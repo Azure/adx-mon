@@ -2,9 +2,15 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pool"
 	"github.com/Azure/adx-mon/prompb"
+	"github.com/Azure/adx-mon/ring"
 	"github.com/Azure/adx-mon/transform"
 	"github.com/davidnarayan/go-flake"
 	"io"
@@ -18,6 +24,10 @@ import (
 
 var (
 	idgen *flake.Flake
+
+	csvWriterPool = pool.NewGeneric(1024, func(sz int) interface{} {
+		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)))
+	})
 )
 
 func init() {
@@ -29,7 +39,7 @@ func init() {
 }
 
 type Segment interface {
-	Write(ts prompb.TimeSeries) error
+	Write(ctx context.Context, ts []prompb.TimeSeries) error
 	Bytes() ([]byte, error)
 	Close() error
 	Table() string
@@ -40,19 +50,36 @@ type Segment interface {
 	Path() string
 }
 
-type file struct {
+type writeReq struct {
+	errCh chan error
+	b     []byte
+}
+
+type segment struct {
 	epoch     string
 	table     string
 	createdAt time.Time
 	path      string
+	hostname  string
 
-	mu   sync.RWMutex
-	w    *os.File
-	size int64
-	csv  *transform.CSVWriter
+	mu         sync.RWMutex
+	w          *os.File
+	bw         *bufio.Writer
+	size       int64
+	closing    chan struct{}
+	closed     bool
+	flushCount uint64
+	wg         sync.WaitGroup
+
+	ringBuf *ring.Buffer
 }
 
 func NewSegment(dir, prefix string) (Segment, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, err
+	}
+
 	epoch := idgen.NextId()
 
 	fileName := fmt.Sprintf("%s_%s.csv", prefix, epoch.String())
@@ -64,17 +91,29 @@ func NewSegment(dir, prefix string) (Segment, error) {
 
 	fields := strings.Split(prefix, "_")
 
-	return &file{
+	bf := bufio.NewWriterSize(fw, 8*1024*1024)
+	f := &segment{
+		hostname:  hostname,
 		createdAt: time.Now().UTC(),
 		table:     fields[0],
 		epoch:     epoch.String(),
 		path:      path,
 		w:         fw,
-		csv:       transform.NewCSVWriter(bufio.NewWriter(fw)),
-	}, nil
+		bw:        bf,
+		closing:   make(chan struct{}),
+		ringBuf:   ring.NewBuffer(10000),
+	}
+
+	go f.flusher()
+	return f, nil
 }
 
 func OpenSegment(path string) (Segment, error) {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, err
+	}
+
 	fileName := filepath.Base(path)
 	fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
 	fields := strings.Split(fileName, "_")
@@ -103,88 +142,127 @@ func OpenSegment(path string) (Segment, error) {
 		return nil, err
 	}
 
-	f := &file{
+	bf := bufio.NewWriterSize(fd, 1024*1024)
+
+	f := &segment{
+		hostname:  hostname,
 		epoch:     epoch,
 		createdAt: createdAt,
 		path:      path,
 		table:     table,
 		w:         fd,
+		bw:        bf,
 		size:      sz,
-		csv:       transform.NewCSVWriter(bufio.NewWriter(fd)),
+		closing:   make(chan struct{}),
+		ringBuf:   ring.NewBuffer(10000),
 	}
 
-	return f, f.repair()
+	if err := f.repair(); err != nil {
+		return nil, err
+	}
+
+	go f.flusher()
+
+	return f, nil
 }
 
-func (f *file) Path() string {
-	return f.path
+func (s *segment) Path() string {
+	return s.path
 }
 
-func (f *file) Reader() (io.Reader, error) {
-	r, err := os.Open(f.path)
+func (s *segment) Reader() (io.Reader, error) {
+	r, err := os.Open(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("open reader: %s: %w", f.path, err)
+		return nil, fmt.Errorf("open reader: %s: %w", s.path, err)
 	}
 	return r, nil
 }
 
-func (f *file) CreatedAt() time.Time {
-	return f.createdAt
+func (s *segment) CreatedAt() time.Time {
+	return s.createdAt
 }
 
-func (f *file) Size() (int64, error) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	stat, err := os.Stat(f.path)
+func (s *segment) Size() (int64, error) {
+	stat, err := os.Stat(s.path)
 	if err != nil {
 		return 0, err
 	}
 	return stat.Size(), nil
 }
 
-func (f *file) Epoch() string {
-	return f.epoch
+func (s *segment) Epoch() string {
+	return s.epoch
 }
 
-func (f *file) Table() string {
-	return f.table
+func (s *segment) Table() string {
+	return s.table
 }
 
-func (f *file) Write(ts prompb.TimeSeries) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (s *segment) Write(ctx context.Context, ts []prompb.TimeSeries) error {
+	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	defer csvWriterPool.Put(enc)
+	enc.Reset()
 
-	err := f.csv.MarshalCSV(ts)
+	for _, v := range ts {
+		metrics.SamplesStored.WithLabelValues(s.hostname).Add(float64(len(v.Samples)))
 
-	return err
+		if err := enc.MarshalCSV(v); err != nil {
+			return err
+		}
+	}
+
+	entry := s.ringBuf.Reserve()
+	defer s.ringBuf.Release(entry)
+
+	entry.Value = enc.Bytes()
+	s.ringBuf.Enqueue(entry)
+
+	select {
+	case err := <-entry.ErrCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	return nil
 }
 
-func (f *file) Bytes() ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return os.ReadFile(f.w.Name())
+func (s *segment) Bytes() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return os.ReadFile(s.w.Name())
 }
 
-func (f *file) Close() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (s *segment) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if err := f.w.Sync(); errors.Is(err, os.ErrClosed) {
+	if s.closed {
+		return nil
+	}
+
+	// Close the channel without holding the lock so goroutines can exit cleanly
+	close(s.closing)
+	s.closed = true
+
+	// Wait for flusher goroutine to flush any in-flight writes
+	s.wg.Wait()
+
+	if err := s.w.Sync(); errors.Is(err, os.ErrClosed) {
 		return nil
 	} else if err != nil {
 		return err
 	}
 
-	return f.w.Close()
+	return s.w.Close()
 }
 
-// repair truncates removes the last bytes in the file that follow a newline.  This repairs any
-// corrupted segments that may not have fully flushed to disk safely.
-func (f *file) repair() error {
+// repair truncates removes the last bytes in the segment that follow a newline.  This repairs any
+// corrupted segment that may not have fully flushed to disk safely.
+func (s *segment) repair() error {
 	buf := make([]byte, 4096)
 
-	sz, err := f.w.Stat()
+	sz, err := s.w.Stat()
 	if err != nil {
 		return err
 	}
@@ -198,7 +276,7 @@ func (f *file) repair() error {
 	var done bool
 	for {
 
-		n, err := f.w.ReadAt(buf, idx)
+		n, err := s.w.ReadAt(buf, idx)
 		if err != nil {
 			return err
 		}
@@ -208,15 +286,15 @@ func (f *file) repair() error {
 		for i := len(buf) - 1; i >= 0; i-- {
 			if buf[i] == '\n' {
 				lastNewLine = i
-				if err := f.w.Truncate(idx + int64(lastNewLine+1)); err != nil {
+				if err := s.w.Truncate(idx + int64(lastNewLine+1)); err != nil {
 					return err
 				}
 
-				if err := f.w.Sync(); err != nil {
+				if err := s.w.Sync(); err != nil {
 					return err
 				}
 
-				_, err := f.w.Seek(0, io.SeekEnd)
+				_, err := s.w.Seek(0, io.SeekEnd)
 				return err
 			}
 		}
@@ -234,5 +312,63 @@ func (f *file) repair() error {
 
 		idx -= int64(len(buf))
 		buf = buf[:cap(buf)]
+	}
+}
+
+func (s *segment) flusher() {
+	s.wg.Add(1)
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+
+	defer s.wg.Done()
+
+	for {
+		select {
+		case req := <-s.ringBuf.Queue():
+
+			_, err := s.bw.Write(req.Value)
+			select {
+			case req.ErrCh <- err:
+			default:
+			}
+
+			var n int
+			for len(s.ringBuf.Queue()) > 0 {
+				req = <-s.ringBuf.Queue()
+				_, err := s.bw.Write(req.Value)
+				select {
+				case req.ErrCh <- err:
+				default:
+				}
+				n++
+
+				if n >= 1000 {
+					break
+				}
+			}
+
+			if err := s.bw.Flush(); err != nil {
+				logger.Error("Failed to flush segment: %s", err)
+			}
+		case <-t.C:
+			if err := s.bw.Flush(); err != nil {
+				logger.Error("Failed to flush segment: %s", err)
+			}
+
+		case <-s.closing:
+			for len(s.ringBuf.Queue()) > 0 {
+				req := <-s.ringBuf.Queue()
+				_, err := s.bw.Write(req.Value)
+				select {
+				case req.ErrCh <- err:
+				default:
+				}
+			}
+
+			if err := s.bw.Flush(); err != nil {
+				logger.Error("Failed to flush segment: %s", err)
+			}
+			return
+		}
 	}
 }

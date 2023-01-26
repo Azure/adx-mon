@@ -16,9 +16,9 @@ func TestNewWAL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Open())
 
-	w.Write(newTimeSeries("foo", nil, 1, 1))
-	w.Write(newTimeSeries("foo", nil, 1, 1))
-	w.Write(newTimeSeries("foo", nil, 1, 1))
+	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
 	require.Equal(t, 1, w.Size())
 }
 
@@ -30,8 +30,8 @@ func TestWAL_Segment(t *testing.T) {
 	require.NoError(t, w.Open())
 
 	series := newTimeSeries("foo", nil, 1, 1)
-	w.Write(series)
-	w.Write(newTimeSeries("foo", nil, 2, 2))
+	w.Write([]prompb.TimeSeries{series})
+	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
 
 	require.Equal(t, 1, w.Size())
 
@@ -40,8 +40,8 @@ func TestWAL_Segment(t *testing.T) {
 
 	b, err := seg.Bytes()
 	require.NoError(t, err)
-	require.Equal(t, `1970-01-01T00:00:00.001Z,{},1.000000000
-1970-01-01T00:00:00.002Z,{},2.000000000
+	require.Equal(t, `1970-01-01T00:00:00.001Z,1678086086935741385,"{""__name__"":""foo""}",1.000000000
+1970-01-01T00:00:00.002Z,1678086086935741385,"{""__name__"":""foo""}",2.000000000
 `, string(b))
 
 }
@@ -54,7 +54,7 @@ func TestWAL_OpenSegments(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Open())
-	w.Write(newTimeSeries("foo", nil, 1, 1))
+	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
 	require.Equal(t, 1, w.Size())
 
 	require.NoError(t, w.Close())
@@ -65,9 +65,9 @@ func TestWAL_OpenSegments(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Open())
-	require.Equal(t, 1, w.Size())
+	require.Equal(t, 0, w.Size())
 
-	w.Write(newTimeSeries("foo", nil, 2, 2))
+	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
 	require.Equal(t, 1, w.Size())
 
 }

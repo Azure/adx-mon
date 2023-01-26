@@ -109,9 +109,6 @@ github.com/emicklei/go-restful/v3/log
 # github.com/fatih/color v1.13.0
 ## explicit; go 1.13
 github.com/fatih/color
-# github.com/fsnotify/fsnotify v1.6.0
-## explicit; go 1.16
-github.com/fsnotify/fsnotify
 # github.com/go-kit/log v0.2.1
 ## explicit; go 1.17
 github.com/go-kit/log
@@ -184,9 +181,15 @@ github.com/josharian/intern
 # github.com/json-iterator/go v1.1.12
 ## explicit; go 1.12
 github.com/json-iterator/go
-# github.com/klauspost/compress v1.15.11
+# github.com/klauspost/compress v1.15.14
 ## explicit; go 1.17
-github.com/klauspost/compress/s2
+github.com/klauspost/compress/flate
+# github.com/klauspost/crc32 v0.0.0-20161016154125-cb6bfca970f6
+## explicit
+github.com/klauspost/crc32
+# github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
+## explicit
+github.com/klauspost/pgzip
 # github.com/kylelemons/godebug v1.1.0
 ## explicit; go 1.11
 github.com/kylelemons/godebug/diff
@@ -208,9 +211,6 @@ github.com/mattn/go-isatty
 # github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369
 ## explicit; go 1.9
 github.com/matttproud/golang_protobuf_extensions/pbutil
-# github.com/minio/highwayhash v1.0.2
-## explicit; go 1.15
-github.com/minio/highwayhash
 # github.com/mitchellh/go-homedir v1.1.0
 ## explicit
 github.com/mitchellh/go-homedir
@@ -223,28 +223,6 @@ github.com/modern-go/reflect2
 # github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 ## explicit
 github.com/munnerz/goautoneg
-# github.com/nats-io/jwt/v2 v2.3.0
-## explicit; go 1.16
-github.com/nats-io/jwt/v2
-# github.com/nats-io/nats-server/v2 v2.9.10
-## explicit; go 1.19
-github.com/nats-io/nats-server/v2/conf
-github.com/nats-io/nats-server/v2/internal/ldap
-github.com/nats-io/nats-server/v2/logger
-github.com/nats-io/nats-server/v2/server
-github.com/nats-io/nats-server/v2/server/pse
-github.com/nats-io/nats-server/v2/server/sysmem
-# github.com/nats-io/nats.go v1.22.0
-## explicit; go 1.16
-github.com/nats-io/nats.go
-github.com/nats-io/nats.go/encoders/builtin
-github.com/nats-io/nats.go/util
-# github.com/nats-io/nkeys v0.3.0
-## explicit; go 1.16
-github.com/nats-io/nkeys
-# github.com/nats-io/nuid v1.0.1
-## explicit
-github.com/nats-io/nuid
 # github.com/pkg/errors v0.9.1
 ## explicit
 github.com/pkg/errors
@@ -259,6 +237,7 @@ github.com/pquerna/ffjson/fflib/v1/internal
 ## explicit; go 1.17
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
+github.com/prometheus/client_golang/prometheus/promauto
 github.com/prometheus/client_golang/prometheus/testutil
 github.com/prometheus/client_golang/prometheus/testutil/promlint
 # github.com/prometheus/client_model v0.3.0
@@ -297,9 +276,6 @@ github.com/prometheus/prometheus/util/testutil
 ## explicit; go 1.13
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
-# github.com/tysonmote/rendezvous v0.0.0-20220626212128-be0258dbbd3d
-## explicit; go 1.18
-github.com/tysonmote/rendezvous
 # go.uber.org/atomic v1.10.0
 ## explicit; go 1.18
 go.uber.org/atomic
@@ -309,20 +285,14 @@ go.uber.org/goleak
 go.uber.org/goleak/internal/stack
 # golang.org/x/crypto v0.1.0
 ## explicit; go 1.17
-golang.org/x/crypto/bcrypt
-golang.org/x/crypto/blowfish
-golang.org/x/crypto/chacha20
-golang.org/x/crypto/chacha20poly1305
-golang.org/x/crypto/ed25519
-golang.org/x/crypto/internal/alias
-golang.org/x/crypto/internal/poly1305
-golang.org/x/crypto/ocsp
 golang.org/x/crypto/pkcs12
 golang.org/x/crypto/pkcs12/internal/rc2
 # golang.org/x/exp v0.0.0-20221031165847-c99f073a8326
 ## explicit; go 1.18
 golang.org/x/exp/constraints
 golang.org/x/exp/slices
+# golang.org/x/lint v0.0.0-20210508222113-6edffad5e616
+## explicit; go 1.11
 # golang.org/x/net v0.4.0
 ## explicit; go 1.17
 golang.org/x/net/context
@@ -336,20 +306,13 @@ golang.org/x/net/idna
 ## explicit; go 1.17
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.1.0
-## explicit
-golang.org/x/sync/errgroup
 # golang.org/x/sys v0.3.0
 ## explicit; go 1.17
-golang.org/x/sys/cpu
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
-golang.org/x/sys/windows/svc
-golang.org/x/sys/windows/svc/eventlog
-golang.org/x/sys/windows/svc/mgr
 # golang.org/x/term v0.3.0
 ## explicit; go 1.17
 golang.org/x/term

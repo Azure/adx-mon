@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/stretchr/testify/require"
 	"os"
@@ -25,19 +26,19 @@ func TestStore_Open(t *testing.T) {
 	wal, err := s.GetWAL(ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, wal)
-	require.NoError(t, wal.Write(ts))
+	require.NoError(t, wal.Write([]prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", nil, 1, 1)
 	wal, err = s.GetWAL(ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, wal)
-	require.NoError(t, wal.Write(ts))
+	require.NoError(t, wal.Write([]prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", nil, 0, 0)
 	wal, err = s.GetWAL(ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, wal)
-	require.NoError(t, wal.Write(ts))
+	require.NoError(t, wal.Write([]prompb.TimeSeries{ts}))
 
 	require.Equal(t, 2, s.WALCount())
 

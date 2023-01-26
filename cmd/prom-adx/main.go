@@ -8,6 +8,7 @@ import (
 	"github.com/Azure/adx-mon/storage"
 	"net/http"
 	_ "net/http/pprof"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -24,6 +25,10 @@ func (i *strSliceFag) Set(value string) error {
 }
 
 func main() {
+
+	runtime.MemProfileRate = 4096
+	runtime.SetBlockProfileRate(int(1 * time.Second))
+	runtime.SetMutexProfileFraction(1)
 
 	var (
 		storageDir, kustoEndpoint, database string
@@ -80,6 +85,7 @@ func main() {
 		logger.Fatal("Failed to start service: %s", err)
 	}
 
+	http.HandleFunc("/transfer", svc.HandleTransfer)
 	http.HandleFunc("/receive", svc.HandleReceive)
 	logger.Info("Listening at :9090")
 	if err := http.ListenAndServe(":9090", nil); err != nil {

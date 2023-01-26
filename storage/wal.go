@@ -1,43 +1,36 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/prompb"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 )
 
 type WAL struct {
-	opts       WALOpts
-	compressor *Compressor
+	opts WALOpts
 
 	path       string
 	schemaPath string
 
-	closedSegments chan Segment
+	closing chan struct{}
 
-	closing  chan struct{}
-	mu       sync.RWMutex
-	segments []Segment
+	mu      sync.RWMutex
+	segment Segment
 }
 
 type WALOpts struct {
-	ClosedSegmentCh chan Segment
-
 	StorageDir string
 
 	// WAL segment prefix
 	Prefix string
 
-	// SegmentMaxSize is the max size of a segment file in bytes before it will be rotated and compressed.
+	// SegmentMaxSize is the max size of a segment in bytes before it will be rotated and compressed.
 	SegmentMaxSize int64
 
-	// SegmentMaxAge is the max age of a segment file before it will be rotated and compressed.
+	// SegmentMaxAge is the max age of a segment before it will be rotated and compressed.
 	SegmentMaxAge time.Duration
 }
 
@@ -47,11 +40,8 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 	}
 
 	return &WAL{
-		opts:           opts,
-		compressor:     &Compressor{},
-		closedSegments: make(chan Segment, 1),
-		closing:        make(chan struct{}),
-		segments:       []Segment{},
+		opts:    opts,
+		closing: make(chan struct{}),
 	}, nil
 }
 
@@ -59,36 +49,8 @@ func (w *WAL) Open() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	prefix := fmt.Sprintf("%s_", w.opts.Prefix)
-	if err := filepath.WalkDir(w.opts.StorageDir, func(path string, d os.DirEntry, err error) error {
-		if d.IsDir() || filepath.Ext(path) != ".csv" {
-			return nil
-		}
-
-		fileName := filepath.Base(path)
-
-		if !strings.HasPrefix(fileName, prefix) {
-			return nil
-		}
-
-		seg, err := OpenSegment(path)
-		if err != nil {
-			return err
-		}
-
-		w.segments = append(w.segments, seg)
-
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	sort.Slice(w.segments, func(j, k int) bool {
-		return w.segments[j].Epoch() < w.segments[k].Epoch()
-	})
-
 	go w.rotate()
-	go w.compress()
+	//go w.compress()
 
 	return nil
 }
@@ -99,174 +61,111 @@ func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	for _, seg := range w.segments {
-		if err := seg.Close(); err != nil {
+	if w.segment != nil {
+		if err := w.segment.Close(); err != nil {
 			return err
 		}
+		w.segment = nil
 	}
 
 	return nil
 }
 
-func (w *WAL) Write(ts prompb.TimeSeries) error {
+func (w *WAL) Write(ctx context.Context, ts []prompb.TimeSeries) error {
 	var seg Segment
 
+	// fast path
+	w.mu.RLock()
+	if w.segment != nil {
+		seg = w.segment
+		w.mu.RUnlock()
+
+		return seg.Write(ctx, ts)
+
+	}
+	w.mu.RUnlock()
+
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	segs := w.segments
-
-	if len(segs) == 0 {
+	if w.segment == nil {
 		var err error
 		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
 		if err != nil {
+			w.mu.Unlock()
 			return err
 		}
-		w.segments = []Segment{seg}
+		w.segment = seg
 	}
-	seg = w.segments[len(w.segments)-1]
+	seg = w.segment
+	w.mu.Unlock()
 
-	sz, err := seg.Size()
-	if err != nil {
-		return err
-	}
-	// Rotate the segment once it's past the max segment size
-	if sz >= 0 &&
-		(w.opts.SegmentMaxSize != 0 && sz >= w.opts.SegmentMaxSize) ||
-		(w.opts.SegmentMaxAge.Seconds() != 0 && time.Since(seg.CreatedAt()) > w.opts.SegmentMaxAge) {
-
-		w.closedSegments <- seg
-		w.segments = w.segments[1:len(w.segments)]
-
-		var err error
-		seg, err = NewSegment(w.opts.StorageDir, w.opts.Prefix)
-		if err != nil {
-			return err
-		}
-		w.segments = append(w.segments, seg)
-	}
-
-	ts.Labels = ts.Labels[1:]
-
-	return seg.Write(ts)
+	return seg.Write(ctx, ts)
 }
 
 func (w *WAL) Size() int {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return len(w.segments)
+	if w.segment == nil {
+		return 0
+	}
+	return 1
 }
 
 func (w *WAL) Segment() Segment {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	segs := w.segments
-	if len(segs) == 0 {
-		return nil
-	}
-	return segs[0]
-}
-
-func (w *WAL) ClosedSegments() chan Segment {
-	return w.closedSegments
+	return w.segment
 }
 
 func (w *WAL) rotate() {
-
-	go func() {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-
-		for _, seg := range w.segments {
-
-			sz, err := seg.Size()
-			if err != nil {
-				logger.Error("Failed segment size: %s", err.Error())
-				continue
-			}
-			// Rotate the segment once it's past the max segment size
-			if sz >= 0 &&
-				(w.opts.SegmentMaxSize != 0 && sz >= w.opts.SegmentMaxSize) ||
-				(w.opts.SegmentMaxAge.Seconds() != 0 && time.Since(seg.CreatedAt()) > w.opts.SegmentMaxAge) {
-
-				if err := seg.Close(); err != nil {
-					logger.Warn("Failed to close segment: %s", err.Error())
-					continue
-				}
-
-				select {
-				case w.closedSegments <- seg:
-				default:
-					logger.Error("Failed to notify closed segment: channel full")
-					continue
-				}
-				w.segments = w.segments[1:len(w.segments)]
-			}
-		}
-
-	}()
-
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
+
 	for {
 		select {
 		case <-w.closing:
 			return
 		case <-t.C:
+
 			w.mu.Lock()
+			if w.segment == nil {
+				w.mu.Unlock()
+				continue
+			}
 
-			for _, seg := range w.segments {
+			var toClose Segment
+			seg := w.segment
+			sz, err := seg.Size()
+			if err != nil {
+				w.mu.Unlock()
+				logger.Error("Failed segment size: %s %s", seg.Path(), err.Error())
+				continue
+			}
 
-				sz, err := seg.Size()
-				if err != nil {
-					logger.Error("Failed segment size: %s", err.Error())
-					continue
-				}
-
-				// Rotate the segment once it's past the max segment size
-				if sz >= 0 &&
-					(w.opts.SegmentMaxSize != 0 && sz >= w.opts.SegmentMaxSize) ||
-					(w.opts.SegmentMaxAge.Seconds() != 0 && time.Since(seg.CreatedAt()) > w.opts.SegmentMaxAge) {
-
-					if err := seg.Close(); err != nil {
-						logger.Error("Failed segement close: %s", err.Error())
-						continue
-					}
-
-					select {
-					case w.closedSegments <- seg:
-					default:
-						logger.Error("Failed to notify closed segment: channel full")
-						continue
-					}
-					w.segments = w.segments[1:len(w.segments)]
-				}
+			// Rotate the segment once it's past the max segment size
+			if (w.opts.SegmentMaxSize != 0 && sz >= w.opts.SegmentMaxSize) ||
+				(w.opts.SegmentMaxAge.Seconds() != 0 && time.Since(seg.CreatedAt()).Seconds() > w.opts.SegmentMaxAge.Seconds()) {
+				toClose = seg
+				w.segment = nil
 			}
 			w.mu.Unlock()
+
+			if toClose != nil {
+				if err := toClose.Close(); err != nil {
+					logger.Error("Failed to close segment: %s %s", toClose.Path(), err.Error())
+				}
+			}
 		}
 
 	}
 }
 
-func (w *WAL) compress() {
-	for {
-		select {
-		case <-w.closing:
-			return
-		case seg := <-w.closedSegments:
-			if err := seg.Close(); err != nil {
-				logger.Error("Failed segment close: %s", err.Error())
-				continue
-			}
+func (w *WAL) SegmentPath() string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
 
-			path, err := w.compressor.Compress(seg)
-			if err != nil {
-				logger.Error("Failed segment compress: %s", err.Error())
-				continue
-			}
-			_ = os.RemoveAll(seg.Path())
-
-			logger.Info("Archived %s", path)
-		}
+	if w.segment == nil {
+		return ""
 	}
+
+	return w.segment.Path()
 }

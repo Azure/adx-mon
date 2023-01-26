@@ -7,7 +7,6 @@ import (
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/cespare/xxhash"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
-	"io"
 	"strconv"
 	"time"
 	"unicode"
@@ -20,13 +19,13 @@ var (
 )
 
 type CSVWriter struct {
-	Fd  io.Writer
+	buf *bytes.Buffer
 	enc *csv.Writer
 }
 
-func NewCSVWriter(w io.Writer) *CSVWriter {
+func NewCSVWriter(w *bytes.Buffer) *CSVWriter {
 	return &CSVWriter{
-		Fd:  w,
+		buf: w,
 		enc: csv.NewWriter(w),
 	}
 }
@@ -48,6 +47,7 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	}
 	buf.WriteByte('}')
 	b := buf.Bytes()
+	seriesId := xxhash.Sum64(b)
 
 	fields := make([]string, 0, 4)
 	for _, v := range ts.Samples {
@@ -57,7 +57,7 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 		tm := time.Unix(v.Timestamp/1000, (v.Timestamp%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano)
 		fields = append(fields, tm)
 
-		seriesId := xxhash.Sum64(b)
+		// seriesID
 		fields = append(fields, strconv.FormatInt(int64(seriesId), 10))
 
 		// labels
@@ -72,9 +72,18 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	}
 
 	w.enc.Flush()
-	return nil
+	return w.enc.Error()
 }
 
+func (w *CSVWriter) Reset() {
+	w.buf.Reset()
+}
+
+func (w *CSVWriter) Bytes() []byte {
+	return w.buf.Bytes()
+}
+
+// Normalized convert a metrics name to a ProperCase table name
 func Normalize(s []byte) []byte {
 	var b bytes.Buffer
 	for i := 0; i < len(s); i++ {

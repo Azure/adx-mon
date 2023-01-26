@@ -5,8 +5,7 @@ import (
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
-	"github.com/fsnotify/fsnotify"
-	"golang.org/x/sync/errgroup"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,11 +21,12 @@ type Ingestor struct {
 	database   string
 	syncer     *Syncer
 
-	queue   chan string
+	queue   chan []string
 	closing chan struct{}
 
 	mu        sync.RWMutex
 	ingestors map[string]*ingest.Ingestion
+	uploading map[string]struct{}
 }
 
 type IngesterOpts struct {
@@ -44,9 +44,10 @@ func NewIngestor(kustoCli *kusto.Client, opts IngesterOpts) *Ingestor {
 		syncer:     syncer,
 		storageDir: opts.StorageDir,
 		database:   opts.Database,
-		queue:      make(chan string, opts.ConcurrentUploads),
+		queue:      make(chan []string, opts.ConcurrentUploads),
 		closing:    make(chan struct{}),
 		ingestors:  make(map[string]*ingest.Ingestion),
+		uploading:  make(map[string]struct{}),
 	}
 }
 
@@ -54,8 +55,6 @@ func (n *Ingestor) Open() error {
 	if err := n.syncer.Open(); err != nil {
 		return err
 	}
-
-	go n.watch()
 
 	for i := 0; i < cap(n.queue); i++ {
 		go n.upload()
@@ -79,7 +78,11 @@ func (n *Ingestor) Close() error {
 	return nil
 }
 
-func (n *Ingestor) Upload(file, table string) error {
+func (n *Ingestor) UploadQueue() chan []string {
+	return n.queue
+}
+
+func (n *Ingestor) Upload(reader io.Reader, table string) error {
 	if err := n.syncer.EnsureTable(table); err != nil {
 		return err
 	}
@@ -122,7 +125,7 @@ func (n *Ingestor) Upload(file, table string) error {
 
 	// Upload our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromFile(ctx, file, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
 		return err
 	}
@@ -132,81 +135,9 @@ func (n *Ingestor) Upload(file, table string) error {
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(file)
+	//return os.Remove(file)
+	return nil
 
-	//
-	//// Upload our file WITH status reporting.
-	//// When completed, delete the file on local storage we are uploading.
-	//status, err := ingestor.FromFile(ctx, "/path/to/file", ingest.DeleteSource(), ingest.ReportResultToTable())
-	//if err != nil {
-	//	// The ingestion command failed to be sent, Do something
-	//}
-	//
-	//err = <-status.Wait(ctx)
-	//if err != nil {
-	//	// the operation complete with an error
-	//	if ingest.IsRetryable(err) {
-	//		// Handle reties
-	//	} else {
-	//		// inspect the failure
-	//		// statusCode, _ := ingest.GetIngestionStatus(err)
-	//		// failureStatus, _ := ingest.GetIngestionFailureStatus(err)
-	//	}
-	//}
-	//return nil
-}
-
-func (n *Ingestor) watch() {
-
-	g, _ := errgroup.WithContext(context.Background())
-	g.SetLimit(10)
-
-	entries, err := os.ReadDir(n.storageDir)
-	if err != nil {
-		logger.Error("Failed to list files: %s", err.Error())
-	}
-
-	for _, v := range entries {
-		if v.IsDir() || !strings.HasSuffix(v.Name(), ".gz") {
-			continue
-		}
-
-		n.queue <- filepath.Join(n.storageDir, v.Name())
-	}
-
-	if err := g.Wait(); err != nil {
-		logger.Error("Failed ingest recovery: %s", err.Error())
-	}
-	// Create new watcher.
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		logger.Fatal("Failed watch: %s", err)
-	}
-	defer watcher.Close()
-
-	// Start listening for events.
-
-	watcher.Add(n.storageDir)
-	for {
-		select {
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-
-			if event.Has(fsnotify.Create) {
-				if strings.HasSuffix(event.Name, ".gz") {
-					n.queue <- event.Name
-				}
-			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			logger.Error("Watch error: %s:", err)
-		}
-
-	}
 }
 
 func (n *Ingestor) upload() error {
@@ -214,16 +145,63 @@ func (n *Ingestor) upload() error {
 		select {
 		case <-n.closing:
 			return nil
-		case path := <-n.queue:
-			now := time.Now()
-			fileName := filepath.Base(path)
-			fields := strings.Split(fileName, "_")
+		case paths := <-n.queue:
 
-			if err := n.Upload(path, fields[0]); err != nil {
-				logger.Error("Failed upload: %s: %s", path, err.Error())
-				continue
-			}
-			logger.Info("Uploaded %s duration=%s", path, time.Since(now).String())
+			func() {
+				readers := make([]io.Reader, 0, len(paths))
+				files := make([]*os.File, 0, len(paths))
+				var fields []string
+				n.mu.Lock()
+				for _, path := range paths {
+
+					if _, ok := n.uploading[path]; ok {
+						continue
+					}
+					n.uploading[path] = struct{}{}
+
+					fileName := filepath.Base(path)
+					fields = strings.Split(fileName, "_")
+
+					f, err := os.Open(path)
+					if err != nil {
+						logger.Error("Failed to open file: %s", err.Error())
+						continue
+					}
+					readers = append(readers, f)
+					files = append(files, f)
+				}
+				n.mu.Unlock()
+
+				defer func(paths []string, files []*os.File) {
+					for _, f := range files {
+						f.Close()
+					}
+
+					n.mu.Lock()
+					for _, path := range paths {
+						delete(n.uploading, path)
+					}
+					n.mu.Unlock()
+				}(paths, files)
+
+				if len(readers) == 0 {
+					return
+				}
+
+				mr := io.MultiReader(readers...)
+
+				now := time.Now()
+				if err := n.Upload(mr, fields[0]); err != nil {
+					logger.Error("Failed to upload file: %s", err.Error())
+					return
+				}
+				logger.Info("Uploaded %v duration=%s", paths, time.Since(now).String())
+				for _, f := range paths {
+					if err := os.RemoveAll(f); err != nil {
+						logger.Error("Failed to remove file: %s", err.Error())
+					}
+				}
+			}()
 
 		}
 	}

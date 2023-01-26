@@ -5,6 +5,7 @@ import (
 	"github.com/Azure/adx-mon/adx"
 	"github.com/Azure/adx-mon/cluster"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pool"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
@@ -18,13 +19,13 @@ import (
 )
 
 var (
-	bytesBufPool = pool.NewGeneric(10, func(sz int) interface{} {
+	bytesBufPool = pool.NewGeneric(50, func(sz int) interface{} {
 		return bytes.NewBuffer(make([]byte, 0, sz))
 	})
 
-	bytesPool = pool.NewBytes(10)
+	bytesPool = pool.NewBytes(50)
 
-	writeReqPool = pool.NewGeneric(10, func(sz int) interface{} {
+	writeReqPool = pool.NewGeneric(50, func(sz int) interface{} {
 		return prompb.WriteRequest{
 			Timeseries: make([]prompb.TimeSeries, 0, sz),
 		}
@@ -37,10 +38,13 @@ type Service struct {
 
 	compressor  *storage.Compressor
 	ingestor    *adx.Ingestor
+	replicator  *cluster.Replicator
 	coordinator *cluster.Coordinator
+	archiver    *cluster.Archiver
 	closing     chan struct{}
 
-	store *storage.Store
+	store   *storage.Store
+	metrics *metrics.Service
 }
 
 type ServiceOpts struct {
@@ -101,6 +105,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
+		Compressor:     c,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
@@ -110,13 +115,31 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
+	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{Partitioner: coord})
+	if err != nil {
+		return nil, err
+	}
+
+	archiver := cluster.NewArchiver(cluster.ArchiverOpts{
+		StorageDir:    opts.StorageDir,
+		Partitioner:   coord,
+		Segmenter:     store,
+		UploadQueue:   ing.UploadQueue(),
+		TransferQueue: repl.TransferQueue(),
+	})
+
+	metricsSvc := metrics.NewService(metrics.ServiceOpts{Coordinator: coord})
+
 	return &Service{
 		opts:        opts,
 		walOpts:     walOpts,
 		ingestor:    ing,
+		replicator:  repl,
 		store:       store,
 		coordinator: coord,
 		compressor:  c,
+		archiver:    archiver,
+		metrics:     metricsSvc,
 		closing:     make(chan struct{}),
 	}, nil
 }
@@ -137,12 +160,35 @@ func (s *Service) Open() error {
 		return err
 	}
 
-	//go s.rotate()
+	if err := s.archiver.Open(); err != nil {
+		return err
+	}
+
+	if err := s.replicator.Open(); err != nil {
+		return err
+	}
+
+	if err := s.metrics.Open(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (s *Service) Close() error {
 	close(s.closing)
+
+	if err := s.metrics.Close(); err != nil {
+		return err
+	}
+
+	if err := s.replicator.Close(); err != nil {
+		return err
+	}
+
+	if err := s.archiver.Close(); err != nil {
+		return err
+	}
 
 	if err := s.coordinator.Close(); err != nil {
 		return err
@@ -159,28 +205,31 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
-// handleReceive extracts prometheus samples from incoming request and sends them to statsd
+// HandleReceive hadles the prometheus remote write requests and writes them to the store.
 func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
-
-	bodyBuf := bytesBufPool.Get(1024 * 1024).(*bytes.Buffer)
-	bodyBuf.Reset()
-	defer bytesBufPool.Put(bodyBuf)
-
-	_, err := io.Copy(bodyBuf, r.Body)
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Error("close http body: %s", err.Error())
 		}
 	}()
-	compressed := bodyBuf.Bytes()
 
+	bodyBuf := bytesBufPool.Get(1024 * 1024).(*bytes.Buffer)
+	defer bytesBufPool.Put(bodyBuf)
+	bodyBuf.Reset()
+
+	//bodyBuf := bytes.NewBuffer(make([]byte, 0, 1024*102))
+	_, err := io.Copy(bodyBuf, r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	compressed := bodyBuf.Bytes()
 	buf := bytesPool.Get(1024 * 1024)
+	defer bytesPool.Put(buf)
 	buf = buf[:0]
+
+	//buf := make([]byte, 0, 1024*1024)
 	reqBuf, err := snappy.Decode(buf, compressed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -188,28 +237,43 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := writeReqPool.Get(2500).(prompb.WriteRequest)
+	defer writeReqPool.Put(req)
 	req.Reset()
+
+	//req := &prompb.WriteRequest{}
 	if err := req.Unmarshal(reqBuf); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	bytesPool.Put(buf)
-	defer writeReqPool.Put(req)
 
-	for _, ts := range req.Timeseries {
-
-		// Drop histogram and
-		for _, v := range ts.Labels {
-			if bytes.Equal(v.Name, []byte("le")) {
-				continue
-			}
-		}
-
-		if err := s.coordinator.Write(ts); err != nil {
-			logger.Error("Failed to write ts: %s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+	if err := s.coordinator.Write(r.Context(), req); err != nil {
+		logger.Error("Failed to write ts: %s", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
+func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := r.Body.Close(); err != nil {
+			logger.Error("close http body: %s", err.Error())
+		}
+	}()
+
+	filename := r.URL.Query().Get("filename")
+	if filename == "" {
+		http.Error(w, "missing filename", http.StatusBadRequest)
+		return
+	}
+
+	if n, err := s.store.Import(filename, r.Body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else {
+		logger.Info("Imported %d bytes to %s", n, filename)
+	}
 	w.WriteHeader(http.StatusAccepted)
 }

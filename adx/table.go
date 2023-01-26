@@ -164,7 +164,7 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(".create table ")
+	sb.WriteString(".create-or-alter table ")
 	sb.WriteString(fmt.Sprintf("['%s'] ", table))
 	sb.WriteString(fmt.Sprintf("ingestion csv mapping \"%s\" '", name))
 

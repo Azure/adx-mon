@@ -3,10 +3,13 @@ package storage
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
-	"fmt"
+	"github.com/Azure/adx-mon/limiter"
 	"github.com/Azure/adx-mon/pool"
+	gzip "github.com/klauspost/pgzip"
+	//gzip "compress/gzip"
 	"io"
+
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +27,8 @@ var (
 	bufioReaderPool = pool.NewGeneric(32, func(sz int) interface{} {
 		return bufio.NewReaderSize(bytes.NewReader(nil), 4*1024)
 	})
+
+	limit = limiter.NewFixed(1)
 )
 
 type Compressor struct {
@@ -48,12 +53,13 @@ func (c *Compressor) Compress(seg Segment) (string, error) {
 	}
 
 	bw := bufioWriterPool.Get(4 * 1024).(*bufio.Writer)
-	bw.Reset(fd)
 	defer bufioWriterPool.Put(bw)
+	bw.Reset(fd)
 
 	gw := gzWriterPool.Get(0).(*gzip.Writer)
-	gw.Reset(bw)
+	gw.SetConcurrency(256<<10, 2)
 	defer gzWriterPool.Put(gw)
+	gw.Reset(bw)
 
 	r, err := seg.Reader()
 	if err != nil {
@@ -61,8 +67,8 @@ func (c *Compressor) Compress(seg Segment) (string, error) {
 	}
 
 	br := bufioReaderPool.Get(4 * 1024).(*bufio.Reader)
-	br.Reset(r)
 	defer bufioReaderPool.Put(br)
+	br.Reset(r)
 
 	_, err = io.Copy(gw, br)
 	if err != nil {

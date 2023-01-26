@@ -1,10 +1,14 @@
 package storage
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"fmt"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/transform"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +16,10 @@ import (
 	"time"
 )
 
+// Store provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
 type Store struct {
-	opts             StoreOpts
-	closedSegmentsCh chan Segment
+	opts       StoreOpts
+	compressor *Compressor
 
 	mu   sync.RWMutex
 	wals map[string]*WAL
@@ -24,13 +29,14 @@ type StoreOpts struct {
 	StorageDir     string
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
+	Compressor     *Compressor
 }
 
 func NewStore(opts StoreOpts) *Store {
 	return &Store{
-		opts:             opts,
-		wals:             make(map[string]*WAL),
-		closedSegmentsCh: make(chan Segment, 10*1024),
+		opts:       opts,
+		compressor: opts.Compressor,
+		wals:       make(map[string]*WAL),
 	}
 }
 
@@ -46,7 +52,7 @@ func (s *Store) Open() error {
 		fileName := filepath.Base(path)
 		fields := strings.Split(fileName, "_")
 		if len(fields) != 2 {
-			logger.Warn("Invalid WAL file: %s", path)
+			logger.Warn("Invalid WAL segment: %s", path)
 			return nil
 		}
 
@@ -82,11 +88,10 @@ func (s *Store) Close() error {
 
 func (s *Store) newWAL(prefix string) (*WAL, error) {
 	walOpts := WALOpts{
-		ClosedSegmentCh: s.closedSegmentsCh,
-		StorageDir:      s.opts.StorageDir,
-		Prefix:          prefix,
-		SegmentMaxSize:  s.opts.SegmentMaxSize,
-		SegmentMaxAge:   s.opts.SegmentMaxAge,
+		StorageDir:     s.opts.StorageDir,
+		Prefix:         prefix,
+		SegmentMaxSize: s.opts.SegmentMaxSize,
+		SegmentMaxAge:  s.opts.SegmentMaxAge,
 	}
 
 	wal, err := NewWAL(walOpts)
@@ -138,21 +143,71 @@ func (s *Store) WALCount() int {
 	return len(s.wals)
 }
 
-func (s *Store) WriteTimeSeries(ts prompb.TimeSeries) error {
-	wal, err := s.GetWAL(ts.Labels)
-	if err != nil {
-		return err
-	}
+func (s *Store) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
+	for _, v := range ts {
+		wal, err := s.GetWAL(v.Labels)
+		if err != nil {
+			return err
+		}
 
-	if err := wal.Write(ts); err != nil {
-		return err
+		if err := wal.Write(ctx, []prompb.TimeSeries{v}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+func (s *Store) IsActiveSegment(path string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, v := range s.wals {
+		if v.SegmentPath() == path {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) Import(filename string, body io.ReadCloser) (int, error) {
+	dstPath := filepath.Join(s.opts.StorageDir, fmt.Sprint(filename, ".tmp"))
+	f, err := os.Create(dstPath)
+	if err != nil {
+		return 0, err
+	}
+
+	bw := bufio.NewWriterSize(f, 1024*1024)
+
+	n, err := io.Copy(bw, body)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := bw.Flush(); err != nil {
+		return 0, err
+	}
+
+	if err := f.Sync(); err != nil {
+		return 0, err
+	}
+
+	if err := f.Close(); err != nil {
+		return 0, err
+	}
+
+	if err := os.Rename(dstPath, filepath.Join(s.opts.StorageDir, filename)); err != nil {
+		return 0, err
+	}
+
+	return int(n), nil
+}
+
+var idx uint64
+
 func seriesKey(labels []prompb.Label) string {
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
+			//return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
 			return string(transform.Normalize(v.Value))
 		}
 	}
