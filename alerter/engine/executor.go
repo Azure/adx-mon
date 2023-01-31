@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
-
 	"github.com/Azure/adx-mon/logger"
 	"strconv"
 	"strings"
@@ -41,11 +40,12 @@ func (e *Executor) queryWorker(rule rules.Rule) {
 	e.wg.Add(1)
 	defer e.wg.Done()
 
-	logger.Info("Creating query executor for %s in %s", rule.DisplayName, rule.Database)
+	logger.Info("Creating query executor for %s/%s in %s executing every %s",
+		rule.Namespace, rule.Name, rule.Database, rule.Interval.String())
 
 	// do-while
 	if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
-		logger.Error("Failed to execute query=%s: %s", rule.DisplayName, err)
+		logger.Error("Failed to execute query=%s/%s: %s", rule.Namespace, rule.Name, err)
 	}
 	ticker := time.NewTicker(rule.Interval)
 	defer ticker.Stop()
@@ -58,11 +58,11 @@ func (e *Executor) queryWorker(rule rules.Rule) {
 			queue.Workers <- struct{}{}
 
 			start := time.Now()
-			logger.Info("Executing %s", rule.DisplayName)
+			logger.Info("Executing %s/%s", rule.Namespace, rule.Name)
 			if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
-				logger.Error("Failed to execute query=%s: %w", rule.DisplayName, err)
+				logger.Error("Failed to execute query=%s.%s: %s", rule.Namespace, rule.Name, err)
 			}
-			logger.Info("Completed %s in %s", rule.DisplayName, time.Since(start))
+			logger.Info("Completed %s/%s in %s", rule.Namespace, rule.Name, time.Since(start))
 
 			// Release the worker slot
 			<-queue.Workers
@@ -105,7 +105,7 @@ func (e *Executor) MetricHandler(endpoint string, rule rules.Rule, row *table.Ro
 	}
 
 	rule.Metric.With(dimensions).Add(float64(metric))
-	logger.Debug("Incrementing metric: name=%s by=%d with=%v", rule.DisplayName, metric, dimensions)
+	logger.Debug("Incrementing metric: namespace=%s name=%s by=%d with=%v", rule.Namespace, rule.Name, metric, dimensions)
 
 	return nil
 }
@@ -123,7 +123,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 	}
 
 	if rule.RoutingID == "" {
-		return fmt.Errorf("failed to create Notification: no routing id for %s", rule.DisplayName)
+		return fmt.Errorf("failed to create Notification: no routing id for %s/%s", rule.Namespace, rule.Name)
 	}
 
 	for k, v := range rule.Parameters {
@@ -152,8 +152,8 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 	summary := fmt.Sprintf("%s<br/><br/>%s</br><pre>%s</pre>", res.Summary, link, query)
 	summary = strings.TrimSpace(summary)
 
-	if res.CorrelationID != "" && !strings.HasPrefix(res.CorrelationID, rule.DisplayName+"://") {
-		res.CorrelationID = fmt.Sprintf("%s://%s", rule.DisplayName, res.CorrelationID)
+	if res.CorrelationID != "" && !strings.HasPrefix(res.CorrelationID, fmt.Sprintf("%s/%s://", rule.Namespace, rule.Name)) {
+		res.CorrelationID = fmt.Sprintf("%s/%s://%s", rule.Namespace, rule.Name, res.CorrelationID)
 	}
 
 	a := alert.Alert{
@@ -162,7 +162,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 		Summary:       summary,
 		Description:   res.Description,
 		Severity:      int(res.Severity),
-		Source:        rule.DisplayName,
+		Source:        fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
 		CorrelationID: res.CorrelationID,
 		CustomFields: map[string]string{ // TODO: These are Azure specific.  Need to make this generic.
 			"TSG":     rule.TSG,
@@ -210,8 +210,4 @@ func columnIsDimension(dimensions []string, column string) bool {
 		}
 	}
 	return false
-}
-
-func isMetric(r rules.Rule) bool {
-	return len(r.Dimensions) != 0 && r.Value != ""
 }

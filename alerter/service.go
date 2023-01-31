@@ -5,14 +5,19 @@ import (
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"net/http"
 	"os"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sync"
 	"time"
 
@@ -65,7 +70,18 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		return nil, fmt.Errorf("failed to construct logger: %w", err)
 	}
 
-	if err := rules.VerifyRules(opts.Region); err != nil {
+	// Setup k8s client
+	// @todo figure out how to mock this
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = alertrulev1.AddToScheme(scheme)
+	kubeconfig := ctrl.GetConfigOrDie()
+	kubeclient, err := client.New(kubeconfig, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := rules.VerifyRules(kubeclient, opts.Region); err != nil {
 		return nil, err
 	}
 
@@ -93,20 +109,23 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		}
 	}
 
-	logger.Warn("No kusto endpoints provided, using fake kusto clients")
-	fakeRule := &rules.Rule{
-		DisplayName: "FakeRule",
-		Database:    "FakeDB",
-		Interval:    time.Minute,
-		Query:       `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
-		RoutingID:   "FakeRoutingID",
-		TSG:         "FakeTSG",
-	}
-	l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
-	rules.Register(fakeRule)
+	if kubeclient == nil {
+		logger.Warn("No kusto endpoints provided, using fake kusto clients")
+		fakeRule := &rules.Rule{
+			Namespace: "fake-namespace",
+			Name:      "FakeRule",
+			Database:  "FakeDB",
+			Interval:  time.Minute,
+			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
+			RoutingID: "FakeRoutingID",
+			TSG:       "FakeTSG",
+		}
+		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
+		rules.Register(fakeRule)
 
-	if err := rules.VerifyRules(opts.Region); err != nil {
-		return nil, err
+		if err := rules.VerifyRules(nil, opts.Region); err != nil {
+			return nil, err
+		}
 	}
 
 	if opts.AlertAddr == "" {
@@ -121,18 +140,23 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 	l2m.alertCli = alertCli
 
+	executor := &engine.Executor{
+		AlertAddr:   opts.AlertAddr,
+		AlertCli:    alertCli,
+		KustoClient: l2m,
+	}
+	l2m.executor = executor
 	return l2m, nil
 }
 
 func (l *Alerter) Open(ctx context.Context) error {
 	l.ctx, l.closeFn = context.WithCancel(ctx)
-	executor := &engine.Executor{
-		AlertAddr:   l.opts.AlertAddr,
-		AlertCli:    l.alertCli,
-		KustoClient: l,
-	}
 
 	logger.Info("Starting adx-mon alerter")
+
+	if err := l.executor.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open executor: %w", err)
+	}
 
 	go func() {
 		logger.Info("Listening at :%d", l.opts.Port)
@@ -143,7 +167,7 @@ func (l *Alerter) Open(ctx context.Context) error {
 		}
 	}()
 
-	return executor.Open(context.Background())
+	return nil
 }
 
 func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
@@ -154,7 +178,7 @@ func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules
 
 	iter, err := client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
 	if err != nil {
-		return fmt.Errorf("failed to execute kusto query=%s: %w", r.DisplayName, err)
+		return fmt.Errorf("failed to execute kusto query=%s/%s: %s", r.Namespace, r.Name, err)
 	}
 	defer iter.Stop()
 	return iter.Do(func(row *table.Row) error {
