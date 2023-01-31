@@ -45,11 +45,12 @@ func TestArchiver_NodeOwned(t *testing.T) {
 		hostname:    "node1",
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node2"},
+		Segmenter:   &fakeSegmenter{active: "Memory_aaaa.csv"},
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
 	require.Equal(t, 0, len(owner))
-	require.Equal(t, []string{"Cpu_aaaa.csv", "Cpu_bbbb.csv"}, notOwned[0])
+	require.Equal(t, []string{filepath.Join(dir, "Cpu_aaaa.csv"), filepath.Join(dir, "Cpu_bbbb.csv")}, notOwned[0])
 }
 
 type fakePartitioner struct {

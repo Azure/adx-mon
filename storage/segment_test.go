@@ -1,6 +1,7 @@
 package storage_test
 
 import (
+	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
@@ -17,14 +18,14 @@ func TestNewSegment(t *testing.T) {
 	dir := t.TempDir()
 	s, err := storage.NewSegment(dir, "Foo")
 	require.NoError(t, err)
-	require.NoError(t, s.Write([]prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 
 	require.NotEmpty(t, s.Path())
 	epoch := s.Epoch()
 
 	s, err = storage.OpenSegment(s.Path())
 	require.NoError(t, err)
-	require.NoError(t, s.Write([]prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 
 	require.NotEmpty(t, s.Path())
 	require.Equal(t, epoch, s.Epoch())
@@ -48,7 +49,7 @@ func TestSegment_Corrupted(t *testing.T) {
 	dir := t.TempDir()
 	s, err := storage.NewSegment(dir, "Foo")
 	require.NoError(t, err)
-	require.NoError(t, s.Write([]prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 	require.NoError(t, s.Close())
 
 	f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
@@ -68,7 +69,7 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 	dir := t.TempDir()
 	s, err := storage.NewSegment(dir, "Foo")
 	require.NoError(t, err)
-	require.NoError(t, s.Write([]prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 	require.NoError(t, s.Close())
 
 	f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
@@ -83,7 +84,7 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint8('\n'), b[len(b)-1])
 
-	require.NoError(t, s.Write([]prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 1, 1)}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 1, 1)}))
 	b, err = s.Bytes()
 	require.NoError(t, err)
 	require.Equal(t, `1970-01-01T00:00:00Z,6718523938451634754,"{""__name__"":""Foo"",""host"":""bar""}",0.000000000

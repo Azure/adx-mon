@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"bytes"
+	"context"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/stretchr/testify/require"
@@ -16,9 +17,9 @@ func TestNewWAL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Open())
 
-	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
-	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
-	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
 	require.Equal(t, 1, w.Size())
 }
 
@@ -30,8 +31,8 @@ func TestWAL_Segment(t *testing.T) {
 	require.NoError(t, w.Open())
 
 	series := newTimeSeries("foo", nil, 1, 1)
-	w.Write([]prompb.TimeSeries{series})
-	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
+	w.Write(context.Background(), []prompb.TimeSeries{series})
+	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
 
 	require.Equal(t, 1, w.Size())
 
@@ -54,7 +55,7 @@ func TestWAL_OpenSegments(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Open())
-	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
 	require.Equal(t, 1, w.Size())
 
 	require.NoError(t, w.Close())
@@ -67,7 +68,7 @@ func TestWAL_OpenSegments(t *testing.T) {
 	require.NoError(t, w.Open())
 	require.Equal(t, 0, w.Size())
 
-	w.Write([]prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
+	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
 	require.Equal(t, 1, w.Size())
 
 }

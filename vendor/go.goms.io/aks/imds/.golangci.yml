@@ -1,0 +1,28 @@
+linters:
+  enable-all: true
+  disable:
+    - errorlint
+    - exhaustivestruct
+    - gochecknoglobals
+    - gochecknoinits
+    - goerr113 # should probably remove this eventually: <phlombar@microsoft.com>
+    - gofumpt
+    - interfacer
+    - ireturn
+    - testpackage
+    - exhaustivestruct
+    - wrapcheck
+    - tagliatelle
+    - varnamelen
+
+linters-settings:
+  funlen:
+    lines: 80
+    statements: 60
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - funlen
+        - gomnd # disable magic number check in tests
