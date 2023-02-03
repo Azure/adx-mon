@@ -37,7 +37,7 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
-	opts := service.AlerterOpts{
+	opts := &service.AlerterOpts{
 		Dev:  ctx.Bool("dev"),
 		Port: ctx.Int("port"),
 		KustoEndpoints: map[string]string{

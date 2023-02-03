@@ -37,10 +37,15 @@ type AlerterOpts struct {
 
 type Alerter struct {
 	log      logger.Logger
-	clients  map[string]*kusto.Client
+	clients  map[string]KustoClient
 	queue    chan struct{}
 	alertCli *alert.Client
-	opts     AlerterOpts
+	opts     *AlerterOpts
+}
+
+type KustoClient interface {
+	Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+	Endpoint() string
 }
 
 var ruleErrorCounter = promauto.NewCounterVec(
@@ -53,7 +58,7 @@ var ruleErrorCounter = promauto.NewCounterVec(
 	[]string{"region"},
 )
 
-func New(opts AlerterOpts) (*Alerter, error) {
+func New(opts *AlerterOpts) (*Alerter, error) {
 	log, err := newLogger()
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct logger: %w", err)
@@ -63,27 +68,52 @@ func New(opts AlerterOpts) (*Alerter, error) {
 		return nil, err
 	}
 
-	var auth kusto.Authorization
-	if opts.Dev {
-		auth, err = devAuth(opts)
-	} else {
-		auth, err = prodAuth(opts)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to create authorizer: %w", err)
-	}
-
 	l2m := &Alerter{
+		opts:    opts,
 		log:     log,
-		clients: make(map[string]*kusto.Client),
+		clients: make(map[string]KustoClient),
 		queue:   make(chan struct{}, opts.Concurrency),
 	}
 
-	for name, endpoint := range opts.KustoEndpoints {
-		l2m.clients[name], err = kusto.New(endpoint, auth)
-		if err != nil {
-			return nil, fmt.Errorf("kusto client=%s: %w", endpoint, err)
+	if opts.MSIID == "" && opts.MSIResource == "" {
+		logger.Warn("No MSI ID or resource provided, using fake kusto clients")
+		for name, endpoint := range opts.KustoEndpoints {
+			l2m.clients[name] = fakeKustoClient{endpoint: endpoint}
+			if err != nil {
+				return nil, fmt.Errorf("kusto client=%s: %w", endpoint, err)
+			}
 		}
+		rules.Register(&rules.Rule{
+			DisplayName: "FakeRule",
+			Database:    "FakeDB",
+			Interval:    time.Minute,
+			Query:       "Table | where foo == 'bar'",
+			RoutingID:   "FakeRoutingID",
+			TSG:         "FakeTSG",
+		})
+	} else {
+		var auth kusto.Authorization
+		if opts.Dev {
+			auth, err = devAuth(opts)
+		} else {
+			auth, err = prodAuth(opts)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to create authorizer: %w", err)
+		}
+
+		for name, endpoint := range opts.KustoEndpoints {
+			l2m.clients[name], err = kusto.New(endpoint, auth)
+			if err != nil {
+				return nil, fmt.Errorf("kusto client=%s: %w", endpoint, err)
+			}
+		}
+	}
+
+	if opts.AlertAddr == "" {
+		logger.Warn("No alert address provided, using fake alert handler")
+		http.Handle("/alerts", fakeAlertHandler())
+		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
 
 	alertCli, err := alert.NewClient(time.Minute)
@@ -119,7 +149,7 @@ func (l *Alerter) Run() error {
 	return executor.Execute(context.Background(), l, log)
 }
 
-func prodAuth(opts AlerterOpts) (kusto.Authorization, error) {
+func prodAuth(opts *AlerterOpts) (kusto.Authorization, error) {
 	msiID := opts.MSIID
 	msiResource := opts.MSIResource
 	if msiID == "" && msiResource == "" {
@@ -171,7 +201,7 @@ func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules
 	})
 }
 
-func devAuth(opts AlerterOpts) (kusto.Authorization, error) {
+func devAuth(opts *AlerterOpts) (kusto.Authorization, error) {
 	// To run queries locally in dev on your laptop, you'll need to create an access token for the Kusto
 	// cluster you want to query via the AZ cli.  This uses your corp account to get an
 	// access token to Kusto and then uses the token to auth to Kusto for you.
