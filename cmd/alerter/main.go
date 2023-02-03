@@ -1,48 +1,67 @@
 package main
 
 import (
-	"fmt"
+	"github.com/Azure/adx-mon/alerter/service"
+	"github.com/Azure/adx-mon/logger"
+	"github.com/urfave/cli/v2" // imports as package "cli"
 	"os"
 	"strings"
-
-	"github.com/Azure/adx-mon/alerter/service"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 func main() {
-	cmd := &cobra.Command{
-		Use:   "l2m",
-		Short: "Emits metrics based on Kusto query results",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			l2m, err := service.New()
-			if err != nil {
-				return err
-			}
-			return l2m.Run()
+	app := &cli.App{
+		Name:  "alerter",
+		Usage: "adx-mon alerting engine for ADX",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "dev", Usage: "Run on a local dev machine without executing real queries"},
+			&cli.IntFlag{Name: "port", Value: 4023, Usage: "Metrics port number"},
+			// Either the msi-id or msi-resource must be specified
+			&cli.StringFlag{Name: "msi-id", Usage: "MSI client ID"},
+			&cli.StringFlag{Name: "msi-resource", Usage: "MSI resource ID"},
+			&cli.StringFlag{Name: "cloud", Usage: "Azure cloud"},
+			&cli.StringFlag{Name: "region", Usage: "Current region"},
+			&cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"},
+			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
+			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
+		},
+
+		Action: func(ctx *cli.Context) error {
+			return realMain(ctx)
 		},
 	}
 
-	viper.SetEnvPrefix("L2M")
-	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-
-	flags := cmd.Flags()
-	flags.Bool("dev", false, "Run on a local dev machine without executing real queries")
-	flags.Int("port", 4023, "Metrics port number")
-	// Either the msi-id or msi-resource must be specified
-	flags.String("msi-id", "", "MSI client ID")
-	flags.String("msi-resource", "", "MSI resource ID")
-	flags.String("cloud", "", "Azure cloud")
-	flags.String("kusto-service-endpoint", "", "Kusto service endpoint")
-	flags.String("kusto-infra-endpoint", "", "Kusto infra endpoint")
-	flags.String("region", "", "Current region")
-	flags.String("underlay", "", "Current underlay")
-	flags.String("alert-address", "", "Address of the alert notification service")
-	viper.BindPFlags(flags)
-	viper.AutomaticEnv()
-
-	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	if err := app.Run(os.Args); err != nil {
+		logger.Fatal(err.Error())
 	}
+}
+
+func realMain(ctx *cli.Context) error {
+
+	endpoints := make(map[string]string)
+	endpointsArg := ctx.StringSlice("kusto-endpoint")
+	for _, v := range endpointsArg {
+		parts := strings.Split(v, "=")
+		if len(parts) != 2 {
+			return cli.Exit("Invalid kusto-endpoint format, expected <name>=<endpoint>", 1)
+		}
+		endpoints[parts[0]] = parts[1]
+	}
+
+	opts := &service.AlerterOpts{
+		Dev:            ctx.Bool("dev"),
+		Port:           ctx.Int("port"),
+		KustoEndpoints: endpoints,
+		Region:         ctx.String("region"),
+		Cloud:          ctx.String("cloud"),
+		AlertAddr:      ctx.String("alerter-address"),
+		Concurrency:    ctx.Int("concurrency"),
+		MSIID:          ctx.String("msi-id"),
+		MSIResource:    ctx.String("msi-resource"),
+	}
+
+	svc, err := service.New(opts)
+	if err != nil {
+		return err
+	}
+	return svc.Run()
 }

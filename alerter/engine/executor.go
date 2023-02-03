@@ -9,7 +9,6 @@ import (
 	"github.com/Azure/adx-mon/alert"
 
 	"github.com/Azure/adx-mon/logger"
-	"github.com/davecgh/go-spew/spew"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +37,7 @@ func (e *Executor) Execute(ctx context.Context, client Client, log logger.Logger
 				handler = e.MetricHandler
 			}
 			if err := client.Query(ctx, rule, handler); err != nil {
-				log.Error("Failed to execute query=%s: %w", rule.DisplayName, err)
+				log.Error("Failed to execute query=%s: %s", rule.DisplayName, err)
 			}
 			ticker := time.NewTicker(rule.Interval)
 			defer ticker.Stop()
@@ -163,7 +162,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 	}
 
 	addr := fmt.Sprintf("%s/alerts", e.AlertAddr)
-	logger.Info("Sending alert %s %s", addr, spew.Sdump(a))
+	logger.Info("Sending alert %s %v", addr, a)
 	if err := e.AlertCli.Create(context.Background(), addr, a); err != nil {
 		fmt.Printf("Failed to log Notification: %s\n", err)
 		return nil
