@@ -8,6 +8,7 @@ import (
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -77,20 +78,23 @@ func New(opts *AlerterOpts) (*Alerter, error) {
 
 	if opts.MSIID == "" && opts.MSIResource == "" {
 		logger.Warn("No MSI ID or resource provided, using fake kusto clients")
+
 		for name, endpoint := range opts.KustoEndpoints {
 			l2m.clients[name] = fakeKustoClient{endpoint: endpoint}
 			if err != nil {
 				return nil, fmt.Errorf("kusto client=%s: %w", endpoint, err)
 			}
 		}
-		rules.Register(&rules.Rule{
+		fakeRule := &rules.Rule{
 			DisplayName: "FakeRule",
 			Database:    "FakeDB",
 			Interval:    time.Minute,
 			Query:       "Table | where foo == 'bar'",
 			RoutingID:   "FakeRoutingID",
 			TSG:         "FakeTSG",
-		})
+		}
+		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
+		rules.Register(fakeRule)
 	} else {
 		var auth kusto.Authorization
 		if opts.Dev {
@@ -135,7 +139,7 @@ func (l *Alerter) Run() error {
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %w", err)
 	}
-	logger.Info("Starting log-to-metrics")
+	logger.Info("Starting adx-mon alerter")
 
 	go func() {
 		logger.Info("Listening at :%d", l.opts.Port)
@@ -187,10 +191,11 @@ func prodAuth(opts *AlerterOpts) (kusto.Authorization, error) {
 }
 
 func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
-	client := l.clients["AKSprod"]
-	if strings.Contains(r.Database, "infra") {
-		client = l.clients["AKSinfra"]
+	client := l.clients[r.Database]
+	if client == nil {
+		return fmt.Errorf("no client found for database=%s", r.Database)
 	}
+
 	iter, err := client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
 	if err != nil {
 		return fmt.Errorf("failed to execute kusto query=%s: %w", r.DisplayName, err)
@@ -209,21 +214,26 @@ func devAuth(opts *AlerterOpts) (kusto.Authorization, error) {
 	// Use microsoft.com creds to login
 	// $ az login
 	// Create an access token for the cluster you want to access
-	// $ az account get-access-token --resource https://aksinfra.centralus.kusto.windows.net
+	// $ az account get-access-token --resource https://cluster.centralus.kusto.windows.net
 	// Run it
 	// $ alerter \
 	// 		--dev \
-	// 		--kusto-infra-endpoint https://aksinfra.centralus.kusto.windows.net \
-	//		--kusto-service-endpoint  https://aks.centralus.kusto.windows.net \
-	// 		--kusto-customer-endpoint https://aksccplogs.centralus.kusto.windows.net \
+	// 		--kusto-endpoint MyDB=https://cluster.centralus.kusto.windows.net
 	// 		--region westeurope \
-	//		--rule NameOfRuleToTest
-	auth, err := auth.NewAuthorizerFromCLIWithResource(opts.KustoEndpoints["AKSinfra"])
-	if err != nil {
-		return kusto.Authorization{}, fmt.Errorf("failed to created authorized: %w", err)
+
+	var authz autorest.Authorizer
+	for _, endpoint := range opts.KustoEndpoints {
+		var err error
+		authz, err = auth.NewAuthorizerFromCLIWithResource(endpoint)
+		if err != nil {
+			return kusto.Authorization{}, fmt.Errorf("failed to created authorized: %w", err)
+		}
+		break
+
 	}
+
 	authorizer := kusto.Authorization{
-		Authorizer: auth,
+		Authorizer: authz,
 	}
 	return authorizer, nil
 }
