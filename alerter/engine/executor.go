@@ -20,48 +20,60 @@ import (
 )
 
 type Executor struct {
-	AlertCli  *alert.Client
-	AlertAddr string
+	AlertCli    *alert.Client
+	AlertAddr   string
+	KustoClient Client
+	ctx         context.Context
+	wg          sync.WaitGroup
+	closeFn     context.CancelFunc
 }
 
-func (e *Executor) Execute(ctx context.Context, client Client, log logger.Logger) error {
+func (e *Executor) Open(ctx context.Context) error {
+	e.ctx, e.closeFn = context.WithCancel(ctx)
 	logger.Info("Begin executing %d queries", len(rules.List()))
-	var wg sync.WaitGroup
 	for _, r := range rules.List() {
-		wg.Add(1)
-		go func(rule rules.Rule) {
-			log.Info("Creating query executor for %s in %s", rule.DisplayName, rule.Database)
-			// do-while
-			handler := e.ICMHandler
-			if isMetric(rule) {
-				handler = e.MetricHandler
-			}
-			if err := client.Query(ctx, rule, handler); err != nil {
-				log.Error("Failed to execute query=%s: %s", rule.DisplayName, err)
-			}
-			ticker := time.NewTicker(rule.Interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					wg.Done()
-					return
-				case <-ticker.C:
-					queue.Workers <- struct{}{}
-					start := time.Now()
-					log.Info("Executing %s", rule.DisplayName)
-					if err := client.Query(ctx, rule, handler); err != nil {
-						log.Error("Failed to execute query=%s: %w", rule.DisplayName, err)
-					}
-					log.Info("Completed %s in %s", rule.DisplayName, time.Since(start))
-					<-queue.Workers
-				}
-			}
-
-		}(*r)
+		go e.queryWorker(*r)
 	}
-	wg.Wait()
-	return ctx.Err()
+	return nil
+}
+
+func (e *Executor) queryWorker(rule rules.Rule) {
+	e.wg.Add(1)
+	defer e.wg.Done()
+
+	logger.Info("Creating query executor for %s in %s", rule.DisplayName, rule.Database)
+
+	// do-while
+	if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
+		logger.Error("Failed to execute query=%s: %s", rule.DisplayName, err)
+	}
+	ticker := time.NewTicker(rule.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-ticker.C:
+			// Try to acquire a worker slot
+			queue.Workers <- struct{}{}
+
+			start := time.Now()
+			logger.Info("Executing %s", rule.DisplayName)
+			if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
+				logger.Error("Failed to execute query=%s: %w", rule.DisplayName, err)
+			}
+			logger.Info("Completed %s in %s", rule.DisplayName, time.Since(start))
+
+			// Release the worker slot
+			<-queue.Workers
+		}
+	}
+}
+
+func (e *Executor) Close() error {
+	e.closeFn()
+	e.wg.Wait()
+	return nil
 }
 
 func (e *Executor) MetricHandler(endpoint string, rule rules.Rule, row *table.Row) error {

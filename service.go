@@ -2,6 +2,7 @@ package adx_mon
 
 import (
 	"bytes"
+	"context"
 	"github.com/Azure/adx-mon/adx"
 	"github.com/Azure/adx-mon/cluster"
 	"github.com/Azure/adx-mon/logger"
@@ -10,8 +11,6 @@ import (
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/Azure/go-autorest/autorest/azure/auth"
 	"github.com/golang/snappy"
 	"io"
 	"net/http"
@@ -41,7 +40,8 @@ type Service struct {
 	replicator  *cluster.Replicator
 	coordinator *cluster.Coordinator
 	archiver    *cluster.Archiver
-	closing     chan struct{}
+	closeFn     context.CancelFunc
+	ctx         context.Context
 
 	store   *storage.Store
 	metrics *metrics.Service
@@ -63,24 +63,14 @@ type ServiceOpts struct {
 
 func NewService(opts ServiceOpts) (*Service, error) {
 
-	var (
-		authConfig autorest.Authorizer
-		err        error
-	)
-
+	kcsb := kusto.NewConnectionStringBuilder(opts.KustoEndpoint)
 	if opts.UseCLIAuth {
-		authConfig, err = auth.NewAuthorizerFromCLIWithResource(opts.KustoEndpoint)
-		if err != nil {
-			return nil, err
-		}
+		kcsb.WithAzCli()
 	} else {
-		authConfig, err = auth.NewAuthorizerFromEnvironmentWithResource(opts.KustoEndpoint)
-		if err != nil {
-			return nil, err
-		}
+		kcsb.WithDefaultAzureCredential()
 	}
 
-	client, err := kusto.New(opts.KustoEndpoint, kusto.Authorization{Authorizer: authConfig})
+	client, err := kusto.New(kcsb)
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +130,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		compressor:  c,
 		archiver:    archiver,
 		metrics:     metricsSvc,
-		closing:     make(chan struct{}),
 	}, nil
 }
 
-func (s *Service) Open() error {
+func (s *Service) Open(ctx context.Context) error {
+	s.ctx, s.closeFn = context.WithCancel(ctx)
 	if err := s.ingestor.Open(); err != nil {
 		return err
 	}
@@ -176,7 +166,7 @@ func (s *Service) Open() error {
 }
 
 func (s *Service) Close() error {
-	close(s.closing)
+	s.closeFn()
 
 	if err := s.metrics.Close(); err != nil {
 		return err
@@ -205,7 +195,7 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
-// HandleReceive hadles the prometheus remote write requests and writes them to the store.
+// HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if err := r.Body.Close(); err != nil {

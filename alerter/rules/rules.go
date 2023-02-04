@@ -3,15 +3,12 @@ package rules
 import (
 	"embed"
 	"fmt"
-	"io/fs"
-	"path/filepath"
 	"time"
 
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/prometheus/client_golang/prometheus"
-	"gopkg.in/yaml.v2"
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	// Load go-based rules: only temporarily in place, will
 	// be replaced by a metrics loader
@@ -29,57 +26,18 @@ func List() []*Rule {
 // VerifyRules ensures all configurations are valid and adds dynamic
 // metadata as required, such as the current region.
 func VerifyRules(region string) error {
-	// Load the yaml-based configurations / rules
-	err := fs.WalkDir(content, ".", func(path string, d fs.DirEntry, err error) error {
-
-		if filepath.Ext(d.Name()) == ".yaml" {
-			data, err := content.ReadFile(path)
-			if err != nil {
-				return fmt.Errorf("failed to read embedded %s: %w", path, err)
-			}
-
-			var rule map[string]*Rule
-			if err := yaml.Unmarshal(data, &rule); err != nil {
-				return fmt.Errorf("failed to load rule %s: %w", path, err)
-			}
-			for k, v := range rule {
-				// Set the Rule's name
-				v.DisplayName = k
-				// Create a Kusto statement
-				v.Stmt = kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).
-					UnsafeAdd(v.Query).
-					MustDefinitions(
-						kusto.NewDefinitions().Must(
-							kusto.ParamTypes{
-								"ParamRegion": kusto.ParamType{Type: types.String},
-							},
-						),
-					)
-				// Optionally create a Prometheus Metric
-				if v.Value != "" && len(v.Dimensions) != 0 {
-					v.Metric = prometheus.NewCounterVec(
-						prometheus.CounterOpts{
-							Namespace: "l2m",
-							Subsystem: v.DisplayName,
-							Name:      v.Value,
-							Help:      v.DisplayName,
-						},
-						v.Dimensions,
-					)
-					if err := prometheus.Register(v.Metric); err != nil {
-						return fmt.Errorf("failed to register metric=%s: %w", v.DisplayName, err)
-					}
-				}
-				Register(v)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to load rules: %w", err)
-	}
 
 	for _, rule := range rules {
+		// Create a Kusto statement
+		rule.Stmt = kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).
+			UnsafeAdd(rule.Query).
+			MustDefinitions(
+				kusto.NewDefinitions().Must(
+					kusto.ParamTypes{
+						"ParamRegion": kusto.ParamType{Type: types.String},
+					},
+				),
+			)
 		qv := kusto.QueryValues{}
 		qv["ParamRegion"] = region
 		params, err := kusto.NewParameters().With(qv)

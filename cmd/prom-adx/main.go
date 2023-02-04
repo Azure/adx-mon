@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	promingest "github.com/Azure/adx-mon"
 	"github.com/Azure/adx-mon/adx"
@@ -8,8 +9,11 @@ import (
 	"github.com/Azure/adx-mon/storage"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -25,6 +29,7 @@ func (i *strSliceFag) Set(value string) error {
 }
 
 func main() {
+	svcCtx, cancel := context.WithCancel(context.Background())
 
 	runtime.MemProfileRate = 4096
 	runtime.SetBlockProfileRate(int(1 * time.Second))
@@ -81,9 +86,23 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
 	}
-	if err := svc.Open(); err != nil {
+	if err := svc.Open(svcCtx); err != nil {
 		logger.Fatal("Failed to start service: %s", err)
 	}
+
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-sc
+		cancel()
+
+		logger.Info("Received signal %s, exiting...", sig.String())
+		// Shutdown the server and cancel context
+		err := svc.Close()
+		if err != nil {
+			logger.Error(err.Error())
+		}
+	}()
 
 	http.HandleFunc("/transfer", svc.HandleTransfer)
 	http.HandleFunc("/receive", svc.HandleReceive)
@@ -91,4 +110,5 @@ func main() {
 	if err := http.ListenAndServe(":9090", nil); err != nil {
 		logger.Fatal("ListenAndServe returned error: %s", err)
 	}
+	<-svcCtx.Done()
 }

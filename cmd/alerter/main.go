@@ -1,11 +1,14 @@
 package main
 
 import (
-	"github.com/Azure/adx-mon/alerter/service"
+	"context"
+	"github.com/Azure/adx-mon/alerter"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/urfave/cli/v2" // imports as package "cli"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 func main() {
@@ -36,7 +39,6 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
-
 	endpoints := make(map[string]string)
 	endpointsArg := ctx.StringSlice("kusto-endpoint")
 	for _, v := range endpointsArg {
@@ -47,7 +49,7 @@ func realMain(ctx *cli.Context) error {
 		endpoints[parts[0]] = parts[1]
 	}
 
-	opts := &service.AlerterOpts{
+	opts := &alerter.AlerterOpts{
 		Dev:            ctx.Bool("dev"),
 		Port:           ctx.Int("port"),
 		KustoEndpoints: endpoints,
@@ -56,12 +58,30 @@ func realMain(ctx *cli.Context) error {
 		AlertAddr:      ctx.String("alerter-address"),
 		Concurrency:    ctx.Int("concurrency"),
 		MSIID:          ctx.String("msi-id"),
-		MSIResource:    ctx.String("msi-resource"),
 	}
 
-	svc, err := service.New(opts)
+	svcCtx, cancel := context.WithCancel(context.Background())
+	svc, err := alerter.NewService(opts)
 	if err != nil {
 		return err
 	}
-	return svc.Run()
+	if err := svc.Open(svcCtx); err != nil {
+		return err
+	}
+
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-sc
+		cancel()
+
+		logger.Info("Received signal %s, exiting...", sig.String())
+		// Shutdown the server and cancel context
+		err := svc.Close()
+		if err != nil {
+			logger.Error(err.Error())
+		}
+	}()
+	<-svcCtx.Done()
+	return nil
 }
