@@ -1,12 +1,11 @@
 package engine
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 type Notification struct {
-	// Region maps to the Location/Region Notification field.
-	Region       string `kusto:"Region"`
-	UnderlayName string `kusto:"UnderlayName"`
-
 	// Title maps to the Title Notification field.
 	Title string `kusto:"Title"`
 
@@ -23,19 +22,19 @@ type Notification struct {
 	// the original Notification will be incremented on each firing of the Notification.
 	CorrelationID string `kusto:"CorrelationId"`
 
-	// Cluster maps to the Location/Cluster Notification field.  This is typically the underlay resource group in infra ICMs.
-	Cluster string `kusto:"Cluster"`
+	// Recipient is the destination of the Notification.  Typically, a queue or email address.
+	Recipient string `kusto:"Recipient"`
 
-	// Role maps to the Location/Role Notification field.
-	Role string `kusto:"Role"`
-
-	// Slice maps to the Location/Slice Notification field.  This is typically the underlay host name for infra ICMs.
-	Slice string `kusto:"Slice"`
+	// CustomFields are any additional fields that are not part of the Notification struct.
+	CustomFields map[string]string
 }
 
 func (i Notification) Validate() error {
 	if len(i.Title) == 0 || len(i.Title) > 512 {
-		return fmt.Errorf("Title must be between 1 and 512 chars")
+		return fmt.Errorf("title must be between 1 and 512 chars")
+	}
+	if i.Severity == math.MinInt64 {
+		return fmt.Errorf("severity must be specified")
 	}
 	return nil
 }

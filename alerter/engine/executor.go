@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/logger"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,13 @@ import (
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
 )
 
 type Executor struct {
-	AlertCli    *alert.Client
+	AlertCli interface {
+		Create(ctx context.Context, endpoint string, alert alert.Alert) error
+	}
 	AlertAddr   string
 	KustoClient Client
 	ctx         context.Context
@@ -76,54 +80,41 @@ func (e *Executor) Close() error {
 	return nil
 }
 
-func (e *Executor) MetricHandler(endpoint string, rule rules.Rule, row *table.Row) error {
-	var (
-		columns    []string
-		dimensions = make(map[string]string)
-		metric     int
-	)
-	columns = row.ColumnNames()
+// ICMHandler converts rows of a query to ICMs.
+func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) error {
+	res := Notification{
+		Severity:     math.MinInt64,
+		CustomFields: map[string]string{},
+	}
+
+	query := rule.Query
+
+	columns := row.ColumnNames()
 	for i, value := range row.Values {
-		if rule.Metric != nil {
-			if columnIsDimension(rule.Dimensions, value.String()) {
-				dimensions[columns[i]] = value.String()
-				logger.Debug("Found metric dimension: %s: %s", columns[i], dimensions[columns[i]])
-				continue
+		switch strings.ToLower(columns[i]) {
+		case "title":
+			res.Title = value.String()
+		case "description":
+			res.Description = value.String()
+		case "severity":
+			v, err := e.asInt64(value)
+			if err != nil {
+				return err
 			}
-			if rule.Value == columns[i] {
-				v := value.String()
-				vv, err := strconv.Atoi(v)
-				if err != nil {
-					logger.Error("Metric value cannot be converted to a number: %s", v)
-					return fmt.Errorf("failed to convert metric value=%s: %w", v, err)
-				}
-				metric = vv
-				logger.Debug("Found metric value: %d", vv)
-				continue
-			}
+			res.Severity = v
+		case "recipient":
+			res.Recipient = value.String()
+		case "summary":
+			res.Summary = value.String()
+		case "correlationid":
+			res.CorrelationID = value.String()
+		default:
+			res.CustomFields[columns[i]] = value.String()
 		}
 	}
 
-	rule.Metric.With(dimensions).Add(float64(metric))
-	logger.Debug("Incrementing metric: namespace=%s name=%s by=%d with=%v", rule.Namespace, rule.Name, metric, dimensions)
-
-	return nil
-}
-
-// ICMHandler converts rows of a query to ICMs.
-func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) error {
-	res := Notification{}
-	if err := row.ToStruct(&res); err != nil {
-		return fmt.Errorf("failed to decode Notification: %w", err)
-	}
-	query := rule.Query
-
 	if err := res.Validate(); err != nil {
 		return err
-	}
-
-	if rule.RoutingID == "" {
-		return fmt.Errorf("failed to create Notification: no routing id for %s/%s", rule.Namespace, rule.Name)
 	}
 
 	for k, v := range rule.Parameters {
@@ -157,32 +148,51 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 	}
 
 	a := alert.Alert{
-		Destination:   rule.RoutingID,
+		Destination:   res.Recipient,
 		Title:         res.Title,
 		Summary:       summary,
 		Description:   res.Description,
 		Severity:      int(res.Severity),
 		Source:        fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
 		CorrelationID: res.CorrelationID,
-		CustomFields: map[string]string{ // TODO: These are Azure specific.  Need to make this generic.
-			"TSG":     rule.TSG,
-			"Region":  res.Region,
-			"Role":    res.Role,
-			"Cluster": res.Cluster,
-			"Slice":   res.Slice,
-		},
+		CustomFields:  res.CustomFields,
 	}
 
 	addr := fmt.Sprintf("%s/alerts", e.AlertAddr)
 	logger.Info("Sending alert %s %v", addr, a)
 	if err := e.AlertCli.Create(context.Background(), addr, a); err != nil {
-		fmt.Printf("Failed to log Notification: %s\n", err)
+		fmt.Printf("Failed to create Notification: %s\n", err)
 		return nil
 	}
 
 	//log.Infof("Created Notification %s - %s", resp.IncidentId, res.Title)
 
 	return nil
+}
+
+func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
+	switch t := value.(type) {
+	case kustovalues.Long:
+		return t.Value, nil
+	case kustovalues.Real:
+		return int64(t.Value), nil
+	case kustovalues.String:
+		v, err := strconv.ParseInt(t.Value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("failed to convert severity to int: %w", err)
+		}
+		return v, nil
+	case kustovalues.Int:
+		return int64(t.Value), nil
+	case kustovalues.Decimal:
+		v, err := strconv.ParseFloat(t.Value, 64)
+		if err != nil {
+			return 0, fmt.Errorf("failed to convert severity to int: %w", err)
+		}
+		return int64(v), nil
+	default:
+		return 0, fmt.Errorf("failed to convert severity to int: %s", value.String())
+	}
 }
 
 func kustoDeepLink(q string) (string, error) {

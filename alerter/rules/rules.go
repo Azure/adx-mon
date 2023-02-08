@@ -9,7 +9,6 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
-	"github.com/prometheus/client_golang/prometheus"
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -37,8 +36,6 @@ func VerifyRules(kubeclient client.Client, region string) error {
 			Name:              r.Name,
 			Interval:          r.Spec.Interval.Duration,
 			Query:             r.Spec.Query,
-			RoutingID:         r.Spec.RoutingID,
-			TSG:               r.Spec.TSG,
 			AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
 		}
 
@@ -79,22 +76,13 @@ type Rule struct {
 	Database          string
 	Interval          time.Duration
 	Query             string
-	RoutingID         string
-	TSG               string
 	AutoMitigateAfter time.Duration
-
-	// @todo remove?
-	Dimensions []string
-	Value      string
 
 	// Stmt specifies the underlayEtcdPeersQuery to execute.
 	Stmt kusto.Stmt
 
-	// Parameters are the parameters passed with the underlayEtcdPeersQuery
+	// Parameters are the parameters passed with the stmt
 	Parameters kusto.QueryValues
-
-	// Metric is a Prometheus metric
-	Metric *prometheus.CounterVec
 }
 
 func Register(rule *Rule) {

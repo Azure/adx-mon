@@ -31,8 +31,6 @@ type AlertRuleSpec struct {
 	Database          string          `json:"database,omitempty"`
 	Interval          metav1.Duration `json:"interval,omitempty"`
 	Query             string          `json:"query,omitempty"`
-	RoutingID         string          `json:"routingID,omitempty"`
-	TSG               string          `json:"tsg,omitempty"`
 	AutoMitigateAfter metav1.Duration `json:"autoMitigateAfter,omitempty"`
 }
 
