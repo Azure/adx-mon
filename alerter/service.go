@@ -117,8 +117,6 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Database:  "FakeDB",
 			Interval:  time.Minute,
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
-			RoutingID: "FakeRoutingID",
-			TSG:       "FakeTSG",
 		}
 		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
 		rules.Register(fakeRule)
