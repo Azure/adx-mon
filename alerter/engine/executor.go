@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/metrics"
 	"math"
 	"strconv"
 	"strings"
@@ -50,6 +51,7 @@ func (e *Executor) queryWorker(rule rules.Rule) {
 	// do-while
 	if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
 		logger.Error("Failed to execute query=%s/%s: %s", rule.Namespace, rule.Name, err)
+		metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 	}
 	ticker := time.NewTicker(rule.Interval)
 	defer ticker.Stop()
@@ -65,6 +67,7 @@ func (e *Executor) queryWorker(rule rules.Rule) {
 			logger.Info("Executing %s/%s", rule.Namespace, rule.Name)
 			if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
 				logger.Error("Failed to execute query=%s.%s: %s", rule.Namespace, rule.Name, err)
+				metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 			}
 			logger.Info("Completed %s/%s in %s", rule.Namespace, rule.Name, time.Since(start))
 
@@ -99,6 +102,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 		case "severity":
 			v, err := e.asInt64(value)
 			if err != nil {
+				metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 				return err
 			}
 			res.Severity = v
@@ -114,6 +118,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 	}
 
 	if err := res.Validate(); err != nil {
+		metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 		return err
 	}
 
@@ -122,12 +127,14 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 		case string:
 			query = strings.Replace(query, k, fmt.Sprintf("\"%s\"", vv), -1)
 		default:
+			metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 			return fmt.Errorf("unimplemented query type: %v", vv)
 		}
 	}
 
 	url, err := kustoDeepLink(query)
 	if err != nil {
+		metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 		return fmt.Errorf("failed to create kusto deep link: %w", err)
 	}
 
@@ -162,6 +169,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 	logger.Info("Sending alert %s %v", addr, a)
 	if err := e.AlertCli.Create(context.Background(), addr, a); err != nil {
 		fmt.Printf("Failed to create Notification: %s\n", err)
+		metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 		return nil
 	}
 
@@ -211,13 +219,4 @@ func kustoDeepLink(q string) (string, error) {
 	}
 
 	return base64.StdEncoding.EncodeToString(b.Bytes()), nil
-}
-
-func columnIsDimension(dimensions []string, column string) bool {
-	for _, d := range dimensions {
-		if d == column {
-			return true
-		}
-	}
-	return false
 }
