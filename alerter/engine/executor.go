@@ -68,8 +68,10 @@ func (e *Executor) queryWorker(rule rules.Rule) {
 			if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
 				logger.Error("Failed to execute query=%s.%s: %s", rule.Namespace, rule.Name, err)
 				metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
+			} else {
+				metrics.AlertQuerySuccess.WithLabelValues(rule.Namespace, rule.Name).Inc()
+				logger.Info("Completed %s/%s in %s", rule.Namespace, rule.Name, time.Since(start))
 			}
-			logger.Info("Completed %s/%s in %s", rule.Namespace, rule.Name, time.Since(start))
 
 			// Release the worker slot
 			<-queue.Workers
@@ -172,6 +174,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 		metrics.AlertQueryFailures.WithLabelValues(rule.Namespace, rule.Name).Inc()
 		return nil
 	}
+	metrics.NotificationSuccess.WithLabelValues(rule.Namespace, rule.Name).Inc()
 
 	//log.Infof("Created Notification %s - %s", resp.IncidentId, res.Title)
 
