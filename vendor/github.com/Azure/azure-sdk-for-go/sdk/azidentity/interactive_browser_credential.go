@@ -73,7 +73,11 @@ func (c *InteractiveBrowserCredential) GetToken(ctx context.Context, opts policy
 		return azcore.AccessToken{Token: ar.AccessToken, ExpiresOn: ar.ExpiresOn.UTC()}, err
 	}
 
-	ar, err = c.client.AcquireTokenInteractive(ctx, opts.Scopes, public.WithRedirectURI(c.options.RedirectURL))
+	o := []public.InteractiveAuthOption{}
+	if c.options.RedirectURL != "" {
+		o = append(o, public.WithRedirectURI(c.options.RedirectURL))
+	}
+	ar, err = c.client.AcquireTokenInteractive(ctx, opts.Scopes, o...)
 	if err != nil {
 		return azcore.AccessToken{}, newAuthenticationFailedErrorFromMSALError(credNameBrowser, err)
 	}

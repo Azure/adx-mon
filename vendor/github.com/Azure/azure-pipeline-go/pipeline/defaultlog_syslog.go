@@ -7,9 +7,9 @@ import (
 	"log/syslog"
 )
 
-// forceLog should rarely be used. It forceable logs an entry to the
+// ForceLog should rarely be used. It forceable logs an entry to the
 // Windows Event Log (on Windows) or to the SysLog (on Linux)
-func forceLog(level LogLevel, msg string) {
+func ForceLog(level LogLevel, msg string) {
 	if defaultLogger == nil {
 		return // Return fast if we failed to create the logger.
 	}

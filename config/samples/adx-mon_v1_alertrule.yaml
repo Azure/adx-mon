@@ -1,0 +1,15 @@
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  labels:
+    app.kubernetes.io/name: alertrule
+    app.kubernetes.io/instance: alertrule-sample
+    app.kubernetes.io/part-of: adx-mon
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: adx-mon
+  name: alertrule-sample
+spec:
+  database: "SomeDB"
+  query: 'SomeTable | where TIMESTAMP > ago(10m) | take 10'
+  interval: 5m
+  routingID: "some-pager"

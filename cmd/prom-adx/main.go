@@ -3,10 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	promingest "github.com/Azure/adx-mon"
-	"github.com/Azure/adx-mon/adx"
-	"github.com/Azure/adx-mon/logger"
-	"github.com/Azure/adx-mon/storage"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -15,6 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Azure/adx-mon/adx"
+	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/storage"
 )
 
 type strSliceFag []string
@@ -74,7 +74,7 @@ func main() {
 		storage.AddDefaultMapping(fields[0], fields[1])
 	}
 
-	svc, err := promingest.NewService(promingest.ServiceOpts{
+	svc, err := NewService(ServiceOpts{
 		StorageDir:        storageDir,
 		KustoEndpoint:     kustoEndpoint,
 		Database:          database,

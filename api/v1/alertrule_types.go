@@ -23,6 +23,14 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+const (
+	// AlertRuleConditionQueryParsed is set when the query is parsed successfully
+	AlertRuleConditionQueryParsed = "QueryParsed"
+
+	// AlertRuleConditionQueryRunning is set when the query is running
+	AlertRuleConditionQueryRunning = "QueryRunning"
+)
+
 // AlertRuleSpec defines the desired state of AlertRule
 type AlertRuleSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -31,18 +39,24 @@ type AlertRuleSpec struct {
 	Database          string          `json:"database,omitempty"`
 	Interval          metav1.Duration `json:"interval,omitempty"`
 	Query             string          `json:"query,omitempty"`
+	RoutingID         string          `json:"routingID,omitempty"`
+	TSG               string          `json:"tsg,omitempty"`
 	AutoMitigateAfter metav1.Duration `json:"autoMitigateAfter,omitempty"`
+
+	// @todo figure out how to handle this
+	//Parameters map[string]interface{} `json:"parameters,omitempty"`
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 // AlertRuleStatus defines the observed state of AlertRule
 type AlertRuleStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	Status        string      `json:"status,omitempty"`
-	Message       string      `json:"message,omitempty"`
-	LastQueryTime metav1.Time `json:"lastQueryTime,omitempty"`
-	LastAlertTime metav1.Time `json:"lastAlertTime,omitempty"`
+	LastQueryTime metav1.Time        `json:"lastQueryTime,omitempty"`
+	LastAlertTime metav1.Time        `json:"lastAlertTime,omitempty"`
+	Conditions    []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true
