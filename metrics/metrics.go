@@ -24,31 +24,17 @@ var (
 	}, []string{"node"})
 
 	// Alerting metrics
-	AlertQueryFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",
-		Name:      "query_failures_total",
-		Help:      "Number of alert query failures",
+		Name:      "query_health",
+		Help:      "Gauge indicating if a query is healthy or not",
 	}, []string{"namespace", "name"})
 
-	AlertQuerySuccess = promauto.NewCounterVec(prometheus.CounterOpts{
+	NotificationHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",
-		Name:      "query_success_total",
-		Help:      "Number of alert query successfully executed",
-	}, []string{"namespace", "name"})
-
-	NotificationFailures = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "alerter",
-		Name:      "notification_failures_total",
-		Help:      "Number of alert notification failures",
-	}, []string{"namespace", "name"})
-
-	NotificationSuccess = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "alerter",
-		Name:      "notification_success_total",
-		Help:      "Number of alert notification successfully created",
+		Name:      "notification_health",
+		Help:      "Gauge indicating if a notification is healthy or not",
 	}, []string{"namespace", "name"})
 )
