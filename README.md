@@ -24,6 +24,15 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
 contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
+
+## Testing alertrules.
+1. az login to the account that has acces to the custo clusers. 
+1. apply your alert rules to a cluster your current kubeconfig is pointing at. (apply the CRD first if you haven't)
+2. cd cmd/alerter for
+1. go run . --kusto-endpoint="<database>=<kustourl>"  
+1. optioally specicfy arugments that will be filled into query if needed like --region=uksouth
+1. You should both see  "Creating query executor for..." and "Fake Alert Notification Recieved..." if your query gets results.
+
 ## Trademarks
 
 This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft 
