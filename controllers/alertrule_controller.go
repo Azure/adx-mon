@@ -258,7 +258,14 @@ func (r *AlertRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		go func() {
 			start := time.Now()
 			logger.Info("Executing query")
-			if err := r.KustoClient.Query(ctx, *alertRule, r.ICMHandler); err != nil {
+			alertcount := 0
+			//time to interface this function?
+			counticms := func(endpoint string, rule adxmonv1.AlertRule, row *table.Row) error {
+				alertcount += 1
+				return r.ICMHandler(endpoint, rule, row)
+			}
+
+			if err := r.KustoClient.Query(ctx, *alertRule, counticms); err != nil {
 				logger.Error(err, "Failed to execute query")
 				mutex.Lock()
 				Results[alertRule.Namespace+"/"+alertRule.Name] = queue.Result{
@@ -280,7 +287,7 @@ func (r *AlertRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 			mutex.Unlock()
 
-			r.Recorder.Event(alertRule, corev1.EventTypeNormal, "QueryCompleted", "Query completed successfully")
+			r.Recorder.Eventf(alertRule, corev1.EventTypeNormal, "QueryCompleted", "Query completed successfully, alerts: %d", alertcount)
 
 		}()
 
