@@ -40,11 +40,12 @@ type Alerter struct {
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
-	wg       sync.WaitGroup
-	executor *engine.Executor
-	ctx      context.Context
-	closeFn  context.CancelFunc
-	CtrlCli  client.Client
+	wg        sync.WaitGroup
+	executor  *engine.Executor
+	ctx       context.Context
+	closeFn   context.CancelFunc
+	CtrlCli   client.Client
+	ruleStore *rules.Store
 }
 
 type KustoClient interface {
@@ -68,16 +69,18 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		return nil, fmt.Errorf("failed to construct logger: %w", err)
 	}
 
-	if err := rules.VerifyRules(opts.CtrlCli, opts.Region); err != nil {
-		return nil, err
-	}
+	ruleStore := rules.NewStore(rules.StoreOpts{
+		Region:  opts.Region,
+		CtrlCli: opts.CtrlCli,
+	})
 
 	l2m := &Alerter{
-		opts:    opts,
-		log:     log,
-		clients: make(map[string]KustoClient),
-		queue:   make(chan struct{}, opts.Concurrency),
-		CtrlCli: opts.CtrlCli,
+		opts:      opts,
+		log:       log,
+		clients:   make(map[string]KustoClient),
+		queue:     make(chan struct{}, opts.Concurrency),
+		CtrlCli:   opts.CtrlCli,
+		ruleStore: ruleStore,
 	}
 
 	if opts.MSIID != "" {
@@ -107,11 +110,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
 		}
 		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
-		rules.Register(fakeRule)
-
-		if err := rules.VerifyRules(nil, opts.Region); err != nil {
-			return nil, err
-		}
+		ruleStore.Register(fakeRule)
 	}
 
 	if opts.AlertAddr == "" {
@@ -130,6 +129,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		AlertAddr:   opts.AlertAddr,
 		AlertCli:    alertCli,
 		KustoClient: l2m,
+		RuleStore:   ruleStore,
 	}
 	l2m.executor = executor
 	return l2m, nil
@@ -139,6 +139,10 @@ func (l *Alerter) Open(ctx context.Context) error {
 	l.ctx, l.closeFn = context.WithCancel(ctx)
 
 	logger.Info("Starting adx-mon alerter")
+
+	if err := l.ruleStore.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open rule store: %w", err)
+	}
 
 	if err := l.executor.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open executor: %w", err)
@@ -178,5 +182,12 @@ func newLogger() (logger.Logger, error) {
 
 func (l *Alerter) Close() error {
 	l.closeFn()
-	return l.executor.Close()
+	if err := l.executor.Close(); err != nil {
+		return fmt.Errorf("failed to close executor: %w", err)
+	}
+
+	if err := l.ruleStore.Close(); err != nil {
+		return fmt.Errorf("failed to close rule store: %w", err)
+	}
+	return nil
 }
