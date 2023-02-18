@@ -16,7 +16,6 @@ func main() {
 		Name:  "alerter",
 		Usage: "adx-mon alerting engine for ADX",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "dev", Usage: "Run on a local dev machine without executing real queries"},
 			&cli.IntFlag{Name: "port", Value: 4023, Usage: "Metrics port number"},
 			// Either the msi-id or msi-resource must be specified
 			&cli.StringFlag{Name: "msi-id", Usage: "MSI client ID"},
@@ -50,7 +49,6 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	opts := &alerter.AlerterOpts{
-		Dev:            ctx.Bool("dev"),
 		Port:           ctx.Int("port"),
 		KustoEndpoints: endpoints,
 		Region:         ctx.String("region"),

@@ -169,6 +169,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 
 	addr := fmt.Sprintf("%s/alerts", e.AlertAddr)
 	logger.Info("Sending alert %s %v", addr, a)
+
 	if err := e.AlertCli.Create(context.Background(), addr, a); err != nil {
 		fmt.Printf("Failed to create Notification: %s\n", err)
 		metrics.NotificationHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
