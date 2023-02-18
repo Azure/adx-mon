@@ -5,18 +5,14 @@ import (
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
-	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"net/http"
 	"os"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sync"
 	"time"
@@ -34,6 +30,7 @@ type AlerterOpts struct {
 	Concurrency    int
 	MSIID          string
 	MSIResource    string
+	CtrlCli        client.Client
 }
 
 type Alerter struct {
@@ -47,6 +44,7 @@ type Alerter struct {
 	executor *engine.Executor
 	ctx      context.Context
 	closeFn  context.CancelFunc
+	CtrlCli  client.Client
 }
 
 type KustoClient interface {
@@ -70,18 +68,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		return nil, fmt.Errorf("failed to construct logger: %w", err)
 	}
 
-	// Setup k8s client
-	// @todo figure out how to mock this
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = alertrulev1.AddToScheme(scheme)
-	kubeconfig := ctrl.GetConfigOrDie()
-	kubeclient, err := client.New(kubeconfig, client.Options{Scheme: scheme})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := rules.VerifyRules(kubeclient, opts.Region); err != nil {
+	if err := rules.VerifyRules(opts.CtrlCli, opts.Region); err != nil {
 		return nil, err
 	}
 
@@ -90,6 +77,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		log:     log,
 		clients: make(map[string]KustoClient),
 		queue:   make(chan struct{}, opts.Concurrency),
+		CtrlCli: opts.CtrlCli,
 	}
 
 	if opts.MSIID != "" {
@@ -109,7 +97,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		}
 	}
 
-	if kubeclient == nil {
+	if opts.CtrlCli == nil {
 		logger.Warn("No kusto endpoints provided, using fake kusto clients")
 		fakeRule := &rules.Rule{
 			Namespace: "fake-namespace",

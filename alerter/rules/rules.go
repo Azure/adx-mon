@@ -23,6 +23,10 @@ func List() []*Rule {
 // VerifyRules ensures all configurations are valid and adds dynamic
 // metadata as required, such as the current region.
 func VerifyRules(kubeclient client.Client, region string) error {
+	if kubeclient == nil {
+		return nil
+	}
+
 	// Get all the rules
 	ruleList := &alertrulev1.AlertRuleList{}
 	if err := kubeclient.List(context.Background(), ruleList); err != nil {
