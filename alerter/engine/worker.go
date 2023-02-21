@@ -28,10 +28,8 @@ func (e *worker) Run() {
 		e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
 
 	// do-while
-	if err := e.kustoClient.Query(e.ctx, *e.rule, e.ICMHandler); err != nil {
-		logger.Error("Failed to execute query=%s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
-	}
+	e.executeQuery()
+
 	ticker := time.NewTicker(e.rule.Interval)
 	defer ticker.Stop()
 	for {
@@ -39,23 +37,28 @@ func (e *worker) Run() {
 		case <-e.ctx.Done():
 			return
 		case <-ticker.C:
-			// Try to acquire a worker slot
-			queue.Workers <- struct{}{}
-
-			start := time.Now()
-			logger.Info("Executing %s/%s", e.rule.Namespace, e.rule.Name)
-			if err := e.kustoClient.Query(e.ctx, *e.rule, e.ICMHandler); err != nil {
-				logger.Error("Failed to execute query=%s.%s: %s", e.rule.Namespace, e.rule.Name, err)
-				metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
-			} else {
-				metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-				logger.Info("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
-			}
-
-			// Release the worker slot
-			<-queue.Workers
+			e.executeQuery()
 		}
 	}
+}
+
+func (e *worker) executeQuery() {
+	// Try to acquire a worker slot
+	queue.Workers <- struct{}{}
+
+	// Release the worker slot
+	defer func() { <-queue.Workers }()
+
+	start := time.Now()
+	logger.Info("Executing %s/%s", e.rule.Namespace, e.rule.Name)
+	if err := e.kustoClient.Query(e.ctx, *e.rule, e.ICMHandler); err != nil {
+		logger.Error("Failed to execute query=%s.%s: %s", e.rule.Namespace, e.rule.Name, err)
+		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+		return
+	}
+
+	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+	logger.Info("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
 }
 
 func (e *worker) Close() {
