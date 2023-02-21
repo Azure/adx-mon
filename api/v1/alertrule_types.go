@@ -32,6 +32,7 @@ type AlertRuleSpec struct {
 	Interval          metav1.Duration `json:"interval,omitempty"`
 	Query             string          `json:"query,omitempty"`
 	AutoMitigateAfter metav1.Duration `json:"autoMitigateAfter,omitempty"`
+	Destination       string          `json:"destination,omitempty"`
 }
 
 // AlertRuleStatus defines the observed state of AlertRule

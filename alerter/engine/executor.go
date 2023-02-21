@@ -7,18 +7,16 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
+	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/Azure/adx-mon/alerter/queue"
-	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
 )
 
 type Executor struct {
@@ -27,55 +25,38 @@ type Executor struct {
 	}
 	AlertAddr   string
 	KustoClient Client
-	ctx         context.Context
-	wg          sync.WaitGroup
-	closeFn     context.CancelFunc
+	RuleStore   *rules.Store
+
+	ctx     context.Context
+	wg      sync.WaitGroup
+	closeFn context.CancelFunc
+
+	mu      sync.RWMutex
+	workers map[string]*worker
 }
 
 func (e *Executor) Open(ctx context.Context) error {
 	e.ctx, e.closeFn = context.WithCancel(ctx)
-	logger.Info("Begin executing %d queries", len(rules.List()))
-	for _, r := range rules.List() {
-		go e.queryWorker(*r)
-	}
+	logger.Info("Begin executing %d queries", len(e.RuleStore.Rules()))
+	e.workers = make(map[string]*worker)
+
+	e.syncWorkers()
+	go e.periodicSync()
 	return nil
 }
 
-func (e *Executor) queryWorker(rule rules.Rule) {
-	e.wg.Add(1)
-	defer e.wg.Done()
+func (e *Executor) workerKey(rule *rules.Rule) string {
+	return fmt.Sprintf("%s/%s", rule.Namespace, rule.Name)
+}
 
-	logger.Info("Creating query executor for %s/%s in %s executing every %s",
-		rule.Namespace, rule.Name, rule.Database, rule.Interval.String())
-
-	// do-while
-	if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
-		logger.Error("Failed to execute query=%s/%s: %s", rule.Namespace, rule.Name, err)
-		metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
-	}
-	ticker := time.NewTicker(rule.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-e.ctx.Done():
-			return
-		case <-ticker.C:
-			// Try to acquire a worker slot
-			queue.Workers <- struct{}{}
-
-			start := time.Now()
-			logger.Info("Executing %s/%s", rule.Namespace, rule.Name)
-			if err := e.KustoClient.Query(e.ctx, rule, e.ICMHandler); err != nil {
-				logger.Error("Failed to execute query=%s.%s: %s", rule.Namespace, rule.Name, err)
-				metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
-			} else {
-				metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(1)
-				logger.Info("Completed %s/%s in %s", rule.Namespace, rule.Name, time.Since(start))
-			}
-
-			// Release the worker slot
-			<-queue.Workers
-		}
+func (e *Executor) newWorker(rule *rules.Rule) *worker {
+	ctx, cancel := context.WithCancel(e.ctx)
+	return &worker{
+		ctx:         ctx,
+		cancel:      cancel,
+		rule:        rule,
+		kustoClient: e.KustoClient,
+		ICMHandler:  e.ICMHandler,
 	}
 }
 
@@ -169,6 +150,7 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 
 	addr := fmt.Sprintf("%s/alerts", e.AlertAddr)
 	logger.Info("Sending alert %s %v", addr, a)
+
 	if err := e.AlertCli.Create(context.Background(), addr, a); err != nil {
 		fmt.Printf("Failed to create Notification: %s\n", err)
 		metrics.NotificationHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
@@ -203,6 +185,57 @@ func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
 		return int64(v), nil
 	default:
 		return 0, fmt.Errorf("failed to convert severity to int: %s", value.String())
+	}
+}
+
+func (e *Executor) syncWorkers() {
+	liveQueries := make(map[string]struct{})
+	for _, r := range e.RuleStore.Rules() {
+		id := e.workerKey(r)
+		liveQueries[id] = struct{}{}
+		worker, ok := e.workers[id]
+		if !ok {
+			logger.Info("Starting new worker for %s", id)
+			worker := e.newWorker(r)
+			e.workers[id] = worker
+			go worker.Run()
+			continue
+		}
+
+		// Rule has not changed, leave the existing working running
+		if worker.rule.Version == r.Version {
+			continue
+		}
+
+		if worker.rule.Version != r.Version {
+			logger.Info("Rule %s has changed, restarting worker", id)
+			worker.Close()
+			delete(e.workers, id)
+			worker := e.newWorker(r)
+			e.workers[id] = worker
+			go worker.Run()
+		}
+	}
+
+	// Shutdown any workers that no longer exist
+	for id := range liveQueries {
+		if _, ok := e.workers[id]; !ok {
+			logger.Info("Shutting down worker for %s", id)
+			e.workers[id].Close()
+			delete(e.workers, id)
+		}
+	}
+}
+
+func (e *Executor) periodicSync() {
+	ticker := time.NewTicker(10 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			e.syncWorkers()
+		case <-e.ctx.Done():
+			return
+		}
 	}
 }
 

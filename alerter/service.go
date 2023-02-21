@@ -5,18 +5,14 @@ import (
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
-	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"net/http"
 	"os"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sync"
 	"time"
@@ -34,6 +30,7 @@ type AlerterOpts struct {
 	Concurrency    int
 	MSIID          string
 	MSIResource    string
+	CtrlCli        client.Client
 }
 
 type Alerter struct {
@@ -43,10 +40,12 @@ type Alerter struct {
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
-	wg       sync.WaitGroup
-	executor *engine.Executor
-	ctx      context.Context
-	closeFn  context.CancelFunc
+	wg        sync.WaitGroup
+	executor  *engine.Executor
+	ctx       context.Context
+	closeFn   context.CancelFunc
+	CtrlCli   client.Client
+	ruleStore *rules.Store
 }
 
 type KustoClient interface {
@@ -70,26 +69,18 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		return nil, fmt.Errorf("failed to construct logger: %w", err)
 	}
 
-	// Setup k8s client
-	// @todo figure out how to mock this
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = alertrulev1.AddToScheme(scheme)
-	kubeconfig := ctrl.GetConfigOrDie()
-	kubeclient, err := client.New(kubeconfig, client.Options{Scheme: scheme})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := rules.VerifyRules(kubeclient, opts.Region); err != nil {
-		return nil, err
-	}
+	ruleStore := rules.NewStore(rules.StoreOpts{
+		Region:  opts.Region,
+		CtrlCli: opts.CtrlCli,
+	})
 
 	l2m := &Alerter{
-		opts:    opts,
-		log:     log,
-		clients: make(map[string]KustoClient),
-		queue:   make(chan struct{}, opts.Concurrency),
+		opts:      opts,
+		log:       log,
+		clients:   make(map[string]KustoClient),
+		queue:     make(chan struct{}, opts.Concurrency),
+		CtrlCli:   opts.CtrlCli,
+		ruleStore: ruleStore,
 	}
 
 	if opts.MSIID != "" {
@@ -109,7 +100,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		}
 	}
 
-	if kubeclient == nil {
+	if opts.CtrlCli == nil {
 		logger.Warn("No kusto endpoints provided, using fake kusto clients")
 		fakeRule := &rules.Rule{
 			Namespace: "fake-namespace",
@@ -119,11 +110,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
 		}
 		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
-		rules.Register(fakeRule)
-
-		if err := rules.VerifyRules(nil, opts.Region); err != nil {
-			return nil, err
-		}
+		ruleStore.Register(fakeRule)
 	}
 
 	if opts.AlertAddr == "" {
@@ -142,6 +129,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		AlertAddr:   opts.AlertAddr,
 		AlertCli:    alertCli,
 		KustoClient: l2m,
+		RuleStore:   ruleStore,
 	}
 	l2m.executor = executor
 	return l2m, nil
@@ -151,6 +139,10 @@ func (l *Alerter) Open(ctx context.Context) error {
 	l.ctx, l.closeFn = context.WithCancel(ctx)
 
 	logger.Info("Starting adx-mon alerter")
+
+	if err := l.ruleStore.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open rule store: %w", err)
+	}
 
 	if err := l.executor.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open executor: %w", err)
@@ -190,5 +182,12 @@ func newLogger() (logger.Logger, error) {
 
 func (l *Alerter) Close() error {
 	l.closeFn()
-	return l.executor.Close()
+	if err := l.executor.Close(); err != nil {
+		return fmt.Errorf("failed to close executor: %w", err)
+	}
+
+	if err := l.ruleStore.Close(); err != nil {
+		return fmt.Errorf("failed to close rule store: %w", err)
+	}
+	return nil
 }

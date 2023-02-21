@@ -2,11 +2,18 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/Azure/adx-mon/alerter"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/urfave/cli/v2" // imports as package "cli"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/clientcmd"
 	"os"
 	"os/signal"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
 	"syscall"
 )
@@ -16,7 +23,7 @@ func main() {
 		Name:  "alerter",
 		Usage: "adx-mon alerting engine for ADX",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "dev", Usage: "Run on a local dev machine without executing real queries"},
+			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.IntFlag{Name: "port", Value: 4023, Usage: "Metrics port number"},
 			// Either the msi-id or msi-resource must be specified
 			&cli.StringFlag{Name: "msi-id", Usage: "MSI client ID"},
@@ -49,8 +56,17 @@ func realMain(ctx *cli.Context) error {
 		endpoints[parts[0]] = parts[1]
 	}
 
+	scheme := clientgoscheme.Scheme
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := alertrulev1.AddToScheme(scheme); err != nil {
+		return err
+	}
+
+	_, _, ctrlCli, err := newKubeClient(ctx)
+
 	opts := &alerter.AlerterOpts{
-		Dev:            ctx.Bool("dev"),
 		Port:           ctx.Int("port"),
 		KustoEndpoints: endpoints,
 		Region:         ctx.String("region"),
@@ -58,9 +74,12 @@ func realMain(ctx *cli.Context) error {
 		AlertAddr:      ctx.String("alerter-address"),
 		Concurrency:    ctx.Int("concurrency"),
 		MSIID:          ctx.String("msi-id"),
+		CtrlCli:        ctrlCli,
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	svc, err := alerter.NewService(opts)
 	if err != nil {
 		return err
@@ -84,4 +103,30 @@ func realMain(ctx *cli.Context) error {
 	}()
 	<-svcCtx.Done()
 	return nil
+}
+
+func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
+	if err != nil {
+		logger.Warn("No kube config provided, using fake kube client")
+		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)
+	}
+
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("unable to build kube config: %v", err)
+	}
+
+	dyCli, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("unable to build dynamic client: %v", err)
+	}
+
+	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	println(ctrlCli)
+
+	return dyCli, client, ctrlCli, nil
 }

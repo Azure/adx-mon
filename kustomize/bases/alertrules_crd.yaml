@@ -43,6 +43,8 @@ spec:
                   type: string
                 query:
                   type: string
+                destination:
+                  type: string
               type: object
             status:
               description: AlertRuleStatus defines the observed state of AlertRule
