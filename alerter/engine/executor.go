@@ -56,7 +56,7 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		cancel:      cancel,
 		rule:        rule,
 		kustoClient: e.KustoClient,
-		ICMHandler:  e.ICMHandler,
+		HandlerFn:   e.HandlerFn,
 	}
 }
 
@@ -66,8 +66,8 @@ func (e *Executor) Close() error {
 	return nil
 }
 
-// ICMHandler converts rows of a query to ICMs.
-func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) error {
+// HandlerFn converts rows of a query to Alerts.
+func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) error {
 	res := Notification{
 		Severity:     math.MinInt64,
 		CustomFields: map[string]string{},
@@ -137,8 +137,15 @@ func (e *Executor) ICMHandler(endpoint string, rule rules.Rule, row *table.Row) 
 		res.CorrelationID = fmt.Sprintf("%s/%s://%s", rule.Namespace, rule.Name, res.CorrelationID)
 	}
 
+	destination := rule.Destination
+	// The recipient query results field is deprecated.
+	if destination == "" {
+		logger.Warn("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", rule.Namespace, rule.Name)
+		destination = res.Recipient
+	}
+
 	a := alert.Alert{
-		Destination:   res.Recipient,
+		Destination:   destination,
 		Title:         res.Title,
 		Summary:       summary,
 		Description:   res.Description,
@@ -189,6 +196,7 @@ func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
 }
 
 func (e *Executor) syncWorkers() {
+	// Track the query Ids that are still definied as CRs, so we can determine which ones were deleted.
 	liveQueries := make(map[string]struct{})
 	for _, r := range e.RuleStore.Rules() {
 		id := e.workerKey(r)

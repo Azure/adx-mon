@@ -17,7 +17,7 @@ type worker struct {
 	wg          sync.WaitGroup
 	rule        *rules.Rule
 	kustoClient Client
-	ICMHandler  func(endpoint string, rule rules.Rule, row *table.Row) error
+	HandlerFn   func(endpoint string, rule rules.Rule, row *table.Row) error
 }
 
 func (e *worker) Run() {
@@ -51,7 +51,7 @@ func (e *worker) executeQuery() {
 
 	start := time.Now()
 	logger.Info("Executing %s/%s", e.rule.Namespace, e.rule.Name)
-	if err := e.kustoClient.Query(e.ctx, *e.rule, e.ICMHandler); err != nil {
+	if err := e.kustoClient.Query(e.ctx, *e.rule, e.HandlerFn); err != nil {
 		logger.Error("Failed to execute query=%s.%s: %s", e.rule.Namespace, e.rule.Name, err)
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		return

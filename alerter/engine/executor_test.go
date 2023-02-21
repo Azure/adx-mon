@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestExecutor_ICMHandler_MissingTitle(t *testing.T) {
+func TestExecutor_Handler_MissingTitle(t *testing.T) {
 	e := Executor{
 		AlertCli: &fakeAlertClient{},
 	}
@@ -37,10 +37,10 @@ func TestExecutor_ICMHandler_MissingTitle(t *testing.T) {
 	require.NoError(t, iter.Mock(rows))
 
 	row, _, _ := iter.NextRowOrError()
-	require.ErrorContains(t, e.ICMHandler("http://endpoint", rule, row), "title must be between 1 and 512 chars")
+	require.ErrorContains(t, e.HandlerFn("http://endpoint", rule, row), "title must be between 1 and 512 chars")
 }
 
-func TestExecutor_ICMHandler_Severity(t *testing.T) {
+func TestExecutor_Handler_Severity(t *testing.T) {
 
 	for _, tt := range []struct {
 		desc     string
@@ -124,7 +124,7 @@ func TestExecutor_ICMHandler_Severity(t *testing.T) {
 
 			rule := rules.Rule{}
 
-			err = e.ICMHandler("http://endpoint", rule, row)
+			err = e.HandlerFn("http://endpoint", rule, row)
 			if tt.err == "" {
 				require.NoError(t, err)
 				require.Equal(t, tt.severity, client.alert.Severity)
