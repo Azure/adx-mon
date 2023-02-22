@@ -126,7 +126,6 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	println(ctrlCli)
 
 	return dyCli, client, ctrlCli, nil
 }

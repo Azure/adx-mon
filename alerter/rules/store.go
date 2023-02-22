@@ -87,6 +87,7 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 			Name:              r.Name,
 			Interval:          r.Spec.Interval.Duration,
 			Query:             r.Spec.Query,
+			Destination:       r.Spec.Destination,
 			AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
 		}
 
@@ -159,6 +160,7 @@ type Rule struct {
 	Interval          time.Duration
 	Query             string
 	AutoMitigateAfter time.Duration
+	Destination       string
 
 	// Stmt specifies the underlayEtcdPeersQuery to execute.
 	Stmt kusto.Stmt
