@@ -3,14 +3,17 @@ package rules
 import (
 	"context"
 	"fmt"
-	"github.com/Azure/adx-mon/logger"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/Azure/adx-mon/logger"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -89,11 +92,17 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 			Query:             r.Spec.Query,
 			Destination:       r.Spec.Destination,
 			AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
+			IsMgmtQuery:       false,
 		}
 
-		rule.Stmt = kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).
-			UnsafeAdd(r.Spec.Query).
-			MustDefinitions(
+		stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
+		qv := kusto.QueryValues{}
+
+		// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
+		// rows in any particular table. So we don't want to wrap the query with the ParamRegion query_parameter()
+		// declaration because then Kusto will say it's an invalid query.
+		if !strings.HasPrefix(r.Spec.Query, ".") {
+			rule.Stmt = stmt.MustDefinitions(
 				kusto.NewDefinitions().Must(
 					kusto.ParamTypes{
 						"ParamRegion": kusto.ParamType{Type: kustotypes.String},
@@ -101,17 +110,19 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 				),
 			)
 
-		qv := kusto.QueryValues{}
-		qv["ParamRegion"] = s.opts.Region
-		params, err := kusto.NewParameters().With(qv)
-		if err != nil {
-			return nil, fmt.Errorf("configuration %s/%s does not have the required region parameter: %w", r.Namespace, r.Name, err)
+			qv["ParamRegion"] = s.opts.Region
+			params, err := kusto.NewParameters().With(qv)
+			if err != nil {
+				return nil, fmt.Errorf("configuration %s/%s does not have the required region parameter: %w", r.Namespace, r.Name, err)
+			}
+			stmt, err = rule.Stmt.WithParameters(params)
+			if err != nil {
+				return nil, fmt.Errorf("configuration %s/%s does not contain a region configuration: %w", r.Namespace, r.Name, err)
+			}
+		} else {
+			rule.IsMgmtQuery = true
 		}
-		stm, err := rule.Stmt.WithParameters(params)
-		if err != nil {
-			return nil, fmt.Errorf("configuration %s/%s does not contain a region configuration: %w", r.Namespace, r.Name, err)
-		}
-		rule.Stmt = stm
+		rule.Stmt = stmt
 		rule.Parameters = qv
 
 		rules = append(rules, rule)
@@ -161,6 +172,10 @@ type Rule struct {
 	Query             string
 	AutoMitigateAfter time.Duration
 	Destination       string
+
+	// Management queries (starts with a dot) have to call a different
+	// query API in the Kusto Go SDK.
+	IsMgmtQuery bool
 
 	// Stmt specifies the underlayEtcdPeersQuery to execute.
 	Stmt kusto.Stmt
