@@ -5,9 +5,9 @@ build-alerter:
 	CGO_ENABLED=0 go build -o bin/alerter cmd/alerter/main.go
 .PHONY: build
 
-build-prom-adx:
+build-ingestor:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/prom-adx cmd/prom-adx/main.go
+	CGO_ENABLED=0 go build -o bin/ingestor cmd/ingestor/main.go
 .PHONY: build
 
 clean:
@@ -21,4 +21,4 @@ test:
 default:
 	@$(MAKE) test
 	@$(MAKE) build-alerter
-	@$(MAKE) build-prom-adx
+	@$(MAKE) build-ingestor
