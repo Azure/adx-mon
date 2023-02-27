@@ -3,14 +3,16 @@ package rules
 import (
 	"context"
 	"fmt"
-	"github.com/Azure/adx-mon/logger"
 	"sync"
 	"time"
+
+	"github.com/Azure/adx-mon/logger"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -161,6 +163,10 @@ type Rule struct {
 	Query             string
 	AutoMitigateAfter time.Duration
 	Destination       string
+
+	// Management queries (starts with a dot) have to call a different
+	// query API in the Kusto Go SDK.
+	IsMgmtQuery bool
 
 	// Stmt specifies the underlayEtcdPeersQuery to execute.
 	Stmt kusto.Stmt

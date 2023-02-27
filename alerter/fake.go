@@ -4,18 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"io"
+	"net/http"
+
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
-	"io"
-	"net/http"
 )
 
 type fakeKustoClient struct {
 	endpoint string
+}
+
+func (f fakeKustoClient) Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	return nil, nil
 }
 
 func (f fakeKustoClient) Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error) {

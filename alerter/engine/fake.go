@@ -17,8 +17,7 @@ type mock struct {
 }
 
 func (m *mock) Endpoint() string {
-	//TODO implement me
-	panic("implement me")
+	return "mockcluster.kusto.windows.net"
 }
 
 func (m *mock) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {

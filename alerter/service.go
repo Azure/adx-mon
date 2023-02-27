@@ -3,6 +3,11 @@ package alerter
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"os"
+	"sync"
+	"time"
+
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/logger"
@@ -11,11 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"net/http"
-	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sync"
-	"time"
 
 	"github.com/Azure/adx-mon/alerter/rules"
 )
@@ -49,6 +50,7 @@ type Alerter struct {
 }
 
 type KustoClient interface {
+	Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 	Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error)
 	Endpoint() string
 }
@@ -166,9 +168,18 @@ func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules
 		return fmt.Errorf("no client found for database=%s", r.Database)
 	}
 
-	iter, err := client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
-	if err != nil {
-		return fmt.Errorf("failed to execute kusto query=%s/%s: %s", r.Namespace, r.Name, err)
+	var iter *kusto.RowIterator
+	var err error
+	if r.IsMgmtQuery {
+		iter, err = client.Mgmt(ctx, r.Database, r.Stmt)
+		if err != nil {
+			return fmt.Errorf("failed to execute management kusto query=%s/%s: %s", r.Namespace, r.Name, err)
+		}
+	} else {
+		iter, err = client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
+		if err != nil {
+			return fmt.Errorf("failed to execute kusto query=%s/%s: %s", r.Namespace, r.Name, err)
+		}
 	}
 	defer iter.Stop()
 	return iter.Do(func(row *table.Row) error {
