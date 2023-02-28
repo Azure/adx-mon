@@ -8,5 +8,6 @@ import (
 )
 
 type Client interface {
+	Endpoint(db string) string
 	Query(ctx context.Context, r rules.Rule, fn func(endpoint string, rule rules.Rule, row *table.Row) error) error
 }
