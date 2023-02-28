@@ -166,7 +166,7 @@ func (l *Alerter) Endpoint(db string) string {
 	if l.clients[db] != nil {
 		return l.clients[db].Endpoint()
 	} else {
-		return "unknown endpoint (is nil)"
+		return "unknown"
 	}
 }
 
