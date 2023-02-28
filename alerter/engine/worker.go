@@ -2,13 +2,14 @@ package engine
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"sync"
-	"time"
 )
 
 type worker struct {
@@ -50,9 +51,9 @@ func (e *worker) executeQuery() {
 	defer func() { <-queue.Workers }()
 
 	start := time.Now()
-	logger.Info("Executing %s/%s", e.rule.Namespace, e.rule.Name)
+	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 	if err := e.kustoClient.Query(e.ctx, *e.rule, e.HandlerFn); err != nil {
-		logger.Error("Failed to execute query=%s.%s: %s", e.rule.Namespace, e.rule.Name, err)
+		logger.Error("Failed to execute query=%s.%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		return
 	}

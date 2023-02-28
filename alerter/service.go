@@ -162,6 +162,14 @@ func (l *Alerter) Open(ctx context.Context) error {
 	return nil
 }
 
+func (l *Alerter) Endpoint(db string) string {
+	if l.clients[db] != nil {
+		return l.clients[db].Endpoint()
+	} else {
+		return "unknown endpoint (is nil)"
+	}
+}
+
 func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
 	client := l.clients[r.Database]
 	if client == nil {
