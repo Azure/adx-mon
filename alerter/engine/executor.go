@@ -106,10 +106,13 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 		return err
 	}
 
+	//shoudl we define let in query here instead of replacing?
 	for k, v := range rule.Parameters {
 		switch vv := v.(type) {
 		case string:
 			query = strings.Replace(query, k, fmt.Sprintf("\"%s\"", vv), -1)
+		case time.Time:
+			query = strings.Replace(query, k, fmt.Sprintf("datetime(%s)", vv.Format(time.RFC3339Nano)), -1) //this needs to be in what rfc?
 		default:
 			metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
 			return fmt.Errorf("unimplemented query type: %v", vv)

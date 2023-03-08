@@ -183,3 +183,34 @@ type Rule struct {
 	// Parameters are the parameters passed with the stmt
 	Parameters kusto.QueryValues
 }
+
+//update rule with query time specific params (just time for now)
+//currently this doesn't replacies in place. Another option is to use let statements
+//prepended to statement.
+//importanly does not take a ponter reciver because we want to clone.
+func (r Rule) ApplyContext() Rule {
+	if r.IsMgmtQuery { //don't mess with management
+		return r
+	}
+
+	r.Stmt = r.Stmt.MustDefinitions(
+		kusto.NewDefinitions().Must(
+			kusto.ParamTypes{
+				"ParamStartTime": kusto.ParamType{Type: kustotypes.DateTime},
+			},
+		),
+	)
+
+	//do we need to clone parmeters?
+	r.Parameters["ParamStartTime"] = time.Now()
+
+	params, err := kusto.NewParameters().With(r.Parameters)
+	if err != nil {
+		panic(err.Error()) //when could we conceivably get here?
+	}
+	r.Stmt, err = r.Stmt.WithParameters(params)
+	if err != nil {
+		panic(err.Error()) //when could we conceivably get here?
+	}
+	return r
+}

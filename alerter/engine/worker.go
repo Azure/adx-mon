@@ -52,7 +52,8 @@ func (e *worker) executeQuery() {
 
 	start := time.Now()
 	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	if err := e.kustoClient.Query(e.ctx, *e.rule, e.HandlerFn); err != nil {
+	rule := e.rule.ApplyContext()
+	if err := e.kustoClient.Query(e.ctx, rule, e.HandlerFn); err != nil {
 		logger.Error("Failed to execute query=%s.%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		return
