@@ -20,13 +20,17 @@ import (
 	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
 )
 
+type ruleStore interface {
+	Rules() []*rules.Rule
+}
+
 type Executor struct {
 	AlertCli interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
 	AlertAddr   string
 	KustoClient Client
-	RuleStore   *rules.Store
+	RuleStore   ruleStore
 
 	ctx     context.Context
 	wg      sync.WaitGroup
@@ -227,8 +231,8 @@ func (e *Executor) syncWorkers() {
 	}
 
 	// Shutdown any workers that no longer exist
-	for id := range liveQueries {
-		if _, ok := e.workers[id]; !ok {
+	for id := range e.workers {
+		if _, ok := liveQueries[id]; !ok {
 			logger.Info("Shutting down worker for %s", id)
 			e.workers[id].Close()
 			delete(e.workers, id)
