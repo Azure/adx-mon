@@ -133,7 +133,43 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 			}
 		})
 	}
+}
 
+func TestExecutor_syncWorkers_Remove(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	e := Executor{
+		RuleStore: &fakeRuleStore{},
+		workers: map[string]*worker{
+			"alert": &worker{
+				ctx:    ctx,
+				cancel: cancel,
+			},
+		},
+	}
+
+	require.Equal(t, 1, len(e.workers))
+	e.syncWorkers()
+	require.Equal(t, 0, len(e.workers))
+}
+
+func TestExecutor_syncWorkers_Add(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	e := Executor{
+		ctx:     ctx,
+		closeFn: cancel,
+		RuleStore: &fakeRuleStore{
+			rules: []*rules.Rule{
+				&rules.Rule{
+					Name: "alert",
+				},
+			},
+		},
+		workers: map[string]*worker{},
+	}
+
+	require.Equal(t, 0, len(e.workers))
+	e.syncWorkers()
+	require.Equal(t, 1, len(e.workers))
 }
 
 type fakeAlertClient struct {
@@ -143,4 +179,12 @@ type fakeAlertClient struct {
 func (f *fakeAlertClient) Create(ctx context.Context, endpoint string, alert alert.Alert) error {
 	f.alert = alert
 	return nil
+}
+
+type fakeRuleStore struct {
+	rules []*rules.Rule
+}
+
+func (f *fakeRuleStore) Rules() []*rules.Rule {
+	return f.rules
 }
