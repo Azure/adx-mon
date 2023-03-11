@@ -33,6 +33,7 @@ func main() {
 			&cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"},
 			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
+			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -67,14 +68,15 @@ func realMain(ctx *cli.Context) error {
 	_, _, ctrlCli, err := newKubeClient(ctx)
 
 	opts := &alerter.AlerterOpts{
-		Port:           ctx.Int("port"),
-		KustoEndpoints: endpoints,
-		Region:         ctx.String("region"),
-		Cloud:          ctx.String("cloud"),
-		AlertAddr:      ctx.String("alerter-address"),
-		Concurrency:    ctx.Int("concurrency"),
-		MSIID:          ctx.String("msi-id"),
-		CtrlCli:        ctrlCli,
+		Port:             ctx.Int("port"),
+		KustoEndpoints:   endpoints,
+		Region:           ctx.String("region"),
+		Cloud:            ctx.String("cloud"),
+		AlertAddr:        ctx.String("alerter-address"),
+		Concurrency:      ctx.Int("concurrency"),
+		MaxNotifications: ctx.Int("max-notifications"),
+		MSIID:            ctx.String("msi-id"),
+		CtrlCli:          ctrlCli,
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
