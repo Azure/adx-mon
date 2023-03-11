@@ -3,6 +3,7 @@ package alerter
 import (
 	"context"
 	"fmt"
+	"github.com/Azure/adx-mon/metrics"
 	"net/http"
 	"os"
 	"sync"
@@ -29,9 +30,13 @@ type AlerterOpts struct {
 	Cloud          string
 	Port           int
 	Concurrency    int
-	MSIID          string
-	MSIResource    string
-	CtrlCli        client.Client
+
+	// MaxNotifications is the maximum number of notifications to send per rule.
+	MaxNotifications int
+
+	MSIID       string
+	MSIResource string
+	CtrlCli     client.Client
 }
 
 type Alerter struct {
@@ -189,10 +194,24 @@ func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules
 			return fmt.Errorf("failed to execute kusto query=%s/%s: %s", r.Namespace, r.Name, err)
 		}
 	}
+
+	var n int
 	defer iter.Stop()
-	return iter.Do(func(row *table.Row) error {
+	if err := iter.Do(func(row *table.Row) error {
+		n++
+		if n > l.opts.MaxNotifications {
+			metrics.NotificationHealth.WithLabelValues(r.Namespace, r.Name).Set(1)
+			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", r.Namespace, r.Name, l.opts.MaxNotifications)
+		}
+
 		return fn(client.Endpoint(), r, row)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// reset health metric since we didn't get any errors
+	metrics.NotificationHealth.WithLabelValues(r.Namespace, r.Name).Set(0)
+	return nil
 }
 
 func newLogger() (logger.Logger, error) {
