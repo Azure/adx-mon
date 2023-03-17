@@ -34,12 +34,12 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 
 ## Testing alertrules
-Prereq: some k8s cluster you have kubeconfig for.
+Prereq: some k8s cluster you have kubeconfig for (can be minikube or kind)
 
 1. az login to the account that has acces to the kusto clusters. 
 1. apply crds :  k apply -f kustomize/bases/alertrules_crd.yaml 
 1. apply your alert rules (probably in a different repo)
 1. cd cmd/alerter
 1. go run . --kusto-endpoint "<database>=<kustourl>"  --kubeconfig ~/.kube/config. The database much match the one in your alert rule (case-sensitive)
-1. optioally specicfy arugments that will be filled into query if needed like --region uksouth
+1. optionally specicfy arugments that will be filled into query if needed like --region uksouth
 1. You should both see  "Creating query executor for..." and "Fake Alert Notification Recieved..." if your query gets results.
