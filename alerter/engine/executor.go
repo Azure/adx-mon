@@ -178,12 +178,12 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
 	logger.Debug("Sending alert %s %v", addr, a)
 
-	if err := e.alertCli.Create(context.TODO(), addr, a); err != nil {
+	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
 		logger.Error("Failed to create Notification: %s\n", err)
-		metrics.NotificationHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
+		metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name).Set(1)
 		return nil
 	}
-	metrics.NotificationHealth.WithLabelValues(rule.Namespace, rule.Name).Set(1)
+	metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name).Set(0)
 
 	//log.Infof("Created Notification %s - %s", resp.IncidentId, res.Title)
 
