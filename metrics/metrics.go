@@ -31,10 +31,10 @@ var (
 		Help:      "Gauge indicating if a query is healthy or not",
 	}, []string{"namespace", "name"})
 
-	NotificationHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	NotificationUnhealthy = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",
-		Name:      "notification_health",
+		Name:      "notification_unhealthy",
 		Help:      "Gauge indicating if a notification is healthy or not",
 	}, []string{"namespace", "name"})
 )

@@ -251,7 +251,7 @@ func (c extendedKustoClient) Query(ctx context.Context, r rules.Rule, fn func(st
 	if err := iter.Do(func(row *table.Row) error {
 		n++
 		if n > c.MaxNotifications {
-			metrics.NotificationHealth.WithLabelValues(r.Namespace, r.Name).Set(1)
+			metrics.NotificationUnhealthy.WithLabelValues(r.Namespace, r.Name).Set(1)
 			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", r.Namespace, r.Name, c.MaxNotifications)
 		}
 
@@ -261,7 +261,7 @@ func (c extendedKustoClient) Query(ctx context.Context, r rules.Rule, fn func(st
 	}
 
 	// reset health metric since we didn't get any errors
-	metrics.NotificationHealth.WithLabelValues(r.Namespace, r.Name).Set(0)
+	metrics.NotificationUnhealthy.WithLabelValues(r.Namespace, r.Name).Set(0)
 	return nil
 }
 
