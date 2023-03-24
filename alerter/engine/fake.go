@@ -9,19 +9,19 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 
-func NewMock(log logger.Logger) Client {
-	return &mock{log: log}
+func NewFakeKustoClient(log logger.Logger) Client {
+	return &fakeKustoClient{log: log}
 }
 
-type mock struct {
+type fakeKustoClient struct {
 	log logger.Logger
 }
 
-func (m *mock) Endpoint(db string) string {
+func (m *fakeKustoClient) Endpoint(db string) string {
 	return fmt.Sprintf("%s.mockcluster.kusto.windows.net", db)
 }
 
-func (m *mock) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
+func (m *fakeKustoClient) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
 	m.log.Info("Executing rule %s", r.Database)
 	return nil
 }
