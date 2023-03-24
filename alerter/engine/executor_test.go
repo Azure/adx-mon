@@ -6,11 +6,13 @@ import (
 
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
+	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
+	"time"
 )
 
 func TestExecutor_Handler_MissingTitle(t *testing.T) {
@@ -174,15 +176,73 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 		closeFn: cancel,
 		ruleStore: &fakeRuleStore{
 			rules: []*rules.Rule{
-				&rules.Rule{
-					Name: "alert",
+				{
+					Name:     "alert",
+					Interval: 10 * time.Second,
 				},
 			},
 		},
-		workers: map[string]*worker{},
+		kustoClient: &fakeKustoClient{log: logger.Default},
+		workers:     map[string]*worker{},
 	}
 
 	require.Equal(t, 0, len(e.workers))
+	e.syncWorkers()
+	require.Equal(t, 1, len(e.workers))
+}
+
+func TestExecutor_syncWorkers_NoChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	e := Executor{
+		ctx:     ctx,
+		closeFn: cancel,
+		ruleStore: &fakeRuleStore{
+			rules: []*rules.Rule{
+				{
+					Name:     "alert",
+					Interval: 10 * time.Second,
+				},
+			},
+		},
+		kustoClient: &fakeKustoClient{log: logger.Default},
+		workers:     map[string]*worker{},
+	}
+
+	require.Equal(t, 0, len(e.workers))
+	e.syncWorkers()
+	require.Equal(t, 1, len(e.workers))
+	e.syncWorkers()
+	require.Equal(t, 1, len(e.workers))
+}
+
+func TestExecutor_syncWorkers_Changed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &fakeRuleStore{
+		rules: []*rules.Rule{
+			{
+				Name:      "alert",
+				Namespace: "foo",
+				Interval:  10 * time.Second,
+			},
+		},
+	}
+	e := Executor{
+		ctx:         ctx,
+		closeFn:     cancel,
+		ruleStore:   store,
+		kustoClient: &fakeKustoClient{log: logger.Default},
+		workers:     map[string]*worker{},
+	}
+
+	require.Equal(t, 0, len(e.workers))
+	e.syncWorkers()
+	require.Equal(t, 1, len(e.workers))
+	store.rules[0] = &rules.Rule{
+		Version:   "changed",
+		Name:      "alert",
+		Namespace: "foo",
+		Interval:  20 * time.Second,
+	}
 	e.syncWorkers()
 	require.Equal(t, 1, len(e.workers))
 }

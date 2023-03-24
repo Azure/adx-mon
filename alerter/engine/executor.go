@@ -223,15 +223,18 @@ func (e *Executor) RunOnce(ctx context.Context) {
 	}
 }
 
+// syncWorkers ensures that the workers are running for the current set of rules.  If any new rules
+// are added, or existing rules are updated, a new worker will be started.  If any rules are deleted,
+// the worker will be stopped. This function is called periodically by the executor.
 func (e *Executor) syncWorkers() {
 	// Track the query Ids that are still definied as CRs, so we can determine which ones were deleted.
 	liveQueries := make(map[string]struct{})
 	for _, r := range e.ruleStore.Rules() {
 		id := e.workerKey(r)
 		liveQueries[id] = struct{}{}
-		worker, ok := e.workers[id]
+		w, ok := e.workers[id]
 		if !ok {
-			logger.Info("Starting new worker for %s", id)
+			logger.Info("Starting new w for %s", id)
 			worker := e.newWorker(r)
 			e.workers[id] = worker
 			go worker.Run()
@@ -239,18 +242,16 @@ func (e *Executor) syncWorkers() {
 		}
 
 		// Rule has not changed, leave the existing working running
-		if worker.rule.Version == r.Version {
+		if w.rule.Version == r.Version {
 			continue
 		}
 
-		if worker.rule.Version != r.Version {
-			logger.Info("Rule %s has changed, restarting worker", id)
-			worker.Close()
-			delete(e.workers, id)
-			worker := e.newWorker(r)
-			e.workers[id] = worker
-			go worker.Run()
-		}
+		logger.Info("Rule %s has changed, restarting w", id)
+		w.Close()
+		delete(e.workers, id)
+		w = e.newWorker(r)
+		e.workers[id] = w
+		go w.Run()
 	}
 
 	// Shutdown any workers that no longer exist
@@ -263,6 +264,7 @@ func (e *Executor) syncWorkers() {
 	}
 }
 
+// periodicSync will periodically sync the workers with the current set of rules.
 func (e *Executor) periodicSync() {
 	ticker := time.NewTicker(10 * time.Second)
 	for {
