@@ -22,6 +22,7 @@ type worker struct {
 }
 
 func (e *worker) Run() {
+	ctx := e.ctx
 	e.wg.Add(1)
 	defer e.wg.Done()
 
@@ -29,21 +30,21 @@ func (e *worker) Run() {
 		e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
 
 	// do-while
-	e.executeQuery()
+	e.ExecuteQuery(ctx)
 
 	ticker := time.NewTicker(e.rule.Interval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-e.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			e.executeQuery()
+			e.ExecuteQuery(ctx)
 		}
 	}
 }
 
-func (e *worker) executeQuery() {
+func (e *worker) ExecuteQuery(ctx context.Context) {
 	// Try to acquire a worker slot
 	queue.Workers <- struct{}{}
 
@@ -52,7 +53,7 @@ func (e *worker) executeQuery() {
 
 	start := time.Now()
 	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	if err := e.kustoClient.Query(e.ctx, *e.rule, e.HandlerFn); err != nil {
+	if err := e.kustoClient.Query(ctx, *e.rule, e.HandlerFn); err != nil {
 		logger.Error("Failed to execute query=%s.%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		return

@@ -75,6 +75,50 @@ func (s *Store) Rules() []*Rule {
 	return s.rules
 }
 
+func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
+	rule := &Rule{
+		Version:           r.ResourceVersion,
+		Database:          r.Spec.Database,
+		Namespace:         r.Namespace,
+		Name:              r.Name,
+		Interval:          r.Spec.Interval.Duration,
+		Query:             r.Spec.Query,
+		Destination:       r.Spec.Destination,
+		AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
+		IsMgmtQuery:       false,
+	}
+
+	qv := kusto.QueryValues{}
+	stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
+	// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
+	// rows in any particular table. So we don't want to wrap the query with the ParamRegion query_parameter()
+	// declaration because then Kusto will say it's an invalid query.
+	if !strings.HasPrefix(r.Spec.Query, ".") {
+		rule.Stmt = stmt.MustDefinitions(
+			kusto.NewDefinitions().Must(
+				kusto.ParamTypes{
+					"ParamRegion": kusto.ParamType{Type: kustotypes.String},
+				},
+			),
+		)
+
+		qv["ParamRegion"] = region
+		params, err := kusto.NewParameters().With(qv)
+		if err != nil {
+			return nil, fmt.Errorf("configuration %s/%s does not have the required region parameter: %w", r.Namespace, r.Name, err)
+		}
+		stmt, err = rule.Stmt.WithParameters(params)
+		if err != nil {
+			return nil, fmt.Errorf("configuration %s/%s does not contain a region configuration: %w", r.Namespace, r.Name, err)
+		}
+	} else {
+		rule.IsMgmtQuery = true
+	}
+	rule.Stmt = stmt
+	rule.Parameters = qv
+	return rule, nil
+}
+
 func (s *Store) reloadRules() ([]*Rule, error) {
 	ruleList := &alertrulev1.AlertRuleList{}
 	if err := s.ctrlCli.List(context.Background(), ruleList); err != nil {
@@ -83,48 +127,10 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 
 	var rules = make([]*Rule, 0, len(ruleList.Items))
 	for _, r := range ruleList.Items {
-		rule := &Rule{
-			Version:           r.ResourceVersion,
-			Database:          r.Spec.Database,
-			Namespace:         r.Namespace,
-			Name:              r.Name,
-			Interval:          r.Spec.Interval.Duration,
-			Query:             r.Spec.Query,
-			Destination:       r.Spec.Destination,
-			AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
-			IsMgmtQuery:       false,
+		rule, err := toRule(r, s.opts.Region)
+		if err != nil {
+			return nil, err
 		}
-
-		stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
-		qv := kusto.QueryValues{}
-
-		// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
-		// rows in any particular table. So we don't want to wrap the query with the ParamRegion query_parameter()
-		// declaration because then Kusto will say it's an invalid query.
-		if !strings.HasPrefix(r.Spec.Query, ".") {
-			rule.Stmt = stmt.MustDefinitions(
-				kusto.NewDefinitions().Must(
-					kusto.ParamTypes{
-						"ParamRegion": kusto.ParamType{Type: kustotypes.String},
-					},
-				),
-			)
-
-			qv["ParamRegion"] = s.opts.Region
-			params, err := kusto.NewParameters().With(qv)
-			if err != nil {
-				return nil, fmt.Errorf("configuration %s/%s does not have the required region parameter: %w", r.Namespace, r.Name, err)
-			}
-			stmt, err = rule.Stmt.WithParameters(params)
-			if err != nil {
-				return nil, fmt.Errorf("configuration %s/%s does not contain a region configuration: %w", r.Namespace, r.Name, err)
-			}
-		} else {
-			rule.IsMgmtQuery = true
-		}
-		rule.Stmt = stmt
-		rule.Parameters = qv
-
 		rules = append(rules, rule)
 	}
 	return rules, nil

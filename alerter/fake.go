@@ -63,18 +63,58 @@ func fakeAlertHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
-			logger.Error("failed to read request body: %v", err)
+			logger.Error("Failed to read request body: %s", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		a := alert.Alert{}
 		if err := json.Unmarshal(b, &a); err != nil {
-			logger.Error("failed to unmarshal request body: %v", err)
+			logger.Error("Failed to unmarshal request body: %s", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		logger.Info("Fake Alert Notification Recieved: %v", a)
 		w.WriteHeader(http.StatusCreated)
 	})
+}
+
+type lintAlertHandler struct {
+	alertCount map[string]int
+}
+
+func NewLinter() *lintAlertHandler {
+	return &lintAlertHandler{
+		alertCount: make(map[string]int),
+	}
+}
+
+func (lh *lintAlertHandler) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			logger.Error("Failed to read request body: %s", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		a := alert.Alert{}
+		if err := json.Unmarshal(b, &a); err != nil {
+			logger.Error("Failed to unmarshal request body: %s", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		lh.alertCount[a.CorrelationID]++
+		w.WriteHeader(http.StatusCreated)
+	})
+}
+
+type log interface {
+	Info(format string, args ...interface{})
+}
+
+func (lh *lintAlertHandler) Log(logger log) {
+	for k, v := range lh.alertCount {
+		logger.Info("Alert %s was sent %d times", k, v)
+	}
 }

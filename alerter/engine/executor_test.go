@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"testing"
+
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -9,12 +11,11 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestExecutor_Handler_MissingTitle(t *testing.T) {
 	e := Executor{
-		AlertCli: &fakeAlertClient{},
+		alertCli: &fakeAlertClient{},
 	}
 
 	rule := rules.Rule{}
@@ -119,7 +120,7 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 
 			client := &fakeAlertClient{}
 			e := Executor{
-				AlertCli: client,
+				alertCli: client,
 			}
 
 			rule := rules.Rule{}
@@ -135,10 +136,24 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 	}
 }
 
+func TestExecutor_RunOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e := Executor{
+		ruleStore: &fakeRuleStore{},
+	}
+
+	require.NotPanics(t, func() {
+		e.RunOnce(ctx)
+	})
+	//his is only checkign we don't panic for now. Need to add rules to see we actually get alerts.
+
+}
+
 func TestExecutor_syncWorkers_Remove(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	e := Executor{
-		RuleStore: &fakeRuleStore{},
+		ruleStore: &fakeRuleStore{},
 		workers: map[string]*worker{
 			"alert": &worker{
 				ctx:    ctx,
@@ -157,7 +172,7 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 	e := Executor{
 		ctx:     ctx,
 		closeFn: cancel,
-		RuleStore: &fakeRuleStore{
+		ruleStore: &fakeRuleStore{
 			rules: []*rules.Rule{
 				&rules.Rule{
 					Name: "alert",
