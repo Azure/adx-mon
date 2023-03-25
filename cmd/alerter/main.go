@@ -3,6 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
 	"github.com/Azure/adx-mon/alerter"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/logger"
@@ -11,11 +16,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
-	"os"
-	"os/signal"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
-	"syscall"
+)
+
+var (
+	kendpointsArg = &cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"}
+	maxNotifArg   = &cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"}
+	regionArg     = &cli.StringFlag{Name: "region", Usage: "Current region"}
 )
 
 func main() {
@@ -23,27 +30,70 @@ func main() {
 		Name:  "alerter",
 		Usage: "adx-mon alerting engine for ADX",
 		Flags: []cli.Flag{
+			kendpointsArg,
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.IntFlag{Name: "port", Value: 4023, Usage: "Metrics port number"},
 			// Either the msi-id or msi-resource must be specified
 			&cli.StringFlag{Name: "msi-id", Usage: "MSI client ID"},
 			&cli.StringFlag{Name: "msi-resource", Usage: "MSI resource ID"},
 			&cli.StringFlag{Name: "cloud", Usage: "Azure cloud"},
-			&cli.StringFlag{Name: "region", Usage: "Current region"},
-			&cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"},
+			regionArg,
 			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
-			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
+			maxNotifArg,
 		},
-
-		Action: func(ctx *cli.Context) error {
-			return realMain(ctx)
+		Action: realMain,
+		Commands: []*cli.Command{
+			{
+				Name:    "lint",
+				Aliases: []string{"l"},
+				Usage:   "lint a directory by running each rule once",
+				Flags: []cli.Flag{
+					kendpointsArg,
+					&cli.StringFlag{Name: "lint-dir", Usage: "Read alert rules from local filesystem", Required: true},
+					maxNotifArg,
+					regionArg,
+				},
+				Action: lintMain,
+			},
 		},
 	}
 
 	if err := app.Run(os.Args); err != nil {
 		logger.Fatal(err.Error())
 	}
+}
+
+func lintMain(ctx *cli.Context) error {
+	endpoints := make(map[string]string)
+	endpointsArg := ctx.StringSlice("kusto-endpoint")
+	for _, v := range endpointsArg {
+		parts := strings.Split(v, "=")
+		if len(parts) != 2 {
+			return cli.Exit("Invalid kusto-endpoint format, expected <name>=<endpoint>", 1)
+		}
+		endpoints[parts[0]] = parts[1]
+	}
+
+	scheme := clientgoscheme.Scheme
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := alertrulev1.AddToScheme(scheme); err != nil {
+		return err
+	}
+
+	opts := &alerter.AlerterOpts{
+		KustoEndpoints:   endpoints,
+		Port:             4023, //needs to be adjustable?Failed to create Notification
+		Region:           ctx.String("region"),
+		MaxNotifications: ctx.Int("max-notifications"),
+	}
+
+	lintCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	//TODO fail early if azlogin is not up to date
+	return alerter.Lint(lintCtx, opts, ctx.String("lint-dir"))
 }
 
 func realMain(ctx *cli.Context) error {
@@ -66,6 +116,9 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	_, _, ctrlCli, err := newKubeClient(ctx)
+	if err != nil {
+		return err
+	}
 
 	opts := &alerter.AlerterOpts{
 		Port:             ctx.Int("port"),
@@ -82,10 +135,15 @@ func realMain(ctx *cli.Context) error {
 	svcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	if ctx.String("lint-dir") != "" {
+		return alerter.Lint(svcCtx, opts, ctx.String("lint-dir"))
+	}
+
 	svc, err := alerter.NewService(opts)
 	if err != nil {
 		return err
 	}
+
 	if err := svc.Open(svcCtx); err != nil {
 		return err
 	}

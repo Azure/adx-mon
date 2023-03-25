@@ -24,15 +24,20 @@ type ruleStore interface {
 	Rules() []*rules.Rule
 }
 
-type Executor struct {
-	AlertCli interface {
-		Create(ctx context.Context, endpoint string, alert alert.Alert) error
-	}
-	AlertAddr   string
-	KustoClient Client
-	RuleStore   ruleStore
+type AlertCli interface {
+	Create(ctx context.Context, endpoint string, alert alert.Alert) error
+}
 
-	ctx     context.Context
+type Executor struct {
+	alertCli    AlertCli
+	alertAddr   string
+	kustoClient Client
+	ruleStore   ruleStore
+
+	// resconsider this later or documetn why we do it https://go.dev/blog/context-and-structs
+	//"Contexts should not be stored inside a struct type, but instead passed to each function that needs it."
+	ctx context.Context
+
 	wg      sync.WaitGroup
 	closeFn context.CancelFunc
 
@@ -40,10 +45,20 @@ type Executor struct {
 	workers map[string]*worker
 }
 
+// TODO make AlertAddr   string part of alertcli
+func NewExecutor(alert AlertCli, alertAddr string, kustoClient Client, ruleStore ruleStore) *Executor {
+	return &Executor{
+		alertCli:    alert,
+		alertAddr:   alertAddr,
+		kustoClient: kustoClient,
+		ruleStore:   ruleStore,
+		workers:     make(map[string]*worker),
+	}
+}
+
 func (e *Executor) Open(ctx context.Context) error {
 	e.ctx, e.closeFn = context.WithCancel(ctx)
-	logger.Info("Begin executing %d queries", len(e.RuleStore.Rules()))
-	e.workers = make(map[string]*worker)
+	logger.Info("Begin executing %d queries", len(e.ruleStore.Rules()))
 
 	e.syncWorkers()
 	go e.periodicSync()
@@ -60,7 +75,7 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		ctx:         ctx,
 		cancel:      cancel,
 		rule:        rule,
-		kustoClient: e.KustoClient,
+		kustoClient: e.kustoClient,
 		HandlerFn:   e.HandlerFn,
 	}
 }
@@ -160,11 +175,11 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 		CustomFields:  res.CustomFields,
 	}
 
-	addr := fmt.Sprintf("%s/alerts", e.AlertAddr)
-	logger.Info("Sending alert %s %v", addr, a)
+	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
+	logger.Debug("Sending alert %s %v", addr, a)
 
-	if err := e.AlertCli.Create(context.Background(), addr, a); err != nil {
-		fmt.Printf("Failed to create Notification: %s\n", err)
+	if err := e.alertCli.Create(context.TODO(), addr, a); err != nil {
+		logger.Error("Failed to create Notification: %s\n", err)
 		metrics.NotificationHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
 		return nil
 	}
@@ -200,10 +215,18 @@ func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
 	}
 }
 
+func (e *Executor) RunOnce(ctx context.Context) {
+	e.ctx, e.closeFn = context.WithCancel(ctx) //todo move way from using context on struct
+	for _, r := range e.ruleStore.Rules() {
+		worker := e.newWorker(r)
+		worker.ExecuteQuery(ctx)
+	}
+}
+
 func (e *Executor) syncWorkers() {
 	// Track the query Ids that are still definied as CRs, so we can determine which ones were deleted.
 	liveQueries := make(map[string]struct{})
-	for _, r := range e.RuleStore.Rules() {
+	for _, r := range e.ruleStore.Rules() {
 		id := e.workerKey(r)
 		liveQueries[id] = struct{}{}
 		worker, ok := e.workers[id]

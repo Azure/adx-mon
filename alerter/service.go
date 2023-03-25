@@ -3,11 +3,12 @@ package alerter
 import (
 	"context"
 	"fmt"
-	"github.com/Azure/adx-mon/metrics"
 	"net/http"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/Azure/adx-mon/metrics"
 
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
@@ -39,6 +40,13 @@ type AlerterOpts struct {
 	CtrlCli     client.Client
 }
 
+// share with executor or fine for both to define privately?
+type ruleStore interface {
+	Rules() []*rules.Rule
+	Open(context.Context) error
+	Close() error
+}
+
 type Alerter struct {
 	log      logger.Logger
 	clients  map[string]KustoClient
@@ -51,7 +59,7 @@ type Alerter struct {
 	ctx       context.Context
 	closeFn   context.CancelFunc
 	CtrlCli   client.Client
-	ruleStore *rules.Store
+	ruleStore ruleStore
 }
 
 type KustoClient interface {
@@ -132,14 +140,56 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 	l2m.alertCli = alertCli
 
-	executor := &engine.Executor{
-		AlertAddr:   opts.AlertAddr,
-		AlertCli:    alertCli,
-		KustoClient: l2m,
-		RuleStore:   ruleStore,
-	}
+	executor := engine.NewExecutor(alertCli, opts.AlertAddr, l2m, ruleStore)
 	l2m.executor = executor
 	return l2m, nil
+}
+
+func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
+	log, err := newLogger()
+	if err != nil {
+		return fmt.Errorf("failed to construct logger: %w", err)
+	}
+
+	ruleStore, err := rules.FromPath(path, opts.Region)
+	if err != nil {
+		return err
+	}
+	log.Info("Linting rules from path=%s", path)
+
+	var client KustoClient
+	for _, endpoint := range opts.KustoEndpoints {
+		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
+		client, err = kusto.New(kcsb)
+		if err != nil {
+			return fmt.Errorf("kusto client=%s: %w", endpoint, err)
+		}
+		break
+	}
+	if client == nil {
+		return fmt.Errorf("no kusto endpoints provided")
+	}
+	lint := NewLinter()
+	http.Handle("/alerts", lint.Handler())
+	fakeaddr := fmt.Sprintf("http://localhost:%d", opts.Port)
+	alertCli, err := alert.NewClient(time.Minute)
+
+	kclient := extendedKustoClient{client: client, MaxNotifications: opts.MaxNotifications}
+	executor := engine.NewExecutor(alertCli, fakeaddr, kclient, ruleStore)
+
+	go func() {
+		logger.Info("Listening at :%d", opts.Port)
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", opts.Port), nil); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}()
+
+	executor.RunOnce(ctx)
+	lint.Log(log)
+	return nil
+
 }
 
 func (l *Alerter) Open(ctx context.Context) error {
@@ -175,23 +225,24 @@ func (l *Alerter) Endpoint(db string) string {
 	}
 }
 
-func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
-	client := l.clients[r.Database]
-	if client == nil {
-		return fmt.Errorf("no client found for database=%s", r.Database)
-	}
+// make multikustoclient to share between linter and service
+type extendedKustoClient struct {
+	client           KustoClient
+	MaxNotifications int
+}
 
+func (c extendedKustoClient) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
 	var iter *kusto.RowIterator
 	var err error
 	if r.IsMgmtQuery {
-		iter, err = client.Mgmt(ctx, r.Database, r.Stmt)
+		iter, err = c.client.Mgmt(ctx, r.Database, r.Stmt)
 		if err != nil {
 			return fmt.Errorf("failed to execute management kusto query=%s/%s: %s", r.Namespace, r.Name, err)
 		}
 	} else {
-		iter, err = client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
+		iter, err = c.client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
 		if err != nil {
-			return fmt.Errorf("failed to execute kusto query=%s/%s: %s", r.Namespace, r.Name, err)
+			return fmt.Errorf("failed to execute kusto query=%s/%s: %s, %s", r.Namespace, r.Name, err, r.Stmt)
 		}
 	}
 
@@ -199,12 +250,12 @@ func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules
 	defer iter.Stop()
 	if err := iter.Do(func(row *table.Row) error {
 		n++
-		if n > l.opts.MaxNotifications {
+		if n > c.MaxNotifications {
 			metrics.NotificationHealth.WithLabelValues(r.Namespace, r.Name).Set(1)
-			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", r.Namespace, r.Name, l.opts.MaxNotifications)
+			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", r.Namespace, r.Name, c.MaxNotifications)
 		}
 
-		return fn(client.Endpoint(), r, row)
+		return fn(c.client.Endpoint(), r, row)
 	}); err != nil {
 		return err
 	}
@@ -212,6 +263,19 @@ func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules
 	// reset health metric since we didn't get any errors
 	metrics.NotificationHealth.WithLabelValues(r.Namespace, r.Name).Set(0)
 	return nil
+}
+
+func (c extendedKustoClient) Endpoint(db string) string {
+	cl := c.client
+	return cl.Endpoint()
+}
+
+func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
+	client := l.clients[r.Database]
+	if client == nil {
+		return fmt.Errorf("no client found for database=%s", r.Database)
+	}
+	return extendedKustoClient{client: client, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, r, fn)
 }
 
 func newLogger() (logger.Logger, error) {
