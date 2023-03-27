@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -27,6 +29,8 @@ func main() {
 			&cli.StringSliceFlag{Name: "label", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of <host regex>=<url>.  Host names that match the regex will scrape the target url"},
 			&cli.StringSliceFlag{Name: "endpoint", Usage: "Prometheus remote write endpoint URLs"},
+			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
+			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -40,6 +44,10 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
+	runtime.MemProfileRate = 4096
+	runtime.SetBlockProfileRate(int(1 * time.Second))
+	runtime.SetMutexProfileFraction(1)
+
 	_, k8scli, _, err := newKubeClient(ctx)
 
 	tags := make(map[string]string)
@@ -77,11 +85,13 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	opts := &collector.ServiceOpts{
-		K8sCli:    k8scli,
-		NodeName:  hostname,
-		Targets:   staticTargets,
-		Endpoints: ctx.StringSlice("endpoints"),
-		Tags:      tags,
+		K8sCli:         k8scli,
+		ListentAddr:    ctx.String("listen-addr"),
+		ScrapeInterval: ctx.Duration("scrape-interval"),
+		NodeName:       hostname,
+		Targets:        staticTargets,
+		Endpoints:      ctx.StringSlice("endpoints"),
+		Tags:           tags,
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())

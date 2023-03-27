@@ -6,11 +6,15 @@ import (
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/promremote"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_model/go"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -34,11 +38,13 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	K8sCli    kubernetes.Interface
-	NodeName  string
-	Targets   []string
-	Endpoints []string
-	Tags      map[string]string
+	ListentAddr    string
+	K8sCli         kubernetes.Interface
+	NodeName       string
+	Targets        []string
+	Endpoints      []string
+	Tags           map[string]string
+	ScrapeInterval time.Duration
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
@@ -84,12 +90,22 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	watcher, err := s.K8sCli.CoreV1().Pods("").Watch(s.ctx, metav1.ListOptions{
+		Watch:         true,
 		FieldSelector: "spec.nodeName=" + s.opts.NodeName,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to watch pods: %w", err)
 	}
 	s.watcher = watcher
+
+	go func() {
+		logger.Info("Listening at %s", s.opts.ListentAddr)
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(s.opts.ListentAddr, nil); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}()
 
 	go s.watch()
 	go s.scrape()
@@ -106,7 +122,7 @@ func (s *Service) scrape() {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
-	t := time.NewTicker(30 * time.Second)
+	t := time.NewTicker(s.opts.ScrapeInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -120,7 +136,6 @@ func (s *Service) scrape() {
 
 func (s *Service) scrapeTargets() {
 	targets := s.Targets()
-
 	for _, target := range targets {
 		fams, err := FetchMetrics(target)
 		if err != nil {
