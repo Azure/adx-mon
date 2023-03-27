@@ -77,6 +77,8 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		rule:        rule,
 		kustoClient: e.kustoClient,
 		HandlerFn:   e.HandlerFn,
+		AlertCli:    e.alertCli,
+		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
 	}
 }
 
@@ -234,7 +236,7 @@ func (e *Executor) syncWorkers() {
 		liveQueries[id] = struct{}{}
 		w, ok := e.workers[id]
 		if !ok {
-			logger.Info("Starting new w for %s", id)
+			logger.Info("Starting new worker for %s", id)
 			worker := e.newWorker(r)
 			e.workers[id] = worker
 			go worker.Run()
@@ -246,7 +248,7 @@ func (e *Executor) syncWorkers() {
 			continue
 		}
 
-		logger.Info("Rule %s has changed, restarting w", id)
+		logger.Info("Rule %s has changed, restarting worker", id)
 		w.Close()
 		delete(e.workers, id)
 		w = e.newWorker(r)
