@@ -2,6 +2,9 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"github.com/Azure/adx-mon/alert"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +21,11 @@ type worker struct {
 	wg          sync.WaitGroup
 	rule        *rules.Rule
 	kustoClient Client
-	HandlerFn   func(endpoint string, rule rules.Rule, row *table.Row) error
+	AlertAddr   string
+	AlertCli    interface {
+		Create(ctx context.Context, endpoint string, alert alert.Alert) error
+	}
+	HandlerFn func(endpoint string, rule rules.Rule, row *table.Row) error
 }
 
 func (e *worker) Run() {
@@ -53,8 +60,25 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 	start := time.Now()
 	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	if err := e.kustoClient.Query(ctx, *e.rule, e.HandlerFn); err != nil {
-		logger.Error("Failed to execute query=%s.%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+	if err := e.kustoClient.Query(e.ctx, *e.rule, e.HandlerFn); err != nil {
+		logger.Error("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+
+		summary := fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/>It is returning the error:<br/><br/><pre>%s</pre>", e.rule.Query, err.Error())
+		summary = strings.TrimSpace(summary)
+
+		if err := e.AlertCli.Create(e.ctx, e.AlertAddr, alert.Alert{
+			Destination:   e.rule.Destination,
+			Title:         fmt.Sprintf("Alert %s/%s has query errors", e.rule.Namespace, e.rule.Name),
+			Summary:       summary,
+			Severity:      3,
+			Source:        fmt.Sprintf("%s/%s", e.rule.Namespace, e.rule.Name),
+			CorrelationID: fmt.Sprintf("alert-failure/%s/%s", e.rule.Namespace, e.rule.Name),
+		}); err != nil {
+			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			// Only set the query as failed if we are not able to send a failure alert directly.
+			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			return
+		}
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		return
 	}
