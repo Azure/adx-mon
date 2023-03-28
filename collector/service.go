@@ -75,20 +75,6 @@ func (s *Service) Open(ctx context.Context) error {
 		s.targets = append(s.targets, target)
 	}
 
-	factory := informers.NewSharedInformerFactory(s.K8sCli, time.Minute)
-	podsInformer := factory.Core().V1().Pods().Informer()
-
-	factory.Start(s.ctx.Done()) // Start processing these informers.
-	factory.WaitForCacheSync(s.ctx.Done())
-	s.factory = factory
-
-	pl := factory.Core().V1().Pods().Lister()
-	s.pl = pl
-
-	if _, err := podsInformer.AddEventHandler(s); err != nil {
-		return err
-	}
-
 	// Discover the initial targets running on the node
 	pods, err := s.K8sCli.CoreV1().Pods("").List(s.ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("spec.nodeName=" + s.opts.NodeName),
@@ -106,6 +92,20 @@ func (s *Service) Open(ctx context.Context) error {
 			logger.Info("Adding target %s/%s %s", pod.Namespace, pod.Name, target)
 			s.targets = append(s.targets, target)
 		}
+	}
+
+	factory := informers.NewSharedInformerFactory(s.K8sCli, time.Minute)
+	podsInformer := factory.Core().V1().Pods().Informer()
+
+	factory.Start(s.ctx.Done()) // Start processing these informers.
+	factory.WaitForCacheSync(s.ctx.Done())
+	s.factory = factory
+
+	pl := factory.Core().V1().Pods().Lister()
+	s.pl = pl
+
+	if _, err := podsInformer.AddEventHandler(s); err != nil {
+		return err
 	}
 
 	logger.Info("Listening at %s", s.opts.ListentAddr)
@@ -317,6 +317,9 @@ func (s *Service) newSeries(name string, m *io_prometheus_client.Metric) prompb.
 }
 
 func (s *Service) OnAdd(obj interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	p := obj.(*v1.Pod)
 
 	target, exists := s.isTarget(p)
@@ -332,8 +335,6 @@ func (s *Service) OnAdd(obj interface{}) {
 	}
 
 	logger.Info("Adding target %s/%s %s", p.Namespace, p.Name, target)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.targets = append(s.targets, target)
 }
@@ -343,6 +344,9 @@ func (s *Service) OnUpdate(oldObj, newObj interface{}) {
 }
 
 func (s *Service) OnDelete(obj interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	p := obj.(*v1.Pod)
 	target, exists := s.isTarget(p)
 
@@ -357,8 +361,6 @@ func (s *Service) OnDelete(obj interface{}) {
 	}
 
 	logger.Info("Removing target %s/%s %s", p.Namespace, p.Name, target)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for i, v := range s.targets {
 		if v == target {
@@ -368,7 +370,7 @@ func (s *Service) OnDelete(obj interface{}) {
 	}
 }
 
-// isTarget returns the scrape target endpoing and true if the pod is currently a target, false otherwise
+// isTarget returns the scrape target endpoint and true if the pod is currently a target, false otherwise
 func (s *Service) isTarget(p *v1.Pod) (string, bool) {
 	// If this pod is not schedule to this node, skip it
 	if strings.ToLower(p.Spec.NodeName) != strings.ToLower(s.opts.NodeName) {
@@ -380,8 +382,6 @@ func (s *Service) isTarget(p *v1.Pod) (string, bool) {
 		return "", false
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	for _, v := range s.targets {
 		if v == target {
 			return target, true
