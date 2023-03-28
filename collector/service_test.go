@@ -8,12 +8,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"testing"
+	"time"
 )
 
 func TestService_Open(t *testing.T) {
 	cli := fake.NewSimpleClientset()
 	s, err := collector.NewService(&collector.ServiceOpts{
-		K8sCli: cli,
+		K8sCli:         cli,
+		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -25,8 +27,9 @@ func TestService_Open(t *testing.T) {
 func TestService_Open_Static(t *testing.T) {
 	cli := fake.NewSimpleClientset()
 	s, err := collector.NewService(&collector.ServiceOpts{
-		K8sCli:  cli,
-		Targets: []string{"http://localhost:8080/metrics"},
+		K8sCli:         cli,
+		Targets:        []string{"http://localhost:8080/metrics"},
+		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -38,9 +41,10 @@ func TestService_Open_Static(t *testing.T) {
 func TestService_Open_NoMatchingHost(t *testing.T) {
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
 	s, err := collector.NewService(&collector.ServiceOpts{
-		K8sCli:   cli,
-		NodeName: "ks8-master-123",
-		Targets:  []string{"http://localhost:8080/metrics"},
+		K8sCli:         cli,
+		NodeName:       "ks8-master-123",
+		Targets:        []string{"http://localhost:8080/metrics"},
+		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -52,9 +56,10 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
 	s, err := collector.NewService(&collector.ServiceOpts{
-		K8sCli:   cli,
-		NodeName: "ks8-master-123",
-		Targets:  []string{"http://localhost:8080/metrics"},
+		K8sCli:         cli,
+		NodeName:       "ks8-master-123",
+		Targets:        []string{"http://localhost:8080/metrics"},
+		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -71,9 +76,10 @@ func TestService_Open_Matching(t *testing.T) {
 	pod.Status.PodIP = "172.31.1.18"
 	cli := fake.NewSimpleClientset(pod)
 	s, err := collector.NewService(&collector.ServiceOpts{
-		K8sCli:   cli,
-		NodeName: "ks8-master-123",
-		Targets:  []string{"http://localhost:8080/metrics"},
+		K8sCli:         cli,
+		NodeName:       "ks8-master-123",
+		Targets:        []string{"http://localhost:8080/metrics"},
+		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -94,9 +100,10 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	pod.Status.PodIP = "172.31.1.18"
 	cli := fake.NewSimpleClientset(pod)
 	s, err := collector.NewService(&collector.ServiceOpts{
-		K8sCli:   cli,
-		NodeName: "ks8-master-123",
-		Targets:  []string{"http://localhost:8080/metrics"},
+		K8sCli:         cli,
+		NodeName:       "ks8-master-123",
+		Targets:        []string{"http://localhost:8080/metrics"},
+		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))

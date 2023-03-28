@@ -11,7 +11,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	v12 "k8s.io/client-go/listers/core/v1"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -35,6 +37,9 @@ type Service struct {
 
 	mu      sync.RWMutex
 	targets []string
+	factory informers.SharedInformerFactory
+	pl      v12.PodLister
+	srv     *http.Server
 }
 
 type ServiceOpts struct {
@@ -70,6 +75,20 @@ func (s *Service) Open(ctx context.Context) error {
 		s.targets = append(s.targets, target)
 	}
 
+	factory := informers.NewSharedInformerFactory(s.K8sCli, time.Minute)
+	podsInformer := factory.Core().V1().Pods().Informer()
+
+	factory.Start(s.ctx.Done()) // Start processing these informers.
+	factory.WaitForCacheSync(s.ctx.Done())
+	s.factory = factory
+
+	pl := factory.Core().V1().Pods().Lister()
+	s.pl = pl
+
+	if _, err := podsInformer.AddEventHandler(s); err != nil {
+		return err
+	}
+
 	// Discover the initial targets running on the node
 	pods, err := s.K8sCli.CoreV1().Pods("").List(s.ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("spec.nodeName=" + s.opts.NodeName),
@@ -89,31 +108,26 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 	}
 
-	watcher, err := s.K8sCli.CoreV1().Pods("").Watch(s.ctx, metav1.ListOptions{
-		Watch:         true,
-		FieldSelector: "spec.nodeName=" + s.opts.NodeName,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to watch pods: %w", err)
-	}
-	s.watcher = watcher
+	logger.Info("Listening at %s", s.opts.ListentAddr)
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
 
 	go func() {
-		logger.Info("Listening at %s", s.opts.ListentAddr)
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(s.opts.ListentAddr, nil); err != nil {
+		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}()
 
-	go s.watch()
 	go s.scrape()
 	return nil
 }
 
 func (s *Service) Close() error {
 	s.cancel()
+	s.srv.Shutdown(s.ctx)
+	s.factory.Shutdown()
 	s.wg.Wait()
 	return nil
 }
@@ -302,71 +316,79 @@ func (s *Service) newSeries(name string, m *io_prometheus_client.Metric) prompb.
 	return ts
 }
 
-func (s *Service) watch() {
-	s.wg.Add(1)
-	defer s.wg.Done()
+func (s *Service) OnAdd(obj interface{}) {
+	p := obj.(*v1.Pod)
 
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.watcher.Stop()
+	target, exists := s.isTarget(p)
+
+	// Not a scrape-able pod
+	if target == "" {
+		return
+	}
+
+	// We're already scraping this pod, nothing to do
+	if exists {
+		return
+	}
+
+	logger.Info("Adding target %s/%s %s", p.Namespace, p.Name, target)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.targets = append(s.targets, target)
+}
+
+func (s *Service) OnUpdate(oldObj, newObj interface{}) {
+	s.OnAdd(newObj)
+}
+
+func (s *Service) OnDelete(obj interface{}) {
+	p := obj.(*v1.Pod)
+	target, exists := s.isTarget(p)
+
+	// Not a scrapeable pod
+	if target == "" {
+		return
+	}
+
+	// We're not currently scraping this pod, nothing to do
+	if !exists {
+		return
+	}
+
+	logger.Info("Removing target %s/%s %s", p.Namespace, p.Name, target)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, v := range s.targets {
+		if v == target {
+			s.targets = append(s.targets[:i], s.targets[i+1:]...)
 			return
-		case event, ok := <-s.watcher.ResultChan():
-			if !ok {
-				break
-			}
-
-			pod := event.Object.(*v1.Pod)
-
-			target := makeTarget(pod)
-			if target == "" {
-				continue
-			}
-
-			var exist bool
-			s.mu.RLock()
-			for _, v := range s.targets {
-				if v == target {
-					exist = true
-					break
-				}
-			}
-			s.mu.RUnlock()
-
-			switch event.Type {
-			case watch.Added:
-				if exist {
-					continue
-				}
-				logger.Info("Adding target %s/%s %s", pod.Namespace, pod.Name, target)
-				s.mu.Lock()
-				s.targets = append(s.targets, target)
-				s.mu.Unlock()
-
-			case watch.Modified:
-				if exist {
-					continue
-				}
-				logger.Info("Adding target %s/%s %s", pod.Namespace, pod.Name, target)
-				s.mu.Lock()
-				s.targets = append(s.targets, target)
-				s.mu.Unlock()
-			case watch.Deleted:
-				if !exist {
-					continue
-				}
-				logger.Info("Removing target %s/%s %s", pod.Namespace, pod.Name, target)
-				s.mu.Lock()
-				for i, v := range s.targets {
-					if v == target {
-						s.targets = append(s.targets[:i], s.targets[i+1:]...)
-						break
-					}
-				}
-				s.mu.Unlock()
-			}
 		}
 	}
+}
+
+// isTarget returns the scrape target endpoing and true if the pod is currently a target, false otherwise
+func (s *Service) isTarget(p *v1.Pod) (string, bool) {
+	// If this pod is not schedule to this node, skip it
+	if strings.ToLower(p.Spec.NodeName) != strings.ToLower(s.opts.NodeName) {
+		return "", false
+	}
+
+	target := makeTarget(p)
+	if target == "" {
+		return "", false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, v := range s.targets {
+		if v == target {
+			return target, true
+		}
+	}
+
+	return target, false
 }
 
 func (s *Service) Targets() []string {
