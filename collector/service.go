@@ -258,7 +258,7 @@ func (s *Service) scrapeTargets() {
 			}
 		}
 
-		if len(s.opts.Endpoints) == 0 {
+		if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
 			var sb strings.Builder
 			for _, ts := range wr.Timeseries {
 				sb.Reset()
@@ -272,7 +272,7 @@ func (s *Service) scrapeTargets() {
 				}
 				sb.Write([]byte(" "))
 				for _, s := range ts.Samples {
-					logger.Info("%s %d %f", sb.String(), s.Timestamp, s.Value)
+					logger.Debug("%s %d %f", sb.String(), s.Timestamp, s.Value)
 				}
 
 			}
