@@ -156,22 +156,20 @@ func TestExecutor_syncWorkers_Remove(t *testing.T) {
 		ruleStore: &fakeRuleStore{},
 		workers: map[string]*worker{
 			"alert": &worker{
-				ctx:    ctx,
 				cancel: cancel,
 			},
 		},
 	}
 
 	require.Equal(t, 1, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 0, len(e.workers))
 }
 
 func TestExecutor_syncWorkers_Add(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	e := Executor{
-		ctx:     ctx,
-		closeFn: cancel,
 		ruleStore: &fakeRuleStore{
 			rules: []*rules.Rule{
 				&rules.Rule{
@@ -183,7 +181,7 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 	}
 
 	require.Equal(t, 0, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
 }
 

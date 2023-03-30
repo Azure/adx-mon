@@ -13,7 +13,6 @@ import (
 )
 
 type worker struct {
-	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	rule        *rules.Rule
@@ -21,8 +20,8 @@ type worker struct {
 	HandlerFn   func(endpoint string, rule rules.Rule, row *table.Row) error
 }
 
-func (e *worker) Run() {
-	ctx := e.ctx
+func (e *worker) Run(ctx context.Context) {
+	ctx, e.cancel = context.WithCancel(ctx)
 	e.wg.Add(1)
 	defer e.wg.Done()
 
@@ -65,5 +64,5 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 func (e *worker) Close() {
 	e.cancel()
-	e.wg.Wait()
+	e.wg.Wait() //waiting so that we don't leak go routines/quueue.worker? Could rely on caller to cancel?
 }
