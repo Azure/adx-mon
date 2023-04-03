@@ -62,7 +62,6 @@ type ServiceOpts struct {
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
-
 	kcsb := kusto.NewConnectionStringBuilder(opts.KustoEndpoint)
 	if opts.UseCLIAuth {
 		kcsb.WithAzCli()

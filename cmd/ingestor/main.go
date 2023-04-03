@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"flag"
+	"fmt"
 	promingest "github.com/Azure/adx-mon"
 	"github.com/Azure/adx-mon/adx"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/storage"
+	"github.com/urfave/cli/v2"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -29,7 +30,32 @@ func (i *strSliceFag) Set(value string) error {
 }
 
 func main() {
+	app := &cli.App{
+		Name:  "ingestor",
+		Usage: "adx-mon metrics ingestor",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "storage-dir", Usage: "Direcotry to store WAL segments"},
+			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
+			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
+			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
+			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
+			&cli.BoolFlag{Name: "use-cli-auth", Usage: "Use CLI authentication"},
+			&cli.StringSliceFlag{Name: "labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
+		},
+
+		Action: func(ctx *cli.Context) error {
+			return realMain(ctx)
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		logger.Fatal(err.Error())
+	}
+}
+
+func realMain(ctx *cli.Context) error {
 	svcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	runtime.MemProfileRate = 4096
 	runtime.SetBlockProfileRate(int(1 * time.Second))
@@ -43,16 +69,21 @@ func main() {
 		useCliAuth                          bool
 		staticColumns                       strSliceFag
 	)
-	flag.StringVar(&storageDir, "storage-dir", "", "Directory to storage WAL segments")
-	flag.StringVar(&kustoEndpoint, "kusto-endpoint", "", "Kusto cluster endpoint")
-	flag.StringVar(&database, "db", "", "Kusto DB")
-	flag.IntVar(&concurrentUploads, "uploads", adx.ConcurrentUploads, "Max concurrent uploads")
-	flag.Int64Var(&maxSegmentSize, "max-segment-size", 1024*1024*1024, "Max segment file size")
-	flag.DurationVar(&maxSegmentAge, "max-segment-age", 5*time.Minute, "Max segment file age")
-	flag.BoolVar(&useCliAuth, "use-cli-auth", false, "Use az cli auth")
-	flag.Var(&staticColumns, "dimensions", "Static column=value fields to add to all records")
+	storageDir = ctx.String("storage-dir")
+	kustoEndpoint = ctx.String("kusto-endpoint")
+	if !strings.Contains(kustoEndpoint, "=") {
+		return fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
+	}
 
-	flag.Parse()
+	split := strings.Split(kustoEndpoint, "=")
+	database = split[0]
+	kustoEndpoint = split[1]
+
+	concurrentUploads = ctx.Int("uploads")
+	maxSegmentSize = ctx.Int64("max-segment-size")
+	maxSegmentAge = ctx.Duration("max-segment-age")
+	useCliAuth = ctx.Bool("use-cli-auth")
+	staticColumns = ctx.StringSlice("labels")
 
 	if storageDir == "" {
 		logger.Fatal("-storage-dir is required")
@@ -111,4 +142,5 @@ func main() {
 		logger.Fatal("ListenAndServe returned error: %s", err)
 	}
 	<-svcCtx.Done()
+	return nil
 }
