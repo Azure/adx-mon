@@ -36,7 +36,7 @@ type Service struct {
 	watcher      watch.Interface
 
 	mu      sync.RWMutex
-	targets []string
+	targets []scrapeTarget
 	factory informers.SharedInformerFactory
 	pl      v12.PodLister
 	srv     *http.Server
@@ -50,6 +50,12 @@ type ServiceOpts struct {
 	Endpoints      []string
 	Tags           map[string]string
 	ScrapeInterval time.Duration
+}
+
+type scrapeTarget struct {
+	Addr      string
+	Namespace string
+	Name      string
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
@@ -72,7 +78,9 @@ func (s *Service) Open(ctx context.Context) error {
 	// Add static targets
 	for _, target := range s.opts.Targets {
 		logger.Info("Adding static target %s", target)
-		s.targets = append(s.targets, target)
+		s.targets = append(s.targets, scrapeTarget{
+			Addr: target,
+		})
 	}
 
 	// Discover the initial targets running on the node
@@ -90,7 +98,11 @@ func (s *Service) Open(ctx context.Context) error {
 		target := makeTarget(&pod)
 		if target != "" {
 			logger.Info("Adding target %s/%s %s", pod.Namespace, pod.Name, target)
-			s.targets = append(s.targets, target)
+			s.targets = append(s.targets, scrapeTarget{
+				Addr:      target,
+				Namespace: pod.Namespace,
+				Name:      pod.Name,
+			})
 		}
 	}
 
@@ -151,7 +163,7 @@ func (s *Service) scrape() {
 func (s *Service) scrapeTargets() {
 	targets := s.Targets()
 	for _, target := range targets {
-		fams, err := FetchMetrics(target)
+		fams, err := FetchMetrics(target.Addr)
 		if err != nil {
 			logger.Error("Failed to scrape metrics for %s: %s", target, err.Error())
 			continue
@@ -160,7 +172,7 @@ func (s *Service) scrapeTargets() {
 		wr := &prompb.WriteRequest{}
 		for name, val := range fams {
 			for _, m := range val.Metric {
-				ts := s.newSeries(name, m)
+				ts := s.newSeries(name, target, m)
 
 				timestamp := m.GetTimestampMs()
 				if timestamp == 0 {
@@ -181,7 +193,7 @@ func (s *Service) scrapeTargets() {
 
 					// Add the quantile series
 					for _, q := range sum.GetQuantile() {
-						ts := s.newSeries(name, m)
+						ts := s.newSeries(name, target, m)
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("quantile"),
 							Value: []byte(fmt.Sprintf("%f", q.GetQuantile())),
@@ -196,7 +208,7 @@ func (s *Service) scrapeTargets() {
 					}
 
 					// Add sum series
-					ts := s.newSeries(fmt.Sprintf("%s_sum", name), m)
+					ts := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -206,7 +218,7 @@ func (s *Service) scrapeTargets() {
 					wr.Timeseries = append(wr.Timeseries, ts)
 
 					// Add sum series
-					ts = s.newSeries(fmt.Sprintf("%s_count", name), m)
+					ts = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -218,7 +230,7 @@ func (s *Service) scrapeTargets() {
 					hist := m.GetHistogram()
 					// Add the quantile series
 					for _, q := range hist.GetBucket() {
-						ts := s.newSeries(name, m)
+						ts := s.newSeries(name, target, m)
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("le"),
 							Value: []byte(fmt.Sprintf("%f", q.GetUpperBound())),
@@ -233,7 +245,7 @@ func (s *Service) scrapeTargets() {
 					}
 
 					// Add sum series
-					ts := s.newSeries(fmt.Sprintf("%s_sum", name), m)
+					ts := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -243,7 +255,7 @@ func (s *Service) scrapeTargets() {
 					wr.Timeseries = append(wr.Timeseries, ts)
 
 					// Add sum series
-					ts = s.newSeries(fmt.Sprintf("%s_count", name), m)
+					ts = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -287,7 +299,7 @@ func (s *Service) scrapeTargets() {
 	}
 }
 
-func (s *Service) newSeries(name string, m *io_prometheus_client.Metric) prompb.TimeSeries {
+func (s *Service) newSeries(name string, scrapeTarget scrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
 	ts := prompb.TimeSeries{
 		Labels: []prompb.Label{
 			{
@@ -295,6 +307,20 @@ func (s *Service) newSeries(name string, m *io_prometheus_client.Metric) prompb.
 				Value: []byte(name),
 			},
 		},
+	}
+
+	if scrapeTarget.Namespace != "" {
+		ts.Labels = append(ts.Labels, prompb.Label{
+			Name:  []byte("namespace"),
+			Value: []byte(scrapeTarget.Namespace),
+		})
+	}
+
+	if scrapeTarget.Name != "" {
+		ts.Labels = append(ts.Labels, prompb.Label{
+			Name:  []byte("pod"),
+			Value: []byte(scrapeTarget.Name),
+		})
 	}
 
 	for _, l := range m.Label {
@@ -336,7 +362,11 @@ func (s *Service) OnAdd(obj interface{}) {
 
 	logger.Info("Adding target %s/%s %s", p.Namespace, p.Name, target)
 
-	s.targets = append(s.targets, target)
+	s.targets = append(s.targets, scrapeTarget{
+		Addr:      target,
+		Namespace: p.Namespace,
+		Name:      p.Name,
+	})
 }
 
 func (s *Service) OnUpdate(oldObj, newObj interface{}) {
@@ -363,7 +393,7 @@ func (s *Service) OnDelete(obj interface{}) {
 	logger.Info("Removing target %s/%s %s", p.Namespace, p.Name, target)
 
 	for i, v := range s.targets {
-		if v == target {
+		if v.Addr == target {
 			s.targets = append(s.targets[:i], s.targets[i+1:]...)
 			return
 		}
@@ -383,7 +413,7 @@ func (s *Service) isTarget(p *v1.Pod) (string, bool) {
 	}
 
 	for _, v := range s.targets {
-		if v == target {
+		if v.Addr == target {
 			return target, true
 		}
 	}
@@ -391,12 +421,14 @@ func (s *Service) isTarget(p *v1.Pod) (string, bool) {
 	return target, false
 }
 
-func (s *Service) Targets() []string {
+func (s *Service) Targets() []scrapeTarget {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	a := make([]string, len(s.targets))
-	copy(a, s.targets)
+	a := make([]scrapeTarget, len(s.targets))
+	for i, v := range s.targets {
+		a[i] = v
+	}
 	return a
 }
 
