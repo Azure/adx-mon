@@ -95,8 +95,8 @@ func TestService_Open_Matching(t *testing.T) {
 
 	targets := s.Targets()
 	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://localhost:8080/metrics", targets[0])
-	require.Equal(t, "http://172.31.1.18:80/metrics", targets[1])
+	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
+	require.Equal(t, "http://172.31.1.18:80/metrics", targets[1].Addr)
 }
 
 func TestService_Open_MatchingPort(t *testing.T) {
@@ -120,8 +120,8 @@ func TestService_Open_MatchingPort(t *testing.T) {
 
 	targets := s.Targets()
 	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://localhost:8080/metrics", targets[0])
-	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1])
+	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
+	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
 }
 
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
