@@ -31,6 +31,7 @@ func NewReplicator(opts ReplicatorOpts) (*Replicator, error) {
 	}
 	return &Replicator{
 		queue:       make(chan []string, 100),
+		closing:     make(chan struct{}),
 		cli:         cli,
 		Partitioner: opts.Partitioner,
 	}, nil

@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/golang/snappy"
 	"io"
+	"k8s.io/client-go/kubernetes"
 	"net/http"
 	"time"
 )
@@ -59,6 +60,7 @@ type ServiceOpts struct {
 
 	// Dimensions is a slice of column=value elements where each element will be added all rows.
 	Dimensions []string
+	K8sCli     *kubernetes.Clientset
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -99,6 +101,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
 		WriteTimeSeriesFn: store.WriteTimeSeries,
+		K8sCli:            opts.K8sCli,
 	})
 	if err != nil {
 		return nil, err
@@ -145,7 +148,7 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.coordinator.Open(); err != nil {
+	if err := s.coordinator.Open(ctx); err != nil {
 		return err
 	}
 
