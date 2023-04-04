@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	v12 "k8s.io/client-go/listers/core/v1"
-	"k8s.io/client-go/rest"
 	"log"
 	"net"
 	"os"
@@ -44,6 +43,7 @@ type Coordinator struct {
 	pl           v12.PodLister
 	hostEntpoint string
 	hostname     string
+	cancel       context.CancelFunc
 }
 
 func (c *Coordinator) OnAdd(obj interface{}) {
@@ -81,19 +81,10 @@ func (c *Coordinator) OnDelete(obj interface{}) {
 
 type CoordinatorOpts struct {
 	WriteTimeSeriesFn TimeSeriesWriter
+	K8sCli            *kubernetes.Clientset
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (*Coordinator, error) {
-	cfg, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	kcli, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-
 	pcli, err := promremote.NewClient(15 * time.Second)
 	if err != nil {
 		return nil, err
@@ -102,13 +93,14 @@ func NewCoordinator(opts *CoordinatorOpts) (*Coordinator, error) {
 	return &Coordinator{
 
 		opts: opts,
-		kcli: kcli,
+		kcli: opts.K8sCli,
 		pcli: pcli,
 	}, nil
 }
 
-func (c *Coordinator) Open() error {
-	ctx := context.Background()
+func (c *Coordinator) Open(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
 
 	factory := informers.NewSharedInformerFactory(c.kcli, time.Minute)
 	podsInformer := factory.Core().V1().Pods().Informer()
@@ -154,6 +146,7 @@ func (c *Coordinator) Owner(b []byte) (string, string) {
 }
 
 func (c *Coordinator) Close() error {
+	c.cancel()
 	c.factory.Shutdown()
 	return nil
 }
