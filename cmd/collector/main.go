@@ -49,6 +49,9 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetMutexProfileFraction(1)
 
 	_, k8scli, _, err := newKubeClient(ctx)
+	if err != nil {
+		return err
+	}
 
 	tags := make(map[string]string)
 	for _, tag := range ctx.StringSlice("label") {
