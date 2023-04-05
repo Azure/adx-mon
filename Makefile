@@ -10,6 +10,15 @@ build-ingestor:
 	CGO_ENABLED=0 go build -o bin/ingestor cmd/ingestor/main.go
 .PHONY: build
 
+build-collector:
+	mkdir -p bin
+	CGO_ENABLED=0 go build -o bin/collector cmd/collector/main.go
+.PHONY: build
+
+
+build: build-alerter build-ingestor build-collector
+.PHONY: build
+
 clean:
 	rm bin/*
 .PHONY: clean
@@ -20,5 +29,4 @@ test:
 
 default:
 	@$(MAKE) test
-	@$(MAKE) build-alerter
-	@$(MAKE) build-ingestor
+	@$(MAKE) build
