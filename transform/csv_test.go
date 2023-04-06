@@ -48,7 +48,10 @@ func TestMarshalCSV(t *testing.T) {
 	w := NewCSVWriter(&b)
 	err := w.MarshalCSV(ts)
 	require.NoError(t, err)
-	println(b.String())
+	require.Equal(t, `2022-11-22T10:22:04.001Z,2808720101239693515,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",0.000000000
+2022-11-22T10:22:05.002Z,2808720101239693515,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",1.000000000
+2022-11-22T10:22:06.003Z,2808720101239693515,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",2.000000000
+`, b.String())
 }
 
 func TestNormalize(t *testing.T) {
