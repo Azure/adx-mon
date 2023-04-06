@@ -18,6 +18,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +56,16 @@ type ServiceOpts struct {
 type scrapeTarget struct {
 	Addr      string
 	Namespace string
-	Name      string
+	Pod       string
+	Container string
+}
+
+func (t scrapeTarget) path() string {
+	path := fmt.Sprintf("%s/%s", t.Namespace, t.Pod)
+	if t.Container != "" {
+		path = fmt.Sprintf("%s/%s", path, t.Container)
+	}
+	return path
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
@@ -95,14 +105,10 @@ func (s *Service) Open(ctx context.Context) error {
 			continue
 		}
 
-		target := makeTarget(&pod)
-		if target != "" {
-			logger.Info("Adding target %s/%s %s", pod.Namespace, pod.Name, target)
-			s.targets = append(s.targets, scrapeTarget{
-				Addr:      target,
-				Namespace: pod.Namespace,
-				Name:      pod.Name,
-			})
+		targets := makeTargets(&pod)
+		for _, target := range targets {
+			logger.Info("Adding target %s %s", target.path(), target)
+			s.targets = append(s.targets, target)
 		}
 	}
 
@@ -316,10 +322,17 @@ func (s *Service) newSeries(name string, scrapeTarget scrapeTarget, m *io_promet
 		})
 	}
 
-	if scrapeTarget.Name != "" {
+	if scrapeTarget.Pod != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
 			Name:  []byte("pod"),
-			Value: []byte(scrapeTarget.Name),
+			Value: []byte(scrapeTarget.Pod),
+		})
+	}
+
+	if scrapeTarget.Container != "" {
+		ts.Labels = append(ts.Labels, prompb.Label{
+			Name:  []byte("container"),
+			Value: []byte(scrapeTarget.Container),
 		})
 	}
 
@@ -348,10 +361,10 @@ func (s *Service) OnAdd(obj interface{}) {
 
 	p := obj.(*v1.Pod)
 
-	target, exists := s.isTarget(p)
+	targets, exists := s.isScrapeable(p)
 
 	// Not a scrape-able pod
-	if target == "" {
+	if len(targets) == 0 {
 		return
 	}
 
@@ -360,13 +373,10 @@ func (s *Service) OnAdd(obj interface{}) {
 		return
 	}
 
-	logger.Info("Adding target %s/%s %s", p.Namespace, p.Name, target)
-
-	s.targets = append(s.targets, scrapeTarget{
-		Addr:      target,
-		Namespace: p.Namespace,
-		Name:      p.Name,
-	})
+	for _, target := range targets {
+		logger.Info("Adding target %s %s", target.path(), target)
+		s.targets = append(s.targets, target)
+	}
 }
 
 func (s *Service) OnUpdate(oldObj, newObj interface{}) {
@@ -378,10 +388,10 @@ func (s *Service) OnDelete(obj interface{}) {
 	defer s.mu.Unlock()
 
 	p := obj.(*v1.Pod)
-	target, exists := s.isTarget(p)
+	targets, exists := s.isScrapeable(p)
 
 	// Not a scrapeable pod
-	if target == "" {
+	if len(targets) == 0 {
 		return
 	}
 
@@ -390,35 +400,42 @@ func (s *Service) OnDelete(obj interface{}) {
 		return
 	}
 
-	logger.Info("Removing target %s/%s %s", p.Namespace, p.Name, target)
-
-	for i, v := range s.targets {
-		if v.Addr == target {
-			s.targets = append(s.targets[:i], s.targets[i+1:]...)
-			return
+	var remainingTargets []scrapeTarget
+	for _, target := range targets {
+		logger.Info("Removing target %s %s", target.path(), target)
+		for _, v := range s.targets {
+			if v.Addr == target.Addr {
+				continue
+			}
+			remainingTargets = append(remainingTargets, v)
 		}
 	}
+	s.targets = remainingTargets
 }
 
-// isTarget returns the scrape target endpoint and true if the pod is currently a target, false otherwise
-func (s *Service) isTarget(p *v1.Pod) (string, bool) {
+// isScrapeable returns the scrape target endpoints and true if the pod is currently a target, false otherwise
+func (s *Service) isScrapeable(p *v1.Pod) ([]scrapeTarget, bool) {
 	// If this pod is not schedule to this node, skip it
 	if strings.ToLower(p.Spec.NodeName) != strings.ToLower(s.opts.NodeName) {
-		return "", false
+		return nil, false
 	}
 
-	target := makeTarget(p)
-	if target == "" {
-		return "", false
+	targets := makeTargets(p)
+	if len(targets) == 0 {
+		return nil, false
 	}
 
+	// See if any of the pods targets are already being scraped
 	for _, v := range s.targets {
-		if v.Addr == target {
-			return target, true
+		for _, target := range targets {
+			if v.Addr == target.Addr {
+				return targets, true
+			}
 		}
 	}
 
-	return target, false
+	// Not scraping this pod, return all the targets
+	return targets, false
 }
 
 func (s *Service) Targets() []scrapeTarget {
@@ -432,11 +449,19 @@ func (s *Service) Targets() []scrapeTarget {
 	return a
 }
 
-func makeTarget(p *v1.Pod) string {
+func makeTargets(p *v1.Pod) []scrapeTarget {
+	var targets []scrapeTarget
+
 	// Skip the pod if it has not opted in to scraping
 	if p.Annotations["prometheus.io/scrape"] != "true" {
-		return ""
+		return nil
 	}
+
+	podIP := p.Status.PodIP
+	if podIP == "" {
+		return nil
+	}
+
 	scheme := "http"
 	if p.Annotations["prometheus.io/scheme"] != "" {
 		scheme = p.Annotations["prometheus.io/scheme"]
@@ -446,14 +471,26 @@ func makeTarget(p *v1.Pod) string {
 	if p.Annotations["prometheus.io/path"] != "" {
 		path = p.Annotations["prometheus.io/path"]
 	}
-	port := "80"
-	if p.Annotations["prometheus.io/port"] != "" {
-		port = p.Annotations["prometheus.io/port"]
-	}
-	podIP := p.Status.PodIP
-	if podIP == "" {
-		return ""
+
+	// Just scrape this one port
+	port := p.Annotations["prometheus.io/port"]
+
+	for _, c := range p.Spec.Containers {
+		for _, cp := range c.Ports {
+			// If a port is specified, only scrape that port on the container that is exposing it
+			if port != "" && port != strconv.Itoa(int(cp.ContainerPort)) {
+				continue
+			}
+
+			targets = append(targets,
+				scrapeTarget{
+					Addr:      fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
+					Namespace: p.Namespace,
+					Pod:       p.Name,
+					Container: c.Name,
+				})
+		}
 	}
 
-	return fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, path)
+	return targets
 }
