@@ -9,6 +9,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -101,9 +102,18 @@ func realMain(ctx *cli.Context) error {
 
 	endpoints := ctx.StringSlice("endpoints")
 	for _, endpoint := range endpoints {
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			return fmt.Errorf("failed to parse endpoint %s: %w", endpoint, err)
+		}
+
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("endpoint %s must be http or https", endpoint)
+		}
+
 		logger.Info("Using remote write endpoint %s", endpoint)
 	}
-	
+
 	opts := &collector.ServiceOpts{
 		K8sCli:         k8scli,
 		ListentAddr:    ctx.String("listen-addr"),
