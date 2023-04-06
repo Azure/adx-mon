@@ -48,7 +48,7 @@ type ServiceOpts struct {
 	NodeName       string
 	Targets        []string
 	Endpoints      []string
-	Tags           map[string]string
+	AddLabels      map[string]string
 	ScrapeInterval time.Duration
 }
 
@@ -72,7 +72,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		opts:   opts,
 		K8sCli: opts.K8sCli,
 		seriesCreator: &seriesCreator{
-			Tags: opts.Tags,
+			AddLabels: opts.AddLabels,
 		},
 	}, nil
 }
