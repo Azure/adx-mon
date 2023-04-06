@@ -26,12 +26,13 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/kubelet.conf"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
-			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they exist.  These are dropped from all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of <host regex>=<url>.  Host names that match the regex will scrape the target url"},
 			&cli.StringSliceFlag{Name: "endpoints", Usage: "Prometheus remote write endpoint URLs"},
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
 			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
+			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
+			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they exist.  These are dropped from all metrics collected by this agent"},
+			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they are scraped from a target.  All metrics with matching prefixes are dropped"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -68,6 +69,11 @@ func realMain(ctx *cli.Context) error {
 		dropLabels[tag] = struct{}{}
 	}
 
+	dropMetrics := make(map[string]struct{})
+	for _, tag := range ctx.StringSlice("drop-metrics") {
+		dropMetrics[tag] = struct{}{}
+	}
+
 	hostname := ctx.String("hostname")
 	if hostname == "" {
 		var err error
@@ -100,6 +106,7 @@ func realMain(ctx *cli.Context) error {
 		NodeName:       hostname,
 		Targets:        staticTargets,
 		Endpoints:      ctx.StringSlice("endpoints"),
+		DropMetrics:    dropMetrics,
 		AddLabels:      addLabels,
 		DropLabels:     dropLabels,
 	}
