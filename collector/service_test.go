@@ -2,6 +2,7 @@ package collector_test
 
 import (
 	"context"
+	"github.com/davecgh/go-spew/spew"
 	"testing"
 	"time"
 
@@ -81,6 +82,15 @@ func TestService_Open_Matching(t *testing.T) {
 		"prometheus.io/scrape": "true",
 	}
 	pod.Status.PodIP = "172.31.1.18"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 9000,
+				},
+			},
+		},
+	}
 	cli := fake.NewSimpleClientset(pod)
 	s, err := collector.NewService(&collector.ServiceOpts{
 		ListentAddr:    MetricListenAddr,
@@ -94,9 +104,10 @@ func TestService_Open_Matching(t *testing.T) {
 	defer s.Close()
 
 	targets := s.Targets()
+	spew.Dump(targets)
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
-	require.Equal(t, "http://172.31.1.18:80/metrics", targets[1].Addr)
+	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[1].Addr)
 }
 
 func TestService_Open_MatchingPort(t *testing.T) {
