@@ -116,6 +116,15 @@ func TestService_Open_MatchingPort(t *testing.T) {
 		"prometheus.io/scrape": "true",
 		"prometheus.io/port":   "8080",
 	}
+	pod.Spec.Containers = []v1.Container{
+		{
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+			},
+		},
+	}
 	pod.Status.PodIP = "172.31.1.18"
 	cli := fake.NewSimpleClientset(pod)
 	s, err := collector.NewService(&collector.ServiceOpts{

@@ -17,7 +17,6 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,14 +32,14 @@ type Service struct {
 	cancel context.CancelFunc
 
 	remoteClient *promremote.Client
-	Tags         map[string]string
 	watcher      watch.Interface
 
-	mu      sync.RWMutex
-	targets []scrapeTarget
-	factory informers.SharedInformerFactory
-	pl      v12.PodLister
-	srv     *http.Server
+	mu            sync.RWMutex
+	targets       []scrapeTarget
+	factory       informers.SharedInformerFactory
+	pl            v12.PodLister
+	srv           *http.Server
+	seriesCreator *seriesCreator
 }
 
 type ServiceOpts struct {
@@ -71,8 +70,10 @@ func (t scrapeTarget) path() string {
 func NewService(opts *ServiceOpts) (*Service, error) {
 	return &Service{
 		opts:   opts,
-		Tags:   opts.Tags,
 		K8sCli: opts.K8sCli,
+		seriesCreator: &seriesCreator{
+			Tags: opts.Tags,
+		},
 	}, nil
 }
 
@@ -306,53 +307,7 @@ func (s *Service) scrapeTargets() {
 }
 
 func (s *Service) newSeries(name string, scrapeTarget scrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
-			{
-				Name:  []byte("__name__"),
-				Value: []byte(name),
-			},
-		},
-	}
-
-	if scrapeTarget.Namespace != "" {
-		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte("namespace"),
-			Value: []byte(scrapeTarget.Namespace),
-		})
-	}
-
-	if scrapeTarget.Pod != "" {
-		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte("pod"),
-			Value: []byte(scrapeTarget.Pod),
-		})
-	}
-
-	if scrapeTarget.Container != "" {
-		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte("container"),
-			Value: []byte(scrapeTarget.Container),
-		})
-	}
-
-	for _, l := range m.Label {
-		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte(l.GetName()),
-			Value: []byte(l.GetValue()),
-		})
-	}
-
-	for k, v := range s.Tags {
-		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte(k),
-			Value: []byte(v),
-		})
-	}
-	sort.Slice(ts.Labels, func(i, j int) bool {
-		return string(ts.Labels[i].Name) < string(ts.Labels[j].Name)
-	})
-	return ts
+	return s.seriesCreator.newSeries(name, scrapeTarget, m)
 }
 
 func (s *Service) OnAdd(obj interface{}) {
