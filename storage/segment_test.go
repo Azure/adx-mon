@@ -87,7 +87,7 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 1, 1)}))
 	b, err = s.Bytes()
 	require.NoError(t, err)
-	require.Equal(t, `1970-01-01T00:00:00Z,6718523938451634754,"{""__name__"":""Foo"",""host"":""bar""}",0.000000000
-1970-01-01T00:00:00.001Z,6718523938451634754,"{""__name__"":""Foo"",""host"":""bar""}",1.000000000
+	require.Equal(t, `1970-01-01T00:00:00Z,5965899759670904239,"{""host"":""bar""}",0.000000000
+1970-01-01T00:00:00.001Z,5965899759670904239,"{""host"":""bar""}",1.000000000
 `, string(b))
 }
