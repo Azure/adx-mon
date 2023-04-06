@@ -7,7 +7,7 @@ import (
 )
 
 type seriesCreator struct {
-	Tags map[string]string
+	AddLabels map[string]string
 }
 
 func (s *seriesCreator) newSeries(name string, scrapeTarget scrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
@@ -43,7 +43,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget scrapeTarget, m *io_
 
 	for _, l := range m.Label {
 		// Skip labels that will be overridden by static labels
-		if _, ok := s.Tags[l.GetName()]; ok {
+		if _, ok := s.AddLabels[l.GetName()]; ok {
 			continue
 		}
 
@@ -53,7 +53,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget scrapeTarget, m *io_
 		})
 	}
 
-	for k, v := range s.Tags {
+	for k, v := range s.AddLabels {
 		if k == "namespace" || k == "pod" || k == "container" {
 			continue
 		}

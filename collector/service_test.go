@@ -2,7 +2,6 @@ package collector_test
 
 import (
 	"context"
-	"github.com/davecgh/go-spew/spew"
 	"testing"
 	"time"
 
@@ -104,7 +103,6 @@ func TestService_Open_Matching(t *testing.T) {
 	defer s.Close()
 
 	targets := s.Targets()
-	spew.Dump(targets)
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
 	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[1].Addr)

@@ -26,7 +26,7 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/kubelet.conf"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
-			&cli.StringSliceFlag{Name: "label", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
+			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of <host regex>=<url>.  Host names that match the regex will scrape the target url"},
 			&cli.StringSliceFlag{Name: "endpoints", Usage: "Prometheus remote write endpoint URLs"},
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
@@ -53,13 +53,13 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
-	tags := make(map[string]string)
-	for _, tag := range ctx.StringSlice("label") {
+	addLabels := make(map[string]string)
+	for _, tag := range ctx.StringSlice("add-labels") {
 		split := strings.Split(tag, "=")
 		if len(split) != 2 {
 			return fmt.Errorf("invalid tag %s", tag)
 		}
-		tags[split[0]] = split[1]
+		addLabels[split[0]] = split[1]
 	}
 
 	hostname := ctx.String("hostname")
@@ -94,7 +94,7 @@ func realMain(ctx *cli.Context) error {
 		NodeName:       hostname,
 		Targets:        staticTargets,
 		Endpoints:      ctx.StringSlice("endpoints"),
-		Tags:           tags,
+		AddLabels:      addLabels,
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())

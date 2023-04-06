@@ -47,7 +47,7 @@ func TestSeriesCreator_PodMetadata(t *testing.T) {
 
 func TestSeriesCreator_Tags(t *testing.T) {
 	sc := seriesCreator{
-		Tags: map[string]string{
+		AddLabels: map[string]string{
 			"namespace": "default",    // This will be ignored
 			"foo":       "overridden", // This will be overridden
 		},
