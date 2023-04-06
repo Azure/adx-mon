@@ -51,6 +51,7 @@ type ServiceOpts struct {
 	AddLabels      map[string]string
 	DropLabels     map[string]struct{}
 	ScrapeInterval time.Duration
+	DropMetrics    map[string]struct{}
 }
 
 type scrapeTarget struct {
@@ -180,6 +181,18 @@ func (s *Service) scrapeTargets() {
 
 		wr := &prompb.WriteRequest{}
 		for name, val := range fams {
+			// Drop metrics that are in the drop list
+			var drop bool
+			for prefix := range s.opts.DropMetrics {
+				if strings.HasPrefix(name, prefix) {
+					drop = true
+					break
+				}
+			}
+			if drop {
+				continue
+			}
+
 			for _, m := range val.Metric {
 				ts := s.newSeries(name, target, m)
 
