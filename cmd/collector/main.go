@@ -99,13 +99,18 @@ func realMain(ctx *cli.Context) error {
 		staticTargets = append(staticTargets, split[1])
 	}
 
+	endpoints := ctx.StringSlice("endpoints")
+	for _, endpoint := range endpoints {
+		logger.Info("Using remote write endpoint %s", endpoint)
+	}
+	
 	opts := &collector.ServiceOpts{
 		K8sCli:         k8scli,
 		ListentAddr:    ctx.String("listen-addr"),
 		ScrapeInterval: ctx.Duration("scrape-interval"),
 		NodeName:       hostname,
 		Targets:        staticTargets,
-		Endpoints:      ctx.StringSlice("endpoints"),
+		Endpoints:      endpoints,
 		DropMetrics:    dropMetrics,
 		AddLabels:      addLabels,
 		DropLabels:     dropLabels,
