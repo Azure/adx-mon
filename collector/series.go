@@ -12,14 +12,7 @@ type seriesCreator struct {
 }
 
 func (s *seriesCreator) newSeries(name string, scrapeTarget scrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
-			{
-				Name:  []byte("__name__"),
-				Value: []byte(name),
-			},
-		},
-	}
+	ts := prompb.TimeSeries{}
 
 	if scrapeTarget.Namespace != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
@@ -72,5 +65,9 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget scrapeTarget, m *io_
 	sort.Slice(ts.Labels, func(i, j int) bool {
 		return string(ts.Labels[i].Name) < string(ts.Labels[j].Name)
 	})
+
+	// Ensure that the __name__ label is the first label
+	ts.Labels = append([]prompb.Label{{Name: []byte("__name__"), Value: []byte(name)}}, ts.Labels...)
+
 	return ts
 }

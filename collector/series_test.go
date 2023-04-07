@@ -25,6 +25,25 @@ func TestSeriesCreator(t *testing.T) {
 	require.Equal(t, "value1", string(series.Labels[1].Value))
 }
 
+func TestSeriesCreator_MixedCase(t *testing.T) {
+	sc := seriesCreator{}
+
+	m := &io_prometheus_client.Metric{
+		Label: []*io_prometheus_client.LabelPair{
+			{
+				Name:  strPtr("Capital"),
+				Value: strPtr("value1"),
+			},
+		},
+	}
+	series := sc.newSeries("test", scrapeTarget{}, m)
+	require.Equal(t, 2, len(series.Labels))
+	require.Equal(t, "__name__", string(series.Labels[0].Name))
+	require.Equal(t, "test", string(series.Labels[0].Value))
+	require.Equal(t, "Capital", string(series.Labels[1].Name))
+	require.Equal(t, "value1", string(series.Labels[1].Value))
+}
+
 func TestSeriesCreator_PodMetadata(t *testing.T) {
 	sc := seriesCreator{}
 
