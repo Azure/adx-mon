@@ -17,7 +17,6 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -445,13 +444,20 @@ func makeTargets(p *v1.Pod) []scrapeTarget {
 	// Just scrape this one port
 	port := p.Annotations["prometheus.io/port"]
 
+	// If a port is specified, only scrape that port on the pod
+	if port != "" {
+		targets = append(targets,
+			scrapeTarget{
+				Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, path),
+				Namespace: p.Namespace,
+				Pod:       p.Name,
+			})
+		return targets
+	}
+
+	// Otherwise, scrape all the ports on the pod
 	for _, c := range p.Spec.Containers {
 		for _, cp := range c.Ports {
-			// If a port is specified, only scrape that port on the container that is exposing it
-			if port != "" && port != strconv.Itoa(int(cp.ContainerPort)) {
-				continue
-			}
-
 			targets = append(targets,
 				scrapeTarget{
 					Addr:      fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
