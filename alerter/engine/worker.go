@@ -68,7 +68,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 		if err := e.AlertCli.Create(e.ctx, e.AlertAddr, alert.Alert{
 			Destination:   e.rule.Destination,
-			Title:         fmt.Sprintf("Alert %s/%s has query errors", e.rule.Namespace, e.rule.Name),
+			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
 			Summary:       summary,
 			Severity:      3,
 			Source:        fmt.Sprintf("%s/%s", e.rule.Namespace, e.rule.Name),
