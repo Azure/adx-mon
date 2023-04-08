@@ -1,10 +1,7 @@
 package engine
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"math"
 	"strconv"
@@ -33,6 +30,7 @@ type Executor struct {
 	alertAddr   string
 	kustoClient Client
 	ruleStore   ruleStore
+	region      string
 
 	// resconsider this later or documetn why we do it https://go.dev/blog/context-and-structs
 	//"Contexts should not be stored inside a struct type, but instead passed to each function that needs it."
@@ -45,13 +43,22 @@ type Executor struct {
 	workers map[string]*worker
 }
 
+type ExecutorOpts struct {
+	AlertCli    AlertCli
+	AlertAddr   string
+	KustoClient Client
+	RuleStore   ruleStore
+	Region      string
+}
+
 // TODO make AlertAddr   string part of alertcli
-func NewExecutor(alert AlertCli, alertAddr string, kustoClient Client, ruleStore ruleStore) *Executor {
+func NewExecutor(opts ExecutorOpts) *Executor {
 	return &Executor{
-		alertCli:    alert,
-		alertAddr:   alertAddr,
-		kustoClient: kustoClient,
-		ruleStore:   ruleStore,
+		alertCli:    opts.AlertCli,
+		alertAddr:   opts.AlertAddr,
+		kustoClient: opts.KustoClient,
+		ruleStore:   opts.RuleStore,
+		region:      opts.Region,
 		workers:     make(map[string]*worker),
 	}
 }
@@ -76,6 +83,7 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		cancel:      cancel,
 		rule:        rule,
 		kustoClient: e.kustoClient,
+		Region:      e.region,
 		HandlerFn:   e.HandlerFn,
 		AlertCli:    e.alertCli,
 		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
@@ -89,13 +97,11 @@ func (e *Executor) Close() error {
 }
 
 // HandlerFn converts rows of a query to Alerts.
-func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) error {
+func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
 	res := Notification{
 		Severity:     math.MinInt64,
 		CustomFields: map[string]string{},
 	}
-
-	query := rule.Query
 
 	columns := row.ColumnNames()
 	for i, value := range row.Values {
@@ -107,7 +113,7 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 		case "severity":
 			v, err := e.asInt64(value)
 			if err != nil {
-				metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
+				metrics.QueryHealth.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 				return err
 			}
 			res.Severity = v
@@ -123,46 +129,24 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 	}
 
 	if err := res.Validate(); err != nil {
-		metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
+		metrics.QueryHealth.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 		return err
 	}
 
-	for k, v := range rule.Parameters {
-		switch vv := v.(type) {
-		case string:
-			query = strings.Replace(query, k, fmt.Sprintf("\"%s\"", vv), -1)
-		default:
-			metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
-			return fmt.Errorf("unimplemented query type: %v", vv)
-		}
-	}
-
-	url, err := kustoDeepLink(query)
+	summary, err := KustoQueryLinks(res.Summary, qc.Query, endpoint, qc.Rule.Database)
 	if err != nil {
-		metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(0)
+		metrics.QueryHealth.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 		return fmt.Errorf("failed to create kusto deep link: %w", err)
 	}
 
-	if !strings.HasSuffix(endpoint, "/") {
-		endpoint = endpoint + "/"
+	if res.CorrelationID != "" && !strings.HasPrefix(res.CorrelationID, fmt.Sprintf("%s/%s://", qc.Rule.Namespace, qc.Rule.Name)) {
+		res.CorrelationID = fmt.Sprintf("%s/%s://%s", qc.Rule.Namespace, qc.Rule.Name, res.CorrelationID)
 	}
 
-	// Setup the Kusto query deep links
-	link := "Execute in "
-	link += fmt.Sprintf(`<a href="%s%s?query=%s">[Web]</a> `, endpoint, rule.Database, url)
-	link += fmt.Sprintf(`<a href="%s%s?query=%s&web=0">[Desktop]</a>`, endpoint, rule.Database, url)
-
-	summary := fmt.Sprintf("%s<br/><br/>%s</br><pre>%s</pre>", res.Summary, link, query)
-	summary = strings.TrimSpace(summary)
-
-	if res.CorrelationID != "" && !strings.HasPrefix(res.CorrelationID, fmt.Sprintf("%s/%s://", rule.Namespace, rule.Name)) {
-		res.CorrelationID = fmt.Sprintf("%s/%s://%s", rule.Namespace, rule.Name, res.CorrelationID)
-	}
-
-	destination := rule.Destination
+	destination := qc.Rule.Destination
 	// The recipient query results field is deprecated.
 	if destination == "" {
-		logger.Warn("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", rule.Namespace, rule.Name)
+		logger.Warn("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
 		destination = res.Recipient
 	}
 
@@ -172,7 +156,7 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 		Summary:       summary,
 		Description:   res.Description,
 		Severity:      int(res.Severity),
-		Source:        fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+		Source:        fmt.Sprintf("%s/%s", qc.Rule.Namespace, qc.Rule.Name),
 		CorrelationID: res.CorrelationID,
 		CustomFields:  res.CustomFields,
 	}
@@ -182,10 +166,10 @@ func (e *Executor) HandlerFn(endpoint string, rule rules.Rule, row *table.Row) e
 
 	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
 		logger.Error("Failed to create Notification: %s\n", err)
-		metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name).Set(1)
+		metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
 		return nil
 	}
-	metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name).Set(0)
+	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 
 	//log.Infof("Created Notification %s - %s", resp.IncidentId, res.Title)
 
@@ -277,22 +261,4 @@ func (e *Executor) periodicSync() {
 			return
 		}
 	}
-}
-
-func kustoDeepLink(q string) (string, error) {
-	var b bytes.Buffer
-	w := gzip.NewWriter(&b)
-	if _, err := w.Write([]byte(q)); err != nil {
-		return "", err
-	}
-
-	if err := w.Flush(); err != nil {
-		return "", err
-	}
-
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(b.Bytes()), nil
 }

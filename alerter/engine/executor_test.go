@@ -20,7 +20,10 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 		alertCli: &fakeAlertClient{},
 	}
 
-	rule := rules.Rule{}
+	rule := &rules.Rule{}
+	qc := &QueryContext{
+		Rule: rule,
+	}
 
 	iter := &kusto.RowIterator{}
 
@@ -40,7 +43,7 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 	require.NoError(t, iter.Mock(rows))
 
 	row, _, _ := iter.NextRowOrError()
-	require.ErrorContains(t, e.HandlerFn("http://endpoint", rule, row), "title must be between 1 and 512 chars")
+	require.ErrorContains(t, e.HandlerFn(context.Background(), "http://endpoint", qc, row), "title must be between 1 and 512 chars")
 }
 
 func TestExecutor_Handler_Severity(t *testing.T) {
@@ -125,9 +128,12 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 				alertCli: client,
 			}
 
-			rule := rules.Rule{}
+			rule := &rules.Rule{}
+			qc := &QueryContext{
+				Rule: rule,
+			}
 
-			err = e.HandlerFn("http://endpoint", rule, row)
+			err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
 			if tt.err == "" {
 				require.NoError(t, err)
 				require.Equal(t, tt.severity, client.alert.Severity)
