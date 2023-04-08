@@ -11,7 +11,6 @@ import (
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/azure-kusto-go/kusto"
-	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
@@ -88,34 +87,14 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 		IsMgmtQuery:       false,
 	}
 
-	qv := kusto.QueryValues{}
-	stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
 	// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
 	// rows in any particular table. So we don't want to wrap the query with the ParamRegion query_parameter()
 	// declaration because then Kusto will say it's an invalid query.
-	if !strings.HasPrefix(r.Spec.Query, ".") {
-		rule.Stmt = stmt.MustDefinitions(
-			kusto.NewDefinitions().Must(
-				kusto.ParamTypes{
-					"ParamRegion": kusto.ParamType{Type: kustotypes.String},
-				},
-			),
-		)
+	rule.IsMgmtQuery = strings.HasPrefix(r.Spec.Query, ".")
 
-		qv["ParamRegion"] = region
-		params, err := kusto.NewParameters().With(qv)
-		if err != nil {
-			return nil, fmt.Errorf("configuration %s/%s does not have the required region parameter: %w", r.Namespace, r.Name, err)
-		}
-		stmt, err = rule.Stmt.WithParameters(params)
-		if err != nil {
-			return nil, fmt.Errorf("configuration %s/%s does not contain a region configuration: %w", r.Namespace, r.Name, err)
-		}
-	} else {
-		rule.IsMgmtQuery = true
-	}
+	stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
+
 	rule.Stmt = stmt
-	rule.Parameters = qv
 	return rule, nil
 }
 
@@ -185,7 +164,4 @@ type Rule struct {
 
 	// Stmt specifies the underlayEtcdPeersQuery to execute.
 	Stmt kusto.Stmt
-
-	// Parameters are the parameters passed with the stmt
-	Parameters kusto.QueryValues
 }

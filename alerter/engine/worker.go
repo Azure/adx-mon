@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,12 +19,13 @@ type worker struct {
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	rule        *rules.Rule
+	Region      string
 	kustoClient Client
 	AlertAddr   string
 	AlertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	HandlerFn func(endpoint string, rule rules.Rule, row *table.Row) error
+	HandlerFn func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
 }
 
 func (e *worker) Run() {
@@ -58,15 +58,25 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	// Release the worker slot
 	defer func() { <-queue.Workers }()
 
-	start := time.Now()
+	start := time.Now().UTC()
+	queryContext, err := NewQueryContext(e.rule, start, e.Region)
+	if err != nil {
+		logger.Error("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		return
+	}
+
 	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	if err := e.kustoClient.Query(e.ctx, *e.rule, e.HandlerFn); err != nil {
+	if err := e.kustoClient.Query(ctx, queryContext, e.HandlerFn); err != nil {
 		logger.Error("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
-		summary := fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/>It is returning the error:<br/><br/><pre>%s</pre>", e.rule.Query, err.Error())
-		summary = strings.TrimSpace(summary)
+		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+		if err != nil {
+			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			return
+		}
 
-		if err := e.AlertCli.Create(e.ctx, e.AlertAddr, alert.Alert{
+		if err := e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
 			Destination:   e.rule.Destination,
 			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
 			Summary:       summary,

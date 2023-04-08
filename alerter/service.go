@@ -140,7 +140,15 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 	l2m.alertCli = alertCli
 
-	executor := engine.NewExecutor(alertCli, opts.AlertAddr, l2m, ruleStore)
+	executor := engine.NewExecutor(
+		engine.ExecutorOpts{
+			AlertCli:    alertCli,
+			AlertAddr:   opts.AlertAddr,
+			Region:      opts.Region,
+			KustoClient: l2m,
+			RuleStore:   ruleStore,
+		})
+
 	l2m.executor = executor
 	return l2m, nil
 }
@@ -175,7 +183,13 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	alertCli, err := alert.NewClient(time.Minute)
 
 	kclient := extendedKustoClient{client: client, MaxNotifications: opts.MaxNotifications}
-	executor := engine.NewExecutor(alertCli, fakeaddr, kclient, ruleStore)
+	executor := engine.NewExecutor(engine.ExecutorOpts{
+		AlertCli:    alertCli,
+		AlertAddr:   fakeaddr,
+		KustoClient: kclient,
+		RuleStore:   ruleStore,
+		Region:      opts.Region,
+	})
 
 	go func() {
 		logger.Info("Listening at :%d", opts.Port)
@@ -231,18 +245,18 @@ type extendedKustoClient struct {
 	MaxNotifications int
 }
 
-func (c extendedKustoClient) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
+func (c extendedKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
 	var iter *kusto.RowIterator
 	var err error
-	if r.IsMgmtQuery {
-		iter, err = c.client.Mgmt(ctx, r.Database, r.Stmt)
+	if qc.Rule.IsMgmtQuery {
+		iter, err = c.client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
 		if err != nil {
-			return fmt.Errorf("failed to execute management kusto query=%s/%s: %s", r.Namespace, r.Name, err)
+			return fmt.Errorf("failed to execute management kusto query=%s/%s: %s", qc.Rule.Namespace, qc.Rule.Name, err)
 		}
 	} else {
-		iter, err = c.client.Query(ctx, r.Database, r.Stmt, kusto.ResultsProgressiveDisable())
+		iter, err = c.client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
 		if err != nil {
-			return fmt.Errorf("failed to execute kusto query=%s/%s: %s, %s", r.Namespace, r.Name, err, r.Stmt)
+			return fmt.Errorf("failed to execute kusto query=%s/%s: %s, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt)
 		}
 	}
 
@@ -251,17 +265,17 @@ func (c extendedKustoClient) Query(ctx context.Context, r rules.Rule, fn func(st
 	if err := iter.Do(func(row *table.Row) error {
 		n++
 		if n > c.MaxNotifications {
-			metrics.NotificationUnhealthy.WithLabelValues(r.Namespace, r.Name).Set(1)
-			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", r.Namespace, r.Name, c.MaxNotifications)
+			metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
+			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", qc.Rule.Namespace, qc.Rule.Name, c.MaxNotifications)
 		}
 
-		return fn(c.client.Endpoint(), r, row)
+		return fn(ctx, c.client.Endpoint(), qc, row)
 	}); err != nil {
 		return err
 	}
 
 	// reset health metric since we didn't get any errors
-	metrics.NotificationUnhealthy.WithLabelValues(r.Namespace, r.Name).Set(0)
+	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 	return nil
 }
 
@@ -270,12 +284,12 @@ func (c extendedKustoClient) Endpoint(db string) string {
 	return cl.Endpoint()
 }
 
-func (l *Alerter) Query(ctx context.Context, r rules.Rule, fn func(string, rules.Rule, *table.Row) error) error {
-	client := l.clients[r.Database]
+func (l *Alerter) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
+	client := l.clients[qc.Rule.Database]
 	if client == nil {
-		return fmt.Errorf("no client found for database=%s", r.Database)
+		return fmt.Errorf("no client found for database=%s", qc.Rule.Database)
 	}
-	return extendedKustoClient{client: client, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, r, fn)
+	return extendedKustoClient{client: client, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, qc, fn)
 }
 
 func newLogger() (logger.Logger, error) {
