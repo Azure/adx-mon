@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/Azure/adx-mon/alert"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/metrics"
+	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 
@@ -69,6 +72,11 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	if err := e.kustoClient.Query(ctx, queryContext, e.HandlerFn); err != nil {
 		logger.Error("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
+		if !isUserError(err) {
+			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Inc()
+			return
+		}
+
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
 			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
@@ -100,4 +108,23 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 func (e *worker) Close() {
 	e.cancel()
 	e.wg.Wait()
+}
+
+func isUserError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var kerr *kerrors.HttpError
+	if errors.As(err, &kerr) {
+		if kerr.Kind == kerrors.KClientArgs {
+			return true
+		}
+		lowerErr := strings.ToLower(kerr.Error())
+		if strings.Contains(lowerErr, "sem0001") || strings.Contains(lowerErr, "semantic error") || strings.Contains(lowerErr, "request is invalid") {
+			return true
+		}
+	}
+
+	return false
 }

@@ -251,12 +251,12 @@ func (c extendedKustoClient) Query(ctx context.Context, qc *engine.QueryContext,
 	if qc.Rule.IsMgmtQuery {
 		iter, err = c.client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
 		if err != nil {
-			return fmt.Errorf("failed to execute management kusto query=%s/%s: %s", qc.Rule.Namespace, qc.Rule.Name, err)
+			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err)
 		}
 	} else {
 		iter, err = c.client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
 		if err != nil {
-			return fmt.Errorf("failed to execute kusto query=%s/%s: %s, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt)
+			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt)
 		}
 	}
 
