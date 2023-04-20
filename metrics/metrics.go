@@ -8,7 +8,7 @@ import (
 var (
 	Namespace = "adxmon"
 
-	// Ingestor metrics
+	// Uploader metrics
 	SamplesReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",

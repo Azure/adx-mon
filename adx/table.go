@@ -8,6 +8,7 @@ import (
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
 	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"
 	"io"
@@ -21,7 +22,7 @@ type columnDef struct {
 }
 
 type Syncer struct {
-	KustoCli *kusto.Client
+	KustoCli ingest.QueryClient
 	database string
 
 	mu       sync.RWMutex
@@ -41,7 +42,7 @@ type IngestionMapping struct {
 	Table         string    `kusto:"Table"`
 }
 
-func NewSyncer(kustoCli *kusto.Client, database string) *Syncer {
+func NewSyncer(kustoCli ingest.QueryClient, database string) *Syncer {
 	return &Syncer{
 		KustoCli:       kustoCli,
 		database:       database,
