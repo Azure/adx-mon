@@ -35,16 +35,16 @@ type Service struct {
 	walOpts storage.WALOpts
 	opts    ServiceOpts
 
-	compressor  *storage.Compressor
+	compressor  storage.Compressor
 	ingestor    adx.Uploader
-	replicator  *cluster.Replicator
-	coordinator *cluster.Coordinator
-	archiver    *cluster.Archiver
+	replicator  cluster.Replicator
+	coordinator cluster.Coordinator
+	archiver    cluster.Archiver
 	closeFn     context.CancelFunc
 	ctx         context.Context
 
-	store   *storage.Store
-	metrics *metrics.Service
+	store   storage.Store
+	metrics metrics.Service
 }
 
 type ServiceOpts struct {
@@ -67,9 +67,9 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentMaxAge:  opts.MaxSegmentAge,
 	}
 
-	c := &storage.Compressor{}
+	c := storage.NewCompressor()
 
-	store := storage.NewStore(storage.StoreOpts{
+	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
@@ -118,10 +118,11 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.compressor.Open(); err != nil {
+	if err := s.compressor.Open(ctx); err != nil {
 		return err
 	}
-	if err := s.store.Open(); err != nil {
+
+	if err := s.store.Open(ctx); err != nil {
 		return err
 	}
 
@@ -129,15 +130,15 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.archiver.Open(); err != nil {
+	if err := s.archiver.Open(ctx); err != nil {
 		return err
 	}
 
-	if err := s.replicator.Open(); err != nil {
+	if err := s.replicator.Open(ctx); err != nil {
 		return err
 	}
 
-	if err := s.metrics.Open(); err != nil {
+	if err := s.metrics.Open(ctx); err != nil {
 		return err
 	}
 

@@ -1,8 +1,10 @@
 package cluster
 
 import (
+	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,13 +26,13 @@ type ArchiverOpts struct {
 	TransferQueue chan []string
 }
 
-type MetricPartitioner interface {
-	Owner([]byte) (string, string)
+type Archiver interface {
+	service.Component
 }
 
 // Archiver manages WAL segments that are ready for upload to kusto or that need
 // to be transferred to another node.
-type Archiver struct {
+type archiver struct {
 	uploadQueue   chan []string
 	transferQueue chan []string
 
@@ -43,8 +45,8 @@ type Archiver struct {
 	hostname    string
 }
 
-func NewArchiver(opts ArchiverOpts) *Archiver {
-	return &Archiver{
+func NewArchiver(opts ArchiverOpts) Archiver {
+	return &archiver{
 		closing:       make(chan struct{}),
 		storageDir:    opts.StorageDir,
 		Partitioner:   opts.Partitioner,
@@ -54,7 +56,7 @@ func NewArchiver(opts ArchiverOpts) *Archiver {
 	}
 }
 
-func (a *Archiver) Open() error {
+func (a *archiver) Open(ctx context.Context) error {
 	var err error
 	a.hostname, err = os.Hostname()
 	if err != nil {
@@ -66,13 +68,13 @@ func (a *Archiver) Open() error {
 	return nil
 }
 
-func (a *Archiver) Close() error {
+func (a *archiver) Close() error {
 	close(a.closing)
 	a.wg.Wait()
 	return nil
 }
 
-func (a *Archiver) watch() {
+func (a *archiver) watch() {
 	a.wg.Add(1)
 	defer a.wg.Done()
 
@@ -109,7 +111,7 @@ func (a *Archiver) watch() {
 	}
 }
 
-func (a *Archiver) processSegments() ([][]string, [][]string, error) {
+func (a *archiver) processSegments() ([][]string, [][]string, error) {
 	entries, err := os.ReadDir(a.storageDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)

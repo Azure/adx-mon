@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pool"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/promremote"
@@ -28,8 +29,16 @@ var (
 
 type TimeSeriesWriter func(ctx context.Context, ts []prompb.TimeSeries) error
 
+type Coordinator interface {
+	MetricPartitioner
+	service.Component
+
+	// Write writes the time series to the correct peer.
+	Write(ctx context.Context, wr prompb.WriteRequest) error
+}
+
 // Coordinator manages the cluster state and writes to the correct peer.
-type Coordinator struct {
+type coordinator struct {
 	opts *CoordinatorOpts
 
 	mu   sync.RWMutex
@@ -46,7 +55,7 @@ type Coordinator struct {
 	cancel       context.CancelFunc
 }
 
-func (c *Coordinator) OnAdd(obj interface{}) {
+func (c *coordinator) OnAdd(obj interface{}) {
 	p := obj.(*v1.Pod)
 	if p.Namespace != "prom-adx" {
 		return
@@ -56,7 +65,7 @@ func (c *Coordinator) OnAdd(obj interface{}) {
 	}
 }
 
-func (c *Coordinator) OnUpdate(oldObj, newObj interface{}) {
+func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
 	p := newObj.(*v1.Pod)
 	if p.Namespace != "prom-adx" {
 		return
@@ -68,7 +77,7 @@ func (c *Coordinator) OnUpdate(oldObj, newObj interface{}) {
 
 }
 
-func (c *Coordinator) OnDelete(obj interface{}) {
+func (c *coordinator) OnDelete(obj interface{}) {
 	p := obj.(*v1.Pod)
 	if p.Namespace != "prom-adx" {
 		return
@@ -84,13 +93,13 @@ type CoordinatorOpts struct {
 	K8sCli            *kubernetes.Clientset
 }
 
-func NewCoordinator(opts *CoordinatorOpts) (*Coordinator, error) {
+func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	pcli, err := promremote.NewClient(15 * time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Coordinator{
+	return &coordinator{
 
 		opts: opts,
 		kcli: opts.K8sCli,
@@ -98,7 +107,7 @@ func NewCoordinator(opts *CoordinatorOpts) (*Coordinator, error) {
 	}, nil
 }
 
-func (c *Coordinator) Open(ctx context.Context) error {
+func (c *coordinator) Open(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
@@ -139,24 +148,24 @@ func (c *Coordinator) Open(ctx context.Context) error {
 	return nil
 }
 
-func (c *Coordinator) Owner(b []byte) (string, string) {
+func (c *coordinator) Owner(b []byte) (string, string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.part.Owner(b)
 }
 
-func (c *Coordinator) Close() error {
+func (c *coordinator) Close() error {
 	c.cancel()
 	c.factory.Shutdown()
 	return nil
 }
 
-func (c *Coordinator) Write(ctx context.Context, wr prompb.WriteRequest) error {
+func (c *coordinator) Write(ctx context.Context, wr prompb.WriteRequest) error {
 	return c.tsw(ctx, wr.Timeseries)
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
-func (c *Coordinator) syncPeers() error {
+func (c *coordinator) syncPeers() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

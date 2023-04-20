@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"github.com/Azure/adx-mon/logger"
+	srv "github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus_client "github.com/prometheus/client_model/go"
@@ -15,26 +16,30 @@ type TimeSeriesWriter interface {
 	Write(ctx context.Context, wr prompb.WriteRequest) error
 }
 
+type Service interface {
+	srv.Component
+}
+
 type ServiceOpts struct {
 	Coordinator TimeSeriesWriter
 }
 
 // Service manages the collection of metrics for ingestors.
-type Service struct {
+type service struct {
 	Coordinator TimeSeriesWriter
 	closing     chan struct{}
 
 	hostname string
 }
 
-func NewService(opts ServiceOpts) *Service {
-	return &Service{
+func NewService(opts ServiceOpts) Service {
+	return &service{
 		closing:     make(chan struct{}),
 		Coordinator: opts.Coordinator,
 	}
 }
 
-func (s *Service) Open() error {
+func (s *service) Open(ctx context.Context) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return err
@@ -44,12 +49,12 @@ func (s *Service) Open() error {
 	return nil
 }
 
-func (s *Service) Close() error {
+func (s *service) Close() error {
 	close(s.closing)
 	return nil
 }
 
-func (s *Service) collect() {
+func (s *service) collect() {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 
