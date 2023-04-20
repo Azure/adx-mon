@@ -91,7 +91,7 @@ func (a *Archiver) watch() {
 
 			// TODO: This might be removable now that uploader tracks files currently being uploaded.
 			if len(a.uploadQueue) > 0 {
-				logger.Info("Upload queue not empty (%d), skipping", len(a.uploadQueue))
+				logger.Info("uploadReader queue not empty (%d), skipping", len(a.uploadQueue))
 			} else {
 				for _, v := range owned {
 					a.uploadQueue <- v

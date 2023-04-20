@@ -3,7 +3,6 @@ package adx
 import (
 	"context"
 	"github.com/Azure/adx-mon/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"io"
 	"os"
@@ -15,8 +14,16 @@ import (
 
 const ConcurrentUploads = 50
 
-type Ingestor struct {
-	KustoCli   *kusto.Client
+type Uploader interface {
+	Open() error
+	Close() error
+
+	// UploadQueue returns a channel that can be used to upload files to kusto.
+	UploadQueue() chan []string
+}
+
+type uploader struct {
+	KustoCli   ingest.QueryClient
 	storageDir string
 	database   string
 	syncer     *Syncer
@@ -29,17 +36,17 @@ type Ingestor struct {
 	uploading map[string]struct{}
 }
 
-type IngesterOpts struct {
+type UploaderOpts struct {
 	StorageDir        string
 	Database          string
 	ConcurrentUploads int
 	Dimensions        []string
 }
 
-func NewIngestor(kustoCli *kusto.Client, opts IngesterOpts) *Ingestor {
+func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database)
 
-	return &Ingestor{
+	return &uploader{
 		KustoCli:   kustoCli,
 		syncer:     syncer,
 		storageDir: opts.StorageDir,
@@ -51,7 +58,7 @@ func NewIngestor(kustoCli *kusto.Client, opts IngesterOpts) *Ingestor {
 	}
 }
 
-func (n *Ingestor) Open() error {
+func (n *uploader) Open() error {
 	if err := n.syncer.Open(); err != nil {
 		return err
 	}
@@ -63,7 +70,7 @@ func (n *Ingestor) Open() error {
 	return nil
 }
 
-func (n *Ingestor) Close() error {
+func (n *uploader) Close() error {
 	close(n.closing)
 
 	n.mu.Lock()
@@ -78,11 +85,11 @@ func (n *Ingestor) Close() error {
 	return nil
 }
 
-func (n *Ingestor) UploadQueue() chan []string {
+func (n *uploader) UploadQueue() chan []string {
 	return n.queue
 }
 
-func (n *Ingestor) Upload(reader io.Reader, table string) error {
+func (n *uploader) uploadReader(reader io.Reader, table string) error {
 	if err := n.syncer.EnsureTable(table); err != nil {
 		return err
 	}
@@ -123,7 +130,7 @@ func (n *Ingestor) Upload(reader io.Reader, table string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Upload our file WITHOUT status reporting.
+	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
 	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
@@ -140,7 +147,7 @@ func (n *Ingestor) Upload(reader io.Reader, table string) error {
 
 }
 
-func (n *Ingestor) upload() error {
+func (n *uploader) upload() error {
 	for {
 		select {
 		case <-n.closing:
@@ -191,7 +198,7 @@ func (n *Ingestor) upload() error {
 				mr := io.MultiReader(readers...)
 
 				now := time.Now()
-				if err := n.Upload(mr, fields[0]); err != nil {
+				if err := n.uploadReader(mr, fields[0]); err != nil {
 					logger.Error("Failed to upload file: %s", err.Error())
 					return
 				}

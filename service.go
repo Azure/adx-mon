@@ -10,7 +10,6 @@ import (
 	"github.com/Azure/adx-mon/pool"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/golang/snappy"
 	"io"
 	"k8s.io/client-go/kubernetes"
@@ -37,7 +36,7 @@ type Service struct {
 	opts    ServiceOpts
 
 	compressor  *storage.Compressor
-	ingestor    *adx.Ingestor
+	ingestor    adx.Uploader
 	replicator  *cluster.Replicator
 	coordinator *cluster.Coordinator
 	archiver    *cluster.Archiver
@@ -49,12 +48,10 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	StorageDir        string
-	KustoEndpoint     string
-	Database          string
-	ConcurrentUploads int
-	MaxSegmentSize    int64
-	MaxSegmentAge     time.Duration
+	StorageDir     string
+	Uploader       adx.Uploader
+	MaxSegmentSize int64
+	MaxSegmentAge  time.Duration
 
 	UseCLIAuth bool
 
@@ -64,26 +61,6 @@ type ServiceOpts struct {
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
-	kcsb := kusto.NewConnectionStringBuilder(opts.KustoEndpoint)
-	if opts.UseCLIAuth {
-		kcsb.WithAzCli()
-	} else {
-		kcsb.WithDefaultAzureCredential()
-	}
-
-	client, err := kusto.New(kcsb)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-
-	ing := adx.NewIngestor(client, adx.IngesterOpts{
-		StorageDir:        opts.StorageDir,
-		Database:          opts.Database,
-		ConcurrentUploads: opts.ConcurrentUploads,
-		Dimensions:        opts.Dimensions,
-	})
-
 	walOpts := storage.WALOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
@@ -116,7 +93,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:    opts.StorageDir,
 		Partitioner:   coord,
 		Segmenter:     store,
-		UploadQueue:   ing.UploadQueue(),
+		UploadQueue:   opts.Uploader.UploadQueue(),
 		TransferQueue: repl.TransferQueue(),
 	})
 
@@ -125,7 +102,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	return &Service{
 		opts:        opts,
 		walOpts:     walOpts,
-		ingestor:    ing,
+		ingestor:    opts.Uploader,
 		replicator:  repl,
 		store:       store,
 		coordinator: coord,
