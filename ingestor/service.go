@@ -1,4 +1,4 @@
-package adx_mon
+package ingestor
 
 import (
 	"bytes"

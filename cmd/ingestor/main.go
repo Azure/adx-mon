@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	promingest "github.com/Azure/adx-mon"
 	"github.com/Azure/adx-mon/adx"
+	promingest "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/azure-kusto-go/kusto"
