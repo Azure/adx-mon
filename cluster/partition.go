@@ -2,6 +2,10 @@ package cluster
 
 import "sort"
 
+type MetricPartitioner interface {
+	Owner([]byte) (string, string)
+}
+
 // Partitioner manages the distribution of metrics across nodes.  It uses rendezvous hashing to distribute metrics
 // roughly evenly.  When nodes are added or removed, the distribution of metrics will change, but only by a proportional
 // amount for each node.  For example, if four nodes exists and a fifth is added, only 20% of the metrics will be reassigned

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/transform"
 	"io"
@@ -16,10 +17,23 @@ import (
 	"time"
 )
 
-// Store provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
-type Store struct {
+type Store interface {
+	service.Component
+
+	// WriteTimeSeries writes a batch of time series to the Store.
+	WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error
+
+	// IsActiveSegment returns true if the given path is an active segment.
+	IsActiveSegment(path string) bool
+
+	// Import imports a file into the LocalStore and returns the number of bytes stored.
+	Import(filename string, body io.ReadCloser) (int, error)
+}
+
+// LocalStore provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
+type LocalStore struct {
 	opts       StoreOpts
-	compressor *Compressor
+	compressor Compressor
 
 	mu   sync.RWMutex
 	wals map[string]*WAL
@@ -29,18 +43,18 @@ type StoreOpts struct {
 	StorageDir     string
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
-	Compressor     *Compressor
+	Compressor     Compressor
 }
 
-func NewStore(opts StoreOpts) *Store {
-	return &Store{
+func NewLocalStore(opts StoreOpts) *LocalStore {
+	return &LocalStore{
 		opts:       opts,
 		compressor: opts.Compressor,
 		wals:       make(map[string]*WAL),
 	}
 }
 
-func (s *Store) Open() error {
+func (s *LocalStore) Open(ctx context.Context) error {
 	return filepath.WalkDir(s.opts.StorageDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -73,7 +87,7 @@ func (s *Store) Open() error {
 
 }
 
-func (s *Store) Close() error {
+func (s *LocalStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -86,7 +100,7 @@ func (s *Store) Close() error {
 	return nil
 }
 
-func (s *Store) newWAL(prefix string) (*WAL, error) {
+func (s *LocalStore) newWAL(prefix string) (*WAL, error) {
 	walOpts := WALOpts{
 		StorageDir:     s.opts.StorageDir,
 		Prefix:         prefix,
@@ -106,7 +120,7 @@ func (s *Store) newWAL(prefix string) (*WAL, error) {
 	return wal, nil
 }
 
-func (s *Store) GetWAL(labels []prompb.Label) (*WAL, error) {
+func (s *LocalStore) GetWAL(labels []prompb.Label) (*WAL, error) {
 	key := seriesKey(labels)
 
 	s.mu.RLock()
@@ -137,13 +151,13 @@ func (s *Store) GetWAL(labels []prompb.Label) (*WAL, error) {
 	return wal, nil
 }
 
-func (s *Store) WALCount() int {
+func (s *LocalStore) WALCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.wals)
 }
 
-func (s *Store) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
+func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
 	for _, v := range ts {
 		wal, err := s.GetWAL(v.Labels)
 		if err != nil {
@@ -157,7 +171,7 @@ func (s *Store) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) err
 	return nil
 }
 
-func (s *Store) IsActiveSegment(path string) bool {
+func (s *LocalStore) IsActiveSegment(path string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -169,7 +183,7 @@ func (s *Store) IsActiveSegment(path string) bool {
 	return false
 }
 
-func (s *Store) Import(filename string, body io.ReadCloser) (int, error) {
+func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	dstPath := filepath.Join(s.opts.StorageDir, fmt.Sprint(filename, ".tmp"))
 	f, err := os.Create(dstPath)
 	if err != nil {

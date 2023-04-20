@@ -18,7 +18,7 @@ func TestArchiver_ClosedSegments(t *testing.T) {
 	require.NoError(t, err)
 	defer f1.Close()
 
-	a := Archiver{
+	a := &archiver{
 		hostname:    "node1",
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node1"},
@@ -41,7 +41,7 @@ func TestArchiver_NodeOwned(t *testing.T) {
 	require.NoError(t, err)
 	defer f1.Close()
 
-	a := Archiver{
+	a := &archiver{
 		hostname:    "node1",
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node2"},
