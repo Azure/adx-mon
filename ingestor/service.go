@@ -52,8 +52,6 @@ type ServiceOpts struct {
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
 
-	UseCLIAuth bool
-
 	// Dimensions is a slice of column=value elements where each element will be added all rows.
 	Dimensions []string
 	K8sCli     *kubernetes.Clientset

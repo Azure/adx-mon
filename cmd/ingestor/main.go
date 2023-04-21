@@ -79,7 +79,6 @@ func realMain(ctx *cli.Context) error {
 		concurrentUploads                   int
 		maxSegmentSize                      int64
 		maxSegmentAge                       time.Duration
-		useCliAuth                          bool
 		staticColumns                       strSliceFag
 	)
 	storageDir = ctx.String("storage-dir")
@@ -88,7 +87,6 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
-	useCliAuth = ctx.Bool("use-cli-auth")
 	staticColumns = ctx.StringSlice("labels")
 
 	if storageDir == "" {
@@ -116,7 +114,6 @@ func realMain(ctx *cli.Context) error {
 		Uploader:       uploader,
 		MaxSegmentSize: maxSegmentSize,
 		MaxSegmentAge:  maxSegmentAge,
-		UseCLIAuth:     useCliAuth,
 	})
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
