@@ -27,7 +27,7 @@ type replicator struct {
 	queue   chan []string
 	cli     *Client
 	wg      sync.WaitGroup
-	closing chan struct{}
+	closeFn context.CancelFunc
 
 	hostname string
 
@@ -42,19 +42,19 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 	}
 	return &replicator{
 		queue:       make(chan []string, 100),
-		closing:     make(chan struct{}),
 		cli:         cli,
 		Partitioner: opts.Partitioner,
 	}, nil
 }
 
 func (r *replicator) Open(ctx context.Context) error {
-	go r.transfer()
+	ctx, r.closeFn = context.WithCancel(ctx)
+	go r.transfer(ctx)
 	return nil
 }
 
 func (r *replicator) Close() error {
-	close(r.closing)
+	r.closeFn()
 	r.wg.Wait()
 	return nil
 }
@@ -63,13 +63,13 @@ func (r *replicator) TransferQueue() chan []string {
 	return r.queue
 }
 
-func (r *replicator) transfer() {
+func (r *replicator) transfer(ctx context.Context) {
 	r.wg.Add(1)
 	defer r.wg.Done()
 
 	for {
 		select {
-		case <-r.closing:
+		case <-ctx.Done():
 			return
 		case segments := <-r.queue:
 			for _, seg := range segments {

@@ -3,6 +3,7 @@ package adx
 import (
 	"context"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"io"
 	"os"
@@ -15,8 +16,7 @@ import (
 const ConcurrentUploads = 50
 
 type Uploader interface {
-	Open() error
-	Close() error
+	service.Component
 
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan []string
@@ -29,7 +29,7 @@ type uploader struct {
 	syncer     *Syncer
 
 	queue   chan []string
-	closing chan struct{}
+	closeFn context.CancelFunc
 
 	mu        sync.RWMutex
 	ingestors map[string]*ingest.Ingestion
@@ -52,26 +52,28 @@ func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 		storageDir: opts.StorageDir,
 		database:   opts.Database,
 		queue:      make(chan []string, opts.ConcurrentUploads),
-		closing:    make(chan struct{}),
 		ingestors:  make(map[string]*ingest.Ingestion),
 		uploading:  make(map[string]struct{}),
 	}
 }
 
-func (n *uploader) Open() error {
-	if err := n.syncer.Open(); err != nil {
+func (n *uploader) Open(ctx context.Context) error {
+	c, closeFn := context.WithCancel(ctx)
+	n.closeFn = closeFn
+
+	if err := n.syncer.Open(c); err != nil {
 		return err
 	}
 
 	for i := 0; i < cap(n.queue); i++ {
-		go n.upload()
+		go n.upload(c)
 	}
 
 	return nil
 }
 
 func (n *uploader) Close() error {
-	close(n.closing)
+	n.closeFn()
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -147,10 +149,10 @@ func (n *uploader) uploadReader(reader io.Reader, table string) error {
 
 }
 
-func (n *uploader) upload() error {
+func (n *uploader) upload(ctx context.Context) error {
 	for {
 		select {
-		case <-n.closing:
+		case <-ctx.Done():
 			return nil
 		case paths := <-n.queue:
 

@@ -37,7 +37,7 @@ type archiver struct {
 	transferQueue chan []string
 
 	wg         sync.WaitGroup
-	closing    chan struct{}
+	closeFn    context.CancelFunc
 	storageDir string
 
 	Partitioner MetricPartitioner
@@ -47,7 +47,6 @@ type archiver struct {
 
 func NewArchiver(opts ArchiverOpts) Archiver {
 	return &archiver{
-		closing:       make(chan struct{}),
 		storageDir:    opts.StorageDir,
 		Partitioner:   opts.Partitioner,
 		Segmenter:     opts.Segmenter,
@@ -57,24 +56,25 @@ func NewArchiver(opts ArchiverOpts) Archiver {
 }
 
 func (a *archiver) Open(ctx context.Context) error {
+	ctx, a.closeFn = context.WithCancel(ctx)
 	var err error
 	a.hostname, err = os.Hostname()
 	if err != nil {
 		return err
 	}
 
-	go a.watch()
+	go a.watch(ctx)
 
 	return nil
 }
 
 func (a *archiver) Close() error {
-	close(a.closing)
+	a.closeFn()
 	a.wg.Wait()
 	return nil
 }
 
-func (a *archiver) watch() {
+func (a *archiver) watch(ctx context.Context) {
 	a.wg.Add(1)
 	defer a.wg.Done()
 
@@ -82,7 +82,7 @@ func (a *archiver) watch() {
 	defer t.Stop()
 	for {
 		select {
-		case <-a.closing:
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			owned, notOwned, err := a.processSegments()

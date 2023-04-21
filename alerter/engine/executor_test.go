@@ -164,21 +164,19 @@ func TestExecutor_syncWorkers_Remove(t *testing.T) {
 		ruleStore: &fakeRuleStore{},
 		workers: map[string]*worker{
 			"alert": &worker{
-				ctx:    ctx,
 				cancel: cancel,
 			},
 		},
 	}
 
 	require.Equal(t, 1, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 0, len(e.workers))
 }
 
 func TestExecutor_syncWorkers_Add(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	e := Executor{
-		ctx:     ctx,
 		closeFn: cancel,
 		ruleStore: &fakeRuleStore{
 			rules: []*rules.Rule{
@@ -193,14 +191,13 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 	}
 
 	require.Equal(t, 0, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
 }
 
 func TestExecutor_syncWorkers_NoChange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	e := Executor{
-		ctx:     ctx,
 		closeFn: cancel,
 		ruleStore: &fakeRuleStore{
 			rules: []*rules.Rule{
@@ -215,9 +212,9 @@ func TestExecutor_syncWorkers_NoChange(t *testing.T) {
 	}
 
 	require.Equal(t, 0, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
 }
 
@@ -233,7 +230,6 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 		},
 	}
 	e := Executor{
-		ctx:         ctx,
 		closeFn:     cancel,
 		ruleStore:   store,
 		kustoClient: &fakeKustoClient{log: logger.Default},
@@ -241,7 +237,7 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 	}
 
 	require.Equal(t, 0, len(e.workers))
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
 	store.rules[0] = &rules.Rule{
 		Version:   "changed",
@@ -249,7 +245,7 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 		Namespace: "foo",
 		Interval:  20 * time.Second,
 	}
-	e.syncWorkers()
+	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
 }
 

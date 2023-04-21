@@ -52,9 +52,9 @@ func NewSyncer(kustoCli ingest.QueryClient, database string) *Syncer {
 	}
 }
 
-func (s *Syncer) Open() error {
+func (s *Syncer) Open(ctx context.Context) error {
 	stmt := kusto.NewStmt(".show ingestion mappings")
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, stmt)
+	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return err
 	}

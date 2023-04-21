@@ -27,41 +27,41 @@ type ServiceOpts struct {
 // Service manages the collection of metrics for ingestors.
 type service struct {
 	Coordinator TimeSeriesWriter
-	closing     chan struct{}
+	closeFn     context.CancelFunc
 
 	hostname string
 }
 
 func NewService(opts ServiceOpts) Service {
 	return &service{
-		closing:     make(chan struct{}),
 		Coordinator: opts.Coordinator,
 	}
 }
 
 func (s *service) Open(ctx context.Context) error {
+	ctx, s.closeFn = context.WithCancel(ctx)
 	hostname, err := os.Hostname()
 	if err != nil {
 		return err
 	}
 	s.hostname = hostname
-	go s.collect()
+	go s.collect(ctx)
 	return nil
 }
 
 func (s *service) Close() error {
-	close(s.closing)
+	s.closeFn()
 	return nil
 }
 
-func (s *service) collect() {
+func (s *service) collect(ctx context.Context) {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 
 	var lastCount float64
 	for {
 		select {
-		case <-s.closing:
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			mets, err := prometheus.DefaultGatherer.Gather()

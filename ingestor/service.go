@@ -41,7 +41,6 @@ type Service struct {
 	coordinator cluster.Coordinator
 	archiver    cluster.Archiver
 	closeFn     context.CancelFunc
-	ctx         context.Context
 
 	store   storage.Store
 	metrics metrics.Service
@@ -113,32 +112,33 @@ func NewService(opts ServiceOpts) (*Service, error) {
 }
 
 func (s *Service) Open(ctx context.Context) error {
-	s.ctx, s.closeFn = context.WithCancel(ctx)
-	if err := s.ingestor.Open(); err != nil {
+	var svcCtx context.Context
+	svcCtx, s.closeFn = context.WithCancel(ctx)
+	if err := s.ingestor.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.compressor.Open(ctx); err != nil {
+	if err := s.compressor.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.store.Open(ctx); err != nil {
+	if err := s.store.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.coordinator.Open(ctx); err != nil {
+	if err := s.coordinator.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.archiver.Open(ctx); err != nil {
+	if err := s.archiver.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.replicator.Open(ctx); err != nil {
+	if err := s.replicator.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.metrics.Open(ctx); err != nil {
+	if err := s.metrics.Open(svcCtx); err != nil {
 		return err
 	}
 
