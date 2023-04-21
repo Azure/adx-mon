@@ -15,13 +15,14 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func NewClient(timeout time.Duration) (*Client, error) {
+func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConns = 100
 	t.MaxConnsPerHost = 100
 	t.MaxIdleConnsPerHost = 100
 	t.ResponseHeaderTimeout = timeout
 	t.IdleConnTimeout = time.Minute
+	t.TLSClientConfig.InsecureSkipVerify = insecureSkipVerify
 
 	httpClient := &http.Client{
 		Timeout: timeout,

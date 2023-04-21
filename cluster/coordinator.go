@@ -91,10 +91,13 @@ func (c *coordinator) OnDelete(obj interface{}) {
 type CoordinatorOpts struct {
 	WriteTimeSeriesFn TimeSeriesWriter
 	K8sCli            *kubernetes.Clientset
+
+	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
+	InsecureSkipVerify bool
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
-	pcli, err := promremote.NewClient(15 * time.Second)
+	pcli, err := promremote.NewClient(15*time.Second, opts.InsecureSkipVerify)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +136,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 		return fmt.Errorf("failed to determin hostname")
 	}
 
-	hostEndpoint := fmt.Sprintf("http://%s:9090/transfer", myIP.To4().String())
+	hostEndpoint := fmt.Sprintf("https://%s:9090/transfer", myIP.To4().String())
 	c.hostEntpoint = hostEndpoint
 	c.hostname = hostName
 
@@ -182,7 +185,7 @@ func (c *coordinator) syncPeers() error {
 		if p.Status.PodIP == "" || !IsPodReady(p) {
 			continue
 		}
-		set[p.Name] = fmt.Sprintf("http://%s:9090/transfer", p.Status.PodIP)
+		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 
 		logger.Debug("Peer %s", p.Status.PodIP, p.Name)
 	}
