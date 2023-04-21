@@ -25,7 +25,8 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) 
 	t.TLSClientConfig.InsecureSkipVerify = insecureSkipVerify
 
 	httpClient := &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: t,
 	}
 
 	return &Client{
