@@ -12,6 +12,7 @@ import (
 )
 
 func TestStore_Open(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     dir,
@@ -24,19 +25,19 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", nil, 0, 0)
-	wal, err := s.GetWAL(ts.Labels)
+	wal, err := s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, wal)
 	require.NoError(t, wal.Write(context.Background(), []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", nil, 1, 1)
-	wal, err = s.GetWAL(ts.Labels)
+	wal, err = s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, wal)
 	require.NoError(t, wal.Write(context.Background(), []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", nil, 0, 0)
-	wal, err = s.GetWAL(ts.Labels)
+	wal, err = s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, wal)
 	require.NoError(t, wal.Write(context.Background(), []prompb.TimeSeries{ts}))

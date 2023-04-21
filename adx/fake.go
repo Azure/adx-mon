@@ -8,8 +8,8 @@ import (
 
 // fakeUploader is an Uploader that does nothing.
 type fakeUploader struct {
-	queue chan []string
-	close context.CancelFunc
+	queue   chan []string
+	closeFn context.CancelFunc
 }
 
 func NewFakeUploader() Uploader {
@@ -18,15 +18,14 @@ func NewFakeUploader() Uploader {
 	}
 }
 
-func (f *fakeUploader) Open() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	f.close = cancel
+func (f *fakeUploader) Open(ctx context.Context) error {
+	ctx, f.closeFn = context.WithCancel(ctx)
 	go f.upload(ctx)
 	return nil
 }
 
 func (f *fakeUploader) Close() error {
-	f.close()
+	f.closeFn()
 	return nil
 }
 

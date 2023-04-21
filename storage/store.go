@@ -76,7 +76,7 @@ func (s *LocalStore) Open(ctx context.Context) error {
 			return nil
 		}
 
-		wal, err := s.newWAL(prefix)
+		wal, err := s.newWAL(ctx, prefix)
 		if err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func (s *LocalStore) Close() error {
 	return nil
 }
 
-func (s *LocalStore) newWAL(prefix string) (*WAL, error) {
+func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	walOpts := WALOpts{
 		StorageDir:     s.opts.StorageDir,
 		Prefix:         prefix,
@@ -113,14 +113,14 @@ func (s *LocalStore) newWAL(prefix string) (*WAL, error) {
 		return nil, err
 	}
 
-	if err := wal.Open(); err != nil {
+	if err := wal.Open(ctx); err != nil {
 		return nil, err
 	}
 
 	return wal, nil
 }
 
-func (s *LocalStore) GetWAL(labels []prompb.Label) (*WAL, error) {
+func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*WAL, error) {
 	key := seriesKey(labels)
 
 	s.mu.RLock()
@@ -142,7 +142,7 @@ func (s *LocalStore) GetWAL(labels []prompb.Label) (*WAL, error) {
 	prefix := key
 
 	var err error
-	wal, err = s.newWAL(prefix)
+	wal, err = s.newWAL(ctx, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (s *LocalStore) WALCount() int {
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
 	for _, v := range ts {
-		wal, err := s.GetWAL(v.Labels)
+		wal, err := s.GetWAL(ctx, v.Labels)
 		if err != nil {
 			return err
 		}
