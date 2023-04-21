@@ -132,7 +132,7 @@ func reportStats(ctx context.Context, stats *stats, batches chan *prompb.WriteRe
 }
 
 func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.WriteRequest) {
-	cli, err := promremote.NewClient(30 * time.Second)
+	cli, err := promremote.NewClient(30*time.Second, true)
 	if err != nil {
 		logger.Fatal("prom client: %w", err)
 	}

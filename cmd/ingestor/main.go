@@ -1,19 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/adx"
 	promingest "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
+	"io"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -49,6 +53,9 @@ func main() {
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.BoolFlag{Name: "use-cli-auth", Usage: "Use CLI authentication"},
 			&cli.StringSliceFlag{Name: "labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
+			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
+			&cli.StringFlag{Name: "key", Usage: "Server key file"},
+			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -76,6 +83,8 @@ func realMain(ctx *cli.Context) error {
 
 	var (
 		storageDir, kustoEndpoint, database string
+		cacert, key                         string
+		insecureSkipVerify                  bool
 		concurrentUploads                   int
 		maxSegmentSize                      int64
 		maxSegmentAge                       time.Duration
@@ -88,9 +97,60 @@ func realMain(ctx *cli.Context) error {
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
 	staticColumns = ctx.StringSlice("labels")
+	cacert = ctx.String("ca-cert")
+	key = ctx.String("key")
+	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
 
+	if cacert != "" || key != "" {
+		if cacert == "" || key == "" {
+			logger.Fatal("Both --ca-cert and --key are required")
+		}
+	} else {
+		logger.Warn("Using fake TLS credentials (not for production use!)")
+		certBytes, keyBytes, err := tls.NewFakeTLSCredentials()
+		if err != nil {
+			logger.Fatal("Failed to create fake TLS credentials: %s", err)
+		}
+
+		certFile, err := os.CreateTemp("", "cert")
+		if err != nil {
+			logger.Fatal("Failed to create cert temp file: %s", err)
+		}
+
+		if _, err := certFile.Write(certBytes); err != nil {
+			logger.Fatal("Failed to write cert temp file: %s", err)
+		}
+
+		keyFile, err := os.CreateTemp("", "key")
+		if err != nil {
+			logger.Fatal("Failed to create key temp file: %s", err)
+		}
+
+		if _, err := keyFile.Write(keyBytes); err != nil {
+			logger.Fatal("Failed to write key temp file: %s", err)
+		}
+
+		cacert = certFile.Name()
+		key = keyFile.Name()
+		insecureSkipVerify = true
+
+		if err := certFile.Close(); err != nil {
+			logger.Fatal("Failed to close cert temp file: %s", err)
+		}
+
+		if err := keyFile.Close(); err != nil {
+			logger.Fatal("Failed to close key temp file: %s", err)
+		}
+
+		defer func() {
+			os.Remove(certFile.Name())
+			os.Remove(keyFile.Name())
+		}()
+	}
+
+	logger.Info("Using TLS ca-cert=%s key=%s", cacert, key)
 	if storageDir == "" {
-		logger.Fatal("-storage-dir is required")
+		logger.Fatal("--storage-dir is required")
 	}
 
 	for _, v := range staticColumns {
@@ -109,11 +169,12 @@ func realMain(ctx *cli.Context) error {
 	defer uploader.Close()
 
 	svc, err := promingest.NewService(promingest.ServiceOpts{
-		K8sCli:         k8scli,
-		StorageDir:     storageDir,
-		Uploader:       uploader,
-		MaxSegmentSize: maxSegmentSize,
-		MaxSegmentAge:  maxSegmentAge,
+		K8sCli:             k8scli,
+		StorageDir:         storageDir,
+		Uploader:           uploader,
+		MaxSegmentSize:     maxSegmentSize,
+		MaxSegmentAge:      maxSegmentAge,
+		InsecureSkipVerify: insecureSkipVerify,
 	})
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
@@ -129,9 +190,10 @@ func realMain(ctx *cli.Context) error {
 	mux.HandleFunc("/receive", svc.HandleReceive)
 
 	srv := &http.Server{Addr: ":9090", Handler: mux}
+	srv.ErrorLog = newLooger()
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS(cacert, key); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
@@ -220,4 +282,26 @@ func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads i
 		ConcurrentUploads: concurrentUploads,
 	})
 	return uploader, err
+}
+
+func newLooger() *log.Logger {
+	return log.New(&writerAdapter{os.Stderr}, "", log.LstdFlags)
+}
+
+type writerAdapter struct {
+	io.Writer
+}
+
+var (
+	tlsHandshakeError = []byte("http: TLS handshake error")
+	ioEOFError        = []byte("EOF")
+)
+
+func (a *writerAdapter) Write(data []byte) (int, error) {
+	// Ignore TLS handshake errors that results in just a closed connection.  Load balancer
+	// health checks will cause this error to be logged.
+	if bytes.Contains(data, tlsHandshakeError) && bytes.Contains(data, ioEOFError) {
+		return len(data), nil
+	}
+	return a.Writer.Write(data)
 }

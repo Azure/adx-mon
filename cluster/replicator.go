@@ -14,6 +14,9 @@ import (
 type ReplicatorOpts struct {
 	// Partitioner is used to determine which node owns a given metric.
 	Partitioner MetricPartitioner
+
+	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
+	InsecureSkipVerify bool
 }
 
 // Replicator manages the transfer of local segments to other nodes.
@@ -36,7 +39,7 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
-	cli, err := NewClient(30 * time.Second)
+	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify)
 	if err != nil {
 		return nil, err
 	}

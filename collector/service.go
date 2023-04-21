@@ -51,6 +51,9 @@ type ServiceOpts struct {
 	DropLabels     map[string]struct{}
 	ScrapeInterval time.Duration
 	DropMetrics    map[string]struct{}
+
+	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
+	InsecureSkipVerify bool
 }
 
 type scrapeTarget struct {
@@ -83,7 +86,7 @@ func (s *Service) Open(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	var err error
-	s.remoteClient, err = promremote.NewClient(10 * time.Second)
+	s.remoteClient, err = promremote.NewClient(10*time.Second, s.opts.InsecureSkipVerify)
 	if err != nil {
 		return fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
