@@ -55,6 +55,28 @@ type coordinator struct {
 	cancel       context.CancelFunc
 }
 
+type CoordinatorOpts struct {
+	WriteTimeSeriesFn TimeSeriesWriter
+	K8sCli            *kubernetes.Clientset
+
+	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
+	InsecureSkipVerify bool
+}
+
+func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
+	pcli, err := promremote.NewClient(15*time.Second, opts.InsecureSkipVerify)
+	if err != nil {
+		return nil, err
+	}
+
+	return &coordinator{
+
+		opts: opts,
+		kcli: opts.K8sCli,
+		pcli: pcli,
+	}, nil
+}
+
 func (c *coordinator) OnAdd(obj interface{}) {
 	p := obj.(*v1.Pod)
 	if p.Namespace != "prom-adx" {
@@ -86,28 +108,6 @@ func (c *coordinator) OnDelete(obj interface{}) {
 	if err := c.syncPeers(); err != nil {
 		logger.Error("Failed to reconfigure peers: %s", err)
 	}
-}
-
-type CoordinatorOpts struct {
-	WriteTimeSeriesFn TimeSeriesWriter
-	K8sCli            *kubernetes.Clientset
-
-	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
-	InsecureSkipVerify bool
-}
-
-func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
-	pcli, err := promremote.NewClient(15*time.Second, opts.InsecureSkipVerify)
-	if err != nil {
-		return nil, err
-	}
-
-	return &coordinator{
-
-		opts: opts,
-		kcli: opts.K8sCli,
-		pcli: pcli,
-	}, nil
 }
 
 func (c *coordinator) Open(ctx context.Context) error {
