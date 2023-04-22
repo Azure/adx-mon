@@ -51,7 +51,6 @@ func main() {
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
-			&cli.BoolFlag{Name: "use-cli-auth", Usage: "Use CLI authentication"},
 			&cli.StringSliceFlag{Name: "labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
