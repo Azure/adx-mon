@@ -15,7 +15,7 @@ import (
 	v12 "k8s.io/client-go/listers/core/v1"
 	"log"
 	"net"
-	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,11 +39,13 @@ type Coordinator interface {
 
 // Coordinator manages the cluster state and writes to the correct peer.
 type coordinator struct {
-	opts *CoordinatorOpts
+	opts      *CoordinatorOpts
+	namespace string
 
-	mu   sync.RWMutex
-	part *Partitioner
-	pcli *promremote.Client
+	mu    sync.RWMutex
+	peers map[string]string
+	part  *Partitioner
+	pcli  *promremote.Client
 
 	factory informers.SharedInformerFactory
 
@@ -52,12 +54,21 @@ type coordinator struct {
 	pl           v12.PodLister
 	hostEntpoint string
 	hostname     string
+	groupName    string
 	cancel       context.CancelFunc
 }
 
 type CoordinatorOpts struct {
 	WriteTimeSeriesFn TimeSeriesWriter
-	K8sCli            *kubernetes.Clientset
+	K8sCli            kubernetes.Interface
+
+	// Namespace is the namespace used to discover peers.  If not specified, the coordinator will
+	// try to use the namespace of the current pod.
+	Namespace string
+
+	// Hostname is the hostname of the current node.  This should be the statefulset hostname format
+	// in order to discover peers correctly
+	Hostname string
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
@@ -69,19 +80,40 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 		return nil, err
 	}
 
-	return &coordinator{
+	ns := opts.Namespace
+	if ns == "" {
+		logger.Warn("No namespace found, peer discovery disabled")
+	} else {
+		logger.Info("Using namespace %s for peer discovery", ns)
+	}
 
-		opts: opts,
-		kcli: opts.K8sCli,
-		pcli: pcli,
+	groupName := opts.Hostname
+	if groupName == "" {
+		logger.Warn("No hostname found, peer discovery disabled")
+	} else if !strings.Contains(groupName, "-") {
+		logger.Warn("Hostname not in statefuleset format, peer discovery disabled")
+	} else {
+		rindex := strings.LastIndex(groupName, "-")
+		groupName = groupName[:rindex]
+		logger.Info("Using statefuleset %s for peer discovery", groupName)
+	}
+
+	return &coordinator{
+		groupName: groupName,
+		hostname:  opts.Hostname,
+		namespace: ns,
+		opts:      opts,
+		kcli:      opts.K8sCli,
+		pcli:      pcli,
 	}, nil
 }
 
 func (c *coordinator) OnAdd(obj interface{}) {
 	p := obj.(*v1.Pod)
-	if p.Namespace != "prom-adx" {
+	if !c.isPeer(p) {
 		return
 	}
+
 	if err := c.syncPeers(); err != nil {
 		logger.Error("Failed to reconfigure peers: %s", err)
 	}
@@ -89,25 +121,39 @@ func (c *coordinator) OnAdd(obj interface{}) {
 
 func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
 	p := newObj.(*v1.Pod)
-	if p.Namespace != "prom-adx" {
+	if !c.isPeer(p) {
 		return
 	}
 
 	if err := c.syncPeers(); err != nil {
 		logger.Error("Failed to reconfigure peers: %s", err)
 	}
-
 }
 
 func (c *coordinator) OnDelete(obj interface{}) {
 	p := obj.(*v1.Pod)
-	if p.Namespace != "prom-adx" {
+	if !c.isPeer(p) {
 		return
 	}
 
 	if err := c.syncPeers(); err != nil {
 		logger.Error("Failed to reconfigure peers: %s", err)
 	}
+}
+
+func (c *coordinator) isPeer(p *v1.Pod) bool {
+	if p.Namespace != c.namespace {
+		return false
+	}
+
+	var isPeer bool
+	for _, ref := range p.OwnerReferences {
+		if ref.Kind == "StatefulSet" && ref.Name == c.groupName {
+			isPeer = true
+		}
+	}
+
+	return isPeer
 }
 
 func (c *coordinator) Open(ctx context.Context) error {
@@ -131,14 +177,15 @@ func (c *coordinator) Open(ctx context.Context) error {
 		return fmt.Errorf("failed to determine ip")
 	}
 
-	hostName, err := os.Hostname()
-	if err != nil {
-		return fmt.Errorf("failed to determin hostname")
-	}
+	hostName := c.opts.Hostname
 
 	hostEndpoint := fmt.Sprintf("https://%s:9090/transfer", myIP.To4().String())
 	c.hostEntpoint = hostEndpoint
 	c.hostname = hostName
+
+	set := make(map[string]string)
+	set[c.hostname] = c.hostEntpoint
+	c.peers = set
 
 	if _, err := podsInformer.AddEventHandler(c); err != nil {
 		return err
@@ -172,26 +219,43 @@ func (c *coordinator) syncPeers() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	pods, err := c.pl.Pods("prom-adx").List(labels.Everything())
+	pods, err := c.pl.Pods(c.namespace).List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("list pods: %w", err)
 	}
 
-	set := make(map[string]string)
-	set[c.hostname] = c.hostEntpoint
-
 	for _, p := range pods {
-		logger.Debug("%s %s", p.Name, p.Status.Phase)
-		if p.Status.PodIP == "" || !IsPodReady(p) {
+		if p.Status.PodIP == "" {
 			continue
 		}
-		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 
-		logger.Debug("Peer %s", p.Status.PodIP, p.Name)
+		if !c.isPeer(p) {
+			continue
+		}
+
+		_, isPeer := c.peers[p.Name]
+		ready := IsPodReady(p)
+
+		// if the peer is not ready and already in our peer set, remove it.
+		if !ready && isPeer {
+			logger.Info("Peer changed %s addr=%s ready=%v", p.Name, p.Status.PodIP, ready)
+			delete(c.peers, p.Name)
+			continue
+		}
+
+		// If the peer is not ready and not already in our peer set, skip it.
+		if !ready || isPeer {
+			continue
+		}
+
+		logger.Info("Peer changed %s addr=%s ready=%v", p.Name, p.Status.PodIP, ready)
+
+		c.peers[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 	}
 
-	for i, v := range set {
-		logger.Debug("sync %d %s", i, v)
+	set := make(map[string]string, len(c.peers))
+	for peer, addr := range c.peers {
+		set[peer] = addr
 	}
 
 	part, err := NewPartition(set)
@@ -199,6 +263,7 @@ func (c *coordinator) syncPeers() error {
 		return err
 	}
 	c.part = part
+	c.peers = set
 
 	return nil
 }

@@ -17,6 +17,9 @@ type ReplicatorOpts struct {
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
+
+	// Hostname is the name of the current node.
+	Hostname string
 }
 
 // Replicator manages the transfer of local segments to other nodes.
@@ -46,6 +49,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 	return &replicator{
 		queue:       make(chan []string, 100),
 		cli:         cli,
+		hostname:    opts.Hostname,
 		Partitioner: opts.Partitioner,
 	}, nil
 }
