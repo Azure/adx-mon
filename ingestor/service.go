@@ -93,8 +93,9 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Partitioner: coord,
-		Hostname:    opts.Hostname,
+		Hostname:           opts.Hostname,
+		Partitioner:        coord,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
 	})
 	if err != nil {
 		return nil, err
