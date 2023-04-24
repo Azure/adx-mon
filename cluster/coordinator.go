@@ -186,6 +186,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 	set := make(map[string]string)
 	set[c.hostname] = c.hostEntpoint
 	c.peers = set
+	logger.Info("Peer changed %s addr=%s ready=%v", hostName, myIP.To4().String(), "true")
 
 	if _, err := podsInformer.AddEventHandler(c); err != nil {
 		return err

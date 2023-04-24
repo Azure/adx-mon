@@ -129,6 +129,9 @@ func (a *archiver) processSegments() ([][]string, [][]string, error) {
 		}
 
 		if a.Segmenter.IsActiveSegment(filepath.Join(a.storageDir, v.Name())) {
+			if logger.IsDebug() {
+				logger.Debug("Skipping active segment: %s", filepath.Join(a.storageDir, v.Name()))
+			}
 			continue
 		}
 
@@ -161,6 +164,9 @@ func (a *archiver) processSegments() ([][]string, [][]string, error) {
 
 			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
 			if stat.Size() >= 100*1024*1024 {
+				if logger.IsDebug() {
+					logger.Debug("File %s is larger than 100MB (%d), uploading directly", path, stat.Size())
+				}
 				directUpload = true
 				break
 			}
@@ -169,9 +175,16 @@ func (a *archiver) processSegments() ([][]string, [][]string, error) {
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have a node that's behind on uploading.
 			if time.Since(stat.ModTime()) > 30*time.Second {
+				if logger.IsDebug() {
+					logger.Debug("File %s is older than 30 seconds, uploading directly", path)
+				}
 				directUpload = true
 				break
 			}
+		}
+
+		if logger.IsDebug() && fileSum >= 100*1024*1024 {
+			logger.Debug("Metric %s is larger than 100MB (%d), uploading directly", k, fileSum)
 		}
 
 		// If the file is already >= 100MB, we'll just upload it directly because it's already in the optimal size range.
