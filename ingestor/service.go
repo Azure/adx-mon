@@ -58,6 +58,12 @@ type ServiceOpts struct {
 
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
+
+	// Namespace is the namespace used for peer discovery.
+	Namespace string
+
+	// Hostname is the hostname of the current node.
+	Hostname string
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -79,12 +85,17 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
 		WriteTimeSeriesFn: store.WriteTimeSeries,
 		K8sCli:            opts.K8sCli,
+		Hostname:          opts.Hostname,
+		Namespace:         opts.Namespace,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{Partitioner: coord})
+	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+		Partitioner: coord,
+		Hostname:    opts.Hostname,
+	})
 	if err != nil {
 		return nil, err
 	}

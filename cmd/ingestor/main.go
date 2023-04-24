@@ -46,6 +46,8 @@ func main() {
 		Usage: "adx-mon metrics ingestor",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
+			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
+			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Direcotry to store WAL segments"},
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
@@ -99,6 +101,22 @@ func realMain(ctx *cli.Context) error {
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
 	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
+	namespace := ctx.String("namespace")
+	hostname := ctx.String("hostname")
+
+	if namespace == "" {
+		nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		if err == nil {
+			namespace = strings.TrimSpace(string(nsBytes))
+		}
+	}
+
+	if hostname == "" {
+		hostname, err = os.Hostname()
+		if err != nil {
+			logger.Error("Failed to get hostname: %s", err)
+		}
+	}
 
 	if cacert != "" || key != "" {
 		if cacert == "" || key == "" {
@@ -169,6 +187,8 @@ func realMain(ctx *cli.Context) error {
 
 	svc, err := promingest.NewService(promingest.ServiceOpts{
 		K8sCli:             k8scli,
+		Namespace:          namespace,
+		Hostname:           hostname,
 		StorageDir:         storageDir,
 		Uploader:           uploader,
 		MaxSegmentSize:     maxSegmentSize,
