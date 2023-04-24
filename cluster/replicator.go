@@ -102,7 +102,7 @@ func (r *replicator) transfer(ctx context.Context) {
 					logger.Error("Failed to remove segment %s: %v", seg, err)
 					continue
 				}
-				logger.Info("Segment %s transferred to %s duration=%s ", seg, addr, time.Since(start).String())
+				logger.Info("Segment %s transferred to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
 
 			}
 		}
