@@ -45,7 +45,7 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 }
 
 func (w *WAL) Open(ctx context.Context) error {
-	ctx, w.closeFn = context.WithCancel(ctx)
+	ctx, w.closeFn = context.WithCancel(context.Background())
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
