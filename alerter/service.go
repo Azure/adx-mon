@@ -165,16 +165,16 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	}
 	log.Info("Linting rules from path=%s", path)
 
-	var client KustoClient
-	for _, endpoint := range opts.KustoEndpoints {
+	var clients map[string]KustoClient
+	for name, endpoint := range opts.KustoEndpoints {
 		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
-		client, err = kusto.New(kcsb)
+		client, err := kusto.New(kcsb)
 		if err != nil {
 			return fmt.Errorf("kusto client=%s: %w", endpoint, err)
 		}
-		break
+		clients[name] = client
 	}
-	if client == nil {
+	if len(clients) == 0 {
 		return fmt.Errorf("no kusto endpoints provided")
 	}
 	lint := NewLinter()
@@ -182,7 +182,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	fakeaddr := fmt.Sprintf("http://localhost:%d", opts.Port)
 	alertCli, err := alert.NewClient(time.Minute)
 
-	kclient := extendedKustoClient{client: client, MaxNotifications: opts.MaxNotifications}
+	kclient := multiKustoClient{clients: clients, MaxNotifications: opts.MaxNotifications}
 	executor := engine.NewExecutor(engine.ExecutorOpts{
 		AlertCli:    alertCli,
 		AlertAddr:   fakeaddr,
@@ -232,29 +232,30 @@ func (l *Alerter) Open(ctx context.Context) error {
 }
 
 func (l *Alerter) Endpoint(db string) string {
-	if l.clients[db] != nil {
-		return l.clients[db].Endpoint()
-	} else {
-		return "unknown"
-	}
+	return multiKustoClient{clients: l.clients, MaxNotifications: l.opts.MaxNotifications}.Endpoint(db)
 }
 
 // make multikustoclient to share between linter and service
-type extendedKustoClient struct {
-	client           KustoClient
+type multiKustoClient struct {
+	clients          map[string]KustoClient
 	MaxNotifications int
 }
 
-func (c extendedKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
+func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
+	client := c.clients[qc.Rule.Database]
+	if client == nil {
+		return fmt.Errorf("no client found for database=%s", qc.Rule.Database)
+	}
+
 	var iter *kusto.RowIterator
 	var err error
 	if qc.Rule.IsMgmtQuery {
-		iter, err = c.client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
+		iter, err = client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
 		if err != nil {
 			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err)
 		}
 	} else {
-		iter, err = c.client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
+		iter, err = client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
 		if err != nil {
 			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt)
 		}
@@ -269,7 +270,7 @@ func (c extendedKustoClient) Query(ctx context.Context, qc *engine.QueryContext,
 			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", qc.Rule.Namespace, qc.Rule.Name, c.MaxNotifications)
 		}
 
-		return fn(ctx, c.client.Endpoint(), qc, row)
+		return fn(ctx, client.Endpoint(), qc, row)
 	}); err != nil {
 		return err
 	}
@@ -279,17 +280,16 @@ func (c extendedKustoClient) Query(ctx context.Context, qc *engine.QueryContext,
 	return nil
 }
 
-func (c extendedKustoClient) Endpoint(db string) string {
-	cl := c.client
+func (c multiKustoClient) Endpoint(db string) string {
+	cl, ok := c.clients[db]
+	if !ok {
+		return "unknown"
+	}
 	return cl.Endpoint()
 }
 
 func (l *Alerter) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
-	client := l.clients[qc.Rule.Database]
-	if client == nil {
-		return fmt.Errorf("no client found for database=%s", qc.Rule.Database)
-	}
-	return extendedKustoClient{client: client, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, qc, fn)
+	return multiKustoClient{clients: l.clients, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, qc, fn)
 }
 
 func newLogger() (logger.Logger, error) {
