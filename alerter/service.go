@@ -92,7 +92,6 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	l2m := &Alerter{
 		opts:      opts,
 		log:       log,
-		clients:   make(map[string]KustoClient),
 		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
@@ -102,17 +101,9 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		logger.Info("Using MSI ID=%s", opts.MSIID)
 	}
 
-	for name, endpoint := range opts.KustoEndpoints {
-		kcsb := kusto.NewConnectionStringBuilder(endpoint)
-		if opts.MSIID == "" {
-			kcsb.WithAzCli()
-		} else {
-			kcsb.WithUserManagedIdentity(opts.MSIID)
-		}
-		l2m.clients[name], err = kusto.New(kcsb)
-		if err != nil {
-			return nil, fmt.Errorf("kusto client=%s: %w", endpoint, err)
-		}
+	kclient, err := multiClientFromOptions(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	if opts.CtrlCli == nil {
@@ -145,7 +136,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			AlertCli:    alertCli,
 			AlertAddr:   opts.AlertAddr,
 			Region:      opts.Region,
-			KustoClient: l2m,
+			KustoClient: kclient,
 			RuleStore:   ruleStore,
 		})
 
@@ -165,24 +156,15 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	}
 	log.Info("Linting rules from path=%s", path)
 
-	var clients map[string]KustoClient
-	for name, endpoint := range opts.KustoEndpoints {
-		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
-		client, err := kusto.New(kcsb)
-		if err != nil {
-			return fmt.Errorf("kusto client=%s: %w", endpoint, err)
-		}
-		clients[name] = client
-	}
-	if len(clients) == 0 {
-		return fmt.Errorf("no kusto endpoints provided")
-	}
 	lint := NewLinter()
 	http.Handle("/alerts", lint.Handler())
 	fakeaddr := fmt.Sprintf("http://localhost:%d", opts.Port)
 	alertCli, err := alert.NewClient(time.Minute)
 
-	kclient := multiKustoClient{clients: clients, MaxNotifications: opts.MaxNotifications}
+	kclient, err := multiClientFromOptions(opts)
+	if err != nil {
+		return err
+	}
 	executor := engine.NewExecutor(engine.ExecutorOpts{
 		AlertCli:    alertCli,
 		AlertAddr:   fakeaddr,
@@ -231,14 +213,30 @@ func (l *Alerter) Open(ctx context.Context) error {
 	return nil
 }
 
-func (l *Alerter) Endpoint(db string) string {
-	return multiKustoClient{clients: l.clients, MaxNotifications: l.opts.MaxNotifications}.Endpoint(db)
-}
-
-// make multikustoclient to share between linter and service
 type multiKustoClient struct {
 	clients          map[string]KustoClient
-	MaxNotifications int
+	maxNotifications int
+}
+
+func multiClientFromOptions(opts *AlerterOpts) (multiKustoClient, error) {
+	var clients map[string]KustoClient
+	for name, endpoint := range opts.KustoEndpoints {
+		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
+		if opts.MSIID == "" {
+			kcsb.WithAzCli()
+		} else {
+			kcsb.WithUserManagedIdentity(opts.MSIID)
+		}
+		client, err := kusto.New(kcsb)
+		if err != nil {
+			return multiKustoClient{}, fmt.Errorf("kusto client=%s: %w", endpoint, err)
+		}
+		clients[name] = client
+	}
+	if len(clients) == 0 {
+		return multiKustoClient{}, fmt.Errorf("no kusto endpoints provided")
+	}
+	return multiKustoClient{clients: clients, maxNotifications: opts.MaxNotifications}, nil
 }
 
 func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
@@ -265,9 +263,9 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 	defer iter.Stop()
 	if err := iter.Do(func(row *table.Row) error {
 		n++
-		if n > c.MaxNotifications {
+		if n > c.maxNotifications {
 			metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
-			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", qc.Rule.Namespace, qc.Rule.Name, c.MaxNotifications)
+			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications)
 		}
 
 		return fn(ctx, client.Endpoint(), qc, row)
@@ -286,10 +284,6 @@ func (c multiKustoClient) Endpoint(db string) string {
 		return "unknown"
 	}
 	return cl.Endpoint()
-}
-
-func (l *Alerter) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
-	return multiKustoClient{clients: l.clients, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, qc, fn)
 }
 
 func newLogger() (logger.Logger, error) {
