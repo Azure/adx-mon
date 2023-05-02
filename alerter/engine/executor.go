@@ -32,7 +32,7 @@ type Executor struct {
 	ruleStore   ruleStore
 	region      string
 
-	// resconsider this later or documetn why we do it https://go.dev/blog/context-and-structs
+	// resconsider this later or document why we do it https://go.dev/blog/context-and-structs
 	//"Contexts should not be stored inside a struct type, but instead passed to each function that needs it."
 	ctx context.Context
 
@@ -51,7 +51,7 @@ type ExecutorOpts struct {
 	Region      string
 }
 
-// TODO make AlertAddr   string part of alertcli
+// TODO make AlertAddr string part of alertcli
 func NewExecutor(opts ExecutorOpts) *Executor {
 	return &Executor{
 		alertCli:    opts.AlertCli,

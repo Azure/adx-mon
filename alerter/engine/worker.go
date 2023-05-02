@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/Azure/adx-mon/alert"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Azure/adx-mon/alert"
 
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
@@ -69,7 +70,8 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	}
 
 	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	if err := e.kustoClient.Query(ctx, queryContext, e.HandlerFn); err != nil {
+	err, rows := e.kustoClient.Query(ctx, queryContext, e.HandlerFn)
+	if err != nil {
 		logger.Error("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
 		if !isUserError(err) {
@@ -103,6 +105,11 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 	logger.Info("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
+	if rows > 0 {
+		logger.Info("Found more than one (%d) row for %s/%s", rows, e.rule.Namespace, e.rule.Name)
+	} else {
+		logger.Info("Found no rows for %s/%s", e.rule.Namespace, e.rule.Name)
+	}
 }
 
 func (e *worker) Close() {
