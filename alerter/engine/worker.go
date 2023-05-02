@@ -105,11 +105,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 	logger.Info("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
-	if rows > 0 {
-		logger.Info("Found more than one (%d) row for %s/%s", rows, e.rule.Namespace, e.rule.Name)
-	} else {
-		logger.Info("Found no rows for %s/%s", e.rule.Namespace, e.rule.Name)
-	}
+	logger.Info("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
 }
 
 func (e *worker) Close() {
