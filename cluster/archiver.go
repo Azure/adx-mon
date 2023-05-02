@@ -1,8 +1,10 @@
 package cluster
 
 import (
+	"context"
 	"fmt"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,18 +26,18 @@ type ArchiverOpts struct {
 	TransferQueue chan []string
 }
 
-type MetricPartitioner interface {
-	Owner([]byte) (string, string)
+type Archiver interface {
+	service.Component
 }
 
 // Archiver manages WAL segments that are ready for upload to kusto or that need
 // to be transferred to another node.
-type Archiver struct {
+type archiver struct {
 	uploadQueue   chan []string
 	transferQueue chan []string
 
 	wg         sync.WaitGroup
-	closing    chan struct{}
+	closeFn    context.CancelFunc
 	storageDir string
 
 	Partitioner MetricPartitioner
@@ -43,9 +45,8 @@ type Archiver struct {
 	hostname    string
 }
 
-func NewArchiver(opts ArchiverOpts) *Archiver {
-	return &Archiver{
-		closing:       make(chan struct{}),
+func NewArchiver(opts ArchiverOpts) Archiver {
+	return &archiver{
 		storageDir:    opts.StorageDir,
 		Partitioner:   opts.Partitioner,
 		Segmenter:     opts.Segmenter,
@@ -54,25 +55,26 @@ func NewArchiver(opts ArchiverOpts) *Archiver {
 	}
 }
 
-func (a *Archiver) Open() error {
+func (a *archiver) Open(ctx context.Context) error {
+	ctx, a.closeFn = context.WithCancel(ctx)
 	var err error
 	a.hostname, err = os.Hostname()
 	if err != nil {
 		return err
 	}
 
-	go a.watch()
+	go a.watch(ctx)
 
 	return nil
 }
 
-func (a *Archiver) Close() error {
-	close(a.closing)
+func (a *archiver) Close() error {
+	a.closeFn()
 	a.wg.Wait()
 	return nil
 }
 
-func (a *Archiver) watch() {
+func (a *archiver) watch(ctx context.Context) {
 	a.wg.Add(1)
 	defer a.wg.Done()
 
@@ -80,7 +82,7 @@ func (a *Archiver) watch() {
 	defer t.Stop()
 	for {
 		select {
-		case <-a.closing:
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			owned, notOwned, err := a.processSegments()
@@ -91,7 +93,7 @@ func (a *Archiver) watch() {
 
 			// TODO: This might be removable now that uploader tracks files currently being uploaded.
 			if len(a.uploadQueue) > 0 {
-				logger.Info("Upload queue not empty (%d), skipping", len(a.uploadQueue))
+				logger.Info("uploadReader queue not empty (%d), skipping", len(a.uploadQueue))
 			} else {
 				for _, v := range owned {
 					a.uploadQueue <- v
@@ -109,7 +111,7 @@ func (a *Archiver) watch() {
 	}
 }
 
-func (a *Archiver) processSegments() ([][]string, [][]string, error) {
+func (a *archiver) processSegments() ([][]string, [][]string, error) {
 	entries, err := os.ReadDir(a.storageDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
@@ -127,6 +129,9 @@ func (a *Archiver) processSegments() ([][]string, [][]string, error) {
 		}
 
 		if a.Segmenter.IsActiveSegment(filepath.Join(a.storageDir, v.Name())) {
+			if logger.IsDebug() {
+				logger.Debug("Skipping active segment: %s", filepath.Join(a.storageDir, v.Name()))
+			}
 			continue
 		}
 
@@ -159,6 +164,9 @@ func (a *Archiver) processSegments() ([][]string, [][]string, error) {
 
 			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
 			if stat.Size() >= 100*1024*1024 {
+				if logger.IsDebug() {
+					logger.Debug("File %s is larger than 100MB (%d), uploading directly", path, stat.Size())
+				}
 				directUpload = true
 				break
 			}
@@ -167,9 +175,16 @@ func (a *Archiver) processSegments() ([][]string, [][]string, error) {
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have a node that's behind on uploading.
 			if time.Since(stat.ModTime()) > 30*time.Second {
+				if logger.IsDebug() {
+					logger.Debug("File %s is older than 30 seconds, uploading directly", path)
+				}
 				directUpload = true
 				break
 			}
+		}
+
+		if logger.IsDebug() && fileSum >= 100*1024*1024 {
+			logger.Debug("Metric %s is larger than 100MB (%d), uploading directly", k, fileSum)
 		}
 
 		// If the file is already >= 100MB, we'll just upload it directly because it's already in the optimal size range.

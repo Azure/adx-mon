@@ -1,17 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	promingest "github.com/Azure/adx-mon"
 	"github.com/Azure/adx-mon/adx"
+	promingest "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
+	"io"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -40,13 +46,17 @@ func main() {
 		Usage: "adx-mon metrics ingestor",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
+			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
+			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Direcotry to store WAL segments"},
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
-			&cli.BoolFlag{Name: "use-cli-auth", Usage: "Use CLI authentication"},
 			&cli.StringSliceFlag{Name: "labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
+			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
+			&cli.StringFlag{Name: "key", Usage: "Server key file"},
+			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -74,37 +84,90 @@ func realMain(ctx *cli.Context) error {
 
 	var (
 		storageDir, kustoEndpoint, database string
+		cacert, key                         string
+		insecureSkipVerify                  bool
 		concurrentUploads                   int
 		maxSegmentSize                      int64
 		maxSegmentAge                       time.Duration
-		useCliAuth                          bool
 		staticColumns                       strSliceFag
 	)
 	storageDir = ctx.String("storage-dir")
 	kustoEndpoint = ctx.String("kusto-endpoint")
-	if !strings.Contains(kustoEndpoint, "=") {
-		return fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
-	}
-
-	split := strings.Split(kustoEndpoint, "=")
-	database = split[0]
-	kustoEndpoint = split[1]
 
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
-	useCliAuth = ctx.Bool("use-cli-auth")
 	staticColumns = ctx.StringSlice("labels")
+	cacert = ctx.String("ca-cert")
+	key = ctx.String("key")
+	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
+	namespace := ctx.String("namespace")
+	hostname := ctx.String("hostname")
 
+	if namespace == "" {
+		nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		if err == nil {
+			namespace = strings.TrimSpace(string(nsBytes))
+		}
+	}
+
+	if hostname == "" {
+		hostname, err = os.Hostname()
+		if err != nil {
+			logger.Error("Failed to get hostname: %s", err)
+		}
+	}
+
+	if cacert != "" || key != "" {
+		if cacert == "" || key == "" {
+			logger.Fatal("Both --ca-cert and --key are required")
+		}
+	} else {
+		logger.Warn("Using fake TLS credentials (not for production use!)")
+		certBytes, keyBytes, err := tls.NewFakeTLSCredentials()
+		if err != nil {
+			logger.Fatal("Failed to create fake TLS credentials: %s", err)
+		}
+
+		certFile, err := os.CreateTemp("", "cert")
+		if err != nil {
+			logger.Fatal("Failed to create cert temp file: %s", err)
+		}
+
+		if _, err := certFile.Write(certBytes); err != nil {
+			logger.Fatal("Failed to write cert temp file: %s", err)
+		}
+
+		keyFile, err := os.CreateTemp("", "key")
+		if err != nil {
+			logger.Fatal("Failed to create key temp file: %s", err)
+		}
+
+		if _, err := keyFile.Write(keyBytes); err != nil {
+			logger.Fatal("Failed to write key temp file: %s", err)
+		}
+
+		cacert = certFile.Name()
+		key = keyFile.Name()
+		insecureSkipVerify = true
+
+		if err := certFile.Close(); err != nil {
+			logger.Fatal("Failed to close cert temp file: %s", err)
+		}
+
+		if err := keyFile.Close(); err != nil {
+			logger.Fatal("Failed to close key temp file: %s", err)
+		}
+
+		defer func() {
+			os.Remove(certFile.Name())
+			os.Remove(keyFile.Name())
+		}()
+	}
+
+	logger.Info("Using TLS ca-cert=%s key=%s", cacert, key)
 	if storageDir == "" {
-		logger.Fatal("-storage-dir is required")
-	}
-
-	if kustoEndpoint == "" {
-		logger.Fatal("-kusto-endpoint is required")
-	}
-	if database == "" {
-		logger.Fatal("-db is required")
+		logger.Fatal("--storage-dir is required")
 	}
 
 	for _, v := range staticColumns {
@@ -116,15 +179,21 @@ func realMain(ctx *cli.Context) error {
 		storage.AddDefaultMapping(fields[0], fields[1])
 	}
 
+	uploader, err := newUploader(kustoEndpoint, database, storageDir, concurrentUploads)
+	if err != nil {
+		logger.Fatal("Failed to create uploader: %s", err)
+	}
+	defer uploader.Close()
+
 	svc, err := promingest.NewService(promingest.ServiceOpts{
-		K8sCli:            k8scli,
-		StorageDir:        storageDir,
-		KustoEndpoint:     kustoEndpoint,
-		Database:          database,
-		ConcurrentUploads: concurrentUploads,
-		MaxSegmentSize:    maxSegmentSize,
-		MaxSegmentAge:     maxSegmentAge,
-		UseCLIAuth:        useCliAuth,
+		K8sCli:             k8scli,
+		Namespace:          namespace,
+		Hostname:           hostname,
+		StorageDir:         storageDir,
+		Uploader:           uploader,
+		MaxSegmentSize:     maxSegmentSize,
+		MaxSegmentAge:      maxSegmentAge,
+		InsecureSkipVerify: insecureSkipVerify,
 	})
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
@@ -140,9 +209,10 @@ func realMain(ctx *cli.Context) error {
 	mux.HandleFunc("/receive", svc.HandleReceive)
 
 	srv := &http.Server{Addr: ":9090", Handler: mux}
+	srv.ErrorLog = newLooger()
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS(cacert, key); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
@@ -191,4 +261,66 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset,
 	}
 
 	return dyCli, client, ctrlCli, nil
+}
+
+func newKustoClient(endpoint string) (ingest.QueryClient, error) {
+	kcsb := kusto.NewConnectionStringBuilder(endpoint)
+	kcsb.WithDefaultAzureCredential()
+
+	return kusto.New(kcsb)
+}
+
+func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads int) (adx.Uploader, error) {
+	if kustoEndpoint == "" && database == "" {
+		logger.Warn("No kusto endpoint provided, using fake uploader")
+		return adx.NewFakeUploader(), nil
+	}
+
+	if kustoEndpoint == "" {
+		return nil, fmt.Errorf("-kusto-endpoint is required")
+	}
+
+	if !strings.Contains(kustoEndpoint, "=") {
+		return nil, fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
+	}
+
+	split := strings.Split(kustoEndpoint, "=")
+	database = split[0]
+	kustoEndpoint = split[1]
+
+	if database == "" {
+		return nil, fmt.Errorf("-db is required")
+	}
+
+	client, err := newKustoClient(kustoEndpoint)
+	defer client.Close()
+
+	uploader := adx.NewUploader(client, adx.UploaderOpts{
+		StorageDir:        storageDir,
+		Database:          database,
+		ConcurrentUploads: concurrentUploads,
+	})
+	return uploader, err
+}
+
+func newLooger() *log.Logger {
+	return log.New(&writerAdapter{os.Stderr}, "", log.LstdFlags)
+}
+
+type writerAdapter struct {
+	io.Writer
+}
+
+var (
+	tlsHandshakeError = []byte("http: TLS handshake error")
+	ioEOFError        = []byte("EOF")
+)
+
+func (a *writerAdapter) Write(data []byte) (int, error) {
+	// Ignore TLS handshake errors that results in just a closed connection.  Load balancer
+	// health checks will cause this error to be logged.
+	if bytes.Contains(data, tlsHandshakeError) && bytes.Contains(data, ioEOFError) {
+		return len(data), nil
+	}
+	return a.Writer.Write(data)
 }

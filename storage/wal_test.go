@@ -15,7 +15,7 @@ func TestNewWAL(t *testing.T) {
 		StorageDir: t.TempDir(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, w.Open())
+	require.NoError(t, w.Open(context.Background()))
 
 	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
 	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
@@ -28,7 +28,7 @@ func TestWAL_Segment(t *testing.T) {
 		StorageDir: t.TempDir(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, w.Open())
+	require.NoError(t, w.Open(context.Background()))
 
 	series := newTimeSeries("foo", nil, 1, 1)
 	w.Write(context.Background(), []prompb.TimeSeries{series})
@@ -41,8 +41,8 @@ func TestWAL_Segment(t *testing.T) {
 
 	b, err := seg.Bytes()
 	require.NoError(t, err)
-	require.Equal(t, `1970-01-01T00:00:00.001Z,1678086086935741385,"{""__name__"":""foo""}",1.000000000
-1970-01-01T00:00:00.002Z,1678086086935741385,"{""__name__"":""foo""}",2.000000000
+	require.Equal(t, `1970-01-01T00:00:00.001Z,3320404949056263377,{},1.000000000
+1970-01-01T00:00:00.002Z,3320404949056263377,{},2.000000000
 `, string(b))
 
 }
@@ -54,7 +54,7 @@ func TestWAL_OpenSegments(t *testing.T) {
 		StorageDir: dir,
 	})
 	require.NoError(t, err)
-	require.NoError(t, w.Open())
+	require.NoError(t, w.Open(context.Background()))
 	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
 	require.Equal(t, 1, w.Size())
 
@@ -65,7 +65,7 @@ func TestWAL_OpenSegments(t *testing.T) {
 		StorageDir: dir,
 	})
 	require.NoError(t, err)
-	require.NoError(t, w.Open())
+	require.NoError(t, w.Open(context.Background()))
 	require.Equal(t, 0, w.Size())
 
 	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})

@@ -32,10 +32,6 @@ type Executor struct {
 	ruleStore   ruleStore
 	region      string
 
-	// resconsider this later or document why we do it https://go.dev/blog/context-and-structs
-	//"Contexts should not be stored inside a struct type, but instead passed to each function that needs it."
-	ctx context.Context
-
 	wg      sync.WaitGroup
 	closeFn context.CancelFunc
 
@@ -64,11 +60,11 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 }
 
 func (e *Executor) Open(ctx context.Context) error {
-	e.ctx, e.closeFn = context.WithCancel(ctx)
+	ctx, e.closeFn = context.WithCancel(ctx)
 	logger.Info("Begin executing %d queries", len(e.ruleStore.Rules()))
 
-	e.syncWorkers()
-	go e.periodicSync()
+	e.syncWorkers(ctx)
+	go e.periodicSync(ctx)
 	return nil
 }
 
@@ -77,10 +73,7 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 }
 
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
-	ctx, cancel := context.WithCancel(e.ctx)
 	return &worker{
-		ctx:         ctx,
-		cancel:      cancel,
 		rule:        rule,
 		kustoClient: e.kustoClient,
 		Region:      e.region,
@@ -202,7 +195,7 @@ func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
 }
 
 func (e *Executor) RunOnce(ctx context.Context) {
-	e.ctx, e.closeFn = context.WithCancel(ctx) //todo move way from using context on struct
+	ctx, e.closeFn = context.WithCancel(ctx)
 	for _, r := range e.ruleStore.Rules() {
 		worker := e.newWorker(r)
 		worker.ExecuteQuery(ctx)
@@ -212,7 +205,7 @@ func (e *Executor) RunOnce(ctx context.Context) {
 // syncWorkers ensures that the workers are running for the current set of rules.  If any new rules
 // are added, or existing rules are updated, a new worker will be started.  If any rules are deleted,
 // the worker will be stopped. This function is called periodically by the executor.
-func (e *Executor) syncWorkers() {
+func (e *Executor) syncWorkers(ctx context.Context) {
 	// Track the query Ids that are still definied as CRs, so we can determine which ones were deleted.
 	liveQueries := make(map[string]struct{})
 	for _, r := range e.ruleStore.Rules() {
@@ -223,7 +216,7 @@ func (e *Executor) syncWorkers() {
 			logger.Info("Starting new worker for %s", id)
 			worker := e.newWorker(r)
 			e.workers[id] = worker
-			go worker.Run()
+			go worker.Run(ctx)
 			continue
 		}
 
@@ -237,7 +230,7 @@ func (e *Executor) syncWorkers() {
 		delete(e.workers, id)
 		w = e.newWorker(r)
 		e.workers[id] = w
-		go w.Run()
+		go w.Run(ctx)
 	}
 
 	// Shutdown any workers that no longer exist
@@ -251,13 +244,13 @@ func (e *Executor) syncWorkers() {
 }
 
 // periodicSync will periodically sync the workers with the current set of rules.
-func (e *Executor) periodicSync() {
+func (e *Executor) periodicSync(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ticker.C:
-			e.syncWorkers()
-		case <-e.ctx.Done():
+			e.syncWorkers(ctx)
+		case <-ctx.Done():
 			return
 		}
 	}

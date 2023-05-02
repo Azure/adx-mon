@@ -3,7 +3,9 @@ package storage
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"github.com/Azure/adx-mon/limiter"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pool"
 	gzip "github.com/klauspost/pgzip"
 	//gzip "compress/gzip"
@@ -31,14 +33,21 @@ var (
 	limit = limiter.NewFixed(1)
 )
 
-type Compressor struct {
+type Compressor interface {
+	service.Component
 }
 
-func (c *Compressor) Open() error {
+type compressor struct{}
+
+func NewCompressor() Compressor {
+	return &compressor{}
+}
+
+func (c *compressor) Open(ctx context.Context) error {
 	return nil
 }
 
-func (c *Compressor) Compress(seg Segment) (string, error) {
+func (c *compressor) Compress(seg Segment) (string, error) {
 	path := seg.Path()
 	fileName := filepath.Base(path)
 
@@ -99,6 +108,6 @@ func (c *Compressor) Compress(seg Segment) (string, error) {
 	return destPath, nil
 }
 
-func (c *Compressor) Close() error {
+func (c *compressor) Close() error {
 	return nil
 }

@@ -1,4 +1,4 @@
-package adx_mon
+package ingestor
 
 import (
 	"bytes"
@@ -10,7 +10,6 @@ import (
 	"github.com/Azure/adx-mon/pool"
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/golang/snappy"
 	"io"
 	"k8s.io/client-go/kubernetes"
@@ -36,63 +35,47 @@ type Service struct {
 	walOpts storage.WALOpts
 	opts    ServiceOpts
 
-	compressor  *storage.Compressor
-	ingestor    *adx.Ingestor
-	replicator  *cluster.Replicator
-	coordinator *cluster.Coordinator
-	archiver    *cluster.Archiver
+	compressor  storage.Compressor
+	ingestor    adx.Uploader
+	replicator  cluster.Replicator
+	coordinator cluster.Coordinator
+	archiver    cluster.Archiver
 	closeFn     context.CancelFunc
-	ctx         context.Context
 
-	store   *storage.Store
-	metrics *metrics.Service
+	store   storage.Store
+	metrics metrics.Service
 }
 
 type ServiceOpts struct {
-	StorageDir        string
-	KustoEndpoint     string
-	Database          string
-	ConcurrentUploads int
-	MaxSegmentSize    int64
-	MaxSegmentAge     time.Duration
-
-	UseCLIAuth bool
+	StorageDir     string
+	Uploader       adx.Uploader
+	MaxSegmentSize int64
+	MaxSegmentAge  time.Duration
 
 	// Dimensions is a slice of column=value elements where each element will be added all rows.
 	Dimensions []string
 	K8sCli     *kubernetes.Clientset
+
+	// InsecureSkipVerify disables TLS certificate verification.
+	InsecureSkipVerify bool
+
+	// Namespace is the namespace used for peer discovery.
+	Namespace string
+
+	// Hostname is the hostname of the current node.
+	Hostname string
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
-	kcsb := kusto.NewConnectionStringBuilder(opts.KustoEndpoint)
-	if opts.UseCLIAuth {
-		kcsb.WithAzCli()
-	} else {
-		kcsb.WithDefaultAzureCredential()
-	}
-
-	client, err := kusto.New(kcsb)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-
-	ing := adx.NewIngestor(client, adx.IngesterOpts{
-		StorageDir:        opts.StorageDir,
-		Database:          opts.Database,
-		ConcurrentUploads: opts.ConcurrentUploads,
-		Dimensions:        opts.Dimensions,
-	})
-
 	walOpts := storage.WALOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
 	}
 
-	c := &storage.Compressor{}
+	c := storage.NewCompressor()
 
-	store := storage.NewStore(storage.StoreOpts{
+	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
@@ -102,12 +85,18 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
 		WriteTimeSeriesFn: store.WriteTimeSeries,
 		K8sCli:            opts.K8sCli,
+		Hostname:          opts.Hostname,
+		Namespace:         opts.Namespace,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{Partitioner: coord})
+	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+		Hostname:           opts.Hostname,
+		Partitioner:        coord,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +105,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:    opts.StorageDir,
 		Partitioner:   coord,
 		Segmenter:     store,
-		UploadQueue:   ing.UploadQueue(),
+		UploadQueue:   opts.Uploader.UploadQueue(),
 		TransferQueue: repl.TransferQueue(),
 	})
 
@@ -125,7 +114,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	return &Service{
 		opts:        opts,
 		walOpts:     walOpts,
-		ingestor:    ing,
+		ingestor:    opts.Uploader,
 		replicator:  repl,
 		store:       store,
 		coordinator: coord,
@@ -136,31 +125,33 @@ func NewService(opts ServiceOpts) (*Service, error) {
 }
 
 func (s *Service) Open(ctx context.Context) error {
-	s.ctx, s.closeFn = context.WithCancel(ctx)
-	if err := s.ingestor.Open(); err != nil {
+	var svcCtx context.Context
+	svcCtx, s.closeFn = context.WithCancel(ctx)
+	if err := s.ingestor.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.compressor.Open(); err != nil {
-		return err
-	}
-	if err := s.store.Open(); err != nil {
+	if err := s.compressor.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.coordinator.Open(ctx); err != nil {
+	if err := s.store.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.archiver.Open(); err != nil {
+	if err := s.coordinator.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.replicator.Open(); err != nil {
+	if err := s.archiver.Open(svcCtx); err != nil {
 		return err
 	}
 
-	if err := s.metrics.Open(); err != nil {
+	if err := s.replicator.Open(svcCtx); err != nil {
+		return err
+	}
+
+	if err := s.metrics.Open(svcCtx); err != nil {
 		return err
 	}
 

@@ -38,6 +38,11 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	// Marshal the labels as JSON and avoid allocations since this code is in the hot path.
 	buf.WriteByte('{')
 	for i, v := range ts.Labels {
+		// Drop the __name__ label since it is implied that the contents of the CSV file is the name of the metric.
+		if bytes.Equal(v.Name, []byte("__name__")) {
+			continue
+		}
+
 		fflib.WriteJson(buf, v.Name)
 		buf.WriteByte(':')
 		fflib.WriteJson(buf, v.Value)

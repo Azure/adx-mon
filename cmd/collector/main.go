@@ -29,6 +29,7 @@ func main() {
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
 			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of <host regex>=<url>.  Host names that match the regex will scrape the target url"},
 			&cli.StringSliceFlag{Name: "endpoints", Usage: "Prometheus remote write endpoint URLs"},
+			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification of remote write endpoints"},
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
 			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
@@ -115,15 +116,16 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	opts := &collector.ServiceOpts{
-		K8sCli:         k8scli,
-		ListentAddr:    ctx.String("listen-addr"),
-		ScrapeInterval: ctx.Duration("scrape-interval"),
-		NodeName:       hostname,
-		Targets:        staticTargets,
-		Endpoints:      endpoints,
-		DropMetrics:    dropMetrics,
-		AddLabels:      addLabels,
-		DropLabels:     dropLabels,
+		K8sCli:             k8scli,
+		ListentAddr:        ctx.String("listen-addr"),
+		ScrapeInterval:     ctx.Duration("scrape-interval"),
+		NodeName:           hostname,
+		Targets:            staticTargets,
+		Endpoints:          endpoints,
+		DropMetrics:        dropMetrics,
+		AddLabels:          addLabels,
+		DropLabels:         dropLabels,
+		InsecureSkipVerify: ctx.Bool("insecure-skip-verify"),
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())

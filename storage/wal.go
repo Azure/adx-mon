@@ -15,7 +15,7 @@ type WAL struct {
 	path       string
 	schemaPath string
 
-	closing chan struct{}
+	closeFn context.CancelFunc
 
 	mu      sync.RWMutex
 	segment Segment
@@ -40,23 +40,22 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 	}
 
 	return &WAL{
-		opts:    opts,
-		closing: make(chan struct{}),
+		opts: opts,
 	}, nil
 }
 
-func (w *WAL) Open() error {
+func (w *WAL) Open(ctx context.Context) error {
+	ctx, w.closeFn = context.WithCancel(context.Background())
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	go w.rotate()
-	//go w.compress()
+	go w.rotate(ctx)
 
 	return nil
 }
 
 func (w *WAL) Close() error {
-	close(w.closing)
+	w.closeFn()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -116,13 +115,13 @@ func (w *WAL) Segment() Segment {
 	return w.segment
 }
 
-func (w *WAL) rotate() {
+func (w *WAL) rotate(ctx context.Context) {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 
 	for {
 		select {
-		case <-w.closing:
+		case <-ctx.Done():
 			return
 		case <-t.C:
 
