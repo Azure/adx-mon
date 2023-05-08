@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/logger"
@@ -80,7 +81,8 @@ func fakeAlertHandler() http.Handler {
 }
 
 type lintAlertHandler struct {
-	alertCount map[string]int
+	alertCount       map[string]int
+	hasFailedQueries bool
 }
 
 func NewLinter() *lintAlertHandler {
@@ -105,12 +107,19 @@ func (lh *lintAlertHandler) Handler() http.Handler {
 			return
 		}
 		lh.alertCount[a.CorrelationID]++
+		if strings.HasPrefix(a.CorrelationID, "alert-failure") {
+			lh.hasFailedQueries = true
+		}
 		w.WriteHeader(http.StatusCreated)
 	})
 }
 
 type log interface {
 	Info(format string, args ...interface{})
+}
+
+func (lh *lintAlertHandler) HasFailedQueries() bool {
+	return lh.hasFailedQueries
 }
 
 func (lh *lintAlertHandler) Log(logger log) {

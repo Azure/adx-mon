@@ -181,9 +181,11 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	}()
 
 	executor.RunOnce(ctx)
+	if lint.HasFailedQueries() {
+		return fmt.Errorf("failed to lint rules")
+	}
 	lint.Log(log)
 	return nil
-
 }
 
 func (l *Alerter) Open(ctx context.Context) error {
