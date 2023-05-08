@@ -16,7 +16,7 @@ type multiKustoClient struct {
 }
 
 func New(endpoints map[string]string, missid string, max int) (multiKustoClient, error) {
-	var clients map[string]*kusto.Client
+	clients := make(map[string]*kusto.Client)
 	for name, endpoint := range endpoints {
 		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
 		if missid == "" {
