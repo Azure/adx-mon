@@ -36,10 +36,10 @@ func New(endpoints map[string]string, missid string, max int) (multiKustoClient,
 	return multiKustoClient{clients: clients, maxNotifications: max}, nil
 }
 
-func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) error {
+func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
 	client := c.clients[qc.Rule.Database]
 	if client == nil {
-		return fmt.Errorf("no client found for database=%s", qc.Rule.Database)
+		return fmt.Errorf("no client found for database=%s", qc.Rule.Database), 0
 	}
 
 	var iter *kusto.RowIterator
@@ -47,12 +47,12 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 	if qc.Rule.IsMgmtQuery {
 		iter, err = client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
 		if err != nil {
-			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err)
+			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err), 0
 		}
 	} else {
 		iter, err = client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
 		if err != nil {
-			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt)
+			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt), 0
 		}
 	}
 
@@ -67,12 +67,12 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 
 		return fn(ctx, client.Endpoint(), qc, row)
 	}); err != nil {
-		return err
+		return err, 0
 	}
 
 	// reset health metric since we didn't get any errors
 	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
-	return nil
+	return nil, n
 }
 
 func (c multiKustoClient) Endpoint(db string) string {
