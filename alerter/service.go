@@ -8,13 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/adx-mon/metrics"
-
 	"github.com/Azure/adx-mon/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
+	"github.com/Azure/adx-mon/alerter/multikustoclient"
 	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -92,7 +90,6 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	l2m := &Alerter{
 		opts:      opts,
 		log:       log,
-		clients:   make(map[string]KustoClient),
 		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
@@ -102,17 +99,9 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		logger.Info("Using MSI ID=%s", opts.MSIID)
 	}
 
-	for name, endpoint := range opts.KustoEndpoints {
-		kcsb := kusto.NewConnectionStringBuilder(endpoint)
-		if opts.MSIID == "" {
-			kcsb.WithAzCli()
-		} else {
-			kcsb.WithUserManagedIdentity(opts.MSIID)
-		}
-		l2m.clients[name], err = kusto.New(kcsb)
-		if err != nil {
-			return nil, fmt.Errorf("kusto client=%s: %w", endpoint, err)
-		}
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, opts.MSIID, opts.MaxNotifications)
+	if err != nil {
+		return nil, err
 	}
 
 	if opts.CtrlCli == nil {
@@ -145,7 +134,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			AlertCli:    alertCli,
 			AlertAddr:   opts.AlertAddr,
 			Region:      opts.Region,
-			KustoClient: l2m,
+			KustoClient: kclient,
 			RuleStore:   ruleStore,
 		})
 
@@ -165,24 +154,15 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	}
 	log.Info("Linting rules from path=%s", path)
 
-	var client KustoClient
-	for _, endpoint := range opts.KustoEndpoints {
-		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
-		client, err = kusto.New(kcsb)
-		if err != nil {
-			return fmt.Errorf("kusto client=%s: %w", endpoint, err)
-		}
-		break
-	}
-	if client == nil {
-		return fmt.Errorf("no kusto endpoints provided")
-	}
 	lint := NewLinter()
 	http.Handle("/alerts", lint.Handler())
 	fakeaddr := fmt.Sprintf("http://localhost:%d", opts.Port)
 	alertCli, err := alert.NewClient(time.Minute)
 
-	kclient := extendedKustoClient{client: client, MaxNotifications: opts.MaxNotifications}
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, opts.MSIID, opts.MaxNotifications)
+	if err != nil {
+		return err
+	}
 	executor := engine.NewExecutor(engine.ExecutorOpts{
 		AlertCli:    alertCli,
 		AlertAddr:   fakeaddr,
@@ -201,9 +181,11 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	}()
 
 	executor.RunOnce(ctx)
+	if lint.HasFailedQueries() {
+		return fmt.Errorf("failed to lint rules")
+	}
 	lint.Log(log)
 	return nil
-
 }
 
 func (l *Alerter) Open(ctx context.Context) error {
