@@ -47,7 +47,7 @@ type ExecutorOpts struct {
 	Region      string
 }
 
-// TODO make AlertAddr   string part of alertcli
+// TODO make AlertAddr string part of alertcli
 func NewExecutor(opts ExecutorOpts) *Executor {
 	return &Executor{
 		alertCli:    opts.AlertCli,
