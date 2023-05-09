@@ -213,68 +213,6 @@ func (l *Alerter) Open(ctx context.Context) error {
 	return nil
 }
 
-func (l *Alerter) Endpoint(db string) string {
-	if l.clients[db] != nil {
-		return l.clients[db].Endpoint()
-	} else {
-		return "unknown"
-	}
-}
-
-// make multikustoclient to share between linter and service
-type extendedKustoClient struct {
-	client           KustoClient
-	MaxNotifications int
-}
-
-// extendedKustoClient.Query returns an error and number of rows returned
-func (c extendedKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
-	var iter *kusto.RowIterator
-	var err error
-	if qc.Rule.IsMgmtQuery {
-		iter, err = c.client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
-		if err != nil {
-			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err), 0
-		}
-	} else {
-		iter, err = c.client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
-		if err != nil {
-			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt), 0
-		}
-	}
-
-	var rows int
-	defer iter.Stop()
-	if err := iter.Do(func(row *table.Row) error {
-		rows++
-		if rows > c.MaxNotifications {
-			metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
-			return fmt.Errorf("%s/%s returned more than %d icm, throttling query", qc.Rule.Namespace, qc.Rule.Name, c.MaxNotifications)
-		}
-
-		return fn(ctx, c.client.Endpoint(), qc, row)
-	}); err != nil {
-		return err, c.MaxNotifications
-	}
-
-	// reset health metric since we didn't get any errors
-	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
-	return nil, rows
-}
-
-func (c extendedKustoClient) Endpoint(db string) string {
-	cl := c.client
-	return cl.Endpoint()
-}
-
-func (l *Alerter) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
-	client := l.clients[qc.Rule.Database]
-	if client == nil {
-		return fmt.Errorf("no client found for database=%s", qc.Rule.Database), 0
-	}
-	return extendedKustoClient{client: client, MaxNotifications: l.opts.MaxNotifications}.Query(ctx, qc, fn)
-}
-
 func newLogger() (logger.Logger, error) {
 	return logger.NewLogger(), nil
 }
