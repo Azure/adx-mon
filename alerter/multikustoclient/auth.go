@@ -12,15 +12,17 @@ type authConfiguror func(*kusto.ConnectionStringBuilder) *kusto.ConnectionString
 
 type authMethod func() (authConfiguror, error)
 
-func AzCliAuth() authMethod {
+// DefaultAuth uses standard AZURE_ environment variables and falls back to az cli if they are not set
+func DefaultAuth() authMethod {
 	return func() (authConfiguror, error) {
-		logger.Info("Using AzCli authentication")
+		logger.Info("Using default authentication")
 		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
-			return kcsb.WithAzCli()
+			return kcsb.WithDefaultAzureCredential()
 		}, nil
 	}
 }
 
+// MsiAuth uses the provided Managed Service Identity to authenticate to kusto
 func MsiAuth(msi string) authMethod {
 	return func() (authConfiguror, error) {
 		if msi == "" {
@@ -33,6 +35,7 @@ func MsiAuth(msi string) authMethod {
 	}
 }
 
+// TokenAuth uses the provided application id and token to authenticate to kusto
 func TokenAuth(kustoAppId string, kustoToken string) authMethod {
 	return func() (authConfiguror, error) {
 		if kustoAppId == "" {
@@ -48,6 +51,7 @@ func TokenAuth(kustoAppId string, kustoToken string) authMethod {
 	}
 }
 
+// GetAuth returns the first valid authConfiguror from the provided list of authMethods
 func GetAuth(methods ...authMethod) (authConfiguror, error) {
 	for _, method := range methods {
 		auth, err := method()

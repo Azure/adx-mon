@@ -104,7 +104,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		logger.Info("Using MSI ID=%s", opts.MSIID)
 	}
 
-	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.AzCliAuth())
+	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auth: %w", err)
 	}
@@ -171,7 +171,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		return err
 	}
 
-	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.AzCliAuth())
+	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
 	if err != nil {
 		return fmt.Errorf("failed to get auth: %w", err)
 	}
