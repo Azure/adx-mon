@@ -19,6 +19,12 @@ build-collector:
 build: build-alerter build-ingestor build-collector
 .PHONY: build
 
+image:
+	docker build -t alerter -f image/Dockerfile.alerter .
+	docker build -t ingestor -f image/Dockerfile.ingestor .
+	docker build -t collector -f image/Dockerfile.collector .
+.PHONY: image
+
 clean:
 	rm bin/*
 .PHONY: clean
