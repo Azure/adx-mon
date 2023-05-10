@@ -23,6 +23,8 @@ var (
 	kendpointsArg = &cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>"}
 	maxNotifArg   = &cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"}
 	regionArg     = &cli.StringFlag{Name: "region", Usage: "Current region"}
+	msiIdArg      = &cli.StringFlag{Name: "auth-msi-id", Usage: "MSI client ID for authentication to Kusto"}
+	tokenArg      = &cli.StringFlag{Name: "auth-token", Usage: "Application token for authentication to Kusto"}
 )
 
 func main() {
@@ -33,9 +35,8 @@ func main() {
 			kendpointsArg,
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.IntFlag{Name: "port", Value: 4023, Usage: "Metrics port number"},
-			// Either the msi-id or msi-resource must be specified
-			&cli.StringFlag{Name: "msi-id", Usage: "MSI client ID"},
-			&cli.StringFlag{Name: "msi-resource", Usage: "MSI resource ID"},
+			msiIdArg,
+			tokenArg,
 			&cli.StringFlag{Name: "cloud", Usage: "Azure cloud"},
 			regionArg,
 			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
@@ -51,6 +52,8 @@ func main() {
 				Flags: []cli.Flag{
 					kendpointsArg,
 					&cli.StringFlag{Name: "lint-dir", Usage: "Read alert rules from local filesystem", Required: true},
+					msiIdArg,
+					tokenArg,
 					maxNotifArg,
 					regionArg,
 				},
@@ -88,6 +91,7 @@ func lintMain(ctx *cli.Context) error {
 		Port:             4023, //needs to be adjustable?Failed to create Notification
 		Region:           ctx.String("region"),
 		MaxNotifications: ctx.Int("max-notifications"),
+		KustoToken:       ctx.String("auth-token"),
 	}
 
 	lintCtx, cancel := context.WithCancel(context.Background())
@@ -128,7 +132,8 @@ func realMain(ctx *cli.Context) error {
 		AlertAddr:        ctx.String("alerter-address"),
 		Concurrency:      ctx.Int("concurrency"),
 		MaxNotifications: ctx.Int("max-notifications"),
-		MSIID:            ctx.String("msi-id"),
+		MSIID:            ctx.String("auth-msi-id"),
+		KustoToken:       ctx.String("auth-token"),
 		CtrlCli:          ctrlCli,
 	}
 

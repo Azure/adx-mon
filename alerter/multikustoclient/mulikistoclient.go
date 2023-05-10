@@ -15,15 +15,11 @@ type multiKustoClient struct {
 	maxNotifications int
 }
 
-func New(endpoints map[string]string, missid string, max int) (multiKustoClient, error) {
+func New(endpoints map[string]string, configureAuth authConfiguror, max int) (multiKustoClient, error) {
 	clients := make(map[string]*kusto.Client)
 	for name, endpoint := range endpoints {
 		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
-		if missid == "" {
-			kcsb.WithAzCli()
-		} else {
-			kcsb.WithUserManagedIdentity(missid)
-		}
+		kcsb = configureAuth(kcsb)
 		client, err := kusto.New(kcsb)
 		if err != nil {
 			return multiKustoClient{}, fmt.Errorf("kusto client=%s: %w", endpoint, err)
