@@ -33,9 +33,14 @@ type AlerterOpts struct {
 	// MaxNotifications is the maximum number of notifications to send per rule.
 	MaxNotifications int
 
+	// Managed Identity options
 	MSIID       string
 	MSIResource string
-	CtrlCli     client.Client
+
+	// Application Token options
+	KustoToken string
+
+	CtrlCli client.Client
 }
 
 // share with executor or fine for both to define privately?
@@ -99,7 +104,11 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		logger.Info("Using MSI ID=%s", opts.MSIID)
 	}
 
-	kclient, err := multikustoclient.New(opts.KustoEndpoints, opts.MSIID, opts.MaxNotifications)
+	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.AzCliAuth())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get auth: %w", err)
+	}
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +167,16 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	http.Handle("/alerts", lint.Handler())
 	fakeaddr := fmt.Sprintf("http://localhost:%d", opts.Port)
 	alertCli, err := alert.NewClient(time.Minute)
+	if err != nil {
+		return err
+	}
 
-	kclient, err := multikustoclient.New(opts.KustoEndpoints, opts.MSIID, opts.MaxNotifications)
+	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.AzCliAuth())
+	if err != nil {
+		return fmt.Errorf("failed to get auth: %w", err)
+	}
+
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
 	if err != nil {
 		return err
 	}
