@@ -20,6 +20,9 @@ func FromPath(path, region string) (*fileStore, error) {
 	s := &fileStore{}
 	//walk files in directory
 	err := filepath.WalkDir(path, func(path string, info os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		if info.IsDir() {
 			return nil
 		}
@@ -27,6 +30,7 @@ func FromPath(path, region string) (*fileStore, error) {
 		if err != nil {
 			return fmt.Errorf("failed to open file '%s': %w", path, err)
 		}
+		defer f.Close()
 		err = s.fromStream(f, region)
 		if err != nil {
 			return fmt.Errorf("failed to read file '%s': %w", path, err)
