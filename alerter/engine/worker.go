@@ -119,6 +119,10 @@ func isUserError(err error) bool {
 		return false
 	}
 
+	var unknownDB *UnknownDBError
+	if errors.As(err, &unknownDB) {
+		return true
+	}
 	var kerr *kerrors.HttpError
 	if errors.As(err, &kerr) {
 		if kerr.Kind == kerrors.KClientArgs {
