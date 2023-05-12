@@ -1,7 +1,7 @@
 package rules
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -42,24 +42,26 @@ func FromPath(path, region string) (*fileStore, error) {
 }
 
 func (s *fileStore) fromStream(file io.Reader, region string) error {
-	d := yaml.NewYAMLOrJSONDecoder(file, 4096)
-	for {
+	contents, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("fromStream failed to read file: %w", err)
+	}
+
+	chunks := bytes.Split(contents, []byte("---"))
+	for _, chunk := range chunks {
 		// create new spec here
 		rule := alertrulev1.AlertRule{}
 
 		// pass a reference to spec reference
-		err := d.Decode(&rule)
-		// break the loop in case of EOF
-		if errors.Is(err, io.EOF) {
-			break
-		}
+		err = yaml.UnmarshalStrict(chunk, &rule)
 		if err != nil {
-			return err
+			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)
 		}
+
 		logger.Info("found rule '%s'", rule.ObjectMeta.Name)
 		r, err := toRule(rule, region)
 		if err != nil {
-			return err
+			return fmt.Errorf("fromStream failed to convert rule: %w", err)
 		}
 		s.rules = append(s.rules, r)
 	}
