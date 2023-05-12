@@ -35,7 +35,7 @@ func New(endpoints map[string]string, configureAuth authConfiguror, max int) (mu
 func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
 	client := c.clients[qc.Rule.Database]
 	if client == nil {
-		return fmt.Errorf("no client found for database=%s", qc.Rule.Database), 0
+		return &engine.UnknownDBError{DB: qc.Rule.Database}, 0
 	}
 
 	var iter *kusto.RowIterator
