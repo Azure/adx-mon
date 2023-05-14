@@ -6,13 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/Azure/adx-mon/logger"
-	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pool"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/Azure/adx-mon/ring"
-	"github.com/Azure/adx-mon/transform"
-	"github.com/davidnarayan/go-flake"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,6 +13,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pool"
+	"github.com/Azure/adx-mon/prompb"
+	"github.com/Azure/adx-mon/ring"
+	"github.com/Azure/adx-mon/transform"
+	"github.com/davidnarayan/go-flake"
 )
 
 var (
@@ -91,7 +92,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 
 	fields := strings.Split(prefix, "_")
 
-	bf := bufio.NewWriterSize(fw, 8*1024*1024)
+	bf := bufio.NewWriterSize(fw, 1024*1024)
 	f := &segment{
 		hostname:  hostname,
 		createdAt: time.Now().UTC(),
@@ -248,6 +249,9 @@ func (s *segment) Close() error {
 	// Wait for flusher goroutine to flush any in-flight writes
 	s.wg.Wait()
 
+	s.bw = nil
+	s.ringBuf = nil
+
 	if err := s.w.Sync(); errors.Is(err, os.ErrClosed) {
 		return nil
 	} else if err != nil {
@@ -359,6 +363,7 @@ func (s *segment) flusher() {
 			for len(s.ringBuf.Queue()) > 0 {
 				req := <-s.ringBuf.Queue()
 				_, err := s.bw.Write(req.Value)
+				req.Value = nil
 				select {
 				case req.ErrCh <- err:
 				default:
