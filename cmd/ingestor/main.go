@@ -4,6 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/http/pprof"
+	"os"
+	"os/signal"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+
 	"github.com/Azure/adx-mon/adx"
 	promingest "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/logger"
@@ -13,20 +24,10 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
-	"io"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"log"
-	"net/http"
-	_ "net/http/pprof"
-	"os"
-	"os/signal"
-	"runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
-	"syscall"
-	"time"
 )
 
 type strSliceFag []string
@@ -207,6 +208,8 @@ func realMain(ctx *cli.Context) error {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/receive", svc.HandleReceive)
+
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
 
 	srv := &http.Server{Addr: ":9090", Handler: mux}
 	srv.ErrorLog = newLooger()
