@@ -23,6 +23,14 @@ import (
 	"github.com/davidnarayan/go-flake"
 )
 
+const (
+	// DefaultIOBufSize is the default buffer size for bufio.Writer.
+	DefaultIOBufSize = 8 * 1024
+
+	// DefaultRingSize is the default size of the ring buffer.
+	DefaultRingSize = 1024
+)
+
 var (
 	idgen *flake.Flake
 
@@ -92,7 +100,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 
 	fields := strings.Split(prefix, "_")
 
-	bf := bufio.NewWriterSize(fw, 1024*1024)
+	bf := bufio.NewWriterSize(fw, DefaultIOBufSize)
 	f := &segment{
 		hostname:  hostname,
 		createdAt: time.Now().UTC(),
@@ -102,7 +110,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		w:         fw,
 		bw:        bf,
 		closing:   make(chan struct{}),
-		ringBuf:   ring.NewBuffer(10000),
+		ringBuf:   ring.NewBuffer(DefaultRingSize),
 	}
 
 	go f.flusher()
@@ -143,7 +151,7 @@ func OpenSegment(path string) (Segment, error) {
 		return nil, err
 	}
 
-	bf := bufio.NewWriterSize(fd, 1024*1024)
+	bf := bufio.NewWriterSize(fd, DefaultIOBufSize)
 
 	f := &segment{
 		hostname:  hostname,
@@ -155,7 +163,7 @@ func OpenSegment(path string) (Segment, error) {
 		bw:        bf,
 		size:      sz,
 		closing:   make(chan struct{}),
-		ringBuf:   ring.NewBuffer(10000),
+		ringBuf:   ring.NewBuffer(DefaultRingSize),
 	}
 
 	if err := f.repair(); err != nil {
@@ -200,7 +208,7 @@ func (s *segment) Table() string {
 }
 
 func (s *segment) Write(ctx context.Context, ts []prompb.TimeSeries) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	enc := csvWriterPool.Get(DefaultIOBufSize).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.Reset()
 

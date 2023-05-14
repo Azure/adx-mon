@@ -5,16 +5,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/Azure/adx-mon/logger"
-	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/Azure/adx-mon/transform"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/prompb"
+	"github.com/Azure/adx-mon/transform"
 )
 
 type Store interface {
@@ -187,7 +188,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	bw := bufio.NewWriterSize(f, 1024*1024)
+	bw := bufio.NewWriterSize(f, 16*1024)
 
 	n, err := io.Copy(bw, body)
 	if err != nil {
@@ -218,7 +219,7 @@ var idx uint64
 func seriesKey(labels []prompb.Label) string {
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
-			//return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
+			// return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
 			return string(transform.Normalize(v.Value))
 		}
 	}
