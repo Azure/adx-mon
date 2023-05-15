@@ -3,6 +3,10 @@ package ingestor
 import (
 	"bytes"
 	"context"
+	"io"
+	"net/http"
+	"time"
+
 	"github.com/Azure/adx-mon/adx"
 	"github.com/Azure/adx-mon/cluster"
 	"github.com/Azure/adx-mon/logger"
@@ -11,10 +15,7 @@ import (
 	"github.com/Azure/adx-mon/prompb"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/golang/snappy"
-	"io"
 	"k8s.io/client-go/kubernetes"
-	"net/http"
-	"time"
 )
 
 var (
@@ -35,7 +36,6 @@ type Service struct {
 	walOpts storage.WALOpts
 	opts    ServiceOpts
 
-	compressor  storage.Compressor
 	ingestor    adx.Uploader
 	replicator  cluster.Replicator
 	coordinator cluster.Coordinator
@@ -73,13 +73,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentMaxAge:  opts.MaxSegmentAge,
 	}
 
-	c := storage.NewCompressor()
-
 	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
-		Compressor:     c,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
@@ -118,7 +115,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		replicator:  repl,
 		store:       store,
 		coordinator: coord,
-		compressor:  c,
 		archiver:    archiver,
 		metrics:     metricsSvc,
 	}, nil
@@ -128,10 +124,6 @@ func (s *Service) Open(ctx context.Context) error {
 	var svcCtx context.Context
 	svcCtx, s.closeFn = context.WithCancel(ctx)
 	if err := s.ingestor.Open(svcCtx); err != nil {
-		return err
-	}
-
-	if err := s.compressor.Open(svcCtx); err != nil {
 		return err
 	}
 
@@ -181,10 +173,6 @@ func (s *Service) Close() error {
 		return err
 	}
 
-	if err := s.compressor.Close(); err != nil {
-		return err
-	}
-
 	return s.store.Close()
 }
 
@@ -200,7 +188,7 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	defer bytesBufPool.Put(bodyBuf)
 	bodyBuf.Reset()
 
-	//bodyBuf := bytes.NewBuffer(make([]byte, 0, 1024*102))
+	// bodyBuf := bytes.NewBuffer(make([]byte, 0, 1024*102))
 	_, err := io.Copy(bodyBuf, r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -212,7 +200,7 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	defer bytesPool.Put(buf)
 	buf = buf[:0]
 
-	//buf := make([]byte, 0, 1024*1024)
+	// buf := make([]byte, 0, 1024*1024)
 	reqBuf, err := snappy.Decode(buf, compressed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -223,7 +211,7 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	defer writeReqPool.Put(req)
 	req.Reset()
 
-	//req := &prompb.WriteRequest{}
+	// req := &prompb.WriteRequest{}
 	if err := req.Unmarshal(reqBuf); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

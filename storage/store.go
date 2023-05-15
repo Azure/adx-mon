@@ -32,8 +32,7 @@ type Store interface {
 
 // LocalStore provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
 type LocalStore struct {
-	opts       StoreOpts
-	compressor Compressor
+	opts StoreOpts
 
 	mu   sync.RWMutex
 	wals map[string]*WAL
@@ -43,14 +42,12 @@ type StoreOpts struct {
 	StorageDir     string
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
-	Compressor     Compressor
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
-		opts:       opts,
-		compressor: opts.Compressor,
-		wals:       make(map[string]*WAL),
+		opts: opts,
+		wals: make(map[string]*WAL),
 	}
 }
 
