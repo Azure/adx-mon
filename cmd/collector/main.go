@@ -3,21 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/Azure/adx-mon/collector"
-	"github.com/Azure/adx-mon/logger"
-	"github.com/urfave/cli/v2"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
 	"runtime"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Azure/adx-mon/collector"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/urfave/cli/v2"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func main() {

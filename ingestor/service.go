@@ -7,42 +7,42 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Azure/adx-mon/adx"
-	"github.com/Azure/adx-mon/cluster"
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/ingestor/adx"
+	cluster2 "github.com/Azure/adx-mon/ingestor/cluster"
+	storage2 "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pool"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/adx-mon/pkg/logger"
+	pool2 "github.com/Azure/adx-mon/pkg/pool"
+	prompb2 "github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/golang/snappy"
 	"k8s.io/client-go/kubernetes"
 )
 
 var (
-	bytesBufPool = pool.NewGeneric(50, func(sz int) interface{} {
+	bytesBufPool = pool2.NewGeneric(50, func(sz int) interface{} {
 		return bytes.NewBuffer(make([]byte, 0, sz))
 	})
 
-	bytesPool = pool.NewBytes(50)
+	bytesPool = pool2.NewBytes(50)
 
-	writeReqPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return prompb.WriteRequest{
-			Timeseries: make([]prompb.TimeSeries, 0, sz),
+	writeReqPool = pool2.NewGeneric(50, func(sz int) interface{} {
+		return prompb2.WriteRequest{
+			Timeseries: make([]prompb2.TimeSeries, 0, sz),
 		}
 	})
 )
 
 type Service struct {
-	walOpts storage.WALOpts
+	walOpts storage2.WALOpts
 	opts    ServiceOpts
 
 	ingestor    adx.Uploader
-	replicator  cluster.Replicator
-	coordinator cluster.Coordinator
-	archiver    cluster.Archiver
+	replicator  cluster2.Replicator
+	coordinator cluster2.Coordinator
+	archiver    cluster2.Archiver
 	closeFn     context.CancelFunc
 
-	store   storage.Store
+	store   storage2.Store
 	metrics metrics.Service
 }
 
@@ -67,19 +67,19 @@ type ServiceOpts struct {
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
-	walOpts := storage.WALOpts{
+	walOpts := storage2.WALOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
 	}
 
-	store := storage.NewLocalStore(storage.StoreOpts{
+	store := storage2.NewLocalStore(storage2.StoreOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
 	})
 
-	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
+	coord, err := cluster2.NewCoordinator(&cluster2.CoordinatorOpts{
 		WriteTimeSeriesFn: store.WriteTimeSeries,
 		K8sCli:            opts.K8sCli,
 		Hostname:          opts.Hostname,
@@ -89,7 +89,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
-	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+	repl, err := cluster2.NewReplicator(cluster2.ReplicatorOpts{
 		Hostname:           opts.Hostname,
 		Partitioner:        coord,
 		InsecureSkipVerify: opts.InsecureSkipVerify,
@@ -98,7 +98,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
-	archiver := cluster.NewArchiver(cluster.ArchiverOpts{
+	archiver := cluster2.NewArchiver(cluster2.ArchiverOpts{
 		StorageDir:    opts.StorageDir,
 		Partitioner:   coord,
 		Segmenter:     store,
@@ -207,7 +207,7 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := writeReqPool.Get(2500).(prompb.WriteRequest)
+	req := writeReqPool.Get(2500).(prompb2.WriteRequest)
 	defer writeReqPool.Put(req)
 	req.Reset()
 

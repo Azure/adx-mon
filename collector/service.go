@@ -3,9 +3,16 @@ package collector
 import (
 	"context"
 	"fmt"
-	"github.com/Azure/adx-mon/logger"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/Azure/adx-mon/promremote"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/client_model/go"
 	v1 "k8s.io/api/core/v1"
@@ -14,12 +21,6 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	v12 "k8s.io/client-go/listers/core/v1"
-	"net/http"
-	_ "net/http/pprof"
-	"os"
-	"strings"
-	"sync"
-	"time"
 )
 
 type Service struct {

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
@@ -18,7 +18,7 @@ type fileStore struct {
 
 func FromPath(path, region string) (*fileStore, error) {
 	s := &fileStore{}
-	//walk files in directory
+	// walk files in directory
 	err := filepath.WalkDir(path, func(path string, info os.DirEntry, err error) error {
 		if err != nil {
 			return err

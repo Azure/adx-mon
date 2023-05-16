@@ -3,7 +3,7 @@ package multikustoclient
 import (
 	"fmt"
 
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 )
 

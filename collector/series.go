@@ -1,9 +1,10 @@
 package collector
 
 import (
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/prometheus/client_model/go"
 	"sort"
+
+	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/prometheus/client_model/go"
 )
 
 type seriesCreator struct {

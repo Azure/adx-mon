@@ -3,16 +3,16 @@ package engine
 import (
 	"context"
 	"testing"
+	"time"
 
-	"github.com/Azure/adx-mon/alert"
+	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
-	"time"
 )
 
 func TestExecutor_Handler_MissingTitle(t *testing.T) {
@@ -154,7 +154,7 @@ func TestExecutor_RunOnce(t *testing.T) {
 	require.NotPanics(t, func() {
 		e.RunOnce(ctx)
 	})
-	//his is only checkign we don't panic for now. Need to add rules to see we actually get alerts.
+	// his is only checkign we don't panic for now. Need to add rules to see we actually get alerts.
 
 }
 

@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/adx-mon/alert"
+	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
 )
@@ -164,7 +164,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	}
 	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 
-	//log.Infof("Created Notification %s - %s", resp.IncidentId, res.Title)
+	// log.Infof("Created Notification %s - %s", resp.IncidentId, res.Title)
 
 	return nil
 }

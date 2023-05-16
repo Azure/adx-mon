@@ -2,9 +2,10 @@ package data
 
 import (
 	"fmt"
-	"github.com/Azure/adx-mon/prompb"
 	"math/rand"
 	"time"
+
+	"github.com/Azure/adx-mon/pkg/prompb"
 )
 
 type SetOptions struct {
