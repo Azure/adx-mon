@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/adx-mon/logger"
-
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/logger"
+
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 

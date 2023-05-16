@@ -3,10 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/Azure/adx-mon/tools/data"
 	"os"
 	"time"
+
+	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/tools/data"
 )
 
 func main() {

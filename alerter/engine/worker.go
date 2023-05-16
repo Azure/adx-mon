@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/adx-mon/alert"
+	"github.com/Azure/adx-mon/alerter/alert"
+	"github.com/Azure/adx-mon/pkg/logger"
 
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/adx-mon/logger"
 	"github.com/Azure/adx-mon/metrics"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"

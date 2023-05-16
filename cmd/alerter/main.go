@@ -10,7 +10,7 @@ import (
 
 	"github.com/Azure/adx-mon/alerter"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/urfave/cli/v2" // imports as package "cli"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -88,7 +88,7 @@ func lintMain(ctx *cli.Context) error {
 
 	opts := &alerter.AlerterOpts{
 		KustoEndpoints:   endpoints,
-		Port:             4023, //needs to be adjustable?Failed to create Notification
+		Port:             4023, // needs to be adjustable?Failed to create Notification
 		Region:           ctx.String("region"),
 		MaxNotifications: ctx.Int("max-notifications"),
 		KustoToken:       ctx.String("auth-token"),
@@ -96,7 +96,7 @@ func lintMain(ctx *cli.Context) error {
 
 	lintCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	//TODO fail early if azlogin is not up to date
+	// TODO fail early if azlogin is not up to date
 	return alerter.Lint(lintCtx, opts, ctx.String("lint-dir"))
 }
 

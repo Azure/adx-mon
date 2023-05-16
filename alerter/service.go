@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/adx-mon/alert"
+	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/multikustoclient"
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"

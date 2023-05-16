@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Azure/adx-mon/alert"
-	"github.com/Azure/adx-mon/logger"
+	"github.com/Azure/adx-mon/alerter/alert"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 

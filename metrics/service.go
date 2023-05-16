@@ -2,14 +2,15 @@ package metrics
 
 import (
 	"context"
-	"github.com/Azure/adx-mon/logger"
-	srv "github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/prometheus/client_golang/prometheus"
-	io_prometheus_client "github.com/prometheus/client_model/go"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
+	srv "github.com/Azure/adx-mon/pkg/service"
+	"github.com/prometheus/client_golang/prometheus"
+	io_prometheus_client "github.com/prometheus/client_model/go"
 )
 
 type TimeSeriesWriter interface {

@@ -4,8 +4,9 @@ import (
 	"bufio"
 	encoding_binary "encoding/binary"
 	"fmt"
-	"github.com/Azure/adx-mon/prompb"
 	"os"
+
+	"github.com/Azure/adx-mon/pkg/prompb"
 )
 
 type FileWriter struct {

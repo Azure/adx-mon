@@ -4,14 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/Azure/adx-mon/logger"
-	"github.com/Azure/adx-mon/prompb"
-	"github.com/Azure/adx-mon/promremote"
-	"github.com/Azure/adx-mon/tools/data"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/promremote"
+	"github.com/Azure/adx-mon/tools/data"
 )
 
 type generator interface {
@@ -142,7 +143,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 		case <-ctx.Done():
 			return
 		case batch := <-ch:
-			//ts := time.Now()
+			// ts := time.Now()
 			for {
 				err := cli.Write(context.Background(), endpoint, batch)
 				if err == nil {
@@ -151,7 +152,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 				logger.Warn("write failed: %s.  Retrying...", err)
 				time.Sleep(1 * time.Second)
 			}
-			//println(time.Since(ts).String(), len(batch.Timeseries))
+			// println(time.Since(ts).String(), len(batch.Timeseries))
 			for _, ts := range batch.Timeseries {
 				stats.IncTotalSent(len(ts.Samples))
 			}
