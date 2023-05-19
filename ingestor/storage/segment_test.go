@@ -17,7 +17,7 @@ import (
 
 func TestNewSegment(t *testing.T) {
 	dir := t.TempDir()
-	s, err := storage.NewSegment(dir, "Foo")
+	s, err := storage.NewSegment(dir, "Foo", nil)
 	require.NoError(t, err)
 	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 
@@ -48,7 +48,7 @@ func TestSegment_CreatedAt(t *testing.T) {
 
 func TestSegment_Corrupted(t *testing.T) {
 	dir := t.TempDir()
-	s, err := storage.NewSegment(dir, "Foo")
+	s, err := storage.NewSegment(dir, "Foo", nil)
 	require.NoError(t, err)
 	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 	require.NoError(t, s.Close())
@@ -68,7 +68,7 @@ func TestSegment_Corrupted(t *testing.T) {
 
 func TestSegment_Corrupted_BigFile(t *testing.T) {
 	dir := t.TempDir()
-	s, err := storage.NewSegment(dir, "Foo")
+	s, err := storage.NewSegment(dir, "Foo", nil)
 	require.NoError(t, err)
 	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("Foo", map[string]string{"host": "bar"}, 0, 0)}))
 	require.NoError(t, s.Close())

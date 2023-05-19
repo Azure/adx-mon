@@ -43,6 +43,8 @@ type StoreOpts struct {
 	StorageDir     string
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
+
+	LiftedColumns []string
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
@@ -104,6 +106,7 @@ func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 		Prefix:         prefix,
 		SegmentMaxSize: s.opts.SegmentMaxSize,
 		SegmentMaxAge:  s.opts.SegmentMaxAge,
+		Columns:        s.opts.LiftedColumns,
 	}
 
 	wal, err := NewWAL(walOpts)

@@ -52,9 +52,13 @@ type ServiceOpts struct {
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
 
-	// Dimensions is a slice of column=value elements where each element will be added all rows.
-	Dimensions []string
-	K8sCli     *kubernetes.Clientset
+	// StaticColumns is a slice of column=value elements where each element will be added all rows.
+	StaticColumns []string
+
+	// LiftedColumns is a slice of label names where each element will be added as a column if the label exists.
+	LiftedColumns []string
+
+	K8sCli *kubernetes.Clientset
 
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
@@ -67,16 +71,11 @@ type ServiceOpts struct {
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
-	walOpts := storage2.WALOpts{
-		StorageDir:     opts.StorageDir,
-		SegmentMaxSize: opts.MaxSegmentSize,
-		SegmentMaxAge:  opts.MaxSegmentAge,
-	}
-
 	store := storage2.NewLocalStore(storage2.StoreOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
+		LiftedColumns:  opts.LiftedColumns,
 	})
 
 	coord, err := cluster2.NewCoordinator(&cluster2.CoordinatorOpts{
@@ -110,7 +109,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	return &Service{
 		opts:        opts,
-		walOpts:     walOpts,
 		ingestor:    opts.Uploader,
 		replicator:  repl,
 		store:       store,

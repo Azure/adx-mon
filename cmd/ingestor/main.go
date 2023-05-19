@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -58,6 +59,7 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
+			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -171,16 +173,24 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatal("--storage-dir is required")
 	}
 
+	defaultMapping := storage.NewSchema()
 	for _, v := range staticColumns {
 		fields := strings.Split(v, "=")
 		if len(fields) != 2 {
 			logger.Fatal("invalid dimension: %s", v)
 		}
 
-		storage.AddDefaultMapping(fields[0], fields[1])
+		defaultMapping = defaultMapping.AddConstMapping(fields[0], fields[1])
 	}
 
-	uploader, err := newUploader(kustoEndpoint, database, storageDir, concurrentUploads)
+	liftedLabels := ctx.StringSlice("lift-label")
+	sort.Strings(liftedLabels)
+
+	for _, v := range liftedLabels {
+		defaultMapping = defaultMapping.AddStringMapping(v)
+	}
+
+	uploader, err := newUploader(kustoEndpoint, database, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
@@ -195,6 +205,7 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentSize:     maxSegmentSize,
 		MaxSegmentAge:      maxSegmentAge,
 		InsecureSkipVerify: insecureSkipVerify,
+		LiftedColumns:      liftedLabels,
 	})
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
@@ -273,7 +284,7 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	return kusto.New(kcsb)
 }
 
-func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads int) (adx.Uploader, error) {
+func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
 	if kustoEndpoint == "" && database == "" {
 		logger.Warn("No kusto endpoint provided, using fake uploader")
 		return adx.NewFakeUploader(), nil
@@ -302,6 +313,7 @@ func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads i
 		StorageDir:        storageDir,
 		Database:          database,
 		ConcurrentUploads: concurrentUploads,
+		DefaultMapping:    defaultMapping,
 	})
 	return uploader, err
 }

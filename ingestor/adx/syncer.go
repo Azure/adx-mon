@@ -12,6 +12,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/ingestor/transform"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
@@ -43,11 +44,11 @@ type IngestionMapping struct {
 	Table         string    `kusto:"Table"`
 }
 
-func NewSyncer(kustoCli ingest.QueryClient, database string) *Syncer {
+func NewSyncer(kustoCli ingest.QueryClient, database string, defaultMapping storage.SchemaMapping) *Syncer {
 	return &Syncer{
 		KustoCli:       kustoCli,
 		database:       database,
-		defaultMapping: storage.DefaultMapping,
+		defaultMapping: defaultMapping,
 		mappings:       make(map[string]storage.SchemaMapping),
 		tables:         make(map[string]struct{}),
 	}
@@ -80,6 +81,8 @@ func (s *Syncer) Open(ctx context.Context) error {
 			return err
 		}
 
+		logger.Info("Loaded ingestion mapping %s", v.Mapping)
+
 		s.mappings[v.Name] = sm
 	}
 
@@ -93,7 +96,7 @@ func (s *Syncer) EnsureTable(table string) error {
 		return nil
 	}
 
-	mapping := storage.DefaultMapping
+	mapping := s.defaultMapping
 
 	var columns []columnDef
 
@@ -116,6 +119,8 @@ func (s *Syncer) EnsureTable(table string) error {
 		}
 	}
 	sb.WriteString(")")
+
+	logger.Info("Creating ingestion mapping %s %s", table, sb.String())
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
@@ -179,6 +184,8 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 
 	sb.WriteString("'")
 
+	logger.Info("Creating table %s %s", table, sb.String())
+
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
 	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
@@ -191,11 +198,13 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 	for {
 		_, err1, err2 := rows.NextRowOrError()
 		if err2 == io.EOF {
-			return name, nil
+			break
 		} else if err1 != nil {
 			return "", err1
 		} else if err2 != nil {
 			return "", err2
 		}
 	}
+	s.mappings[name] = mapping
+	return name, nil
 }
