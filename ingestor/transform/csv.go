@@ -3,7 +3,9 @@ package transform
 import (
 	"bytes"
 	"encoding/csv"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unicode"
 
@@ -20,15 +22,21 @@ var (
 )
 
 type CSVWriter struct {
-	buf *bytes.Buffer
-	enc *csv.Writer
+	buf     *bytes.Buffer
+	enc     *csv.Writer
+	columns []string
 }
 
-func NewCSVWriter(w *bytes.Buffer) *CSVWriter {
-	return &CSVWriter{
-		buf: w,
-		enc: csv.NewWriter(w),
+// NewCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
+// label keys that will be promoted to columns.
+func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
+	writer := &CSVWriter{
+		buf:     w,
+		enc:     csv.NewWriter(w),
+		columns: columns,
 	}
+	writer.SetColumns(columns)
+	return writer
 }
 
 func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
@@ -39,7 +47,7 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	// Marshal the labels as JSON and avoid allocations since this code is in the hot path.
 	buf.WriteByte('{')
 	for i, v := range ts.Labels {
-		// Drop the __name__ label since it is implied that the contents of the CSV file is the name of the metric.
+		// Drop the __name__ label since it is implied that the name of the CSV file is the name of the metric.
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			continue
 		}
@@ -66,6 +74,23 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 		// seriesID
 		fields = append(fields, strconv.FormatInt(int64(seriesId), 10))
 
+		if len(w.columns) > 0 {
+			var i, j int
+			for i < len(ts.Labels) && j < len(w.columns) {
+				cmp := bytes.Compare(bytes.ToLower(ts.Labels[i].Name), []byte(strings.ToLower(w.columns[j])))
+				if cmp == 0 {
+					fields = append(fields, string(ts.Labels[i].Value))
+					j++
+					i++
+				} else if cmp > 0 {
+					j++
+					fields = append(fields, "")
+				} else {
+					i++
+				}
+			}
+		}
+
 		// labels
 		fields = append(fields, string(b))
 
@@ -87,6 +112,15 @@ func (w *CSVWriter) Reset() {
 
 func (w *CSVWriter) Bytes() []byte {
 	return w.buf.Bytes()
+}
+
+func (w *CSVWriter) SetColumns(columns []string) {
+	sortLower := make([]string, len(columns))
+	for i, v := range columns {
+		sortLower[i] = strings.ToLower(v)
+	}
+	sort.Strings(sortLower)
+	w.columns = sortLower
 }
 
 // Normalized convert a metrics name to a ProperCase table name

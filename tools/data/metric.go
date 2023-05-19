@@ -3,6 +3,7 @@ package data
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -50,6 +51,9 @@ func (s *Set) Next(timestamp time.Time) prompb.TimeSeries {
 	ts.Labels = append(ts.Labels, prompb.Label{
 		Name:  []byte("host"),
 		Value: []byte(fmt.Sprintf("host_%d", metric.n%metric.cardinality)),
+	})
+	sort.Slice(ts.Labels, func(i, j int) bool {
+		return string(ts.Labels[i].Name) < string(ts.Labels[j].Name)
 	})
 	s.i += 1
 	return ts

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ var (
 	idgen *flake.Flake
 
 	csvWriterPool = pool.NewGeneric(1024, func(sz int) interface{} {
-		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)))
+		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 )
 
@@ -67,6 +68,7 @@ type writeReq struct {
 type segment struct {
 	epoch     string
 	table     string
+	columns   []string
 	createdAt time.Time
 	path      string
 	hostname  string
@@ -83,7 +85,8 @@ type segment struct {
 	ringBuf *ring.Buffer
 }
 
-func NewSegment(dir, prefix string) (Segment, error) {
+func NewSegment(dir, prefix string, columns []string) (Segment, error) {
+	sort.Strings(columns)
 	hostname, err := os.Hostname()
 	if err != nil {
 		return nil, err
@@ -105,6 +108,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		hostname:  hostname,
 		createdAt: time.Now().UTC(),
 		table:     fields[0],
+		columns:   columns,
 		epoch:     epoch.String(),
 		path:      path,
 		w:         fw,
@@ -211,6 +215,7 @@ func (s *segment) Write(ctx context.Context, ts []prompb.TimeSeries) error {
 	enc := csvWriterPool.Get(DefaultIOBufSize).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.Reset()
+	enc.SetColumns(s.columns)
 
 	for _, v := range ts {
 		metrics.SamplesStored.WithLabelValues(s.hostname).Add(float64(len(v.Samples)))

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
@@ -42,10 +43,11 @@ type UploaderOpts struct {
 	Database          string
 	ConcurrentUploads int
 	Dimensions        []string
+	DefaultMapping    storage.SchemaMapping
 }
 
 func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
-	syncer := NewSyncer(kustoCli, opts.Database)
+	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping)
 
 	return &uploader{
 		KustoCli:   kustoCli,

@@ -33,6 +33,9 @@ type WALOpts struct {
 
 	// SegmentMaxAge is the max age of a segment before it will be rotated and compressed.
 	SegmentMaxAge time.Duration
+
+	// Columns are label keys that will be promoted to columns in the segment.
+	Columns []string
 }
 
 func NewWAL(opts WALOpts) (*WAL, error) {
@@ -88,7 +91,7 @@ func (w *WAL) Write(ctx context.Context, ts []prompb.TimeSeries) error {
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, w.opts.Columns)
 		if err != nil {
 			w.mu.Unlock()
 			return err
