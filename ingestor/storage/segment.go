@@ -212,6 +212,9 @@ func (s *segment) Table() string {
 }
 
 func (s *segment) Write(ctx context.Context, ts []prompb.TimeSeries) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	enc := csvWriterPool.Get(DefaultIOBufSize).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.Reset()
@@ -237,8 +240,6 @@ func (s *segment) Write(ctx context.Context, ts []prompb.TimeSeries) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-
-	return nil
 }
 
 func (s *segment) Bytes() ([]byte, error) {
