@@ -2,9 +2,13 @@ package adx
 
 import (
 	"context"
+	"io"
 	"os"
+	"testing"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 
 // fakeUploader is an Uploader that does nothing.
@@ -47,5 +51,32 @@ func (f *fakeUploader) upload(ctx context.Context) {
 				}
 			}
 		}
+	}
+}
+
+type fakeKustoMgmt struct {
+	expectedQuery, actualQuery string
+	expectedRows               *kusto.MockRows
+}
+
+func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	f.actualQuery = query.String()
+
+	rows, err := kusto.NewMockRows(table.Columns{
+		{Name: "Name", Type: "string"},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	iter := &kusto.RowIterator{}
+	rows.Error(io.EOF)
+	iter.Mock(rows)
+	return iter, nil
+}
+
+func (f *fakeKustoMgmt) Verify(t *testing.T) {
+	if f.expectedQuery != "" && f.actualQuery != f.expectedQuery {
+		t.Errorf("Expected query %s, got %s", f.expectedQuery, f.actualQuery)
 	}
 }

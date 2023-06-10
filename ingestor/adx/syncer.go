@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"
 )
@@ -23,8 +22,13 @@ type columnDef struct {
 	name, typ string
 }
 
+type mgmt interface {
+	Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+}
+
 type Syncer struct {
-	KustoCli ingest.QueryClient
+	KustoCli mgmt
+
 	database string
 
 	mu       sync.RWMutex
@@ -44,7 +48,7 @@ type IngestionMapping struct {
 	Table         string    `kusto:"Table"`
 }
 
-func NewSyncer(kustoCli ingest.QueryClient, database string, defaultMapping storage.SchemaMapping) *Syncer {
+func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping) *Syncer {
 	return &Syncer{
 		KustoCli:       kustoCli,
 		database:       database,
@@ -120,7 +124,7 @@ func (s *Syncer) EnsureTable(table string) error {
 	}
 	sb.WriteString(")")
 
-	logger.Info("Creating ingestion mapping %s %s", table, sb.String())
+	logger.Info("Creating table %s %s", table, sb.String())
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
@@ -143,6 +147,7 @@ func (s *Syncer) EnsureTable(table string) error {
 	return nil
 }
 
+// EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
 func (s *Syncer) EnsureMapping(table string) (string, error) {
 	var columns []columnDef
 
@@ -192,8 +197,6 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	s.mappings[name] = mapping
 
 	for {
 		_, err1, err2 := rows.NextRowOrError()
