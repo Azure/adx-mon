@@ -67,6 +67,10 @@ func (s *Syncer) Open(ctx context.Context) error {
 		return err
 	}
 
+	if err := s.ensureIngestionPolicy(ctx); err != nil {
+		return err
+	}
+
 	return nil
 
 }
@@ -268,6 +272,35 @@ func (s *Syncer) ensureFunctions(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
+	type ingestionPolicy struct {
+		MaximumBatchingTimeSpan string `json:"MaximumBatchingTimeSpan"`
+		MaximumNumberOfItems    int    `json:"MaximumNumberOfItems"`
+		MaximumRawDataSizeMB    int    `json:"MaximumRawDataSizeMB"`
+	}
+
+	p := &ingestionPolicy{
+		MaximumBatchingTimeSpan: "00:00:30",
+		MaximumNumberOfItems:    500,
+		MaximumRawDataSizeMB:    1000,
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+
+	logger.Info("Creating ingestion batching policy: MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
+		p.MaximumBatchingTimeSpan, p.MaximumNumberOfItems, p.MaximumRawDataSizeMB)
+
+	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+		fmt.Sprintf(".alter database %s policy ingestionbatching\n```%s\n```", s.database, string(b)))
+	_, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
+	if err != nil {
+		return err
 	}
 	return nil
 }
