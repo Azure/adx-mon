@@ -59,6 +59,19 @@ func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapp
 }
 
 func (s *Syncer) Open(ctx context.Context) error {
+	if err := s.loadIngestionMappings(ctx); err != nil {
+		return err
+	}
+
+	if err := s.ensureFunctions(ctx); err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 	stmt := kusto.NewStmt(".show ingestion mappings")
 	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
@@ -85,11 +98,10 @@ func (s *Syncer) Open(ctx context.Context) error {
 			return err
 		}
 
-		logger.Info("Loaded ingestion mapping %s", v.Mapping)
+		logger.Info("Loaded ingestion mapping %s", v.Name)
 
 		s.mappings[v.Name] = sm
 	}
-
 }
 
 func (s *Syncer) EnsureTable(table string) error {
@@ -210,4 +222,52 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 	}
 	s.mappings[name] = mapping
 	return name, nil
+}
+
+func (s *Syncer) ensureFunctions(ctx context.Context) error {
+	functions := map[string]string{
+		"prom_rate": `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+    T
+    | invoke prom_increase(interval=interval)
+    | extend Value=Value/((Timestamp-prev(Timestamp))/1s)
+    | where isnotnull(Value)
+    | where isnan(Value) == false
+}`,
+		"prom_increase": `.create-or-alter function prom_increase (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+    T
+    | where isnan(Value)==false
+    | extend h=SeriesId
+    | partition hint.strategy=shuffle by h (
+        as Series
+        | order by h, Timestamp asc
+        | extend prevVal=prev(Value)
+        | extend diff=Value-prevVal
+        | extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
+        | project-away prevVal, diff, h
+    )
+}`,
+		"prom_delta": `.create-or-alter function prom_delta (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+    T
+    | where isnan(Value)==false
+    | extend h=SeriesId
+    | partition hint.strategy=shuffle by h (
+        as Series
+        | order by h, Timestamp asc
+        | extend prevVal=prev(Value)
+        | extend diff=Value-prevVal
+        | extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
+        | project-away prevVal, diff, h
+    )
+}`,
+	}
+
+	for name, fn := range functions {
+		logger.Info("Creating function %s", name)
+		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn)
+		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
