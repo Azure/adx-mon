@@ -329,10 +329,13 @@ func (s *Service) newSeries(name string, scrapeTarget scrapeTarget, m *io_promet
 }
 
 func (s *Service) OnAdd(obj interface{}) {
+	p, ok := obj.(*v1.Pod)
+	if !ok || p == nil {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	p := obj.(*v1.Pod)
 
 	targets, exists := s.isScrapeable(p)
 
@@ -357,10 +360,14 @@ func (s *Service) OnUpdate(oldObj, newObj interface{}) {
 }
 
 func (s *Service) OnDelete(obj interface{}) {
+	p, ok := obj.(*v1.Pod)
+	if !ok || p == nil {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	p := obj.(*v1.Pod)
 	targets, exists := s.isScrapeable(p)
 
 	// Not a scrapeable pod
