@@ -109,12 +109,12 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 }
 
 func (s *Syncer) EnsureTable(table string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	s.mu.RLock()
 	if _, ok := s.tables[table]; ok {
+		s.mu.RUnlock()
 		return nil
 	}
+	s.mu.RUnlock()
 
 	mapping := s.defaultMapping
 
@@ -159,7 +159,11 @@ func (s *Syncer) EnsureTable(table string) error {
 			return err2
 		}
 	}
+
+	s.mu.Lock()
 	s.tables[table] = struct{}{}
+	s.mu.Unlock()
+
 	return nil
 }
 

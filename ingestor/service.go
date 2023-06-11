@@ -3,6 +3,7 @@ package ingestor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -36,10 +37,10 @@ type Service struct {
 	walOpts storage.WALOpts
 	opts    ServiceOpts
 
-	ingestor    adx.Uploader
+	uploader    adx.Uploader
 	replicator  cluster.Replicator
 	coordinator cluster.Coordinator
-	archiver    cluster.Archiver
+	batcher     cluster.Batcher
 	closeFn     context.CancelFunc
 
 	store   storage.Store
@@ -58,7 +59,7 @@ type ServiceOpts struct {
 	// LiftedColumns is a slice of label names where each element will be added as a column if the label exists.
 	LiftedColumns []string
 
-	K8sCli *kubernetes.Clientset
+	K8sCli kubernetes.Interface
 
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
@@ -97,7 +98,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
-	archiver := cluster.NewArchiver(cluster.ArchiverOpts{
+	batcher := cluster.NewBatcher(cluster.BatcherOpts{
 		StorageDir:    opts.StorageDir,
 		Partitioner:   coord,
 		Segmenter:     store,
@@ -109,11 +110,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	return &Service{
 		opts:        opts,
-		ingestor:    opts.Uploader,
+		uploader:    opts.Uploader,
 		replicator:  repl,
 		store:       store,
 		coordinator: coord,
-		archiver:    archiver,
+		batcher:     batcher,
 		metrics:     metricsSvc,
 	}, nil
 }
@@ -121,7 +122,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 func (s *Service) Open(ctx context.Context) error {
 	var svcCtx context.Context
 	svcCtx, s.closeFn = context.WithCancel(ctx)
-	if err := s.ingestor.Open(svcCtx); err != nil {
+	if err := s.uploader.Open(svcCtx); err != nil {
 		return err
 	}
 
@@ -133,7 +134,7 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.archiver.Open(svcCtx); err != nil {
+	if err := s.batcher.Open(svcCtx); err != nil {
 		return err
 	}
 
@@ -159,7 +160,7 @@ func (s *Service) Close() error {
 		return err
 	}
 
-	if err := s.archiver.Close(); err != nil {
+	if err := s.batcher.Close(); err != nil {
 		return err
 	}
 
@@ -167,7 +168,7 @@ func (s *Service) Close() error {
 		return err
 	}
 
-	if err := s.ingestor.Close(); err != nil {
+	if err := s.uploader.Close(); err != nil {
 		return err
 	}
 
@@ -245,4 +246,46 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		logger.Info("Imported %d bytes to %s", n, filename)
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Service) UploadSegments() error {
+	if err := s.batcher.BatchSegments(); err != nil {
+		return err
+	}
+	logger.Info("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+	logger.Info("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-t.C:
+			if len(s.uploader.UploadQueue()) == 0 && len(s.replicator.TransferQueue()) == 0 {
+				return nil
+			}
+
+			if len(s.uploader.UploadQueue()) != 0 {
+				logger.Info("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+			}
+			if len(s.replicator.TransferQueue()) != 0 {
+				logger.Info("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+			}
+		case <-timeout.C:
+			return fmt.Errorf("failed to upload segments")
+		}
+	}
+}
+
+func (s *Service) DisableWrites() error {
+	if err := s.metrics.Close(); err != nil {
+		return err
+	}
+
+	if err := s.store.Close(); err != nil {
+		return err
+	}
+	return nil
 }
