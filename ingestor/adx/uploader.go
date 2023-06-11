@@ -33,6 +33,7 @@ type uploader struct {
 	queue   chan []string
 	closeFn context.CancelFunc
 
+	wg        sync.WaitGroup
 	mu        sync.RWMutex
 	ingestors map[string]*ingest.Ingestion
 	uploading map[string]struct{}
@@ -78,6 +79,9 @@ func (n *uploader) Open(ctx context.Context) error {
 func (n *uploader) Close() error {
 	n.closeFn()
 
+	// Wait for all uploads to finish.
+	n.wg.Wait()
+
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -95,6 +99,10 @@ func (n *uploader) UploadQueue() chan []string {
 }
 
 func (n *uploader) uploadReader(reader io.Reader, table string) error {
+	// Ensure we wait for this upload to finish.
+	n.wg.Add(1)
+	defer n.wg.Done()
+
 	if err := n.syncer.EnsureTable(table); err != nil {
 		return err
 	}
@@ -167,6 +175,7 @@ func (n *uploader) upload(ctx context.Context) error {
 				for _, path := range paths {
 
 					if _, ok := n.uploading[path]; ok {
+						logger.Debug("File %s is already uploading", path)
 						continue
 					}
 					n.uploading[path] = struct{}{}
@@ -175,7 +184,10 @@ func (n *uploader) upload(ctx context.Context) error {
 					fields = strings.Split(fileName, "_")
 
 					f, err := os.Open(path)
-					if err != nil {
+					if os.IsNotExist(err) {
+						// batches are not disjoint, so the same segments could be included in multiple batches.
+						continue
+					} else if err != nil {
 						logger.Error("Failed to open file: %s", err.Error())
 						continue
 					}

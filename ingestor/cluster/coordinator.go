@@ -3,7 +3,6 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -173,7 +172,10 @@ func (c *coordinator) Open(ctx context.Context) error {
 
 	c.tsw = c.opts.WriteTimeSeriesFn
 
-	myIP := GetOutboundIP()
+	myIP, err := GetOutboundIP()
+	if err != nil {
+		return fmt.Errorf("failed to determin ip: %w", err)
+	}
 	if myIP == nil || myIP.To4().String() == "" {
 		return fmt.Errorf("failed to determine ip")
 	}
@@ -271,15 +273,18 @@ func (c *coordinator) syncPeers() error {
 }
 
 // Get preferred outbound ip of this machine
-func GetOutboundIP() net.IP {
+func GetOutboundIP() (net.IP, error) {
 	conn, err := net.Dial("udp", "169.254.169.25:80")
 	if err != nil {
-		log.Fatal(err)
+		if strings.Contains(err.Error(), "network is unreachable") {
+			return net.IPv4(127, 0, 0, 1), nil
+		}
+		return nil, err
 	}
 	defer conn.Close()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP
+	return localAddr.IP, nil
 }
 
 // IsPodReady returns true if all containers in a pod are in a ready state

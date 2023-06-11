@@ -18,7 +18,7 @@ type Segmenter interface {
 	IsActiveSegment(path string) bool
 }
 
-type ArchiverOpts struct {
+type BatcherOpts struct {
 	StorageDir  string
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
@@ -27,13 +27,14 @@ type ArchiverOpts struct {
 	TransferQueue chan []string
 }
 
-type Archiver interface {
+type Batcher interface {
 	service.Component
+	BatchSegments() error
 }
 
-// Archiver manages WAL segments that are ready for upload to kusto or that need
+// Batcher manages WAL segments that are ready for upload to kusto or that need
 // to be transferred to another node.
-type archiver struct {
+type batcher struct {
 	uploadQueue   chan []string
 	transferQueue chan []string
 
@@ -46,8 +47,8 @@ type archiver struct {
 	hostname    string
 }
 
-func NewArchiver(opts ArchiverOpts) Archiver {
-	return &archiver{
+func NewBatcher(opts BatcherOpts) Batcher {
+	return &batcher{
 		storageDir:    opts.StorageDir,
 		Partitioner:   opts.Partitioner,
 		Segmenter:     opts.Segmenter,
@@ -56,7 +57,7 @@ func NewArchiver(opts ArchiverOpts) Archiver {
 	}
 }
 
-func (a *archiver) Open(ctx context.Context) error {
+func (a *batcher) Open(ctx context.Context) error {
 	ctx, a.closeFn = context.WithCancel(ctx)
 	var err error
 	a.hostname, err = os.Hostname()
@@ -69,13 +70,13 @@ func (a *archiver) Open(ctx context.Context) error {
 	return nil
 }
 
-func (a *archiver) Close() error {
+func (a *batcher) Close() error {
 	a.closeFn()
 	a.wg.Wait()
 	return nil
 }
 
-func (a *archiver) watch(ctx context.Context) {
+func (a *batcher) watch(ctx context.Context) {
 	a.wg.Add(1)
 	defer a.wg.Done()
 
@@ -86,33 +87,31 @@ func (a *archiver) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			owned, notOwned, err := a.processSegments()
-			if err != nil {
-				logger.Error("Failed to process segments: %v", err)
-				continue
-			}
-
-			// TODO: This might be removable now that uploader tracks files currently being uploaded.
-			if len(a.uploadQueue) > 0 {
-				logger.Info("uploadReader queue not empty (%d), skipping", len(a.uploadQueue))
-			} else {
-				for _, v := range owned {
-					a.uploadQueue <- v
-				}
-			}
-
-			if len(a.transferQueue) > 0 {
-				logger.Info("Transfer queue not empty (%d), skipping", len(a.transferQueue))
-			} else {
-				for _, v := range notOwned {
-					a.transferQueue <- v
-				}
+			if err := a.BatchSegments(); err != nil {
+				logger.Error("Failed to batch segments: %v", err)
 			}
 		}
 	}
 }
 
-func (a *archiver) processSegments() ([][]string, [][]string, error) {
+func (a *batcher) BatchSegments() error {
+	owned, notOwned, err := a.processSegments()
+	if err != nil {
+		return fmt.Errorf("process segments: %w", err)
+	}
+
+	for _, v := range owned {
+		a.uploadQueue <- v
+	}
+
+	for _, v := range notOwned {
+		a.transferQueue <- v
+	}
+
+	return nil
+}
+
+func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	entries, err := os.ReadDir(a.storageDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)

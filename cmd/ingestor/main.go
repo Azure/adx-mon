@@ -27,6 +27,8 @@ import (
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -231,15 +233,31 @@ func realMain(ctx *cli.Context) error {
 		}
 	}()
 
+	// Capture SIGINT and SIGTERM to trigger a shutdown and upload/transfer of all pending segments.
+	// This is best-effort, if the process is killed with SIGKILL or the shutdown takes too long
+	// the segments will be delayed until the process is restarted.
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		sig := <-sc
-		cancel()
 
-		logger.Info("Received signal %s, exiting...", sig.String())
-
+		// Stop receiving new samples
 		srv.Shutdown(context.Background())
+
+		// Disable writes for internal processes (metrics)
+		if err := svc.DisableWrites(); err != nil {
+			logger.Error("Failed to disable writes: %s", err)
+		}
+
+		logger.Info("Received signal %s, uploading pending segments...", sig.String())
+
+		// Upload pending segments
+		if err := svc.UploadSegments(); err != nil {
+			logger.Error("Failed to upload segments: %s", err)
+		}
+
+		// Trigger shutdown of any pending background processes
+		cancel()
 
 		// Shutdown the server and cancel context
 		err := svc.Close()
@@ -252,11 +270,17 @@ func realMain(ctx *cli.Context) error {
 	return nil
 }
 
-func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
-	if err != nil {
+func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, ctrlclient.Client, error) {
+	kubeconfig := cCtx.String("kubeconfig")
+	_, err := rest.InClusterConfig()
+	if err == rest.ErrNotInCluster && kubeconfig == "" && os.Getenv("KUBECONIFG=") == "" {
 		logger.Warn("No kube config provided, using fake kube client")
-		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)
+		return nil, fake.NewSimpleClientset(), nil, nil
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", kubeconfig, err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)

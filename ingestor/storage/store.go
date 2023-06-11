@@ -217,8 +217,6 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	return int(n), nil
 }
 
-var idx uint64
-
 func seriesKey(labels []prompb.Label) string {
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
