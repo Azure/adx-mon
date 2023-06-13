@@ -45,10 +45,11 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	defer buffPool.Put(buf)
 
 	seriesIdHasher := xxhash.New()
+	var j int
 
 	// Marshal the labels as JSON and avoid allocations since this code is in the hot path.
 	buf.WriteByte('{')
-	for i, v := range ts.Labels {
+	for _, v := range ts.Labels {
 		seriesIdHasher.Write(v.Name)
 		seriesIdHasher.Write(v.Value)
 
@@ -57,13 +58,39 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 			continue
 		}
 
+		// We need to drop the labels that have been promoted to columns to avoid duplicating the storage of the value
+		// in both the Labels column the lifted column.  The columns are sorted so we can walk them in order and skip
+		// any matches.
+		var skip bool
+		for j < len(w.columns) {
+			cmp := bytes.Compare([]byte(strings.ToLower(w.columns[j])), bytes.ToLower(v.Name))
+			// The lifted column is less than the current label, we need move to the next column and check again.
+			if cmp < 0 {
+				j++
+				continue
+			} else if cmp == 0 {
+				// The lifted column matches the current label, we need to skip it.
+				j++
+				skip = true
+				break
+			}
+
+			// The lifted column is greater than the current label, we can stop looking.
+			break
+		}
+
+		if skip {
+			continue
+		}
+
+		if buf.Bytes()[buf.Len()-1] != '{' {
+			buf.WriteByte(',')
+		}
 		fflib.WriteJson(buf, v.Name)
 		buf.WriteByte(':')
 		fflib.WriteJson(buf, v.Value)
-		if i < len(ts.Labels)-1 {
-			buf.WriteByte(',')
-		}
 	}
+
 	buf.WriteByte('}')
 	b := buf.Bytes()
 	seriesId := seriesIdHasher.Sum64()
