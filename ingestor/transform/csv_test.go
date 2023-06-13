@@ -49,9 +49,9 @@ func TestMarshalCSV(t *testing.T) {
 	w := NewCSVWriter(&b, nil)
 	err := w.MarshalCSV(ts)
 	require.NoError(t, err)
-	require.Equal(t, `2022-11-22T10:22:04.001Z,2808720101239693515,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",0.000000000
-2022-11-22T10:22:05.002Z,2808720101239693515,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",1.000000000
-2022-11-22T10:22:06.003Z,2808720101239693515,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",2.000000000
+	require.Equal(t, `2022-11-22T10:22:04.001Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",0.000000000
+2022-11-22T10:22:05.002Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",1.000000000
+2022-11-22T10:22:06.003Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",2.000000000
 `, b.String())
 }
 
@@ -97,9 +97,9 @@ func TestMarshalCSV_LiftLabel(t *testing.T) {
 
 	err := w.MarshalCSV(ts)
 	require.NoError(t, err)
-	require.Equal(t, `2022-11-22T10:22:04.001Z,7916738835213694439,,host_1,eastus,"{""hostname"":""host_1"",""measurement"":""used_cpu_user_children"",""region"":""eastus""}",0.000000000
-2022-11-22T10:22:05.002Z,7916738835213694439,,host_1,eastus,"{""hostname"":""host_1"",""measurement"":""used_cpu_user_children"",""region"":""eastus""}",1.000000000
-2022-11-22T10:22:06.003Z,7916738835213694439,,host_1,eastus,"{""hostname"":""host_1"",""measurement"":""used_cpu_user_children"",""region"":""eastus""}",2.000000000
+	require.Equal(t, `2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,"{""hostname"":""host_1"",""measurement"":""used_cpu_user_children"",""region"":""eastus""}",0.000000000
+2022-11-22T10:22:05.002Z,1265838189064375029,,host_1,eastus,"{""hostname"":""host_1"",""measurement"":""used_cpu_user_children"",""region"":""eastus""}",1.000000000
+2022-11-22T10:22:06.003Z,1265838189064375029,,host_1,eastus,"{""hostname"":""host_1"",""measurement"":""used_cpu_user_children"",""region"":""eastus""}",2.000000000
 `, b.String())
 }
 
