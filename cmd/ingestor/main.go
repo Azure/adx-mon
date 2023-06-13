@@ -61,7 +61,7 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
-			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns"},
+			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns. Format is <label>[=<column name>]"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -188,7 +188,21 @@ func realMain(ctx *cli.Context) error {
 	liftedLabels := ctx.StringSlice("lift-label")
 	sort.Strings(liftedLabels)
 
+	var sortedLiftedLabels []string
 	for _, v := range liftedLabels {
+		// The format is <label>[=<column name>] where the column name is optional.  If not specified, the label name is used.
+		fields := strings.Split(v, "=")
+		if len(fields) > 2 {
+			logger.Fatal("invalid dimension: %s", v)
+		}
+
+		sortedLiftedLabels = append(sortedLiftedLabels, fields[0])
+
+		if len(fields) == 2 {
+			defaultMapping = defaultMapping.AddStringMapping(fields[1])
+			continue
+		}
+
 		defaultMapping = defaultMapping.AddStringMapping(v)
 	}
 
@@ -207,7 +221,7 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentSize:     maxSegmentSize,
 		MaxSegmentAge:      maxSegmentAge,
 		InsecureSkipVerify: insecureSkipVerify,
-		LiftedColumns:      liftedLabels,
+		LiftedColumns:      sortedLiftedLabels,
 	})
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
