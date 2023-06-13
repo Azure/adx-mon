@@ -433,7 +433,7 @@ func makeTargets(p *v1.Pod) []scrapeTarget {
 	var targets []scrapeTarget
 
 	// Skip the pod if it has not opted in to scraping
-	if p.Annotations["prometheus.io/scrape"] != "true" {
+	if p.Annotations["adx-mon/scrape"] != "true" {
 		return nil
 	}
 
@@ -443,17 +443,17 @@ func makeTargets(p *v1.Pod) []scrapeTarget {
 	}
 
 	scheme := "http"
-	if p.Annotations["prometheus.io/scheme"] != "" {
-		scheme = p.Annotations["prometheus.io/scheme"]
+	if p.Annotations["adx-mon/scheme"] != "" {
+		scheme = p.Annotations["adx-mon/scheme"]
 	}
 
 	path := "/metrics"
-	if p.Annotations["prometheus.io/path"] != "" {
-		path = p.Annotations["prometheus.io/path"]
+	if p.Annotations["adx-mon/path"] != "" {
+		path = p.Annotations["adx-mon/path"]
 	}
 
 	// Just scrape this one port
-	port := p.Annotations["prometheus.io/port"]
+	port := p.Annotations["adx-mon/port"]
 
 	// If a port is specified, only scrape that port on the pod
 	if port != "" {

@@ -78,7 +78,7 @@ func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 func TestService_Open_Matching(t *testing.T) {
 	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
 	pod.Annotations = map[string]string{
-		"prometheus.io/scrape": "true",
+		"adx-mon/scrape": "true",
 	}
 	pod.Status.PodIP = "172.31.1.18"
 	pod.Spec.Containers = []v1.Container{
@@ -111,8 +111,8 @@ func TestService_Open_Matching(t *testing.T) {
 func TestService_Open_MatchingPort(t *testing.T) {
 	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
 	pod.Annotations = map[string]string{
-		"prometheus.io/scrape": "true",
-		"prometheus.io/port":   "8080",
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "8080",
 	}
 	pod.Spec.Containers = []v1.Container{
 		{
