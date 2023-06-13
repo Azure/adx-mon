@@ -44,9 +44,14 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	buf.Reset()
 	defer buffPool.Put(buf)
 
+	seriesIdHasher := xxhash.New()
+
 	// Marshal the labels as JSON and avoid allocations since this code is in the hot path.
 	buf.WriteByte('{')
 	for i, v := range ts.Labels {
+		seriesIdHasher.Write(v.Name)
+		seriesIdHasher.Write(v.Value)
+
 		// Drop the __name__ label since it is implied that the name of the CSV file is the name of the metric.
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			continue
@@ -61,7 +66,7 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	}
 	buf.WriteByte('}')
 	b := buf.Bytes()
-	seriesId := xxhash.Sum64(b)
+	seriesId := seriesIdHasher.Sum64()
 
 	fields := make([]string, 0, 4)
 	for _, v := range ts.Samples {
