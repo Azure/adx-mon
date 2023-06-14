@@ -83,6 +83,7 @@ func TestService_Open_Matching(t *testing.T) {
 	pod.Status.PodIP = "172.31.1.18"
 	pod.Spec.Containers = []v1.Container{
 		{
+			Name: "container",
 			Ports: []v1.ContainerPort{
 				{
 					ContainerPort: 9000,
@@ -106,6 +107,8 @@ func TestService_Open_Matching(t *testing.T) {
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
 	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[1].Addr)
+	require.Equal(t, "container", targets[1].Container)
+	require.Equal(t, "default", targets[1].Namespace)
 }
 
 func TestService_Open_MatchingPort(t *testing.T) {
@@ -116,6 +119,7 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	}
 	pod.Spec.Containers = []v1.Container{
 		{
+			Name: "container",
 			Ports: []v1.ContainerPort{
 				{
 					ContainerPort: 8080,
@@ -140,6 +144,8 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
 	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
+	require.Equal(t, "container", targets[1].Container)
+	require.Equal(t, "default", targets[1].Namespace)
 }
 
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
