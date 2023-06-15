@@ -17,21 +17,21 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 
 	if scrapeTarget.Namespace != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte("namespace"),
+			Name:  []byte("adxmon_namespace"),
 			Value: []byte(scrapeTarget.Namespace),
 		})
 	}
 
 	if scrapeTarget.Pod != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte("pod"),
+			Name:  []byte("adxmon_pod"),
 			Value: []byte(scrapeTarget.Pod),
 		})
 	}
 
 	if scrapeTarget.Container != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte("container"),
+			Name:  []byte("adxmon_container"),
 			Value: []byte(scrapeTarget.Container),
 		})
 	}
@@ -54,7 +54,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 	}
 
 	for k, v := range s.AddLabels {
-		if k == "namespace" || k == "pod" || k == "container" {
+		if k == "adxmon_namespace" || k == "adxmon_pod" || k == "adxmon_container" {
 			continue
 		}
 
