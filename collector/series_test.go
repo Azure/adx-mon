@@ -1,9 +1,10 @@
 package collector
 
 import (
+	"testing"
+
 	io_prometheus_client "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestSeriesCreator(t *testing.T) {
@@ -17,7 +18,7 @@ func TestSeriesCreator(t *testing.T) {
 			},
 		},
 	}
-	series := sc.newSeries("test", scrapeTarget{}, m)
+	series := sc.newSeries("test", ScrapeTarget{}, m)
 	require.Equal(t, 2, len(series.Labels))
 	require.Equal(t, "__name__", string(series.Labels[0].Name))
 	require.Equal(t, "test", string(series.Labels[0].Value))
@@ -36,7 +37,7 @@ func TestSeriesCreator_MixedCase(t *testing.T) {
 			},
 		},
 	}
-	series := sc.newSeries("test", scrapeTarget{}, m)
+	series := sc.newSeries("test", ScrapeTarget{}, m)
 	require.Equal(t, 2, len(series.Labels))
 	require.Equal(t, "__name__", string(series.Labels[0].Name))
 	require.Equal(t, "test", string(series.Labels[0].Value))
@@ -48,7 +49,7 @@ func TestSeriesCreator_PodMetadata(t *testing.T) {
 	sc := seriesCreator{}
 
 	m := &io_prometheus_client.Metric{}
-	series := sc.newSeries("test", scrapeTarget{
+	series := sc.newSeries("test", ScrapeTarget{
 		Namespace: "namespace",
 		Pod:       "pod",
 		Container: "container",
@@ -80,7 +81,7 @@ func TestSeriesCreator_AddLabels(t *testing.T) {
 			},
 		},
 	}
-	series := sc.newSeries("test", scrapeTarget{
+	series := sc.newSeries("test", ScrapeTarget{
 		Namespace: "namespace",
 		Pod:       "pod",
 		Container: "container",
@@ -116,7 +117,7 @@ func TestSeriesCreator_DropLabels(t *testing.T) {
 			},
 		},
 	}
-	series := sc.newSeries("test", scrapeTarget{
+	series := sc.newSeries("test", ScrapeTarget{
 		Namespace: "namespace",
 		Pod:       "pod",
 		Container: "container",

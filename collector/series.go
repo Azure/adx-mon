@@ -12,7 +12,7 @@ type seriesCreator struct {
 	DropLabels map[string]struct{}
 }
 
-func (s *seriesCreator) newSeries(name string, scrapeTarget scrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
+func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
 	ts := prompb.TimeSeries{}
 
 	if scrapeTarget.Namespace != "" {

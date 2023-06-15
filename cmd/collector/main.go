@@ -25,10 +25,26 @@ func main() {
 	app := &cli.App{
 		Name:  "collector",
 		Usage: "adx-mon metrics collector",
+		UsageText: `
+Static Targets:
+
+Static targets can be specified with the --target flag.  The format is <host regex>=<url>,namespace/pod/container.
+This is intended to support non-kubernetes workloads.  The host regex is matched against the hostname of the node
+to determine if the target will be scraped.  To scrape all nodes, use .* as the host regex.  The namespace/pod/container
+is used to label metrics with a namespace, pod and container name.  This value must have two slashes.  
+Multiple targets can be specified by repeating the --target flag.
+
+Scrape port 9100 on all nodes:
+  --target=.*=http://$(HOSTNAME):9100/metrics
+
+Add a static pod scrape for etcd pods running outside of Kubernetes on masters and label metrics in kube-system namespace, etcd pod and etcd container.:
+  --target=.+-master-.+=http://$(HOSTNAME):2381/metrics:kube-system/etcd/etcd
+`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/kubelet.conf"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
-			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of <host regex>=<url>.  Host names that match the regex will scrape the target url"},
+			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of " +
+				"<host regex>=<url>:namespace/pod/container.  Multiple targets can be specified by repeating this flag. See usage for more details."},
 			&cli.StringSliceFlag{Name: "endpoints", Usage: "Prometheus remote write endpoint URLs"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification of remote write endpoints"},
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
@@ -86,11 +102,11 @@ func realMain(ctx *cli.Context) error {
 		}
 	}
 
-	var staticTargets []string
+	var staticTargets []collector.ScrapeTarget
 	for _, target := range ctx.StringSlice("target") {
 		split := strings.Split(target, "=")
 		if len(split) != 2 {
-			return fmt.Errorf("invalid target %s", target)
+			return fmt.Errorf("invalid target %s, Expected <host regex>=<url>:namespace/pod/container", target)
 		}
 
 		if match, err := regexp.MatchString(split[0], hostname); err != nil {
@@ -99,7 +115,28 @@ func realMain(ctx *cli.Context) error {
 			continue
 		}
 
-		staticTargets = append(staticTargets, split[1])
+		i := strings.LastIndex(split[1], ":")
+		if i == -1 {
+			return fmt.Errorf("invalid target %s. Missing :namespace/pod/container", target)
+		}
+
+		url := split[1][:i]
+		metaPart := split[1][i+1:]
+
+		meta := strings.Split(metaPart, "/")
+		if len(meta) != 3 {
+			return fmt.Errorf("invalid target %s. Expected namespace/pod/container", target)
+		}
+		namespace := meta[0]
+		pod := meta[1]
+		container := meta[2]
+
+		staticTargets = append(staticTargets, collector.ScrapeTarget{
+			Addr:      url,
+			Namespace: namespace,
+			Pod:       pod,
+			Container: container,
+		})
 	}
 
 	endpoints := ctx.StringSlice("endpoints")
