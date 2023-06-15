@@ -57,11 +57,11 @@ func TestSeriesCreator_PodMetadata(t *testing.T) {
 	require.Equal(t, 4, len(series.Labels))
 	require.Equal(t, "__name__", string(series.Labels[0].Name))
 	require.Equal(t, "test", string(series.Labels[0].Value))
-	require.Equal(t, "container", string(series.Labels[1].Name))
+	require.Equal(t, "adxmon_container", string(series.Labels[1].Name))
 	require.Equal(t, "container", string(series.Labels[1].Value))
-	require.Equal(t, "namespace", string(series.Labels[2].Name))
+	require.Equal(t, "adxmon_namespace", string(series.Labels[2].Name))
 	require.Equal(t, "namespace", string(series.Labels[2].Value))
-	require.Equal(t, "pod", string(series.Labels[3].Name))
+	require.Equal(t, "adxmon_pod", string(series.Labels[3].Name))
 	require.Equal(t, "pod", string(series.Labels[3].Value))
 }
 
@@ -86,17 +86,25 @@ func TestSeriesCreator_AddLabels(t *testing.T) {
 		Pod:       "pod",
 		Container: "container",
 	}, m)
-	require.Equal(t, 5, len(series.Labels))
+	require.Equal(t, 6, len(series.Labels))
+	// Labels should be sorted by name
 	require.Equal(t, "__name__", string(series.Labels[0].Name))
 	require.Equal(t, "test", string(series.Labels[0].Value))
-	require.Equal(t, "container", string(series.Labels[1].Name))
+	// adxmon_ should always be added
+	require.Equal(t, "adxmon_container", string(series.Labels[1].Name))
 	require.Equal(t, "container", string(series.Labels[1].Value))
-	require.Equal(t, "foo", string(series.Labels[2].Name))
-	require.Equal(t, "overridden", string(series.Labels[2].Value))
-	require.Equal(t, "namespace", string(series.Labels[3].Name))
-	require.Equal(t, "namespace", string(series.Labels[3].Value))
-	require.Equal(t, "pod", string(series.Labels[4].Name))
-	require.Equal(t, "pod", string(series.Labels[4].Value))
+	require.Equal(t, "adxmon_namespace", string(series.Labels[2].Name))
+	require.Equal(t, "namespace", string(series.Labels[2].Value))
+	require.Equal(t, "adxmon_pod", string(series.Labels[3].Name))
+	require.Equal(t, "pod", string(series.Labels[3].Value))
+
+	// Label foo is overridden by the series
+	require.Equal(t, "foo", string(series.Labels[4].Name))
+	require.Equal(t, "overridden", string(series.Labels[4].Value))
+
+	// Original label is still present
+	require.Equal(t, "namespace", string(series.Labels[5].Name))
+	require.Equal(t, "default", string(series.Labels[5].Value))
 }
 
 func TestSeriesCreator_DropLabels(t *testing.T) {
@@ -122,14 +130,14 @@ func TestSeriesCreator_DropLabels(t *testing.T) {
 		Pod:       "pod",
 		Container: "container",
 	}, m)
-	require.Equal(t, 4, len(series.Labels))
+	require.Equal(t, 5, len(series.Labels))
 	require.Equal(t, "__name__", string(series.Labels[0].Name))
 	require.Equal(t, "test", string(series.Labels[0].Value))
-	require.Equal(t, "container", string(series.Labels[1].Name))
+	require.Equal(t, "adxmon_container", string(series.Labels[1].Name))
 	require.Equal(t, "container", string(series.Labels[1].Value))
-	require.Equal(t, "namespace", string(series.Labels[2].Name))
+	require.Equal(t, "adxmon_namespace", string(series.Labels[2].Name))
 	require.Equal(t, "namespace", string(series.Labels[2].Value))
-	require.Equal(t, "pod", string(series.Labels[3].Name))
+	require.Equal(t, "adxmon_pod", string(series.Labels[3].Name))
 	require.Equal(t, "pod", string(series.Labels[3].Value))
 }
 
