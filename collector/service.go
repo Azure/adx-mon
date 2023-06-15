@@ -36,7 +36,7 @@ type Service struct {
 	watcher      watch.Interface
 
 	mu            sync.RWMutex
-	targets       []scrapeTarget
+	targets       []ScrapeTarget
 	factory       informers.SharedInformerFactory
 	pl            v12.PodLister
 	srv           *http.Server
@@ -47,7 +47,7 @@ type ServiceOpts struct {
 	ListentAddr    string
 	K8sCli         kubernetes.Interface
 	NodeName       string
-	Targets        []string
+	Targets        []ScrapeTarget
 	Endpoints      []string
 	AddLabels      map[string]string
 	DropLabels     map[string]struct{}
@@ -58,19 +58,23 @@ type ServiceOpts struct {
 	InsecureSkipVerify bool
 }
 
-type scrapeTarget struct {
+type ScrapeTarget struct {
 	Addr      string
 	Namespace string
 	Pod       string
 	Container string
 }
 
-func (t scrapeTarget) path() string {
+func (t ScrapeTarget) path() string {
 	path := fmt.Sprintf("%s/%s", t.Namespace, t.Pod)
 	if t.Container != "" {
 		path = fmt.Sprintf("%s/%s", path, t.Container)
 	}
 	return path
+}
+
+func (t ScrapeTarget) String() string {
+	return fmt.Sprintf("%s => %s/%s/%s", t.Addr, t.Namespace, t.Pod, t.Container)
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
@@ -96,9 +100,7 @@ func (s *Service) Open(ctx context.Context) error {
 	// Add static targets
 	for _, target := range s.opts.Targets {
 		logger.Info("Adding static target %s", target)
-		s.targets = append(s.targets, scrapeTarget{
-			Addr: target,
-		})
+		s.targets = append(s.targets, target)
 	}
 
 	// Discover the initial targets running on the node
@@ -325,7 +327,7 @@ func (s *Service) scrapeTargets() {
 	}
 }
 
-func (s *Service) newSeries(name string, scrapeTarget scrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
+func (s *Service) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
 	return s.seriesCreator.newSeries(name, scrapeTarget, m)
 }
 
@@ -381,7 +383,7 @@ func (s *Service) OnDelete(obj interface{}) {
 		return
 	}
 
-	var remainingTargets []scrapeTarget
+	var remainingTargets []ScrapeTarget
 	for _, target := range targets {
 		logger.Info("Removing target %s %s", target.path(), target)
 		for _, v := range s.targets {
@@ -395,7 +397,7 @@ func (s *Service) OnDelete(obj interface{}) {
 }
 
 // isScrapeable returns the scrape target endpoints and true if the pod is currently a target, false otherwise
-func (s *Service) isScrapeable(p *v1.Pod) ([]scrapeTarget, bool) {
+func (s *Service) isScrapeable(p *v1.Pod) ([]ScrapeTarget, bool) {
 	// If this pod is not schedule to this node, skip it
 	if strings.ToLower(p.Spec.NodeName) != strings.ToLower(s.opts.NodeName) {
 		return nil, false
@@ -419,19 +421,19 @@ func (s *Service) isScrapeable(p *v1.Pod) ([]scrapeTarget, bool) {
 	return targets, false
 }
 
-func (s *Service) Targets() []scrapeTarget {
+func (s *Service) Targets() []ScrapeTarget {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	a := make([]scrapeTarget, len(s.targets))
+	a := make([]ScrapeTarget, len(s.targets))
 	for i, v := range s.targets {
 		a[i] = v
 	}
 	return a
 }
 
-func makeTargets(p *v1.Pod) []scrapeTarget {
-	var targets []scrapeTarget
+func makeTargets(p *v1.Pod) []ScrapeTarget {
+	var targets []ScrapeTarget
 
 	// Skip the pod if it has not opted in to scraping
 	if p.Annotations["adx-mon/scrape"] != "true" {
@@ -465,7 +467,7 @@ func makeTargets(p *v1.Pod) []scrapeTarget {
 			}
 
 			targets = append(targets,
-				scrapeTarget{
+				ScrapeTarget{
 					Addr:      fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
 					Namespace: p.Namespace,
 					Pod:       p.Name,
