@@ -461,8 +461,29 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 	// Otherwise, scrape all the ports on the pod
 	for _, c := range p.Spec.Containers {
 		for _, cp := range c.Ports {
+
+			var readinessPort, livenessPort string
+			if c.ReadinessProbe != nil && c.ReadinessProbe.HTTPGet != nil {
+				readinessPort = c.ReadinessProbe.HTTPGet.Port.String()
+			}
+
+			if c.LivenessProbe != nil && c.LivenessProbe.HTTPGet != nil {
+				livenessPort = c.LivenessProbe.HTTPGet.Port.String()
+			}
+
 			// If a port is specified, only scrape that port on the pod
-			if port != "" && port != strconv.Itoa(int(cp.ContainerPort)) {
+
+			if port != "" {
+				if port != strconv.Itoa(int(cp.ContainerPort)) && port != readinessPort && port != livenessPort {
+					continue
+				}
+				targets = append(targets,
+					ScrapeTarget{
+						Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, path),
+						Namespace: p.Namespace,
+						Pod:       p.Name,
+						Container: c.Name,
+					})
 				continue
 			}
 
