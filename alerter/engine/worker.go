@@ -74,7 +74,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		logger.Error("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
 		if !isUserError(err) {
-			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Inc()
+			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 			return
 		}
 
@@ -94,11 +94,12 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 			CorrelationID: fmt.Sprintf("alert-failure/%s/%s", e.rule.Namespace, e.rule.Name),
 		}); err != nil {
 			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-			// Only set the query as failed if we are not able to send a failure alert directly.
+			// Only set the notification as failed if we are not able to send a failure alert directly.
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 			return
 		}
-		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+		// Query failed due to user error, so return the query to healthy.
+		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 		return
 	}
 
