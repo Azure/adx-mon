@@ -11,12 +11,23 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	// Query is successful or only has user-caused errors (invalid queries, etc.)
+	QueryHealthHealthy = float64(1)
+	// Query is failing due to service issues (unable to query due to networking issues, timeouts, etc)
+	QueryHealthUnhealthy = float64(0)
+)
+
 func TestWorker_ServerError(t *testing.T) {
+
 	kcli := &fakeKustoClient{
 		log:      logger.Default,
 		queryErr: fmt.Errorf("Request aborted due to an internal service error"),
@@ -30,11 +41,12 @@ func TestWorker_ServerError(t *testing.T) {
 		},
 	}
 
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
 	w := &worker{
-		rule: &rules.Rule{
-			Namespace: "namespace",
-			Name:      "name",
-		},
+		rule:        rule,
 		Region:      "eastus",
 		kustoClient: kcli,
 		AlertAddr:   "",
@@ -42,7 +54,12 @@ func TestWorker_ServerError(t *testing.T) {
 		HandlerFn:   nil,
 	}
 
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
 	w.ExecuteQuery(context.Background())
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, QueryHealthUnhealthy, gaugeValue)
 }
 
 func TestWorker_ConnectionReset(t *testing.T) {
@@ -59,11 +76,12 @@ func TestWorker_ConnectionReset(t *testing.T) {
 		},
 	}
 
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
 	w := &worker{
-		rule: &rules.Rule{
-			Namespace: "namespace",
-			Name:      "name",
-		},
+		rule:        rule,
 		Region:      "eastus",
 		kustoClient: kcli,
 		AlertAddr:   "",
@@ -71,12 +89,19 @@ func TestWorker_ConnectionReset(t *testing.T) {
 		HandlerFn:   nil,
 	}
 
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
 	w.ExecuteQuery(context.Background())
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, QueryHealthUnhealthy, gaugeValue)
 }
 
 func TestWorker_ContextTimeout(t *testing.T) {
 	kcli := &fakeKustoClient{
 		log: logger.Default,
+		// fakeKustoClient does not evaluate if context is done, so we need to simulate the error
+		queryErr: context.DeadlineExceeded,
 	}
 
 	alertCli := &fakeAlerter{
@@ -87,11 +112,12 @@ func TestWorker_ContextTimeout(t *testing.T) {
 		},
 	}
 
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
 	w := &worker{
-		rule: &rules.Rule{
-			Namespace: "namespace",
-			Name:      "name",
-		},
+		rule:        rule,
 		Region:      "eastus",
 		kustoClient: kcli,
 		AlertAddr:   "",
@@ -99,9 +125,15 @@ func TestWorker_ContextTimeout(t *testing.T) {
 		HandlerFn:   nil,
 	}
 
-	ctx, _ := context.WithDeadline(context.Background(), time.Now())
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
+	defer cancel()
 
 	w.ExecuteQuery(ctx)
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, QueryHealthUnhealthy, gaugeValue)
 }
 
 func TestWorker_RequestInvalid(t *testing.T) {
@@ -118,11 +150,12 @@ func TestWorker_RequestInvalid(t *testing.T) {
 		},
 	}
 
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
 	w := &worker{
-		rule: &rules.Rule{
-			Namespace: "namespace",
-			Name:      "name",
-		},
+		rule:        rule,
 		Region:      "eastus",
 		kustoClient: kcli,
 		AlertAddr:   "",
@@ -130,8 +163,14 @@ func TestWorker_RequestInvalid(t *testing.T) {
 		HandlerFn:   nil,
 	}
 
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
 	w.ExecuteQuery(context.Background())
 	require.True(t, createCalled, "Create alert should be called")
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	// user caused error
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
 }
 
 func TestWorker_UnknownDB(t *testing.T) {
@@ -148,11 +187,12 @@ func TestWorker_UnknownDB(t *testing.T) {
 		},
 	}
 
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
 	w := &worker{
-		rule: &rules.Rule{
-			Namespace: "namespace",
-			Name:      "name",
-		},
+		rule:        rule,
 		Region:      "eastus",
 		kustoClient: kcli,
 		AlertAddr:   "",
@@ -160,6 +200,21 @@ func TestWorker_UnknownDB(t *testing.T) {
 		HandlerFn:   nil,
 	}
 
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
 	w.ExecuteQuery(context.Background())
 	require.True(t, createCalled, "Create alert should be called")
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	// user caused error
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
+}
+
+func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
+	t.Helper()
+
+	metricDTO := &dto.Metric{}
+	err := metric.Write(metricDTO)
+	require.NoError(t, err)
+	return metricDTO.Gauge.GetValue()
 }
