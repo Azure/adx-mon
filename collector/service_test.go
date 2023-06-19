@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -126,6 +127,49 @@ func TestService_Open_Matching(t *testing.T) {
 	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[1].Addr)
 	require.Equal(t, "container", targets[1].Container)
 	require.Equal(t, "default", targets[1].Namespace)
+}
+
+func TestService_Open_HostPort(t *testing.T) {
+	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "10254",
+	}
+	pod.Status.PodIP = "172.31.1.18"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 9000,
+				},
+			},
+			ReadinessProbe: &v1.Probe{
+				ProbeHandler: v1.ProbeHandler{
+					HTTPGet: &v1.HTTPGetAction{
+						Port: intstr.FromInt(10254),
+					},
+				},
+			},
+		},
+	}
+	cli := fake.NewSimpleClientset(pod)
+	s, err := collector.NewService(&collector.ServiceOpts{
+		ListentAddr:    MetricListenAddr,
+		K8sCli:         cli,
+		NodeName:       "ks8-master-123",
+		ScrapeInterval: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+
+	targets := s.Targets()
+	require.Equal(t, 1, len(targets))
+	require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
+	require.Equal(t, "default", targets[0].Namespace)
+	require.Equal(t, "pod1", targets[0].Pod)
+	require.Equal(t, "container", targets[0].Container)
 }
 
 func TestService_Open_MatchingPort(t *testing.T) {
