@@ -104,7 +104,7 @@ func TestCoordinator_DiscoveryDisabled(t *testing.T) {
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-0",
+			Name:      "ingestor-1",
 			Namespace: "adx-mon",
 			OwnerReferences: []metav1.OwnerReference{
 				{
@@ -135,7 +135,7 @@ func TestCoordinator_DiscoveryDisabled(t *testing.T) {
 		WriteTimeSeriesFn:  nil,
 		K8sCli:             kcli,
 		Namespace:          "",
-		Hostname:           "",
+		Hostname:           "ingestor-0",
 		InsecureSkipVerify: false,
 	})
 	require.NoError(t, c.Open(context.Background()))
@@ -144,7 +144,7 @@ func TestCoordinator_DiscoveryDisabled(t *testing.T) {
 	require.NoError(t, err)
 
 	coord := c.(*coordinator)
-	require.Equal(t, 1, len(coord.peers))
+	require.Equal(t, 0, len(coord.peers))
 
 }
 
