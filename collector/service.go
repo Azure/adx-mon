@@ -256,17 +256,19 @@ func (s *Service) scrapeTargets() {
 					wr.Timeseries = append(wr.Timeseries, ts)
 				} else if m.GetHistogram() != nil {
 					hist := m.GetHistogram()
+
 					// Add the quantile series
 					for _, q := range hist.GetBucket() {
-						ts := s.newSeries(name, target, m)
+						ts := s.newSeries(fmt.Sprintf("%s_bucket", name), target, m)
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("le"),
 							Value: []byte(fmt.Sprintf("%f", q.GetUpperBound())),
 						})
+
 						ts.Samples = []prompb.Sample{
 							{
 								Timestamp: timestamp,
-								Value:     q.GetCumulativeCountFloat(),
+								Value:     float64(q.GetCumulativeCount()),
 							},
 						}
 						wr.Timeseries = append(wr.Timeseries, ts)
