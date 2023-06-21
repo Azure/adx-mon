@@ -56,6 +56,7 @@ type coordinator struct {
 	hostname     string
 	groupName    string
 	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 type CoordinatorOpts struct {
@@ -142,6 +143,11 @@ func (c *coordinator) OnDelete(obj interface{}) {
 }
 
 func (c *coordinator) isPeer(p *v1.Pod) bool {
+	// Determine if peer discovery is enabled or not
+	if c.namespace == "" || c.groupName == "" {
+		return false
+	}
+
 	if p.Namespace != c.namespace {
 		return false
 	}
@@ -189,7 +195,6 @@ func (c *coordinator) Open(ctx context.Context) error {
 	set := make(map[string]string)
 	set[c.hostname] = c.hostEntpoint
 	c.peers = set
-	logger.Info("Peer changed %s addr=%s ready=%v", hostName, myIP.To4().String(), "true")
 
 	if _, err := podsInformer.AddEventHandler(c); err != nil {
 		return err
@@ -198,6 +203,9 @@ func (c *coordinator) Open(ctx context.Context) error {
 	if err := c.syncPeers(); err != nil {
 		return err
 	}
+
+	c.wg.Add(1)
+	go c.resyncPeers(ctx)
 
 	return nil
 }
@@ -210,6 +218,7 @@ func (c *coordinator) Owner(b []byte) (string, string) {
 
 func (c *coordinator) Close() error {
 	c.cancel()
+	c.wg.Wait()
 	c.factory.Shutdown()
 	return nil
 }
@@ -228,6 +237,7 @@ func (c *coordinator) syncPeers() error {
 		return fmt.Errorf("list pods: %w", err)
 	}
 
+	set := make(map[string]string, len(c.peers))
 	for _, p := range pods {
 		if p.Status.PodIP == "" {
 			continue
@@ -237,29 +247,17 @@ func (c *coordinator) syncPeers() error {
 			continue
 		}
 
-		_, isPeer := c.peers[p.Name]
 		ready := IsPodReady(p)
-
-		// if the peer is not ready and already in our peer set, remove it.
-		if !ready && isPeer {
-			logger.Info("Peer changed %s addr=%s ready=%v", p.Name, p.Status.PodIP, ready)
-			delete(c.peers, p.Name)
+		if !ready {
 			continue
 		}
 
-		// If the peer is not ready and not already in our peer set, skip it.
-		if !ready || isPeer {
-			continue
-		}
-
-		logger.Info("Peer changed %s addr=%s ready=%v", p.Name, p.Status.PodIP, ready)
-
-		c.peers[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
+		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 	}
 
-	set := make(map[string]string, len(c.peers))
-	for peer, addr := range c.peers {
-		set[peer] = addr
+	c.peers = make(map[string]string, len(set))
+	for peer, addr := range set {
+		c.peers[peer] = addr
 	}
 
 	part, err := NewPartition(set)
@@ -267,9 +265,31 @@ func (c *coordinator) syncPeers() error {
 		return err
 	}
 	c.part = part
-	c.peers = set
 
 	return nil
+}
+
+func (c *coordinator) resyncPeers(ctx context.Context) {
+	defer c.wg.Done()
+
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := c.syncPeers(); err != nil {
+				logger.Error("Failed to reconfigure peers: %s", err)
+			}
+			c.mu.RLock()
+			for peer, addr := range c.peers {
+				logger.Info("Peers updated %s addr=%s ready=%v", peer, addr, "true")
+			}
+			c.mu.RUnlock()
+		}
+	}
 }
 
 // Get preferred outbound ip of this machine
