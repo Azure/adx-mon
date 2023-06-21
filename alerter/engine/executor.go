@@ -32,6 +32,10 @@ type Executor struct {
 	ruleStore   ruleStore
 	region      string
 
+	// tags are access by the worker concurrently outside a mutex.  This is safe because
+	// the map is never modified after creation.
+	tags map[string]string
+
 	wg      sync.WaitGroup
 	closeFn context.CancelFunc
 
@@ -45,6 +49,7 @@ type ExecutorOpts struct {
 	KustoClient Client
 	RuleStore   ruleStore
 	Region      string
+	Tags        map[string]string
 }
 
 // TODO make AlertAddr string part of alertcli
@@ -55,6 +60,7 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 		kustoClient: opts.KustoClient,
 		ruleStore:   opts.RuleStore,
 		region:      opts.Region,
+		tags:        opts.Tags,
 		workers:     make(map[string]*worker),
 	}
 }
@@ -75,6 +81,7 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
 	return &worker{
 		rule:        rule,
+		tags:        e.tags,
 		kustoClient: e.kustoClient,
 		Region:      e.region,
 		HandlerFn:   e.HandlerFn,

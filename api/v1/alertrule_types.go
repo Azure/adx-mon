@@ -33,6 +33,12 @@ type AlertRuleSpec struct {
 	Query             string          `json:"query,omitempty"`
 	AutoMitigateAfter metav1.Duration `json:"autoMitigateAfter,omitempty"`
 	Destination       string          `json:"destination,omitempty"`
+
+	// Key/Value pairs used to determine when an alert can execute.  If empty, always execute.  Keys and values
+	// are deployment specific and configured on alerter instances.  For example, an alerter instance may be
+	// started with `--tag cloud=public`. If an AlertRule has `criteria: {cloud: public}`, then the rule will only
+	// execute on that alerter. All key/values pairs must match (case-insensitive) for the rule to execute.
+	Criteria map[string]string `json:"criteria,omitempty"`
 }
 
 // AlertRuleStatus defines the observed state of AlertRule
@@ -46,8 +52,8 @@ type AlertRuleStatus struct {
 	LastAlertTime metav1.Time `json:"lastAlertTime,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // AlertRule is the Schema for the alertrules API
 type AlertRule struct {
@@ -58,7 +64,7 @@ type AlertRule struct {
 	Status AlertRuleStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // AlertRuleList contains a list of AlertRule
 type AlertRuleList struct {
