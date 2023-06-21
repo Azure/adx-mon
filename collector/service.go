@@ -472,7 +472,6 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 			}
 
 			// If a port is specified, only scrape that port on the pod
-
 			if port != "" {
 				if port != strconv.Itoa(int(cp.ContainerPort)) && port != readinessPort && port != livenessPort {
 					continue
@@ -484,7 +483,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 						Pod:       p.Name,
 						Container: c.Name,
 					})
-				continue
+				return targets
 			}
 
 			targets = append(targets,
