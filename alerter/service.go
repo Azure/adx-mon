@@ -30,6 +30,8 @@ type AlerterOpts struct {
 	Port           int
 	Concurrency    int
 
+	Tags map[string]string
+
 	// MaxNotifications is the maximum number of notifications to send per rule.
 	MaxNotifications int
 
@@ -143,6 +145,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			AlertCli:    alertCli,
 			AlertAddr:   opts.AlertAddr,
 			Region:      opts.Region,
+			Tags:        opts.Tags,
 			KustoClient: kclient,
 			RuleStore:   ruleStore,
 		})

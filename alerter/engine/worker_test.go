@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,51 @@ const (
 	// Query is failing due to service issues (unable to query due to networking issues, timeouts, etc)
 	QueryHealthUnhealthy = float64(0)
 )
+
+func TestWorker_TagsMismatch(t *testing.T) {
+	kcli := &fakeKustoClient{
+		log: logger.Default,
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			t.Logf("Query should not be called")
+			t.Fail()
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			t.Logf("Create alert should not be called")
+			t.Fail()
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+		Criteria: map[string]string{
+			"region": "eastus",
+		},
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+		tags: map[string]string{
+			"region": "westus",
+		},
+	}
+
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	w.ExecuteQuery(context.Background())
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
+}
 
 func TestWorker_ServerError(t *testing.T) {
 

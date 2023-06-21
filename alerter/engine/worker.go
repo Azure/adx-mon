@@ -9,11 +9,10 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
-	"github.com/Azure/adx-mon/pkg/logger"
-
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
@@ -23,6 +22,7 @@ type worker struct {
 	wg          sync.WaitGroup
 	rule        *rules.Rule
 	Region      string
+	tags        map[string]string
 	kustoClient Client
 	AlertAddr   string
 	AlertCli    interface {
@@ -55,6 +55,17 @@ func (e *worker) Run(ctx context.Context) {
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
+	// Check if the rule is enabled for this instance by matching tags with alert criteria.
+	for k, v := range e.rule.Criteria {
+		if vv, ok := e.tags[k]; !ok {
+			logger.Info("Skipping %s/%s on %s/%s because tag %s does not exist: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, k, e.tags)
+			return
+		} else if vv != v {
+			logger.Info("Skipping %s/%s on %s/%s because tag %s=%s does not match criteria %s=%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, k, vv, k, v)
+			return
+		}
+	}
+
 	// Try to acquire a worker slot
 	queue.Workers <- struct{}{}
 

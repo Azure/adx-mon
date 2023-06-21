@@ -84,6 +84,7 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 		Query:             r.Spec.Query,
 		Destination:       r.Spec.Destination,
 		AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
+		Criteria:          r.Spec.Criteria,
 		IsMgmtQuery:       false,
 	}
 
@@ -157,6 +158,9 @@ type Rule struct {
 	Query             string
 	AutoMitigateAfter time.Duration
 	Destination       string
+
+	// Criteria is a map of key-value pairs that are used to determine where an alert can execute.
+	Criteria map[string]string
 
 	// Management queries (starts with a dot) have to call a different
 	// query API in the Kusto Go SDK.

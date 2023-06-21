@@ -45,6 +45,11 @@ spec:
                   type: string
                 destination:
                   type: string
+                criteria:
+                  additionalProperties:
+                    type: string
+                  description: Free form key value pairs
+                  type: object
               type: object
             status:
               description: AlertRuleStatus defines the observed state of AlertRule

@@ -16,6 +16,7 @@ func NewFakeKustoClient(log logger.Logger) Client {
 type fakeKustoClient struct {
 	log      logger.Logger
 	queryErr error
+	queryFn  func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int)
 }
 
 func (m *fakeKustoClient) Endpoint(db string) string {
@@ -26,6 +27,11 @@ func (m *fakeKustoClient) Query(ctx context.Context, qc *QueryContext, fn func(c
 	if m.queryErr != nil {
 		return m.queryErr, 0
 	}
+
+	if m.queryFn != nil {
+		return m.queryFn(ctx, qc, fn)
+	}
+
 	m.log.Info("Executing rule %s", qc.Rule.Database)
 	return nil, 1
 }

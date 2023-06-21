@@ -34,6 +34,7 @@ func main() {
 			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
 			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
+			&cli.StringSliceFlag{Name: "tag", Usage: "Tag in the format of <key>=<value> that applies to execution context"},
 		},
 		Action: realMain,
 		Commands: []*cli.Command{
@@ -55,6 +56,24 @@ func realMain(ctx *cli.Context) error {
 			return cli.Exit("Invalid kusto-endpoint format, expected <name>=<endpoint>", 1)
 		}
 		endpoints[parts[0]] = parts[1]
+	}
+
+	tags := make(map[string]string)
+	tagsArg := ctx.StringSlice("tag")
+	for _, v := range tagsArg {
+		parts := strings.Split(v, "=")
+		if len(parts) != 2 {
+			return cli.Exit("Invalid tag format, expected <key>=<value>", 1)
+		}
+		tags[strings.ToLower(parts[0])] = strings.ToLower(parts[1])
+	}
+
+	// Always add region and cloud tags which are required params for alerter currently.
+	tags["region"] = strings.ToLower(ctx.String("region"))
+	tags["cloud"] = strings.ToLower(ctx.String("cloud"))
+
+	for k, v := range tags {
+		logger.Info("Using tag %s=%s", k, v)
 	}
 
 	scheme := clientgoscheme.Scheme
@@ -80,6 +99,7 @@ func realMain(ctx *cli.Context) error {
 		MaxNotifications: ctx.Int("max-notifications"),
 		MSIID:            ctx.String("auth-msi-id"),
 		KustoToken:       ctx.String("auth-token"),
+		Tags:             tags,
 		CtrlCli:          ctrlCli,
 	}
 
