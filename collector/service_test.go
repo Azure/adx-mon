@@ -1,11 +1,10 @@
-package collector_test
+package collector
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/Azure/adx-mon/collector"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,7 +16,7 @@ const MetricListenAddr = ":9090"
 
 func TestService_Open(t *testing.T) {
 	cli := fake.NewSimpleClientset()
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr:    MetricListenAddr,
 		K8sCli:         cli,
 		ScrapeInterval: 10 * time.Second,
@@ -31,10 +30,10 @@ func TestService_Open(t *testing.T) {
 
 func TestService_Open_Static(t *testing.T) {
 	cli := fake.NewSimpleClientset()
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr: MetricListenAddr,
 		K8sCli:      cli,
-		Targets: []collector.ScrapeTarget{
+		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
 		ScrapeInterval: 10 * time.Second,
@@ -48,11 +47,11 @@ func TestService_Open_Static(t *testing.T) {
 
 func TestService_Open_NoMatchingHost(t *testing.T) {
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr: MetricListenAddr,
 		K8sCli:      cli,
 		NodeName:    "ks8-master-123",
-		Targets: []collector.ScrapeTarget{
+		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
 		ScrapeInterval: 10 * time.Second,
@@ -66,11 +65,11 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr: MetricListenAddr,
 		K8sCli:      cli,
 		NodeName:    "ks8-master-123",
-		Targets: []collector.ScrapeTarget{
+		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
 		ScrapeInterval: 10 * time.Second,
@@ -99,11 +98,11 @@ func TestService_Open_Matching(t *testing.T) {
 		},
 	}
 	cli := fake.NewSimpleClientset(pod)
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr: MetricListenAddr,
 		K8sCli:      cli,
 		NodeName:    "ks8-master-123",
-		Targets: []collector.ScrapeTarget{
+		Targets: []ScrapeTarget{
 			{
 				Addr:      "http://localhost:8080/metrics",
 				Namespace: "namespace",
@@ -154,7 +153,7 @@ func TestService_Open_HostPort(t *testing.T) {
 		},
 	}
 	cli := fake.NewSimpleClientset(pod)
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr:    MetricListenAddr,
 		K8sCli:         cli,
 		NodeName:       "ks8-master-123",
@@ -190,11 +189,11 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	}
 	pod.Status.PodIP = "172.31.1.18"
 	cli := fake.NewSimpleClientset(pod)
-	s, err := collector.NewService(&collector.ServiceOpts{
+	s, err := NewService(&ServiceOpts{
 		ListentAddr: MetricListenAddr,
 		K8sCli:      cli,
 		NodeName:    "ks8-master-123",
-		Targets: []collector.ScrapeTarget{
+		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
 		ScrapeInterval: 10 * time.Second,
@@ -209,6 +208,41 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
 	require.Equal(t, "container", targets[1].Container)
 	require.Equal(t, "default", targets[1].Namespace)
+}
+
+func TestMakeTargets(t *testing.T) {
+	pod := fakePod("namespace", "pod", map[string]string{"app": "test"}, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "10254",
+	}
+	pod.Status.PodIP = "172.31.1.18"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			ReadinessProbe: &v1.Probe{
+				ProbeHandler: v1.ProbeHandler{
+					HTTPGet: &v1.HTTPGetAction{
+						Port: intstr.FromInt(10254),
+					},
+				},
+			},
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+				{
+					ContainerPort: 8081,
+				},
+				{
+					ContainerPort: 8082,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 1, len(targets))
 }
 
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
