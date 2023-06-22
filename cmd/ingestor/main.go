@@ -232,21 +232,31 @@ func realMain(ctx *cli.Context) error {
 
 	logger.Info("Listening at %s", ":9090")
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/receive", svc.HandleReceive)
 
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	logger.Info("Metrics Listening at %s", ":9091")
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.HandleFunc("/debug/pprof/", pprof.Index)
+	metricsMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	srv := &http.Server{Addr: ":9090", Handler: mux}
-	srv.ErrorLog = newLooger()
+	srv.ErrorLog = newLogger()
 
 	go func() {
 		if err := srv.ListenAndServeTLS(cacert, key); err != nil {
+			logger.Error(err.Error())
+		}
+	}()
+
+	metricsSrv := &http.Server{Addr: ":9091", Handler: metricsMux}
+	metricsSrv.ErrorLog = newLogger()
+	go func() {
+		if err := metricsSrv.ListenAndServe(); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
@@ -276,6 +286,10 @@ func realMain(ctx *cli.Context) error {
 
 		// Trigger shutdown of any pending background processes
 		cancel()
+
+		if err := metricsSrv.Shutdown(context.Background()); err != nil {
+			logger.Error("Failed to shutdown metrics server: %s", err)
+		}
 
 		// Shutdown the server and cancel context
 		err := svc.Close()
@@ -360,7 +374,7 @@ func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads i
 	return uploader, err
 }
 
-func newLooger() *log.Logger {
+func newLogger() *log.Logger {
 	return log.New(&writerAdapter{os.Stderr}, "", log.LstdFlags)
 }
 

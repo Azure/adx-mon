@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"os"
 	"strings"
 	"time"
 
@@ -22,30 +21,21 @@ type Service interface {
 }
 
 type ServiceOpts struct {
-	Coordinator TimeSeriesWriter
 }
 
 // Service manages the collection of metrics for ingestors.
 type service struct {
-	Coordinator TimeSeriesWriter
-	closeFn     context.CancelFunc
+	closeFn context.CancelFunc
 
 	hostname string
 }
 
 func NewService(opts ServiceOpts) Service {
-	return &service{
-		Coordinator: opts.Coordinator,
-	}
+	return &service{}
 }
 
 func (s *service) Open(ctx context.Context) error {
 	ctx, s.closeFn = context.WithCancel(ctx)
-	hostname, err := os.Hostname()
-	if err != nil {
-		return err
-	}
-	s.hostname = hostname
 	go s.collect(ctx)
 	return nil
 }
@@ -71,8 +61,6 @@ func (s *service) collect(ctx context.Context) {
 				continue
 			}
 
-			timestamp := time.Now().UTC().UnixMilli()
-			req := prompb.WriteRequest{}
 			for _, v := range mets {
 				switch *v.Type {
 				case io_prometheus_client.MetricType_COUNTER:
@@ -82,33 +70,11 @@ func (s *service) collect(ctx context.Context) {
 						}
 
 						if strings.Contains(v.GetName(), "samples_stored_total") {
-							logger.Info("Rate %0.2f, %f %f", (vv.Counter.GetValue()-lastCount)/10, lastCount, vv.Counter.GetValue())
+							logger.Info("Ingestion rate %0.2f samples/sec, samples ingested=%d", (vv.Counter.GetValue()-lastCount)/10, uint64(vv.Counter.GetValue()))
 							lastCount = vv.Counter.GetValue()
 						}
-
-						ts := prompb.TimeSeries{}
-						ts.Labels = append(ts.Labels, prompb.Label{
-							Name:  []byte("__name__"),
-							Value: []byte(v.GetName()),
-						})
-						for _, label := range vv.Label {
-							ts.Labels = append(ts.Labels, prompb.Label{
-								[]byte(label.GetName()),
-								[]byte(label.GetValue()),
-							})
-						}
-
-						ts.Samples = append(ts.Samples, prompb.Sample{
-							Value:     vv.Counter.GetValue(),
-							Timestamp: int64(timestamp),
-						})
-
-						req.Timeseries = append(req.Timeseries, ts)
 					}
 				}
-			}
-			if err := s.Coordinator.Write(context.Background(), req); err != nil {
-				logger.Error("Failed to write metrics: %s", err)
 			}
 		}
 	}
