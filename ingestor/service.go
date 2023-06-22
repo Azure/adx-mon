@@ -106,7 +106,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		TransferQueue: repl.TransferQueue(),
 	})
 
-	metricsSvc := metrics.NewService(metrics.ServiceOpts{Coordinator: coord})
+	metricsSvc := metrics.NewService(metrics.ServiceOpts{})
 
 	return &Service{
 		opts:        opts,
