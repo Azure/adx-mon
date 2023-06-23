@@ -8,20 +8,27 @@ import (
 var (
 	Namespace = "adxmon"
 
-	// Uploader metrics
-	SamplesReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+	// Ingestor metrics
+	RequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
-		Name:      "samples_received_total",
-		Help:      "Counter of samples received from an ingestor instance",
-	}, []string{"node"})
+		Name:      "requests_received_total",
+		Help:      "Counter of requests received from an ingestor instance",
+	}, []string{"path", "code"})
 
 	SamplesStored = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "samples_stored_total",
 		Help:      "Counter of samples stored for an ingestor instance",
-	}, []string{"node"})
+	}, []string{"metric"})
+
+	IngestorSegmentsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "wal_segments_count",
+		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
+	}, []string{"metric"})
 
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{

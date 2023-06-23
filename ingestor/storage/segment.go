@@ -221,7 +221,7 @@ func (s *segment) Write(ctx context.Context, ts []prompb.TimeSeries) error {
 	enc.SetColumns(s.columns)
 
 	for _, v := range ts {
-		metrics.SamplesStored.WithLabelValues(s.hostname).Add(float64(len(v.Samples)))
+		metrics.SamplesStored.WithLabelValues(s.table).Add(float64(len(v.Samples)))
 
 		if err := enc.MarshalCSV(v); err != nil {
 			return err
