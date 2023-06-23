@@ -196,6 +196,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		// TODO: Should order these by age and break up groups into files that are less than 1GB.
 		owner, _ := a.Partitioner.Owner([]byte(k))
+		println(owner, k)
 		if owner == a.hostname {
 			owned = append(owned, append([]string{}, v...))
 		} else {

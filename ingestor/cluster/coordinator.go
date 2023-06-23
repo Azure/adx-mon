@@ -82,21 +82,18 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	}
 
 	ns := opts.Namespace
+	groupName := opts.Hostname
 	if ns == "" {
 		logger.Warn("No namespace found, peer discovery disabled")
 	} else {
 		logger.Info("Using namespace %s for peer discovery", ns)
-	}
-
-	groupName := opts.Hostname
-	if groupName == "" {
-		logger.Warn("No hostname found, peer discovery disabled")
-	} else if !strings.Contains(groupName, "-") {
-		logger.Warn("Hostname not in statefuleset format, peer discovery disabled")
-	} else {
-		rindex := strings.LastIndex(groupName, "-")
-		groupName = groupName[:rindex]
-		logger.Info("Using statefuleset %s for peer discovery", groupName)
+		if !strings.Contains(groupName, "-") {
+			logger.Warn("Hostname not in statefuleset format, peer discovery disabled")
+		} else {
+			rindex := strings.LastIndex(groupName, "-")
+			groupName = groupName[:rindex]
+			logger.Info("Using statefuleset %s for peer discovery", groupName)
+		}
 	}
 
 	return &coordinator{
@@ -195,6 +192,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 	set := make(map[string]string)
 	set[c.hostname] = c.hostEntpoint
 	c.peers = set
+	c.setPartitioner(set)
 
 	if _, err := podsInformer.AddEventHandler(c); err != nil {
 		return err
@@ -229,6 +227,11 @@ func (c *coordinator) Write(ctx context.Context, wr prompb.WriteRequest) error {
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
 func (c *coordinator) syncPeers() error {
+	// Determine if peer discovery is enabled or not
+	if !c.isPeerDiscoveryEnabled() {
+		return nil
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -255,6 +258,18 @@ func (c *coordinator) syncPeers() error {
 		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 	}
 
+	if err := c.setPartitioner(set); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *coordinator) isPeerDiscoveryEnabled() bool {
+	return c.namespace != "" && c.groupName != ""
+}
+
+func (c *coordinator) setPartitioner(set map[string]string) error {
 	c.peers = make(map[string]string, len(set))
 	for peer, addr := range set {
 		c.peers[peer] = addr
@@ -265,7 +280,6 @@ func (c *coordinator) syncPeers() error {
 		return err
 	}
 	c.part = part
-
 	return nil
 }
 
