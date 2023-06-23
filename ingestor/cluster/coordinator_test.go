@@ -144,8 +144,9 @@ func TestCoordinator_DiscoveryDisabled(t *testing.T) {
 	require.NoError(t, err)
 
 	coord := c.(*coordinator)
-	require.Equal(t, 0, len(coord.peers))
-
+	require.Equal(t, 1, len(coord.peers))
+	require.True(t, coord.peers["ingestor-0"] != "") // Ensure we are in the list
+	require.True(t, coord.peers["ingestor-1"] == "") // Discovery disabled
 }
 
 func TestCoordinator_LostPeer(t *testing.T) {

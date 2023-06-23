@@ -1,6 +1,8 @@
 package cluster
 
-import "sort"
+import (
+	"sort"
+)
 
 type MetricPartitioner interface {
 	Owner([]byte) (string, string)
