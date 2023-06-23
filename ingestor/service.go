@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/adx"
@@ -16,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/golang/snappy"
+	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -177,6 +179,7 @@ func (s *Service) Close() error {
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
+	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/receive"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Error("close http body: %s", err.Error())
@@ -190,6 +193,7 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	// bodyBuf := bytes.NewBuffer(make([]byte, 0, 1024*102))
 	_, err := io.Copy(bodyBuf, r.Body)
 	if err != nil {
+		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -202,6 +206,7 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	// buf := make([]byte, 0, 1024*1024)
 	reqBuf, err := snappy.Decode(buf, compressed)
 	if err != nil {
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -212,21 +217,25 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	// req := &prompb.WriteRequest{}
 	if err := req.Unmarshal(reqBuf); err != nil {
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if err := s.coordinator.Write(r.Context(), req); err != nil {
 		logger.Error("Failed to write ts: %s", err.Error())
+		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
+	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Error("close http body: %s", err.Error())
@@ -235,16 +244,19 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	filename := r.URL.Query().Get("filename")
 	if filename == "" {
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "missing filename", http.StatusBadRequest)
 		return
 	}
 
 	if n, err := s.store.Import(filename, r.Body); err != nil {
+		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else {
 		logger.Info("Imported %d bytes to %s", n, filename)
 	}
+	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
 }
 

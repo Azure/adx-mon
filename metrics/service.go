@@ -61,6 +61,7 @@ func (s *service) collect(ctx context.Context) {
 				continue
 			}
 
+			currentTotal := 0.0
 			for _, v := range mets {
 				switch *v.Type {
 				case io_prometheus_client.MetricType_COUNTER:
@@ -70,12 +71,15 @@ func (s *service) collect(ctx context.Context) {
 						}
 
 						if strings.Contains(v.GetName(), "samples_stored_total") {
-							logger.Info("Ingestion rate %0.2f samples/sec, samples ingested=%d", (vv.Counter.GetValue()-lastCount)/10, uint64(vv.Counter.GetValue()))
-							lastCount = vv.Counter.GetValue()
+							currentTotal += vv.Counter.GetValue()
 						}
 					}
 				}
 			}
+
+			logger.Info("Ingestion rate %0.2f samples/sec, samples ingested=%d", (currentTotal-lastCount)/10, uint64(currentTotal))
+			lastCount = currentTotal
+
 		}
 	}
 }

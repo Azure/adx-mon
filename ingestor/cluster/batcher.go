@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 )
@@ -117,6 +118,8 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
 	}
 
+	metrics.IngestorSegmentsTotal.Reset()
+
 	// Groups is a map of metrics name to a list of segments for that metric.
 	groups := make(map[string][]string)
 
@@ -128,16 +131,18 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			continue
 		}
 
+		parts := strings.Split(v.Name(), "_")
+		if len(parts) != 2 { // Cpu_1234.csv
+			logger.Warn("Invalid file name: %s", filepath.Join(a.storageDir, v.Name()))
+			continue
+		}
+
+		metrics.IngestorSegmentsTotal.WithLabelValues(parts[0]).Inc()
+
 		if a.Segmenter.IsActiveSegment(filepath.Join(a.storageDir, v.Name())) {
 			if logger.IsDebug() {
 				logger.Debug("Skipping active segment: %s", filepath.Join(a.storageDir, v.Name()))
 			}
-			continue
-		}
-
-		parts := strings.Split(v.Name(), "_")
-		if len(parts) != 2 { // Cpu_1234.csv
-			logger.Warn("Invalid file name: %s", filepath.Join(a.storageDir, v.Name()))
 			continue
 		}
 
@@ -196,7 +201,6 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		// TODO: Should order these by age and break up groups into files that are less than 1GB.
 		owner, _ := a.Partitioner.Owner([]byte(k))
-		println(owner, k)
 		if owner == a.hostname {
 			owned = append(owned, append([]string{}, v...))
 		} else {
