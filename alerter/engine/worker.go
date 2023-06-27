@@ -55,15 +55,20 @@ func (e *worker) Run(ctx context.Context) {
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
-	// Check if the rule is enabled for this instance by matching tags with alert criteria.
+	// Check if the rule is enabled for this instance by matching any of the alert criteria tags.
+	var matched bool
 	for k, v := range e.rule.Criteria {
-		if vv, ok := e.tags[k]; !ok {
-			logger.Info("Skipping %s/%s on %s/%s because tag %s does not exist: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, k, e.tags)
-			return
-		} else if vv != v {
-			logger.Info("Skipping %s/%s on %s/%s because tag %s=%s does not match criteria %s=%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, k, vv, k, v)
-			return
+		lowerKey := strings.ToLower(k)
+		if vv, ok := e.tags[lowerKey]; ok && strings.ToLower(vv) == strings.ToLower(v) {
+			matched = true
+			break
 		}
+	}
+
+	// If tags are specified, but none of them matched, skip the query
+	if len(e.rule.Criteria) > 0 && !matched {
+		logger.Info("Skipping %s/%s on %s/%s because none of the tags matched: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags)
+		return
 	}
 
 	// Try to acquire a worker slot
