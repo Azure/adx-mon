@@ -56,6 +56,9 @@ type ServiceOpts struct {
 
 	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
 	InsecureSkipVerify bool
+
+	// MaxBatchSize is the maximum number of samples to send in a single batch.
+	MaxBatchSize int
 }
 
 type ScrapeTarget struct {
@@ -178,6 +181,8 @@ func (s *Service) scrape() {
 
 func (s *Service) scrapeTargets() {
 	targets := s.Targets()
+
+	wr := &prompb.WriteRequest{}
 	for _, target := range targets {
 		fams, err := FetchMetrics(target.Addr)
 		if err != nil {
@@ -185,7 +190,6 @@ func (s *Service) scrapeTargets() {
 			continue
 		}
 
-		wr := &prompb.WriteRequest{}
 		for name, val := range fams {
 			// Drop metrics that are in the drop list
 			var drop bool
@@ -320,12 +324,26 @@ func (s *Service) scrapeTargets() {
 			}
 		}
 
+		if len(wr.Timeseries) >= s.opts.MaxBatchSize {
+			// TODO: Send write requests to separate goroutines
+			for _, endpoint := range s.opts.Endpoints {
+				if err := s.remoteClient.Write(s.ctx, endpoint, wr); err != nil {
+					logger.Error(err.Error())
+				}
+			}
+			wr.Timeseries = wr.Timeseries[:0]
+		}
+
+	}
+
+	if len(wr.Timeseries) > 0 {
 		// TODO: Send write requests to separate goroutines
 		for _, endpoint := range s.opts.Endpoints {
 			if err := s.remoteClient.Write(s.ctx, endpoint, wr); err != nil {
 				logger.Error(err.Error())
 			}
 		}
+		wr.Timeseries = wr.Timeseries[:0]
 	}
 }
 

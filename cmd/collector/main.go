@@ -52,6 +52,7 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they exist.  These are dropped from all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they are scraped from a target.  All metrics with matching prefixes are dropped"},
+			&cli.IntFlag{Name: "max-batch-size", Usage: "Maximum number of samples to send in a single batch", Value: 5000},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -164,6 +165,7 @@ func realMain(ctx *cli.Context) error {
 		AddLabels:          addLabels,
 		DropLabels:         dropLabels,
 		InsecureSkipVerify: ctx.Bool("insecure-skip-verify"),
+		MaxBatchSize:       ctx.Int("max-batch-size"),
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
