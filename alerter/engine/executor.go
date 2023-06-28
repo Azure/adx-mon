@@ -79,9 +79,13 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 }
 
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
+	lowerTags := make(map[string]string, len(e.tags))
+	for k, v := range e.tags {
+		lowerTags[strings.ToLower(k)] = strings.ToLower(v)
+	}
 	return &worker{
 		rule:        rule,
-		tags:        e.tags,
+		tags:        lowerTags,
 		kustoClient: e.kustoClient,
 		Region:      e.region,
 		HandlerFn:   e.HandlerFn,

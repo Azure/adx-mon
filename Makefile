@@ -2,17 +2,17 @@
 
 build-alerter:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/alerter cmd/alerter/main.go
+	CGO_ENABLED=0 go build -o bin/alerter ./cmd/alerter/...
 .PHONY: build
 
 build-ingestor:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/ingestor cmd/ingestor/main.go
+	CGO_ENABLED=0 go build -o bin/ingestor ./cmd/ingestor/...
 .PHONY: build
 
 build-collector:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/collector cmd/collector/main.go
+	CGO_ENABLED=0 go build -o bin/collector ./cmd/collector/...
 .PHONY: build
 
 

@@ -37,7 +37,7 @@ type AlertRuleSpec struct {
 	// Key/Value pairs used to determine when an alert can execute.  If empty, always execute.  Keys and values
 	// are deployment specific and configured on alerter instances.  For example, an alerter instance may be
 	// started with `--tag cloud=public`. If an AlertRule has `criteria: {cloud: public}`, then the rule will only
-	// execute on that alerter. All key/values pairs must match (case-insensitive) for the rule to execute.
+	// execute on that alerter. Any key/values pairs must match (case-insensitive) for the rule to execute.
 	Criteria map[string]string `json:"criteria,omitempty"`
 }
 
