@@ -6,6 +6,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,15 +45,20 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	ListentAddr    string
-	K8sCli         kubernetes.Interface
-	NodeName       string
-	Targets        []ScrapeTarget
-	Endpoints      []string
-	AddLabels      map[string]string
-	DropLabels     map[string]struct{}
+	ListentAddr string
+	K8sCli      kubernetes.Interface
+	NodeName    string
+	Targets     []ScrapeTarget
+	Endpoints   []string
+	AddLabels   map[string]string
+	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
+	DropLabels map[*regexp.Regexp]*regexp.Regexp
+
+	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
+	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
+	DropMetrics []*regexp.Regexp
+
 	ScrapeInterval time.Duration
-	DropMetrics    map[string]struct{}
 
 	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
 	InsecureSkipVerify bool
@@ -193,8 +199,8 @@ func (s *Service) scrapeTargets() {
 		for name, val := range fams {
 			// Drop metrics that are in the drop list
 			var drop bool
-			for prefix := range s.opts.DropMetrics {
-				if strings.HasPrefix(name, prefix) {
+			for _, r := range s.opts.DropMetrics {
+				if r.MatchString(name) {
 					drop = true
 					break
 				}
@@ -204,7 +210,10 @@ func (s *Service) scrapeTargets() {
 			}
 
 			for _, m := range val.Metric {
-				ts := s.newSeries(name, target, m)
+				ts, ok := s.newSeries(name, target, m)
+				if !ok {
+					continue
+				}
 
 				timestamp := m.GetTimestampMs()
 				if timestamp == 0 {
@@ -225,7 +234,10 @@ func (s *Service) scrapeTargets() {
 
 					// Add the quantile series
 					for _, q := range sum.GetQuantile() {
-						ts := s.newSeries(name, target, m)
+						ts, ok := s.newSeries(name, target, m)
+						if !ok {
+							continue
+						}
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("quantile"),
 							Value: []byte(fmt.Sprintf("%f", q.GetQuantile())),
@@ -240,7 +252,10 @@ func (s *Service) scrapeTargets() {
 					}
 
 					// Add sum series
-					ts := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
+					ts, ok := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
+					if !ok {
+						continue
+					}
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -250,7 +265,10 @@ func (s *Service) scrapeTargets() {
 					wr.Timeseries = append(wr.Timeseries, ts)
 
 					// Add sum series
-					ts = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
+					ts, ok = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
+					if !ok {
+						continue
+					}
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -263,7 +281,10 @@ func (s *Service) scrapeTargets() {
 
 					// Add the quantile series
 					for _, q := range hist.GetBucket() {
-						ts := s.newSeries(fmt.Sprintf("%s_bucket", name), target, m)
+						ts, ok := s.newSeries(fmt.Sprintf("%s_bucket", name), target, m)
+						if !ok {
+							continue
+						}
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("le"),
 							Value: []byte(fmt.Sprintf("%f", q.GetUpperBound())),
@@ -279,7 +300,10 @@ func (s *Service) scrapeTargets() {
 					}
 
 					// Add sum series
-					ts := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
+					ts, ok := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
+					if !ok {
+						continue
+					}
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -289,7 +313,10 @@ func (s *Service) scrapeTargets() {
 					wr.Timeseries = append(wr.Timeseries, ts)
 
 					// Add sum series
-					ts = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
+					ts, ok = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
+					if !ok {
+						continue
+					}
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -347,7 +374,7 @@ func (s *Service) scrapeTargets() {
 	}
 }
 
-func (s *Service) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
+func (s *Service) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) (prompb.TimeSeries, bool) {
 	return s.seriesCreator.newSeries(name, scrapeTarget, m)
 }
 
