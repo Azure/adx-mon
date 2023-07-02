@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -47,6 +49,8 @@ type Service struct {
 
 	store   storage.Store
 	metrics metrics.Service
+
+	requestFilter *transform.RequestFilter
 }
 
 type ServiceOpts struct {
@@ -60,6 +64,13 @@ type ServiceOpts struct {
 
 	// LiftedColumns is a slice of label names where each element will be added as a column if the label exists.
 	LiftedColumns []string
+
+	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
+	DropLabels map[*regexp.Regexp]*regexp.Regexp
+
+	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
+	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
+	DropMetrics []*regexp.Regexp
 
 	K8sCli kubernetes.Interface
 
@@ -118,6 +129,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		coordinator: coord,
 		batcher:     batcher,
 		metrics:     metricsSvc,
+		requestFilter: &transform.RequestFilter{
+			DropMetrics: opts.DropMetrics,
+			DropLabels:  opts.DropLabels,
+		},
 	}, nil
 }
 
@@ -222,6 +237,10 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(s.opts.DropMetrics) > 0 || len(s.opts.DropLabels) > 0 {
+		req = s.fileterDropMetrics(req)
+	}
+
 	if err := s.coordinator.Write(r.Context(), req); err != nil {
 		logger.Error("Failed to write ts: %s", err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
@@ -300,4 +319,10 @@ func (s *Service) DisableWrites() error {
 		return err
 	}
 	return nil
+}
+
+// filterDropMetrics remove metrics and labels configured to be dropped by slicing them out
+// of the passed prombpWriteRequest.  The modified request is returned to caller.
+func (s *Service) fileterDropMetrics(req prompb.WriteRequest) prompb.WriteRequest {
+	return s.requestFilter.Filter(req)
 }
