@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"regexp"
 	"sort"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -8,12 +9,21 @@ import (
 )
 
 type seriesCreator struct {
-	AddLabels  map[string]string
-	DropLabels map[string]struct{}
+	AddLabels   map[string]string
+	DropMetrics []*regexp.Regexp
+	DropLabels  map[*regexp.Regexp]*regexp.Regexp
 }
 
-func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
+func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) (prompb.TimeSeries, bool) {
 	ts := prompb.TimeSeries{}
+
+	if len(s.DropMetrics) > 0 {
+		for _, r := range s.DropMetrics {
+			if r.MatchString(name) {
+				return ts, false
+			}
+		}
+	}
 
 	if scrapeTarget.Namespace != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
@@ -43,7 +53,15 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 		}
 
 		// Skip labels that will be dropped
-		if _, ok := s.DropLabels[l.GetName()]; ok {
+		var skip bool
+		for metRe, labelRe := range s.DropLabels {
+			println(name, metRe.MatchString(name), l.GetName(), labelRe.MatchString(l.GetName()))
+			if metRe.MatchString(name) && labelRe.MatchString(l.GetName()) {
+				skip = true
+				break
+			}
+		}
+		if skip {
 			continue
 		}
 
@@ -70,5 +88,5 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 	// Ensure that the __name__ label is the first label
 	ts.Labels = append([]prompb.Label{{Name: []byte("__name__"), Value: []byte(name)}}, ts.Labels...)
 
-	return ts
+	return ts, true
 }

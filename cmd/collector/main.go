@@ -50,8 +50,8 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
 			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they exist.  These are dropped from all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they are scraped from a target.  All metrics with matching prefixes are dropped"},
+			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
+			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
 			&cli.IntFlag{Name: "max-batch-size", Usage: "Maximum number of samples to send in a single batch", Value: 5000},
 		},
 
@@ -84,14 +84,35 @@ func realMain(ctx *cli.Context) error {
 		addLabels[split[0]] = split[1]
 	}
 
-	dropLabels := make(map[string]struct{})
-	for _, tag := range ctx.StringSlice("drop-labels") {
-		dropLabels[tag] = struct{}{}
+	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
+	for _, v := range ctx.StringSlice("drop-labels") {
+		// The format is <metrics region>=<label regex>
+		fields := strings.Split(v, "=")
+		if len(fields) > 2 {
+			logger.Fatal("invalid dimension: %s", v)
+		}
+
+		metricRegex, err := regexp.Compile(fields[0])
+		if err != nil {
+			logger.Fatal("invalid metric regex: %s", err)
+		}
+
+		labelRegex, err := regexp.Compile(fields[1])
+		if err != nil {
+			logger.Fatal("invalid label regex: %s", err)
+		}
+
+		dropLabels[metricRegex] = labelRegex
 	}
 
-	dropMetrics := make(map[string]struct{})
-	for _, tag := range ctx.StringSlice("drop-metrics") {
-		dropMetrics[tag] = struct{}{}
+	dropMetrics := []*regexp.Regexp{}
+	for _, v := range ctx.StringSlice("drop-metrics") {
+		metricRegex, err := regexp.Compile(v)
+		if err != nil {
+			logger.Fatal("invalid metric regex: %s", err)
+		}
+
+		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
 	hostname := ctx.String("hostname")
