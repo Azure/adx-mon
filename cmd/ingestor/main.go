@@ -57,7 +57,7 @@ func main() {
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
-			&cli.StringSliceFlag{Name: "labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
+			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
@@ -102,7 +102,7 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
-	staticColumns = ctx.StringSlice("labels")
+	staticColumns = ctx.StringSlice("add-labels")
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
 	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
