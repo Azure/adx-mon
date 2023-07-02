@@ -30,6 +30,13 @@ var (
 		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
 	}, []string{"metric"})
 
+	MetricsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "metrics_dropped_total",
+		Help:      "Counter of metrics droopped for an ingestor instance",
+	}, []string{"metric"})
+
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,

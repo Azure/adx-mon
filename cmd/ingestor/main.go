@@ -10,6 +10,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -58,6 +59,9 @@ func main() {
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
+			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
+			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
+
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
@@ -94,7 +98,6 @@ func realMain(ctx *cli.Context) error {
 		concurrentUploads                   int
 		maxSegmentSize                      int64
 		maxSegmentAge                       time.Duration
-		staticColumns                       strSliceFag
 	)
 	storageDir = ctx.String("storage-dir")
 	kustoEndpoint = ctx.String("kusto-endpoint")
@@ -102,7 +105,6 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
-	staticColumns = ctx.StringSlice("add-labels")
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
 	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
@@ -176,7 +178,7 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	defaultMapping := storage.NewSchema()
-	for _, v := range staticColumns {
+	for _, v := range ctx.StringSlice("add-labels") {
 		fields := strings.Split(v, "=")
 		if len(fields) != 2 {
 			logger.Fatal("invalid dimension: %s", v)
@@ -206,6 +208,37 @@ func realMain(ctx *cli.Context) error {
 		defaultMapping = defaultMapping.AddStringMapping(v)
 	}
 
+	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
+	for _, v := range ctx.StringSlice("drop-labels") {
+		// The format is <metrics region>=<label regex>
+		fields := strings.Split(v, "=")
+		if len(fields) > 2 {
+			logger.Fatal("invalid dimension: %s", v)
+		}
+
+		metricRegex, err := regexp.Compile(fields[0])
+		if err != nil {
+			logger.Fatal("invalid metric regex: %s", err)
+		}
+
+		labelRegex, err := regexp.Compile(fields[1])
+		if err != nil {
+			logger.Fatal("invalid label regex: %s", err)
+		}
+
+		dropLabels[metricRegex] = labelRegex
+	}
+
+	dropMetrics := []*regexp.Regexp{}
+	for _, v := range ctx.StringSlice("drop-metrics") {
+		metricRegex, err := regexp.Compile(v)
+		if err != nil {
+			logger.Fatal("invalid metric regex: %s", err)
+		}
+
+		dropMetrics = append(dropMetrics, metricRegex)
+	}
+
 	uploader, err := newUploader(kustoEndpoint, database, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
@@ -222,6 +255,8 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentAge:      maxSegmentAge,
 		InsecureSkipVerify: insecureSkipVerify,
 		LiftedColumns:      sortedLiftedLabels,
+		DropLabels:         dropLabels,
+		DropMetrics:        dropMetrics,
 	})
 	if err != nil {
 		logger.Fatal("Failed to create service: %s", err)
