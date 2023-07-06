@@ -43,7 +43,9 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 	require.NoError(t, iter.Mock(rows))
 
 	row, _, _ := iter.NextRowOrError()
-	require.ErrorContains(t, e.HandlerFn(context.Background(), "http://endpoint", qc, row), "title must be between 1 and 512 chars")
+	err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
+	require.ErrorContains(t, err, "title must be between 1 and 512 chars")
+	require.True(t, isUserError(err))
 }
 
 func TestExecutor_Handler_Severity(t *testing.T) {
@@ -60,6 +62,16 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 			columns: table.Columns{{Name: "Title", Type: types.String}},
 			rows:    value.Values{value.String{Value: "Title", Valid: true}},
 			err:     "severity must be specified",
+		},
+		{
+			desc: "severity not convertable to a number",
+			columns: table.Columns{
+				{Name: "Title", Type: types.String},
+				{Name: "Severity", Type: types.String}},
+			rows: value.Values{
+				value.String{Value: "Title", Valid: true},
+				value.String{Value: "not a number", Valid: false}},
+			err: "failed to convert severity to int",
 		},
 		{
 			desc: "severity as long",
@@ -139,6 +151,7 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 				require.Equal(t, tt.severity, client.alert.Severity)
 			} else {
 				require.ErrorContains(t, err, tt.err)
+				require.True(t, isUserError(err))
 			}
 		})
 	}

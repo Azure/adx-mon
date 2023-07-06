@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"math"
 )
 
@@ -31,10 +30,18 @@ type Notification struct {
 
 func (i Notification) Validate() error {
 	if len(i.Title) == 0 || len(i.Title) > 512 {
-		return fmt.Errorf("title must be between 1 and 512 chars")
+		return &NotificationValidationError{"title must be between 1 and 512 chars"}
 	}
 	if i.Severity == math.MinInt64 {
-		return fmt.Errorf("severity must be specified")
+		return &NotificationValidationError{"severity must be specified"}
 	}
 	return nil
+}
+
+type NotificationValidationError struct {
+	Msg string
+}
+
+func (e *NotificationValidationError) Error() string {
+	return e.Msg
 }

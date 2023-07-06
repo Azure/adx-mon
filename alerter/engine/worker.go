@@ -136,10 +136,19 @@ func isUserError(err error) bool {
 		return false
 	}
 
+	// User specified a database in their CRD that adx-mon does not have configured.
 	var unknownDB *UnknownDBError
 	if errors.As(err, &unknownDB) {
 		return true
 	}
+
+	// User's query results are missing a required column, or they are the wrong type.
+	var validationErr *NotificationValidationError
+	if errors.As(err, &validationErr) {
+		return true
+	}
+
+	// Look to see if a kusto query error is specific to how the query was defined and not due to problems with adx-mon itself.
 	var kerr *kerrors.HttpError
 	if errors.As(err, &kerr) {
 		if kerr.Kind == kerrors.KClientArgs {
