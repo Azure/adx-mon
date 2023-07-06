@@ -37,6 +37,13 @@ var (
 		Help:      "Counter of metrics droopped for an ingestor instance",
 	}, []string{"metric"})
 
+	IngestorMetricsCardinality = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "metrics_cardinality_count",
+		Help:      "Cardinality of metrics ingested",
+	}, []string{"metric"})
+
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,

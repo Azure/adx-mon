@@ -32,7 +32,6 @@ func (f *RequestFilter) Filter(req prompb.WriteRequest) prompb.WriteRequest {
 		}
 
 		if skip {
-
 			continue
 		}
 

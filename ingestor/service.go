@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/cespare/xxhash"
 	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
@@ -239,6 +240,20 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	if len(s.opts.DropMetrics) > 0 || len(s.opts.DropLabels) > 0 {
 		req = s.fileterDropMetrics(req)
+	}
+
+	seriesId := xxhash.New()
+	for _, v := range req.Timeseries {
+		seriesId.Reset()
+		var metric string
+		for i, vv := range v.Labels {
+			if i == 0 {
+				metric = string(vv.Value)
+			}
+			seriesId.Write(vv.Name)
+			seriesId.Write(vv.Value)
+		}
+		s.metrics.AddSeries(metric, seriesId.Sum64())
 	}
 
 	if err := s.coordinator.Write(r.Context(), req); err != nil {
