@@ -131,6 +131,8 @@ github.com/cespare/xxhash/v2
 # github.com/cpuguy83/go-md2man/v2 v2.0.2
 ## explicit; go 1.11
 github.com/cpuguy83/go-md2man/v2/md2man
+# github.com/d4l3k/messagediff v1.2.1
+## explicit
 # github.com/davecgh/go-spew v1.1.1
 ## explicit
 github.com/davecgh/go-spew/spew
@@ -296,6 +298,9 @@ github.com/spf13/pflag
 ## explicit; go 1.13
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
+# github.com/tylertreat/BoomFilters v0.0.0-20210315201527-1a82519a3e43
+## explicit
+github.com/tylertreat/BoomFilters
 # github.com/urfave/cli/v2 v2.24.3
 ## explicit; go 1.18
 github.com/urfave/cli/v2

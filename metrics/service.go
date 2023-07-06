@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/counter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	srv "github.com/Azure/adx-mon/pkg/service"
@@ -18,6 +19,7 @@ type TimeSeriesWriter interface {
 
 type Service interface {
 	srv.Component
+	AddSeries(key string, id uint64)
 }
 
 type ServiceOpts struct {
@@ -27,11 +29,14 @@ type ServiceOpts struct {
 type service struct {
 	closeFn context.CancelFunc
 
-	hostname string
+	hostname  string
+	estimator *counter.MultiEstimator
 }
 
 func NewService(opts ServiceOpts) Service {
-	return &service{}
+	return &service{
+		estimator: counter.NewMultiEstimator(),
+	}
 }
 
 func (s *service) Open(ctx context.Context) error {
@@ -45,6 +50,10 @@ func (s *service) Close() error {
 	return nil
 }
 
+func (s *service) AddSeries(key string, id uint64) {
+	s.estimator.Add(key, id)
+}
+
 func (s *service) collect(ctx context.Context) {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
@@ -55,6 +64,12 @@ func (s *service) collect(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			s.estimator.Roll()
+			IngestorMetricsCardinality.Reset()
+			for _, k := range s.estimator.Keys() {
+				IngestorMetricsCardinality.WithLabelValues(k).Set(float64(s.estimator.Count(k)))
+			}
+
 			mets, err := prometheus.DefaultGatherer.Gather()
 			if err != nil {
 				logger.Error("Failed to gather metrics: %s", err)
