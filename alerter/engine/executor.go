@@ -117,8 +117,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		case "severity":
 			v, err := e.asInt64(value)
 			if err != nil {
-				metrics.QueryHealth.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
-				return err
+				return &NotificationValidationError{err.Error()}
 			}
 			res.Severity = v
 		case "recipient":
@@ -133,7 +132,6 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	}
 
 	if err := res.Validate(); err != nil {
-		metrics.QueryHealth.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 		return err
 	}
 

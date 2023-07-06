@@ -419,6 +419,43 @@ func TestWorker_UnknownDB(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 }
 
+func TestWorker_MissingColumnsFromResults(t *testing.T) {
+	kcli := &fakeKustoClient{
+		log:      logger.Default,
+		queryErr: &NotificationValidationError{"invalid result"},
+	}
+
+	var createCalled bool
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			createCalled = true
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+	}
+
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	w.ExecuteQuery(context.Background())
+	require.True(t, createCalled, "Create alert should be called")
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	// user caused error
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
+}
+
 func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
 	t.Helper()
 
