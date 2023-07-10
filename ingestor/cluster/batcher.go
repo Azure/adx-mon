@@ -132,11 +132,19 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	var (
 		owned, notOwned [][]string
 		lastMetric      string
+		groupSize       int
 	)
 	for _, v := range entries {
 		if v.IsDir() || !strings.HasSuffix(v.Name(), ".csv") {
 			continue
 		}
+
+		fi, err := v.Info()
+		if err != nil {
+			logger.Warn("Failed to stat file: %s", filepath.Join(a.storageDir, v.Name()))
+			continue
+		}
+		groupSize += int(fi.Size())
 
 		parts := strings.Split(v.Name(), "_")
 		if len(parts) != 2 { // Cpu_1234.csv
@@ -151,6 +159,8 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		} else {
 			if lastMetric == "" || parts[0] != lastMetric {
 				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastMetric).Set(time.Since(createdAt).Seconds())
+				metrics.IngestorSegmentsSizeBytes.WithLabelValues(lastMetric).Set(float64(groupSize))
+				groupSize = 0
 			}
 		}
 		lastMetric = parts[0]
