@@ -30,6 +30,13 @@ var (
 		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
 	}, []string{"metric"})
 
+	IngestorSegmentsMaxAge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "wal_segments_max_age_seconds",
+		Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
+	}, []string{"metric"})
+
 	MetricsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
