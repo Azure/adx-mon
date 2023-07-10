@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 )
@@ -117,6 +118,9 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
 
 	metrics.IngestorSegmentsTotal.Reset()
 
@@ -125,7 +129,10 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 	// We need to find the segment that this node is responsible for uploading to kusto and ones that
 	// need to be transferred to other nodes.
-	var owned, notOwned [][]string
+	var (
+		owned, notOwned [][]string
+		lastMetric      string
+	)
 	for _, v := range entries {
 		if v.IsDir() || !strings.HasSuffix(v.Name(), ".csv") {
 			continue
@@ -136,6 +143,17 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			logger.Warn("Invalid file name: %s", filepath.Join(a.storageDir, v.Name()))
 			continue
 		}
+
+		epoch := parts[1][:len(parts[1])-4]
+		createdAt, err := flake.ParseFlakeID(epoch)
+		if err != nil {
+			logger.Warn("Failed to parse flake id: %s: %s", epoch, err)
+		} else {
+			if lastMetric == "" || parts[0] != lastMetric {
+				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastMetric).Set(time.Since(createdAt).Seconds())
+			}
+		}
+		lastMetric = parts[0]
 
 		metrics.IngestorSegmentsTotal.WithLabelValues(parts[0]).Inc()
 
