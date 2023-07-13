@@ -1,11 +1,16 @@
 package counter
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // MultiEstimator is a cardinality estimator that can track cardinality of multiple keys over time without big drops in
 // counts when counting windows roll over.
 type MultiEstimator struct {
-	i          uint64
+	i uint64
+
+	mu         sync.RWMutex
 	estimators [2]map[string]*Estimator
 }
 
@@ -19,17 +24,21 @@ func NewMultiEstimator() *MultiEstimator {
 func (e *MultiEstimator) Keys() []string {
 	idx := atomic.LoadUint64(&e.i)
 	est := e.estimators[idx%2]
+	e.mu.RLock()
 	keys := make([]string, 0, len(est))
 	for k := range est {
 		keys = append(keys, k)
 	}
+	e.mu.RUnlock()
 	return keys
 }
 
 // Count returns the current count of items.
 func (e *MultiEstimator) Count(key string) uint64 {
 	idx := atomic.LoadUint64(&e.i)
+	e.mu.RLock()
 	est := e.estimators[idx%2][key]
+	e.mu.RUnlock()
 	if est == nil {
 		return 0
 	}
@@ -40,18 +49,22 @@ func (e *MultiEstimator) Count(key string) uint64 {
 func (e *MultiEstimator) Add(key string, i uint64) {
 	idx := atomic.LoadUint64(&e.i)
 
+	e.mu.Lock()
 	est := e.estimators[idx%2][key]
 	if est == nil {
 		est = NewEstimator()
 		e.estimators[idx%2][key] = est
 	}
+	e.mu.Unlock()
 	est.Add(i)
 
+	e.mu.Lock()
 	est = e.estimators[(idx+1)%2][key]
 	if est == nil {
 		est = NewEstimator()
 		e.estimators[(idx+1)%2][key] = est
 	}
+	e.mu.Unlock()
 	est.Add(i)
 }
 
@@ -65,9 +78,5 @@ func (e *MultiEstimator) Reset() {
 // being counted.
 func (e *MultiEstimator) Roll() {
 	idx := atomic.AddUint64(&e.i, 1)
-
-	est := e.estimators[(idx-1)%2]
-	for k := range est {
-		delete(est, k)
-	}
+	e.estimators[(idx-1)%2] = map[string]*Estimator{}
 }
