@@ -135,7 +135,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		groupSize       int
 	)
 	for _, v := range entries {
-		if v.IsDir() || !strings.HasSuffix(v.Name(), ".csv") {
+		if v.IsDir() || !strings.HasSuffix(v.Name(), ".wal") {
 			continue
 		}
 
@@ -147,7 +147,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		groupSize += int(fi.Size())
 
 		parts := strings.Split(v.Name(), "_")
-		if len(parts) != 2 { // Cpu_1234.csv
+		if len(parts) != 2 { // Cpu_1234.wal
 			logger.Warn("Invalid file name: %s", filepath.Join(a.storageDir, v.Name()))
 			continue
 		}

@@ -1,6 +1,7 @@
 package wal_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -129,4 +130,38 @@ func TestSegment_Iterator(t *testing.T) {
 	next, err = iter.Next()
 	require.ErrorIs(t, err, io.EOF)
 	require.False(t, next)
+}
+
+func TestSegment_LargeSegments(t *testing.T) {
+	dir := t.TempDir()
+	s, err := wal.NewSegment(dir, "Foo")
+	require.NoError(t, err)
+	for i := 0; i < 100000; i++ {
+		require.NoError(t, s.Write(context.Background(), []byte(fmt.Sprintf("test%d %s\n", i, strings.Repeat("a", 1024)))))
+	}
+	require.NoError(t, s.Close())
+
+	f, err := os.Open(s.Path())
+	require.NoError(t, err)
+	defer f.Close()
+
+	iter, err := wal.NewSegmentIterator(f)
+	require.NoError(t, err)
+	for {
+		next, err := iter.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if !next {
+			break
+		}
+	}
+
+	s, err = wal.Open(s.Path())
+	require.NoError(t, err)
+
+	b, err := s.Bytes()
+	require.NoError(t, err)
+	require.Equal(t, 100000, bytes.Count(b, []byte("\n")))
 }

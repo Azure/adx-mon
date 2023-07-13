@@ -24,13 +24,10 @@ import (
 
 const (
 	// DefaultIOBufSize is the default buffer size for bufio.Writer.
-	DefaultIOBufSize = 8 * 1024
+	DefaultIOBufSize = 128 * 1024
 
 	// DefaultRingSize is the default size of the ring buffer.
-	DefaultRingSize = 1024
-
-	// DefaultFlushThreshold is the size of uncompressed, buffered writes that will be flushed to disk if exceeded.
-	DefaultFlushThreshold = 1024 * 1024
+	DefaultRingSize = 16 * 1024
 )
 
 var (
@@ -53,7 +50,7 @@ type Segment interface {
 	Name() string
 	Size() (int64, error)
 	CreatedAt() time.Time
-	Reader() (io.Reader, error)
+	Reader() (io.ReadCloser, error)
 	Path() string
 
 	Iterator() (Iterator, error)
@@ -112,7 +109,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 	fields := strings.Split(prefix, "_")
 
 	bf := bufio.NewWriterSize(fw, DefaultIOBufSize)
-	gzbuf := bytes.NewBuffer(make([]byte, 0, 1024))
+	gzbuf := bytes.NewBuffer(make([]byte, 0, 4*1024))
 
 	f := &segment{
 		name:      fields[0],
@@ -128,6 +125,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		ringBuf: ring.NewBuffer(DefaultRingSize),
 	}
 
+	f.wg.Add(1)
 	go f.flusher()
 	return f, nil
 }
@@ -161,7 +159,7 @@ func Open(path string) (Segment, error) {
 
 	bf := bufio.NewWriterSize(fd, DefaultIOBufSize)
 
-	gzbuf := bytes.NewBuffer(make([]byte, 0, 1024))
+	gzbuf := bytes.NewBuffer(make([]byte, 0, 4*1024))
 
 	f := &segment{
 		name:      name,
@@ -181,6 +179,7 @@ func Open(path string) (Segment, error) {
 		return nil, err
 	}
 
+	f.wg.Add(1)
 	go f.flusher()
 
 	return f, nil
@@ -196,9 +195,10 @@ func (s *segment) Name() string {
 	return s.name
 }
 
-// Reader returns an io.Reader for the segement.
-func (s *segment) Reader() (io.Reader, error) {
-	return os.Open(s.path)
+// Reader returns an io.Reader for the segment.  The Reader returns segment data automatically handling segment
+// blocks and validation.
+func (s *segment) Reader() (io.ReadCloser, error) {
+	return NewSegmentReader(s.Path())
 }
 
 // CreateAt returns the time when the segment was created.
@@ -227,7 +227,7 @@ func (s *segment) Iterator() (Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &blockIterator{f: f, buf: make([]byte, 0, 4096)}, nil
+	return NewSegmentIterator(f)
 }
 
 // Write writes buf to the segment.
@@ -238,7 +238,8 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 	entry := s.ringBuf.Reserve()
 	defer s.ringBuf.Release(entry)
 
-	entry.Value = buf
+	entry.Value = append(entry.Value[:0], buf...)
+
 	s.ringBuf.Enqueue(entry)
 
 	select {
@@ -251,9 +252,13 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 
 // Bytes returns full segment file as byte slice.
 func (s *segment) Bytes() ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return os.ReadFile(s.w.Name())
+	f, err := s.Reader()
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	return io.ReadAll(f)
 }
 
 // Close closes the segment for writing.
@@ -287,7 +292,7 @@ func (s *segment) Close() error {
 // repair truncates the last bytes in the segment if they don't are missing, corrupted or have extra data.  This
 // repairs any corrupted segment that may not have fully flushed to disk safely.
 func (s *segment) repair() error {
-	buf := make([]byte, 4096)
+	buf := make([]byte, 0, 4096)
 
 	if _, err := s.w.Seek(0, io.SeekStart); err != nil {
 		return err
@@ -308,7 +313,7 @@ func (s *segment) repair() error {
 
 		blockLen := binary.BigEndian.Uint32(lenCrcBuf[:4])
 		if uint32(cap(buf)) < blockLen {
-			buf = make([]byte, blockLen)
+			buf = make([]byte, 0, blockLen)
 		}
 
 		crc := binary.BigEndian.Uint32(lenCrcBuf[4:8])
@@ -332,10 +337,12 @@ func (s *segment) repair() error {
 }
 
 func (s *segment) flusher() {
-	s.wg.Add(1)
 	defer s.wg.Done()
 
-	blockBuf := bytes.NewBuffer(make([]byte, 4*1024))
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+
+	blockBuf := bytes.NewBuffer(make([]byte, 0, 4*1024))
 	for {
 		select {
 		case req := <-s.ringBuf.Queue():
@@ -347,33 +354,34 @@ func (s *segment) flusher() {
 			default:
 			}
 
-			var n int
-			for len(s.ringBuf.Queue()) > 0 {
-				req = <-s.ringBuf.Queue()
-
-				err := s.blockWrite(blockBuf, req.Value)
-				select {
-				case req.ErrCh <- err:
-				default:
-				}
-				n++
-
-				if blockBuf.Len() >= DefaultFlushThreshold {
-					break
-				}
-			}
+			s.flushQueue(blockBuf)
 
 			s.flushBlock(blockBuf, req)
+
+		case <-t.C:
+			if err := s.bw.Flush(); err != nil {
+				logger.Error("Failed to flush writer for segment: %s: %s", s.path, err)
+			}
 		case <-s.closing:
 			blockBuf.Reset()
 			s.flushQueue(blockBuf)
 
-			req := &ring.Entry{ErrCh: make(chan error)}
+			req := &ring.Entry{ErrCh: make(chan error, 1)}
 			s.flushBlock(blockBuf, req)
+
+			if err := s.bw.Flush(); err != nil {
+				logger.Error("Failed to flush writer for segment: %s: %s", s.path, err)
+			}
+
+			if err := s.w.Sync(); err != nil {
+				logger.Error("Failed to sync segment: %s: %s", s.path, err)
+			}
 
 			select {
 			case err := <-req.ErrCh:
-				logger.Error("Failed to flush block when closing segment: %s", err)
+				if err != nil {
+					logger.Error("Failed to flush block when closing segment: %s", err)
+				}
 			default:
 			}
 
@@ -383,30 +391,25 @@ func (s *segment) flusher() {
 }
 
 func (s *segment) flushBlock(blockBuf *bytes.Buffer, req *ring.Entry) {
+	if blockBuf.Len() == 0 {
+		req.ErrCh <- nil
+		return
+	}
+
 	s.gzbuf.Reset()
 	s.gw.Reset(s.gzbuf)
 
-	_, err := s.gw.Write(blockBuf.Bytes())
-	select {
-	case req.ErrCh <- err:
-	default:
+	var reqErr error
+	if _, err := io.Copy(s.gw, blockBuf); err != nil {
+		reqErr = err
+	} else if err = s.gw.Close(); err != nil {
+		reqErr = err
+	} else if err = s.blockWrite(s.bw, s.gzbuf.Bytes()); err != nil {
+		reqErr = err
 	}
 
-	err = s.gw.Flush()
 	select {
-	case req.ErrCh <- err:
-	default:
-	}
-
-	err = s.blockWrite(s.bw, blockBuf.Bytes())
-	select {
-	case req.ErrCh <- err:
-	default:
-	}
-
-	err = s.bw.Flush()
-	select {
-	case req.ErrCh <- err:
+	case req.ErrCh <- reqErr:
 	default:
 	}
 }
@@ -420,7 +423,6 @@ func (s *segment) flushQueue(w io.Writer) {
 		case req.ErrCh <- err:
 		default:
 		}
-		continue
 	}
 
 }
@@ -434,13 +436,20 @@ func (s *segment) blockWrite(w io.Writer, buf []byte) error {
 	var lenBuf [8]byte
 	binary.BigEndian.PutUint32(lenBuf[:4], uint32(len(buf)))
 	binary.BigEndian.PutUint32(lenBuf[4:8], crc32.ChecksumIEEE(buf))
-	_, err := w.Write(lenBuf[:8])
+	n, err := w.Write(lenBuf[:8])
 	if err != nil {
 		return err
+	} else if n != 8 {
+		return io.ErrShortWrite
 	}
 
-	_, err = w.Write(buf)
-	return err
+	n, err = w.Write(buf)
+	if err != nil {
+		return err
+	} else if n != len(buf) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func (s *segment) truncate(ofs int64) error {
@@ -452,100 +461,4 @@ func (s *segment) truncate(ofs int64) error {
 	}
 
 	return nil
-}
-
-// blockIterator is an iterator for a segment file.  It allows reading back values written to the segment in the
-// same order they were written.
-type blockIterator struct {
-	// f is the underlying segment file on disk.
-	f *os.File
-
-	// n is the index into buf that allows iterating through values in a block.
-	n int
-
-	// buf is last read block from disk.  This block holds multiple values corresponding
-	// to segment writes.
-	buf []byte
-
-	// value is the current value that is returned for the iterator.
-	value []byte
-
-	// lenCrcBuf is a temp buffer to re-use for extracting the 8 byte (4 len, 4 crc) values
-	// when iterating.
-	lenCrcBuf [8]byte
-}
-
-func (b *blockIterator) Next() (bool, error) {
-	// Each block may have multiple entries corresponding to each call to Write
-	if b.n < len(b.buf) {
-		return b.nextValue()
-	}
-
-	// Read the block length and CRC
-	n, err := b.f.Read(b.lenCrcBuf[:8])
-	if err == io.EOF {
-		return false, err
-	} else if err != nil || n != 8 {
-		return false, fmt.Errorf("short read: expected 8, got %d", n)
-	}
-
-	// Extract the block length and expand the read buffer if it is too small.
-	blockLen := binary.BigEndian.Uint32(b.lenCrcBuf[:4])
-	if uint32(cap(b.buf)) < blockLen {
-		b.buf = make([]byte, blockLen)
-	}
-
-	// Extract the CRC value for the block
-	crc := binary.BigEndian.Uint32(b.lenCrcBuf[4:8])
-
-	// Read the expected block length bytes
-	n, err = b.f.Read(b.buf[:blockLen])
-	if err != nil {
-		return false, err
-	}
-
-	// Make sure we actually read the number of bytes we were expecting.
-	if uint32(n) != blockLen {
-		return false, fmt.Errorf("short block read: expected %d, got %d", blockLen, n)
-	}
-
-	// Validate the block checksum matches still
-	if crc32.ChecksumIEEE(b.buf[:blockLen]) != crc {
-		return false, fmt.Errorf("block checksum verification failed")
-	}
-
-	// Setup internal iterator indexing on this block.
-	b.buf = b.buf[:n]
-	b.n = 0
-
-	// Unwrap the first value in this block.
-	return b.nextValue()
-}
-
-func (b *blockIterator) nextValue() (bool, error) {
-	blockLen := binary.BigEndian.Uint32(b.buf[b.n : b.n+4])
-	crc := binary.BigEndian.Uint32(b.buf[b.n+4 : b.n+8])
-
-	if int(blockLen) > len(b.buf[b.n+8:]) {
-		return false, fmt.Errorf("short block read: expected %d, got %d", blockLen, len(b.buf[b.n+8:]))
-	}
-
-	value := b.buf[b.n+8 : b.n+8+int(blockLen)]
-
-	if crc32.ChecksumIEEE(value) != crc {
-		return false, fmt.Errorf("block checksum verification failed")
-	}
-
-	b.value = value
-	b.n += 8 + int(blockLen)
-
-	return true, nil
-}
-
-func (b *blockIterator) Value() []byte {
-	return b.value
-}
-
-func (b *blockIterator) Close() error {
-	return b.f.Close()
 }

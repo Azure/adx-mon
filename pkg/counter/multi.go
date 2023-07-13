@@ -49,23 +49,30 @@ func (e *MultiEstimator) Count(key string) uint64 {
 func (e *MultiEstimator) Add(key string, i uint64) {
 	idx := atomic.LoadUint64(&e.i)
 
-	e.mu.Lock()
-	est := e.estimators[idx%2][key]
-	if est == nil {
-		est = NewEstimator()
-		e.estimators[idx%2][key] = est
-	}
-	e.mu.Unlock()
-	est.Add(i)
+	// Fast-path
+	e.mu.RLock()
+	estA := e.estimators[idx%2][key]
+	estB := e.estimators[(idx+1)%2][key]
+	e.mu.RUnlock()
 
-	e.mu.Lock()
-	est = e.estimators[(idx+1)%2][key]
-	if est == nil {
-		est = NewEstimator()
-		e.estimators[(idx+1)%2][key] = est
+	if estA == nil || estB == nil {
+		// Re-check under the write-lock
+		e.mu.Lock()
+		estA = e.estimators[idx%2][key]
+		estB = e.estimators[(idx+1)%2][key]
+		if estA == nil {
+			estA = NewEstimator()
+			e.estimators[idx%2][key] = estA
+		}
+
+		if estB == nil {
+			estB = NewEstimator()
+			e.estimators[(idx+1)%2][key] = estB
+		}
+		e.mu.Unlock()
 	}
-	e.mu.Unlock()
-	est.Add(i)
+	estA.Add(i)
+	estB.Add(i)
 }
 
 // Reset resets the estimator.

@@ -13,9 +13,18 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/transform"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/wal"
+)
+
+var (
+	csvWriterPool = pool.NewGeneric(1024, func(sz int) interface{} {
+		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+	})
 )
 
 type Store interface {
@@ -36,7 +45,7 @@ type LocalStore struct {
 	opts StoreOpts
 
 	mu   sync.RWMutex
-	wals map[string]*WAL
+	wals map[string]*wal.WAL
 }
 
 type StoreOpts struct {
@@ -50,7 +59,7 @@ type StoreOpts struct {
 func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
 		opts: opts,
-		wals: make(map[string]*WAL),
+		wals: make(map[string]*wal.WAL),
 	}
 }
 
@@ -59,7 +68,7 @@ func (s *LocalStore) Open(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || filepath.Ext(path) != ".csv" {
+		if d.IsDir() || filepath.Ext(path) != ".wal" {
 			return nil
 		}
 
@@ -100,16 +109,15 @@ func (s *LocalStore) Close() error {
 	return nil
 }
 
-func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*WAL, error) {
-	walOpts := WALOpts{
+func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*wal.WAL, error) {
+	walOpts := wal.WALOpts{
 		StorageDir:     s.opts.StorageDir,
 		Prefix:         prefix,
 		SegmentMaxSize: s.opts.SegmentMaxSize,
 		SegmentMaxAge:  s.opts.SegmentMaxAge,
-		Columns:        s.opts.LiftedColumns,
 	}
 
-	wal, err := NewWAL(walOpts)
+	wal, err := wal.NewWAL(walOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +129,7 @@ func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	return wal, nil
 }
 
-func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*WAL, error) {
+func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*wal.WAL, error) {
 	key := seriesKey(labels)
 
 	s.mu.RLock()
@@ -159,13 +167,24 @@ func (s *LocalStore) WALCount() int {
 }
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
+	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	defer csvWriterPool.Put(enc)
+	enc.SetColumns(s.opts.LiftedColumns)
+
 	for _, v := range ts {
 		wal, err := s.GetWAL(ctx, v.Labels)
 		if err != nil {
 			return err
 		}
 
-		if err := wal.Write(ctx, []prompb.TimeSeries{v}); err != nil {
+		metrics.SamplesStored.WithLabelValues(string(v.Labels[0].Value)).Add(float64(len(v.Samples)))
+
+		enc.Reset()
+		if err := enc.MarshalCSV(v); err != nil {
+			return err
+		}
+
+		if err := wal.Write(ctx, enc.Bytes()); err != nil {
 			return err
 		}
 	}
@@ -177,7 +196,7 @@ func (s *LocalStore) IsActiveSegment(path string) bool {
 	defer s.mu.RUnlock()
 
 	for _, v := range s.wals {
-		if v.SegmentPath() == path {
+		if v.Path() == path {
 			return true
 		}
 	}

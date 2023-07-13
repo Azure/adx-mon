@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 )
 
@@ -169,7 +170,7 @@ func (n *uploader) upload(ctx context.Context) error {
 
 			func() {
 				readers := make([]io.Reader, 0, len(paths))
-				files := make([]*os.File, 0, len(paths))
+				files := make([]io.Closer, 0, len(paths))
 				var fields []string
 				n.mu.Lock()
 				for _, path := range paths {
@@ -183,7 +184,7 @@ func (n *uploader) upload(ctx context.Context) error {
 					fileName := filepath.Base(path)
 					fields = strings.Split(fileName, "_")
 
-					f, err := os.Open(path)
+					f, err := wal.NewSegmentReader(path)
 					if os.IsNotExist(err) {
 						// batches are not disjoint, so the same segments could be included in multiple batches.
 						continue
@@ -191,12 +192,13 @@ func (n *uploader) upload(ctx context.Context) error {
 						logger.Error("Failed to open file: %s", err.Error())
 						continue
 					}
+
 					readers = append(readers, f)
 					files = append(files, f)
 				}
 				n.mu.Unlock()
 
-				defer func(paths []string, files []*os.File) {
+				defer func(paths []string, files []io.Closer) {
 					for _, f := range files {
 						f.Close()
 					}
