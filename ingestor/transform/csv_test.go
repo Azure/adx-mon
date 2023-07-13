@@ -52,7 +52,8 @@ func TestMarshalCSV(t *testing.T) {
 	require.Equal(t, `2022-11-22T10:22:04.001Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",0.000000000
 2022-11-22T10:22:05.002Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",1.000000000
 2022-11-22T10:22:06.003Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",2.000000000
-`, b.String())
+`, string(w.Bytes()))
+
 }
 
 func TestMarshalCSV_LiftLabel(t *testing.T) {

@@ -1,44 +1,44 @@
 package wal_test
 
 import (
-	"bytes"
 	"context"
-	"sort"
 	"testing"
 
-	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewWAL(t *testing.T) {
-	w, err := storage.NewWAL(storage.WALOpts{
+	w, err := wal.NewWAL(wal.WALOpts{
 		StorageDir: t.TempDir(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Open(context.Background()))
 
-	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
-	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
-	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write(context.Background(), []byte("foo"))
+	w.Write(context.Background(), []byte("foo"))
+	w.Write(context.Background(), []byte("foo"))
 	require.Equal(t, 1, w.Size())
 }
 
 func TestWAL_Segment(t *testing.T) {
-	w, err := storage.NewWAL(storage.WALOpts{
+	w, err := wal.NewWAL(wal.WALOpts{
 		StorageDir: t.TempDir(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Open(context.Background()))
 
-	series := newTimeSeries("foo", nil, 1, 1)
-	w.Write(context.Background(), []prompb.TimeSeries{series})
-	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
+	w.Write(context.Background(), []byte("1970-01-01T00:00:00.001Z,-414304664621325809,{},1.000000000\n"))
+	w.Write(context.Background(), []byte("1970-01-01T00:00:00.002Z,-414304664621325809,{},2.000000000\n"))
 
 	require.Equal(t, 1, w.Size())
 
-	seg := w.Segment()
-	require.NotNil(t, seg)
+	path := w.Path()
+
+	require.NoError(t, w.Close())
+
+	seg, err := wal.Open(path)
+	require.NoError(t, err)
 
 	b, err := seg.Bytes()
 	require.NoError(t, err)
@@ -50,18 +50,18 @@ func TestWAL_Segment(t *testing.T) {
 
 func TestWAL_Open(t *testing.T) {
 	dir := t.TempDir()
-	w, err := storage.NewWAL(storage.WALOpts{
+	w, err := wal.NewWAL(wal.WALOpts{
 		Prefix:     "Foo",
 		StorageDir: dir,
 	})
 	require.NoError(t, err)
 	require.NoError(t, w.Open(context.Background()))
-	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 1, 1)})
+	w.Write(context.Background(), []byte("foo"))
 	require.Equal(t, 1, w.Size())
 
 	require.NoError(t, w.Close())
 
-	w, err = storage.NewWAL(storage.WALOpts{
+	w, err = wal.NewWAL(wal.WALOpts{
 		Prefix:     "Foo",
 		StorageDir: dir,
 	})
@@ -69,33 +69,7 @@ func TestWAL_Open(t *testing.T) {
 	require.NoError(t, w.Open(context.Background()))
 	require.Equal(t, 0, w.Size())
 
-	w.Write(context.Background(), []prompb.TimeSeries{newTimeSeries("foo", nil, 2, 2)})
+	w.Write(context.Background(), []byte("foo"))
 	require.Equal(t, 1, w.Size())
 
-}
-
-func newTimeSeries(name string, labels map[string]string, ts int64, val float64) prompb.TimeSeries {
-	l := []prompb.Label{
-		{
-			Name:  []byte("__name__"),
-			Value: []byte(name),
-		},
-	}
-	for k, v := range labels {
-		l = append(l, prompb.Label{Name: []byte(k), Value: []byte(v)})
-	}
-	sort.Slice(l, func(i, j int) bool {
-		return bytes.Compare(l[i].Name, l[j].Name) < 0
-	})
-
-	return prompb.TimeSeries{
-		Labels: l,
-
-		Samples: []prompb.Sample{
-			{
-				Timestamp: ts,
-				Value:     val,
-			},
-		},
-	}
 }

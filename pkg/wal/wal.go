@@ -158,6 +158,7 @@ func (w *WAL) rotate(ctx context.Context) {
 	}
 }
 
+// Path returns the path of the active segment.
 func (w *WAL) Path() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()

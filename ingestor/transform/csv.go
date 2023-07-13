@@ -9,20 +9,14 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
 )
 
-var (
-	buffPool = pool.NewGeneric(128, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
-)
-
 type CSVWriter struct {
-	buf     *bytes.Buffer
+	w       *bytes.Buffer
+	buf     *strings.Builder
 	enc     *csv.Writer
 	columns []string
 }
@@ -31,7 +25,8 @@ type CSVWriter struct {
 // label keys that will be promoted to columns.
 func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 	writer := &CSVWriter{
-		buf:     w,
+		w:       w,
+		buf:     &strings.Builder{},
 		enc:     csv.NewWriter(w),
 		columns: columns,
 	}
@@ -40,9 +35,8 @@ func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 }
 
 func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
-	buf := buffPool.Get(4096).(*bytes.Buffer)
+	buf := w.buf
 	buf.Reset()
-	defer buffPool.Put(buf)
 
 	seriesIdHasher := xxhash.New()
 	var j int
@@ -83,7 +77,7 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 			continue
 		}
 
-		if buf.Bytes()[buf.Len()-1] != '{' {
+		if buf.String()[buf.Len()-1] != '{' {
 			buf.WriteByte(',')
 		}
 		fflib.WriteJson(buf, v.Name)
@@ -92,7 +86,6 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 	}
 
 	buf.WriteByte('}')
-	b := buf.Bytes()
 	seriesId := seriesIdHasher.Sum64()
 
 	fields := make([]string, 0, 4)
@@ -124,7 +117,7 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 		}
 
 		// labels
-		fields = append(fields, string(b))
+		fields = append(fields, buf.String())
 
 		// Values
 		fields = append(fields, strconv.FormatFloat(v.Value, 'f', 9, 64))
@@ -139,11 +132,12 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 }
 
 func (w *CSVWriter) Reset() {
+	w.w.Reset()
 	w.buf.Reset()
 }
 
 func (w *CSVWriter) Bytes() []byte {
-	return w.buf.Bytes()
+	return w.w.Bytes()
 }
 
 func (w *CSVWriter) SetColumns(columns []string) {
@@ -155,7 +149,7 @@ func (w *CSVWriter) SetColumns(columns []string) {
 	w.columns = sortLower
 }
 
-// Normalized convert a metrics name to a ProperCase table name
+// Normalize converts a metrics name to a ProperCase table name
 func Normalize(s []byte) []byte {
 	var b bytes.Buffer
 	for i := 0; i < len(s); i++ {

@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/cespare/xxhash"
 	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,7 +40,7 @@ var (
 )
 
 type Service struct {
-	walOpts storage.WALOpts
+	walOpts wal.WALOpts
 	opts    ServiceOpts
 
 	uploader    adx.Uploader
