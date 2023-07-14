@@ -1,8 +1,6 @@
 package wal
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -28,22 +26,15 @@ type segmentIterator struct {
 
 	// lenCrcBuf is a temp buffer to re-use for extracting the 8 byte (4 len, 4 crc) values
 	// when iterating.
-	lenCrcBuf   [8]byte
-	bytesReader *bytes.Reader
-	gr          *gzip.Reader
-	bytesWriter *bytes.Buffer
+	lenCrcBuf [8]byte
 }
 
 func NewSegmentIterator(f *os.File) (Iterator, error) {
-	bytesReader := bytes.NewReader(nil)
-
 	return &segmentIterator{
-		f:           f,
-		n:           0,
-		buf:         make([]byte, 0, 4096),
-		value:       nil,
-		bytesReader: bytesReader,
-		bytesWriter: bytes.NewBuffer(make([]byte, 0, 1024)),
+		f:     f,
+		n:     0,
+		buf:   make([]byte, 0, 4096),
+		value: nil,
 	}, nil
 }
 func (b *segmentIterator) Next() (bool, error) {
@@ -85,27 +76,8 @@ func (b *segmentIterator) Next() (bool, error) {
 		return false, fmt.Errorf("block checksum verification failed")
 	}
 
-	// println("read block", blockLen, "bytes", len(b.buf[:blockLen]), "crc", crc, spew.Sdump(b.buf[:blockLen]))
-
-	// Reset the bytes reader and gzip reader to read from the new block.
-	b.bytesReader.Reset(b.buf[:blockLen])
-	if b.gr == nil {
-		var err error
-		b.gr, err = gzip.NewReader(b.bytesReader)
-		if err != nil {
-			println(1)
-			return false, err
-		}
-	} else {
-		if err := b.gr.Reset(b.bytesReader); err != nil {
-			println(2)
-			return false, err
-		}
-	}
-
-	buf, err := io.ReadAll(b.gr)
+	buf, err := decoder.DecodeAll(b.buf[:blockLen], nil)
 	if err != nil {
-		println(3)
 		return false, err
 	}
 

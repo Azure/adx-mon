@@ -3,7 +3,6 @@ package wal
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -20,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/ring"
 	"github.com/davidnarayan/go-flake"
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -32,6 +32,10 @@ const (
 
 var (
 	idgen *flake.Flake
+
+	// encoder and decoder are used for compressing and decompressing blocks
+	encoder, _ = zstd.NewWriter(nil)
+	decoder, _ = zstd.NewReader(nil)
 )
 
 func init() {
@@ -80,9 +84,8 @@ type segment struct {
 	// bw is a buffered writer for w that if flushed to disk in batches.
 	bw *bufio.Writer
 
-	// gw is the writer used for compressing blocks.
-	gw    *gzip.Writer
-	gzbuf *bytes.Buffer
+	// encodeBuf is a buffer used for compressing blocks before writing to disk.
+	encodeBuf []byte
 
 	closing chan struct{}
 	closed  bool
@@ -109,7 +112,6 @@ func NewSegment(dir, prefix string) (Segment, error) {
 	fields := strings.Split(prefix, "_")
 
 	bf := bufio.NewWriterSize(fw, DefaultIOBufSize)
-	gzbuf := bytes.NewBuffer(make([]byte, 0, 4*1024))
 
 	f := &segment{
 		name:      fields[0],
@@ -118,8 +120,6 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		path:      path,
 		w:         fw,
 		bw:        bf,
-		gw:        gzip.NewWriter(gzbuf),
-		gzbuf:     gzbuf,
 
 		closing: make(chan struct{}),
 		ringBuf: ring.NewBuffer(DefaultRingSize),
@@ -159,8 +159,6 @@ func Open(path string) (Segment, error) {
 
 	bf := bufio.NewWriterSize(fd, DefaultIOBufSize)
 
-	gzbuf := bytes.NewBuffer(make([]byte, 0, 4*1024))
-
 	f := &segment{
 		name:      name,
 		id:        id,
@@ -169,8 +167,6 @@ func Open(path string) (Segment, error) {
 
 		w:       fd,
 		bw:      bf,
-		gw:      gzip.NewWriter(gzbuf),
-		gzbuf:   gzbuf,
 		closing: make(chan struct{}),
 		ringBuf: ring.NewBuffer(DefaultRingSize),
 	}
@@ -396,20 +392,12 @@ func (s *segment) flushBlock(blockBuf *bytes.Buffer, req *ring.Entry) {
 		return
 	}
 
-	s.gzbuf.Reset()
-	s.gw.Reset(s.gzbuf)
+	s.encodeBuf = encoder.EncodeAll(blockBuf.Bytes(), s.encodeBuf[:0])
 
-	var reqErr error
-	if _, err := io.Copy(s.gw, blockBuf); err != nil {
-		reqErr = err
-	} else if err = s.gw.Close(); err != nil {
-		reqErr = err
-	} else if err = s.blockWrite(s.bw, s.gzbuf.Bytes()); err != nil {
-		reqErr = err
-	}
+	err := s.blockWrite(s.bw, s.encodeBuf)
 
 	select {
-	case req.ErrCh <- reqErr:
+	case req.ErrCh <- err:
 	default:
 	}
 }
