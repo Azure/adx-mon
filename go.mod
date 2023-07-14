@@ -8,6 +8,7 @@ require (
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/fatih/color v1.13.0
 	github.com/golang/snappy v0.0.4
+	github.com/klauspost/compress v1.16.7
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
 	github.com/mattn/go-isatty v0.0.16
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
@@ -62,7 +63,6 @@ require (
 	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/klauspost/crc32 v0.0.0-20161016154125-cb6bfca970f6 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
