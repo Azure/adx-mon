@@ -285,7 +285,7 @@ func (s *segment) Close() error {
 	return s.w.Close()
 }
 
-// repair truncates the last bytes in the segment if they don't are missing, corrupted or have extra data.  This
+// repair truncates the last bytes in the segment if they are missing, corrupted or have extra data.  This
 // repairs any corrupted segment that may not have fully flushed to disk safely.
 func (s *segment) repair() error {
 	buf := make([]byte, 0, 4096)
@@ -304,6 +304,7 @@ func (s *segment) repair() error {
 		idx += n
 
 		if err != nil || n != 8 {
+			logger.Warn("Repairing segment %s, missing block header, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 
@@ -321,10 +322,12 @@ func (s *segment) repair() error {
 		}
 
 		if uint32(n) != blockLen {
+			logger.Warn("Repairing segment %s, short block, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 
 		if crc32.ChecksumIEEE(buf[:blockLen]) != crc {
+			logger.Warn("Repairing segment %s, checksum failed, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 

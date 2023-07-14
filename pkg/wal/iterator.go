@@ -91,7 +91,7 @@ func (b *segmentIterator) Next() (bool, error) {
 }
 
 func (b *segmentIterator) nextValue() (bool, error) {
-	if b.n > len(b.buf) {
+	if b.n >= len(b.buf) {
 		return false, io.EOF
 	}
 	blockLen := binary.BigEndian.Uint32(b.buf[b.n : b.n+4])
