@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"flag"
-	"io"
 	"os"
 
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -39,23 +37,4 @@ func main() {
 		}
 		print(string(iter.Value()))
 	}
-
-	return
-	reader, err := wal.NewSegmentReader(dataFile)
-	if err != nil {
-		logger.Fatal("open file: %s", err)
-	}
-
-	defer reader.Close()
-
-	b, err := io.ReadAll(reader)
-	if err != nil {
-		// logger.Fatal("read: %s", err)
-	}
-
-	lines := bytes.Split(b, []byte("\n"))
-	for _, line := range lines {
-		println(string(line))
-	}
-
 }
