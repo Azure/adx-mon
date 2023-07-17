@@ -1,6 +1,7 @@
 package counter
 
 import (
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,4 +30,20 @@ func TestMultiEstimator(t *testing.T) {
 	require.Equal(t, uint64(0), est.Count("foo"))
 	require.Equal(t, uint64(0), est.Count("bar"))
 	require.Equal(t, uint64(0), est.Count("baz"))
+}
+
+func TestMultiEstimator_HighCount(t *testing.T) {
+	samples := 1000000
+	est := NewMultiEstimator()
+	require.Equal(t, uint64(0), est.Count("foo"))
+
+	for i := 0; i < samples; i++ {
+		u := rand.Uint64()
+		est.Add("foo", u)
+	}
+	require.True(t, float64(samples-int(est.Count("foo")))/float64(samples) < 0.01)
+	est.Roll()
+	require.True(t, float64(samples-int(est.Count("foo")))/float64(samples) < 0.01)
+	est.Roll()
+	require.Equal(t, uint64(0), est.Count("foo"))
 }

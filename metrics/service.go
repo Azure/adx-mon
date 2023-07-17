@@ -55,7 +55,7 @@ func (s *service) AddSeries(key string, id uint64) {
 }
 
 func (s *service) collect(ctx context.Context) {
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
 	var lastCount float64
