@@ -59,8 +59,15 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	var matched bool
 	for k, v := range e.rule.Criteria {
 		lowerKey := strings.ToLower(k)
-		if vv, ok := e.tags[lowerKey]; ok && strings.ToLower(vv) == strings.ToLower(v) {
-			matched = true
+		if vv, ok := e.tags[lowerKey]; ok {
+			for _, value := range v {
+				if strings.ToLower(vv) == strings.ToLower(value) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
 			break
 		}
 	}

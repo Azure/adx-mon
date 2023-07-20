@@ -47,7 +47,9 @@ spec:
                   type: string
                 criteria:
                   additionalProperties:
-                    type: string
+                    type: array
+                    items:
+                      type: string
                   description: Free form key value pairs
                   type: object
               type: object

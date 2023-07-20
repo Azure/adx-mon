@@ -160,7 +160,7 @@ type Rule struct {
 	Destination       string
 
 	// Criteria is a map of key-value pairs that are used to determine where an alert can execute.
-	Criteria map[string]string
+	Criteria map[string][]string
 
 	// Management queries (starts with a dot) have to call a different
 	// query API in the Kusto Go SDK.
