@@ -48,8 +48,8 @@ func TestWorker_TagsMismatch(t *testing.T) {
 	rule := &rules.Rule{
 		Namespace: "namespace",
 		Name:      "name",
-		Criteria: map[string]string{
-			"region": "eastus",
+		Criteria: map[string][]string{
+			"region": {"eastus"},
 		},
 	}
 	w := &worker{
@@ -93,8 +93,8 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 	rule := &rules.Rule{
 		Namespace: "namespace",
 		Name:      "name",
-		Criteria: map[string]string{
-			"region": "eastus",
+		Criteria: map[string][]string{
+			"region": {"eastus"},
 		},
 	}
 	w := &worker{
@@ -140,8 +140,8 @@ func TestWorker_TagsNoneMatch(t *testing.T) {
 	rule := &rules.Rule{
 		Namespace: "namespace",
 		Name:      "name",
-		Criteria: map[string]string{
-			"region": "westus",
+		Criteria: map[string][]string{
+			"region": {"westus"},
 		},
 	}
 	w := &worker{
@@ -164,6 +164,75 @@ func TestWorker_TagsNoneMatch(t *testing.T) {
 	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 	require.Equal(t, false, queryCalled)
+}
+
+func TestWorker_TagsMultiple(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		log: logger.Default,
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			t.Logf("Create alert should not be called")
+			t.Fail()
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+		Criteria: map[string][]string{
+			"region": {"eastus", "westus"},
+		},
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+		tags: map[string]string{
+			"region": "eastus",
+			"env":    "prod",
+		},
+	}
+
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	w.ExecuteQuery(context.Background())
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
+	require.Equal(t, true, queryCalled)
+
+	w = &worker{
+		rule:        rule,
+		Region:      "westus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+		tags: map[string]string{
+			"region": "eastus",
+			"env":    "prod",
+		},
+	}
+
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	w.ExecuteQuery(context.Background())
+	gaugeValue = getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
+	require.Equal(t, true, queryCalled)
+
 }
 
 func TestWorker_ServerError(t *testing.T) {

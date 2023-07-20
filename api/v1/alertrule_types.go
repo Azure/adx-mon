@@ -17,6 +17,9 @@ limitations under the License.
 package v1
 
 import (
+	"encoding/json"
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -38,7 +41,61 @@ type AlertRuleSpec struct {
 	// are deployment specific and configured on alerter instances.  For example, an alerter instance may be
 	// started with `--tag cloud=public`. If an AlertRule has `criteria: {cloud: public}`, then the rule will only
 	// execute on that alerter. Any key/values pairs must match (case-insensitive) for the rule to execute.
-	Criteria map[string]string `json:"criteria,omitempty"`
+	Criteria map[string][]string `json:"criteria,omitempty"`
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface for backward compatibility with and older version of the
+// Criteria field.  The older version was a map[string]string.  This function will convert the older version to the
+// new version.
+func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
+	rule := make(map[string]interface{})
+	if err := json.Unmarshal(data, &rule); err != nil {
+		return err
+	}
+	a.Database = rule["database"].(string)
+	if rule["interval"] != nil {
+		dur := rule["interval"].(string)
+		if dur != "" {
+			d, err := time.ParseDuration(dur)
+			if err != nil {
+				return err
+			}
+			a.Interval = metav1.Duration{Duration: d}
+		}
+	}
+
+	a.Query = rule["query"].(string)
+
+	if rule["autoMitigateAfter"] != nil {
+		mit := rule["autoMitigateAfter"].(string)
+		if mit != "" {
+			d, err := time.ParseDuration(mit)
+			if err != nil {
+				return err
+			}
+			a.AutoMitigateAfter = metav1.Duration{Duration: d}
+		}
+	}
+	a.Destination = rule["destination"].(string)
+
+	// The type for Criteria has changed to map[string][]string.  This handles backwards compatibility where
+	// some existing alerts may have a string value instead of a list of strings.
+	criteria := rule["criteria"]
+	if s, ok := criteria.(map[string]interface{}); ok && s != nil {
+		a.Criteria = make(map[string][]string)
+		for k, v := range s {
+			switch v.(type) {
+			case string:
+				a.Criteria[k] = []string{v.(string)}
+			case []interface{}:
+				for _, value := range v.([]interface{}) {
+					a.Criteria[k] = append(a.Criteria[k], value.(string))
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // AlertRuleStatus defines the observed state of AlertRule
