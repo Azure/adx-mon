@@ -8,6 +8,7 @@ require (
 	github.com/Azure/azure-kusto-go v0.10.2
 	github.com/bufbuild/connect-go v1.9.0
 	github.com/cespare/xxhash v1.1.0
+	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/golang/snappy v0.0.4
