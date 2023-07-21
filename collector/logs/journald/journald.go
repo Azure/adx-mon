@@ -14,7 +14,22 @@ var (
 	CONTAINER_METADATA = []string{"CONTAINER_PARTIAL_ID", "CONTAINER_PARTIAL_LAST", "CONTAINER_NAME"}
 )
 
-func CollectLogs(ctx context.Context) error {
+type JournaldCollector struct {
+	transforms []logs.Transform
+}
+
+func NewJournaldCollector(transforms []logs.Transform) *JournaldCollector {
+	return &JournaldCollector{
+		transforms: transforms,
+	}
+}
+
+func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
+	for _, transformer := range c.transforms {
+		transformer.Init()
+		// TODO shutdown transformers, going from first to last
+	}
+
 	j, err := sdjournal.NewJournal()
 	if err != nil {
 		return err
@@ -37,13 +52,13 @@ func CollectLogs(ctx context.Context) error {
 			return nil
 		}
 
-		c, err := j.Next()
+		ret, err := j.Next()
 		if err != nil {
 			return err
 		}
 
-		if c == 0 {
-			err = waitForLogs(j, ctx)
+		if ret == 0 {
+			err = c.waitForLogs(ctx, j)
 			if err != nil {
 				return err
 			}
@@ -64,15 +79,17 @@ func CollectLogs(ctx context.Context) error {
 			}
 		}
 		log := &logs.Log{
-			Message:  entry.Fields["MESSAGE"],
-			Metadata: metadata,
+			Timestamp:         int64(entry.RealtimeTimestamp),
+			ObservedTimestamp: time.Now().UnixNano(),
+			Body:              map[string]interface{}{"MESSAGE": entry.Fields["MESSAGE"]},
+			Attributes:        metadata,
 		}
 
-		fmt.Println(log)
+		c.process(ctx, log)
 	}
 }
 
-func waitForLogs(j *sdjournal.Journal, ctx context.Context) error {
+func (c *JournaldCollector) waitForLogs(ctx context.Context, j *sdjournal.Journal) error {
 	for {
 		if ctx.Err() != nil {
 			// done
@@ -92,4 +109,25 @@ func waitForLogs(j *sdjournal.Journal, ctx context.Context) error {
 			// TODO unexpected event
 		}
 	}
+}
+
+func (c *JournaldCollector) process(ctx context.Context, log *logs.Log) error {
+	batches := []*logs.LogBatch{{
+		Logs: []*logs.Log{log},
+	}}
+
+	for _, transformer := range c.transforms {
+		transformedBatches := []*logs.LogBatch{} // TODO fix alloc each time
+		for _, batch := range batches {
+			transformedBatch, err := transformer.Transform(ctx, batch)
+			if err != nil {
+				return err
+			}
+			transformedBatches = append(transformedBatches, transformedBatch...)
+		}
+		batches = transformedBatches
+	}
+	// TODO
+	fmt.Println(batches)
+	return nil
 }

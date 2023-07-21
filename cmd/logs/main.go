@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/journald"
 )
 
@@ -20,6 +21,8 @@ func main() {
 		cancel()
 		fmt.Println("Received signal, exiting...")
 	}()
-	err := journald.CollectLogs(ctx)
+
+	dockerCollector := journald.NewJournaldCollector([]logs.Transform{&journald.DockerMultiline{}, &logs.ExampleTransform{}})
+	err := dockerCollector.CollectLogs(ctx)
 	fmt.Println(err)
 }
