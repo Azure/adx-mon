@@ -9,6 +9,7 @@ import (
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/journald"
+	"github.com/Azure/adx-mon/collector/logs/transform"
 )
 
 func main() {
@@ -22,7 +23,7 @@ func main() {
 		fmt.Println("Received signal, exiting...")
 	}()
 
-	dockerCollector := journald.NewJournaldCollector([]logs.Transform{&journald.DockerMultiline{}, &logs.ExampleTransform{}})
+	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, &transform.ExampleTransform{}})
 	err := dockerCollector.CollectLogs(ctx)
 	fmt.Println(err)
 }

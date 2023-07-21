@@ -1,6 +1,10 @@
-package logs
+package transform
 
-import "context"
+import (
+	"context"
+
+	"github.com/Azure/adx-mon/collector/logs"
+)
 
 type ExampleTransform struct {
 }
@@ -8,11 +12,11 @@ type ExampleTransform struct {
 func (t *ExampleTransform) Init() {
 }
 
-func (t *ExampleTransform) Transform(ctx context.Context, batch *LogBatch) ([]*LogBatch, error) {
+func (t *ExampleTransform) Transform(ctx context.Context, batch *logs.LogBatch) ([]*logs.LogBatch, error) {
 	for _, log := range batch.Logs {
 		log.Attributes["example"] = "value"
 	}
-	batches := [1]*LogBatch{batch}
+	batches := [1]*logs.LogBatch{batch}
 	return batches[:], nil
 }
 

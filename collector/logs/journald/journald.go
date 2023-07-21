@@ -15,10 +15,10 @@ var (
 )
 
 type JournaldCollector struct {
-	transforms []logs.Transform
+	transforms []logs.Transformer
 }
 
-func NewJournaldCollector(transforms []logs.Transform) *JournaldCollector {
+func NewJournaldCollector(transforms []logs.Transformer) *JournaldCollector {
 	return &JournaldCollector{
 		transforms: transforms,
 	}
@@ -71,18 +71,18 @@ func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
 		}
 
 		//TODO batch
-		metadata := map[string]string{}
+		attributes := map[string]string{}
 		for _, k := range CONTAINER_METADATA {
 			value, ok := entry.Fields[k]
 			if ok {
-				metadata[k] = value
+				attributes[k] = value
 			}
 		}
 		log := &logs.Log{
 			Timestamp:         int64(entry.RealtimeTimestamp),
 			ObservedTimestamp: time.Now().UnixNano(),
 			Body:              map[string]interface{}{"MESSAGE": entry.Fields["MESSAGE"]},
-			Attributes:        metadata,
+			Attributes:        attributes,
 		}
 
 		c.process(ctx, log)

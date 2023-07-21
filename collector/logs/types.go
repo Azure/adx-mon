@@ -31,7 +31,7 @@ func (l *LogBatch) String() string {
 	return fmt.Sprintf("logs: %v", l.Logs)
 }
 
-type Transform interface {
+type Transformer interface {
 	Init()
 	Transform(context.Context, *LogBatch) ([]*LogBatch, error)
 	Close(context.Context) error
