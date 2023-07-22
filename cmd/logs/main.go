@@ -10,6 +10,8 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/journald"
 	"github.com/Azure/adx-mon/collector/logs/transform"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func main() {
@@ -23,7 +25,21 @@ func main() {
 		fmt.Println("Received signal, exiting...")
 	}()
 
-	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, &transform.ExampleTransform{}})
-	err := dockerCollector.CollectLogs(ctx)
+	k8sConfig := rest.Config{
+		Host:            "https://172.30.0.1:443",
+		BearerTokenFile: "/etc/td-agent-bit/token",
+		TLSClientConfig: rest.TLSClientConfig{
+			Insecure: true,
+		},
+	}
+	client, err := kubernetes.NewForConfig(&k8sConfig)
+	if err != nil {
+		panic(err) // TODO
+	}
+
+	kubernetesTransform := transform.NewKubernetesTransform(client)
+
+	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, kubernetesTransform})
+	err = dockerCollector.CollectLogs(ctx)
 	fmt.Println(err)
 }
