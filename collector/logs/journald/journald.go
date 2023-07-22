@@ -3,6 +3,7 @@ package journald
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
@@ -12,6 +13,12 @@ import (
 // container constants - move out of here
 var (
 	CONTAINER_METADATA = []string{"CONTAINER_PARTIAL_ID", "CONTAINER_PARTIAL_LAST", "CONTAINER_NAME"}
+)
+
+const (
+	ContainerAttribute = "k8s.container.name"
+	PodAttribute       = "k8s.pod.name"
+	NamespaceAttribute = "k8s.namespace.name"
 )
 
 type JournaldCollector struct {
@@ -78,6 +85,7 @@ func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
 				attributes[k] = value
 			}
 		}
+		c.addKubernetesAttributes(entry, attributes)
 		log := &logs.Log{
 			Timestamp:         int64(entry.RealtimeTimestamp),
 			ObservedTimestamp: time.Now().UnixNano(),
@@ -130,4 +138,21 @@ func (c *JournaldCollector) process(ctx context.Context, log *logs.Log) error {
 	// TODO
 	fmt.Println(batches)
 	return nil
+}
+
+func (c *JournaldCollector) addKubernetesAttributes(entry *sdjournal.JournalEntry, attributes map[string]string) {
+	containerNameAttribute, ok := attributes["CONTAINER_NAME"]
+	if !ok {
+		return
+	}
+
+	// example container_name: k8s_calico-node_canal-9dq4b_kube-system_e3e72bef-7f90-497e-8870-65509a3f95ad_0
+	split := strings.Split(containerNameAttribute, "_")
+	if len(split) != 6 {
+		return
+	}
+
+	attributes[ContainerAttribute] = split[1]
+	attributes[PodAttribute] = split[2]
+	attributes[NamespaceAttribute] = split[3]
 }
