@@ -1,0 +1,28 @@
+service:
+  flush: 1
+  log_level: debug
+
+pipeline:
+
+  inputs:
+    - name: dummy
+      tag: dummy
+      dummy: {"message": "hello world"}
+
+  outputs:
+    - Name: opentelemetry
+      Match: "*"
+      Host: collector
+      Port: 8080
+      Logs_uri: /logs
+      Log_response_payload: true
+      TLS: false
+      TLS.verify: false
+    # - Name: opentelemetry
+    #   Match: "*"
+    #   Host: otel
+    #   Port: 4318
+    #   Logs_uri: /v1/logs
+    #   Log_response_payload: true
+    #   TLS: false
+    #   TLS.verify: false

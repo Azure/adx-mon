@@ -1,0 +1,33 @@
+version: "3"
+services:
+  fluentbit:
+    image: cr.fluentbit.io/fluent/fluent-bit
+    command: -c /etc/fluent-bit/config.yaml
+    volumes:
+      - ./fluent.yaml:/etc/fluent-bit/config.yaml
+    depends_on:
+      - collector
+
+  otel:
+    image: otel/opentelemetry-collector-contrib
+    volumes:
+      - ./otlp.yaml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - 4317:4317
+
+  collector:
+    build:
+      dockerfile: tools/otlp/logs/Dockerfile
+      context: ../../..
+    volumes:
+      - ~/.kube/config:/root/.kube/config
+    ports:
+      - 8080:8080
+    # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
+    # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
+    # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
+    command: --kubeconfig /root/.kube/config --endpoints http://otel:4317/receive --insecure-skip-verify
+    depends_on:
+      - otel
+    environment:
+      - LOG_LEVEL=DEBUG
