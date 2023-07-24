@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
@@ -81,6 +82,15 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				return
 			}
 
+			// OTLP API https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
+			// requires us send a partial success where appropriate. We'll keep track
+			// of the maximum number of failed records so the caller can make the
+			// appropriate decision on whether to retry the request.
+			var (
+				rejectedRecords int64
+				mu              sync.Mutex
+			)
+
 			// Create our RPC request and send it
 			g, gctx := errgroup.WithContext(ctx)
 			for _, rpcClient := range rpcClients {
@@ -95,19 +105,40 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 					// delivery, they should retry the request until it succeeds.
 					if partial := resp.Msg.GetPartialSuccess(); partial != nil && partial.GetRejectedLogRecords() != 0 {
 						logger.Error("Partial success: %s", partial.String())
+						mu.Lock()
+						if partial.GetRejectedLogRecords() > rejectedRecords {
+							rejectedRecords = partial.GetRejectedLogRecords()
+						}
+						mu.Unlock()
 						return errors.New(partial.ErrorMessage)
 					}
 					return nil
 				})
 			}
-			if err := g.Wait(); err != nil {
-				logger.Error("Failed to proxy request: %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
 
-			// The logs have been committed by the OTLP endpoint
+			var respBodyBytes []byte
+			if err := g.Wait(); err != nil {
+				// Construct a partial success response with the maximum number of rejected records
+				logger.Error("Failed to proxy request: %v", err)
+				respBodyBytes, err = proto.Marshal(&v1.ExportLogsPartialSuccess{RejectedLogRecords: rejectedRecords})
+				if err != nil {
+					logger.Error("Failed to marshal response: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+			} else {
+				// The logs have been committed by the OTLP endpoint
+				respBodyBytes, err = proto.Marshal(&v1.ExportLogsServiceResponse{})
+				if err != nil {
+					logger.Error("Failed to marshal response: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+			}
+			// Even in the case of a partial response, OTLP API requires us to send StatusOK
+			w.Header().Add("Content-Type", "application/x-protobuf")
 			w.WriteHeader(http.StatusOK)
+			w.Write(respBodyBytes)
 
 		case "application/json":
 			// We're receiving JSON, so we need to unmarshal the JSON
