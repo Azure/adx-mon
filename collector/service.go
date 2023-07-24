@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -149,7 +149,7 @@ func (s *Service) Open(ctx context.Context) error {
 	logger.Info("Listening at %s", s.opts.ListentAddr)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/logs", otlp.LogsHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify))
+	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify))
 	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
 
 	go func() {
