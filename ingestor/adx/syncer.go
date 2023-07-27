@@ -233,45 +233,55 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
-	functions := map[string]string{
-		"prom_rate": `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
-    T
-    | invoke prom_increase(interval=interval)
-    | extend Value=Value/((Timestamp-prev(Timestamp))/1s)
-    | where isnotnull(Value)
-    | where isnan(Value) == false
-}`,
-		"prom_increase": `.create-or-alter function prom_increase (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
-    T
-    | where isnan(Value)==false
-    | extend h=SeriesId
-    | partition hint.strategy=shuffle by h (
-        as Series
-        | order by h, Timestamp asc
-        | extend prevVal=prev(Value)
-        | extend diff=Value-prevVal
-        | extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
-        | project-away prevVal, diff, h
-    )
-}`,
-		"prom_delta": `.create-or-alter function prom_delta (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
-    T
-    | where isnan(Value)==false
-    | extend h=SeriesId
-    | partition hint.strategy=shuffle by h (
-        as Series
-        | order by h, Timestamp asc
-        | extend prevVal=prev(Value)
-        | extend diff=Value-prevVal
-        | extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
-        | project-away prevVal, diff, h
-    )
-}`,
+	// functions is the list of functions that we need to create in the database.  They are executed in order.
+	functions := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "prom_increase",
+			body: `.create-or-alter function prom_increase (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+		T
+		| where isnan(Value)==false
+		| extend h=SeriesId
+		| partition hint.strategy=shuffle by h (
+			as Series
+			| order by h, Timestamp asc
+			| extend prevVal=prev(Value)
+			| extend diff=Value-prevVal
+			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
+			| project-away prevVal, diff, h
+		)}`},
+
+		{
+			name: "prom_rate",
+			body: `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+		T
+		| invoke prom_increase(interval=interval)
+		| extend Value=Value/((Timestamp-prev(Timestamp))/1s)
+		| where isnotnull(Value)
+		| where isnan(Value) == false}`},
+
+		{
+
+			name: "prom_delta",
+			body: `.create-or-alter function prom_delta (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+		T
+		| where isnan(Value)==false
+		| extend h=SeriesId
+		| partition hint.strategy=shuffle by h (
+			as Series
+			| order by h, Timestamp asc
+			| extend prevVal=prev(Value)
+			| extend diff=Value-prevVal
+			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
+			| project-away prevVal, diff, h
+		)}`},
 	}
 
-	for name, fn := range functions {
-		logger.Info("Creating function %s", name)
-		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn)
+	for _, fn := range functions {
+		logger.Info("Creating function %s", fn.name)
+		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
 		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 		if err != nil {
 			return err
