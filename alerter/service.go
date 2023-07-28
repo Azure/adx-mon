@@ -189,6 +189,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		KustoClient: kclient,
 		RuleStore:   ruleStore,
 		Region:      opts.Region,
+		Tags:        opts.Tags,
 	})
 
 	go func() {
