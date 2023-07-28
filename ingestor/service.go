@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
@@ -19,8 +19,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/cespare/xxhash"
-	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 )
@@ -52,6 +50,7 @@ type Service struct {
 	store   storage.Store
 	metrics metrics.Service
 
+	handler       *metricsHandler.Handler
 	requestFilter *transform.RequestFilter
 }
 
@@ -123,6 +122,13 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{})
 
+	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
+		DropLabels:    opts.DropLabels,
+		DropMetrics:   opts.DropMetrics,
+		SeriesCounter: metricsSvc,
+		RequestWriter: coord,
+	})
+
 	return &Service{
 		opts:        opts,
 		uploader:    opts.Uploader,
@@ -131,6 +137,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		coordinator: coord,
 		batcher:     batcher,
 		metrics:     metricsSvc,
+		handler:     handler,
 		requestFilter: &transform.RequestFilter{
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
@@ -196,76 +203,7 @@ func (s *Service) Close() error {
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
-	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/receive"})
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			logger.Error("close http body: %s", err.Error())
-		}
-	}()
-
-	bodyBuf := bytesBufPool.Get(1024 * 1024).(*bytes.Buffer)
-	defer bytesBufPool.Put(bodyBuf)
-	bodyBuf.Reset()
-
-	// bodyBuf := bytes.NewBuffer(make([]byte, 0, 1024*102))
-	_, err := io.Copy(bodyBuf, r.Body)
-	if err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	compressed := bodyBuf.Bytes()
-	buf := bytesPool.Get(1024 * 1024)
-	defer bytesPool.Put(buf)
-	buf = buf[:0]
-
-	// buf := make([]byte, 0, 1024*1024)
-	reqBuf, err := snappy.Decode(buf, compressed)
-	if err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	req := writeReqPool.Get(2500).(prompb.WriteRequest)
-	defer writeReqPool.Put(req)
-	req.Reset()
-
-	// req := &prompb.WriteRequest{}
-	if err := req.Unmarshal(reqBuf); err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if len(s.opts.DropMetrics) > 0 || len(s.opts.DropLabels) > 0 {
-		req = s.fileterDropMetrics(req)
-	}
-
-	seriesId := xxhash.New()
-	for _, v := range req.Timeseries {
-		seriesId.Reset()
-		var metric string
-		for i, vv := range v.Labels {
-			if i == 0 {
-				metric = string(vv.Value)
-			}
-			seriesId.Write(vv.Name)
-			seriesId.Write(vv.Value)
-		}
-		s.metrics.AddSeries(metric, seriesId.Sum64())
-	}
-
-	if err := s.coordinator.Write(r.Context(), req); err != nil {
-		logger.Error("Failed to write ts: %s", err.Error())
-		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
-	w.WriteHeader(http.StatusAccepted)
+	s.handler.HandleReceive(w, r)
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
@@ -335,10 +273,4 @@ func (s *Service) DisableWrites() error {
 		return err
 	}
 	return nil
-}
-
-// filterDropMetrics remove metrics and labels configured to be dropped by slicing them out
-// of the passed prombpWriteRequest.  The modified request is returned to caller.
-func (s *Service) fileterDropMetrics(req prompb.WriteRequest) prompb.WriteRequest {
-	return s.requestFilter.Filter(req)
 }

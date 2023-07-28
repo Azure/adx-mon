@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/otlp"
+	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
@@ -43,6 +45,7 @@ type Service struct {
 	pl            v12.PodLister
 	srv           *http.Server
 	seriesCreator *seriesCreator
+	metricsSvc    metrics.Service
 }
 
 type ServiceOpts struct {
@@ -95,6 +98,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			AddLabels:  opts.AddLabels,
 			DropLabels: opts.DropLabels,
 		},
+		metricsSvc: metrics.NewService(metrics.ServiceOpts{}),
 	}, nil
 }
 
@@ -105,6 +109,10 @@ func (s *Service) Open(ctx context.Context) error {
 	s.remoteClient, err = promremote.NewClient(10*time.Second, s.opts.InsecureSkipVerify)
 	if err != nil {
 		return fmt.Errorf("failed to create prometheus remote client: %w", err)
+	}
+
+	if err := s.metricsSvc.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open metrics service: %w", err)
 	}
 
 	// Add static targets
@@ -149,6 +157,12 @@ func (s *Service) Open(ctx context.Context) error {
 	logger.Info("Listening at %s", s.opts.ListentAddr)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
+		DropLabels:    s.opts.DropLabels,
+		DropMetrics:   s.opts.DropMetrics,
+		SeriesCounter: s.metricsSvc,
+		RequestWriter: &metricsHandler.FakeRequestWriter{},
+	}))
 	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify))
 	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
 
@@ -164,6 +178,7 @@ func (s *Service) Open(ctx context.Context) error {
 }
 
 func (s *Service) Close() error {
+	s.metricsSvc.Close()
 	s.cancel()
 	s.srv.Shutdown(s.ctx)
 	s.factory.Shutdown()
