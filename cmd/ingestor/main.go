@@ -17,8 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	promingest "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
+	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
@@ -269,6 +271,7 @@ func realMain(ctx *cli.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/receive", svc.HandleReceive)
+	mux.Handle(logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer()))
 
 	logger.Info("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()

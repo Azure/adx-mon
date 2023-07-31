@@ -35,14 +35,26 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 		logger.Info("gRPC endpoint: %s", grpcEndpoint)
 
 		// Create our HTTP2 client with optional TLS configuration
-		httpClient := &http.Client{
-			Transport: &http2.Transport{
-				AllowHTTP: true,
-				DialTLS: func(network, addr string, _ *tls.Config) (net.Conn, error) {
-					return net.Dial(network, addr)
+		httpClient := http.DefaultClient
+		if insecureSkipVerify && uri.Scheme == "https" {
+			logger.Warn("Using insecure TLS configuration")
+			httpClient = &http.Client{
+				Transport: &http2.Transport{
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
 				},
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
-			},
+			}
+		}
+		if uri.Scheme == "http" {
+			logger.Warn("Disabling TLS for HTTP endpoint")
+			httpClient = &http.Client{
+				Transport: &http2.Transport{
+					AllowHTTP: true,
+					DialTLS: func(network, addr string, _ *tls.Config) (net.Conn, error) {
+						return net.Dial(network, addr)
+					},
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
+				},
+			}
 		}
 
 		// Create our gRPC client used to upgrade from HTTP1 to HTTP2 via gRPC and proxy to the OTLP endpoint
