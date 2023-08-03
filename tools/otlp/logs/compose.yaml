@@ -15,9 +15,21 @@ services:
     ports:
       - 4317:4317
 
+  ingestor:
+    build:
+      dockerfile: tools/otlp/logs/Dockerfile.ingestor
+      context: ../../..
+    volumes:
+      - ~/.kube/config:/root/.kube/config
+    ports:
+      - 9090:9090
+    command: --kubeconfig /root/.kube/config --namespace adx-mon --storage-dir /tmp
+    environment:
+      - LOG_LEVEL=DEBUG
+
   collector:
     build:
-      dockerfile: tools/otlp/logs/Dockerfile
+      dockerfile: tools/otlp/logs/Dockerfile.collector
       context: ../../..
     volumes:
       - ~/.kube/config:/root/.kube/config
@@ -26,8 +38,9 @@ services:
     # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
     # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
     # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
-    command: --kubeconfig /root/.kube/config --endpoints http://otel:4317/receive --insecure-skip-verify --add-columns Environment=dev
+    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --endpoints http://otel:4317 --insecure-skip-verify --add-columns Environment=dev
     depends_on:
+      - ingestor
       - otel
     environment:
       - LOG_LEVEL=DEBUG
