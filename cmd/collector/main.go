@@ -31,7 +31,7 @@ Static Targets:
 Static targets can be specified with the --target flag.  The format is <host regex>=<url>,namespace/pod/container.
 This is intended to support non-kubernetes workloads.  The host regex is matched against the hostname of the node
 to determine if the target will be scraped.  To scrape all nodes, use .* as the host regex.  The namespace/pod/container
-is used to label metrics with a namespace, pod and container name.  This value must have two slashes.  
+is used to label metrics with a namespace, pod and container name.  This value must have two slashes.
 Multiple targets can be specified by repeating the --target flag.
 
 Scrape port 9100 on all nodes:
@@ -50,6 +50,7 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
 			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
+			&cli.StringSliceFlag{Name: "add-columns", Usage: "Columns in the format of <name>=<value>.  These are added to all logs collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
 			&cli.IntFlag{Name: "max-batch-size", Usage: "Maximum number of samples to send in a single batch", Value: 5000},
@@ -75,13 +76,13 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
-	addLabels := make(map[string]string)
-	for _, tag := range ctx.StringSlice("add-labels") {
-		split := strings.Split(tag, "=")
-		if len(split) != 2 {
-			return fmt.Errorf("invalid tag %s", tag)
-		}
-		addLabels[split[0]] = split[1]
+	addLabels, err := parseKeyPairs(ctx.StringSlice("add-labels"))
+	if err != nil {
+		return err
+	}
+	addColumns, err := parseKeyPairs(ctx.StringSlice("add-columns"))
+	if err != nil {
+		return err
 	}
 
 	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
@@ -184,6 +185,7 @@ func realMain(ctx *cli.Context) error {
 		Endpoints:          endpoints,
 		DropMetrics:        dropMetrics,
 		AddLabels:          addLabels,
+		AddColumns:         addColumns,
 		DropLabels:         dropLabels,
 		InsecureSkipVerify: ctx.Bool("insecure-skip-verify"),
 		MaxBatchSize:       ctx.Int("max-batch-size"),
@@ -240,4 +242,18 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset,
 	}
 
 	return dyCli, client, ctrlCli, nil
+}
+
+// parseKeyPairs parses a list of key pairs in the form of key=value,key=value
+// and returns them as a map.
+func parseKeyPairs(kp []string) (map[string]string, error) {
+	m := make(map[string]string)
+	for _, encoded := range kp {
+		split := strings.Split(encoded, "=")
+		if len(split) != 2 {
+			return nil, fmt.Errorf("invalid key-pair %s", encoded)
+		}
+		m[split[0]] = split[1]
+	}
+	return m, nil
 }

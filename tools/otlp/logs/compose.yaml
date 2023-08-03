@@ -26,7 +26,7 @@ services:
     # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
     # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
     # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
-    command: --kubeconfig /root/.kube/config --endpoints http://otel:4317/receive --insecure-skip-verify
+    command: --kubeconfig /root/.kube/config --endpoints http://otel:4317/receive --insecure-skip-verify --add-columns Environment=dev
     depends_on:
       - otel
     environment:

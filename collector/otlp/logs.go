@@ -12,6 +12,8 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	connect_go "github.com/bufbuild/connect-go"
@@ -21,7 +23,7 @@ import (
 )
 
 // LogsProxyHandler implements an HTTP handler that receives OTLP logs and forwards them to an OTLP endpoint over gRPC.
-func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool) http.HandlerFunc {
+func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addColumns map[string]string) http.HandlerFunc {
 
 	rpcClients := make([]logsv1connect.LogsServiceClient, len(endpoints))
 	for i, endpoint := range endpoints {
@@ -80,6 +82,43 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				logger.Error("Failed to unmarshal request body: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				return
+			}
+
+			// Add any additional columns to the logs
+			for column, value := range addColumns {
+				for i := 0; i < len(msg.ResourceLogs); i++ {
+					// Logs schema https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
+					// All these events have Resource in common, see https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-resource,
+					// since they're all coming from the same source.
+					if msg.ResourceLogs == nil {
+						// This is a parculiar case, but it can happen if the client sends an empty request.
+						break
+					}
+					if msg.ResourceLogs[i].Resource == nil {
+						msg.ResourceLogs[i].Resource = &resourcev1.Resource{}
+					}
+					if msg.ResourceLogs[i].Resource.Attributes == nil {
+						// If the sender doesn't provide any Attributes, we have to initialize them ourselves.
+						msg.ResourceLogs[i].Resource.Attributes = []*commonv1.KeyValue{
+							{
+								Key:   column,
+								Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: value}},
+							},
+						}
+					} else {
+						msg.ResourceLogs[i].Resource.Attributes = append(
+							msg.ResourceLogs[i].Resource.Attributes,
+							&commonv1.KeyValue{
+								Key: column,
+								Value: &commonv1.AnyValue{
+									Value: &commonv1.AnyValue_StringValue{
+										StringValue: value,
+									},
+								},
+							},
+						)
+					}
+				}
 			}
 
 			// OTLP API https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
