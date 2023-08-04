@@ -38,7 +38,7 @@ services:
     # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
     # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
     # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
-    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --endpoints http://otel:4317 --insecure-skip-verify
+    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --endpoints http://otel:4317 --insecure-skip-verify --target=.*=http://localhost:8080/metrics:adx-mon/collector/collector
     depends_on:
       - ingestor
       - otel
