@@ -6,7 +6,10 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 )
 
-var DefaultMapping SchemaMapping = NewSchema()
+var (
+	DefaultMetricsMapping SchemaMapping = NewMetricsSchema()
+	DefaultLogsMapping    SchemaMapping = NewLogsSchema()
+)
 
 type SchemaMapping []CSVMapping
 
@@ -19,7 +22,7 @@ type CSVMapping struct {
 	} `json:"Properties"`
 }
 
-func NewSchema() SchemaMapping {
+func NewMetricsSchema() SchemaMapping {
 	var (
 		mapping SchemaMapping
 		idx     int
@@ -68,6 +71,114 @@ func NewSchema() SchemaMapping {
 			Ordinal: strconv.Itoa(idx),
 		},
 	})
+	return mapping
+}
+
+func NewLogsSchema() SchemaMapping {
+	// https://opentelemetry.io/docs/specs/otel/logs/data-model/#log-and-event-record-definition
+	var (
+		mapping SchemaMapping
+		idx     int
+	)
+	mapping = append(mapping, CSVMapping{
+		Column:   "Timestamp",
+		DataType: "datetime",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "ObservedTimestamp",
+		DataType: "datetime",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "TraceId",
+		DataType: "string",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "SpanId",
+		DataType: "string",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "SeverityText",
+		DataType: "string",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "SeverityNumber",
+		DataType: "int",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "Body",
+		DataType: "dynamic",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "Resource",
+		DataType: "dynamic",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
+	mapping = append(mapping, CSVMapping{
+		Column:   "Attributes",
+		DataType: "dynamic",
+		Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{
+			Ordinal: strconv.Itoa(idx),
+		},
+	})
+	idx += 1
 	return mapping
 }
 
