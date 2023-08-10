@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/samples"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 )
@@ -29,9 +30,7 @@ var (
 
 type Store interface {
 	service.Component
-
-	// WriteTimeSeries writes a batch of time series to the Store.
-	WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error
+	samples.Writer
 
 	// IsActiveSegment returns true if the given path is an active segment.
 	IsActiveSegment(path string) bool
@@ -166,7 +165,16 @@ func (s *LocalStore) WALCount() int {
 	return len(s.wals)
 }
 
-func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
+func (s *LocalStore) Write(ctx context.Context, v interface{}) error {
+	switch v := v.(type) {
+	case []prompb.TimeSeries:
+		return s.writeTimeSeries(ctx, v)
+	default:
+		return fmt.Errorf("unsupported type: %T", v)
+	}
+}
+
+func (s *LocalStore) writeTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.SetColumns(s.opts.LiftedColumns)

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
@@ -76,7 +76,6 @@ func TestCoordinator_NewPeer(t *testing.T) {
 	kcli := fakek8s.NewSimpleClientset(&v1.PodList{Items: []v1.Pod{*self}})
 
 	c, err := NewCoordinator(&CoordinatorOpts{
-		WriteTimeSeriesFn:  nil,
 		K8sCli:             kcli,
 		Namespace:          "adx-mon",
 		Hostname:           "ingestor-0",
@@ -132,7 +131,6 @@ func TestCoordinator_DiscoveryDisabled(t *testing.T) {
 
 	// Test with no namespace or hostname, that discovery is disabled
 	c, err := NewCoordinator(&CoordinatorOpts{
-		WriteTimeSeriesFn:  nil,
 		K8sCli:             kcli,
 		Namespace:          "",
 		Hostname:           "ingestor-0",
@@ -213,7 +211,6 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	kcli := fakek8s.NewSimpleClientset(&v1.PodList{Items: []v1.Pod{*self, *newPeer}})
 
 	c, err := NewCoordinator(&CoordinatorOpts{
-		WriteTimeSeriesFn:  nil,
 		K8sCli:             kcli,
 		Namespace:          "adx-mon",
 		Hostname:           "ingestor-0",

@@ -94,10 +94,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
-		WriteTimeSeriesFn: store.WriteTimeSeries,
-		K8sCli:            opts.K8sCli,
-		Hostname:          opts.Hostname,
-		Namespace:         opts.Namespace,
+		Writer:    store,
+		K8sCli:    opts.K8sCli,
+		Hostname:  opts.Hostname,
+		Namespace: opts.Namespace,
 	})
 	if err != nil {
 		return nil, err

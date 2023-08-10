@@ -8,27 +8,30 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/samples"
 	"github.com/golang/snappy"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeRequestWriter struct {
-	fn func(ctx context.Context, wr prompb.WriteRequest) error
+	samples.Writer
+	t      *testing.T
+	called bool
 }
 
-func (f *fakeRequestWriter) Write(ctx context.Context, wr prompb.WriteRequest) error {
-	return f.fn(ctx, wr)
+func (f *fakeRequestWriter) Write(ctx context.Context, s interface{}) error {
+	f.t.Helper()
+	wr, ok := s.(prompb.WriteRequest)
+	if !ok {
+		f.t.Fatalf("unexpected type %T", s)
+	}
+	require.Equal(f.t, 1, len(wr.Timeseries))
+	f.called = true
+	return nil
 }
 
 func TestHandler_HandleReceive(t *testing.T) {
-	var called bool
-	writer := &fakeRequestWriter{
-		fn: func(ctx context.Context, wr prompb.WriteRequest) error {
-			require.Equal(t, 1, len(wr.Timeseries))
-			called = true
-			return nil
-		},
-	}
+	writer := &fakeRequestWriter{t: t}
 
 	h := NewHandler(HandlerOpts{
 		DropLabels:    nil,
@@ -68,6 +71,6 @@ func TestHandler_HandleReceive(t *testing.T) {
 	resp := httptest.NewRecorder()
 	h.HandleReceive(resp, req)
 	require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
-	require.True(t, called)
+	require.True(t, writer.called)
 
 }

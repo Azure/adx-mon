@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
+	"github.com/Azure/adx-mon/pkg/samples"
 	"github.com/Azure/adx-mon/pkg/service"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -27,14 +28,10 @@ var (
 	bytesPool = pool.NewBytes(1024)
 )
 
-type TimeSeriesWriter func(ctx context.Context, ts []prompb.TimeSeries) error
-
 type Coordinator interface {
 	MetricPartitioner
 	service.Component
-
-	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr prompb.WriteRequest) error
+	samples.Writer
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -49,7 +46,7 @@ type coordinator struct {
 
 	factory informers.SharedInformerFactory
 
-	tsw          TimeSeriesWriter
+	writer       samples.Writer
 	kcli         kubernetes.Interface
 	pl           v12.PodLister
 	hostEntpoint string
@@ -60,8 +57,8 @@ type coordinator struct {
 }
 
 type CoordinatorOpts struct {
-	WriteTimeSeriesFn TimeSeriesWriter
-	K8sCli            kubernetes.Interface
+	Writer samples.Writer
+	K8sCli kubernetes.Interface
 
 	// Namespace is the namespace used to discover peers.  If not specified, the coordinator will
 	// try to use the namespace of the current pod.
@@ -173,7 +170,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 	pl := factory.Core().V1().Pods().Lister()
 	c.pl = pl
 
-	c.tsw = c.opts.WriteTimeSeriesFn
+	c.writer = c.opts.Writer
 
 	myIP, err := GetOutboundIP()
 	if err != nil {
@@ -221,8 +218,8 @@ func (c *coordinator) Close() error {
 	return nil
 }
 
-func (c *coordinator) Write(ctx context.Context, wr prompb.WriteRequest) error {
-	return c.tsw(ctx, wr.Timeseries)
+func (c *coordinator) Write(ctx context.Context, s interface{}) error {
+	return c.writer.Write(ctx, s)
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.

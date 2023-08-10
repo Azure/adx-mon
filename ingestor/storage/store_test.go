@@ -33,19 +33,19 @@ func TestStore_Open(t *testing.T) {
 	w, err := s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", nil, 1, 1)
 	w, err = s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", nil, 0, 0)
 	w, err = s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{ts}))
 
 	path := w.Path()
 
@@ -69,7 +69,7 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 }
 
-func TestLocalStore_WriteTimeSeries(t *testing.T) {
+func TestLocalStore_Write(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
@@ -86,7 +86,7 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 	w, err := s.GetWAL(ctx, ts.Labels)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.Write(context.Background(), []prompb.TimeSeries{ts}))
 
 	path := w.Path()
 

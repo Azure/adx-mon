@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/samples"
 	"github.com/cespare/xxhash"
 	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
@@ -37,11 +37,6 @@ type SeriesCounter interface {
 	AddSeries(key string, id uint64)
 }
 
-type RequestWriter interface {
-	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr prompb.WriteRequest) error
-}
-
 type HandlerOpts struct {
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
@@ -54,7 +49,7 @@ type HandlerOpts struct {
 	SeriesCounter SeriesCounter
 
 	// RequestWriter is the interface that writes the time series to a destination.
-	RequestWriter RequestWriter
+	RequestWriter samples.Writer
 }
 
 type Handler struct {
@@ -71,7 +66,7 @@ type Handler struct {
 
 	seriesCounter SeriesCounter
 
-	requestWriter RequestWriter
+	requestWriter samples.Writer
 }
 
 func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
