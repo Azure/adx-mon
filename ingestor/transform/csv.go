@@ -3,12 +3,14 @@ package transform
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
@@ -34,7 +36,19 @@ func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 	return writer
 }
 
-func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
+func (w *CSVWriter) MarshalCSV(t interface{}) error {
+	// Note the Benchmark for this function in csv_test.go
+	switch t := t.(type) {
+	case prompb.TimeSeries:
+		return w.marshalTS(t)
+	case *logsv1.ExportLogsServiceRequest:
+		return w.marshalLog(t)
+	default:
+		return errors.New("unknown type")
+	}
+}
+
+func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 	buf := w.buf
 	buf.Reset()
 
@@ -124,6 +138,74 @@ func (w *CSVWriter) MarshalCSV(ts prompb.TimeSeries) error {
 
 		if err := w.enc.Write(fields); err != nil {
 			return err
+		}
+	}
+
+	w.enc.Flush()
+	return w.enc.Error()
+}
+
+func (w *CSVWriter) marshalLog(log *logsv1.ExportLogsServiceRequest) error {
+	// See ingestor/storage/schema::NewLogsSchema
+	// we're writing a ExportLogsServiceRequest as a CSV
+
+	// There are 9 fields defined in an OTLP log schema
+	fields := make([]string, 0, 9)
+	// Convert log records to CSV
+	// see samples at https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
+	for _, r := range log.GetResourceLogs() {
+		for _, s := range r.GetScopeLogs() {
+			for _, l := range s.GetLogRecords() {
+				// Reset fields
+				fields = fields[:0]
+				// Timestamp
+				ts := int64(l.GetTimeUnixNano())
+				fields = append(fields, time.Unix(ts/1000, (ts%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano))
+				// ObservedTimestamp
+				ts = int64(l.GetObservedTimeUnixNano())
+				fields = append(fields, time.Unix(ts/1000, (ts%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano))
+				// TraceId
+				fields = append(fields, string(l.GetTraceId()))
+				// SpanId
+				fields = append(fields, string(l.GetSpanId()))
+				// SeverityText
+				fields = append(fields, l.GetSeverityText())
+				// SeverityNumber
+				fields = append(fields, l.GetSeverityNumber().String())
+				// Body
+				fields = append(fields, l.GetBody().GetStringValue())
+				// Resource
+				buf := w.buf
+				buf.Reset()
+				buf.WriteByte('{')
+				for _, a := range r.GetResource().GetAttributes() {
+					if buf.String()[buf.Len()-1] != '{' {
+						buf.WriteByte(',')
+					}
+					fflib.WriteJson(buf, []byte(a.GetKey()))
+					buf.WriteByte(':')
+					fflib.WriteJson(buf, []byte(a.GetValue().GetStringValue()))
+				}
+				buf.WriteByte('}')
+				fields = append(fields, buf.String())
+				// Attributes
+				buf.Reset()
+				buf.WriteByte('{')
+				for _, a := range l.GetAttributes() {
+					if buf.String()[buf.Len()-1] != '{' {
+						buf.WriteByte(',')
+					}
+					fflib.WriteJson(buf, []byte(a.GetKey()))
+					buf.WriteByte(':')
+					fflib.WriteJson(buf, []byte(a.GetValue().GetStringValue()))
+				}
+				buf.WriteByte('}')
+				fields = append(fields, buf.String())
+				// Serialize
+				if err := w.enc.Write(fields); err != nil {
+					return err
+				}
+			}
 		}
 	}
 

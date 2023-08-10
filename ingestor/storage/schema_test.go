@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewSchema_NoLabels(t *testing.T) {
-	mapping := storage.NewSchema()
+	mapping := storage.NewMetricsSchema()
 	_, err := json.Marshal(mapping)
 	require.NoError(t, err)
 
@@ -32,7 +32,7 @@ func TestNewSchema_NoLabels(t *testing.T) {
 }
 
 func TestNewSchema_AddConstMapping(t *testing.T) {
-	mapping := storage.NewSchema()
+	mapping := storage.NewMetricsSchema()
 	mapping = mapping.AddConstMapping("Region", "eastus")
 
 	_, err := json.Marshal(mapping)
@@ -63,7 +63,7 @@ func TestNewSchema_AddConstMapping(t *testing.T) {
 }
 
 func TestNewSchema_AddLiftedMapping(t *testing.T) {
-	mapping := storage.NewSchema()
+	mapping := storage.NewMetricsSchema()
 
 	mapping = mapping.AddStringMapping("Region")
 	mapping = mapping.AddStringMapping("Host")

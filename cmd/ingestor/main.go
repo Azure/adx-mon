@@ -179,7 +179,7 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatal("--storage-dir is required")
 	}
 
-	defaultMapping := storage.NewSchema()
+	defaultMapping := storage.NewMetricsSchema()
 	for _, v := range ctx.StringSlice("add-labels") {
 		fields := strings.Split(v, "=")
 		if len(fields) != 2 {
