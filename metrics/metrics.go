@@ -72,4 +72,26 @@ var (
 		Name:      "notification_unhealthy",
 		Help:      "Gauge indicating if a notification is healthy or not",
 	}, []string{"namespace", "name"})
+
+	// Collector metrics
+	LogsProxyReceived = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_received",
+		Help:      "Counter of the number of logs received by the proxy",
+	})
+
+	LogsProxyFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_failures",
+		Help:      "Counter of the number of failures when proxying logs to the OTLP endpoints",
+	}, []string{"endpoint"})
+
+	LogsProxyPartialFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_partial_failures",
+		Help:      "Counter of the number of partial failures when proxying logs to the OTLP endpoints",
+	}, []string{"endpoint"})
 )
