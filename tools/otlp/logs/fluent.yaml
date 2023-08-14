@@ -7,7 +7,7 @@ pipeline:
   inputs:
     - name: dummy
       tag: dummy
-      dummy: {"message": "hello world"}
+      dummy: '{"message": "hello world","kusto.table": "dummy","kusto.database": "fake"}'
 
   outputs:
     - Name: opentelemetry

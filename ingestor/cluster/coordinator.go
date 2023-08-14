@@ -185,6 +185,8 @@ func (c *coordinator) Open(ctx context.Context) error {
 
 	hostName := c.opts.Hostname
 
+	// TODO: this needs to be configurable
+
 	hostEndpoint := fmt.Sprintf("https://%s:9090/transfer", myIP.To4().String())
 	c.hostEntpoint = hostEndpoint
 	c.hostname = hostName
@@ -254,6 +256,8 @@ func (c *coordinator) syncPeers() error {
 		if !ready {
 			continue
 		}
+
+		// TODO: this needs to be configurable
 
 		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 	}

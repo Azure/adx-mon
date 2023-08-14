@@ -1,7 +1,6 @@
-package ingestor
+package metrics
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -11,30 +10,13 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
-	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/pool"
-	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
-)
-
-var (
-	bytesBufPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
-
-	bytesPool = pool.NewBytes(50)
-
-	writeReqPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return prompb.WriteRequest{
-			Timeseries: make([]prompb.TimeSeries, 0, sz),
-		}
-	})
 )
 
 type Service struct {
@@ -50,8 +32,11 @@ type Service struct {
 	store   storage.Store
 	metrics metrics.Service
 
-	handler       *metricsHandler.Handler
+	handler       *Handler
 	requestFilter *transform.RequestFilter
+
+	receivePath  string
+	transferPath string
 }
 
 type ServiceOpts struct {
@@ -122,7 +107,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{})
 
-	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
+	handler := NewHandler(HandlerOpts{
 		DropLabels:    opts.DropLabels,
 		DropMetrics:   opts.DropMetrics,
 		SeriesCounter: metricsSvc,
@@ -142,6 +127,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
 		},
+		receivePath:  "/receive",
+		transferPath: "/transfer",
 	}, nil
 }
 
@@ -202,35 +189,37 @@ func (s *Service) Close() error {
 }
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
-func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
-	s.handler.HandleReceive(w, r)
+func (s *Service) HandleReceive() (string, http.Handler) {
+	return s.receivePath, s.handler
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
-func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
-	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			logger.Error("close http body: %s", err.Error())
+func (s *Service) HandleTransfer() (string, http.Handler) {
+	return s.transferPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": s.transferPath})
+		defer func() {
+			if err := r.Body.Close(); err != nil {
+				logger.Error("close http body: %s", err.Error())
+			}
+		}()
+
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			http.Error(w, "missing filename", http.StatusBadRequest)
+			return
 		}
-	}()
 
-	filename := r.URL.Query().Get("filename")
-	if filename == "" {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		http.Error(w, "missing filename", http.StatusBadRequest)
-		return
-	}
-
-	if n, err := s.store.Import(filename, r.Body); err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	} else {
-		logger.Info("Imported %d bytes to %s", n, filename)
-	}
-	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
-	w.WriteHeader(http.StatusAccepted)
+		if n, err := s.store.Import(filename, r.Body); err != nil {
+			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else {
+			logger.Info("Imported %d bytes to %s", n, filename)
+		}
+		m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
+		w.WriteHeader(http.StatusAccepted)
+	})
 }
 
 func (s *Service) UploadSegments() error {

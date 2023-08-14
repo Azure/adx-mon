@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -32,6 +33,9 @@ type Store interface {
 
 	// WriteTimeSeries writes a batch of time series to the Store.
 	WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error
+
+	// WriteOTLPLogs writes a batch of OTLP logs to the Store.
+	WriteOTLPLogs(ctx context.Context, logs otlp.GroupedLogs) error
 
 	// IsActiveSegment returns true if the given path is an active segment.
 	IsActiveSegment(path string) bool
@@ -129,9 +133,7 @@ func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*wal.WAL, error
 	return wal, nil
 }
 
-func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*wal.WAL, error) {
-	key := seriesKey(labels)
-
+func (s *LocalStore) GetWAL(ctx context.Context, key string) (*wal.WAL, error) {
 	s.mu.RLock()
 	wal := s.wals[key]
 	s.mu.RUnlock()
@@ -172,7 +174,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries
 	enc.SetColumns(s.opts.LiftedColumns)
 
 	for _, v := range ts {
-		wal, err := s.GetWAL(ctx, v.Labels)
+		wal, err := s.GetWAL(ctx, SeriesKey(v.Labels))
 		if err != nil {
 			return err
 		}
@@ -187,6 +189,28 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries
 		if err := wal.Write(ctx, enc.Bytes()); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *LocalStore) WriteOTLPLogs(ctx context.Context, logs otlp.GroupedLogs) error {
+	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	defer csvWriterPool.Put(enc)
+
+	wal, err := s.GetWAL(ctx, logs.Table)
+	if err != nil {
+		return err
+	}
+
+	metrics.SamplesStored.WithLabelValues(string(logs.Table)).Add(float64(logs.NumberOfRecords))
+
+	enc.Reset()
+	if err := enc.MarshalCSV(logs.Logs); err != nil {
+		return err
+	}
+
+	if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		return err
 	}
 	return nil
 }
@@ -236,7 +260,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	return int(n), nil
 }
 
-func seriesKey(labels []prompb.Label) string {
+func SeriesKey(labels []prompb.Label) string {
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			// return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)

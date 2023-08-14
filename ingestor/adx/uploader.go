@@ -21,6 +21,7 @@ const ConcurrentUploads = 50
 type Uploader interface {
 	service.Component
 
+	Database() string
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan []string
 }
@@ -97,6 +98,10 @@ func (n *uploader) Close() error {
 
 func (n *uploader) UploadQueue() chan []string {
 	return n.queue
+}
+
+func (n *uploader) Database() string {
+	return n.database
 }
 
 func (n *uploader) uploadReader(reader io.Reader, table string) error {

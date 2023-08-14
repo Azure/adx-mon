@@ -17,10 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
-	promingest "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
+	metricssvc "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/otlp"
+	"github.com/Azure/adx-mon/ingestor/service"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
@@ -28,6 +28,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/sync/errgroup"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -56,7 +57,9 @@ func main() {
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Direcotry to store WAL segments"},
+			&cli.StringFlag{Name: "storage-logs-dir", Usage: "Direcotry to store OTLP logs WAL segments"},
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
+			&cli.StringSliceFlag{Name: "kusto-logs-endpoints", Usage: "Kusto endpoints in the format of <db>=<endpoint>"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
@@ -94,12 +97,12 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetMutexProfileFraction(1)
 
 	var (
-		storageDir, kustoEndpoint, database string
-		cacert, key                         string
-		insecureSkipVerify                  bool
-		concurrentUploads                   int
-		maxSegmentSize                      int64
-		maxSegmentAge                       time.Duration
+		storageDir, kustoEndpoint string
+		cacert, key               string
+		insecureSkipVerify        bool
+		concurrentUploads         int
+		maxSegmentSize            int64
+		maxSegmentAge             time.Duration
 	)
 	storageDir = ctx.String("storage-dir")
 	kustoEndpoint = ctx.String("kusto-endpoint")
@@ -241,13 +244,16 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	uploader, err := newUploader(kustoEndpoint, database, storageDir, concurrentUploads, defaultMapping)
+	uploader, err := newUploader(kustoEndpoint, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
 	defer uploader.Close()
 
-	svc, err := promingest.NewService(promingest.ServiceOpts{
+	// metrics, logs, etc
+	var services []service.Telemetry
+
+	metricsSvc, err := metricssvc.NewService(metricssvc.ServiceOpts{
 		K8sCli:             k8scli,
 		Namespace:          namespace,
 		Hostname:           hostname,
@@ -261,17 +267,46 @@ func realMain(ctx *cli.Context) error {
 		DropMetrics:        dropMetrics,
 	})
 	if err != nil {
-		logger.Fatal("Failed to create service: %s", err)
+		logger.Fatal("Failed to create metrics service: %s", err)
 	}
-	if err := svc.Open(svcCtx); err != nil {
-		logger.Fatal("Failed to start service: %s", err)
+	services = append(services, metricsSvc)
+
+	var logUploaders []adx.Uploader
+	for _, endpoint := range ctx.StringSlice("kusto-logs-endpoints") {
+		uploader, err := newUploader(endpoint, ctx.String("storage-logs-dir"), concurrentUploads, storage.DefaultLogsMapping)
+		if err != nil {
+			logger.Fatal("Failed to create uploader: %s", err)
+		}
+		logUploaders = append(logUploaders, uploader)
 	}
+	if len(logUploaders) == 0 {
+		// This is a testing scenario
+		logUploaders = append(logUploaders, adx.NewFakeUploader())
+	}
+	logsSvc, err := otlp.NewLogsService(otlp.LogsServiceOpts{
+		StorageDir:         ctx.String("storage-logs-dir"),
+		Uploaders:          logUploaders,
+		K8sCli:             k8scli,
+		Namespace:          namespace,
+		Hostname:           hostname,
+		MaxSegmentSize:     maxSegmentSize,
+		MaxSegmentAge:      maxSegmentAge,
+		InsecureSkipVerify: insecureSkipVerify,
+	})
+	if err != nil {
+		logger.Fatal("Failed to create logs service: %s", err)
+	}
+	services = append(services, logsSvc)
 
 	logger.Info("Listening at %s", ":9090")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/transfer", svc.HandleTransfer)
-	mux.HandleFunc("/receive", svc.HandleReceive)
-	mux.Handle(logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer()))
+	for _, svc := range services {
+		if err := svc.Open(svcCtx); err != nil {
+			logger.Fatal("Failed to start service: %s", err)
+		}
+		mux.Handle(svc.HandleReceive())
+		mux.Handle(svc.HandleTransfer())
+	}
 
 	logger.Info("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()
@@ -308,30 +343,40 @@ func realMain(ctx *cli.Context) error {
 		sig := <-sc
 
 		// Stop receiving new samples
-		srv.Shutdown(context.Background())
-
-		// Disable writes for internal processes (metrics)
-		if err := svc.DisableWrites(); err != nil {
-			logger.Error("Failed to disable writes: %s", err)
-		}
-
-		logger.Info("Received signal %s, uploading pending segments...", sig.String())
-
-		// Upload pending segments
-		if err := svc.UploadSegments(); err != nil {
-			logger.Error("Failed to upload segments: %s", err)
-		}
-
-		// Trigger shutdown of any pending background processes
-		cancel()
+		shutdownCtx := context.Background()
+		srv.Shutdown(shutdownCtx)
 
 		if err := metricsSrv.Shutdown(context.Background()); err != nil {
 			logger.Error("Failed to shutdown metrics server: %s", err)
 		}
 
-		// Shutdown the server and cancel context
-		err := svc.Close()
-		if err != nil {
+		g, _ := errgroup.WithContext(shutdownCtx)
+		for _, svc := range services {
+			svc := svc
+			g.Go(func() error {
+				// Disable writes for internal processes
+				if err := svc.DisableWrites(); err != nil {
+					logger.Error("Failed to disable writes: %s", err)
+				}
+
+				logger.Info("Received signal %s, uploading pending segments...", sig.String())
+
+				// Upload pending segments
+				if err := svc.UploadSegments(); err != nil {
+					logger.Error("Failed to upload segments: %s", err)
+				}
+
+				// Shutdown the server
+				if err := svc.Close(); err != nil {
+					logger.Error(err.Error())
+				}
+				return nil
+			})
+		}
+
+		// Trigger shutdown of any pending background processes
+		cancel()
+		if err := g.Wait(); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
@@ -378,8 +423,8 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	return kusto.New(kcsb)
 }
 
-func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
-	if kustoEndpoint == "" && database == "" {
+func newUploader(kustoEndpoint, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
+	if kustoEndpoint == "" {
 		logger.Warn("No kusto endpoint provided, using fake uploader")
 		return adx.NewFakeUploader(), nil
 	}
@@ -393,7 +438,7 @@ func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads i
 	}
 
 	split := strings.Split(kustoEndpoint, "=")
-	database = split[0]
+	database := split[0]
 	kustoEndpoint = split[1]
 
 	if database == "" {

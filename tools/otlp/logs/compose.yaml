@@ -23,7 +23,7 @@ services:
       - ~/.kube/config:/root/.kube/config
     ports:
       - 9090:9090
-    command: --kubeconfig /root/.kube/config --namespace adx-mon --storage-dir /tmp
+    command: --kubeconfig /root/.kube/config --namespace adx-mon --storage-dir /tmp --storage-logs-dir /tmp
     environment:
       - LOG_LEVEL=DEBUG
 

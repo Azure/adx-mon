@@ -17,6 +17,8 @@ type fakeUploader struct {
 	closeFn context.CancelFunc
 }
 
+func (f fakeUploader) Database() string { return "fake" }
+
 func NewFakeUploader() Uploader {
 	return &fakeUploader{
 		queue: make(chan []string),
@@ -56,7 +58,6 @@ func (f *fakeUploader) upload(ctx context.Context) {
 
 type fakeKustoMgmt struct {
 	expectedQuery, actualQuery string
-	expectedRows               *kusto.MockRows
 }
 
 func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {

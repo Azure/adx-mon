@@ -94,4 +94,18 @@ var (
 		Name:      "logs_partial_failures",
 		Help:      "Counter of the number of partial failures when proxying logs to the OTLP endpoints",
 	}, []string{"endpoint"})
+
+	// Ingestor Metrics
+	LogsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "logs_received",
+		Help:      "Counter of the number of logs received",
+	}, []string{"database", "table"})
+	LogsStored = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "logs_stored",
+		Help:      "Counter of the number of logs stored",
+	}, []string{"database", "table"})
 )

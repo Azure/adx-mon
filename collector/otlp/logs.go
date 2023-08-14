@@ -13,6 +13,7 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
+	v11 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -102,11 +103,71 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			}
 
 			var numLogs int
-			for _, resourceLog := range msg.GetResourceLogs() {
-				for _, scopeLog := range resourceLog.GetScopeLogs() {
-					numLogs += len(scopeLog.GetLogRecords())
+			for resourceIdx := 0; resourceIdx < len(msg.ResourceLogs); resourceIdx++ {
+				for scopeIdx := 0; scopeIdx < len(msg.ResourceLogs[resourceIdx].ScopeLogs); scopeIdx++ {
+					numLogs += len(msg.ResourceLogs[resourceIdx].ScopeLogs[scopeIdx].LogRecords)
+					for logIdx := 0; logIdx < len(msg.ResourceLogs[resourceIdx].ScopeLogs[scopeIdx].LogRecords); logIdx++ {
+
+						var database, table string
+						for _, a := range msg.ResourceLogs[resourceIdx].ScopeLogs[scopeIdx].LogRecords[logIdx].GetAttributes() {
+							if a.GetKey() == "kusto.table" {
+								table = a.GetValue().GetStringValue()
+							}
+							if a.GetKey() == "kusto.database" {
+								database = a.GetValue().GetStringValue()
+							}
+							if table != "" && database != "" {
+								break
+							}
+						}
+						if table == "" && database == "" {
+
+							kv := msg.ResourceLogs[resourceIdx].ScopeLogs[scopeIdx].LogRecords[logIdx].GetBody().GetKvlistValue()
+							for _, values := range kv.GetValues() {
+								if values.GetKey() == "kusto.table" {
+									table = values.GetValue().GetStringValue()
+								} else if values.GetKey() == "kusto.database" {
+									database = values.GetValue().GetStringValue()
+								}
+								if table != "" && database != "" {
+									break
+								}
+							}
+
+							if table != "" && database != "" {
+								// We found our destination Kusto Table and Database in the Body, so we'll
+								// add them to the LogRecord attributes so Ingestor can route them correctly.
+								msg.ResourceLogs[resourceIdx].ScopeLogs[scopeIdx].LogRecords[logIdx].Attributes = append(
+									msg.ResourceLogs[resourceIdx].ScopeLogs[scopeIdx].LogRecords[logIdx].Attributes,
+									&v11.KeyValue{
+										Key: "kusto.table",
+										Value: &v11.AnyValue{
+											Value: &v11.AnyValue_StringValue{
+												StringValue: table,
+											},
+										},
+									},
+									&v11.KeyValue{
+										Key: "kusto.database",
+										Value: &v11.AnyValue{
+											Value: &v11.AnyValue_StringValue{
+												StringValue: database,
+											},
+										},
+									},
+								)
+							} else {
+								// This is fatal since no Kusto Table or Database can be determined.
+								logger.Error("Failed to determine Kusto destination")
+								w.WriteHeader(http.StatusBadRequest)
+								m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+								return
+							}
+						}
+					}
 				}
 			}
+
 			metrics.LogsProxyReceived.Add(float64(numLogs))
 
 			// OTLP API https://opentelemetry.io/docs/specs/otlp/#otlphttp-response

@@ -30,19 +30,19 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", nil, 0, 0)
-	w, err := s.GetWAL(ctx, ts.Labels)
+	w, err := s.GetWAL(ctx, storage.SeriesKey(ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", nil, 1, 1)
-	w, err = s.GetWAL(ctx, ts.Labels)
+	w, err = s.GetWAL(ctx, storage.SeriesKey(ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", nil, 0, 0)
-	w, err = s.GetWAL(ctx, ts.Labels)
+	w, err = s.GetWAL(ctx, storage.SeriesKey(ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
@@ -83,7 +83,7 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", nil, 0, 0)
-	w, err := s.GetWAL(ctx, ts.Labels)
+	w, err := s.GetWAL(ctx, storage.SeriesKey(ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
