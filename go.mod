@@ -1,6 +1,6 @@
 module github.com/Azure/adx-mon
 
-go 1.19
+go 1.21
 
 require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.9.0-20230607214311-b93f1c8ac185.1
