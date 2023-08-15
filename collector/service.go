@@ -49,12 +49,13 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	ListentAddr string
-	K8sCli      kubernetes.Interface
-	NodeName    string
-	Targets     []ScrapeTarget
-	Endpoints   []string
-	AddLabels   map[string]string
+	ListentAddr   string
+	K8sCli        kubernetes.Interface
+	NodeName      string
+	Targets       []ScrapeTarget
+	Endpoints     []string
+	AddLabels     map[string]string
+	AddAttributes map[string]string
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
 
@@ -163,7 +164,7 @@ func (s *Service) Open(ctx context.Context) error {
 		SeriesCounter: s.metricsSvc,
 		RequestWriter: &metricsHandler.FakeRequestWriter{},
 	}))
-	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify))
+	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes))
 	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
 
 	go func() {

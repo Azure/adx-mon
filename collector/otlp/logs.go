@@ -13,6 +13,8 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -24,7 +26,7 @@ import (
 )
 
 // LogsProxyHandler implements an HTTP handler that receives OTLP logs and forwards them to an OTLP endpoint over gRPC.
-func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool) http.HandlerFunc {
+func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string) http.HandlerFunc {
 
 	rpcClients := make(map[string]logsv1connect.LogsServiceClient)
 	for _, endpoint := range endpoints {
@@ -101,10 +103,42 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				return
 			}
 
+			// Add any additional columns to the logs
 			var numLogs int
-			for _, resourceLog := range msg.GetResourceLogs() {
-				for _, scopeLog := range resourceLog.GetScopeLogs() {
-					numLogs += len(scopeLog.GetLogRecords())
+			for attribute, value := range addAttributes {
+				for i := 0; i < len(msg.ResourceLogs); i++ {
+					// Logs schema https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
+					// All these events have Resource in common, see https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-resource,
+					// since they're all coming from the same source.
+					if msg.ResourceLogs == nil {
+						// This is a parculiar case, but it can happen if the client sends an empty request.
+						break
+					}
+					if msg.ResourceLogs[i].Resource == nil {
+						msg.ResourceLogs[i].Resource = &resourcev1.Resource{}
+					}
+					if msg.ResourceLogs[i].Resource.Attributes == nil {
+						// If the sender doesn't provide any Attributes, we have to initialize them ourselves.
+						msg.ResourceLogs[i].Resource.Attributes = []*commonv1.KeyValue{
+							{
+								Key:   attribute,
+								Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: value}},
+							},
+						}
+					} else {
+						msg.ResourceLogs[i].Resource.Attributes = append(
+							msg.ResourceLogs[i].Resource.Attributes,
+							&commonv1.KeyValue{
+								Key: attribute,
+								Value: &commonv1.AnyValue{
+									Value: &commonv1.AnyValue_StringValue{
+										StringValue: value,
+									},
+								},
+							},
+						)
+					}
+					numLogs += len(msg.ResourceLogs[i].ScopeLogs)
 				}
 			}
 			metrics.LogsProxyReceived.Add(float64(numLogs))
