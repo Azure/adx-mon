@@ -50,7 +50,7 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
 			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "add-columns", Usage: "Columns in the format of <name>=<value>.  These are added to all logs collected by this agent"},
+			&cli.StringSliceFlag{Name: "add-attributes", Usage: "Attributes in the format of <name>=<value>.  These are added to all logs collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
 			&cli.IntFlag{Name: "max-batch-size", Usage: "Maximum number of samples to send in a single batch", Value: 5000},
@@ -80,7 +80,7 @@ func realMain(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	addColumns, err := parseKeyPairs(ctx.StringSlice("add-columns"))
+	addAttributes, err := parseKeyPairs(ctx.StringSlice("add-attributes"))
 	if err != nil {
 		return err
 	}
@@ -185,7 +185,7 @@ func realMain(ctx *cli.Context) error {
 		Endpoints:          endpoints,
 		DropMetrics:        dropMetrics,
 		AddLabels:          addLabels,
-		AddColumns:         addColumns,
+		AddAttributes:      addAttributes,
 		DropLabels:         dropLabels,
 		InsecureSkipVerify: ctx.Bool("insecure-skip-verify"),
 		MaxBatchSize:       ctx.Int("max-batch-size"),
