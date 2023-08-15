@@ -83,6 +83,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		K8sCli:            opts.K8sCli,
 		Hostname:          opts.Hostname,
 		Namespace:         opts.Namespace,
+		EndpointPath:      "/transfer",
 	})
 	if err != nil {
 		return nil, err

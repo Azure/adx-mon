@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -18,13 +17,6 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	v12 "k8s.io/client-go/listers/core/v1"
-)
-
-var (
-	tsPool = pool.NewGeneric(1024, func(sz int) interface{} {
-		return &prompb.TimeSeries{}
-	})
-	bytesPool = pool.NewBytes(1024)
 )
 
 type TimeSeriesWriter func(ctx context.Context, ts []prompb.TimeSeries) error
@@ -73,6 +65,9 @@ type CoordinatorOpts struct {
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
+
+	// EndpointPath is a URI path component used for transferring segments
+	EndpointPath string
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
@@ -95,6 +90,9 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 			logger.Info("Using statefuleset %s for peer discovery", groupName)
 		}
 	}
+
+	// Trim path prefix
+	opts.EndpointPath = strings.TrimPrefix(opts.EndpointPath, "/")
 
 	return &coordinator{
 		groupName: groupName,
@@ -185,9 +183,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 
 	hostName := c.opts.Hostname
 
-	// TODO: this needs to be configurable
-
-	hostEndpoint := fmt.Sprintf("https://%s:9090/transfer", myIP.To4().String())
+	hostEndpoint := fmt.Sprintf("https://%s:9090/%s", myIP.To4().String(), c.opts.EndpointPath)
 	c.hostEntpoint = hostEndpoint
 	c.hostname = hostName
 
@@ -257,9 +253,7 @@ func (c *coordinator) syncPeers() error {
 			continue
 		}
 
-		// TODO: this needs to be configurable
-
-		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
+		set[p.Name] = fmt.Sprintf("https://%s:9090/%s", p.Status.PodIP, c.opts.EndpointPath)
 	}
 
 	if err := c.setPartitioner(set); err != nil {

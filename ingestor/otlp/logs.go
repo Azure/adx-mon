@@ -78,9 +78,10 @@ func NewLogsService(opts LogsServiceOpts) (*LogsService, error) {
 
 		var err error
 		s.Coordinators[db], err = cluster.NewCoordinator(&cluster.CoordinatorOpts{
-			K8sCli:    opts.K8sCli,
-			Hostname:  opts.Hostname,
-			Namespace: opts.Namespace,
+			K8sCli:       opts.K8sCli,
+			Hostname:     opts.Hostname,
+			Namespace:    opts.Namespace,
+			EndpointPath: s.transferPath,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cluster coordinator for database=%s: %w", db, err)

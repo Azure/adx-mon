@@ -102,6 +102,10 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				return
 			}
 
+			// We expect our OTLP logs to have Attributes with routing keys in them, namely, both kusto.table and kusto.database;
+			// however, some clients are not able to set this information, so this routing checks for the existing of our routing
+			// keys in the Attributes and, if not found, attempts to find them in the message Body, at which point they are added
+			// to the expected Attributes.
 			var numLogs int
 			for resourceIdx := 0; resourceIdx < len(msg.ResourceLogs); resourceIdx++ {
 				for scopeIdx := 0; scopeIdx < len(msg.ResourceLogs[resourceIdx].ScopeLogs); scopeIdx++ {
