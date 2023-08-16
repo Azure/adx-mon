@@ -113,11 +113,13 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:    opts.StorageDir,
-		Partitioner:   coord,
-		Segmenter:     store,
-		UploadQueue:   opts.Uploader.UploadQueue(),
-		TransferQueue: repl.TransferQueue(),
+		StorageDir:     opts.StorageDir,
+		MaxSegmentAge:  opts.MaxSegmentAge,
+		MaxSegmentSize: opts.MaxSegmentSize,
+		Partitioner:    coord,
+		Segmenter:      store,
+		UploadQueue:    opts.Uploader.UploadQueue(),
+		TransferQueue:  repl.TransferQueue(),
 	})
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{})
