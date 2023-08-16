@@ -57,38 +57,7 @@ func Encode(tlvs ...*TLV) []byte {
 	return b
 }
 
-func Decode(data []byte) []*TLV {
-	// First determine how many TLVs are in the data
-	header := &TLV{
-		Tag:    Tag(binary.BigEndian.Uint16(data[0:])),
-		Length: binary.BigEndian.Uint32(data[binary.MaxVarintLen16:]),
-	}
-	header.Value = data[binary.MaxVarintLen16+binary.MaxVarintLen32 : binary.MaxVarintLen16+binary.MaxVarintLen32+header.Length]
-	elements := int(big.NewInt(0).SetBytes(header.Value[:header.Length-1]).Int64())
-
-	// Now decode all the TLVs
-	var (
-		tlvs   []*TLV
-		offset = binary.MaxVarintLen16 + binary.MaxVarintLen32 + int(header.Length)
-	)
-	for i := 0; i < elements; i++ {
-		t := &TLV{}
-		t.Tag = Tag(binary.BigEndian.Uint16(data[offset:]))
-		offset += binary.MaxVarintLen16
-		t.Length = binary.BigEndian.Uint32(data[offset:])
-		offset += binary.MaxVarintLen32
-		if offset+int(t.Length) > len(data) {
-			break
-		}
-		t.Value = data[offset : offset+int(t.Length)]
-		offset += int(t.Length)
-		tlvs = append(tlvs, t)
-	}
-
-	return tlvs
-}
-
-func DecodeSeeker(s io.ReadSeeker) ([]*TLV, error) {
+func Decode(s io.ReadSeeker) ([]*TLV, error) {
 	data := buf.Get(1024)
 	defer buf.Put(data)
 	data = data[0:]
