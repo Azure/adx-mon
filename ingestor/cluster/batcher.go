@@ -21,7 +21,10 @@ type Segmenter interface {
 }
 
 type BatcherOpts struct {
-	StorageDir  string
+	StorageDir     string
+	MaxSegmentAge  time.Duration
+	MaxSegmentSize int64
+
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
 
@@ -44,18 +47,26 @@ type batcher struct {
 	closeFn    context.CancelFunc
 	storageDir string
 
-	Partitioner MetricPartitioner
-	Segmenter   Segmenter
-	hostname    string
+	Partitioner    MetricPartitioner
+	Segmenter      Segmenter
+	hostname       string
+	maxSegmentAge  time.Duration
+	maxSegmentSize int64
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
+	maxSegmentAge := 30 * time.Second
+	if opts.MaxSegmentAge.Seconds() > 0 {
+		maxSegmentAge = opts.MaxSegmentAge
+	}
 	return &batcher{
-		storageDir:    opts.StorageDir,
-		Partitioner:   opts.Partitioner,
-		Segmenter:     opts.Segmenter,
-		uploadQueue:   opts.UploadQueue,
-		transferQueue: opts.TransferQueue,
+		storageDir:     opts.StorageDir,
+		maxSegmentAge:  maxSegmentAge,
+		maxSegmentSize: 100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
+		Partitioner:    opts.Partitioner,
+		Segmenter:      opts.Segmenter,
+		uploadQueue:    opts.UploadQueue,
+		transferQueue:  opts.TransferQueue,
 	}
 }
 
@@ -113,6 +124,11 @@ func (a *batcher) BatchSegments() error {
 	return nil
 }
 
+// processSegments returns the set of batches that are owned by the current instance and
+// the set that are owned by peers and need to be transferred.  The owned slice may contain
+// segments that are owned by other peers if they are already past the max age or max size
+// thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
+// lagging segments over new ones.
 func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	entries, err := os.ReadDir(a.storageDir)
 	if err != nil {
@@ -196,7 +212,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			fileSum += stat.Size()
 
 			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
-			if stat.Size() >= 100*1024*1024 {
+			if stat.Size() >= a.maxSegmentSize {
 				if logger.IsDebug() {
 					logger.Debug("File %s is larger than 100MB (%d), uploading directly", path, stat.Size())
 				}
@@ -204,10 +220,15 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				break
 			}
 
+			createdAt, err := segmentCreationTime(path)
+			if err != nil {
+				logger.Warn("failed to determine segment creation time: %s", err)
+			}
+
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have a node that's behind on uploading.
-			if time.Since(stat.ModTime()) > 30*time.Second {
+			if time.Since(stat.ModTime()) > a.maxSegmentAge || time.Since(createdAt) > a.maxSegmentAge {
 				if logger.IsDebug() {
 					logger.Debug("File %s is older than 30 seconds, uploading directly", path)
 				}
@@ -216,18 +237,18 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			}
 		}
 
-		if logger.IsDebug() && fileSum >= 100*1024*1024 {
+		if logger.IsDebug() && fileSum >= a.maxSegmentSize {
 			logger.Debug("Metric %s is larger than 100MB (%d), uploading directly", k, fileSum)
 		}
 
 		// If the file is already >= 100MB, we'll just upload it directly because it's already in the optimal size range.
 		// Transferring it to another node would just add additional latency and Disk IO
-		if directUpload || fileSum >= 100*1024*1024 {
+		if directUpload || fileSum >= a.maxSegmentSize {
 			owned = append(owned, append([]string{}, v...))
 			continue
 		}
 
-		// TODO: Should order these by age and break up groups into files that are less than 1GB.
+		// TODO: Should break up groups into files that are less than 1GB.
 		owner, _ := a.Partitioner.Owner([]byte(k))
 		if owner == a.hostname {
 			owned = append(owned, append([]string{}, v...))
@@ -236,5 +257,55 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		}
 	}
 
+	// Sort the owned and not-owned batches by creation time so that we prioritize uploading the old segments first
+	sort.Slice(owned, func(i, j int) bool {
+		groupA := owned[i]
+		groupB := owned[j]
+
+		minA := minCreated(groupA)
+		minB := minCreated(groupB)
+		return minA.Before(minB)
+	})
+
+	sort.Slice(notOwned, func(i, j int) bool {
+		groupA := notOwned[i]
+		groupB := notOwned[j]
+
+		minA := minCreated(groupA)
+		minB := minCreated(groupB)
+		return minA.Before(minB)
+	})
+
 	return owned, notOwned, nil
+}
+
+func minCreated(batch []string) time.Time {
+	var minTime time.Time
+	for _, v := range batch {
+		createdAt, err := segmentCreationTime(v)
+		if err != nil {
+			logger.Warn("Invalid file name: %s: %s", v, err)
+			continue
+		}
+
+		if minTime.IsZero() || createdAt.Before(minTime) {
+			minTime = createdAt
+		}
+	}
+	return minTime
+}
+
+func segmentCreationTime(filename string) (time.Time, error) {
+	parts := strings.Split(filepath.Base(filename), "_")
+	if len(parts) != 2 { // Cpu_1234.wal
+		return time.Time{}, fmt.Errorf("invalid file name: %s", filename)
+	}
+
+	epoch := parts[1][:len(parts[1])-4]
+	createdAt, err := flake.ParseFlakeID(epoch)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid file name: %s: %w", filename, err)
+
+	}
+	return createdAt, nil
 }
