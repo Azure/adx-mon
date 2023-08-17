@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/net/netutil"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -58,6 +60,7 @@ func main() {
 			&cli.StringFlag{Name: "storage-dir", Usage: "Direcotry to store WAL segments"},
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
+			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
@@ -98,6 +101,7 @@ func realMain(ctx *cli.Context) error {
 		cacert, key                         string
 		insecureSkipVerify                  bool
 		concurrentUploads                   int
+		maxConns                            int
 		maxSegmentSize                      int64
 		maxSegmentAge                       time.Duration
 	)
@@ -107,6 +111,7 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
+	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
 	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
@@ -267,6 +272,13 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatal("Failed to start service: %s", err)
 	}
 
+	l, err := net.Listen("tcp", ":9090")
+	if maxConns > 0 {
+		logger.Info("Limiting connections to %d", maxConns)
+		l = netutil.LimitListener(l, maxConns)
+	}
+	defer l.Close()
+
 	logger.Info("Listening at %s", ":9090")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
@@ -282,11 +294,11 @@ func realMain(ctx *cli.Context) error {
 	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	srv := &http.Server{Addr: ":9090", Handler: mux}
+	srv := &http.Server{Handler: mux}
 	srv.ErrorLog = newLogger()
 
 	go func() {
-		if err := srv.ListenAndServeTLS(cacert, key); err != nil {
+		if err := srv.ServeTLS(l, cacert, key); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
