@@ -95,6 +95,10 @@ func (s *service) collect(ctx context.Context) {
 			logger.Info("Ingestion rate %0.2f samples/sec, samples ingested=%d", (currentTotal-lastCount)/10, uint64(currentTotal))
 			lastCount = currentTotal
 
+			// Clear the gauges to prune old metrics that may not be collected anymore.
+			IngestorSegmentsMaxAge.Reset()
+			IngestorSegmentsSizeBytes.Reset()
+			IngestorSegmentsTotal.Reset()
 		}
 	}
 }
