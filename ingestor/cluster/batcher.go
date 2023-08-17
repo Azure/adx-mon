@@ -55,13 +55,9 @@ type batcher struct {
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
-	maxSegmentAge := 30 * time.Second
-	if opts.MaxSegmentAge.Seconds() > 0 {
-		maxSegmentAge = opts.MaxSegmentAge
-	}
 	return &batcher{
 		storageDir:     opts.StorageDir,
-		maxSegmentAge:  maxSegmentAge,
+		maxSegmentAge:  90 * time.Second,
 		maxSegmentSize: 100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
 		Partitioner:    opts.Partitioner,
 		Segmenter:      opts.Segmenter,
@@ -228,9 +224,9 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have a node that's behind on uploading.
-			if time.Since(stat.ModTime()) > a.maxSegmentAge || time.Since(createdAt) > a.maxSegmentAge {
+			if time.Since(createdAt) > a.maxSegmentAge {
 				if logger.IsDebug() {
-					logger.Debug("File %s is older than 30 seconds, uploading directly", path)
+					logger.Debug("File %s is older than %s (%s) seconds, uploading directly", path, a.maxSegmentAge.String(), time.Since(createdAt).String())
 				}
 				directUpload = true
 				break
