@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"sort"
 	"strconv"
 
 	"github.com/Azure/adx-mon/ingestor/transform"
@@ -142,16 +141,12 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 			var metric string
 
 			// Labels should already be sorted by name, but just in case they aren't, sort them.
-			if !sort.SliceIsSorted(v.Labels, func(i, j int) bool {
-				return bytes.Compare(v.Labels[i].Name, v.Labels[j].Name) < 0
-			}) {
-				sort.Slice(v.Labels, func(i, j int) bool {
-					return bytes.Compare(v.Labels[i].Name, v.Labels[j].Name) < 0
-				})
+			if !prompb.IsSorted(v.Labels) {
+				prompb.Sort(v.Labels)
 			}
 
-			for i, vv := range v.Labels {
-				if i == 0 {
+			for _, vv := range v.Labels {
+				if bytes.Equal(vv.Name, []byte("__name__")) {
 					metric = string(vv.Value)
 				}
 				seriesId.Write(vv.Name)
