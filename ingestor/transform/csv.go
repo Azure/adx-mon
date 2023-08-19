@@ -41,14 +41,11 @@ func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 		labelsBuf:   bytes.NewBuffer(make([]byte, 0, 1024)),
 		enc:         csv.NewWriter(w),
 		line:        make([]byte, 0, 4096),
-		columns:     make([][]byte, len(columns)),
+		columns:     make([][]byte, 0, len(columns)),
 		fields:      make([]string, 0, 4+len(columns)),
 	}
 
-	for i, v := range columns {
-		writer.columns[i] = []byte(strings.ToLower(v))
-	}
-	writer.SetColumns(columns)
+	writer.InitColumns(columns)
 	return writer
 }
 
@@ -243,7 +240,13 @@ func (w *CSVWriter) Bytes() []byte {
 	return w.w.Bytes()
 }
 
-func (w *CSVWriter) SetColumns(columns []string) {
+// InitColumns initializes the labels that will be promoted to columns in the CSV file.  This can be done
+// once on the *Writer and subsequent calls are no-ops.
+func (w *CSVWriter) InitColumns(columns []string) {
+	if len(w.columns) > 0 {
+		return
+	}
+
 	sortLower := make([][]byte, len(columns))
 	for i, v := range columns {
 		sortLower[i] = []byte(strings.ToLower(v))
