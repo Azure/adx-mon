@@ -117,12 +117,13 @@ func BenchmarkMarshalCSV(b *testing.B) {
 		},
 	}
 
-	var buf bytes.Buffer
-	w := NewCSVWriter(&buf, []string{"region", "Hostname", "bar"})
+	buf := bytes.NewBuffer(make([]byte, 0, 64*1024))
+	w := NewCSVWriter(buf, []string{"region", "Hostname", "bar"})
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		w.MarshalCSV(ts)
+		buf.Reset()
 	}
 }
 

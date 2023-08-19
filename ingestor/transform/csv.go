@@ -15,23 +15,34 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
+
+	adxcsv "github.com/Azure/adx-mon/pkg/csv"
 )
 
 type CSVWriter struct {
-	w       *bytes.Buffer
-	buf     *strings.Builder
-	enc     *csv.Writer
-	columns [][]byte
+	w   *bytes.Buffer
+	buf *strings.Builder
+	enc *csv.Writer
+
+	labelsBuf   *bytes.Buffer
+	seriesIdBuf *bytes.Buffer
+	line        []byte
+	columns     [][]byte
+	fields      []string
 }
 
 // NewCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
 // label keys that will be promoted to columns.
 func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 	writer := &CSVWriter{
-		w:       w,
-		buf:     &strings.Builder{},
-		enc:     csv.NewWriter(w),
-		columns: make([][]byte, len(columns)),
+		w:           w,
+		buf:         &strings.Builder{},
+		seriesIdBuf: bytes.NewBuffer(make([]byte, 0, 1024)),
+		labelsBuf:   bytes.NewBuffer(make([]byte, 0, 1024)),
+		enc:         csv.NewWriter(w),
+		line:        make([]byte, 0, 4096),
+		columns:     make([][]byte, len(columns)),
+		fields:      make([]string, 0, 4+len(columns)),
 	}
 
 	for i, v := range columns {
@@ -54,17 +65,19 @@ func (w *CSVWriter) MarshalCSV(t interface{}) error {
 }
 
 func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
-	buf := w.buf
+	buf := w.labelsBuf
 	buf.Reset()
 
-	seriesIdHasher := xxhash.New()
+	seriesIdBuf := w.seriesIdBuf
+	seriesIdBuf.Reset()
+
 	var j int
 
 	// Marshal the labels as JSON and avoid allocations since this code is in the hot path.
 	buf.WriteByte('{')
 	for _, v := range ts.Labels {
-		seriesIdHasher.Write(v.Name)
-		seriesIdHasher.Write(v.Value)
+		w.seriesIdBuf.Write(v.Name)
+		w.seriesIdBuf.Write(v.Value)
 
 		// Drop the __name__ label since it is implied that the name of the CSV file is the name of the metric.
 		if bytes.Equal(v.Name, []byte("__name__")) {
@@ -96,7 +109,7 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 			continue
 		}
 
-		if buf.String()[buf.Len()-1] != '{' {
+		if buf.Bytes()[buf.Len()-1] != '{' {
 			buf.WriteByte(',')
 		}
 		fflib.WriteJson(buf, v.Name)
@@ -105,30 +118,29 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 	}
 
 	buf.WriteByte('}')
-	seriesId := seriesIdHasher.Sum64()
+	seriesId := xxhash.Sum64(seriesIdBuf.Bytes())
 
-	fields := make([]string, 0, 4)
 	for _, v := range ts.Samples {
-		fields = fields[:0]
+		line := w.line[:0]
 
 		// Timestamp
-		tm := time.Unix(v.Timestamp/1000, (v.Timestamp%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano)
-		fields = append(fields, tm)
+		line = time.Unix(v.Timestamp/1000, (v.Timestamp%1000)*int64(time.Millisecond)).UTC().AppendFormat(line, time.RFC3339Nano)
 
 		// seriesID
-		fields = append(fields, strconv.FormatInt(int64(seriesId), 10))
+		line = append(line, ',')
+		line = strconv.AppendInt(line, int64(seriesId), 10)
 
 		if len(w.columns) > 0 {
 			var i, j int
 			for i < len(ts.Labels) && j < len(w.columns) {
 				cmp := compareLower(ts.Labels[i].Name, w.columns[j])
 				if cmp == 0 {
-					fields = append(fields, string(ts.Labels[i].Value))
+					line = adxcsv.Append(line, ts.Labels[i].Value)
 					j++
 					i++
 				} else if cmp > 0 {
 					j++
-					fields = append(fields, "")
+					line = append(line, ',')
 				} else {
 					i++
 				}
@@ -136,18 +148,22 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 		}
 
 		// labels
-		fields = append(fields, buf.String())
+		line = adxcsv.AppendQuoted(line, buf.Bytes())
+		line = append(line, ',')
 
 		// Values
-		fields = append(fields, strconv.FormatFloat(v.Value, 'f', 9, 64))
+		line = strconv.AppendFloat(line, v.Value, 'f', 9, 64)
 
-		if err := w.enc.Write(fields); err != nil {
+		// End of line
+		line = adxcsv.AppendNewLine(line)
+
+		if n, err := w.w.Write(line); err != nil {
 			return err
+		} else if n != len(line) {
+			return errors.New("short write")
 		}
 	}
-
-	w.enc.Flush()
-	return w.enc.Error()
+	return nil
 }
 
 func (w *CSVWriter) marshalLog(log *logsv1.ExportLogsServiceRequest) error {
