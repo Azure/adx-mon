@@ -96,7 +96,7 @@ func BenchmarkMarshalCSV(b *testing.B) {
 	}
 
 	var buf bytes.Buffer
-	w := NewCSVWriter(&buf, nil)
+	w := NewCSVWriter(&buf, []string{"region", "Hostname", "bar"})
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
