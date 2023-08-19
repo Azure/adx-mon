@@ -97,7 +97,7 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 	require.NoError(t, err)
 	b, err := io.ReadAll(r)
 	require.NoError(t, err)
-	require.Equal(t, "1970-01-01T00:00:00Z,-414304664621325809,{},0.000000000\n", string(b))
+	require.Equal(t, "1970-01-01T00:00:00Z,-414304664621325809,\"{}\",0.000000000\n", string(b))
 }
 
 func TestStore_SkipNonCSV(t *testing.T) {
