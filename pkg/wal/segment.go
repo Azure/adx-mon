@@ -34,7 +34,7 @@ var (
 	idgen *flake.Flake
 
 	// encoder and decoder are used for compressing and decompressing blocks
-	encoder, _ = zstd.NewWriter(nil)
+	encoder, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	decoder, _ = zstd.NewReader(nil)
 )
 
