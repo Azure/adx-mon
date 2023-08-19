@@ -169,7 +169,7 @@ func (s *LocalStore) WALCount() int {
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
-	enc.SetColumns(s.opts.LiftedColumns)
+	enc.InitColumns(s.opts.LiftedColumns)
 
 	for _, v := range ts {
 		wal, err := s.GetWAL(ctx, v.Labels)
