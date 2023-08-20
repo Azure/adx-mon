@@ -94,6 +94,7 @@ type segment struct {
 
 	// encodeBuf is a buffer used for compressing blocks before writing to disk.
 	encodeBuf []byte
+	lenBuf    [8]byte
 
 	closing chan struct{}
 	closed  bool
@@ -433,10 +434,9 @@ func (s *segment) blockWrite(w io.Writer, buf []byte) error {
 		return nil
 	}
 
-	var lenBuf [8]byte
-	binary.BigEndian.PutUint32(lenBuf[:4], uint32(len(buf)))
-	binary.BigEndian.PutUint32(lenBuf[4:8], crc32.ChecksumIEEE(buf))
-	n, err := w.Write(lenBuf[:8])
+	binary.BigEndian.PutUint32(s.lenBuf[:4], uint32(len(buf)))
+	binary.BigEndian.PutUint32(s.lenBuf[4:8], crc32.ChecksumIEEE(buf))
+	n, err := w.Write(s.lenBuf[:8])
 	if err != nil {
 		return err
 	} else if n != 8 {
