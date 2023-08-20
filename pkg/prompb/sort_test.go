@@ -35,3 +35,29 @@ func TestSortedLables(t *testing.T) {
 	require.Equal(t, []byte("Capital"), l[2].Name)
 	require.Equal(t, []byte("foo"), l[3].Name)
 }
+
+func BenchmarkIsSorted(b *testing.B) {
+	l := []Label{
+		{
+			Name:  []byte("foo"),
+			Value: []byte("bar"),
+		},
+		{
+			Name:  []byte("__name__"),
+			Value: []byte("name"),
+		},
+		{
+			Name:  []byte("__abc__"),
+			Value: []byte("abc"),
+		},
+
+		{
+			Name:  []byte("Capital"),
+			Value: []byte("capital"),
+		},
+	}
+
+	for i := 0; i < b.N; i++ {
+		IsSorted(l)
+	}
+}
