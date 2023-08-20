@@ -313,6 +313,10 @@ func (s *segment) repair() error {
 		n, err := s.w.Read(lenCrcBuf[:8])
 		idx += n
 
+		if err == io.EOF {
+			return nil
+		}
+
 		if err != nil || n != 8 {
 			logger.Warn("Repairing segment %s, missing block header, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
