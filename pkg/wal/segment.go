@@ -17,6 +17,7 @@ import (
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/ring"
 	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/zstd"
@@ -27,7 +28,7 @@ const (
 	DefaultIOBufSize = 128 * 1024
 
 	// DefaultRingSize is the default size of the ring buffer.
-	DefaultRingSize = 16 * 1024
+	DefaultRingSize = 1024
 )
 
 var (
@@ -36,6 +37,13 @@ var (
 	// encoder and decoder are used for compressing and decompressing blocks
 	encoder, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	decoder, _ = zstd.NewReader(nil)
+
+	// ringPool is a pool of ring buffers used for queuing writes to segments.  This allows these to be
+	// re-used across segments.  We allow up to 10000 ring buffers to be allocated to match the max number of
+	// tables allowed in Kusto.
+	ringPool = pool.NewGeneric(10000, func(sz int) interface{} {
+		return ring.NewBuffer(sz)
+	})
 )
 
 func init() {
@@ -122,7 +130,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		bw:        bf,
 
 		closing: make(chan struct{}),
-		ringBuf: ring.NewBuffer(DefaultRingSize),
+		ringBuf: ringPool.Get(DefaultRingSize).(*ring.Buffer),
 	}
 
 	f.wg.Add(1)
@@ -274,6 +282,7 @@ func (s *segment) Close() error {
 	s.wg.Wait()
 
 	s.bw = nil
+	ringPool.Put(s.ringBuf)
 	s.ringBuf = nil
 
 	if err := s.w.Sync(); errors.Is(err, os.ErrClosed) {
