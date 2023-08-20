@@ -9,19 +9,25 @@ import (
 
 // IsSorted return true if the labels are sorted according to Sort.
 func IsSorted(l []Label) bool {
-	return sort.SliceIsSorted(l, func(i, j int) bool {
-		return labelCompare(l[i].Name, l[j].Name)
-	})
+	if len(l) == 1 {
+		return true
+	}
+	for i := 1; i < len(l)-1; i++ {
+		if !labelLess(l[i-1].Name, l[i].Name) {
+			return false
+		}
+	}
+	return true
 }
 
 // Sort sorts labels ensuring the __name__ is first the remaining labels or ordered by name.
 func Sort(l []Label) {
 	sort.Slice(l, func(i, j int) bool {
-		return labelCompare(l[i].Name, l[j].Name)
+		return labelLess(l[i].Name, l[j].Name)
 	})
 }
 
-func labelCompare(a, b []byte) bool {
+func labelLess(a, b []byte) bool {
 	if bytes.Equal(a, []byte("__name__")) {
 		return true
 	} else if bytes.Equal(b, []byte("__name__")) {
