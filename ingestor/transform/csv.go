@@ -259,14 +259,17 @@ func (w *CSVWriter) InitColumns(columns []string) {
 
 // Normalize converts a metrics name to a ProperCase table name
 func Normalize(s []byte) []byte {
-	var b bytes.Buffer
-	for i := 0; i < len(s); i++ {
+	return AppendNormalize(make([]byte, 0, len(s)), s)
+}
 
+// AppendNormalize converts a metrics name to a ProperCase table name and appends it to dst.
+func AppendNormalize(dst, s []byte) []byte {
+	for i := 0; i < len(s); i++ {
 		// Skip _, but capitalize the first letter after an _
 		if s[i] == '_' {
 			if i+1 < len(s) {
 				if s[i+1] >= 'a' && s[i+1] <= 'z' {
-					b.Write([]byte{byte(unicode.ToUpper(rune(s[i+1])))})
+					dst = append(dst, byte(unicode.ToUpper(rune(s[i+1]))))
 					i += 1
 					continue
 				}
@@ -276,12 +279,12 @@ func Normalize(s []byte) []byte {
 
 		// Capitalize the first letter
 		if i == 0 {
-			b.Write([]byte{byte(unicode.ToUpper(rune(s[i])))})
+			dst = append(dst, byte(unicode.ToUpper(rune(s[i]))))
 			continue
 		}
-		b.WriteByte(s[i])
+		dst = append(dst, s[i])
 	}
-	return b.Bytes()
+	return dst
 }
 
 func compareLower(sa, sb []byte) int {

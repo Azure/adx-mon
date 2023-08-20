@@ -22,9 +22,10 @@ import (
 )
 
 var (
-	csvWriterPool = pool.NewGeneric(1024, func(sz int) interface{} {
+	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
+	bytesPool = pool.NewBytes(1000)
 )
 
 type Store interface {
@@ -130,10 +131,13 @@ func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*wal.WAL, error
 }
 
 func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*wal.WAL, error) {
-	key := seriesKey(labels)
+	b := bytesPool.Get(256)
+	defer bytesPool.Put(b)
+
+	key := seriesKey(b[:0], labels)
 
 	s.mu.RLock()
-	wal := s.wals[key]
+	wal := s.wals[string(key)]
 	s.mu.RUnlock()
 
 	if wal != nil {
@@ -143,7 +147,7 @@ func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*wal.WA
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	wal = s.wals[key]
+	wal = s.wals[string(key)]
 	if wal != nil {
 		return wal, nil
 	}
@@ -151,11 +155,11 @@ func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*wal.WA
 	prefix := key
 
 	var err error
-	wal, err = s.newWAL(ctx, prefix)
+	wal, err = s.newWAL(ctx, string(prefix))
 	if err != nil {
 		return nil, err
 	}
-	s.wals[key] = wal
+	s.wals[string(key)] = wal
 
 	return wal, nil
 }
@@ -236,12 +240,12 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	return int(n), nil
 }
 
-func seriesKey(labels []prompb.Label) string {
+func seriesKey(dst []byte, labels []prompb.Label) []byte {
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			// return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
-			return string(transform.Normalize(v.Value))
+			return transform.AppendNormalize(dst, v.Value)
 		}
 	}
-	return string(transform.Normalize(labels[0].Value))
+	return transform.AppendNormalize(dst, labels[0].Value)
 }
