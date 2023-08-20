@@ -165,3 +165,16 @@ func TestSegment_LargeSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 100000, bytes.Count(b, []byte("\n")))
 }
+
+func BenchmarkSegment_Write(b *testing.B) {
+	dir := b.TempDir()
+	s, err := wal.NewSegment(dir, "Foo")
+	require.NoError(b, err)
+	defer s.Close()
+	buf := []byte("test")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		require.NoError(b, s.Write(context.Background(), buf))
+	}
+}
