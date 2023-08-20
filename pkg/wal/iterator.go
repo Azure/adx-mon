@@ -27,14 +27,18 @@ type segmentIterator struct {
 	// lenCrcBuf is a temp buffer to re-use for extracting the 8 byte (4 len, 4 crc) values
 	// when iterating.
 	lenCrcBuf [8]byte
+
+	// decodeBuf is a temp buffer to re-use for decoding the block.
+	decodeBuf []byte
 }
 
 func NewSegmentIterator(f *os.File) (Iterator, error) {
 	return &segmentIterator{
-		f:     f,
-		n:     0,
-		buf:   make([]byte, 0, 4096),
-		value: nil,
+		f:         f,
+		n:         0,
+		buf:       make([]byte, 0, 4096),
+		decodeBuf: make([]byte, 0, 4096),
+		value:     nil,
 	}, nil
 }
 func (b *segmentIterator) Next() (bool, error) {
@@ -76,13 +80,13 @@ func (b *segmentIterator) Next() (bool, error) {
 		return false, fmt.Errorf("block checksum verification failed")
 	}
 
-	buf, err := decoder.DecodeAll(b.buf[:blockLen], nil)
+	b.decodeBuf, err = decoder.DecodeAll(b.buf[:blockLen], b.decodeBuf[:0])
 	if err != nil {
 		return false, err
 	}
 
 	// Setup internal iterator indexing on this block.
-	b.buf = buf
+	b.buf = append(b.buf[:0], b.decodeBuf...)
 	b.n = 0
 	b.value = nil
 
