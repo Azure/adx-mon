@@ -19,13 +19,13 @@ import (
 )
 
 var (
-	bytesBufPool = pool.NewGeneric(50, func(sz int) interface{} {
+	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return bytes.NewBuffer(make([]byte, 0, sz))
 	})
 
-	bytesPool = pool.NewBytes(50)
+	bytesPool = pool.NewBytes(1000)
 
-	writeReqPool = pool.NewGeneric(50, func(sz int) interface{} {
+	writeReqPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return prompb.WriteRequest{
 			Timeseries: make([]prompb.TimeSeries, 0, sz),
 		}
