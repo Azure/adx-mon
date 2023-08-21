@@ -53,7 +53,8 @@ func Encode(tlvs ...*TLV) []byte {
 	// T is a magic number 0x1
 	// L is the number of TLVs
 	// V is the size in bytes of all the TLVs
-	v := make([]byte, sizeOfHeader)
+	v := buf.Get(sizeOfHeader)
+	defer buf.Put(v)
 	binary.BigEndian.PutUint16(v, uint16(magicn))                                                  // T
 	binary.BigEndian.PutUint32(v[binary.MaxVarintLen16:], uint32(b.Len()))                         // L
 	binary.BigEndian.PutUint32(v[binary.MaxVarintLen16+binary.MaxVarintLen32:], uint32(len(tlvs))) // V
