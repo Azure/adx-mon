@@ -33,10 +33,10 @@ func labelLess(a, b []byte) bool {
 	} else if bytes.Equal(b, []byte("__name__")) {
 		return false
 	}
-	return compareLower(a, b) < 0
+	return CompareLower(a, b) < 0
 }
 
-func compareLower(sa, sb []byte) int {
+func CompareLower(sa, sb []byte) int {
 	for {
 		rb, nb := utf8.DecodeRune(sb)
 		ra, na := utf8.DecodeRune(sa)
