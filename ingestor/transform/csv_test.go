@@ -58,28 +58,6 @@ func TestMarshalCSV(t *testing.T) {
 
 }
 
-func TestCompareLower(t *testing.T) {
-	for _, tc := range []struct {
-		a, b     []byte
-		expected int
-	}{
-		{[]byte("a"), []byte("b"), -1},
-		{[]byte("b"), []byte("a"), 1},
-		{[]byte("a"), []byte("a"), 0},
-		{[]byte("A"), []byte("a"), 0},
-		{[]byte("a"), []byte("A"), 0},
-		{[]byte("A"), []byte("A"), 0},
-		{[]byte("a"), []byte("aa"), -1},
-		{[]byte("aa"), []byte("a"), 1},
-		{[]byte("aa"), []byte("aa"), 0},
-		{[]byte("aa"), []byte("ab"), -1},
-		{[]byte("ab"), []byte("aa"), 1},
-		{[]byte("ab"), []byte("ab"), 0},
-	} {
-		require.Equal(t, tc.expected, compareLower(tc.a, tc.b), "%s %s", tc.a, tc.b)
-	}
-}
-
 func BenchmarkMarshalCSV(b *testing.B) {
 	ts := prompb.TimeSeries{
 		Labels: []prompb.Label{

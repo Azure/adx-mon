@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -86,7 +85,7 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 		// any matches.
 		var skip bool
 		for j < len(w.columns) {
-			cmp := compareLower(w.columns[j], v.Name)
+			cmp := prompb.CompareLower(w.columns[j], v.Name)
 			// The lifted column is less than the current label, we need move to the next column and check again.
 			if cmp < 0 {
 				j++
@@ -130,7 +129,7 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 		if len(w.columns) > 0 {
 			var i, j int
 			for i < len(ts.Labels) && j < len(w.columns) {
-				cmp := compareLower(ts.Labels[i].Name, w.columns[j])
+				cmp := prompb.CompareLower(ts.Labels[i].Name, w.columns[j])
 				if cmp == 0 {
 					line = adxcsv.Append(line, ts.Labels[i].Value)
 					j++
@@ -285,32 +284,4 @@ func AppendNormalize(dst, s []byte) []byte {
 		dst = append(dst, s[i])
 	}
 	return dst
-}
-
-func compareLower(sa, sb []byte) int {
-	for {
-		rb, nb := utf8.DecodeRune(sb)
-		ra, na := utf8.DecodeRune(sa)
-
-		if na == 0 && nb > 0 {
-			return -1
-		} else if na > 0 && nb == 0 {
-			return 1
-		} else if na == 0 && nb == 0 {
-			return 0
-		}
-
-		rb = unicode.ToLower(rb)
-		ra = unicode.ToLower(ra)
-
-		if ra < rb {
-			return -1
-		} else if ra > rb {
-			return 1
-		}
-
-		// Trim rune from the beginning of each string.
-		sa = sa[na:]
-		sb = sb[nb:]
-	}
 }
