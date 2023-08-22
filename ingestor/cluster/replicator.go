@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
+	"golang.org/x/sync/errgroup"
 )
 
 type ReplicatorOpts struct {
@@ -94,17 +96,23 @@ func (r *replicator) transfer(ctx context.Context) {
 					continue
 				}
 
-				start := time.Now()
-				if err := r.cli.Write(context.Background(), addr, seg); err != nil {
-					logger.Error("Failed to transfer segment %s to %s: %v", seg, addr, err)
-					continue
-				}
-				if err := os.Remove(seg); err != nil {
-					logger.Error("Failed to remove segment %s: %v", seg, err)
-					continue
-				}
-				logger.Info("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
+				g, gCtx := errgroup.WithContext(ctx)
+				g.SetLimit(5)
+				g.Go(func() error {
+					start := time.Now()
+					if err := r.cli.Write(gCtx, addr, seg); err != nil {
+						return fmt.Errorf("transfer segment %s to %s: %w", seg, addr, err)
+					}
+					if err := os.Remove(seg); err != nil {
+						return fmt.Errorf("remove segment %s: %w", seg, err)
+					}
+					logger.Info("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
+					return nil
+				})
 
+				if err := g.Wait(); err != nil {
+					logger.Error("Failed to transfer segment %s to %s: %v", seg, addr, err)
+				}
 			}
 		}
 	}
