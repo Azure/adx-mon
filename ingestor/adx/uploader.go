@@ -4,8 +4,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +18,8 @@ const ConcurrentUploads = 50
 
 type Uploader interface {
 	service.Component
+
+	Database() string
 
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan []string
@@ -99,7 +99,11 @@ func (n *uploader) UploadQueue() chan []string {
 	return n.queue
 }
 
-func (n *uploader) uploadReader(reader io.Reader, table string) error {
+func (n *uploader) Database() string {
+	return n.database
+}
+
+func (n *uploader) uploadReader(reader io.Reader, database, table string) error {
 	// Ensure we wait for this upload to finish.
 	n.wg.Add(1)
 	defer n.wg.Done()
@@ -169,9 +173,13 @@ func (n *uploader) upload(ctx context.Context) error {
 		case paths := <-n.queue:
 
 			func() {
-				readers := make([]io.Reader, 0, len(paths))
-				files := make([]io.Closer, 0, len(paths))
-				var fields []string
+				var (
+					readers  = make([]io.Reader, 0, len(paths))
+					files    = make([]io.Closer, 0, len(paths))
+					database string
+					table    string
+					err      error
+				)
 				n.mu.Lock()
 				for _, path := range paths {
 
@@ -181,8 +189,11 @@ func (n *uploader) upload(ctx context.Context) error {
 					}
 					n.uploading[path] = struct{}{}
 
-					fileName := filepath.Base(path)
-					fields = strings.Split(fileName, "_")
+					database, table, _, err = wal.ParseFilename(path)
+					if err != nil {
+						logger.Error("Failed to parse file: %s", err.Error())
+						continue
+					}
 
 					f, err := wal.NewSegmentReader(path)
 					if os.IsNotExist(err) {
@@ -217,7 +228,7 @@ func (n *uploader) upload(ctx context.Context) error {
 				mr := io.MultiReader(readers...)
 
 				now := time.Now()
-				if err := n.uploadReader(mr, fields[0]); err != nil {
+				if err := n.uploadReader(mr, database, table); err != nil {
 					logger.Error("Failed to upload file: %s", err.Error())
 					return
 				}

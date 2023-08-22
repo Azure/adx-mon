@@ -16,7 +16,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSeriesKey(t *testing.T) {
+	tests := []struct {
+		Database string
+		Labels   []prompb.Label
+		Expect   []byte
+	}{
+		{
+			Database: "adxmetrics",
+			Labels:   newTimeSeries("foo", nil, 0, 0).Labels,
+			Expect:   []byte("adxmetrics_Foo"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.Expect), func(t *testing.T) {
+			b := make([]byte, 256)
+			require.Equal(t, string(tt.Expect), string(storage.SeriesKey(b[:0], tt.Database, tt.Labels)))
+		})
+	}
+}
+
 func TestStore_Open(t *testing.T) {
+	b := make([]byte, 256)
+	database := "adxmetrics"
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
@@ -30,22 +52,22 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", nil, 0, 0)
-	w, err := s.GetWAL(ctx, ts.Labels)
+	w, err := s.GetWAL(ctx, storage.SeriesKey(b[:0], database, ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), database, []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", nil, 1, 1)
-	w, err = s.GetWAL(ctx, ts.Labels)
+	w, err = s.GetWAL(ctx, storage.SeriesKey(b[:0], database, ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), database, []prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", nil, 0, 0)
-	w, err = s.GetWAL(ctx, ts.Labels)
+	w, err = s.GetWAL(ctx, storage.SeriesKey(b[:0], database, ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), database, []prompb.TimeSeries{ts}))
 
 	path := w.Path()
 
@@ -54,9 +76,9 @@ func TestStore_Open(t *testing.T) {
 
 	r, err := wal.NewSegmentReader(path)
 	require.NoError(t, err)
-	b, err := io.ReadAll(r)
+	data, err := io.ReadAll(r)
 	require.NoError(t, err)
-	println(string(b))
+	println(string(data))
 
 	s = storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     dir,
@@ -70,6 +92,8 @@ func TestStore_Open(t *testing.T) {
 }
 
 func TestLocalStore_WriteTimeSeries(t *testing.T) {
+	b := make([]byte, 256)
+	database := "adxmetrics"
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
@@ -83,10 +107,10 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", nil, 0, 0)
-	w, err := s.GetWAL(ctx, ts.Labels)
+	w, err := s.GetWAL(ctx, storage.SeriesKey(b[:0], database, ts.Labels))
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), database, []prompb.TimeSeries{ts}))
 
 	path := w.Path()
 
@@ -95,9 +119,9 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 
 	r, err := wal.NewSegmentReader(path)
 	require.NoError(t, err)
-	b, err := io.ReadAll(r)
+	data, err := io.ReadAll(r)
 	require.NoError(t, err)
-	require.Equal(t, "1970-01-01T00:00:00Z,-414304664621325809,\"{}\",0.000000000\n", string(b))
+	require.Equal(t, "1970-01-01T00:00:00Z,-414304664621325809,\"{}\",0.000000000\n", string(data))
 }
 
 func TestStore_SkipNonCSV(t *testing.T) {

@@ -129,6 +129,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		DropMetrics:   opts.DropMetrics,
 		SeriesCounter: metricsSvc,
 		RequestWriter: coord,
+		Database:      opts.Uploader.Database(),
 	})
 
 	return &Service{
