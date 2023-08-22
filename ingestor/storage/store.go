@@ -160,9 +160,10 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []
 	b := bytesPool.Get(256)
 	defer bytesPool.Put(b)
 
+	db := []byte(database)
 	for _, v := range ts {
 
-		key := SeriesKey(b[:0], database, v.Labels)
+		key := SegmentKey(b[:0], db, v.Labels)
 		wal, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
@@ -227,8 +228,9 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	return int(n), nil
 }
 
-func SeriesKey(dst []byte, database string, labels []prompb.Label) []byte {
-	dst = append([]byte(database+"_"), dst...)
+func SegmentKey(dst []byte, database []byte, labels []prompb.Label) []byte {
+	dst = append(dst, database...)
+	dst = append(dst, delim...)
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			// return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
@@ -237,3 +239,5 @@ func SeriesKey(dst []byte, database string, labels []prompb.Label) []byte {
 	}
 	return transform.AppendNormalize(dst, labels[0].Value)
 }
+
+var delim = []byte("_")

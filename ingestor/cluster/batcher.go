@@ -143,7 +143,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	// need to be transferred to other nodes.
 	var (
 		owned, notOwned [][]string
-		lastMetric      string
+		lastSegmentKey  string
 		groupSize       int
 	)
 	for _, v := range entries {
@@ -154,20 +154,19 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		}
 		groupSize += int(fi.Size())
 
-		key := fmt.Sprintf("%s_%s", v.Database, v.Table)
 		createdAt, err := flake.ParseFlakeID(v.Epoch)
 		if err != nil {
 			logger.Warn("Failed to parse flake id: %s: %s", v.Epoch, err)
 		} else {
-			if lastMetric == "" || key != lastMetric {
-				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastMetric).Set(time.Since(createdAt).Seconds())
-				metrics.IngestorSegmentsSizeBytes.WithLabelValues(lastMetric).Set(float64(groupSize))
+			if lastSegmentKey == "" || v.Key != lastSegmentKey {
+				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastSegmentKey).Set(time.Since(createdAt).Seconds())
+				metrics.IngestorSegmentsSizeBytes.WithLabelValues(lastSegmentKey).Set(float64(groupSize))
 				groupSize = 0
 			}
 		}
-		lastMetric = key
+		lastSegmentKey = v.Key
 
-		metrics.IngestorSegmentsTotal.WithLabelValues(key).Inc()
+		metrics.IngestorSegmentsTotal.WithLabelValues(v.Key).Inc()
 
 		if a.Segmenter.IsActiveSegment(v.Path) {
 			if logger.IsDebug() {
@@ -176,10 +175,10 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			continue
 		}
 
-		groups[key] = append(groups[key], v.Path)
+		groups[v.Key] = append(groups[v.Key], v.Path)
 	}
 
-	// For each metric, sort the segments by name.  The last segment is the current segment.
+	// For each sample, sort the segments by name.  The last segment is the current segment.
 	for k, v := range groups {
 		sort.Strings(v)
 

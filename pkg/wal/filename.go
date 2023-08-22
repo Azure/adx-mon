@@ -40,6 +40,7 @@ type File struct {
 	Database string
 	Table    string
 	Epoch    string
+	Key      string
 }
 
 func ListDir(storageDir string) ([]File, error) {
@@ -63,6 +64,7 @@ func ListDir(storageDir string) ([]File, error) {
 			Database: fields[0],
 			Table:    fields[1],
 			Epoch:    fields[2][:len(fields[2])-4],
+			Key:      fmt.Sprintf("%s_%s", fields[0], fields[1]),
 		},
 		)
 		return nil
