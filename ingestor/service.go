@@ -83,6 +83,10 @@ type ServiceOpts struct {
 
 	// Hostname is the hostname of the current node.
 	Hostname string
+
+	// DisablePeerDiscovery disables peer discovery and prevents transfers of small segments to an owner.
+	// Each instance of ingestor will upload received segments directly.
+	DisablePeerDiscovery bool
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -94,10 +98,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
-		WriteTimeSeriesFn: store.WriteTimeSeries,
-		K8sCli:            opts.K8sCli,
-		Hostname:          opts.Hostname,
-		Namespace:         opts.Namespace,
+		DisablePeerDiscovery: opts.DisablePeerDiscovery,
+		WriteTimeSeriesFn:    store.WriteTimeSeries,
+		K8sCli:               opts.K8sCli,
+		Hostname:             opts.Hostname,
+		Namespace:            opts.Namespace,
 	})
 	if err != nil {
 		return nil, err
