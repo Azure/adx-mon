@@ -191,6 +191,8 @@ func (s *Service) scrape() {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
+	reconnectTimer := time.NewTicker(5 * time.Minute)
+	defer reconnectTimer.Stop()
 	t := time.NewTicker(s.opts.ScrapeInterval)
 	defer t.Stop()
 	for {
@@ -199,6 +201,8 @@ func (s *Service) scrape() {
 			return
 		case <-t.C:
 			s.scrapeTargets()
+		case <-reconnectTimer.C:
+			s.remoteClient.CloseIdleConnections()
 		}
 	}
 }
