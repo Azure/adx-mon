@@ -297,7 +297,12 @@ func realMain(ctx *cli.Context) error {
 	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{
+		Handler: mux,
+		// Close idle connections fairly often to establish new connections through the load balancer
+		// so that long-lived connections don't stay pinned to the same node indefinitely.
+		IdleTimeout: 15 * time.Second,
+	}
 	srv.ErrorLog = newLogger()
 
 	go func() {
