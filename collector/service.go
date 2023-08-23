@@ -433,7 +433,16 @@ func (s *Service) OnAdd(obj interface{}) {
 }
 
 func (s *Service) OnUpdate(oldObj, newObj interface{}) {
-	s.OnAdd(newObj)
+	p, ok := newObj.(*v1.Pod)
+	if !ok || p == nil {
+		return
+	}
+
+	if p.DeletionTimestamp != nil {
+		s.OnDelete(p)
+	} else {
+		s.OnAdd(p)
+	}
 }
 
 func (s *Service) OnDelete(obj interface{}) {
