@@ -107,7 +107,12 @@ func (s *Service) Open(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	var err error
-	s.remoteClient, err = promremote.NewClient(10*time.Second, s.opts.InsecureSkipVerify)
+	s.remoteClient, err = promremote.NewClient(
+		promremote.ClientOpts{
+			Timeout:            20 * time.Second,
+			InsecureSkipVerify: s.opts.InsecureSkipVerify,
+			Close:              true,
+		})
 	if err != nil {
 		return fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
