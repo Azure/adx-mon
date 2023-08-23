@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	io_prometheus_client "github.com/prometheus/client_model/go"
+	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
@@ -358,47 +359,56 @@ func (s *Service) scrapeTargets() {
 			}
 		}
 
-		if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
-			var sb strings.Builder
-			for _, ts := range wr.Timeseries {
-				sb.Reset()
-				for i, l := range ts.Labels {
-					sb.Write(l.Name)
-					sb.WriteString("=")
-					sb.Write(l.Value)
-					if i < len(ts.Labels)-1 {
-						sb.Write([]byte(","))
-					}
-				}
-				sb.Write([]byte(" "))
-				for _, s := range ts.Samples {
-					logger.Debug("%s %d %f", sb.String(), s.Timestamp, s.Value)
-				}
-
-			}
-		}
-
 		if len(wr.Timeseries) >= s.opts.MaxBatchSize {
-			// TODO: Send write requests to separate goroutines
-			for _, endpoint := range s.opts.Endpoints {
-				if err := s.remoteClient.Write(s.ctx, endpoint, wr); err != nil {
-					logger.Error(err.Error())
-				}
+			if err := s.sendBatch(wr); err != nil {
+				logger.Error(err.Error())
 			}
 			wr.Timeseries = wr.Timeseries[:0]
 		}
-
 	}
 
-	if len(wr.Timeseries) > 0 {
-		// TODO: Send write requests to separate goroutines
-		for _, endpoint := range s.opts.Endpoints {
-			if err := s.remoteClient.Write(s.ctx, endpoint, wr); err != nil {
-				logger.Error(err.Error())
-			}
+	if len(wr.Timeseries) >= s.opts.MaxBatchSize {
+		if err := s.sendBatch(wr); err != nil {
+			logger.Error(err.Error())
 		}
 		wr.Timeseries = wr.Timeseries[:0]
 	}
+}
+
+func (s *Service) sendBatch(wr *prompb.WriteRequest) error {
+	if len(wr.Timeseries) == 0 {
+		return nil
+	}
+
+	if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
+		var sb strings.Builder
+		for _, ts := range wr.Timeseries {
+			sb.Reset()
+			for i, l := range ts.Labels {
+				sb.Write(l.Name)
+				sb.WriteString("=")
+				sb.Write(l.Value)
+				if i < len(ts.Labels)-1 {
+					sb.Write([]byte(","))
+				}
+			}
+			sb.Write([]byte(" "))
+			for _, s := range ts.Samples {
+				logger.Debug("%s %d %f", sb.String(), s.Timestamp, s.Value)
+			}
+
+		}
+	}
+
+	logger.Info("Sending %d timeseries to %d endpoints", len(wr.Timeseries), len(s.opts.Endpoints))
+	g, gCtx := errgroup.WithContext(s.ctx)
+	for _, endpoint := range s.opts.Endpoints {
+		endpoint := endpoint
+		g.Go(func() error {
+			return s.remoteClient.Write(gCtx, endpoint, wr)
+		})
+	}
+	return g.Wait()
 }
 
 func (s *Service) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) (prompb.TimeSeries, bool) {
