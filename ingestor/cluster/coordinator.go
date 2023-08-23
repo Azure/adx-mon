@@ -81,11 +81,6 @@ type CoordinatorOpts struct {
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
-	pcli, err := promremote.NewClient(15*time.Second, opts.InsecureSkipVerify)
-	if err != nil {
-		return nil, err
-	}
-
 	ns := opts.Namespace
 	groupName := opts.Hostname
 	discoveryDisabled := opts.DisablePeerDiscovery
@@ -113,7 +108,6 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 		namespace:         ns,
 		opts:              opts,
 		kcli:              opts.K8sCli,
-		pcli:              pcli,
 	}, nil
 }
 
