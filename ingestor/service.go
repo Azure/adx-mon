@@ -87,6 +87,10 @@ type ServiceOpts struct {
 	// DisablePeerDiscovery disables peer discovery and prevents transfers of small segments to an owner.
 	// Each instance of ingestor will upload received segments directly.
 	DisablePeerDiscovery bool
+
+	// MinTransferSize is the minimum size of a segment that will be transferred to another node.  If a segment
+	// exceeds this size, it will be uploaded directly by the current node.
+	MinTransferSize int64
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -118,13 +122,13 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:     opts.StorageDir,
-		MaxSegmentAge:  opts.MaxSegmentAge,
-		MaxSegmentSize: opts.MaxSegmentSize,
-		Partitioner:    coord,
-		Segmenter:      store,
-		UploadQueue:    opts.Uploader.UploadQueue(),
-		TransferQueue:  repl.TransferQueue(),
+		StorageDir:      opts.StorageDir,
+		MaxSegmentAge:   opts.MaxSegmentAge,
+		MinTransferSize: opts.MinTransferSize,
+		Partitioner:     coord,
+		Segmenter:       store,
+		UploadQueue:     opts.Uploader.UploadQueue(),
+		TransferQueue:   repl.TransferQueue(),
 	})
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{})

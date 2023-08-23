@@ -21,9 +21,9 @@ type Segmenter interface {
 }
 
 type BatcherOpts struct {
-	StorageDir     string
-	MaxSegmentAge  time.Duration
-	MaxSegmentSize int64
+	StorageDir      string
+	MaxSegmentAge   time.Duration
+	MinTransferSize int64
 
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
@@ -47,22 +47,22 @@ type batcher struct {
 	closeFn    context.CancelFunc
 	storageDir string
 
-	Partitioner    MetricPartitioner
-	Segmenter      Segmenter
-	hostname       string
-	maxSegmentAge  time.Duration
-	maxSegmentSize int64
+	Partitioner     MetricPartitioner
+	Segmenter       Segmenter
+	hostname        string
+	maxSegmentAge   time.Duration
+	minTransferSize int64
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
 	return &batcher{
-		storageDir:     opts.StorageDir,
-		maxSegmentAge:  90 * time.Second,
-		maxSegmentSize: 100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
-		Partitioner:    opts.Partitioner,
-		Segmenter:      opts.Segmenter,
-		uploadQueue:    opts.UploadQueue,
-		transferQueue:  opts.TransferQueue,
+		storageDir:      opts.StorageDir,
+		maxSegmentAge:   90 * time.Second,
+		minTransferSize: opts.MinTransferSize, // This is the minimal "optimal" size for kusto uploads.
+		Partitioner:     opts.Partitioner,
+		Segmenter:       opts.Segmenter,
+		uploadQueue:     opts.UploadQueue,
+		transferQueue:   opts.TransferQueue,
 	}
 }
 
@@ -208,9 +208,9 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			fileSum += stat.Size()
 
 			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
-			if stat.Size() >= a.maxSegmentSize {
+			if stat.Size() >= a.minTransferSize {
 				if logger.IsDebug() {
-					logger.Debug("File %s is larger than 100MB (%d), uploading directly", path, stat.Size())
+					logger.Debug("File %s is larger than %dMB (%d), uploading directly", a.minTransferSize/1e6, path, stat.Size())
 				}
 				directUpload = true
 				break
@@ -233,13 +233,13 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			}
 		}
 
-		if logger.IsDebug() && fileSum >= a.maxSegmentSize {
+		if logger.IsDebug() && fileSum >= a.minTransferSize {
 			logger.Debug("Metric %s is larger than 100MB (%d), uploading directly", k, fileSum)
 		}
 
 		// If the file is already >= 100MB, we'll just upload it directly because it's already in the optimal size range.
 		// Transferring it to another node would just add additional latency and Disk IO
-		if directUpload || fileSum >= a.maxSegmentSize {
+		if directUpload || fileSum >= a.minTransferSize {
 			owned = append(owned, append([]string{}, v...))
 			continue
 		}

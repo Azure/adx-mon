@@ -53,12 +53,12 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	defer f1.Close()
 
 	a := &batcher{
-		hostname:       "node1",
-		storageDir:     dir,
-		maxSegmentAge:  30 * time.Second,
-		maxSegmentSize: 100 * 1024 * 1024,
-		Partitioner:    &fakePartitioner{owner: "node2"},
-		Segmenter:      &fakeSegmenter{active: "Memory_aaaa.wal"},
+		hostname:        "node1",
+		storageDir:      dir,
+		maxSegmentAge:   30 * time.Second,
+		minTransferSize: 100 * 1024 * 1024,
+		Partitioner:     &fakePartitioner{owner: "node2"},
+		Segmenter:       &fakeSegmenter{active: "Memory_aaaa.wal"},
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
