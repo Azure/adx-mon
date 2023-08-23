@@ -57,12 +57,13 @@ func main() {
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
-			&cli.StringFlag{Name: "storage-dir", Usage: "Direcotry to store WAL segments"},
+			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
 			&cli.BoolFlag{Name: "disable-peer-discovery", Usage: "Disable peer discovery and segment transfers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
+			&cli.Int64Flag{Name: "min-transfer-size", Usage: "Minimum segment size in bytes required for direct kusto upload", Value: 100 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
 			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
@@ -103,7 +104,7 @@ func realMain(ctx *cli.Context) error {
 		insecureSkipVerify, disablePeerDiscovery bool
 		concurrentUploads                        int
 		maxConns                                 int
-		maxSegmentSize                           int64
+		maxSegmentSize, minTransferSize          int64
 		maxSegmentAge                            time.Duration
 	)
 	storageDir = ctx.String("storage-dir")
@@ -112,6 +113,7 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
+	minTransferSize = ctx.Int64("min-transfer-size")
 	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
@@ -263,6 +265,7 @@ func realMain(ctx *cli.Context) error {
 		DisablePeerDiscovery: disablePeerDiscovery,
 		MaxSegmentSize:       maxSegmentSize,
 		MaxSegmentAge:        maxSegmentAge,
+		MinTransferSize:      minTransferSize,
 		InsecureSkipVerify:   insecureSkipVerify,
 		LiftedColumns:        sortedLiftedLabels,
 		DropLabels:           dropLabels,
