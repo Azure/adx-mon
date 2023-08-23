@@ -266,7 +266,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		minA := minCreated(groupA)
 		minB := minCreated(groupB)
-		return minA.Before(minB)
+		return minB.Before(minA)
 	})
 
 	sort.Slice(notOwned, func(i, j int) bool {
@@ -275,7 +275,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		minA := minCreated(groupA)
 		minB := minCreated(groupB)
-		return minA.Before(minB)
+		return minB.Before(minA)
 	})
 
 	return owned, notOwned, nil

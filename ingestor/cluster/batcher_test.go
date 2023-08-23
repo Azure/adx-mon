@@ -66,7 +66,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	require.Equal(t, []string{filepath.Join(dir, fName), filepath.Join(dir, f1Name)}, notOwned[0])
 }
 
-func TestBatcher_OldestFirst(t *testing.T) {
+func TestBatcher_NewestFirst(t *testing.T) {
 	dir := t.TempDir()
 
 	f, err := os.Create(filepath.Join(dir, "Cpu_2359cdac7d6f0001.wal"))
@@ -88,12 +88,12 @@ func TestBatcher_OldestFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(owner))
 	require.Equal(t, 0, len(notOwned))
-	require.Equal(t, []string{filepath.Join(dir, "Disk_2359cd7e3aef0001.wal")}, owner[0])
-	require.Equal(t, []string{filepath.Join(dir, "Cpu_2359cdac7d6f0001.wal")}, owner[1])
+	require.Equal(t, []string{filepath.Join(dir, "Cpu_2359cdac7d6f0001.wal")}, owner[0])
+	require.Equal(t, []string{filepath.Join(dir, "Disk_2359cd7e3aef0001.wal")}, owner[1])
+
 }
 
 func TestBatcher_BigFileBatch(t *testing.T) {
-	os.Setenv("LOG_LEVEL", "DEBUG")
 	dir := t.TempDir()
 
 	idgen, err := flake.New()
@@ -127,9 +127,9 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
-	require.Equal(t, []string{filepath.Join(dir, "Disk_2359cd7e3aef0001.wal")}, owned[0])
+	require.Equal(t, []string{f1.Name()}, owned[0])
 	require.Equal(t, []string{f.Name()}, owned[1])
-	require.Equal(t, []string{f1.Name()}, owned[2])
+	require.Equal(t, []string{filepath.Join(dir, "Disk_2359cd7e3aef0001.wal")}, owned[2])
 }
 
 func TestBatcher_BigBatch(t *testing.T) {
@@ -173,9 +173,10 @@ func TestBatcher_BigBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
-	require.Equal(t, []string{filepath.Join(dir, "Disk_2359cd7e3aef0001.wal")}, owned[0])
+
+	require.Equal(t, []string{f2.Name()}, owned[0])
 	require.Equal(t, []string{f.Name(), f1.Name()}, owned[1])
-	require.Equal(t, []string{f2.Name()}, owned[2])
+	require.Equal(t, []string{filepath.Join(dir, "Disk_2359cd7e3aef0001.wal")}, owned[2])
 }
 
 type fakePartitioner struct {
