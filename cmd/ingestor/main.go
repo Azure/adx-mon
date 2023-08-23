@@ -63,7 +63,7 @@ func main() {
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
-			&cli.Int64Flag{Name: "min-transfer-size", Usage: "Minimum segment size in bytes required for direct kusto upload", Value: 100 * 1024 * 1024},
+			&cli.Int64Flag{Name: "max-transfer-size", Usage: "Maximum segment size in bytes allowed for segment transfers", Value: 100 * 1024 * 1024},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
@@ -105,7 +105,7 @@ func realMain(ctx *cli.Context) error {
 		insecureSkipVerify, disablePeerDiscovery bool
 		concurrentUploads                        int
 		maxConns                                 int
-		maxSegmentSize, minTransferSize          int64
+		maxSegmentSize, maxTransferSize          int64
 		maxSegmentAge, maxTransferAge            time.Duration
 	)
 	storageDir = ctx.String("storage-dir")
@@ -114,7 +114,7 @@ func realMain(ctx *cli.Context) error {
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
-	minTransferSize = ctx.Int64("min-transfer-size")
+	maxTransferSize = ctx.Int64("max-transfer-size")
 	maxTransferAge = ctx.Duration("max-transfer-age")
 	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
@@ -267,7 +267,7 @@ func realMain(ctx *cli.Context) error {
 		DisablePeerDiscovery: disablePeerDiscovery,
 		MaxSegmentSize:       maxSegmentSize,
 		MaxSegmentAge:        maxSegmentAge,
-		MinTransferSize:      minTransferSize,
+		MaxTransferSize:      maxTransferSize,
 		MaxTransferAge:       maxTransferAge,
 		InsecureSkipVerify:   insecureSkipVerify,
 		LiftedColumns:        sortedLiftedLabels,

@@ -88,9 +88,9 @@ type ServiceOpts struct {
 	// Each instance of ingestor will upload received segments directly.
 	DisablePeerDiscovery bool
 
-	// MinTransferSize is the minimum size of a segment that will be transferred to another node.  If a segment
+	// MaxTransferSize is the minimum size of a segment that will be transferred to another node.  If a segment
 	// exceeds this size, it will be uploaded directly by the current node.
-	MinTransferSize int64
+	MaxTransferSize int64
 
 	// MaxTransferAge is the maximum age of a segment that will be transferred to another node.  If a segment
 	// exceeds this age, it will be uploaded directly by the current node.
@@ -128,7 +128,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	batcher := cluster.NewBatcher(cluster.BatcherOpts{
 		StorageDir:      opts.StorageDir,
 		MaxSegmentAge:   opts.MaxSegmentAge,
-		MinTransferSize: opts.MinTransferSize,
+		MaxTransferSize: opts.MaxTransferSize,
 		MaxTransferAge:  opts.MaxTransferAge,
 		Partitioner:     coord,
 		Segmenter:       store,
