@@ -55,7 +55,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	a := &batcher{
 		hostname:        "node1",
 		storageDir:      dir,
-		maxSegmentAge:   30 * time.Second,
+		maxTransferAge:  30 * time.Second,
 		minTransferSize: 100 * 1024 * 1024,
 		Partitioner:     &fakePartitioner{owner: "node2"},
 		Segmenter:       &fakeSegmenter{active: "Memory_aaaa.wal"},

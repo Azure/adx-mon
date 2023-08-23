@@ -91,6 +91,10 @@ type ServiceOpts struct {
 	// MinTransferSize is the minimum size of a segment that will be transferred to another node.  If a segment
 	// exceeds this size, it will be uploaded directly by the current node.
 	MinTransferSize int64
+
+	// MaxTransferAge is the maximum age of a segment that will be transferred to another node.  If a segment
+	// exceeds this age, it will be uploaded directly by the current node.
+	MaxTransferAge time.Duration
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -125,6 +129,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:      opts.StorageDir,
 		MaxSegmentAge:   opts.MaxSegmentAge,
 		MinTransferSize: opts.MinTransferSize,
+		MaxTransferAge:  opts.MaxTransferAge,
 		Partitioner:     coord,
 		Segmenter:       store,
 		UploadQueue:     opts.Uploader.UploadQueue(),
