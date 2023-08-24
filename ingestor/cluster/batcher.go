@@ -20,9 +20,10 @@ type Segmenter interface {
 }
 
 type BatcherOpts struct {
-	StorageDir     string
-	MaxSegmentAge  time.Duration
-	MaxSegmentSize int64
+	StorageDir      string
+	MaxSegmentAge   time.Duration
+	MaxTransferSize int64
+	MaxTransferAge  time.Duration
 
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
@@ -46,22 +47,22 @@ type batcher struct {
 	closeFn    context.CancelFunc
 	storageDir string
 
-	Partitioner    MetricPartitioner
-	Segmenter      Segmenter
-	hostname       string
-	maxSegmentAge  time.Duration
-	maxSegmentSize int64
+	Partitioner     MetricPartitioner
+	Segmenter       Segmenter
+	hostname        string
+	maxTransferAge  time.Duration
+	maxTransferSize int64
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
 	return &batcher{
-		storageDir:     opts.StorageDir,
-		maxSegmentAge:  90 * time.Second,
-		maxSegmentSize: 100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
-		Partitioner:    opts.Partitioner,
-		Segmenter:      opts.Segmenter,
-		uploadQueue:    opts.UploadQueue,
-		transferQueue:  opts.TransferQueue,
+		storageDir:      opts.StorageDir,
+		maxTransferAge:  opts.MaxTransferAge,
+		maxTransferSize: opts.MaxTransferSize, // This is the minimal "optimal" size for kusto uploads.
+		Partitioner:     opts.Partitioner,
+		Segmenter:       opts.Segmenter,
+		uploadQueue:     opts.UploadQueue,
+		transferQueue:   opts.TransferQueue,
 	}
 }
 
@@ -183,8 +184,8 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		sort.Strings(v)
 
 		var (
-			directUpload bool
-			fileSum      int64
+			batchSize int64
+			batch     []string
 		)
 
 		for _, path := range v {
@@ -194,15 +195,27 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				continue
 			}
 
-			fileSum += stat.Size()
+			batch = append(batch, path)
+
+			batchSize += stat.Size()
+			if batchSize >= a.maxTransferSize {
+				if logger.IsDebug() {
+					logger.Debug("Batch %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, stat.Size())
+				}
+				owned = append(owned, batch)
+				batch = nil
+				batchSize = 0
+				continue
+			}
 
 			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
-			if stat.Size() >= a.maxSegmentSize {
+			if stat.Size() >= a.maxTransferSize {
 				if logger.IsDebug() {
-					logger.Debug("File %s is larger than 100MB (%d), uploading directly", path, stat.Size())
+					logger.Debug("File %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, stat.Size())
 				}
-				directUpload = true
-				break
+				owned = append(owned, batch)
+				batch = nil
+				continue
 			}
 
 			createdAt, err := segmentCreationTime(path)
@@ -213,32 +226,25 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have a node that's behind on uploading.
-			if time.Since(createdAt) > a.maxSegmentAge {
+			if time.Since(createdAt) > a.maxTransferAge {
 				if logger.IsDebug() {
-					logger.Debug("File %s is older than %s (%s) seconds, uploading directly", path, a.maxSegmentAge.String(), time.Since(createdAt).String())
+					logger.Debug("File %s is older than %s (%s) seconds, uploading directly", path, a.maxTransferAge.String(), time.Since(createdAt).String())
 				}
-				directUpload = true
-				break
+				owned = append(owned, batch)
+				batch = nil
+				continue
 			}
 		}
 
-		if logger.IsDebug() && fileSum >= a.maxSegmentSize {
-			logger.Debug("Metric %s is larger than 100MB (%d), uploading directly", k, fileSum)
-		}
-
-		// If the file is already >= 100MB, we'll just upload it directly because it's already in the optimal size range.
-		// Transferring it to another node would just add additional latency and Disk IO
-		if directUpload || fileSum >= a.maxSegmentSize {
-			owned = append(owned, append([]string{}, v...))
+		if len(batch) == 0 {
 			continue
 		}
 
-		// TODO: Should break up groups into files that are less than 1GB.
 		owner, _ := a.Partitioner.Owner([]byte(k))
 		if owner == a.hostname {
-			owned = append(owned, append([]string{}, v...))
+			owned = append(owned, batch)
 		} else {
-			notOwned = append(notOwned, append([]string{}, v...))
+			notOwned = append(notOwned, batch)
 		}
 	}
 
@@ -249,7 +255,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		minA := minCreated(groupA)
 		minB := minCreated(groupB)
-		return minA.Before(minB)
+		return minB.Before(minA)
 	})
 
 	sort.Slice(notOwned, func(i, j int) bool {
@@ -258,7 +264,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		minA := minCreated(groupA)
 		minB := minCreated(groupB)
-		return minA.Before(minB)
+		return minB.Before(minA)
 	})
 
 	return owned, notOwned, nil

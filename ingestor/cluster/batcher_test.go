@@ -53,12 +53,12 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	defer f1.Close()
 
 	a := &batcher{
-		hostname:       "node1",
-		storageDir:     dir,
-		maxSegmentAge:  30 * time.Second,
-		maxSegmentSize: 100 * 1024 * 1024,
-		Partitioner:    &fakePartitioner{owner: "node2"},
-		Segmenter:      &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		hostname:        "node1",
+		storageDir:      dir,
+		maxTransferAge:  30 * time.Second,
+		maxTransferSize: 100 * 1024 * 1024,
+		Partitioner:     &fakePartitioner{owner: "node2"},
+		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	require.Equal(t, []string{filepath.Join(dir, fName), filepath.Join(dir, f1Name)}, notOwned[0])
 }
 
-func TestBatcher_OldestFirst(t *testing.T) {
+func TestBatcher_NewestFirst(t *testing.T) {
 	dir := t.TempDir()
 
 	f, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001")))
@@ -88,8 +88,8 @@ func TestBatcher_OldestFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(owner))
 	require.Equal(t, 0, len(notOwned))
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[0])
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[1])
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[0])
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[1])
 }
 
 type fakePartitioner struct {
