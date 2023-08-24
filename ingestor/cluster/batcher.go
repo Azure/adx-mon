@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/wal"
 )
 
 type Segmenter interface {
@@ -127,12 +126,13 @@ func (a *batcher) BatchSegments() error {
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
 func (a *batcher) processSegments() ([][]string, [][]string, error) {
-	entries, err := os.ReadDir(a.storageDir)
+	entries, err := wal.ListDir(a.storageDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
 	}
+
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
+		return entries[i].Path < entries[j].Path
 	})
 
 	metrics.IngestorSegmentsTotal.Reset()
@@ -144,53 +144,42 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	// need to be transferred to other nodes.
 	var (
 		owned, notOwned [][]string
-		lastMetric      string
+		lastSegmentKey  string
 		groupSize       int
 	)
 	for _, v := range entries {
-		if v.IsDir() || !strings.HasSuffix(v.Name(), ".wal") {
-			continue
-		}
-
-		fi, err := v.Info()
+		fi, err := os.Stat(v.Path)
 		if err != nil {
-			logger.Warn("Failed to stat file: %s", filepath.Join(a.storageDir, v.Name()))
+			logger.Warn("Failed to stat file: %s", v.Path)
 			continue
 		}
 		groupSize += int(fi.Size())
 
-		parts := strings.Split(v.Name(), "_")
-		if len(parts) != 2 { // Cpu_1234.wal
-			logger.Warn("Invalid file name: %s", filepath.Join(a.storageDir, v.Name()))
-			continue
-		}
-
-		epoch := parts[1][:len(parts[1])-4]
-		createdAt, err := flake.ParseFlakeID(epoch)
+		createdAt, err := flake.ParseFlakeID(v.Epoch)
 		if err != nil {
-			logger.Warn("Failed to parse flake id: %s: %s", epoch, err)
+			logger.Warn("Failed to parse flake id: %s: %s", v.Epoch, err)
 		} else {
-			if lastMetric == "" || parts[0] != lastMetric {
-				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastMetric).Set(time.Since(createdAt).Seconds())
-				metrics.IngestorSegmentsSizeBytes.WithLabelValues(lastMetric).Set(float64(groupSize))
+			if lastSegmentKey == "" || v.Key != lastSegmentKey {
+				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastSegmentKey).Set(time.Since(createdAt).Seconds())
+				metrics.IngestorSegmentsSizeBytes.WithLabelValues(lastSegmentKey).Set(float64(groupSize))
 				groupSize = 0
 			}
 		}
-		lastMetric = parts[0]
+		lastSegmentKey = v.Key
 
-		metrics.IngestorSegmentsTotal.WithLabelValues(parts[0]).Inc()
+		metrics.IngestorSegmentsTotal.WithLabelValues(v.Key).Inc()
 
-		if a.Segmenter.IsActiveSegment(filepath.Join(a.storageDir, v.Name())) {
+		if a.Segmenter.IsActiveSegment(v.Path) {
 			if logger.IsDebug() {
-				logger.Debug("Skipping active segment: %s", filepath.Join(a.storageDir, v.Name()))
+				logger.Debug("Skipping active segment: %s", v.Path)
 			}
 			continue
 		}
 
-		groups[parts[0]] = append(groups[parts[0]], filepath.Join(a.storageDir, v.Name()))
+		groups[v.Key] = append(groups[v.Key], v.Path)
 	}
 
-	// For each metric, sort the segments by name.  The last segment is the current segment.
+	// For each sample, sort the segments by name.  The last segment is the current segment.
 	for k, v := range groups {
 		sort.Strings(v)
 
@@ -298,12 +287,11 @@ func minCreated(batch []string) time.Time {
 }
 
 func segmentCreationTime(filename string) (time.Time, error) {
-	parts := strings.Split(filepath.Base(filename), "_")
-	if len(parts) != 2 { // Cpu_1234.wal
-		return time.Time{}, fmt.Errorf("invalid file name: %s", filename)
+	_, _, epoch, err := wal.ParseFilename(filename)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid file name: %s: %w", filename, err)
 	}
 
-	epoch := parts[1][:len(parts[1])-4]
 	createdAt, err := flake.ParseFlakeID(epoch)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid file name: %s: %w", filename, err)

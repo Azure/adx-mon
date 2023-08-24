@@ -13,17 +13,17 @@ import (
 )
 
 type fakeRequestWriter struct {
-	fn func(ctx context.Context, wr prompb.WriteRequest) error
+	fn func(ctx context.Context, database string, wr prompb.WriteRequest) error
 }
 
-func (f *fakeRequestWriter) Write(ctx context.Context, wr prompb.WriteRequest) error {
-	return f.fn(ctx, wr)
+func (f *fakeRequestWriter) Write(ctx context.Context, database string, wr prompb.WriteRequest) error {
+	return f.fn(ctx, database, wr)
 }
 
 func TestHandler_HandleReceive(t *testing.T) {
 	var called bool
 	writer := &fakeRequestWriter{
-		fn: func(ctx context.Context, wr prompb.WriteRequest) error {
+		fn: func(ctx context.Context, database string, wr prompb.WriteRequest) error {
 			require.Equal(t, 1, len(wr.Timeseries))
 			called = true
 			return nil
@@ -35,6 +35,7 @@ func TestHandler_HandleReceive(t *testing.T) {
 		DropMetrics:   nil,
 		SeriesCounter: nil,
 		RequestWriter: writer,
+		Database:      "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{

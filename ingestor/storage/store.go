@@ -8,13 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -32,7 +30,7 @@ type Store interface {
 	service.Component
 
 	// WriteTimeSeries writes a batch of time series to the Store.
-	WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error
+	WriteTimeSeries(ctx context.Context, database string, ts []prompb.TimeSeries) error
 
 	// IsActiveSegment returns true if the given path is an active segment.
 	IsActiveSegment(path string) bool
@@ -65,22 +63,12 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 }
 
 func (s *LocalStore) Open(ctx context.Context) error {
-	return filepath.WalkDir(s.opts.StorageDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || filepath.Ext(path) != ".wal" {
-			return nil
-		}
-
-		fileName := filepath.Base(path)
-		fields := strings.Split(fileName, "_")
-		if len(fields) != 2 {
-			logger.Warn("Invalid WAL segment: %s", path)
-			return nil
-		}
-
-		prefix := fields[0]
+	wals, err := wal.ListDir(s.opts.StorageDir)
+	if err != nil {
+		return fmt.Errorf("failed to list %s: %w", s.opts.StorageDir, err)
+	}
+	for _, w := range wals {
+		prefix := fmt.Sprintf("%s_%s", w.Database, w.Table)
 		_, ok := s.wals[prefix]
 		if ok {
 			return nil
@@ -91,10 +79,8 @@ func (s *LocalStore) Open(ctx context.Context) error {
 			return err
 		}
 		s.wals[prefix] = wal
-
-		return nil
-	})
-
+	}
+	return nil
 }
 
 func (s *LocalStore) Close() error {
@@ -130,11 +116,7 @@ func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*wal.WAL, error
 	return wal, nil
 }
 
-func (s *LocalStore) GetWAL(ctx context.Context, labels []prompb.Label) (*wal.WAL, error) {
-	b := bytesPool.Get(256)
-	defer bytesPool.Put(b)
-
-	key := seriesKey(b[:0], labels)
+func (s *LocalStore) GetWAL(ctx context.Context, key []byte) (*wal.WAL, error) {
 
 	s.mu.RLock()
 	wal := s.wals[string(key)]
@@ -170,13 +152,19 @@ func (s *LocalStore) WALCount() int {
 	return len(s.wals)
 }
 
-func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
+func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []prompb.TimeSeries) error {
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedColumns)
 
+	b := bytesPool.Get(256)
+	defer bytesPool.Put(b)
+
+	db := []byte(database)
 	for _, v := range ts {
-		wal, err := s.GetWAL(ctx, v.Labels)
+
+		key := SegmentKey(b[:0], db, v.Labels)
+		wal, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
 		}
@@ -240,7 +228,9 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	return int(n), nil
 }
 
-func seriesKey(dst []byte, labels []prompb.Label) []byte {
+func SegmentKey(dst []byte, database []byte, labels []prompb.Label) []byte {
+	dst = append(dst, database...)
+	dst = append(dst, delim...)
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			// return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
@@ -249,3 +239,5 @@ func seriesKey(dst []byte, labels []prompb.Label) []byte {
 	}
 	return transform.AppendNormalize(dst, labels[0].Value)
 }
+
+var delim = []byte("_")

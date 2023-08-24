@@ -38,7 +38,7 @@ type SeriesCounter interface {
 
 type RequestWriter interface {
 	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr prompb.WriteRequest) error
+	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
 }
 
 type HandlerOpts struct {
@@ -54,6 +54,9 @@ type HandlerOpts struct {
 
 	// RequestWriter is the interface that writes the time series to a destination.
 	RequestWriter RequestWriter
+
+	// Database is the name of the Kusto database where time series will be written.
+	Database string
 }
 
 type Handler struct {
@@ -69,8 +72,8 @@ type Handler struct {
 	}
 
 	seriesCounter SeriesCounter
-
 	requestWriter RequestWriter
+	database      string
 }
 
 func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -85,6 +88,7 @@ func NewHandler(opts HandlerOpts) *Handler {
 		},
 		seriesCounter: opts.SeriesCounter,
 		requestWriter: opts.RequestWriter,
+		database:      opts.Database,
 	}
 }
 
@@ -156,7 +160,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.requestWriter.Write(r.Context(), req); err != nil {
+	if err := s.requestWriter.Write(r.Context(), s.database, req); err != nil {
 		logger.Error("Failed to write ts: %s", err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)

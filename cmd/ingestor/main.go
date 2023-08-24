@@ -100,7 +100,7 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetMutexProfileFraction(1)
 
 	var (
-		storageDir, kustoEndpoint, database      string
+		storageDir, kustoEndpoint                string
 		cacert, key                              string
 		insecureSkipVerify, disablePeerDiscovery bool
 		concurrentUploads                        int
@@ -252,7 +252,7 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	uploader, err := newUploader(kustoEndpoint, database, storageDir, concurrentUploads, defaultMapping)
+	uploader, err := newUploader(kustoEndpoint, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
@@ -404,8 +404,8 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	return kusto.New(kcsb)
 }
 
-func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
-	if kustoEndpoint == "" && database == "" {
+func newUploader(kustoEndpoint, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
+	if kustoEndpoint == "" {
 		logger.Warn("No kusto endpoint provided, using fake uploader")
 		return adx.NewFakeUploader(), nil
 	}
@@ -419,7 +419,7 @@ func newUploader(kustoEndpoint, database, storageDir string, concurrentUploads i
 	}
 
 	split := strings.Split(kustoEndpoint, "=")
-	database = split[0]
+	database := split[0]
 	kustoEndpoint = split[1]
 
 	if database == "" {

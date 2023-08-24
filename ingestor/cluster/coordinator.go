@@ -27,14 +27,14 @@ var (
 	bytesPool = pool.NewBytes(1024)
 )
 
-type TimeSeriesWriter func(ctx context.Context, ts []prompb.TimeSeries) error
+type TimeSeriesWriter func(ctx context.Context, database string, ts []prompb.TimeSeries) error
 
 type Coordinator interface {
 	MetricPartitioner
 	service.Component
 
 	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr prompb.WriteRequest) error
+	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -228,8 +228,8 @@ func (c *coordinator) Close() error {
 	return nil
 }
 
-func (c *coordinator) Write(ctx context.Context, wr prompb.WriteRequest) error {
-	return c.tsw(ctx, wr.Timeseries)
+func (c *coordinator) Write(ctx context.Context, database string, wr prompb.WriteRequest) error {
+	return c.tsw(ctx, database, wr.Timeseries)
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
