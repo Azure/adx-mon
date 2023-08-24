@@ -59,7 +59,6 @@ type Segment interface {
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
-	Name() string
 	Size() (int64, error)
 	CreatedAt() time.Time
 	Reader() (io.ReadCloser, error)
@@ -75,8 +74,6 @@ type Iterator interface {
 }
 
 type segment struct {
-	// name is the first part of the segment file name.  Segments with the same name are group together.
-	name string
 	// id is the time-ordered ID and allows for segment files to be sorted lexicographically and in time order of
 	// creating.
 	id        string
@@ -118,12 +115,9 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		return nil, err
 	}
 
-	fields := strings.Split(prefix, "_")
-
 	bf := bufio.NewWriterSize(fw, DefaultIOBufSize)
 
 	f := &segment{
-		name:      fields[0],
 		id:        flakeId.String(),
 		createdAt: createdAt.UTC(),
 		path:      path,
@@ -147,14 +141,9 @@ func Open(path string) (Segment, error) {
 
 	fileName := filepath.Base(path)
 	fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
-	fields := strings.Split(fileName, "_")
+	i := strings.LastIndex(fileName, "_")
 
-	if len(fields) != 2 {
-		return nil, fmt.Errorf("invalid segment filename: %s", path)
-	}
-
-	name := fields[0]
-	id := fields[1]
+	id := fileName[i+1:]
 
 	createdAt, err := flakeutil.ParseFlakeID(id)
 	if err != nil {
@@ -169,7 +158,6 @@ func Open(path string) (Segment, error) {
 	bf := bufio.NewWriterSize(fd, DefaultIOBufSize)
 
 	f := &segment{
-		name:      name,
 		id:        id,
 		createdAt: createdAt,
 		path:      path,
@@ -193,11 +181,6 @@ func Open(path string) (Segment, error) {
 // Path returns the path on disk of the segment.
 func (s *segment) Path() string {
 	return s.path
-}
-
-// Name returns the segment name.
-func (s *segment) Name() string {
-	return s.name
 }
 
 // Reader returns an io.Reader for the segment.  The Reader returns segment data automatically handling segment

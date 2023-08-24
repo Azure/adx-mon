@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -83,13 +82,18 @@ func (r *replicator) transfer(ctx context.Context) {
 			return
 		case segments := <-r.queue:
 			for _, seg := range segments {
-				filename := filepath.Base(seg)
-				parts := strings.Split(filename, "_")
+				db, table, _, err := wal.ParseFilename(seg)
+				if err != nil {
+					logger.Error("Failed to parse segment filename: %v", err)
+					continue
+				}
+
+				key := fmt.Sprintf("%s_%s", db, table)
 
 				// Each metric is written to a distinct file.  The first part of the filename
 				// is the metric name.  We use the metric name to determine which node owns
 				// the metric.
-				owner, addr := r.Partitioner.Owner([]byte(parts[0]))
+				owner, addr := r.Partitioner.Owner([]byte(key))
 
 				// We're the owner of the file... leave it for the ingestor to upload.
 				if owner == r.hostname {
