@@ -13,13 +13,17 @@ import (
 
 // fakeUploader is an Uploader that does nothing.
 type fakeUploader struct {
-	queue   chan []string
-	closeFn context.CancelFunc
+	database string
+	queue    chan []string
+	closeFn  context.CancelFunc
+	observer map[string]map[string]int
 }
 
-func NewFakeUploader() Uploader {
+func NewFakeUploader(database string) Uploader {
 	return &fakeUploader{
-		queue: make(chan []string),
+		queue:    make(chan []string),
+		observer: make(map[string]map[string]int),
+		database: database,
 	}
 }
 
@@ -39,7 +43,15 @@ func (f *fakeUploader) UploadQueue() chan []string {
 }
 
 func (f *fakeUploader) Database() string {
-	return ""
+	return f.database
+}
+
+func (f *fakeUploader) Upload(ctx context.Context, database, table string, reader io.Reader) error {
+	if _, ok := f.observer[database]; !ok {
+		f.observer[database] = make(map[string]int)
+	}
+	f.observer[database][table]++
+	return nil
 }
 
 func (f *fakeUploader) upload(ctx context.Context) {

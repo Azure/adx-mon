@@ -2,6 +2,7 @@ package adx
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -20,6 +21,7 @@ type Uploader interface {
 	service.Component
 
 	Database() string
+	Upload(ctx context.Context, database, table string, reader io.Reader) error
 
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan []string
@@ -93,6 +95,10 @@ func (n *uploader) Close() error {
 	n.ingestors = nil
 
 	return nil
+}
+
+func (n *uploader) Upload(ctx context.Context, database, table string, reader io.Reader) error {
+	return errors.New("not implemented")
 }
 
 func (n *uploader) UploadQueue() chan []string {
