@@ -82,17 +82,20 @@ func (s *service) collect(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			// Only one node should execute the cardinality counts so see if we are the owner.
-			hostname, _ := s.partitioner.Owner([]byte("AdxmonIngestorTableCardinalityCount"))
-			if s.kustoCli != nil && hostname == s.hostname {
-				stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-					".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
-				)
-				iter, err := s.kustoCli.Mgmt(ctx, s.database, stmt)
-				if err != nil {
-					logger.Error("Failed to execute cardinality counts: %s", err)
-				} else {
-					iter.Stop()
+			// This is only set when running on ingestor currently.
+			if s.partitioner != nil {
+				// Only one node should execute the cardinality counts so see if we are the owner.
+				hostname, _ := s.partitioner.Owner([]byte("AdxmonIngestorTableCardinalityCount"))
+				if s.kustoCli != nil && hostname == s.hostname {
+					stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+						".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
+					)
+					iter, err := s.kustoCli.Mgmt(ctx, s.database, stmt)
+					if err != nil {
+						logger.Error("Failed to execute cardinality counts: %s", err)
+					} else {
+						iter.Stop()
+					}
 				}
 			}
 
