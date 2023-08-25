@@ -57,6 +57,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 		storageDir:      dir,
 		maxTransferAge:  30 * time.Second,
 		maxTransferSize: 100 * 1024 * 1024,
+		minUploadSize:   100 * 1024 * 1024,
 		Partitioner:     &fakePartitioner{owner: "node2"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
 	}
@@ -100,12 +101,14 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	now := idgen.NextId()
 
 	f, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now.String())))
-	f.Truncate(100 * 1024) // Meets min transfer size, separate batch
+	require.NoError(t, f.Truncate(100*1024)) // Meets min transfer size, separate batch
 	require.NoError(t, err)
 	defer f.Close()
 
-	now = idgen.NextId()
-	f1, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now.String())))
+	now1 := idgen.NextId()
+	require.True(t, now1 > now)
+	f1, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now1.String())))
+	require.NoError(t, f1.Truncate(100)) // Meets min transfer size, separate batch
 	require.NoError(t, err)
 	defer f1.Close()
 
@@ -118,17 +121,21 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 		hostname:        "node1",
 		storageDir:      dir,
 		maxTransferSize: 100 * 1024,
+		minUploadSize:   100 * 1024,
 		maxTransferAge:  time.Minute,
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
 	}
 	owned, notOwned, err := a.processSegments()
+
 	require.NoError(t, err)
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
+
 	require.Equal(t, []string{f1.Name()}, owned[0])
 	require.Equal(t, []string{f.Name()}, owned[1])
 	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2])
+
 }
 
 func TestBatcher_BigBatch(t *testing.T) {
@@ -163,6 +170,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 		hostname:        "node1",
 		storageDir:      dir,
 		maxTransferSize: 100 * 1024,
+		minUploadSize:   100 * 1024,
 		maxTransferAge:  time.Minute,
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
