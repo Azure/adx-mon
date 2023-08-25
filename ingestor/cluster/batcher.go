@@ -29,8 +29,14 @@ type BatcherOpts struct {
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
 
-	UploadQueue   chan []string
-	TransferQueue chan []string
+	UploadQueue   chan *Batch
+	TransferQueue chan *Batch
+}
+
+type Batch struct {
+	Paths    []string
+	Database string
+	Table    string
 }
 
 type Batcher interface {
@@ -41,8 +47,8 @@ type Batcher interface {
 // Batcher manages WAL segments that are ready for upload to kusto or that need
 // to be transferred to another node.
 type batcher struct {
-	uploadQueue   chan []string
-	transferQueue chan []string
+	uploadQueue   chan *Batch
+	transferQueue chan *Batch
 
 	wg         sync.WaitGroup
 	closeFn    context.CancelFunc
@@ -128,7 +134,7 @@ func (a *batcher) BatchSegments() error {
 // segments that are owned by other peers if they are already past the max age or max size
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
-func (a *batcher) processSegments() ([][]string, [][]string, error) {
+func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	entries, err := wal.ListDir(a.storageDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
@@ -146,7 +152,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	// We need to find the segment that this node is responsible for uploading to kusto and ones that
 	// need to be transferred to other nodes.
 	var (
-		owned, notOwned [][]string
+		owned, notOwned []*Batch
 		lastSegmentKey  string
 		groupSize       int
 	)
@@ -188,9 +194,20 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 
 		var (
 			batchSize    int64
-			batch        []string
+			batch        *Batch
 			directUpload bool
 		)
+
+		db, table, _, err := wal.ParseFilename(v[0])
+		if err != nil {
+			logger.Error("Failed to parse segment filename: %s", err)
+			continue
+		}
+
+		batch = &Batch{
+			Database: db,
+			Table:    table,
+		}
 
 		for _, path := range v {
 			stat, err := os.Stat(path)
@@ -199,7 +216,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				continue
 			}
 
-			batch = append(batch, path)
+			batch.Paths = append(batch.Paths, path)
 			batchSize += stat.Size()
 
 			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
@@ -209,7 +226,10 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				}
 
 				owned = append(owned, batch)
-				batch = nil
+				batch = &Batch{
+					Database: db,
+					Table:    table,
+				}
 				batchSize = 0
 				directUpload = false
 				continue
@@ -239,7 +259,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			}
 		}
 
-		if len(batch) == 0 {
+		if len(batch.Paths) == 0 {
 			continue
 		}
 
@@ -263,8 +283,8 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		groupA := owned[i]
 		groupB := owned[j]
 
-		minA := maxCreated(groupA)
-		minB := maxCreated(groupB)
+		minA := maxCreated(groupA.Paths)
+		minB := maxCreated(groupB.Paths)
 		return minB.Before(minA)
 	})
 
@@ -275,8 +295,8 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		groupA := notOwned[i]
 		groupB := notOwned[j]
 
-		minA := maxCreated(groupA)
-		minB := maxCreated(groupB)
+		minA := maxCreated(groupA.Paths)
+		minB := maxCreated(groupB.Paths)
 		return minB.Before(minA)
 	})
 
@@ -286,8 +306,8 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 	return owned, notOwned, nil
 }
 
-func prioritizeOldest(a [][]string) [][]string {
-	var b [][]string
+func prioritizeOldest(a []*Batch) []*Batch {
+	var b []*Batch
 
 	// Find the index that is roughly 10% from the end of the list
 	idx := len(a) - int(math.Round(float64(len(a))*0.1))

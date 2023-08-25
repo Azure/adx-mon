@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
@@ -13,13 +14,13 @@ import (
 
 // fakeUploader is an Uploader that does nothing.
 type fakeUploader struct {
-	queue   chan []string
+	queue   chan *cluster.Batch
 	closeFn context.CancelFunc
 }
 
 func NewFakeUploader() Uploader {
 	return &fakeUploader{
-		queue: make(chan []string),
+		queue: make(chan *cluster.Batch),
 	}
 }
 
@@ -34,7 +35,7 @@ func (f *fakeUploader) Close() error {
 	return nil
 }
 
-func (f *fakeUploader) UploadQueue() chan []string {
+func (f *fakeUploader) UploadQueue() chan *cluster.Batch {
 	return f.queue
 }
 
@@ -47,7 +48,9 @@ func (f *fakeUploader) upload(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case files := <-f.queue:
+		case batch := <-f.queue:
+			files := batch.Paths
+
 			for _, file := range files {
 				logger.Warn("Uploading file %s", file)
 				if err := os.RemoveAll(file); err != nil {
