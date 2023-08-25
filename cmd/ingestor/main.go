@@ -267,6 +267,9 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		client, err = newKustoClient(addr)
+		if err != nil {
+			logger.Fatal("Failed to create kusto client: %s", err)
+		}
 		defer client.Close()
 	}
 
@@ -274,7 +277,10 @@ func realMain(ctx *cli.Context) error {
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
-	defer uploader.Close()
+	uploadDispatcher := adx.NewDispatcher([]adx.Uploader{uploader})
+	if err := uploadDispatcher.Open(svcCtx); err != nil {
+		logger.Fatal("Failed to start upload dispatcher: %s", err)
+	}
 
 	svc, err := promingest.NewService(promingest.ServiceOpts{
 		K8sCli:               k8scli,
@@ -283,7 +289,7 @@ func realMain(ctx *cli.Context) error {
 		Namespace:            namespace,
 		Hostname:             hostname,
 		StorageDir:           storageDir,
-		Uploader:             uploader,
+		Uploader:             uploadDispatcher,
 		DisablePeerDiscovery: disablePeerDiscovery,
 		MaxSegmentSize:       maxSegmentSize,
 		MaxSegmentAge:        maxSegmentAge,
@@ -302,6 +308,9 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	l, err := net.Listen("tcp", ":9090")
+	if err != nil {
+		logger.Fatal("Failed to listen: %s", err)
+	}
 	if maxConns > 0 {
 		logger.Info("Limiting connections to %d", maxConns)
 		l = netutil.LimitListener(l, maxConns)
