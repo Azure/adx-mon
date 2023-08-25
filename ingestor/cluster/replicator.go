@@ -28,11 +28,11 @@ type ReplicatorOpts struct {
 type Replicator interface {
 	service.Component
 	// TransferQueue returns a channel that can be used to transfer files to other nodes.
-	TransferQueue() chan []string
+	TransferQueue() chan *Batch
 }
 
 type replicator struct {
-	queue   chan []string
+	queue   chan *Batch
 	cli     *Client
 	wg      sync.WaitGroup
 	closeFn context.CancelFunc
@@ -49,7 +49,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		return nil, err
 	}
 	return &replicator{
-		queue:       make(chan []string, 10000),
+		queue:       make(chan *Batch, 10000),
 		cli:         cli,
 		hostname:    opts.Hostname,
 		Partitioner: opts.Partitioner,
@@ -68,7 +68,7 @@ func (r *replicator) Close() error {
 	return nil
 }
 
-func (r *replicator) TransferQueue() chan []string {
+func (r *replicator) TransferQueue() chan *Batch {
 	return r.queue
 }
 
@@ -80,7 +80,9 @@ func (r *replicator) transfer(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case segments := <-r.queue:
+		case batch := <-r.queue:
+			segments := batch.Paths
+
 			for _, seg := range segments {
 				db, table, _, err := wal.ParseFilename(seg)
 				if err != nil {

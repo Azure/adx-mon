@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -22,7 +23,7 @@ type Uploader interface {
 	Database() string
 
 	// UploadQueue returns a channel that can be used to upload files to kusto.
-	UploadQueue() chan []string
+	UploadQueue() chan *cluster.Batch
 }
 
 type uploader struct {
@@ -32,7 +33,7 @@ type uploader struct {
 	opts       UploaderOpts
 	syncer     *Syncer
 
-	queue   chan []string
+	queue   chan *cluster.Batch
 	closeFn context.CancelFunc
 
 	wg        sync.WaitGroup
@@ -58,7 +59,7 @@ func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 		storageDir: opts.StorageDir,
 		database:   opts.Database,
 		opts:       opts,
-		queue:      make(chan []string, 10000),
+		queue:      make(chan *cluster.Batch, 10000),
 		ingestors:  make(map[string]*ingest.Ingestion),
 		uploading:  make(map[string]struct{}),
 	}
@@ -97,7 +98,7 @@ func (n *uploader) Close() error {
 	return nil
 }
 
-func (n *uploader) UploadQueue() chan []string {
+func (n *uploader) UploadQueue() chan *cluster.Batch {
 	return n.queue
 }
 
@@ -172,7 +173,13 @@ func (n *uploader) upload(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case paths := <-n.queue:
+		case batch := <-n.queue:
+			paths := batch.Paths
+
+			if batch.Database != n.database {
+				logger.Error("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
+				continue
+			}
 
 			func() {
 				var (

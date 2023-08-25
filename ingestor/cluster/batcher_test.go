@@ -30,7 +30,7 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa"))}, owner[0])
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa"))}, owner[0].Paths)
 	require.Equal(t, 0, len(notOwned))
 }
 
@@ -64,7 +64,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
 	require.Equal(t, 0, len(owner))
-	require.Equal(t, []string{filepath.Join(dir, fName), filepath.Join(dir, f1Name)}, notOwned[0])
+	require.Equal(t, []string{filepath.Join(dir, fName), filepath.Join(dir, f1Name)}, notOwned[0].Paths)
 }
 
 func TestBatcher_NewestFirst(t *testing.T) {
@@ -89,8 +89,14 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(owner))
 	require.Equal(t, 0, len(notOwned))
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[0])
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[1])
+
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[0].Paths)
+	require.Equal(t, "db", owner[0].Database)
+	require.Equal(t, "Cpu", owner[0].Table)
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[1].Paths)
+	require.Equal(t, "db", owner[1].Database)
+	require.Equal(t, "Disk", owner[1].Table)
+
 }
 
 func TestBatcher_BigFileBatch(t *testing.T) {
@@ -132,9 +138,9 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{f1.Name()}, owned[0])
-	require.Equal(t, []string{f.Name()}, owned[1])
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2])
+	require.Equal(t, []string{f1.Name()}, owned[0].Paths)
+	require.Equal(t, []string{f.Name()}, owned[1].Paths)
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths)
 
 }
 
@@ -181,9 +187,9 @@ func TestBatcher_BigBatch(t *testing.T) {
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{f2.Name()}, owned[0])
-	require.Equal(t, []string{f.Name(), f1.Name()}, owned[1])
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2])
+	require.Equal(t, []string{f2.Name()}, owned[0].Paths)
+	require.Equal(t, []string{f.Name(), f1.Name()}, owned[1].Paths)
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths)
 }
 
 type fakePartitioner struct {
