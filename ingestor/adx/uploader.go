@@ -29,6 +29,7 @@ type uploader struct {
 	KustoCli   ingest.QueryClient
 	storageDir string
 	database   string
+	opts       UploaderOpts
 	syncer     *Syncer
 
 	queue   chan []string
@@ -56,7 +57,8 @@ func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 		syncer:     syncer,
 		storageDir: opts.StorageDir,
 		database:   opts.Database,
-		queue:      make(chan []string, opts.ConcurrentUploads),
+		opts:       opts,
+		queue:      make(chan []string, 10000),
 		ingestors:  make(map[string]*ingest.Ingestion),
 		uploading:  make(map[string]struct{}),
 	}
@@ -70,7 +72,7 @@ func (n *uploader) Open(ctx context.Context) error {
 		return err
 	}
 
-	for i := 0; i < cap(n.queue); i++ {
+	for i := 0; i < n.opts.ConcurrentUploads; i++ {
 		go n.upload(c)
 	}
 
