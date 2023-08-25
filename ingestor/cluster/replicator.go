@@ -49,7 +49,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		return nil, err
 	}
 	return &replicator{
-		queue:       make(chan []string, 100),
+		queue:       make(chan []string, 10000),
 		cli:         cli,
 		hostname:    opts.Hostname,
 		Partitioner: opts.Partitioner,

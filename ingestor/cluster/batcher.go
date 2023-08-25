@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -52,13 +53,15 @@ type batcher struct {
 	hostname        string
 	maxTransferAge  time.Duration
 	maxTransferSize int64
+	minUploadSize   int64
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
 	return &batcher{
 		storageDir:      opts.StorageDir,
 		maxTransferAge:  opts.MaxTransferAge,
-		maxTransferSize: opts.MaxTransferSize, // This is the minimal "optimal" size for kusto uploads.
+		maxTransferSize: opts.MaxTransferSize,
+		minUploadSize:   100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
 		Partitioner:     opts.Partitioner,
 		Segmenter:       opts.Segmenter,
 		uploadQueue:     opts.UploadQueue,
@@ -184,8 +187,9 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		sort.Strings(v)
 
 		var (
-			batchSize int64
-			batch     []string
+			batchSize    int64
+			batch        []string
+			directUpload bool
 		)
 
 		for _, path := range v {
@@ -196,25 +200,26 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			}
 
 			batch = append(batch, path)
-
 			batchSize += stat.Size()
-			if batchSize >= a.maxTransferSize {
+
+			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
+			if batchSize >= a.minUploadSize {
 				if logger.IsDebug() {
-					logger.Debug("Batch %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, stat.Size())
+					logger.Debug("Batch %s is larger than %dMB (%d), uploading directly", path, (a.minUploadSize)/1e6, batchSize)
 				}
+
 				owned = append(owned, batch)
 				batch = nil
 				batchSize = 0
+				directUpload = false
 				continue
 			}
 
-			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
-			if stat.Size() >= a.maxTransferSize {
+			if batchSize >= a.maxTransferSize {
 				if logger.IsDebug() {
-					logger.Debug("File %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, stat.Size())
+					logger.Debug("Batch %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, batchSize)
 				}
-				owned = append(owned, batch)
-				batch = nil
+				directUpload = true
 				continue
 			}
 
@@ -230,13 +235,18 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				if logger.IsDebug() {
 					logger.Debug("File %s is older than %s (%s) seconds, uploading directly", path, a.maxTransferAge.String(), time.Since(createdAt).String())
 				}
-				owned = append(owned, batch)
-				batch = nil
-				continue
+				directUpload = true
 			}
 		}
 
 		if len(batch) == 0 {
+			continue
+		}
+
+		if directUpload {
+			owned = append(owned, batch)
+			batch = nil
+			batchSize = 0
 			continue
 		}
 
@@ -253,25 +263,43 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		groupA := owned[i]
 		groupB := owned[j]
 
-		minA := minCreated(groupA)
-		minB := minCreated(groupB)
+		minA := maxCreated(groupA)
+		minB := maxCreated(groupB)
 		return minB.Before(minA)
 	})
+
+	// Prioritize the oldest 10% of batches to the front of the list
+	owned = prioritizeOldest(owned)
 
 	sort.Slice(notOwned, func(i, j int) bool {
 		groupA := notOwned[i]
 		groupB := notOwned[j]
 
-		minA := minCreated(groupA)
-		minB := minCreated(groupB)
+		minA := maxCreated(groupA)
+		minB := maxCreated(groupB)
 		return minB.Before(minA)
 	})
+
+	// Prioritize the oldest 10% of batches to the front of the list
+	notOwned = prioritizeOldest(notOwned)
 
 	return owned, notOwned, nil
 }
 
-func minCreated(batch []string) time.Time {
-	var minTime time.Time
+func prioritizeOldest(a [][]string) [][]string {
+	var b [][]string
+
+	// Find the index that is roughly 10% from the end of the list
+	idx := len(a) - int(math.Round(float64(len(a))*0.1))
+	// Move last 10% of batches to the front of the list
+	b = append(b, a[idx:]...)
+	// Move first 90% of batches to the end of the list
+	b = append(b, a[:idx]...)
+	return b
+}
+
+func maxCreated(batch []string) time.Time {
+	var maxTime time.Time
 	for _, v := range batch {
 		createdAt, err := segmentCreationTime(v)
 		if err != nil {
@@ -279,11 +307,11 @@ func minCreated(batch []string) time.Time {
 			continue
 		}
 
-		if minTime.IsZero() || createdAt.Before(minTime) {
-			minTime = createdAt
+		if maxTime.IsZero() || createdAt.After(maxTime) {
+			maxTime = createdAt
 		}
 	}
-	return minTime
+	return maxTime
 }
 
 func segmentCreationTime(filename string) (time.Time, error) {
