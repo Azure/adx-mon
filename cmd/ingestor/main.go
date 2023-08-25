@@ -252,11 +252,25 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	// TODO: We will have to specify the metrics database name before we can support
-	// kusto endpoints for different telemetry sample types, such as otlp, something
-	// like --metrics-database. For now, we'll just assume all databases are prom/metrics,
-	// and for that matter, there will only be 1 until a subsequent PR that plumbs through otlp/logs.
-	uploader, err := newUploader(kustoEndpoint, storageDir, concurrentUploads, metricsMapping)
+	var (
+		client   ingest.QueryClient
+		database string
+	)
+	if kustoEndpoint != "" {
+		var (
+			err  error
+			addr string
+		)
+		addr, database, err = parseKustoEndpoint(kustoEndpoint)
+		if err != nil {
+			logger.Fatal("Failed to parse kusto endpoint: %s", err)
+		}
+
+		client, err = newKustoClient(addr)
+		defer client.Close()
+	}
+
+	uploader, err := newUploader(client, database, storageDir, concurrentUploads, metricsMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
@@ -267,6 +281,8 @@ func realMain(ctx *cli.Context) error {
 
 	svc, err := promingest.NewService(promingest.ServiceOpts{
 		K8sCli:               k8scli,
+		MetricsKustoCli:      client,
+		MetricsDatabase:      database,
 		Namespace:            namespace,
 		Hostname:             hostname,
 		StorageDir:           storageDir,
@@ -411,38 +427,34 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	return kusto.New(kcsb)
 }
 
-func newUploader(kustoEndpoint, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
-	if kustoEndpoint == "" {
+func newUploader(kustoCli ingest.QueryClient, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
+	if kustoCli == nil {
 		logger.Warn("No kusto endpoint provided, using fake uploader")
 		return adx.NewFakeUploader(), nil
 	}
 
-	if kustoEndpoint == "" {
-		return nil, fmt.Errorf("-kusto-endpoint is required")
-	}
-
-	if !strings.Contains(kustoEndpoint, "=") {
-		return nil, fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
-	}
-
-	split := strings.Split(kustoEndpoint, "=")
-	database := split[0]
-	kustoEndpoint = split[1]
-
-	if database == "" {
-		return nil, fmt.Errorf("-db is required")
-	}
-
-	client, err := newKustoClient(kustoEndpoint)
-	defer client.Close()
-
-	uploader := adx.NewUploader(client, adx.UploaderOpts{
+	uploader := adx.NewUploader(kustoCli, adx.UploaderOpts{
 		StorageDir:        storageDir,
 		Database:          database,
 		ConcurrentUploads: concurrentUploads,
 		DefaultMapping:    defaultMapping,
 	})
-	return uploader, err
+	return uploader, nil
+}
+
+func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
+	if !strings.Contains(kustoEndpoint, "=") {
+		return "", "", fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
+	}
+
+	split := strings.Split(kustoEndpoint, "=")
+	database := split[0]
+	addr := split[1]
+
+	if database == "" {
+		return "", "", fmt.Errorf("-db is required")
+	}
+	return addr, database, nil
 }
 
 func newLogger() *log.Logger {

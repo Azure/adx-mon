@@ -1,7 +1,6 @@
 package ingestor
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -16,25 +15,10 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/pool"
-	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
-)
-
-var (
-	bytesBufPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
-
-	bytesPool = pool.NewBytes(50)
-
-	writeReqPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return prompb.WriteRequest{
-			Timeseries: make([]prompb.TimeSeries, 0, sz),
-		}
-	})
 )
 
 type Service struct {
@@ -75,6 +59,9 @@ type ServiceOpts struct {
 
 	K8sCli kubernetes.Interface
 
+	// MetricsKustoCli is the Kusto client connected to the metrics kusto cluster.
+	MetricsKustoCli ingest.QueryClient
+
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
 
@@ -95,6 +82,9 @@ type ServiceOpts struct {
 	// MaxTransferAge is the maximum age of a segment that will be transferred to another node.  If a segment
 	// exceeds this age, it will be uploaded directly by the current node.
 	MaxTransferAge time.Duration
+
+	// MetricsDatabase is the name of the metrics database.
+	MetricsDatabase string
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -136,7 +126,12 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		TransferQueue:   repl.TransferQueue(),
 	})
 
-	metricsSvc := metrics.NewService(metrics.ServiceOpts{})
+	metricsSvc := metrics.NewService(metrics.ServiceOpts{
+		Hostname:    opts.Hostname,
+		Partitioner: coord,
+		KustoCli:    opts.MetricsKustoCli,
+		Database:    opts.MetricsDatabase,
+	})
 
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		DropLabels:    opts.DropLabels,
