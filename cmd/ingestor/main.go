@@ -190,14 +190,14 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatal("--storage-dir is required")
 	}
 
-	defaultMapping := storage.NewMetricsSchema()
+	metricsMapping := storage.NewMetricsSchema()
 	for _, v := range ctx.StringSlice("add-labels") {
 		fields := strings.Split(v, "=")
 		if len(fields) != 2 {
 			logger.Fatal("invalid dimension: %s", v)
 		}
 
-		defaultMapping = defaultMapping.AddConstMapping(fields[0], fields[1])
+		metricsMapping = metricsMapping.AddConstMapping(fields[0], fields[1])
 	}
 
 	liftedLabels := ctx.StringSlice("lift-label")
@@ -214,11 +214,11 @@ func realMain(ctx *cli.Context) error {
 		sortedLiftedLabels = append(sortedLiftedLabels, fields[0])
 
 		if len(fields) == 2 {
-			defaultMapping = defaultMapping.AddStringMapping(fields[1])
+			metricsMapping = metricsMapping.AddStringMapping(fields[1])
 			continue
 		}
 
-		defaultMapping = defaultMapping.AddStringMapping(v)
+		metricsMapping = metricsMapping.AddStringMapping(v)
 	}
 
 	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
@@ -252,18 +252,25 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	uploader, err := newUploader(kustoEndpoint, storageDir, concurrentUploads, defaultMapping)
+	// TODO: We will have to specify the metrics database name before we can support
+	// kusto endpoints for different telemetry sample types, such as otlp, something
+	// like --metrics-database. For now, we'll just assume all databases are prom/metrics,
+	// and for that matter, there will only be 1 until a subsequent PR that plumbs through otlp/logs.
+	uploader, err := newUploader(kustoEndpoint, storageDir, concurrentUploads, metricsMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
-	defer uploader.Close()
+	uploadDispatcher := adx.NewDispatcher([]adx.Uploader{uploader})
+	if err := uploadDispatcher.Open(svcCtx); err != nil {
+		logger.Fatal("Failed to start upload dispatcher: %s", err)
+	}
 
 	svc, err := promingest.NewService(promingest.ServiceOpts{
 		K8sCli:               k8scli,
 		Namespace:            namespace,
 		Hostname:             hostname,
 		StorageDir:           storageDir,
-		Uploader:             uploader,
+		Uploader:             uploadDispatcher,
 		DisablePeerDiscovery: disablePeerDiscovery,
 		MaxSegmentSize:       maxSegmentSize,
 		MaxSegmentAge:        maxSegmentAge,

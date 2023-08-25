@@ -106,7 +106,7 @@ func (n *uploader) Database() string {
 	return n.database
 }
 
-func (n *uploader) uploadReader(reader io.Reader, database, table string) error {
+func (n *uploader) uploadReader(reader io.Reader, table string) error {
 	// Ensure we wait for this upload to finish.
 	n.wg.Add(1)
 	defer n.wg.Done()
@@ -183,11 +183,8 @@ func (n *uploader) upload(ctx context.Context) error {
 
 			func() {
 				var (
-					readers  = make([]io.Reader, 0, len(paths))
-					files    = make([]io.Closer, 0, len(paths))
-					database string
-					table    string
-					err      error
+					readers = make([]io.Reader, 0, len(paths))
+					files   = make([]io.Closer, 0, len(paths))
 				)
 				n.mu.Lock()
 				for _, path := range paths {
@@ -197,12 +194,6 @@ func (n *uploader) upload(ctx context.Context) error {
 						continue
 					}
 					n.uploading[path] = struct{}{}
-
-					database, table, _, err = wal.ParseFilename(path)
-					if err != nil {
-						logger.Error("Failed to parse file: %s", err.Error())
-						continue
-					}
 
 					f, err := wal.NewSegmentReader(path)
 					if os.IsNotExist(err) {
@@ -237,7 +228,7 @@ func (n *uploader) upload(ctx context.Context) error {
 				mr := io.MultiReader(readers...)
 
 				now := time.Now()
-				if err := n.uploadReader(mr, database, table); err != nil {
+				if err := n.uploadReader(mr, batch.Table); err != nil {
 					logger.Error("Failed to upload file: %s", err.Error())
 					return
 				}
@@ -248,7 +239,6 @@ func (n *uploader) upload(ctx context.Context) error {
 					}
 				}
 			}()
-
 		}
 	}
 }
