@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Azure/adx-mon/metrics"
 )
 
 var ErrPeerOverloaded = fmt.Errorf("peer overloaded")
@@ -28,7 +30,7 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) 
 
 	httpClient := &http.Client{
 		Timeout:   timeout,
-		Transport: t,
+		Transport: metrics.NewRoundTripper(t),
 	}
 
 	return &Client{

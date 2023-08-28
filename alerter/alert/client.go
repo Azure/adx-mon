@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/Azure/adx-mon/metrics"
 )
 
 var (
@@ -31,7 +33,8 @@ func NewClient(timeout time.Duration) (*Client, error) {
 	t.IdleConnTimeout = time.Minute
 
 	httpClient := &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: metrics.NewRoundTripper(t),
 	}
 
 	return &Client{

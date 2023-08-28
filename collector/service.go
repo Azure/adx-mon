@@ -243,6 +243,7 @@ func (s *Service) scrapeTargets() {
 		fams, err := FetchMetrics(target.Addr)
 		if err != nil {
 			logger.Errorf("Failed to scrape metrics for %s: %s", target, err.Error())
+			metrics.CollectorErrors.WithLabelValues(metrics.CollectorScrapeError).Add(1)
 			continue
 		}
 

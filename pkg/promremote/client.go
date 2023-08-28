@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/golang/snappy"
 )
@@ -83,7 +84,7 @@ func NewClient(opts ClientOpts) (*Client, error) {
 
 	httpClient := &http.Client{
 		Timeout:   opts.Timeout,
-		Transport: t,
+		Transport: metrics.NewRoundTripper(t),
 	}
 
 	return &Client{

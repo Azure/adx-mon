@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -148,6 +149,7 @@ func (a *batcher) watch(ctx context.Context) {
 		case <-t.C:
 			if err := a.BatchSegments(); err != nil {
 				logger.Errorf("Failed to batch segments: %v", err)
+				metrics.IngestorWalErrors.WithLabelValues(metrics.BatchSegmentsError).Add(1)
 			}
 		}
 	}
@@ -190,7 +192,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		return entries[i].Path < entries[j].Path
 	})
 
-	metrics.IngestorSegmentsTotal.Reset()
+	metrics.IngestorSegmentsCount.Reset()
 
 	// Groups is a map of metrics name to a list of segments for that metric.
 	groups := make(map[string][]string)
@@ -230,7 +232,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		}
 		lastSegmentKey = v.Key
 
-		metrics.IngestorSegmentsTotal.WithLabelValues(v.Key).Inc()
+		metrics.IngestorSegmentsCount.WithLabelValues(v.Key).Inc()
 
 		if a.Segmenter.IsActiveSegment(v.Path) {
 			if logger.IsDebug() {
@@ -250,6 +252,8 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			batchSize    int64
 			batch        *Batch
 			directUpload bool
+			maxAge       time.Duration
+			reason       string
 		)
 
 		db, table, _, err := wal.ParseFilename(v[0])
@@ -270,11 +274,22 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				continue
 			} else if err != nil {
 				logger.Warnf("Failed to stat file: %s", path)
+				metrics.IngestorWalErrors.WithLabelValues(metrics.StatFileError).Inc()
 				continue
 			}
 
 			batch.Paths = append(batch.Paths, path)
 			batchSize += stat.Size()
+
+			createdAt, err := segmentCreationTime(path)
+			if err != nil {
+				logger.Warnf("failed to determine segment creation time: %s", err)
+			}
+
+			age := time.Since(createdAt)
+			if maxAge < age {
+				maxAge = age
+			}
 
 			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
 			if batchSize >= a.minUploadSize {
@@ -289,6 +304,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				}
 				batchSize = 0
 				directUpload = false
+				reason = "upload_size"
 				continue
 			}
 
@@ -297,12 +313,8 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, a.maxTransferSize/1e6, batchSize)
 				}
 				directUpload = true
+				reason = "transfer_size"
 				continue
-			}
-
-			createdAt, err := segmentCreationTime(path)
-			if err != nil {
-				logger.Warnf("failed to determine segment creation time: %s", err)
 			}
 
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
@@ -313,6 +325,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", path, a.maxTransferAge.String(), time.Since(createdAt).String())
 				}
 				directUpload = true
+				reason = "age"
 			}
 		}
 
@@ -320,21 +333,21 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			continue
 		}
 
-		if directUpload {
-			owned = append(owned, batch)
-			batch = nil
-			batchSize = 0
-			continue
-		}
-
 		owner, _ := a.Partitioner.Owner([]byte(k))
 
 		// If the peer has signaled that it's unhealthy, upload the segments directly.
 		peerHealthy := a.health.IsPeerHealthy(owner)
+		isOwned := strconv.FormatBool(owner == a.hostname)
 
-		if owner == a.hostname || !peerHealthy || a.transferDisabled {
+		if directUpload || owner == a.hostname || !peerHealthy || a.transferDisabled {
+			metrics.FileUploadBytes.WithLabelValues(k).Observe(float64(batchSize))
+			metrics.FileUploadAge.WithLabelValues(k).Observe(maxAge.Seconds())
+			metrics.FileUploadTotal.WithLabelValues(k, reason, isOwned).Inc()
 			owned = append(owned, batch)
 		} else {
+			metrics.FileTransferBytes.WithLabelValues(k).Observe(float64(batchSize))
+			metrics.FileTransferAge.WithLabelValues(k).Observe(maxAge.Seconds())
+			metrics.FileTransferTotal.WithLabelValues(k, reason, isOwned).Inc()
 			notOwned = append(notOwned, batch)
 		}
 	}
