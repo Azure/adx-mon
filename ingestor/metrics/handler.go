@@ -41,6 +41,10 @@ type RequestWriter interface {
 	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
 }
 
+type HealthChecker interface {
+	IsHealthy() bool
+}
+
 type HandlerOpts struct {
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
@@ -54,6 +58,9 @@ type HandlerOpts struct {
 
 	// RequestWriter is the interface that writes the time series to a destination.
 	RequestWriter RequestWriter
+
+	// Health is the interface that determines if the service is healthy.
+	HealthChecker HealthChecker
 
 	// Database is the name of the Kusto database where time series will be written.
 	Database string
@@ -74,6 +81,7 @@ type Handler struct {
 	seriesCounter SeriesCounter
 	requestWriter RequestWriter
 	database      string
+	health        HealthChecker
 }
 
 func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -82,6 +90,7 @@ func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 func NewHandler(opts HandlerOpts) *Handler {
 	return &Handler{
+		health: opts.HealthChecker,
 		requestFilter: &transform.RequestFilter{
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
@@ -100,6 +109,12 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 			logger.Error("close http body: %s", err.Error())
 		}
 	}()
+
+	if !s.health.IsHealthy() {
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		return
+	}
 
 	bodyBuf := bytesBufPool.Get(1024 * 1024).(*bytes.Buffer)
 	defer bytesBufPool.Put(bodyBuf)

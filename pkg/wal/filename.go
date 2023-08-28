@@ -55,7 +55,7 @@ func ListDir(storageDir string) ([]File, error) {
 
 		fileName := filepath.Base(path)
 		fields := strings.Split(fileName, "_")
-		if len(fields) != 3 {
+		if len(fields) != 3 || fields[0] == "" {
 			return nil
 		}
 

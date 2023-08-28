@@ -60,6 +60,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 		minUploadSize:   100 * 1024 * 1024,
 		Partitioner:     &fakePartitioner{owner: "node2"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		health:          &fakeHealthChecker{healthy: true},
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -131,6 +132,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 		maxTransferAge:  time.Minute,
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		health:          fakeHealthChecker{healthy: true},
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -180,6 +182,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 		maxTransferAge:  time.Minute,
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		health:          fakeHealthChecker{healthy: true},
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -207,3 +210,11 @@ type fakeSegmenter struct {
 func (f *fakeSegmenter) IsActiveSegment(path string) bool {
 	return path == f.active
 }
+
+type fakeHealthChecker struct {
+	healthy bool
+}
+
+func (f fakeHealthChecker) IsPeerHealthy(peer string) bool { return true }
+func (f fakeHealthChecker) SetPeerUnhealthy(peer string)   {}
+func (f fakeHealthChecker) SetPeerHealthy(peer string)     {}

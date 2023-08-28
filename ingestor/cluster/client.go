@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var ErrPeerOverloaded = fmt.Errorf("peer overloaded")
+
 type Client struct {
 	httpClient *http.Client
 }
@@ -45,10 +47,6 @@ func (c *Client) Write(ctx context.Context, endpoint string, path string) error 
 
 	br := bufio.NewReaderSize(f, 1024*1024)
 
-	// TODO: Transfer files with compressions
-	//encoded := snappy.Encode(nil, b)
-	//body := bytes.NewReader(encoded)
-
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, br)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
@@ -58,7 +56,6 @@ func (c *Client) Write(ctx context.Context, endpoint string, path string) error 
 	req.URL.RawQuery = params.Encode()
 
 	req.Header.Set("Content-Type", "text/csv")
-	//req.Header.Set("Content-Encoding", "snappy")
 	req.Header.Set("User-Agent", "adx-mon")
 
 	resp, err := c.httpClient.Do(req)
@@ -75,6 +72,11 @@ func (c *Client) Write(ctx context.Context, endpoint string, path string) error 
 		if err != nil {
 			return fmt.Errorf("read resp: %w", err)
 		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return ErrPeerOverloaded
+		}
+
 		return fmt.Errorf("write failed: %s", string(body))
 	}
 	return nil
