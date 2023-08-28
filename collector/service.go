@@ -277,6 +277,7 @@ func (s *Service) scrapeTargets() {
 							},
 						}
 						wr.Timeseries = append(wr.Timeseries, ts)
+						wr = s.flushBatchIfNecessary(wr)
 					}
 
 					// Add sum series
@@ -291,6 +292,7 @@ func (s *Service) scrapeTargets() {
 						},
 					}
 					wr.Timeseries = append(wr.Timeseries, ts)
+					wr = s.flushBatchIfNecessary(wr)
 
 					// Add sum series
 					ts, ok = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
@@ -304,6 +306,7 @@ func (s *Service) scrapeTargets() {
 						},
 					}
 					wr.Timeseries = append(wr.Timeseries, ts)
+					wr = s.flushBatchIfNecessary(wr)
 				} else if m.GetHistogram() != nil {
 					hist := m.GetHistogram()
 
@@ -325,6 +328,8 @@ func (s *Service) scrapeTargets() {
 							},
 						}
 						wr.Timeseries = append(wr.Timeseries, ts)
+
+						wr = s.flushBatchIfNecessary(wr)
 					}
 
 					// Add sum series
@@ -339,6 +344,7 @@ func (s *Service) scrapeTargets() {
 						},
 					}
 					wr.Timeseries = append(wr.Timeseries, ts)
+					wr = s.flushBatchIfNecessary(wr)
 
 					// Add sum series
 					ts, ok = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
@@ -352,27 +358,33 @@ func (s *Service) scrapeTargets() {
 						},
 					}
 					wr.Timeseries = append(wr.Timeseries, ts)
+
+					wr = s.flushBatchIfNecessary(wr)
 				}
 
 				ts.Samples = append(ts.Samples, sample)
 				wr.Timeseries = append(wr.Timeseries, ts)
-			}
-		}
 
-		if len(wr.Timeseries) >= s.opts.MaxBatchSize {
-			if err := s.sendBatch(wr); err != nil {
-				logger.Error(err.Error())
+				wr = s.flushBatchIfNecessary(wr)
 			}
-			wr.Timeseries = wr.Timeseries[:0]
+			wr = s.flushBatchIfNecessary(wr)
 		}
+		wr = s.flushBatchIfNecessary(wr)
 	}
+	if err := s.sendBatch(wr); err != nil {
+		logger.Error(err.Error())
+	}
+	wr.Timeseries = wr.Timeseries[:0]
+}
 
+func (s *Service) flushBatchIfNecessary(wr *prompb.WriteRequest) *prompb.WriteRequest {
 	if len(wr.Timeseries) >= s.opts.MaxBatchSize {
 		if err := s.sendBatch(wr); err != nil {
 			logger.Error(err.Error())
 		}
 		wr.Timeseries = wr.Timeseries[:0]
 	}
+	return wr
 }
 
 func (s *Service) sendBatch(wr *prompb.WriteRequest) error {
