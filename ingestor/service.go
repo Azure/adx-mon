@@ -36,6 +36,7 @@ type Service struct {
 
 	handler       *metricsHandler.Handler
 	requestFilter *transform.RequestFilter
+	health        *cluster.Health
 }
 
 type ServiceOpts struct {
@@ -106,25 +107,33 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
+	health := cluster.NewHealth(cluster.HealthOpts{
+		UnhealthyTimeout: time.Minute,
+	})
+
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
 		Hostname:           opts.Hostname,
 		Partitioner:        coord,
 		InsecureSkipVerify: opts.InsecureSkipVerify,
+		Health:             health,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:      opts.StorageDir,
-		MaxSegmentAge:   opts.MaxSegmentAge,
-		MaxTransferSize: opts.MaxTransferSize,
-		MaxTransferAge:  opts.MaxTransferAge,
-		Partitioner:     coord,
-		Segmenter:       store,
-		UploadQueue:     opts.Uploader.UploadQueue(),
-		TransferQueue:   repl.TransferQueue(),
+		StorageDir:         opts.StorageDir,
+		MaxSegmentAge:      opts.MaxSegmentAge,
+		MaxTransferSize:    opts.MaxTransferSize,
+		MaxTransferAge:     opts.MaxTransferAge,
+		Partitioner:        coord,
+		Segmenter:          store,
+		UploadQueue:        opts.Uploader.UploadQueue(),
+		TransferQueue:      repl.TransferQueue(),
+		PeerHealthReporter: health,
 	})
+
+	health.QueueSizer = batcher
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{
 		Hostname:    opts.Hostname,
@@ -138,7 +147,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		DropMetrics:   opts.DropMetrics,
 		SeriesCounter: metricsSvc,
 		RequestWriter: coord,
-		Database:      opts.Uploader.Database(),
+		Database:      opts.MetricsDatabase,
+		HealthChecker: health,
 	})
 
 	return &Service{
@@ -150,6 +160,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		batcher:     batcher,
 		metrics:     metricsSvc,
 		handler:     handler,
+		health:      health,
 		requestFilter: &transform.RequestFilter{
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
@@ -226,6 +237,12 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 			logger.Error("close http body: %s", err.Error())
 		}
 	}()
+
+	if !s.health.IsHealthy() {
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		return
+	}
 
 	filename := r.URL.Query().Get("filename")
 	if filename == "" {
