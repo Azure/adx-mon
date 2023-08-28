@@ -88,6 +88,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	queryContext, err := NewQueryContext(e.rule, start, e.Region)
 	if err != nil {
 		logger.Error("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		metrics.AlerterErrors.WithLabelValues(e.rule.Name, metrics.CreateQueryContextError).Inc()
 		return
 	}
 
@@ -98,14 +99,16 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 		if !isUserError(err) {
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+			metrics.AlerterErrors.WithLabelValues(e.rule.Name, metrics.AlerterQueryInternalError).Inc()
 			return
 		}
 
+		metrics.AlerterErrors.WithLabelValues(e.rule.Name, metrics.AlerterQueryUserError).Inc()
+
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
-			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-			return
+			logger.Error("Failed to generate kusto deep links for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			summary = fmt.Sprintf("Rule %s is failing to execute against endpoint: %s, database: %s with error: %s", e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err.Error())
 		}
 
 		if err := e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
@@ -118,6 +121,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		}); err != nil {
 			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			// Only set the notification as failed if we are not able to send a failure alert directly.
+			metrics.AlerterErrors.WithLabelValues(e.rule.Name, metrics.CreateAlertNotificationError).Add(1)
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 			return
 		}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -116,10 +117,7 @@ func (c *coordinator) OnAdd(obj interface{}) {
 	if !c.isPeer(p) {
 		return
 	}
-
-	if err := c.syncPeers(); err != nil {
-		logger.Error("Failed to reconfigure peers: %s", err)
-	}
+	c.syncPeers()
 }
 
 func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
@@ -127,10 +125,7 @@ func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
 	if !c.isPeer(p) {
 		return
 	}
-
-	if err := c.syncPeers(); err != nil {
-		logger.Error("Failed to reconfigure peers: %s", err)
-	}
+	c.syncPeers()
 }
 
 func (c *coordinator) OnDelete(obj interface{}) {
@@ -138,10 +133,7 @@ func (c *coordinator) OnDelete(obj interface{}) {
 	if !c.isPeer(p) {
 		return
 	}
-
-	if err := c.syncPeers(); err != nil {
-		logger.Error("Failed to reconfigure peers: %s", err)
-	}
+	c.syncPeers()
 }
 
 func (c *coordinator) isPeer(p *v1.Pod) bool {
@@ -204,10 +196,6 @@ func (c *coordinator) Open(ctx context.Context) error {
 	}
 
 	if c.isPeerDiscoveryEnabled() {
-		if err := c.syncPeers(); err != nil {
-			return err
-		}
-
 		c.wg.Add(1)
 		go c.resyncPeers(ctx)
 	}
@@ -233,18 +221,26 @@ func (c *coordinator) Write(ctx context.Context, database string, wr prompb.Writ
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
-func (c *coordinator) syncPeers() error {
+func (c *coordinator) syncPeers() {
 	// Determine if peer discovery is enabled or not
 	if !c.isPeerDiscoveryEnabled() {
-		return nil
+		return
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var err error
+	defer func() {
+		if err != nil {
+			logger.Error("Failed to reconfigure peers: %s", err)
+			metrics.IngestorInternalErrors.WithLabelValues(metrics.SyncPeersError).Add(1)
+		}
+	}()
+
 	pods, err := c.pl.Pods(c.namespace).List(labels.Everything())
 	if err != nil {
-		return fmt.Errorf("list pods: %w", err)
+		return
 	}
 
 	set := make(map[string]string, len(c.peers))
@@ -264,12 +260,12 @@ func (c *coordinator) syncPeers() error {
 
 		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
 	}
-
-	if err := c.setPartitioner(set); err != nil {
-		return err
+	err = c.setPartitioner(set)
+	if err != nil {
+		return
 	}
 
-	return nil
+	return
 }
 
 func (c *coordinator) isPeerDiscoveryEnabled() bool {
@@ -296,14 +292,14 @@ func (c *coordinator) resyncPeers(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
+	// Sync peers now
+	c.syncPeers()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := c.syncPeers(); err != nil {
-				logger.Error("Failed to reconfigure peers: %s", err)
-			}
+			c.syncPeers()
 			c.mu.RLock()
 			for peer, addr := range c.peers {
 				logger.Info("Peers updated %s addr=%s ready=%v", peer, addr, "true")

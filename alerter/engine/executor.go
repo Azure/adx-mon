@@ -169,6 +169,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
 		logger.Error("Failed to create Notification: %s\n", err)
 		metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
+		metrics.AlerterErrors.WithLabelValues(qc.Rule.Name, metrics.CreateAlertNotificationError).Inc()
 		return nil
 	}
 	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)

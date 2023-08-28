@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/Azure/adx-mon/metrics"
 )
 
 // Client is a client for alert notification services.  Notification services implement the JSON http API
@@ -25,7 +27,8 @@ func NewClient(timeout time.Duration) (*Client, error) {
 	t.IdleConnTimeout = time.Minute
 
 	httpClient := &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: metrics.NewRoundTripper(t),
 	}
 
 	return &Client{

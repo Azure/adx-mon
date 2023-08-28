@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -98,6 +99,7 @@ func (a *batcher) watch(ctx context.Context) {
 		case <-t.C:
 			if err := a.BatchSegments(); err != nil {
 				logger.Error("Failed to batch segments: %v", err)
+				metrics.IngestorWalErrors.WithLabelValues(metrics.BatchSegmentsError).Add(1)
 			}
 		}
 	}
@@ -135,7 +137,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		return entries[i].Path < entries[j].Path
 	})
 
-	metrics.IngestorSegmentsTotal.Reset()
+	metrics.IngestorSegmentsCount.Reset()
 
 	// Groups is a map of metrics name to a list of segments for that metric.
 	groups := make(map[string][]string)
@@ -167,7 +169,7 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		}
 		lastSegmentKey = v.Key
 
-		metrics.IngestorSegmentsTotal.WithLabelValues(v.Key).Inc()
+		metrics.IngestorSegmentsCount.WithLabelValues(v.Key).Inc()
 
 		if a.Segmenter.IsActiveSegment(v.Path) {
 			if logger.IsDebug() {
@@ -186,16 +188,30 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 		var (
 			batchSize int64
 			batch     []string
+			maxAge    time.Duration
 		)
-
+		owner, _ := a.Partitioner.Owner([]byte(k))
+		isOwned := strconv.FormatBool(owner == a.hostname)
 		for _, path := range v {
 			stat, err := os.Stat(path)
 			if err != nil {
 				logger.Warn("Failed to stat file: %s", path)
+				metrics.IngestorWalErrors.WithLabelValues(metrics.StatFileError).Inc()
 				continue
 			}
 
 			batch = append(batch, path)
+
+			createdAt, err := segmentCreationTime(path)
+			if err != nil {
+				logger.Warn("failed to determine segment creation time: %s", err)
+				metrics.IngestorWalErrors.WithLabelValues(metrics.ParseFilenameError).Inc()
+			}
+
+			age := time.Since(createdAt)
+			if age > maxAge {
+				maxAge = age
+			}
 
 			batchSize += stat.Size()
 			if batchSize >= a.maxTransferSize {
@@ -205,22 +221,12 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				owned = append(owned, batch)
 				batch = nil
 				batchSize = 0
-				continue
-			}
 
-			// If any of the files are larger than 100MB, we'll just upload it directly since it's already pretty big.
-			if stat.Size() >= a.maxTransferSize {
-				if logger.IsDebug() {
-					logger.Debug("File %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, stat.Size())
-				}
-				owned = append(owned, batch)
-				batch = nil
-				continue
-			}
+				metrics.FileSizeUploadBytes.WithLabelValues(k).Observe(float64(batchSize))
+				metrics.FileUploadAge.WithLabelValues(k).Observe(maxAge.Seconds())
+				metrics.FileUploadTotal.WithLabelValues(k, "size", isOwned).Inc()
 
-			createdAt, err := segmentCreationTime(path)
-			if err != nil {
-				logger.Warn("failed to determine segment creation time: %s", err)
+				continue
 			}
 
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
@@ -232,6 +238,10 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 				}
 				owned = append(owned, batch)
 				batch = nil
+
+				metrics.FileSizeUploadBytes.WithLabelValues(k).Observe(float64(batchSize))
+				metrics.FileUploadAge.WithLabelValues(k).Observe(maxAge.Seconds())
+				metrics.FileUploadTotal.WithLabelValues(k, "age", isOwned).Inc()
 				continue
 			}
 		}
@@ -240,7 +250,6 @@ func (a *batcher) processSegments() ([][]string, [][]string, error) {
 			continue
 		}
 
-		owner, _ := a.Partitioner.Owner([]byte(k))
 		if owner == a.hostname {
 			owned = append(owned, batch)
 		} else {

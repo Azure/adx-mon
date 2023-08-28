@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sync"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
@@ -19,7 +18,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	connect_go "github.com/bufbuild/connect-go"
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -61,14 +59,14 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				},
 			}
 		}
+		httpClient.Transport = metrics.NewRoundTripper(httpClient.Transport)
 
 		// Create our gRPC client used to upgrade from HTTP1 to HTTP2 via gRPC and proxy to the OTLP endpoint
 		rpcClients[endpoint] = logsv1connect.NewLogsServiceClient(httpClient, grpcEndpoint, connect_go.WithGRPC())
 	}
 	bufs := pool.NewBytes(1024 * 1024)
 
-	return func(w http.ResponseWriter, r *http.Request) {
-		m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/logs"})
+	return metrics.MeasureHandler(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
 		switch r.Header.Get("Content-Type") {
@@ -85,13 +83,11 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			if err != nil {
 				logger.Error("Failed to read request body: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
-				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
 			}
 			if n < int(r.ContentLength) {
 				logger.Warn("Short read %d < %d", n, r.ContentLength)
 				w.WriteHeader(http.StatusInternalServerError)
-				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
 			}
 
@@ -99,7 +95,6 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			if err := proto.Unmarshal(b, &msg); err != nil {
 				logger.Error("Failed to unmarshal request body: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
-				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
 			}
 
@@ -188,7 +183,6 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				if err != nil {
 					logger.Error("Failed to marshal response: %v", err)
 					w.WriteHeader(http.StatusInternalServerError)
-					m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 					return
 				}
 			} else {
@@ -197,7 +191,6 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				if err != nil {
 					logger.Error("Failed to marshal response: %v", err)
 					w.WriteHeader(http.StatusInternalServerError)
-					m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 					return
 				}
 			}
@@ -206,19 +199,15 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			w.WriteHeader(http.StatusOK)
 			w.Write(respBodyBytes)
 
-			m.WithLabelValues(strconv.Itoa(http.StatusOK)).Inc()
-
 		case "application/json":
 			// We're receiving JSON, so we need to unmarshal the JSON
 			// into an OTLP protobuf, then use gRPC to send the OTLP
 			// protobuf to the OTLP endpoint
 			w.WriteHeader(http.StatusNotImplemented)
-			m.WithLabelValues(strconv.Itoa(http.StatusNotImplemented)).Inc()
 
 		default:
 			logger.Error("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
 			w.WriteHeader(http.StatusBadRequest)
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		}
-	}
+	})
 }

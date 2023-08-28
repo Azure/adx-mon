@@ -6,16 +6,13 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strconv"
 
 	"github.com/Azure/adx-mon/ingestor/transform"
-	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
 	"github.com/golang/snappy"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -94,7 +91,6 @@ func NewHandler(opts HandlerOpts) *Handler {
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
-	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/receive"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Error("close http body: %s", err.Error())
@@ -107,7 +103,6 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	_, err := io.Copy(bodyBuf, r.Body)
 	if err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -119,7 +114,6 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	reqBuf, err := snappy.Decode(buf, compressed)
 	if err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -129,7 +123,6 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	req.Reset()
 
 	if err := req.Unmarshal(reqBuf); err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -162,12 +155,10 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.requestWriter.Write(r.Context(), s.database, req); err != nil {
 		logger.Error("Failed to write ts: %s", err.Error())
-		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
 }
 

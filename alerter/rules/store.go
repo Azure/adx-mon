@@ -8,6 +8,7 @@ import (
 	"time"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -130,6 +131,8 @@ func (s *Store) reloadPeriodically() {
 			rules, err := s.reloadRules()
 			if err != nil {
 				logger.Error("failed to reload rules: %s", err)
+				metrics.AlerterErrors.WithLabelValues("", metrics.AlerterReloadRulesError).Add(1)
+
 				continue
 			}
 

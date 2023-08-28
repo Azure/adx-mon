@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -290,8 +291,8 @@ func realMain(ctx *cli.Context) error {
 
 	logger.Info("Listening at %s", ":9090")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/transfer", svc.HandleTransfer)
-	mux.HandleFunc("/receive", svc.HandleReceive)
+	mux.HandleFunc("/transfer", metrics.MeasureHandler(svc.HandleTransfer))
+	mux.HandleFunc("/receive", metrics.MeasureHandler(svc.HandleReceive))
 	mux.Handle(logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer()))
 
 	logger.Info("Metrics Listening at %s", ":9091")
@@ -401,7 +402,10 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	kcsb := kusto.NewConnectionStringBuilder(endpoint)
 	kcsb.WithDefaultAzureCredential()
 
-	return kusto.New(kcsb)
+	httpClient := &http.Client{
+		Transport: metrics.NewRoundTripper(http.DefaultTransport),
+	}
+	return kusto.New(kcsb, kusto.WithHttpClient(httpClient))
 }
 
 func newUploader(kustoEndpoint, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {

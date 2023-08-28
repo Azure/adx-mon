@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 )
 
@@ -136,6 +137,7 @@ func (w *WAL) rotate(ctx context.Context) {
 			sz, err := seg.Size()
 			if err != nil {
 				w.mu.Unlock()
+				metrics.IngestorWalErrors.WithLabelValues(metrics.SizeWalError).Inc()
 				logger.Error("Failed segment size: %s %s", seg.Path(), err.Error())
 				continue
 			}
@@ -150,11 +152,11 @@ func (w *WAL) rotate(ctx context.Context) {
 
 			if toClose != nil {
 				if err := toClose.Close(); err != nil {
+					metrics.IngestorWalErrors.WithLabelValues(metrics.CloseWalError).Inc()
 					logger.Error("Failed to close segment: %s %s", toClose.Path(), err.Error())
 				}
 			}
 		}
-
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -373,6 +374,7 @@ func (s *segment) flusher() {
 
 		case <-t.C:
 			if err := s.bw.Flush(); err != nil {
+				metrics.IngestorWalErrors.WithLabelValues(metrics.FlushWalError).Inc()
 				logger.Error("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 		case <-s.closing:
@@ -383,16 +385,19 @@ func (s *segment) flusher() {
 			s.flushBlock(blockBuf, req)
 
 			if err := s.bw.Flush(); err != nil {
+				metrics.IngestorWalErrors.WithLabelValues(metrics.FlushWalError).Inc()
 				logger.Error("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 
 			if err := s.w.Sync(); err != nil {
+				metrics.IngestorWalErrors.WithLabelValues(metrics.SyncWalError).Inc()
 				logger.Error("Failed to sync segment: %s: %s", s.path, err)
 			}
 
 			select {
 			case err := <-req.ErrCh:
 				if err != nil {
+					metrics.IngestorWalErrors.WithLabelValues(metrics.FlushWalError).Inc()
 					logger.Error("Failed to flush block when closing segment: %s", err)
 				}
 			default:

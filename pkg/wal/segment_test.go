@@ -67,6 +67,7 @@ func TestSegment_Corrupted(t *testing.T) {
 	require.NoError(t, err)
 
 	s, err = wal.Open(s.Path())
+	require.NoError(t, err)
 
 	b, err := s.Bytes()
 	require.NoError(t, err)
@@ -87,6 +88,7 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 	require.NoError(t, err)
 
 	s, err = wal.Open(s.Path())
+	require.NoError(t, err)
 
 	b, err := s.Bytes()
 	require.NoError(t, err)

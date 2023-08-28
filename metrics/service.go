@@ -29,7 +29,6 @@ type ServiceOpts struct {
 type service struct {
 	closeFn context.CancelFunc
 
-	hostname  string
 	estimator *counter.MultiEstimator
 }
 
@@ -98,7 +97,7 @@ func (s *service) collect(ctx context.Context) {
 			// Clear the gauges to prune old metrics that may not be collected anymore.
 			IngestorSegmentsMaxAge.Reset()
 			IngestorSegmentsSizeBytes.Reset()
-			IngestorSegmentsTotal.Reset()
+			IngestorSegmentsCount.Reset()
 		}
 	}
 }

@@ -3,21 +3,24 @@ package collector
 import (
 	"compress/gzip"
 	"fmt"
-	prom_model "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/Azure/adx-mon/metrics"
+	prom_model "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 )
 
 var dialer = &net.Dialer{
 	Timeout: 5 * time.Second,
 }
 
-var transport = &http.Transport{
+var transport = metrics.NewRoundTripper(&http.Transport{
 	DialContext:         dialer.DialContext,
 	TLSHandshakeTimeout: 5 * time.Second,
-}
+})
+
 var httpClient = &http.Client{
 	Timeout:   time.Second * 10,
 	Transport: transport,

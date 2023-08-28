@@ -1,12 +1,10 @@
 package ingestor
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/adx"
@@ -16,30 +14,11 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/pool"
-	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 )
 
-var (
-	bytesBufPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
-
-	bytesPool = pool.NewBytes(50)
-
-	writeReqPool = pool.NewGeneric(50, func(sz int) interface{} {
-		return prompb.WriteRequest{
-			Timeseries: make([]prompb.TimeSeries, 0, sz),
-		}
-	})
-)
-
 type Service struct {
-	walOpts wal.WALOpts
-	opts    ServiceOpts
+	opts ServiceOpts
 
 	uploader    adx.Uploader
 	replicator  cluster.Replicator
@@ -225,7 +204,6 @@ func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
-	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Error("close http body: %s", err.Error())
@@ -234,19 +212,16 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	filename := r.URL.Query().Get("filename")
 	if filename == "" {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "missing filename", http.StatusBadRequest)
 		return
 	}
 
 	if n, err := s.store.Import(filename, r.Body); err != nil {
-		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else {
 		logger.Info("Imported %d bytes to %s", n, filename)
 	}
-	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
 }
 

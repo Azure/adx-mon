@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -192,6 +193,7 @@ func (n *uploader) upload(ctx context.Context) error {
 					database, table, _, err = wal.ParseFilename(path)
 					if err != nil {
 						logger.Error("Failed to parse file: %s", err.Error())
+						metrics.IngestorWalErrors.WithLabelValues(metrics.ParseFilenameError).Inc()
 						continue
 					}
 
@@ -201,6 +203,7 @@ func (n *uploader) upload(ctx context.Context) error {
 						continue
 					} else if err != nil {
 						logger.Error("Failed to open file: %s", err.Error())
+						metrics.IngestorWalErrors.WithLabelValues(metrics.OpenFileError).Inc()
 						continue
 					}
 
@@ -230,11 +233,13 @@ func (n *uploader) upload(ctx context.Context) error {
 				now := time.Now()
 				if err := n.uploadReader(mr, database, table); err != nil {
 					logger.Error("Failed to upload file: %s", err.Error())
+					metrics.IngestorUploadErrors.Inc()
 					return
 				}
 				logger.Info("Uploaded %v duration=%s", paths, time.Since(now).String())
 				for _, f := range paths {
 					if err := os.RemoveAll(f); err != nil {
+						metrics.IngestorWalErrors.WithLabelValues(metrics.DeleteFileError).Inc()
 						logger.Error("Failed to remove file: %s", err.Error())
 					}
 				}
