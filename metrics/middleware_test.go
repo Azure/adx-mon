@@ -44,6 +44,12 @@ func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 			statusCode:       500,
 			expectedResponse: "hello",
 		},
+		{
+			name:             "get with status code 404",
+			method:           "GET",
+			statusCode:       404,
+			expectedResponse: "hello",
+		},
 	}
 
 	for i, tc := range testCases {
