@@ -40,7 +40,7 @@ func (f *fakeUploader) UploadQueue() chan *cluster.Batch {
 }
 
 func (f *fakeUploader) Database() string {
-	return ""
+	return "FakeDatabase"
 }
 
 func (f *fakeUploader) upload(ctx context.Context) {

@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"time"
 
+	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
+	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
@@ -35,6 +37,7 @@ type Service struct {
 	metrics metrics.Service
 
 	handler       *metricsHandler.Handler
+	logsHandler   http.Handler
 	requestFilter *transform.RequestFilter
 }
 
@@ -98,6 +101,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
 		DisablePeerDiscovery: opts.DisablePeerDiscovery,
 		WriteTimeSeriesFn:    store.WriteTimeSeries,
+		WriteOTLPLogsFn:      store.WriteOTLPLogs,
 		K8sCli:               opts.K8sCli,
 		Hostname:             opts.Hostname,
 		Namespace:            opts.Namespace,
@@ -141,6 +145,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Database:      opts.Uploader.Database(),
 	})
 
+	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer(coord.WriteOTLPLogs))
+
 	return &Service{
 		opts:        opts,
 		uploader:    opts.Uploader,
@@ -150,6 +156,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		batcher:     batcher,
 		metrics:     metricsSvc,
 		handler:     handler,
+		logsHandler: l,
 		requestFilter: &transform.RequestFilter{
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
@@ -216,6 +223,11 @@ func (s *Service) Close() error {
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	s.handler.HandleReceive(w, r)
+}
+
+// HandleLogs handles OTLP logs requests and writes them to the store.
+func (s *Service) HandleLogs(w http.ResponseWriter, r *http.Request) {
+	s.logsHandler.ServeHTTP(w, r)
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.

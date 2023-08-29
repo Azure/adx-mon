@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -29,12 +30,17 @@ var (
 
 type TimeSeriesWriter func(ctx context.Context, database string, ts []prompb.TimeSeries) error
 
+type OTLPLogsWriter func(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error
+
 type Coordinator interface {
 	MetricPartitioner
 	service.Component
 
 	// Write writes the time series to the correct peer.
 	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
+
+	// WriteOTLPLogs writes the logs to the correct peer.
+	WriteOTLPLogs(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -50,6 +56,7 @@ type coordinator struct {
 	factory informers.SharedInformerFactory
 
 	tsw               TimeSeriesWriter
+	lw                OTLPLogsWriter
 	kcli              kubernetes.Interface
 	pl                v12.PodLister
 	discoveryDisabled bool
@@ -62,6 +69,7 @@ type coordinator struct {
 
 type CoordinatorOpts struct {
 	WriteTimeSeriesFn TimeSeriesWriter
+	WriteOTLPLogsFn   OTLPLogsWriter
 	K8sCli            kubernetes.Interface
 
 	// Namespace is the namespace used to discover peers.  If not specified, the coordinator will
@@ -179,6 +187,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 	c.pl = pl
 
 	c.tsw = c.opts.WriteTimeSeriesFn
+	c.lw = c.opts.WriteOTLPLogsFn
 
 	myIP, err := GetOutboundIP()
 	if err != nil {
@@ -230,6 +239,10 @@ func (c *coordinator) Close() error {
 
 func (c *coordinator) Write(ctx context.Context, database string, wr prompb.WriteRequest) error {
 	return c.tsw(ctx, database, wr.Timeseries)
+}
+
+func (c *coordinator) WriteOTLPLogs(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error {
+	return c.lw(ctx, database, table, logs)
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.

@@ -26,7 +26,7 @@ import (
 )
 
 // LogsProxyHandler implements an HTTP handler that receives OTLP logs and forwards them to an OTLP endpoint over gRPC.
-func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string) http.HandlerFunc {
+func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string, liftAttributes []string) http.HandlerFunc {
 
 	rpcClients := make(map[string]logsv1connect.LogsServiceClient)
 	for _, endpoint := range endpoints {
@@ -103,6 +103,18 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				return
 			}
 
+			// TODO: Need to know the type fluent sends json in the body so we can
+			// correctly lift-attributes
+			if logger.IsDebug() {
+				for _, rs := range msg.ResourceLogs {
+					for _, sl := range rs.ScopeLogs {
+						for _, lr := range sl.LogRecords {
+							logger.Debug("Received log: %s, body: %v", lr.String(), lr.Body.Value)
+						}
+					}
+				}
+			}
+
 			// Add any additional columns to the logs
 			var numLogs int
 			for attribute, value := range addAttributes {
@@ -141,6 +153,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 					numLogs += len(msg.ResourceLogs[i].ScopeLogs)
 				}
 			}
+			// Now lift attributes out of Body and place in Attributes
 			metrics.LogsProxyReceived.Add(float64(numLogs))
 
 			// OTLP API https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
