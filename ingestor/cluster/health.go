@@ -64,7 +64,7 @@ func (h *Health) IsHealthy() bool {
 	uploadQueue := h.QueueSizer.UploadQueueSize()
 	transferQueue := h.QueueSizer.TransferQueueSize()
 
-	return uploadQueue < 500 && transferQueue < 10000
+	return uploadQueue < 5000 && transferQueue < 5000
 }
 
 func (h *Health) IsPeerHealthy(peer string) bool {
