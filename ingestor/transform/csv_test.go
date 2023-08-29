@@ -131,25 +131,15 @@ func TestMarshalCSV_LiftLabel(t *testing.T) {
 				Timestamp: 1669112524001,
 				Value:     0,
 			},
-			{
-				Timestamp: 1669112525002,
-				Value:     1,
-			},
-			{
-				Timestamp: 1669112526003,
-				Value:     2,
-			},
 		},
 	}
 
 	var b bytes.Buffer
-	w := NewCSVWriter(&b, []string{"region", "Hostname", "bar"})
+	w := NewCSVWriter(&b, []string{"zip", "zap", "region", "Hostname", "bar"})
 
 	err := w.MarshalCSV(ts)
 	require.NoError(t, err)
-	require.Equal(t, `2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,"{""measurement"":""used_cpu_user_children""}",0.000000000
-2022-11-22T10:22:05.002Z,1265838189064375029,,host_1,eastus,"{""measurement"":""used_cpu_user_children""}",1.000000000
-2022-11-22T10:22:06.003Z,1265838189064375029,,host_1,eastus,"{""measurement"":""used_cpu_user_children""}",2.000000000
+	require.Equal(t, `2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,,,"{""measurement"":""used_cpu_user_children""}",0.000000000
 `, b.String())
 }
 

@@ -141,6 +141,11 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 					i++
 				}
 			}
+
+			for j < len(w.columns) {
+				line = append(line, ',')
+				j++
+			}
 		}
 
 		// labels
