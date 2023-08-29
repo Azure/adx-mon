@@ -14,10 +14,15 @@ type dispatcher struct {
 }
 
 func NewDispatcher(uploaders []Uploader) *dispatcher {
-	return &dispatcher{
+	d := &dispatcher{
 		uploaders: make(map[string]Uploader),
 		queue:     make(chan *cluster.Batch, 10000),
 	}
+	for _, u := range uploaders {
+		logger.Info("Registering uploader for database %s", u.Database())
+		d.uploaders[u.Database()] = u
+	}
+	return d
 }
 
 func (d *dispatcher) Open(ctx context.Context) error {
@@ -25,8 +30,11 @@ func (d *dispatcher) Open(ctx context.Context) error {
 	d.cancel = cancel
 
 	for _, u := range d.uploaders {
-		d.uploaders[u.Database()] = u
+		if err := u.Open(c); err != nil {
+			return err
+		}
 	}
+
 	go d.upload(c)
 	return nil
 }
@@ -63,7 +71,7 @@ func (d *dispatcher) upload(ctx context.Context) {
 			select {
 			case u.UploadQueue() <- batch:
 			default:
-				logger.Error("Failed to queue batch for %s. Queue is full", batch.Database)
+				logger.Error("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(u.UploadQueue()), cap(u.UploadQueue()))
 			}
 		}
 	}

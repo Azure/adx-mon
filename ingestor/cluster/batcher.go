@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/adx-mon/metrics"
@@ -29,8 +30,9 @@ type BatcherOpts struct {
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
 
-	UploadQueue   chan *Batch
-	TransferQueue chan *Batch
+	UploadQueue        chan *Batch
+	TransferQueue      chan *Batch
+	PeerHealthReporter PeerHealthReporter
 }
 
 type Batch struct {
@@ -42,6 +44,8 @@ type Batch struct {
 type Batcher interface {
 	service.Component
 	BatchSegments() error
+	UploadQueueSize() int
+	TransferQueueSize() int
 }
 
 // Batcher manages WAL segments that are ready for upload to kusto or that need
@@ -50,12 +54,18 @@ type batcher struct {
 	uploadQueue   chan *Batch
 	transferQueue chan *Batch
 
+	// pendingUploads is the count of segments on disk ready for upload but not in the upload queue.
+	pendingUploads uint64
+	// pendingTransfers is the count of segments on disk ready for transfer but not in the transfer queue.
+	pendingTransfer uint64
+
 	wg         sync.WaitGroup
 	closeFn    context.CancelFunc
 	storageDir string
 
 	Partitioner     MetricPartitioner
 	Segmenter       Segmenter
+	health          PeerHealthReporter
 	hostname        string
 	maxTransferAge  time.Duration
 	maxTransferSize int64
@@ -72,6 +82,7 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		Segmenter:       opts.Segmenter,
 		uploadQueue:     opts.UploadQueue,
 		transferQueue:   opts.TransferQueue,
+		health:          opts.PeerHealthReporter,
 	}
 }
 
@@ -92,6 +103,14 @@ func (a *batcher) Close() error {
 	a.closeFn()
 	a.wg.Wait()
 	return nil
+}
+
+func (a *batcher) TransferQueueSize() int {
+	return len(a.transferQueue) + int(atomic.LoadUint64(&a.pendingTransfer))
+}
+
+func (a *batcher) UploadQueueSize() int {
+	return len(a.uploadQueue) + int(atomic.LoadUint64(&a.pendingUploads))
 }
 
 func (a *batcher) watch(ctx context.Context) {
@@ -117,6 +136,11 @@ func (a *batcher) BatchSegments() error {
 	if err != nil {
 		return fmt.Errorf("process segments: %w", err)
 	}
+	atomic.StoreUint64(&a.pendingUploads, uint64(len(owned)))
+	atomic.StoreUint64(&a.pendingTransfer, uint64(len(notOwned)))
+
+	metrics.IngestorQueueSize.WithLabelValues("upload").Set(float64(len(a.uploadQueue) + len(owned)))
+	metrics.IngestorQueueSize.WithLabelValues("transfer").Set(float64(len(a.transferQueue) + len(notOwned)))
 
 	for _, v := range owned {
 		a.uploadQueue <- v
@@ -271,7 +295,11 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		}
 
 		owner, _ := a.Partitioner.Owner([]byte(k))
-		if owner == a.hostname {
+
+		// If the peer has signaled that it's unhealthy, upload the segments directly.
+		peerHealthy := a.health.IsPeerHealthy(owner)
+
+		if owner == a.hostname || !peerHealthy {
 			owned = append(owned, batch)
 		} else {
 			notOwned = append(notOwned, batch)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -27,6 +28,24 @@ import (
 
 // LogsProxyHandler implements an HTTP handler that receives OTLP logs and forwards them to an OTLP endpoint over gRPC.
 func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string, liftAttributes []string) http.HandlerFunc {
+
+	lift := make(map[string]struct{})
+	for _, attribute := range liftAttributes {
+		lift[attribute] = struct{}{}
+	}
+
+	var add []*commonv1.KeyValue
+	for attribute, value := range addAttributes {
+		add = append(add, &commonv1.KeyValue{
+			Key: attribute,
+			Value: &commonv1.AnyValue{
+				Value: &commonv1.AnyValue_StringValue{
+					StringValue: value,
+				},
+			},
+		},
+		)
+	}
 
 	rpcClients := make(map[string]logsv1connect.LogsServiceClient)
 	for _, endpoint := range endpoints {
@@ -95,65 +114,16 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				return
 			}
 
-			var msg v1.ExportLogsServiceRequest
-			if err := proto.Unmarshal(b, &msg); err != nil {
+			msg := &v1.ExportLogsServiceRequest{}
+			if err := proto.Unmarshal(b, msg); err != nil {
 				logger.Error("Failed to unmarshal request body: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
 			}
 
-			// TODO: Need to know the type fluent sends json in the body so we can
-			// correctly lift-attributes
-			if logger.IsDebug() {
-				for _, rs := range msg.ResourceLogs {
-					for _, sl := range rs.ScopeLogs {
-						for _, lr := range sl.LogRecords {
-							logger.Debug("Received log: %s, body: %v", lr.String(), lr.Body.Value)
-						}
-					}
-				}
-			}
-
-			// Add any additional columns to the logs
 			var numLogs int
-			for attribute, value := range addAttributes {
-				for i := 0; i < len(msg.ResourceLogs); i++ {
-					// Logs schema https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
-					// All these events have Resource in common, see https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-resource,
-					// since they're all coming from the same source.
-					if msg.ResourceLogs == nil {
-						// This is a parculiar case, but it can happen if the client sends an empty request.
-						break
-					}
-					if msg.ResourceLogs[i].Resource == nil {
-						msg.ResourceLogs[i].Resource = &resourcev1.Resource{}
-					}
-					if msg.ResourceLogs[i].Resource.Attributes == nil {
-						// If the sender doesn't provide any Attributes, we have to initialize them ourselves.
-						msg.ResourceLogs[i].Resource.Attributes = []*commonv1.KeyValue{
-							{
-								Key:   attribute,
-								Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: value}},
-							},
-						}
-					} else {
-						msg.ResourceLogs[i].Resource.Attributes = append(
-							msg.ResourceLogs[i].Resource.Attributes,
-							&commonv1.KeyValue{
-								Key: attribute,
-								Value: &commonv1.AnyValue{
-									Value: &commonv1.AnyValue_StringValue{
-										StringValue: value,
-									},
-								},
-							},
-						)
-					}
-					numLogs += len(msg.ResourceLogs[i].ScopeLogs)
-				}
-			}
-			// Now lift attributes out of Body and place in Attributes
+			msg, numLogs = modifyAttributes(msg, add, lift)
 			metrics.LogsProxyReceived.Add(float64(numLogs))
 
 			// OTLP API https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
@@ -171,7 +141,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				endpoint := endpoint
 				rpcClient := rpcClient
 				g.Go(func() error {
-					resp, err := rpcClient.Export(gctx, connect_go.NewRequest(&msg))
+					resp, err := rpcClient.Export(gctx, connect_go.NewRequest(msg))
 					if err != nil {
 						logger.Error("Failed to send request: %v", err)
 						metrics.LogsProxyFailures.WithLabelValues(endpoint).Inc()
@@ -234,4 +204,58 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		}
 	}
+}
+
+func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, lift map[string]struct{}) (*v1.ExportLogsServiceRequest, int) {
+
+	var (
+		numLogs int
+		ok      bool
+	)
+	for i := range msg.ResourceLogs {
+		// Logs schema https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
+		// All these events have Resource in common, see https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-resource,
+		// since they're all coming from the same source.
+		if msg.ResourceLogs[i] == nil {
+			// This is a parculiar case, but it can happen if the client sends an empty request.
+			break
+		}
+		if msg.ResourceLogs[i].Resource == nil {
+			msg.ResourceLogs[i].Resource = &resourcev1.Resource{}
+		}
+
+		// Add any additional columns to the logs
+		msg.ResourceLogs[i].Resource.Attributes = append(
+			msg.ResourceLogs[i].Resource.Attributes,
+			add...,
+		)
+
+		for j := range msg.ResourceLogs[i].ScopeLogs {
+			numLogs += len(msg.ResourceLogs[i].ScopeLogs[j].LogRecords)
+
+			// Now lift attributes from the body of the log message
+			if len(lift) > 0 {
+				for k := range msg.ResourceLogs[i].ScopeLogs[j].LogRecords {
+
+					var deleted int
+					for idx, v := range msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().GetValues() {
+						_, ok = lift[v.GetKey()]
+						if ok {
+							msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Attributes = append(
+								msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Attributes,
+								v,
+							)
+							msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().Values = slices.Delete(
+								msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().Values,
+								idx-deleted, idx-deleted+1,
+							)
+							deleted++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return msg, numLogs
 }

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -16,6 +17,9 @@ import (
 type ReplicatorOpts struct {
 	// Partitioner is used to determine which node owns a given metric.
 	Partitioner MetricPartitioner
+
+	// Health is used to report the health of the peer replication.
+	Health PeerHealthReporter
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
@@ -41,6 +45,7 @@ type replicator struct {
 
 	// Partitioner is used to determine which node owns a given metric.
 	Partitioner MetricPartitioner
+	Health      PeerHealthReporter
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
@@ -53,6 +58,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		cli:         cli,
 		hostname:    opts.Hostname,
 		Partitioner: opts.Partitioner,
+		Health:      opts.Health,
 	}, nil
 }
 
@@ -106,7 +112,11 @@ func (r *replicator) transfer(ctx context.Context) {
 				g.SetLimit(5)
 				g.Go(func() error {
 					start := time.Now()
-					if err := r.cli.Write(gCtx, addr, seg); err != nil {
+					err := r.cli.Write(gCtx, addr, seg)
+					if errors.Is(err, ErrPeerOverloaded) {
+						r.Health.SetPeerUnhealthy(owner)
+						return fmt.Errorf("transfer segment %s to %s: %w", seg, addr, err)
+					} else if err != nil {
 						return fmt.Errorf("transfer segment %s to %s: %w", seg, addr, err)
 					}
 					if err := os.Remove(seg); err != nil {

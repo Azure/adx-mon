@@ -20,7 +20,7 @@ type fakeUploader struct {
 
 func NewFakeUploader() Uploader {
 	return &fakeUploader{
-		queue: make(chan *cluster.Batch),
+		queue: make(chan *cluster.Batch, 10000),
 	}
 }
 

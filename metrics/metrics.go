@@ -23,6 +23,13 @@ var (
 		Help:      "Counter of samples stored for an ingestor instance",
 	}, []string{"metric"})
 
+	IngestorQueueSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "queue_size",
+		Help:      "Gauge indicating the size of the queue for an ingestor instance",
+	}, []string{"queue"})
+
 	IngestorSegmentsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",

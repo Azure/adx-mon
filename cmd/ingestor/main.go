@@ -57,7 +57,8 @@ func main() {
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
-			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint>"},
+			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> [DEPRECATED]"},
+			&cli.StringFlag{Name: "metrics-kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
 			&cli.BoolFlag{Name: "disable-peer-discovery", Usage: "Disable peer discovery and segment transfers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
@@ -69,11 +70,11 @@ func main() {
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
 			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
+			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns. Format is <label>[=<column name>]"},
 
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
-			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns. Format is <label>[=<column name>]"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -100,16 +101,17 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetMutexProfileFraction(1)
 
 	var (
-		storageDir, kustoEndpoint                string
-		cacert, key                              string
-		insecureSkipVerify, disablePeerDiscovery bool
-		concurrentUploads                        int
-		maxConns                                 int
-		maxSegmentSize, maxTransferSize          int64
-		maxSegmentAge, maxTransferAge            time.Duration
+		storageDir, kustoEndpoint, metricsEndpoint string
+		cacert, key                                string
+		insecureSkipVerify, disablePeerDiscovery   bool
+		concurrentUploads                          int
+		maxConns                                   int
+		maxSegmentSize, maxTransferSize            int64
+		maxSegmentAge, maxTransferAge              time.Duration
 	)
 	storageDir = ctx.String("storage-dir")
 	kustoEndpoint = ctx.String("kusto-endpoint")
+	metricsEndpoint = ctx.String("metrics-kusto-endpoint")
 
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
@@ -254,8 +256,12 @@ func realMain(ctx *cli.Context) error {
 
 	var (
 		client   ingest.QueryClient
-		database string
+		database = "FakeDatabase"
 	)
+	if metricsEndpoint != "" {
+		kustoEndpoint = metricsEndpoint
+	}
+
 	if kustoEndpoint != "" {
 		var (
 			err  error
@@ -286,6 +292,7 @@ func realMain(ctx *cli.Context) error {
 	if err := uploadDispatcher.Open(svcCtx); err != nil {
 		logger.Fatal("Failed to start upload dispatcher: %s", err)
 	}
+	defer uploadDispatcher.Close()
 
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:               k8scli,

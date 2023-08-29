@@ -35,6 +35,7 @@ func TestHandler_HandleReceive(t *testing.T) {
 		DropMetrics:   nil,
 		SeriesCounter: nil,
 		RequestWriter: writer,
+		HealthChecker: &fakeHealthChecker{healthy: true},
 		Database:      "adxmetrics",
 	})
 
@@ -72,3 +73,63 @@ func TestHandler_HandleReceive(t *testing.T) {
 	require.True(t, called)
 
 }
+
+func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
+	var called bool
+	writer := &fakeRequestWriter{
+		fn: func(ctx context.Context, database string, wr prompb.WriteRequest) error {
+			require.Equal(t, 1, len(wr.Timeseries))
+			called = true
+			return nil
+		},
+	}
+
+	h := NewHandler(HandlerOpts{
+		DropLabels:    nil,
+		DropMetrics:   nil,
+		SeriesCounter: nil,
+		RequestWriter: writer,
+		HealthChecker: &fakeHealthChecker{healthy: false},
+		Database:      "adxmetrics",
+	})
+
+	wr := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("foo"),
+						Value: []byte("bar"),
+					},
+				},
+				Samples: []prompb.Sample{
+					{
+						Value:     1,
+						Timestamp: 1,
+					},
+				},
+			},
+		},
+	}
+
+	b, err := wr.Marshal()
+	require.NoError(t, err)
+
+	encoded := snappy.Encode(nil, b)
+	body := bytes.NewReader(encoded)
+
+	req, err := http.NewRequest("POST", "http://localhost:8080/receive", body)
+	require.NoError(t, err)
+
+	resp := httptest.NewRecorder()
+	h.HandleReceive(resp, req)
+	require.Equal(t, http.StatusTooManyRequests, resp.Code, resp.Body.String())
+	require.False(t, called)
+
+}
+
+type fakeHealthChecker struct {
+	healthy bool
+}
+
+func (f *fakeHealthChecker) IsHealthy() bool { return f.healthy }
