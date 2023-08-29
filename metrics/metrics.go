@@ -6,7 +6,8 @@ import (
 )
 
 var (
-	Namespace = "adxmon"
+	bytesBucket = prometheus.ExponentialBuckets(100, 10, 8)
+	Namespace   = "adxmon"
 
 	// Generic HTTP  metrics
 	InflightRequests = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -34,6 +35,7 @@ var (
 		Subsystem: "http_server",
 		Name:      "request_bytes",
 		Help:      "A histogram of request sizes from the wrapped server.",
+		Buckets:   bytesBucket,
 	}, []string{"path"})
 
 	ResponseBytesSent = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -41,6 +43,7 @@ var (
 		Subsystem: "http_server",
 		Name:      "response_bytes",
 		Help:      "A histogram of response sizes from the wrapped server.",
+		Buckets:   bytesBucket,
 	}, []string{"path"})
 
 	HttpRequestsInFlight = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -62,6 +65,7 @@ var (
 		Subsystem: "http_client",
 		Name:      "request_bytes",
 		Help:      "A histogram of request sizes for requests from the wrapped client.",
+		Buckets:   bytesBucket,
 	}, []string{"host", "path"})
 
 	HttpResponseBytesReceived = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -69,6 +73,7 @@ var (
 		Subsystem: "http_client",
 		Name:      "response_bytes",
 		Help:      "A histogram of response sizes from the wrapped client.",
+		Buckets:   bytesBucket,
 	}, []string{"host", "path"})
 
 	HttpRequestLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -110,6 +115,7 @@ var (
 		Subsystem: "ingestor",
 		Name:      "file_size_upload_bytes",
 		Help:      "Histogram of the size of files uploaded",
+		Buckets:   bytesBucket,
 	}, []string{"metric"})
 
 	FileUploadAge = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -131,6 +137,7 @@ var (
 		Subsystem: "ingestor",
 		Name:      "file_size_transfer_bytes",
 		Help:      "Histogram of the size of files transfered",
+		Buckets:   bytesBucket,
 	}, []string{"metric"})
 
 	FileTransferAge = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -138,6 +145,7 @@ var (
 		Subsystem: "ingestor",
 		Name:      "file_transfer_age_seconds",
 		Help:      "Histogram of the age of files transfered",
+		Buckets:   bytesBucket,
 	}, []string{"metric"})
 
 	SamplesStored = promauto.NewCounterVec(prometheus.CounterOpts{
