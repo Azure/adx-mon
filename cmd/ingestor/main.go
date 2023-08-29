@@ -493,10 +493,6 @@ func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads i
 			DefaultMapping:    storage.DefaultLogsMapping,
 		}))
 	}
-	if len(uploaders) == 0 {
-		logger.Warn("No logs endpoints provided, using fake uploader")
-		uploaders = append(uploaders, adx.NewFakeUploader())
-	}
 	return uploaders, nil
 }
 

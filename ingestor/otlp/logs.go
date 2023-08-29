@@ -9,7 +9,6 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	v11 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
@@ -38,6 +37,10 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 
 	for key, logs := range groupByKustoTable(req.Msg) {
 		d, t = metadataFromKey(key)
+		if logger.IsDebug() {
+			logger.Debug("LogHandler received %d logs for %s.%s", len(logs), d, t)
+		}
+
 		if d == "" || t == "" {
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 			err := errors.New("request missing destination metadata")
@@ -94,23 +97,16 @@ func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string][]*logsv1.Lo
 	defer bytesPool.Put(b)
 
 	var (
-		d, t, k string
-		a       []*v11.KeyValue
-		m       = make(map[string][]*logsv1.LogRecord)
+		d, t string
+		m    = make(map[string][]*logsv1.LogRecord)
 	)
 	for _, r := range req.GetResourceLogs() {
-		a = r.Resource.GetAttributes()
 		for _, s := range r.GetScopeLogs() {
 			for _, l := range s.GetLogRecords() {
-				// Each LogRecord contains Attributes that we merge
-				// with the ResourceLog's Attributes, which come from
-				// Collector's --add-attributes.
-				l.Attributes = append(l.Attributes, a...)
 				// Extract the destination Kusto Database and Table
 				d, t = kustoMetadata(l)
 				b = makeKey(b[:0], d, t)
-				k = string(b)
-				m[k] = append(m[k], l)
+				m[string(b)] = append(m[string(b)], l)
 			}
 		}
 	}

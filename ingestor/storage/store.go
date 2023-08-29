@@ -14,6 +14,7 @@ import (
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -191,7 +192,14 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
-	key := []byte(fmt.Sprintf("%s_%s", database, table))
+	key := bytesPool.Get(256)
+	defer bytesPool.Put(key)
+
+	if logger.IsDebug() {
+		logger.Debug("Store received %d logs for %s.%s", len(logs), database, table)
+	}
+
+	key = fmt.Appendf(key[:0], "%s_%s", database, table)
 
 	wal, err := s.GetWAL(ctx, key)
 	if err != nil {
