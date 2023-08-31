@@ -226,6 +226,13 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 	entry := s.ringBuf.Reserve()
 	defer s.ringBuf.Release(entry)
 
+	// Entries are re-used, so we need to reset the error channel before enqueuing the entry to prevent exiting
+	// this func and adding the entry back to the ringbuffer before it's actually be flushed.
+	select {
+	case <-entry.ErrCh:
+	default:
+	}
+
 	entry.Value = append(entry.Value[:0], buf...)
 
 	s.ringBuf.Enqueue(entry)
