@@ -53,7 +53,6 @@ type ruleStore interface {
 }
 
 type Alerter struct {
-	log      logger.Logger
 	clients  map[string]KustoClient
 	queue    chan struct{}
 	alertCli *alert.Client
@@ -84,11 +83,6 @@ var ruleErrorCounter = promauto.NewCounterVec(
 )
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
-	log, err := newLogger()
-	if err != nil {
-		return nil, fmt.Errorf("failed to construct logger: %w", err)
-	}
-
 	ruleStore := rules.NewStore(rules.StoreOpts{
 		Region:  opts.Region,
 		CtrlCli: opts.CtrlCli,
@@ -96,7 +90,6 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 
 	l2m := &Alerter{
 		opts:      opts,
-		log:       log,
 		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
@@ -155,16 +148,11 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 }
 
 func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
-	log, err := newLogger()
-	if err != nil {
-		return fmt.Errorf("failed to construct logger: %w", err)
-	}
-
 	ruleStore, err := rules.FromPath(path, opts.Region)
 	if err != nil {
 		return err
 	}
-	log.Info("Linting rules from path=%s", path)
+	logger.Infof("Linting rules from path=%s", path)
 
 	lint := NewLinter()
 	http.Handle("/alerts", lint.Handler())
@@ -205,7 +193,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	if lint.HasFailedQueries() {
 		return fmt.Errorf("failed to lint rules")
 	}
-	lint.Log(log)
+	lint.Log()
 	return nil
 }
 
@@ -232,10 +220,6 @@ func (l *Alerter) Open(ctx context.Context) error {
 	}()
 
 	return nil
-}
-
-func newLogger() (logger.Logger, error) {
-	return logger.NewLogger(), nil
 }
 
 func (l *Alerter) Close() error {

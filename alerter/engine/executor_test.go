@@ -7,7 +7,6 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
@@ -199,7 +198,7 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 				},
 			},
 		},
-		kustoClient: &fakeKustoClient{log: logger.Default},
+		kustoClient: &fakeKustoClient{},
 		workers:     map[string]*worker{},
 	}
 
@@ -220,7 +219,7 @@ func TestExecutor_syncWorkers_NoChange(t *testing.T) {
 				},
 			},
 		},
-		kustoClient: &fakeKustoClient{log: logger.Default},
+		kustoClient: &fakeKustoClient{},
 		workers:     map[string]*worker{},
 	}
 
@@ -245,7 +244,7 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 	e := Executor{
 		closeFn:     cancel,
 		ruleStore:   store,
-		kustoClient: &fakeKustoClient{log: logger.Default},
+		kustoClient: &fakeKustoClient{},
 		workers:     map[string]*worker{},
 	}
 

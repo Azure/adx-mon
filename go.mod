@@ -9,10 +9,10 @@ require (
 	github.com/bufbuild/connect-go v1.9.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
-	github.com/fatih/color v1.13.0
 	github.com/golang/snappy v0.0.4
 	github.com/klauspost/compress v1.16.7
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
+	github.com/lmittmann/tint v1.0.1
 	github.com/mattn/go-isatty v0.0.16
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.14.0
@@ -72,7 +72,6 @@ require (
 	github.com/klauspost/crc32 v0.0.0-20161016154125-cb6bfca970f6 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-ieproxy v0.0.1 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

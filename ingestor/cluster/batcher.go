@@ -261,7 +261,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 			if batchSize >= a.maxTransferSize {
 				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, a.maxTransferSize/1e6, batchSize)
 				}
 				directUpload = true
 				continue
