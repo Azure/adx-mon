@@ -136,7 +136,7 @@ func (w *WAL) rotate(ctx context.Context) {
 			sz, err := seg.Size()
 			if err != nil {
 				w.mu.Unlock()
-				logger.Error("Failed segment size: %s %s", seg.Path(), err.Error())
+				logger.Errorf("Failed segment size: %s %s", seg.Path(), err.Error())
 				continue
 			}
 
@@ -150,7 +150,7 @@ func (w *WAL) rotate(ctx context.Context) {
 
 			if toClose != nil {
 				if err := toClose.Close(); err != nil {
-					logger.Error("Failed to close segment: %s %s", toClose.Path(), err.Error())
+					logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
 				}
 			}
 		}

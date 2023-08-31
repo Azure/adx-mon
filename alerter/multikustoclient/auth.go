@@ -15,7 +15,7 @@ type authMethod func() (authConfiguror, error)
 // DefaultAuth uses standard AZURE_ environment variables and falls back to az cli if they are not set
 func DefaultAuth() authMethod {
 	return func() (authConfiguror, error) {
-		logger.Info("Using default authentication")
+		logger.Infof("Using default authentication")
 		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
 			return kcsb.WithDefaultAzureCredential()
 		}, nil
@@ -28,7 +28,7 @@ func MsiAuth(msi string) authMethod {
 		if msi == "" {
 			return nil, fmt.Errorf("msi cannot be empty")
 		}
-		logger.Info("Using MSI authentication")
+		logger.Infof("Using MSI authentication")
 		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
 			return kcsb.WithUserManagedIdentity(msi)
 		}, nil
@@ -44,7 +44,7 @@ func TokenAuth(kustoAppId string, kustoToken string) authMethod {
 		if kustoToken == "" {
 			return nil, fmt.Errorf("token cannot be empty")
 		}
-		logger.Info("Using token authentication")
+		logger.Infof("Using token authentication")
 		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
 			return kcsb.WithApplicationToken(kustoAppId, kustoToken)
 		}, nil

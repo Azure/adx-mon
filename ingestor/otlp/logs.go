@@ -25,7 +25,7 @@ type logsServer struct {
 }
 
 func NewLogsServer(w cluster.OTLPLogsWriter) logsv1connect.LogsServiceHandler {
-	logger.Info("Initializing OTLP logs server")
+	logger.Infof("Initializing OTLP logs server")
 	return &logsServer{w: w}
 }
 
@@ -38,7 +38,7 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 	for key, logs := range groupByKustoTable(req.Msg) {
 		d, t = metadataFromKey(key)
 		if logger.IsDebug() {
-			logger.Debug("LogHandler received %d logs for %s.%s", len(logs), d, t)
+			logger.Debugf("LogHandler received %d logs for %s.%s", len(logs), d, t)
 		}
 
 		if d == "" || t == "" {

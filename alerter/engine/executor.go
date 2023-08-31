@@ -67,7 +67,7 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 
 func (e *Executor) Open(ctx context.Context) error {
 	ctx, e.closeFn = context.WithCancel(ctx)
-	logger.Info("Begin executing %d queries", len(e.ruleStore.Rules()))
+	logger.Infof("Begin executing %d queries", len(e.ruleStore.Rules()))
 
 	e.syncWorkers(ctx)
 	go e.periodicSync(ctx)
@@ -148,7 +148,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	destination := qc.Rule.Destination
 	// The recipient query results field is deprecated.
 	if destination == "" {
-		logger.Warn("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
+		logger.Warnf("Recipient query results field is deprecated. Please use the destination field in the rule instead for %s/%s.", qc.Rule.Namespace, qc.Rule.Name)
 		destination = res.Recipient
 	}
 
@@ -164,10 +164,10 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	}
 
 	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
-	logger.Debug("Sending alert %s %v", addr, a)
+	logger.Debugf("Sending alert %s %v", addr, a)
 
 	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
-		logger.Error("Failed to create Notification: %s\n", err)
+		logger.Errorf("Failed to create Notification: %s\n", err)
 		metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
 		return nil
 	}
@@ -222,7 +222,7 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 		liveQueries[id] = struct{}{}
 		w, ok := e.workers[id]
 		if !ok {
-			logger.Info("Starting new worker for %s", id)
+			logger.Infof("Starting new worker for %s", id)
 			worker := e.newWorker(r)
 			e.workers[id] = worker
 			go worker.Run(ctx)
@@ -234,7 +234,7 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 			continue
 		}
 
-		logger.Info("Rule %s has changed, restarting worker", id)
+		logger.Infof("Rule %s has changed, restarting worker", id)
 		w.Close()
 		delete(e.workers, id)
 		w = e.newWorker(r)
@@ -245,7 +245,7 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 	// Shutdown any workers that no longer exist
 	for id := range e.workers {
 		if _, ok := liveQueries[id]; !ok {
-			logger.Info("Shutting down worker for %s", id)
+			logger.Infof("Shutting down worker for %s", id)
 			e.workers[id].Close()
 			delete(e.workers, id)
 		}

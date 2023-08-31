@@ -17,12 +17,12 @@ func main() {
 	flag.Parse()
 
 	if dataFile == "" {
-		logger.Fatal("data-file is required")
+		logger.Fatalf("data-file is required")
 	}
 
 	f, err := os.Open(dataFile)
 	if err != nil {
-		logger.Fatal("open file: %s", err)
+		logger.Fatalf("open file: %s", err)
 	}
 	defer f.Close()
 

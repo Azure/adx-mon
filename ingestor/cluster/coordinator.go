@@ -93,19 +93,19 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	groupName := opts.Hostname
 	discoveryDisabled := opts.DisablePeerDiscovery
 	if opts.DisablePeerDiscovery {
-		logger.Warn("Peer discovery disabled")
+		logger.Warnf("Peer discovery disabled")
 	} else if ns == "" {
-		logger.Warn("No namespace found, peer discovery disabled")
+		logger.Warnf("No namespace found, peer discovery disabled")
 		discoveryDisabled = true
 	} else {
-		logger.Info("Using namespace %s for peer discovery", ns)
+		logger.Infof("Using namespace %s for peer discovery", ns)
 		if !strings.Contains(groupName, "-") {
-			logger.Warn("Hostname not in statefuleset format, peer discovery disabled")
+			logger.Warnf("Hostname not in statefuleset format, peer discovery disabled")
 			discoveryDisabled = true
 		} else {
 			rindex := strings.LastIndex(groupName, "-")
 			groupName = groupName[:rindex]
-			logger.Info("Using statefuleset %s for peer discovery", groupName)
+			logger.Infof("Using statefuleset %s for peer discovery", groupName)
 		}
 	}
 
@@ -126,7 +126,7 @@ func (c *coordinator) OnAdd(obj interface{}) {
 	}
 
 	if err := c.syncPeers(); err != nil {
-		logger.Error("Failed to reconfigure peers: %s", err)
+		logger.Errorf("Failed to reconfigure peers: %s", err)
 	}
 }
 
@@ -137,7 +137,7 @@ func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
 	}
 
 	if err := c.syncPeers(); err != nil {
-		logger.Error("Failed to reconfigure peers: %s", err)
+		logger.Errorf("Failed to reconfigure peers: %s", err)
 	}
 }
 
@@ -148,7 +148,7 @@ func (c *coordinator) OnDelete(obj interface{}) {
 	}
 
 	if err := c.syncPeers(); err != nil {
-		logger.Error("Failed to reconfigure peers: %s", err)
+		logger.Errorf("Failed to reconfigure peers: %s", err)
 	}
 }
 
@@ -315,11 +315,11 @@ func (c *coordinator) resyncPeers(ctx context.Context) {
 			return
 		case <-t.C:
 			if err := c.syncPeers(); err != nil {
-				logger.Error("Failed to reconfigure peers: %s", err)
+				logger.Errorf("Failed to reconfigure peers: %s", err)
 			}
 			c.mu.RLock()
 			for peer, addr := range c.peers {
-				logger.Info("Peers updated %s addr=%s ready=%v", peer, addr, "true")
+				logger.Infof("Peers updated %s addr=%s ready=%v", peer, addr, "true")
 			}
 			c.mu.RUnlock()
 		}

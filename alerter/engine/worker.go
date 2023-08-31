@@ -36,7 +36,7 @@ func (e *worker) Run(ctx context.Context) {
 	e.wg.Add(1)
 	defer e.wg.Done()
 
-	logger.Info("Creating query executor for %s/%s in %s executing every %s",
+	logger.Infof("Creating query executor for %s/%s in %s executing every %s",
 		e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
 
 	// do-while
@@ -74,7 +74,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 	// If tags are specified, but none of them matched, skip the query
 	if len(e.rule.Criteria) > 0 && !matched {
-		logger.Info("Skipping %s/%s on %s/%s because none of the tags matched: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags)
+		logger.Infof("Skipping %s/%s on %s/%s because none of the tags matched: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags)
 		return
 	}
 
@@ -87,14 +87,14 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	start := time.Now().UTC()
 	queryContext, err := NewQueryContext(e.rule, start, e.Region)
 	if err != nil {
-		logger.Error("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 		return
 	}
 
-	logger.Info("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 	err, rows := e.kustoClient.Query(ctx, queryContext, e.HandlerFn)
 	if err != nil {
-		logger.Error("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		logger.Errorf("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
 		if !isUserError(err) {
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
@@ -103,7 +103,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
-			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 			return
 		}
@@ -116,7 +116,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 			Source:        fmt.Sprintf("%s/%s", e.rule.Namespace, e.rule.Name),
 			CorrelationID: fmt.Sprintf("alert-failure/%s/%s", e.rule.Namespace, e.rule.Name),
 		}); err != nil {
-			logger.Error("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			// Only set the notification as failed if we are not able to send a failure alert directly.
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 			return
@@ -127,8 +127,8 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	}
 
 	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-	logger.Info("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
-	logger.Info("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
+	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
+	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
 }
 
 func (e *worker) Close() {

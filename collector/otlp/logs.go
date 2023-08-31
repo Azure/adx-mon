@@ -51,16 +51,16 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 		// We have to strip the path component from our endpoint so gRPC can correctly setup its routing
 		uri, err := url.Parse(endpoint)
 		if err != nil {
-			logger.Fatal("Failed to parse endpoint: %v", err)
+			logger.Fatalf("Failed to parse endpoint: %v", err)
 		}
 		uri.Path = ""
 		grpcEndpoint := uri.String()
-		logger.Info("gRPC endpoint: %s", grpcEndpoint)
+		logger.Infof("gRPC endpoint: %s", grpcEndpoint)
 
 		// Create our HTTP2 client with optional TLS configuration
 		httpClient := http.DefaultClient
 		if insecureSkipVerify && uri.Scheme == "https" {
-			logger.Warn("Using insecure TLS configuration")
+			logger.Warnf("Using insecure TLS configuration")
 			httpClient = &http.Client{
 				Transport: &http2.Transport{
 					TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
@@ -68,7 +68,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			}
 		}
 		if uri.Scheme == "http" {
-			logger.Warn("Disabling TLS for HTTP endpoint")
+			logger.Warnf("Disabling TLS for HTTP endpoint")
 			httpClient = &http.Client{
 				Transport: &http2.Transport{
 					AllowHTTP: true,
@@ -101,13 +101,13 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 
 			n, err := io.ReadFull(r.Body, b)
 			if err != nil {
-				logger.Error("Failed to read request body: %v", err)
+				logger.Errorf("Failed to read request body: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
 			}
 			if n < int(r.ContentLength) {
-				logger.Warn("Short read %d < %d", n, r.ContentLength)
+				logger.Warnf("Short read %d < %d", n, r.ContentLength)
 				w.WriteHeader(http.StatusInternalServerError)
 				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
@@ -115,7 +115,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 
 			msg := &v1.ExportLogsServiceRequest{}
 			if err := proto.Unmarshal(b, msg); err != nil {
-				logger.Error("Failed to unmarshal request body: %v", err)
+				logger.Errorf("Failed to unmarshal request body: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
@@ -142,14 +142,14 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				g.Go(func() error {
 					resp, err := rpcClient.Export(gctx, connect_go.NewRequest(msg))
 					if err != nil {
-						logger.Error("Failed to send request: %v", err)
+						logger.Errorf("Failed to send request: %v", err)
 						metrics.LogsProxyFailures.WithLabelValues(endpoint).Inc()
 						return err
 					}
 					// Partial failures are left to the caller to handle. If they want at-least-once
 					// delivery, they should retry the request until it succeeds.
 					if partial := resp.Msg.GetPartialSuccess(); partial != nil && partial.GetRejectedLogRecords() != 0 {
-						logger.Error("Partial success: %s", partial.String())
+						logger.Errorf("Partial success: %s", partial.String())
 						metrics.LogsProxyPartialFailures.WithLabelValues(endpoint).Add(float64(partial.GetRejectedLogRecords()))
 						mu.Lock()
 						if partial.GetRejectedLogRecords() > rejectedRecords {
@@ -165,10 +165,10 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			var respBodyBytes []byte
 			if err := g.Wait(); err != nil {
 				// Construct a partial success response with the maximum number of rejected records
-				logger.Error("Failed to proxy request: %v", err)
+				logger.Errorf("Failed to proxy request: %v", err)
 				respBodyBytes, err = proto.Marshal(&v1.ExportLogsPartialSuccess{RejectedLogRecords: rejectedRecords})
 				if err != nil {
-					logger.Error("Failed to marshal response: %v", err)
+					logger.Errorf("Failed to marshal response: %v", err)
 					w.WriteHeader(http.StatusInternalServerError)
 					m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 					return
@@ -177,7 +177,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				// The logs have been committed by the OTLP endpoint
 				respBodyBytes, err = proto.Marshal(&v1.ExportLogsServiceResponse{})
 				if err != nil {
-					logger.Error("Failed to marshal response: %v", err)
+					logger.Errorf("Failed to marshal response: %v", err)
 					w.WriteHeader(http.StatusInternalServerError)
 					m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 					return
@@ -198,7 +198,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			m.WithLabelValues(strconv.Itoa(http.StatusNotImplemented)).Inc()
 
 		default:
-			logger.Error("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
+			logger.Errorf("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
 			w.WriteHeader(http.StatusBadRequest)
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		}

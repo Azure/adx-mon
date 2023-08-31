@@ -125,11 +125,11 @@ func (s *Store) reloadPeriodically() {
 		case <-s.ctx.Done():
 			return
 		case <-time.After(time.Minute):
-			logger.Info("Reloading rules...")
+			logger.Infof("Reloading rules...")
 
 			rules, err := s.reloadRules()
 			if err != nil {
-				logger.Error("failed to reload rules: %s", err)
+				logger.Errorf("failed to reload rules: %s", err)
 				continue
 			}
 

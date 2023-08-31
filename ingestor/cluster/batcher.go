@@ -125,7 +125,7 @@ func (a *batcher) watch(ctx context.Context) {
 			return
 		case <-t.C:
 			if err := a.BatchSegments(); err != nil {
-				logger.Error("Failed to batch segments: %v", err)
+				logger.Errorf("Failed to batch segments: %v", err)
 			}
 		}
 	}
@@ -183,14 +183,14 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	for _, v := range entries {
 		fi, err := os.Stat(v.Path)
 		if err != nil {
-			logger.Warn("Failed to stat file: %s", v.Path)
+			logger.Warnf("Failed to stat file: %s", v.Path)
 			continue
 		}
 		groupSize += int(fi.Size())
 
 		createdAt, err := flake.ParseFlakeID(v.Epoch)
 		if err != nil {
-			logger.Warn("Failed to parse flake id: %s: %s", v.Epoch, err)
+			logger.Warnf("Failed to parse flake id: %s: %s", v.Epoch, err)
 		} else {
 			if lastSegmentKey == "" || v.Key != lastSegmentKey {
 				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastSegmentKey).Set(time.Since(createdAt).Seconds())
@@ -204,7 +204,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		if a.Segmenter.IsActiveSegment(v.Path) {
 			if logger.IsDebug() {
-				logger.Debug("Skipping active segment: %s", v.Path)
+				logger.Debugf("Skipping active segment: %s", v.Path)
 			}
 			continue
 		}
@@ -224,7 +224,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		db, table, _, err := wal.ParseFilename(v[0])
 		if err != nil {
-			logger.Error("Failed to parse segment filename: %s", err)
+			logger.Errorf("Failed to parse segment filename: %s", err)
 			continue
 		}
 
@@ -236,7 +236,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		for _, path := range v {
 			stat, err := os.Stat(path)
 			if err != nil {
-				logger.Warn("Failed to stat file: %s", path)
+				logger.Warnf("Failed to stat file: %s", path)
 				continue
 			}
 
@@ -246,7 +246,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
 			if batchSize >= a.minUploadSize {
 				if logger.IsDebug() {
-					logger.Debug("Batch %s is larger than %dMB (%d), uploading directly", path, (a.minUploadSize)/1e6, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, (a.minUploadSize)/1e6, batchSize)
 				}
 
 				owned = append(owned, batch)
@@ -261,7 +261,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 			if batchSize >= a.maxTransferSize {
 				if logger.IsDebug() {
-					logger.Debug("Batch %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", a.maxTransferSize/1e6, path, batchSize)
 				}
 				directUpload = true
 				continue
@@ -269,7 +269,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 			createdAt, err := segmentCreationTime(path)
 			if err != nil {
-				logger.Warn("failed to determine segment creation time: %s", err)
+				logger.Warnf("failed to determine segment creation time: %s", err)
 			}
 
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
@@ -277,7 +277,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			// rather take that hit than have a node that's behind on uploading.
 			if time.Since(createdAt) > a.maxTransferAge {
 				if logger.IsDebug() {
-					logger.Debug("File %s is older than %s (%s) seconds, uploading directly", path, a.maxTransferAge.String(), time.Since(createdAt).String())
+					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", path, a.maxTransferAge.String(), time.Since(createdAt).String())
 				}
 				directUpload = true
 			}
@@ -351,7 +351,7 @@ func maxCreated(batch []string) time.Time {
 	for _, v := range batch {
 		createdAt, err := segmentCreationTime(v)
 		if err != nil {
-			logger.Warn("Invalid file name: %s: %s", v, err)
+			logger.Warnf("Invalid file name: %s: %s", v, err)
 			continue
 		}
 

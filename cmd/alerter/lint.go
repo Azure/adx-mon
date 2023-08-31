@@ -64,7 +64,7 @@ func lintMain(ctx *cli.Context) error {
 	tags["cloud"] = strings.ToLower(ctx.String("cloud"))
 
 	for k, v := range tags {
-		logger.Info("Using tag %s=%s", k, v)
+		logger.Infof("Using tag %s=%s", k, v)
 	}
 
 	opts := &alerter.AlerterOpts{
