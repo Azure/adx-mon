@@ -83,7 +83,7 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		logger.Fatal(err.Error())
+		logger.Fatalf(err.Error())
 	}
 }
 
@@ -136,37 +136,37 @@ func realMain(ctx *cli.Context) error {
 	if hostname == "" {
 		hostname, err = os.Hostname()
 		if err != nil {
-			logger.Error("Failed to get hostname: %s", err)
+			logger.Errorf("Failed to get hostname: %s", err)
 		}
 	}
 
 	if cacert != "" || key != "" {
 		if cacert == "" || key == "" {
-			logger.Fatal("Both --ca-cert and --key are required")
+			logger.Fatalf("Both --ca-cert and --key are required")
 		}
 	} else {
-		logger.Warn("Using fake TLS credentials (not for production use!)")
+		logger.Warnf("Using fake TLS credentials (not for production use!)")
 		certBytes, keyBytes, err := tls.NewFakeTLSCredentials()
 		if err != nil {
-			logger.Fatal("Failed to create fake TLS credentials: %s", err)
+			logger.Fatalf("Failed to create fake TLS credentials: %s", err)
 		}
 
 		certFile, err := os.CreateTemp("", "cert")
 		if err != nil {
-			logger.Fatal("Failed to create cert temp file: %s", err)
+			logger.Fatalf("Failed to create cert temp file: %s", err)
 		}
 
 		if _, err := certFile.Write(certBytes); err != nil {
-			logger.Fatal("Failed to write cert temp file: %s", err)
+			logger.Fatalf("Failed to write cert temp file: %s", err)
 		}
 
 		keyFile, err := os.CreateTemp("", "key")
 		if err != nil {
-			logger.Fatal("Failed to create key temp file: %s", err)
+			logger.Fatalf("Failed to create key temp file: %s", err)
 		}
 
 		if _, err := keyFile.Write(keyBytes); err != nil {
-			logger.Fatal("Failed to write key temp file: %s", err)
+			logger.Fatalf("Failed to write key temp file: %s", err)
 		}
 
 		cacert = certFile.Name()
@@ -174,11 +174,11 @@ func realMain(ctx *cli.Context) error {
 		insecureSkipVerify = true
 
 		if err := certFile.Close(); err != nil {
-			logger.Fatal("Failed to close cert temp file: %s", err)
+			logger.Fatalf("Failed to close cert temp file: %s", err)
 		}
 
 		if err := keyFile.Close(); err != nil {
-			logger.Fatal("Failed to close key temp file: %s", err)
+			logger.Fatalf("Failed to close key temp file: %s", err)
 		}
 
 		defer func() {
@@ -187,16 +187,16 @@ func realMain(ctx *cli.Context) error {
 		}()
 	}
 
-	logger.Info("Using TLS ca-cert=%s key=%s", cacert, key)
+	logger.Infof("Using TLS ca-cert=%s key=%s", cacert, key)
 	if storageDir == "" {
-		logger.Fatal("--storage-dir is required")
+		logger.Fatalf("--storage-dir is required")
 	}
 
 	defaultMapping := storage.NewMetricsSchema()
 	for _, v := range ctx.StringSlice("add-labels") {
 		fields := strings.Split(v, "=")
 		if len(fields) != 2 {
-			logger.Fatal("invalid dimension: %s", v)
+			logger.Fatalf("invalid dimension: %s", v)
 		}
 
 		defaultMapping = defaultMapping.AddConstMapping(fields[0], fields[1])
@@ -210,7 +210,7 @@ func realMain(ctx *cli.Context) error {
 		// The format is <label>[=<column name>] where the column name is optional.  If not specified, the label name is used.
 		fields := strings.Split(v, "=")
 		if len(fields) > 2 {
-			logger.Fatal("invalid dimension: %s", v)
+			logger.Fatalf("invalid dimension: %s", v)
 		}
 
 		sortedLiftedLabels = append(sortedLiftedLabels, fields[0])
@@ -228,17 +228,17 @@ func realMain(ctx *cli.Context) error {
 		// The format is <metrics region>=<label regex>
 		fields := strings.Split(v, "=")
 		if len(fields) > 2 {
-			logger.Fatal("invalid dimension: %s", v)
+			logger.Fatalf("invalid dimension: %s", v)
 		}
 
 		metricRegex, err := regexp.Compile(fields[0])
 		if err != nil {
-			logger.Fatal("invalid metric regex: %s", err)
+			logger.Fatalf("invalid metric regex: %s", err)
 		}
 
 		labelRegex, err := regexp.Compile(fields[1])
 		if err != nil {
-			logger.Fatal("invalid label regex: %s", err)
+			logger.Fatalf("invalid label regex: %s", err)
 		}
 
 		dropLabels[metricRegex] = labelRegex
@@ -248,7 +248,7 @@ func realMain(ctx *cli.Context) error {
 	for _, v := range ctx.StringSlice("drop-metrics") {
 		metricRegex, err := regexp.Compile(v)
 		if err != nil {
-			logger.Fatal("invalid metric regex: %s", err)
+			logger.Fatalf("invalid metric regex: %s", err)
 		}
 
 		dropMetrics = append(dropMetrics, metricRegex)
@@ -269,28 +269,28 @@ func realMain(ctx *cli.Context) error {
 		)
 		addr, database, err = parseKustoEndpoint(kustoEndpoint)
 		if err != nil {
-			logger.Fatal("Failed to parse kusto endpoint: %s", err)
+			logger.Fatalf("Failed to parse kusto endpoint: %s", err)
 		}
 
 		client, err = newKustoClient(addr)
 		if err != nil {
-			logger.Fatal("Failed to create kusto client: %s", err)
+			logger.Fatalf("Failed to create kusto client: %s", err)
 		}
 		defer client.Close()
 	}
 
 	metricsUploader, err := newUploader(client, database, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
-		logger.Fatal("Failed to create uploader: %s", err)
+		logger.Fatalf("Failed to create uploader: %s", err)
 	}
 	otlpLogsUploaders, err := otlpLogUploaders(ctx.StringSlice("logs-kusto-endpoints"), storageDir, concurrentUploads)
 	if err != nil {
-		logger.Fatal("Failed to create uploaders for OTLP logs: %s", err)
+		logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 	}
 
 	uploadDispatcher := adx.NewDispatcher(append(otlpLogsUploaders, metricsUploader))
 	if err := uploadDispatcher.Open(svcCtx); err != nil {
-		logger.Fatal("Failed to start upload dispatcher: %s", err)
+		logger.Fatalf("Failed to start upload dispatcher: %s", err)
 	}
 	defer uploadDispatcher.Close()
 
@@ -313,29 +313,29 @@ func realMain(ctx *cli.Context) error {
 		DropMetrics:          dropMetrics,
 	})
 	if err != nil {
-		logger.Fatal("Failed to create service: %s", err)
+		logger.Fatalf("Failed to create service: %s", err)
 	}
 	if err := svc.Open(svcCtx); err != nil {
-		logger.Fatal("Failed to start service: %s", err)
+		logger.Fatalf("Failed to start service: %s", err)
 	}
 
 	l, err := net.Listen("tcp", ":9090")
 	if err != nil {
-		logger.Fatal("Failed to listen: %s", err)
+		logger.Fatalf("Failed to listen: %s", err)
 	}
 	if maxConns > 0 {
-		logger.Info("Limiting connections to %d", maxConns)
+		logger.Infof("Limiting connections to %d", maxConns)
 		l = netutil.LimitListener(l, maxConns)
 	}
 	defer l.Close()
 
-	logger.Info("Listening at %s", ":9090")
+	logger.Infof("Listening at %s", ":9090")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/receive", svc.HandleReceive)
 	mux.HandleFunc(logsv1connect.LogsServiceExportProcedure, svc.HandleLogs)
 
-	logger.Info("Metrics Listening at %s", ":9091")
+	logger.Infof("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()
 	metricsMux.Handle("/metrics", promhttp.Handler())
 	metricsMux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -354,7 +354,7 @@ func realMain(ctx *cli.Context) error {
 
 	go func() {
 		if err := srv.ServeTLS(l, cacert, key); err != nil {
-			logger.Error(err.Error())
+			logger.Errorf(err.Error())
 		}
 	}()
 
@@ -362,7 +362,7 @@ func realMain(ctx *cli.Context) error {
 	metricsSrv.ErrorLog = newLogger()
 	go func() {
 		if err := metricsSrv.ListenAndServe(); err != nil {
-			logger.Error(err.Error())
+			logger.Errorf(err.Error())
 		}
 	}()
 
@@ -379,27 +379,27 @@ func realMain(ctx *cli.Context) error {
 
 		// Disable writes for internal processes (metrics)
 		if err := svc.DisableWrites(); err != nil {
-			logger.Error("Failed to disable writes: %s", err)
+			logger.Errorf("Failed to disable writes: %s", err)
 		}
 
-		logger.Info("Received signal %s, uploading pending segments...", sig.String())
+		logger.Infof("Received signal %s, uploading pending segments...", sig.String())
 
 		// Upload pending segments
 		if err := svc.UploadSegments(); err != nil {
-			logger.Error("Failed to upload segments: %s", err)
+			logger.Errorf("Failed to upload segments: %s", err)
 		}
 
 		// Trigger shutdown of any pending background processes
 		cancel()
 
 		if err := metricsSrv.Shutdown(context.Background()); err != nil {
-			logger.Error("Failed to shutdown metrics server: %s", err)
+			logger.Errorf("Failed to shutdown metrics server: %s", err)
 		}
 
 		// Shutdown the server and cancel context
 		err := svc.Close()
 		if err != nil {
-			logger.Error(err.Error())
+			logger.Errorf(err.Error())
 		}
 	}()
 
@@ -411,7 +411,7 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 	kubeconfig := cCtx.String("kubeconfig")
 	_, err := rest.InClusterConfig()
 	if err == rest.ErrNotInCluster && kubeconfig == "" && os.Getenv("KUBECONIFG=") == "" {
-		logger.Warn("No kube config provided, using fake kube client")
+		logger.Warnf("No kube config provided, using fake kube client")
 		return nil, fake.NewSimpleClientset(), nil, nil
 	}
 
@@ -447,7 +447,7 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 
 func newUploader(kustoCli ingest.QueryClient, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
 	if kustoCli == nil {
-		logger.Warn("No kusto endpoint provided, using fake uploader")
+		logger.Warnf("No kusto endpoint provided, using fake uploader")
 		return adx.NewFakeUploader(), nil
 	}
 

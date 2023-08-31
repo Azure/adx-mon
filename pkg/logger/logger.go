@@ -185,7 +185,7 @@ func IsTrace() bool {
 	return Default.IsTrace()
 }
 
-func Trace(format string, args ...interface{}) {
+func Tracef(format string, args ...interface{}) {
 	Default.Trace(format, args...)
 }
 
@@ -193,23 +193,23 @@ func IsDebug() bool {
 	return Default.IsDebug()
 }
 
-func Debug(format string, args ...interface{}) {
+func Debugf(format string, args ...interface{}) {
 	Default.Debug(format, args...)
 }
 
-func Info(format string, args ...interface{}) {
+func Infof(format string, args ...interface{}) {
 	Default.Info(format, args...)
 }
 
-func Warn(format string, args ...interface{}) {
+func Warnf(format string, args ...interface{}) {
 	Default.Warn(format, args...)
 }
 
-func Error(format string, args ...interface{}) {
+func Errorf(format string, args ...interface{}) {
 	Default.Error(format, args...)
 }
 
-func Fatal(format string, args ...interface{}) {
+func Fatalf(format string, args ...interface{}) {
 	Default.Error(format, args...)
 	os.Exit(1)
 }

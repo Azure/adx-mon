@@ -177,7 +177,7 @@ func (n *uploader) upload(ctx context.Context) error {
 			paths := batch.Paths
 
 			if batch.Database != n.database {
-				logger.Error("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
+				logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
 				continue
 			}
 
@@ -193,14 +193,14 @@ func (n *uploader) upload(ctx context.Context) error {
 				for _, path := range paths {
 
 					if _, ok := n.uploading[path]; ok {
-						logger.Debug("File %s is already uploading", path)
+						logger.Debugf("File %s is already uploading", path)
 						continue
 					}
 					n.uploading[path] = struct{}{}
 
 					database, table, _, err = wal.ParseFilename(path)
 					if err != nil {
-						logger.Error("Failed to parse file: %s", err.Error())
+						logger.Errorf("Failed to parse file: %s", err.Error())
 						continue
 					}
 
@@ -209,7 +209,7 @@ func (n *uploader) upload(ctx context.Context) error {
 						// batches are not disjoint, so the same segments could be included in multiple batches.
 						continue
 					} else if err != nil {
-						logger.Error("Failed to open file: %s", err.Error())
+						logger.Errorf("Failed to open file: %s", err.Error())
 						continue
 					}
 
@@ -238,13 +238,13 @@ func (n *uploader) upload(ctx context.Context) error {
 
 				now := time.Now()
 				if err := n.uploadReader(mr, database, table); err != nil {
-					logger.Error("Failed to upload file: %s", err.Error())
+					logger.Errorf("Failed to upload file: %s", err.Error())
 					return
 				}
-				logger.Info("Uploaded %v duration=%s", paths, time.Since(now).String())
+				logger.Infof("Uploaded %v duration=%s", paths, time.Since(now).String())
 				for _, f := range paths {
 					if err := os.RemoveAll(f); err != nil {
-						logger.Error("Failed to remove file: %s", err.Error())
+						logger.Errorf("Failed to remove file: %s", err.Error())
 					}
 				}
 			}()

@@ -246,7 +246,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
-			logger.Error("close http body: %s", err.Error())
+			logger.Errorf("close http body: %s", err.Error())
 		}
 	}()
 
@@ -268,7 +268,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else {
-		logger.Info("Imported %d bytes to %s", n, filename)
+		logger.Infof("Imported %d bytes to %s", n, filename)
 	}
 	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
@@ -278,8 +278,8 @@ func (s *Service) UploadSegments() error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
-	logger.Info("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
-	logger.Info("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -294,10 +294,10 @@ func (s *Service) UploadSegments() error {
 			}
 
 			if len(s.uploader.UploadQueue()) != 0 {
-				logger.Info("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+				logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
 			}
 			if len(s.replicator.TransferQueue()) != 0 {
-				logger.Info("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 			}
 		case <-timeout.C:
 			return fmt.Errorf("failed to upload segments")

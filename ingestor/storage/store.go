@@ -196,7 +196,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	defer bytesPool.Put(key)
 
 	if logger.IsDebug() {
-		logger.Debug("Store received %d logs for %s.%s", len(logs), database, table)
+		logger.Debugf("Store received %d logs for %s.%s", len(logs), database, table)
 	}
 
 	key = fmt.Appendf(key[:0], "%s_%s", database, table)

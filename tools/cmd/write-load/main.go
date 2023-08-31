@@ -55,7 +55,7 @@ func main() {
 	if dataFile != "" {
 		r, err := data.NewFileReader(dataFile)
 		if err != nil {
-			logger.Fatal("open file: %s", err)
+			logger.Fatalf("open file: %s", err)
 		}
 		defer r.Close()
 		dataGen = r
@@ -138,7 +138,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 		Timeout:            30 * time.Second,
 	})
 	if err != nil {
-		logger.Fatal("prom client: %w", err)
+		logger.Fatalf("prom client: %w", err)
 	}
 
 	for {
@@ -152,7 +152,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 				if err == nil {
 					break
 				}
-				logger.Warn("write failed: %s.  Retrying...", err)
+				logger.Warnf("write failed: %s.  Retrying...", err)
 				time.Sleep(1 * time.Second)
 			}
 			// println(time.Since(ts).String(), len(batch.Timeseries))

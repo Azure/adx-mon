@@ -43,7 +43,7 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		logger.Fatal(err.Error())
+		logger.Fatalf(err.Error())
 	}
 }
 
@@ -73,7 +73,7 @@ func realMain(ctx *cli.Context) error {
 	tags["cloud"] = strings.ToLower(ctx.String("cloud"))
 
 	for k, v := range tags {
-		logger.Info("Using tag %s=%s", k, v)
+		logger.Infof("Using tag %s=%s", k, v)
 	}
 
 	scheme := clientgoscheme.Scheme
@@ -125,11 +125,11 @@ func realMain(ctx *cli.Context) error {
 		sig := <-sc
 		cancel()
 
-		logger.Info("Received signal %s, exiting...", sig.String())
+		logger.Infof("Received signal %s, exiting...", sig.String())
 		// Shutdown the server and cancel context
 		err := svc.Close()
 		if err != nil {
-			logger.Error(err.Error())
+			logger.Errorf(err.Error())
 		}
 	}()
 	<-svcCtx.Done()
@@ -139,7 +139,7 @@ func realMain(ctx *cli.Context) error {
 func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
 	if err != nil {
-		logger.Warn("No kube config provided, using fake kube client")
+		logger.Warnf("No kube config provided, using fake kube client")
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)
 	}
 

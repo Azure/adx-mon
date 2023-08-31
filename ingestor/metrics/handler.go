@@ -106,7 +106,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/receive"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
-			logger.Error("close http body: %s", err.Error())
+			logger.Errorf("close http body: %s", err.Error())
 		}
 	}()
 
@@ -176,7 +176,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.requestWriter.Write(r.Context(), s.database, req); err != nil {
-		logger.Error("Failed to write ts: %s", err.Error())
+		logger.Errorf("Failed to write ts: %s", err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

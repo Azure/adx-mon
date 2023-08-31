@@ -63,7 +63,7 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		logger.Fatal(err.Error())
+		logger.Fatalf(err.Error())
 	}
 }
 
@@ -79,11 +79,11 @@ func realMain(ctx *cli.Context) error {
 
 	addLabels, err := parseKeyPairs(ctx.StringSlice("add-labels"))
 	if err != nil {
-		logger.Fatal("invalid labels: %s", ctx.StringSlice("add-labels"))
+		logger.Fatalf("invalid labels: %s", ctx.StringSlice("add-labels"))
 	}
 	addAttributes, err := parseKeyPairs(ctx.StringSlice("add-attributes"))
 	if err != nil {
-		logger.Fatal("invalid attributes: %s", ctx.StringSlice("add-attributes"))
+		logger.Fatalf("invalid attributes: %s", ctx.StringSlice("add-attributes"))
 	}
 
 	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
@@ -91,17 +91,17 @@ func realMain(ctx *cli.Context) error {
 		// The format is <metrics region>=<label regex>
 		fields := strings.Split(v, "=")
 		if len(fields) > 2 {
-			logger.Fatal("invalid dimension: %s", v)
+			logger.Fatalf("invalid dimension: %s", v)
 		}
 
 		metricRegex, err := regexp.Compile(fields[0])
 		if err != nil {
-			logger.Fatal("invalid metric regex: %s", err)
+			logger.Fatalf("invalid metric regex: %s", err)
 		}
 
 		labelRegex, err := regexp.Compile(fields[1])
 		if err != nil {
-			logger.Fatal("invalid label regex: %s", err)
+			logger.Fatalf("invalid label regex: %s", err)
 		}
 
 		dropLabels[metricRegex] = labelRegex
@@ -111,7 +111,7 @@ func realMain(ctx *cli.Context) error {
 	for _, v := range ctx.StringSlice("drop-metrics") {
 		metricRegex, err := regexp.Compile(v)
 		if err != nil {
-			logger.Fatal("invalid metric regex: %s", err)
+			logger.Fatalf("invalid metric regex: %s", err)
 		}
 
 		dropMetrics = append(dropMetrics, metricRegex)
@@ -174,7 +174,7 @@ func realMain(ctx *cli.Context) error {
 			return fmt.Errorf("endpoint %s must be http or https", endpoint)
 		}
 
-		logger.Info("Using remote write endpoint %s", endpoint)
+		logger.Infof("Using remote write endpoint %s", endpoint)
 	}
 
 	opts := &collector.ServiceOpts{
@@ -210,11 +210,11 @@ func realMain(ctx *cli.Context) error {
 		sig := <-sc
 		cancel()
 
-		logger.Info("Received signal %s, exiting...", sig.String())
+		logger.Infof("Received signal %s, exiting...", sig.String())
 		// Shutdown the server and cancel context
 		err := svc.Close()
 		if err != nil {
-			logger.Error(err.Error())
+			logger.Errorf(err.Error())
 		}
 	}()
 	<-svcCtx.Done()
@@ -224,7 +224,7 @@ func realMain(ctx *cli.Context) error {
 func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
 	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
 	if err != nil {
-		logger.Warn("No kube config provided, using fake kube client")
+		logger.Warnf("No kube config provided, using fake kube client")
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)
 	}
 

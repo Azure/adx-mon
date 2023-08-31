@@ -92,7 +92,7 @@ func (r *replicator) transfer(ctx context.Context) {
 			for _, seg := range segments {
 				db, table, _, err := wal.ParseFilename(seg)
 				if err != nil {
-					logger.Error("Failed to parse segment filename: %v", err)
+					logger.Errorf("Failed to parse segment filename: %v", err)
 					continue
 				}
 
@@ -122,12 +122,12 @@ func (r *replicator) transfer(ctx context.Context) {
 					if err := os.Remove(seg); err != nil {
 						return fmt.Errorf("remove segment %s: %w", seg, err)
 					}
-					logger.Info("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
+					logger.Infof("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
 					return nil
 				})
 
 				if err := g.Wait(); err != nil {
-					logger.Error("Failed to transfer segment %s to %s: %v", seg, addr, err)
+					logger.Errorf("Failed to transfer segment %s to %s: %v", seg, addr, err)
 				}
 			}
 		}

@@ -308,7 +308,7 @@ func (s *segment) repair() error {
 		}
 
 		if err != nil || n != 8 {
-			logger.Warn("Repairing segment %s, missing block header, truncating at %d", s.path, lastGoodIdx)
+			logger.Warnf("Repairing segment %s, missing block header, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 
@@ -326,12 +326,12 @@ func (s *segment) repair() error {
 		}
 
 		if uint32(n) != blockLen {
-			logger.Warn("Repairing segment %s, short block, truncating at %d", s.path, lastGoodIdx)
+			logger.Warnf("Repairing segment %s, short block, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 
 		if crc32.ChecksumIEEE(buf[:blockLen]) != crc {
-			logger.Warn("Repairing segment %s, checksum failed, truncating at %d", s.path, lastGoodIdx)
+			logger.Warnf("Repairing segment %s, checksum failed, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 
@@ -363,7 +363,7 @@ func (s *segment) flusher() {
 
 		case <-t.C:
 			if err := s.bw.Flush(); err != nil {
-				logger.Error("Failed to flush writer for segment: %s: %s", s.path, err)
+				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 		case <-s.closing:
 			blockBuf.Reset()
@@ -373,17 +373,17 @@ func (s *segment) flusher() {
 			s.flushBlock(blockBuf, req)
 
 			if err := s.bw.Flush(); err != nil {
-				logger.Error("Failed to flush writer for segment: %s: %s", s.path, err)
+				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 
 			if err := s.w.Sync(); err != nil {
-				logger.Error("Failed to sync segment: %s: %s", s.path, err)
+				logger.Errorf("Failed to sync segment: %s: %s", s.path, err)
 			}
 
 			select {
 			case err := <-req.ErrCh:
 				if err != nil {
-					logger.Error("Failed to flush block when closing segment: %s", err)
+					logger.Errorf("Failed to flush block when closing segment: %s", err)
 				}
 			default:
 			}

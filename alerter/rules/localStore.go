@@ -58,7 +58,7 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)
 		}
 
-		logger.Info("found rule '%s'", rule.ObjectMeta.Name)
+		logger.Infof("found rule '%s'", rule.ObjectMeta.Name)
 		r, err := toRule(rule, region)
 		if err != nil {
 			return fmt.Errorf("fromStream failed to convert rule: %w", err)

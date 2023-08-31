@@ -52,9 +52,9 @@ func (f *fakeUploader) upload(ctx context.Context) {
 			files := batch.Paths
 
 			for _, file := range files {
-				logger.Warn("Uploading file %s", file)
+				logger.Warnf("Uploading file %s", file)
 				if err := os.RemoveAll(file); err != nil {
-					logger.Error("Failed to remove file: %s", err.Error())
+					logger.Errorf("Failed to remove file: %s", err.Error())
 				}
 			}
 		}

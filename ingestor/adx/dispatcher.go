@@ -19,7 +19,7 @@ func NewDispatcher(uploaders []Uploader) *dispatcher {
 		queue:     make(chan *cluster.Batch, 10000),
 	}
 	for _, u := range uploaders {
-		logger.Info("Registering uploader for database %s", u.Database())
+		logger.Infof("Registering uploader for database %s", u.Database())
 		d.uploaders[u.Database()] = u
 	}
 	return d
@@ -64,14 +64,14 @@ func (d *dispatcher) upload(ctx context.Context) {
 		case batch := <-d.queue:
 			u, ok := d.uploaders[batch.Database]
 			if !ok {
-				logger.Error("No uploader for database %s", batch.Database)
+				logger.Errorf("No uploader for database %s", batch.Database)
 				continue
 			}
 
 			select {
 			case u.UploadQueue() <- batch:
 			default:
-				logger.Error("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(u.UploadQueue()), cap(u.UploadQueue()))
+				logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(u.UploadQueue()), cap(u.UploadQueue()))
 			}
 		}
 	}

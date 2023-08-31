@@ -92,7 +92,7 @@ func (s *service) collect(ctx context.Context) {
 					)
 					iter, err := s.kustoCli.Mgmt(ctx, s.database, stmt)
 					if err != nil {
-						logger.Error("Failed to execute cardinality counts: %s", err)
+						logger.Errorf("Failed to execute cardinality counts: %s", err)
 					} else {
 						iter.Stop()
 					}
@@ -101,7 +101,7 @@ func (s *service) collect(ctx context.Context) {
 
 			mets, err := prometheus.DefaultGatherer.Gather()
 			if err != nil {
-				logger.Error("Failed to gather metrics: %s", err)
+				logger.Errorf("Failed to gather metrics: %s", err)
 				continue
 			}
 
@@ -121,7 +121,7 @@ func (s *service) collect(ctx context.Context) {
 				}
 			}
 
-			logger.Info("Ingestion rate %0.2f samples/sec, samples ingested=%d", (currentTotal-lastCount)/60, uint64(currentTotal))
+			logger.Infof("Ingestion rate %0.2f samples/sec, samples ingested=%d", (currentTotal-lastCount)/60, uint64(currentTotal))
 			lastCount = currentTotal
 
 			// Clear the gauges to prune old metrics that may not be collected anymore.

@@ -102,7 +102,7 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 			return err
 		}
 
-		logger.Info("Loaded ingestion mapping %s", v.Name)
+		logger.Infof("Loaded ingestion mapping %s", v.Name)
 
 		s.mappings[v.Name] = sm
 	}
@@ -140,7 +140,7 @@ func (s *Syncer) EnsureTable(table string) error {
 	}
 	sb.WriteString(")")
 
-	logger.Info("Creating table %s %s", table, sb.String())
+	logger.Infof("Creating table %s %s", table, sb.String())
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
@@ -209,7 +209,7 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 
 	sb.WriteString("'")
 
-	logger.Info("Creating table %s %s", table, sb.String())
+	logger.Infof("Creating table %s %s", table, sb.String())
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
@@ -297,7 +297,7 @@ func (s *Syncer) ensureFunctions(ctx context.Context) error {
 	}
 
 	for _, fn := range functions {
-		logger.Info("Creating function %s", fn.name)
+		logger.Infof("Creating function %s", fn.name)
 		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
 		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 		if err != nil {
@@ -324,7 +324,7 @@ func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
 		return err
 	}
 
-	logger.Info("Creating ingestion batching policy: MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
+	logger.Infof("Creating ingestion batching policy: MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
 		p.MaximumBatchingTimeSpan, p.MaximumNumberOfItems, p.MaximumRawDataSizeMB)
 
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(

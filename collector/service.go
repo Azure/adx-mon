@@ -125,7 +125,7 @@ func (s *Service) Open(ctx context.Context) error {
 
 	// Add static targets
 	for _, target := range s.opts.Targets {
-		logger.Info("Adding static target %s", target)
+		logger.Infof("Adding static target %s", target)
 		s.targets = append(s.targets, target)
 	}
 
@@ -143,7 +143,7 @@ func (s *Service) Open(ctx context.Context) error {
 
 		targets := makeTargets(&pod)
 		for _, target := range targets {
-			logger.Info("Adding target %s %s", target.path(), target)
+			logger.Infof("Adding target %s %s", target.path(), target)
 			s.targets = append(s.targets, target)
 		}
 	}
@@ -162,7 +162,7 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	logger.Info("Listening at %s", s.opts.ListentAddr)
+	logger.Infof("Listening at %s", s.opts.ListentAddr)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
@@ -221,7 +221,7 @@ func (s *Service) scrapeTargets() {
 	for _, target := range targets {
 		fams, err := FetchMetrics(target.Addr)
 		if err != nil {
-			logger.Error("Failed to scrape metrics for %s: %s", target, err.Error())
+			logger.Errorf("Failed to scrape metrics for %s: %s", target, err.Error())
 			continue
 		}
 
@@ -373,7 +373,7 @@ func (s *Service) scrapeTargets() {
 		wr = s.flushBatchIfNecessary(wr)
 	}
 	if err := s.sendBatch(wr); err != nil {
-		logger.Error(err.Error())
+		logger.Errorf(err.Error())
 	}
 	wr.Timeseries = wr.Timeseries[:0]
 }
@@ -381,7 +381,7 @@ func (s *Service) scrapeTargets() {
 func (s *Service) flushBatchIfNecessary(wr *prompb.WriteRequest) *prompb.WriteRequest {
 	if len(wr.Timeseries) >= s.opts.MaxBatchSize {
 		if err := s.sendBatch(wr); err != nil {
-			logger.Error(err.Error())
+			logger.Errorf(err.Error())
 		}
 		wr.Timeseries = wr.Timeseries[:0]
 	}
@@ -407,13 +407,13 @@ func (s *Service) sendBatch(wr *prompb.WriteRequest) error {
 			}
 			sb.Write([]byte(" "))
 			for _, s := range ts.Samples {
-				logger.Debug("%s %d %f", sb.String(), s.Timestamp, s.Value)
+				logger.Debugf("%s %d %f", sb.String(), s.Timestamp, s.Value)
 			}
 
 		}
 	}
 
-	logger.Info("Sending %d timeseries to %d endpoints", len(wr.Timeseries), len(s.opts.Endpoints))
+	logger.Infof("Sending %d timeseries to %d endpoints", len(wr.Timeseries), len(s.opts.Endpoints))
 	g, gCtx := errgroup.WithContext(s.ctx)
 	for _, endpoint := range s.opts.Endpoints {
 		endpoint := endpoint
@@ -450,7 +450,7 @@ func (s *Service) OnAdd(obj interface{}) {
 	}
 
 	for _, target := range targets {
-		logger.Info("Adding target %s %s", target.path(), target)
+		logger.Infof("Adding target %s %s", target.path(), target)
 		s.targets = append(s.targets, target)
 	}
 }
@@ -491,7 +491,7 @@ func (s *Service) OnDelete(obj interface{}) {
 
 	var remainingTargets []ScrapeTarget
 	for _, target := range targets {
-		logger.Info("Removing target %s %s", target.path(), target)
+		logger.Infof("Removing target %s %s", target.path(), target)
 		for _, v := range s.targets {
 			if v.Addr == target.Addr {
 				continue

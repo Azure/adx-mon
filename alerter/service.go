@@ -103,7 +103,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 
 	if opts.MSIID != "" {
-		logger.Info("Using MSI ID=%s", opts.MSIID)
+		logger.Infof("Using MSI ID=%s", opts.MSIID)
 	}
 
 	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
@@ -116,7 +116,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 
 	if opts.CtrlCli == nil {
-		logger.Warn("No kusto endpoints provided, using fake kusto clients")
+		logger.Warnf("No kusto endpoints provided, using fake kusto clients")
 		fakeRule := &rules.Rule{
 			Namespace: "fake-namespace",
 			Name:      "FakeRule",
@@ -129,7 +129,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	}
 
 	if opts.AlertAddr == "" {
-		logger.Warn("No alert address provided, using fake alert handler")
+		logger.Warnf("No alert address provided, using fake alert handler")
 		http.Handle("/alerts", fakeAlertHandler())
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
@@ -193,7 +193,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	})
 
 	go func() {
-		logger.Info("Listening at :%d", opts.Port)
+		logger.Infof("Listening at :%d", opts.Port)
 		http.Handle("/metrics", promhttp.Handler())
 		if err := http.ListenAndServe(fmt.Sprintf(":%d", opts.Port), nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -212,7 +212,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 func (l *Alerter) Open(ctx context.Context) error {
 	l.ctx, l.closeFn = context.WithCancel(ctx)
 
-	logger.Info("Starting adx-mon alerter")
+	logger.Infof("Starting adx-mon alerter")
 
 	if err := l.ruleStore.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open rule store: %w", err)
@@ -223,7 +223,7 @@ func (l *Alerter) Open(ctx context.Context) error {
 	}
 
 	go func() {
-		logger.Info("Listening at :%d", l.opts.Port)
+		logger.Infof("Listening at :%d", l.opts.Port)
 		http.Handle("/metrics", promhttp.Handler())
 		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
