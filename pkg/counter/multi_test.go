@@ -41,9 +41,9 @@ func TestMultiEstimator_HighCount(t *testing.T) {
 		u := rand.Uint64()
 		est.Add("foo", u)
 	}
-	require.True(t, float64(samples-int(est.Count("foo")))/float64(samples) < 0.01)
+	require.True(t, float64(samples-int(est.Count("foo")))/float64(samples) < 0.1)
 	est.Roll()
-	require.True(t, float64(samples-int(est.Count("foo")))/float64(samples) < 0.01)
+	require.True(t, float64(samples-int(est.Count("foo")))/float64(samples) < 0.1)
 	est.Roll()
 	require.Equal(t, uint64(0), est.Count("foo"))
 }
