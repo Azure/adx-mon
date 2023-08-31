@@ -291,6 +291,11 @@ func (s *Syncer) ensureFunctions(ctx context.Context) error {
 		}`},
 	}
 
+	// CountCardinality needs at least 1 table to exists before it can be created due to the union * statement.
+	if err := s.EnsureTable("AdxmonIngestorMetricsCardinalityCount"); err != nil {
+		return err
+	}
+
 	for _, fn := range functions {
 		logger.Info("Creating function %s", fn.name)
 		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
