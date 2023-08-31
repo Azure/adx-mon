@@ -36,15 +36,14 @@ func TestAttributes(t *testing.T) {
 	require.Equal(t, 1, len(modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values))
 	require.Equal(t, "message", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values[0].Key)
 
-	require.Equal(t, "source", modified.ResourceLogs[0].Resource.Attributes[0].Key)
-	require.Equal(t, "hostname", modified.ResourceLogs[0].Resource.Attributes[0].Value.GetStringValue())
-	require.Equal(t, "SomeAttribute", modified.ResourceLogs[0].Resource.Attributes[1].Key)
-	require.Equal(t, "SomeValue", modified.ResourceLogs[0].Resource.Attributes[1].Value.GetStringValue())
+	require.Equal(t, "SomeAttribute", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[0].Key)
+	require.Equal(t, "SomeValue", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[0].Value.GetStringValue())
 
-	require.Equal(t, "kusto.table", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[0].Key)
-	require.Equal(t, "ATable", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[0].Value.GetStringValue())
-	require.Equal(t, "kusto.database", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Key)
-	require.Equal(t, "ADatabase", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Value.GetStringValue())
+	require.Equal(t, "kusto.table", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Key)
+	require.Equal(t, "ATable", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Value.GetStringValue())
+
+	require.Equal(t, "kusto.database", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[2].Key)
+	require.Equal(t, "ADatabase", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[2].Value.GetStringValue())
 }
 
 func BenchmarkModifyAttributes(b *testing.B) {
