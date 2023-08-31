@@ -1,56 +1,36 @@
 package logger
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
-	"github.com/fatih/color"
+	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 )
 
 const timeFormat = "2006-01-02T15:04:05.000000Z07:00"
 
-type LogLevel int
-
-const (
-	LevelError LogLevel = iota
-	LevelWarn
-	LevelInfo
-	LevelDebug
-	LevelTrace
-)
-
 var (
-	Default = NewLogger()
-	red     = color.New(color.FgRed).SprintFunc()
-	green   = color.New(color.FgGreen).SprintFunc()
-	yellow  = color.New(color.FgYellow).SprintFunc()
-	blue    = color.New(color.FgHiBlue).SprintFunc()
-	cyan    = color.New(color.FgCyan).SprintFunc()
-
-	levelDesc = map[int]string{
-		1: "ERR",
-		2: "WRN",
-		3: "INF",
-		4: "DBG",
-		5: "TRC",
-	}
-
-	descLevel = map[string]int{
-		"ERR": 1,
-		"WRN": 2,
-		"INF": 3,
-		"DBG": 4,
-		"TRC": 5,
-	}
+	levelVar = new(slog.LevelVar)
+	debugmsg = slog.StringValue("DBG")
+	infomsg  = slog.StringValue("INF")
+	warnmsg  = slog.StringValue("WRN")
+	errormsg = slog.StringValue("ERR")
 )
 
 func init() {
+	var logger *slog.Logger
+
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
-		Default.SetFormatter(&JsonFormatter{})
+		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: levelVar, ReplaceAttr: replaceAttr}))
+	} else {
+		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: levelVar, TimeFormat: timeFormat}))
 	}
+	slog.SetDefault(logger)
 
 	level := os.Getenv("LOG_LEVEL")
 	if level == "" {
@@ -59,157 +39,142 @@ func init() {
 
 	switch level {
 	case "ERROR":
-		Default.SetLevel(LevelError)
+		levelVar.Set(slog.LevelError)
 	case "WARN":
-		Default.SetLevel(LevelWarn)
+		levelVar.Set(slog.LevelWarn)
 	case "INFO":
-		Default.SetLevel(LevelInfo)
+		levelVar.Set(slog.LevelInfo)
 	case "DEBUG":
-		Default.SetLevel(LevelDebug)
+		levelVar.Set(slog.LevelDebug)
 	case "TRACE":
-		Default.SetLevel(LevelTrace)
+		levelVar.Set(slog.LevelDebug)
 	default:
 		fmt.Printf("Unknown log level: %s != [ERROR,WARN,INFO,DEBUG,TRACE]\n", level)
 	}
 }
 
-type Formatter interface {
-	Format(ts, level, format string, args ...interface{}) string
-}
-
-type TextFormatter struct{}
-
-func (t *TextFormatter) Format(ts, level, format string, args ...interface{}) string {
-	return fmt.Sprintf(fmt.Sprintf("%s %s %s", ts, level, format), args...)
-}
-
-type JsonFormatter struct{}
-
-func (t *JsonFormatter) Format(ts, level, format string, args ...interface{}) string {
-	msg, _ := json.Marshal(map[string]string{
-		"ts":  ts,
-		"lvl": level,
-		"msg": fmt.Sprintf(format, args...),
-	})
-	return string(msg)
-}
-
-// Logger is the interface for logging.
-type Logger interface {
-	Trace(format string, args ...interface{})
-	Debug(format string, args ...interface{})
-	Info(format string, args ...interface{})
-	Warn(format string, args ...interface{})
-	Error(format string, args ...interface{})
-
-	SetLevel(level LogLevel)
-	IsTrace() bool
-	IsDebug() bool
-	IsInfo() bool
-	IsWarn() bool
-	SetFormatter(formatter Formatter)
-}
-
-func NewLogger() Logger {
-	l := &logger{
-		formatter: &TextFormatter{},
-	}
-	l.SetLevel(LevelInfo)
-	return l
-
-}
-
-type logger struct {
-	logLevel  LogLevel
-	formatter Formatter
-}
-
-func (l *logger) SetFormatter(formatter Formatter) {
-	l.formatter = formatter
-}
-
-func (l *logger) Trace(format string, args ...interface{}) {
-	if !l.IsTrace() {
-		return
-	}
-
-	l.level(cyan("TRC"), format, args...)
-}
-
-func (l *logger) Debug(format string, args ...interface{}) {
-	if !l.IsDebug() {
-		return
-	}
-
-	l.level(blue("DBG"), format, args...)
-}
-
-func (l *logger) Info(format string, args ...interface{}) {
-	if !l.IsInfo() {
-		return
-	}
-
-	l.level(green("INF"), format, args...)
-}
-
-func (l *logger) Warn(format string, args ...interface{}) {
-	if !l.IsWarn() {
-		return
-	}
-
-	l.level(yellow("WRN"), format, args...)
-}
-
-func (l *logger) Error(format string, args ...interface{}) {
-	if !l.IsError() {
-		return
-	}
-
-	l.level(red("ERR"), format, args...)
-}
-
-func (l *logger) level(level, format string, args ...interface{}) {
-	ts := time.Now().UTC().Format(timeFormat)
-	msg := l.formatter.Format(ts, level, format, args...)
-	fmt.Println(msg)
-}
-
-func (l *logger) SetLevel(lvl LogLevel) { l.logLevel = lvl }
-func (l *logger) IsTrace() bool         { return l.logLevel >= LevelTrace }
-func (l *logger) IsDebug() bool         { return l.logLevel >= LevelDebug }
-func (l *logger) IsInfo() bool          { return l.logLevel >= LevelInfo }
-func (l *logger) IsWarn() bool          { return l.logLevel >= LevelWarn }
-func (l *logger) IsError() bool         { return l.logLevel >= LevelError }
-
-func IsTrace() bool {
-	return Default.IsTrace()
-}
-
-func Tracef(format string, args ...interface{}) {
-	Default.Trace(format, args...)
+func SetLevel(level slog.Level) {
+	levelVar.Set(level)
 }
 
 func IsDebug() bool {
-	return Default.IsDebug()
+	return slog.Default().Enabled(context.Background(), slog.LevelDebug)
 }
 
+func IsInfo() bool {
+	return slog.Default().Enabled(context.Background(), slog.LevelInfo)
+}
+
+func IsWarn() bool {
+	return slog.Default().Enabled(context.Background(), slog.LevelWarn)
+}
+
+var (
+	Debug = slog.Debug
+	Info  = slog.Info
+	Warn  = slog.Warn
+	Error = slog.Error
+	// Fatal defined below
+)
+
+// For these wrappers, we need to capture the caller's PC to allow source line functionality to work.
+// This does not add any allocs and does not affect performance.
+
 func Debugf(format string, args ...interface{}) {
-	Default.Debug(format, args...)
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
+	r := slog.NewRecord(time.Now(), slog.LevelDebug, fmt.Sprintf(format, args...), pcs[0])
+	_ = logger.Handler().Handle(context.Background(), r)
 }
 
 func Infof(format string, args ...interface{}) {
-	Default.Info(format, args...)
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelInfo) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, fmt.Sprintf(format, args...), pcs[0])
+	_ = logger.Handler().Handle(context.Background(), r)
 }
 
 func Warnf(format string, args ...interface{}) {
-	Default.Warn(format, args...)
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelWarn) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
+	r := slog.NewRecord(time.Now(), slog.LevelWarn, fmt.Sprintf(format, args...), pcs[0])
+	_ = logger.Handler().Handle(context.Background(), r)
 }
 
 func Errorf(format string, args ...interface{}) {
-	Default.Error(format, args...)
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelError) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
+	r := slog.NewRecord(time.Now(), slog.LevelError, fmt.Sprintf(format, args...), pcs[0])
+	_ = logger.Handler().Handle(context.Background(), r)
+}
+
+func Fatal(msg string, attrs ...slog.Attr) {
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelError) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
+	r := slog.NewRecord(time.Now(), slog.LevelError, msg, pcs[0])
+	r.AddAttrs(attrs...)
+	_ = logger.Handler().Handle(context.Background(), r)
+	os.Exit(1)
 }
 
 func Fatalf(format string, args ...interface{}) {
-	Default.Error(format, args...)
+	logger := slog.Default()
+	if !logger.Enabled(context.Background(), slog.LevelError) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(2, pcs[:]) // skip [Callers, Infof]
+	r := slog.NewRecord(time.Now(), slog.LevelError, fmt.Sprintf(format, args...), pcs[0])
+	_ = logger.Handler().Handle(context.Background(), r)
 	os.Exit(1)
+}
+
+func replaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if a.Key == slog.TimeKey {
+		a.Key = "ts"
+		a.Value = slog.AnyValue(a.Value.Any().(time.Time).UTC().Format(timeFormat))
+	}
+	if a.Key == slog.LevelKey {
+		a.Key = "lvl"
+
+		level := a.Value.Any().(slog.Level)
+		switch {
+		case level < slog.LevelInfo:
+			a.Value = debugmsg
+		case level < slog.LevelWarn:
+			a.Value = infomsg
+		case level < slog.LevelError:
+			a.Value = warnmsg
+		default:
+			a.Value = errormsg
+		}
+	}
+
+	return a
 }

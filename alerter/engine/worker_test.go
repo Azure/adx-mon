@@ -12,7 +12,6 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,7 +28,6 @@ const (
 
 func TestWorker_TagsMismatch(t *testing.T) {
 	kcli := &fakeKustoClient{
-		log: logger.Default,
 		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
 			t.Logf("Query should not be called")
 			t.Fail()
@@ -75,7 +73,6 @@ func TestWorker_TagsMismatch(t *testing.T) {
 func TestWorker_TagsAtLeastOne(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		log: logger.Default,
 		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
@@ -122,7 +119,6 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 func TestWorker_TagsNoneMatch(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		log: logger.Default,
 		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
@@ -169,7 +165,6 @@ func TestWorker_TagsNoneMatch(t *testing.T) {
 func TestWorker_TagsMultiple(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		log: logger.Default,
 		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
@@ -238,7 +233,6 @@ func TestWorker_TagsMultiple(t *testing.T) {
 func TestWorker_ServerError(t *testing.T) {
 
 	kcli := &fakeKustoClient{
-		log:      logger.Default,
 		queryErr: fmt.Errorf("Request aborted due to an internal service error"),
 	}
 
@@ -273,7 +267,6 @@ func TestWorker_ServerError(t *testing.T) {
 
 func TestWorker_ConnectionReset(t *testing.T) {
 	kcli := &fakeKustoClient{
-		log:      logger.Default,
 		queryErr: kerrors.ES(kerrors.OpQuery, kerrors.KHTTPError, "Post \"https://kusto.fqdn/v2/rest/query\": read tcp 1.2.3.4:56140->5.6.7.8:443: read: connection reset by peer"),
 	}
 
@@ -308,7 +301,6 @@ func TestWorker_ConnectionReset(t *testing.T) {
 
 func TestWorker_ContextTimeout(t *testing.T) {
 	kcli := &fakeKustoClient{
-		log: logger.Default,
 		// fakeKustoClient does not evaluate if context is done, so we need to simulate the error
 		queryErr: context.DeadlineExceeded,
 	}
@@ -347,7 +339,6 @@ func TestWorker_ContextTimeout(t *testing.T) {
 
 func TestWorker_RequestInvalid(t *testing.T) {
 	kcli := &fakeKustoClient{
-		log:      logger.Default,
 		queryErr: kerrors.HTTP(kerrors.OpQuery, "Bad Request", http.StatusBadRequest, io.NopCloser(bytes.NewBufferString("query")), "Request is invalid and cannot be processed: Semantic error: SEM0001: Arithmetic expression cannot be carried-out between DateTime and StringBuffer"),
 	}
 
@@ -384,7 +375,6 @@ func TestWorker_RequestInvalid(t *testing.T) {
 
 func TestWorker_UnknownDB(t *testing.T) {
 	kcli := &fakeKustoClient{
-		log:      logger.Default,
 		queryErr: &UnknownDBError{"fakedb"},
 	}
 
@@ -421,7 +411,6 @@ func TestWorker_UnknownDB(t *testing.T) {
 
 func TestWorker_MissingColumnsFromResults(t *testing.T) {
 	kcli := &fakeKustoClient{
-		log:      logger.Default,
 		queryErr: &NotificationValidationError{"invalid result"},
 	}
 

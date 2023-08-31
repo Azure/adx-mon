@@ -114,16 +114,12 @@ func (lh *lintAlertHandler) Handler() http.Handler {
 	})
 }
 
-type log interface {
-	Info(format string, args ...interface{})
-}
-
 func (lh *lintAlertHandler) HasFailedQueries() bool {
 	return lh.hasFailedQueries
 }
 
-func (lh *lintAlertHandler) Log(logger log) {
+func (lh *lintAlertHandler) Log() {
 	for k, v := range lh.alertCount {
-		logger.Info("Alert %s was sent %d times", k, v)
+		logger.Infof("Alert %s was sent %d times", k, v)
 	}
 }

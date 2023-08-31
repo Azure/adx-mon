@@ -138,7 +138,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 		Timeout:            30 * time.Second,
 	})
 	if err != nil {
-		logger.Fatalf("prom client: %w", err)
+		logger.Fatalf("prom client: %v", err)
 	}
 
 	for {
