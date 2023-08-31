@@ -77,14 +77,14 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				},
 			}
 		}
-		httpClient.Transport = metrics.NewRoundTripper(httpClient.Transport)
+		httpClient.Transport = metrics.NewRoundTripper(metrics.CollectorSubsystem, httpClient.Transport)
 
 		// Create our gRPC client used to upgrade from HTTP1 to HTTP2 via gRPC and proxy to the OTLP endpoint
 		rpcClients[endpoint] = logsv1connect.NewLogsServiceClient(httpClient, grpcEndpoint, connect_go.WithGRPC())
 	}
 	bufs := pool.NewBytes(1024 * 1024)
 
-	return metrics.MeasureHandler(func(w http.ResponseWriter, r *http.Request) {
+	return metrics.HandlerFuncRecorder(metrics.CollectorSubsystem, func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
 		switch r.Header.Get("Content-Type") {

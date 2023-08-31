@@ -339,15 +339,22 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		peerHealthy := a.health.IsPeerHealthy(owner)
 		isOwned := strconv.FormatBool(owner == a.hostname)
 
+<<<<<<< HEAD
 		if directUpload || owner == a.hostname || !peerHealthy || a.transferDisabled {
 			metrics.FileUploadBytes.WithLabelValues(k).Observe(float64(batchSize))
 			metrics.FileUploadAge.WithLabelValues(k).Observe(maxAge.Seconds())
 			metrics.FileUploadTotal.WithLabelValues(k, reason, isOwned).Inc()
+=======
+		if directUpload || owner == a.hostname || !peerHealthy {
+			metrics.SegmentUploadBytes.WithLabelValues(k).Observe(float64(batchSize))
+			metrics.SegmentUploadAge.WithLabelValues(k).Observe(maxAge.Seconds())
+			metrics.SegmentUploadTotal.WithLabelValues(k, reason, isOwned).Inc()
+>>>>>>> 9b5163e (address all comments)
 			owned = append(owned, batch)
 		} else {
-			metrics.FileTransferBytes.WithLabelValues(k).Observe(float64(batchSize))
-			metrics.FileTransferAge.WithLabelValues(k).Observe(maxAge.Seconds())
-			metrics.FileTransferTotal.WithLabelValues(k, reason, isOwned).Inc()
+			metrics.SegmentTransferBytes.WithLabelValues(k).Observe(float64(batchSize))
+			metrics.SegmentTransferAge.WithLabelValues(k).Observe(maxAge.Seconds())
+			metrics.SegmentTransferTotal.WithLabelValues(k, reason, isOwned).Inc()
 			notOwned = append(notOwned, batch)
 		}
 	}

@@ -16,7 +16,7 @@ import (
 func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 	testServer := newTestServer()
 	client := testServer.Client()
-	client.Transport = NewRoundTripper(client.Transport)
+	client.Transport = NewRoundTripper("fake-system", client.Transport)
 
 	testCases := []struct {
 		name             string
@@ -86,7 +86,7 @@ func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 }
 
 func newTestServer() *httptest.Server {
-	f := http.HandlerFunc(MeasureHandler(func(w http.ResponseWriter, r *http.Request) {
+	f := http.HandlerFunc(HandlerFuncRecorder("fake-system", func(w http.ResponseWriter, r *http.Request) {
 		response := r.URL.Query().Get("response")
 		statusCode := r.URL.Query().Get("statusCode")
 		shouldPanic := r.URL.Query().Get("panic")

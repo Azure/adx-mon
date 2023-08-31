@@ -339,8 +339,8 @@ func realMain(ctx *cli.Context) error {
 
 	logger.Infof("Listening at %s", ":9090")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/transfer", metrics.MeasureHandler(svc.HandleTransfer))
-	mux.HandleFunc("/receive", metrics.MeasureHandler(svc.HandleReceive))
+	mux.HandleFunc("/transfer", metrics.HandlerFuncRecorder(metrics.IngestorSubsystem, svc.HandleTransfer))
+	mux.HandleFunc("/receive", metrics.HandlerFuncRecorder(metrics.IngestorSubsystem, svc.HandleReceive))
 	mux.HandleFunc(logsv1connect.LogsServiceExportProcedure, svc.HandleLogs)
 
 	logger.Infof("Metrics Listening at %s", ":9091")
@@ -451,7 +451,7 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	kcsb.WithDefaultAzureCredential()
 
 	httpClient := &http.Client{
-		Transport: metrics.NewRoundTripper(http.DefaultTransport),
+		Transport: metrics.NewRoundTripper(metrics.IngestorSubsystem, http.DefaultTransport),
 	}
 	return kusto.New(kcsb, kusto.WithHttpClient(httpClient))
 }
