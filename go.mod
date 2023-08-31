@@ -10,9 +10,11 @@ require (
 	github.com/cespare/xxhash v1.1.0
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
+	github.com/go-test/deep v1.1.0
 	github.com/golang/snappy v0.0.4
 	github.com/klauspost/compress v1.16.7
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
+	github.com/lithammer/dedent v1.1.0
 	github.com/lmittmann/tint v1.0.1
 	github.com/mattn/go-isatty v0.0.19
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7

@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/go-test/deep"
 )
 
 type testResult struct {
@@ -30,7 +32,7 @@ type Client interface {
 
 type Evaluator struct {
 	kustoClient Client
-	rules       []*rules.Rule
+	rules       map[string]*rules.Rule
 	tests       []*Test
 	schema      storage.SchemaMapping
 }
@@ -51,5 +53,44 @@ func (e *Evaluator) RunTests() []*testResult {
 }
 
 func (e *Evaluator) runTest(test *Test) *testResult {
+	curTime := time.Time{}
+	for _, expected := range test.expectedAlerts {
+		qc, err := engine.NewQueryContext(e.rules[expected.Name], curTime.Add(expected.EvalAt), "local")
+		if err != nil {
+			return &testResult{
+				name:    test.name,
+				failed:  true,
+				message: fmt.Sprintf("failed to create query context: %s", err),
+			}
+		}
+		alerts, _, err := e.kustoClient.Query(context.Background(), qc)
+		if err != nil {
+			return &testResult{
+				name:    test.name,
+				failed:  true,
+				message: fmt.Sprintf("failed to execute query: %s", err),
+			}
+		}
+		if len(alerts) != 1 {
+			return &testResult{
+				name:    test.name,
+				failed:  true,
+				message: fmt.Sprintf("expected 1 alert, got %d", len(alerts)),
+			}
+		}
+
+		if diff := deep.Equal(); len(diff) > 0 {
+			return &testResult{
+				name:    test.name,
+				failed:  true,
+				message: fmt.Sprintf("expected alert %s, got %s\n\ndiff: %s", expected.Alert, alerts[0], diff),
+			}
+		}
+		return &testResult{
+			name:   test.name,
+			failed: true,
+			// message: fmt.Sprintf("expected alert name %s, got %s", expected.Alert.Name, alerts[0].Name),
+		}
+	}
 	return nil
 }

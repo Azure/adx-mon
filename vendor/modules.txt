@@ -188,6 +188,9 @@ github.com/go-openapi/jsonreference/internal
 # github.com/go-openapi/swag v0.22.4
 ## explicit; go 1.18
 github.com/go-openapi/swag
+# github.com/go-test/deep v1.1.0
+## explicit; go 1.16
+github.com/go-test/deep
 # github.com/gofrs/uuid v4.2.0+incompatible
 ## explicit
 github.com/gofrs/uuid
@@ -265,6 +268,9 @@ github.com/klauspost/pgzip
 ## explicit; go 1.11
 github.com/kylelemons/godebug/diff
 github.com/kylelemons/godebug/pretty
+# github.com/lithammer/dedent v1.1.0
+## explicit
+github.com/lithammer/dedent
 # github.com/lmittmann/tint v1.0.1
 ## explicit; go 1.21
 github.com/lmittmann/tint

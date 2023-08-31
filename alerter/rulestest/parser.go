@@ -18,18 +18,24 @@ var (
 	defaultMapping = storage.NewMetricsSchema()
 )
 
+type ExpectedAlert struct {
+	Name   string
+	EvalAt time.Duration `yaml:"eval_at"`
+	Alert  *alert.Alert
+}
+
 type TestInput struct {
 	Name           string
 	Values         []string
 	Interval       time.Duration
-	ExpectedAlerts []*alert.Alert
+	ExpectedAlerts []ExpectedAlert `yaml:"expected_alerts"`
 }
 
 type Test struct {
 	name           string
 	timeseries     map[string][]Timeseries
 	interval       time.Duration
-	expectedAlerts []*alert.Alert
+	expectedAlerts []ExpectedAlert
 }
 
 type Timeseries struct {
@@ -40,16 +46,21 @@ type Timeseries struct {
 
 func (t *Timeseries) seriesID() uint64 {
 	var buf strings.Builder
+	sortedLabels := make([]string, 0, len(t.labels))
+
 	for k, v := range t.labels {
-		buf.WriteString(fmt.Sprintf("%s:%s,", k, v))
+		sortedLabels = append(sortedLabels, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	slices.Sort(sortedLabels)
+	for _, v := range sortedLabels {
+		buf.WriteString(fmt.Sprintf("%v,", v))
 	}
 	return xxhash.Sum64String(buf.String())
 }
 
 func (t *Timeseries) stringFor(startTime time.Time, interval time.Duration, liftedLabels []string) (string, error) {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\tdatetime(%s),", startTime.Format(time.RFC3339)))
-
 	seriesID := t.seriesID()
 	liftedMap, labelMap := t.separateLabels(liftedLabels)
 
@@ -63,10 +74,10 @@ func (t *Timeseries) stringFor(startTime time.Time, interval time.Duration, lift
 			continue
 		}
 		now := startTime.Add(interval * time.Duration(i))
-		sb.WriteString(fmt.Sprintf("\tdatetime(%s), %d, dynamic(%s), %f,", now.Format(time.RFC3339), seriesID, string(o), value.Value))
+		sb.WriteString(fmt.Sprintf("\tdatetime(%s), %#x, dynamic(%s), %f,", now.Format(time.RFC3339), seriesID, string(o), value.Value))
 
 		for _, key := range liftedLabels {
-			sb.WriteString(fmt.Sprintf("%s,", liftedMap[key]))
+			sb.WriteString(fmt.Sprintf("\"%s\",", liftedMap[key]))
 		}
 		sb.WriteString("\n")
 	}
@@ -87,7 +98,7 @@ func (t *Timeseries) separateLabels(liftedLabels []string) (map[string]string, m
 	return liftedMap, labelMap
 }
 
-func Parse(raw string) (*Test, error) {
+func parse(raw string) (*Test, error) {
 	testInput := TestInput{}
 	err := yaml.Unmarshal([]byte(raw), &testInput)
 	if err != nil {
@@ -120,13 +131,13 @@ func Parse(raw string) (*Test, error) {
 		test.timeseries[t.metric] = append(test.timeseries[t.metric], t)
 	}
 
-	if err := test.Validate(); err != nil {
+	if err := test.validate(); err != nil {
 		return nil, fmt.Errorf("failed to validate test: %w", err)
 	}
 	return test, nil
 }
 
-func (t *Test) Validate() error {
+func (t *Test) validate() error {
 	if t.name == "" {
 		return fmt.Errorf("missing name")
 	}
@@ -135,6 +146,9 @@ func (t *Test) Validate() error {
 	}
 	if len(t.timeseries) == 0 {
 		return fmt.Errorf("missing values")
+	}
+	if len(t.expectedAlerts) == 0 {
+		return fmt.Errorf("missing expected alerts")
 	}
 	for metric, ts := range t.timeseries {
 		if len(ts) == 0 {
@@ -149,23 +163,23 @@ func (t *Test) Validate() error {
 			}
 		}
 	}
+	for i, expectedAlert := range t.expectedAlerts {
+		if expectedAlert.Name == "" {
+			return fmt.Errorf("missing name on expected alert %d", i)
+		}
+		if expectedAlert.EvalAt == 0 {
+			return fmt.Errorf("evalAt is either missing or 0 on expected alert %d. evalAt must be positive. It is the time after the start of the input series at which the alertrule will be evaluated", i)
+		}
+	}
 	return nil
 }
 
-// datatable(Date:datetime, Event:string, MoreData:dynamic) [
-//     datetime(1910-06-11), "Born", dynamic({"key1":"value1", "key2":"value2"}),
-//     datetime(1930-01-01), "Enters Ecole Navale", dynamic({"key1":"value3", "key2":"value4"}),
-//     datetime(1953-01-01), "Published first book", dynamic({"key1":"value5", "key2":"value6"}),
-//     datetime(1997-06-25), "Died", dynamic({"key1":"value7", "key2":"value8"}),
-// ]
-
-func (t *Test) GetDatatableStmt(liftedLabels []string) (string, error) {
+func (t *Test) getDatatableStmt(liftedLabels []string) (string, error) {
 	var sb strings.Builder
-	startTime := time.Now()
-	// input: `CPUContainerSpecShares{Underlay: "cx-test1", Overlay: "cx-test2", ClusterID: "0000000000"} 0x15 1+1x20`,
+	startTime := time.Time{}
 	schemaStr := getSchemaStr(liftedLabels)
 	for metric, ts := range t.timeseries {
-		sb.WriteString(fmt.Sprintf("let %s datatable(%s) [\n", metric, schemaStr))
+		sb.WriteString(fmt.Sprintf("let %s = datatable(%s) [\n", metric, schemaStr))
 		for _, v := range ts {
 			tsOutput, err := v.stringFor(startTime, t.interval, liftedLabels)
 			if err != nil {
@@ -180,12 +194,13 @@ func (t *Test) GetDatatableStmt(liftedLabels []string) (string, error) {
 
 func getSchemaStr(extraStringLabels []string) string {
 	var sb strings.Builder
-	for _, mapping := range defaultMapping {
-		sb.WriteString(fmt.Sprintf("%s:%s,", mapping.Column, mapping.DataType))
+	sb.WriteString(fmt.Sprintf("%s:%s", defaultMapping[0].Column, defaultMapping[0].DataType))
+
+	for _, mapping := range defaultMapping[1:] {
+		sb.WriteString(fmt.Sprintf(", %s:%s", mapping.Column, mapping.DataType))
 	}
 	for _, label := range extraStringLabels {
-		sb.WriteString(fmt.Sprintf("%s:string,", label))
+		sb.WriteString(fmt.Sprintf(", %s:string", label))
 	}
-	// TODO: don't write comma out if no extra labels
 	return sb.String()
 }
