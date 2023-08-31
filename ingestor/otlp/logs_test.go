@@ -69,10 +69,10 @@ func TestGroupbyKustoTable(t *testing.T) {
 		switch table {
 		case "ATable":
 			require.Len(t, logs, 2)
-			require.Equal(t, 3, len(logs[0].Attributes))
+			require.Equal(t, 2, len(logs[0].Attributes))
 		case "BTable":
 			require.Len(t, logs, 1)
-			require.Equal(t, 3, len(logs[0].Attributes))
+			require.Equal(t, 2, len(logs[0].Attributes))
 		default:
 			require.Fail(t, "unknown table")
 		}
