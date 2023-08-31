@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -31,6 +33,9 @@ type Store interface {
 
 	// WriteTimeSeries writes a batch of time series to the Store.
 	WriteTimeSeries(ctx context.Context, database string, ts []prompb.TimeSeries) error
+
+	// WriteOTLPLogs writes a batch of logs to the Store.
+	WriteOTLPLogs(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error
 
 	// IsActiveSegment returns true if the given path is an active segment.
 	IsActiveSegment(path string) bool
@@ -180,6 +185,38 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error {
+	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	defer csvWriterPool.Put(enc)
+
+	key := bytesPool.Get(256)
+	defer bytesPool.Put(key)
+
+	if logger.IsDebug() {
+		logger.Debug("Store received %d logs for %s.%s", len(logs), database, table)
+	}
+
+	key = fmt.Appendf(key[:0], "%s_%s", database, table)
+
+	wal, err := s.GetWAL(ctx, key)
+	if err != nil {
+		return err
+	}
+
+	metrics.SamplesStored.WithLabelValues(table).Add(float64(len(logs)))
+
+	enc.Reset()
+	if err := enc.MarshalCSV(logs); err != nil {
+		return err
+	}
+
+	if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		return err
+	}
+
 	return nil
 }
 

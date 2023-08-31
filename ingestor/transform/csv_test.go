@@ -158,15 +158,9 @@ func TestMarshalCSV_OTLPLog(t *testing.T) {
             "resource": {
                 "attributes": [
                     {
-                        "key": "RPTenant",
+                        "key": "source",
                         "value": {
-                            "stringValue": "eastus"
-                        }
-                    },
-					{
-                        "key": "UnderlayName",
-                        "value": {
-                            "stringValue": "hcp-underlay-eastus-cx-test"
+                            "stringValue": "hostname"
                         }
                     }
                 ],
@@ -222,9 +216,10 @@ func TestMarshalCSV_OTLPLog(t *testing.T) {
 	var b bytes.Buffer
 	w := NewCSVWriter(&b, nil)
 
-	err := w.MarshalCSV(&log)
+	err := w.MarshalCSV(log.ResourceLogs[0].ScopeLogs[0].LogRecords)
+	// err := w.marshalLog(log.ResourceLogs[0].ScopeLogs[0].LogRecords)
 	require.NoError(t, err)
-	require.Equal(t, `2022-11-22T10:22:04.001Z,2022-11-22T10:22:04.001Z,,,Error,SEVERITY_NUMBER_ERROR,"{""msg"":""something happened""}","{""RPTenant"":""eastus"",""UnderlayName"":""hcp-underlay-eastus-cx-test""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
+	require.Equal(t, `2022-11-22T10:22:04.001Z,2022-11-22T10:22:04.001Z,,,Error,SEVERITY_NUMBER_ERROR,"{""msg"":""something happened""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
 `, b.String())
 }
 
@@ -299,7 +294,7 @@ func BenchmarkMarshalCSV_OTLPLog(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		w.MarshalCSV(&log)
+		w.MarshalCSV(log.ResourceLogs[0].ScopeLogs[0].LogRecords)
 	}
 }
 

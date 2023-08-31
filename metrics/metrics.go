@@ -58,6 +58,13 @@ var (
 		Help:      "Counter of metrics droopped for an ingestor instance",
 	}, []string{"metric"})
 
+	LogsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "logs_received",
+		Help:      "Counter of the number of logs received",
+	}, []string{"database", "table"})
+
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,

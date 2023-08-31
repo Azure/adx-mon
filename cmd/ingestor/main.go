@@ -19,9 +19,8 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
-	promingest "github.com/Azure/adx-mon/ingestor"
+	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
-	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
@@ -60,6 +59,7 @@ func main() {
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> [DEPRECATED]"},
 			&cli.StringFlag{Name: "metrics-kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
+			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
 			&cli.BoolFlag{Name: "disable-peer-discovery", Usage: "Disable peer discovery and segment transfers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
@@ -279,17 +279,22 @@ func realMain(ctx *cli.Context) error {
 		defer client.Close()
 	}
 
-	uploader, err := newUploader(client, database, storageDir, concurrentUploads, defaultMapping)
+	metricsUploader, err := newUploader(client, database, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
 		logger.Fatal("Failed to create uploader: %s", err)
 	}
-	uploadDispatcher := adx.NewDispatcher([]adx.Uploader{uploader})
+	otlpLogsUploaders, err := otlpLogUploaders(ctx.StringSlice("logs-kusto-endpoints"), storageDir, concurrentUploads)
+	if err != nil {
+		logger.Fatal("Failed to create uploaders for OTLP logs: %s", err)
+	}
+
+	uploadDispatcher := adx.NewDispatcher(append(otlpLogsUploaders, metricsUploader))
 	if err := uploadDispatcher.Open(svcCtx); err != nil {
 		logger.Fatal("Failed to start upload dispatcher: %s", err)
 	}
 	defer uploadDispatcher.Close()
 
-	svc, err := promingest.NewService(promingest.ServiceOpts{
+	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:               k8scli,
 		MetricsKustoCli:      client,
 		MetricsDatabase:      database,
@@ -328,7 +333,7 @@ func realMain(ctx *cli.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/receive", svc.HandleReceive)
-	mux.Handle(logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer()))
+	mux.HandleFunc(logsv1connect.LogsServiceExportProcedure, svc.HandleLogs)
 
 	logger.Info("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()
@@ -468,6 +473,27 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 		return "", "", fmt.Errorf("-db is required")
 	}
 	return addr, database, nil
+}
+
+func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads int) ([]adx.Uploader, error) {
+	var uploaders []adx.Uploader
+	for _, endpoint := range endpoints {
+		addr, database, err := parseKustoEndpoint(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		client, err := newKustoClient(addr)
+		if err != nil {
+			return nil, err
+		}
+		uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
+			StorageDir:        storageDir,
+			Database:          database,
+			ConcurrentUploads: concurrentUploads,
+			DefaultMapping:    storage.DefaultLogsMapping,
+		}))
+	}
+	return uploaders, nil
 }
 
 func newLogger() *log.Logger {
