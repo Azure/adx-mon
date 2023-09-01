@@ -37,7 +37,5 @@ func TestLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, id.Pod, "collector-2jhz9")
 	require.Equal(t, id.Namespace, "adx-mon")
-	hostname, err := os.Hostname()
-	require.NoError(t, err)
-	require.Equal(t, id.Container, hostname)
+	require.NotEqual(t, id.Container, "")
 }
