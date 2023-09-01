@@ -55,7 +55,6 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 		// Skip labels that will be dropped
 		var skip bool
 		for metRe, labelRe := range s.DropLabels {
-			println(name, metRe.MatchString(name), l.GetName(), labelRe.MatchString(l.GetName()))
 			if metRe.MatchString(name) && labelRe.MatchString(l.GetName()) {
 				skip = true
 				break
