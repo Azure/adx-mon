@@ -37,9 +37,17 @@ func (r *RemoteWriteProxy) Write(ctx context.Context, _ string, wr prompb.WriteR
 
 	g, gCtx := errgroup.WithContext(ctx)
 	for i := range r.Endpoints {
-		g.Go(func() error {
-			return r.Client.Write(gCtx, r.Endpoints[i], &wr)
-		})
+		for len(wr.Timeseries) > 0 {
+			var batch prompb.WriteRequest
+			for j := 0; j < r.MaxBatchSize && len(wr.Timeseries) > 0; j++ {
+				batch.Timeseries = append(batch.Timeseries, wr.Timeseries[0])
+				wr.Timeseries = wr.Timeseries[1:]
+			}
+			logger.Infof("Sending %d timeseries to %s", len(batch.Timeseries), r.Endpoints[i])
+			g.Go(func() error {
+				return r.Client.Write(gCtx, r.Endpoints[i], &batch)
+			})
+		}
 	}
 	return g.Wait()
 }

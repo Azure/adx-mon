@@ -200,6 +200,10 @@ func TestRequestTransformer_TransformTimeSeries_AddLabels(t *testing.T) {
 	ts := prompb.TimeSeries{
 		Labels: []prompb.Label{
 			{
+				Name:  []byte("region"),
+				Value: []byte("eastus"),
+			},
+			{
 				Name:  []byte("__name__"),
 				Value: []byte("cpu"),
 			},
@@ -208,7 +212,7 @@ func TestRequestTransformer_TransformTimeSeries_AddLabels(t *testing.T) {
 
 	res := f.TransformTimeSeries(ts)
 
-	require.Equal(t, 4, len(res.Labels))
+	require.Equal(t, 5, len(res.Labels))
 	require.Equal(t, []byte("__name__"), res.Labels[0].Name)
 	require.Equal(t, []byte("cpu"), res.Labels[0].Value)
 	require.Equal(t, []byte("adxmon_container"), res.Labels[1].Name)
@@ -217,6 +221,9 @@ func TestRequestTransformer_TransformTimeSeries_AddLabels(t *testing.T) {
 	require.Equal(t, []byte("namespace"), res.Labels[2].Value)
 	require.Equal(t, []byte("adxmon_pod"), res.Labels[3].Name)
 	require.Equal(t, []byte("pod"), res.Labels[3].Value)
+	require.Equal(t, []byte("region"), res.Labels[4].Name)
+	require.Equal(t, []byte("eastus"), res.Labels[4].Value)
+
 }
 
 func BenchmarkRequestTransformer_TransformTimeSeries(b *testing.B) {
