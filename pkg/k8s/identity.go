@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/dgrijalva/jwt-go"
 )
@@ -25,13 +26,8 @@ type Metadata struct {
 
 // LoadIdentity loads the identity from the specified path.
 func LoadIdentity(path string) (Metadata, error) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return Instance, err
-	}
-
 	m := Metadata{
-		Container: hostname,
+		Container: filepath.Base(os.Args[0]),
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
