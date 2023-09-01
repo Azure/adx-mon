@@ -166,19 +166,25 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
+	// Add this pods identity for all metrics received
+	addLabels := map[string]string{
+		"adxmon_namespace": k8s.Instance.Namespace,
+		"adxmon_pod":       k8s.Instance.Pod,
+		"adxmon_container": k8s.Instance.Container,
+	}
+
+	// Add the other static labels
+	for k, v := range s.opts.AddLabels {
+		addLabels[k] = v
+	}
+
 	logger.Infof("Listening at %s", s.opts.ListentAddr)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		DropLabels:  s.opts.DropLabels,
 		DropMetrics: s.opts.DropMetrics,
-
-		// Add this pods identity for all metrics received
-		AddLabels: map[string]string{
-			"adxmon_namespace": k8s.Instance.Namespace,
-			"adxmon_pod":       k8s.Instance.Pod,
-			"adxmon_container": k8s.Instance.Container,
-		},
+		AddLabels:   addLabels,
 		RequestWriter: &promremote.RemoteWriteProxy{
 			Client:       s.remoteClient,
 			Endpoints:    s.opts.Endpoints,
