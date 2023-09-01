@@ -4,93 +4,139 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
+	"text/template"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/go-test/deep"
 )
 
-type testResult struct {
-	name    string
-	failed  bool
-	message string
-}
-
-func (r *testResult) String() string {
-	if r.failed {
-		return fmt.Sprintf("Test %s failed: %s\n", r.name, r.message)
-	}
-	return fmt.Sprintf("%s: ok\n", r.name)
-}
-
 type Client interface {
-	Query(ctx context.Context, qc *engine.QueryContext) ([]*alert.Alert, int, error)
+	Query(ctx context.Context, qc *engine.QueryContext) ([]*alert.Alert, error)
+}
+
+type EvaluatorOpts struct {
 }
 
 type Evaluator struct {
 	kustoClient Client
 	rules       map[string]*rules.Rule
 	tests       []*Test
-	schema      storage.SchemaMapping
 }
 
-func (e *Evaluator) RunAndPrintTests(w io.Writer) {
-	results := e.RunTests()
-	for _, result := range results {
-		fmt.Fprint(w, result.String())
+func NewEvaluator(client Client, testRules []*rules.Rule, tests []*Test) (*Evaluator, error) {
+	ruleMap := make(map[string]*rules.Rule, len(testRules))
+	for _, rule := range testRules {
+		if _, ok := ruleMap[rule.Name]; ok {
+			return nil, fmt.Errorf("duplicate rule name: %q", rule.Name)
+		}
+		ruleMap[rule.Name] = rule
 	}
+	return &Evaluator{
+		kustoClient: client,
+		rules:       ruleMap,
+		tests:       tests,
+	}, nil
 }
 
-func (e *Evaluator) RunTests() []*testResult {
-	var results []*testResult
+func (e *Evaluator) RunAndPrintTests(w io.Writer) error {
+	results := e.runTests()
+	failures := 0
+
+	t := template.Must(template.New("test").Parse(resultsTemplateStr))
+	err := t.Execute(w, results)
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		if result.Failed() {
+			failures++
+		}
+	}
+
+	if failures > 0 {
+		return fmt.Errorf("%d tests failed out of %d", failures, len(results))
+	}
+	return nil
+}
+
+func (e *Evaluator) ruleForTest(name string, test *Test) (*rules.Rule, error) {
+	rule, ok := e.rules[name]
+	if !ok {
+		return nil, fmt.Errorf("rule \"%q\" not found", name)
+	}
+
+	letStatements, err := test.getDatatableStmt(nil)
+	if err != nil {
+		return nil, err
+	}
+	// make a copy of rule so the query isn't permanently modified.
+	tmp := *rule
+	tmp.Query = fmt.Sprintf("%s\n%s", letStatements, rule.Query)
+	return &tmp, err
+}
+
+func (e *Evaluator) runTests() []result {
+	var results []result
 	for _, test := range e.tests {
-		results = append(results, e.runTest(test))
+		results = append(results, e.runTest(test)...)
 	}
 	return results
 }
 
-func (e *Evaluator) runTest(test *Test) *testResult {
+func (e *Evaluator) runTest(test *Test) (results []result) {
 	curTime := time.Time{}
-	for _, expected := range test.expectedAlerts {
-		qc, err := engine.NewQueryContext(e.rules[expected.Name], curTime.Add(expected.EvalAt), "local")
+	for _, testAt := range test.expectedAlerts {
+		rule, err := e.ruleForTest(testAt.Name, test)
 		if err != nil {
-			return &testResult{
-				name:    test.name,
-				failed:  true,
-				message: fmt.Sprintf("failed to create query context: %s", err),
-			}
+			results = append(results, test.Error(testAt, err))
+			continue
 		}
-		alerts, _, err := e.kustoClient.Query(context.Background(), qc)
+		qc, err := engine.NewQueryContext(rule, curTime.Add(testAt.EvalAt), "local")
 		if err != nil {
-			return &testResult{
-				name:    test.name,
-				failed:  true,
-				message: fmt.Sprintf("failed to execute query: %s", err),
-			}
+			results = append(results, test.Error(testAt, fmt.Errorf("failed to create query context: %s", err)))
+			continue
 		}
-		if len(alerts) != 1 {
-			return &testResult{
-				name:    test.name,
-				failed:  true,
-				message: fmt.Sprintf("expected 1 alert, got %d", len(alerts)),
-			}
+		got, err := e.kustoClient.Query(context.Background(), qc)
+		if err != nil {
+			results = append(results, test.Error(testAt, fmt.Errorf("failed to execute query: %s", err)))
+			continue
 		}
 
-		if diff := deep.Equal(); len(diff) > 0 {
-			return &testResult{
-				name:    test.name,
-				failed:  true,
-				message: fmt.Sprintf("expected alert %s, got %s\n\ndiff: %s", expected.Alert, alerts[0], diff),
+		extraAlerts, missingAlerts := nonMatchingAlerts(testAt.Alerts, got)
+		results = append(results, test.Result(testAt, missingAlerts, extraAlerts))
+	}
+	return
+}
+
+func nonMatchingAlerts(want, got []*alert.Alert) (additional []*alert.Alert, missing []*alert.Alert) {
+	for _, a := range got {
+		found := false
+		for _, b := range want {
+			if reflect.DeepEqual(a, b) {
+				found = true
+				break
 			}
 		}
-		return &testResult{
-			name:   test.name,
-			failed: true,
-			// message: fmt.Sprintf("expected alert name %s, got %s", expected.Alert.Name, alerts[0].Name),
+		if !found {
+			additional = append(additional, a)
 		}
 	}
-	return nil
+
+	for _, a := range want {
+		found := false
+		for _, b := range got {
+			if reflect.DeepEqual(a, b) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, a)
+		}
+	}
+
+	return
 }

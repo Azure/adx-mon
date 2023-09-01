@@ -17,6 +17,7 @@ require (
 	github.com/lithammer/dedent v1.1.0
 	github.com/lmittmann/tint v1.0.1
 	github.com/mattn/go-isatty v0.0.19
+	github.com/openconfig/goyang v1.4.1
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.16.0
 	github.com/prometheus/client_model v0.4.0

@@ -2,12 +2,13 @@ package engine
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
-	"strings"
-	"time"
 )
 
 type QueryContext struct {
@@ -33,8 +34,6 @@ func NewQueryContext(rule *rules.Rule, endTime time.Time, region string) (*Query
 
 func (q *QueryContext) wrapStmt() error {
 	q.Query = q.Rule.Query
-	q.Stmt = q.Rule.Stmt
-
 	if q.Rule.IsMgmtQuery {
 		return nil
 	}
