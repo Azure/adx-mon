@@ -431,7 +431,7 @@ func (s *Service) sendBatch(wr *prompb.WriteRequest) error {
 	return g.Wait()
 }
 
-func (s *Service) OnAdd(obj interface{}) {
+func (s *Service) OnAdd(obj interface{}, _ bool) {
 	p, ok := obj.(*v1.Pod)
 	if !ok || p == nil {
 		return
@@ -467,7 +467,7 @@ func (s *Service) OnUpdate(oldObj, newObj interface{}) {
 	if p.DeletionTimestamp != nil {
 		s.OnDelete(p)
 	} else {
-		s.OnAdd(p)
+		s.OnAdd(p, false)
 	}
 }
 
