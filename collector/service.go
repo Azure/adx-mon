@@ -14,12 +14,12 @@ import (
 
 	"github.com/Azure/adx-mon/collector/otlp"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
+	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	io_prometheus_client "github.com/prometheus/client_model/go"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,8 +37,9 @@ type Service struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	remoteClient *promremote.Client
-	watcher      watch.Interface
+	requestTransformer *transform.RequestTransformer
+	remoteClient       *promremote.Client
+	watcher            watch.Interface
 
 	mu            sync.RWMutex
 	targets       []ScrapeTarget
@@ -95,13 +96,15 @@ func (t ScrapeTarget) String() string {
 
 func NewService(opts *ServiceOpts) (*Service, error) {
 	return &Service{
-		opts:   opts,
-		K8sCli: opts.K8sCli,
-		seriesCreator: &seriesCreator{
-			AddLabels:  opts.AddLabels,
-			DropLabels: opts.DropLabels,
-		},
-		metricsSvc: metrics.NewService(metrics.ServiceOpts{}),
+		opts:          opts,
+		K8sCli:        opts.K8sCli,
+		seriesCreator: &seriesCreator{},
+		metricsSvc:    metrics.NewService(metrics.ServiceOpts{}),
+		requestTransformer: transform.NewRequestTransformer(
+			opts.AddLabels,
+			opts.DropLabels,
+			opts.DropMetrics,
+		),
 	}, nil
 }
 
@@ -166,9 +169,13 @@ func (s *Service) Open(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-		DropLabels:    s.opts.DropLabels,
-		DropMetrics:   s.opts.DropMetrics,
-		RequestWriter: &metricsHandler.FakeRequestWriter{},
+		DropLabels:  s.opts.DropLabels,
+		DropMetrics: s.opts.DropMetrics,
+		RequestWriter: &promremote.RemoteWriteProxy{
+			Client:       s.remoteClient,
+			Endpoints:    s.opts.Endpoints,
+			MaxBatchSize: s.opts.MaxBatchSize,
+		},
 		HealthChecker: fakeHealthChecker{},
 	}))
 	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
@@ -227,22 +234,14 @@ func (s *Service) scrapeTargets() {
 
 		for name, val := range fams {
 			// Drop metrics that are in the drop list
-			var drop bool
-			for _, r := range s.opts.DropMetrics {
-				if r.MatchString(name) {
-					drop = true
-					break
-				}
-			}
-			if drop {
+			if s.requestTransformer.ShouldDropMetric([]byte(name)) {
+				metrics.MetricsDroppedTotal.WithLabelValues(name).Add(float64(len(val.Metric)))
 				continue
+
 			}
 
 			for _, m := range val.Metric {
-				ts, ok := s.newSeries(name, target, m)
-				if !ok {
-					continue
-				}
+				ts := s.seriesCreator.newSeries(name, target, m)
 
 				timestamp := m.GetTimestampMs()
 				if timestamp == 0 {
@@ -263,10 +262,7 @@ func (s *Service) scrapeTargets() {
 
 					// Add the quantile series
 					for _, q := range sum.GetQuantile() {
-						ts, ok := s.newSeries(name, target, m)
-						if !ok {
-							continue
-						}
+						ts = s.seriesCreator.newSeries(name, target, m)
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("quantile"),
 							Value: []byte(fmt.Sprintf("%f", q.GetQuantile())),
@@ -277,35 +273,35 @@ func (s *Service) scrapeTargets() {
 								Value:     q.GetValue(),
 							},
 						}
+
+						ts = s.requestTransformer.TransformTimeSeries(ts)
 						wr.Timeseries = append(wr.Timeseries, ts)
 						wr = s.flushBatchIfNecessary(wr)
 					}
 
 					// Add sum series
-					ts, ok := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
-					if !ok {
-						continue
-					}
+					ts := s.seriesCreator.newSeries(fmt.Sprintf("%s_sum", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
 							Value:     sum.GetSampleSum(),
 						},
 					}
+
+					ts = s.requestTransformer.TransformTimeSeries(ts)
 					wr.Timeseries = append(wr.Timeseries, ts)
 					wr = s.flushBatchIfNecessary(wr)
 
 					// Add sum series
-					ts, ok = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
-					if !ok {
-						continue
-					}
+					ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_count", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
 							Value:     float64(sum.GetSampleCount()),
 						},
 					}
+
+					ts = s.requestTransformer.TransformTimeSeries(ts)
 					wr.Timeseries = append(wr.Timeseries, ts)
 					wr = s.flushBatchIfNecessary(wr)
 				} else if m.GetHistogram() != nil {
@@ -313,10 +309,7 @@ func (s *Service) scrapeTargets() {
 
 					// Add the quantile series
 					for _, q := range hist.GetBucket() {
-						ts, ok := s.newSeries(fmt.Sprintf("%s_bucket", name), target, m)
-						if !ok {
-							continue
-						}
+						ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_bucket", name), target, m)
 						ts.Labels = append(ts.Labels, prompb.Label{
 							Name:  []byte("le"),
 							Value: []byte(fmt.Sprintf("%f", q.GetUpperBound())),
@@ -334,24 +327,20 @@ func (s *Service) scrapeTargets() {
 					}
 
 					// Add sum series
-					ts, ok := s.newSeries(fmt.Sprintf("%s_sum", name), target, m)
-					if !ok {
-						continue
-					}
+					ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_sum", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
 							Value:     hist.GetSampleSum(),
 						},
 					}
+
+					ts = s.requestTransformer.TransformTimeSeries(ts)
 					wr.Timeseries = append(wr.Timeseries, ts)
 					wr = s.flushBatchIfNecessary(wr)
 
 					// Add sum series
-					ts, ok = s.newSeries(fmt.Sprintf("%s_count", name), target, m)
-					if !ok {
-						continue
-					}
+					ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_count", name), target, m)
 					ts.Samples = []prompb.Sample{
 						{
 							Timestamp: timestamp,
@@ -364,6 +353,8 @@ func (s *Service) scrapeTargets() {
 				}
 
 				ts.Samples = append(ts.Samples, sample)
+
+				ts = s.requestTransformer.TransformTimeSeries(ts)
 				wr.Timeseries = append(wr.Timeseries, ts)
 
 				wr = s.flushBatchIfNecessary(wr)
@@ -422,10 +413,6 @@ func (s *Service) sendBatch(wr *prompb.WriteRequest) error {
 		})
 	}
 	return g.Wait()
-}
-
-func (s *Service) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) (prompb.TimeSeries, bool) {
-	return s.seriesCreator.newSeries(name, scrapeTarget, m)
 }
 
 func (s *Service) OnAdd(obj interface{}) {

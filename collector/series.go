@@ -1,29 +1,21 @@
 package collector
 
 import (
-	"regexp"
-	"sort"
-
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/prometheus/client_model/go"
 )
 
-type seriesCreator struct {
-	AddLabels   map[string]string
-	DropMetrics []*regexp.Regexp
-	DropLabels  map[*regexp.Regexp]*regexp.Regexp
-}
+type seriesCreator struct{}
 
-func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) (prompb.TimeSeries, bool) {
-	ts := prompb.TimeSeries{}
-
-	if len(s.DropMetrics) > 0 {
-		for _, r := range s.DropMetrics {
-			if r.MatchString(name) {
-				return ts, false
-			}
-		}
+func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
+	ts := prompb.TimeSeries{
+		Labels: make([]prompb.Label, 0, len(m.Label)+3),
 	}
+
+	ts.Labels = append(ts.Labels, prompb.Label{
+		Name:  []byte("__name__"),
+		Value: []byte(name),
+	})
 
 	if scrapeTarget.Namespace != "" {
 		ts.Labels = append(ts.Labels, prompb.Label{
@@ -47,20 +39,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 	}
 
 	for _, l := range m.Label {
-		// Skip labels that will be overridden by static labels
-		if _, ok := s.AddLabels[l.GetName()]; ok {
-			continue
-		}
-
-		// Skip labels that will be dropped
-		var skip bool
-		for metRe, labelRe := range s.DropLabels {
-			if metRe.MatchString(name) && labelRe.MatchString(l.GetName()) {
-				skip = true
-				break
-			}
-		}
-		if skip {
+		if l.GetName() == "adxmon_namespace" || l.GetName() == "adxmon_pod" || l.GetName() == "adxmon_container" {
 			continue
 		}
 
@@ -70,22 +49,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 		})
 	}
 
-	for k, v := range s.AddLabels {
-		if k == "adxmon_namespace" || k == "adxmon_pod" || k == "adxmon_container" {
-			continue
-		}
+	prompb.Sort(ts.Labels)
 
-		ts.Labels = append(ts.Labels, prompb.Label{
-			Name:  []byte(k),
-			Value: []byte(v),
-		})
-	}
-	sort.Slice(ts.Labels, func(i, j int) bool {
-		return string(ts.Labels[i].Name) < string(ts.Labels[j].Name)
-	})
-
-	// Ensure that the __name__ label is the first label
-	ts.Labels = append([]prompb.Label{{Name: []byte("__name__"), Value: []byte(name)}}, ts.Labels...)
-
-	return ts, true
+	return ts
 }

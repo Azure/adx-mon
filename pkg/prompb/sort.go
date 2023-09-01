@@ -7,6 +7,18 @@ import (
 	"unicode/utf8"
 )
 
+type Labels []Label
+
+func (l Labels) Len() int { return len(l) }
+
+func (l Labels) Less(i, j int) bool {
+	return labelLess(l[i].Name, l[j].Name)
+}
+
+func (l Labels) Swap(i, j int) {
+	l[i], l[j] = l[j], l[i]
+}
+
 // IsSorted return true if the labels are sorted according to Sort.
 func IsSorted(l []Label) bool {
 	if len(l) == 1 {

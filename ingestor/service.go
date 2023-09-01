@@ -38,7 +38,7 @@ type Service struct {
 
 	handler       *metricsHandler.Handler
 	logsHandler   http.Handler
-	requestFilter *transform.RequestFilter
+	requestFilter *transform.RequestTransformer
 	health        *cluster.Health
 }
 
@@ -167,7 +167,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		handler:     handler,
 		health:      health,
 		logsHandler: l,
-		requestFilter: &transform.RequestFilter{
+		requestFilter: &transform.RequestTransformer{
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
 		},

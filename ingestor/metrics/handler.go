@@ -46,6 +46,9 @@ type HealthChecker interface {
 }
 
 type HandlerOpts struct {
+	// AddLabels is a map of label names and values.  These labels will be added to all metrics.
+	AddLabels map[string]string
+
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
 
@@ -75,7 +78,7 @@ type Handler struct {
 	DropMetrics []*regexp.Regexp
 
 	requestFilter interface {
-		Filter(req prompb.WriteRequest) prompb.WriteRequest
+		TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest
 	}
 
 	seriesCounter SeriesCounter
@@ -91,10 +94,11 @@ func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 func NewHandler(opts HandlerOpts) *Handler {
 	return &Handler{
 		health: opts.HealthChecker,
-		requestFilter: &transform.RequestFilter{
-			DropMetrics: opts.DropMetrics,
-			DropLabels:  opts.DropLabels,
-		},
+		requestFilter: transform.NewRequestTransformer(
+			opts.AddLabels,
+			opts.DropLabels,
+			opts.DropMetrics,
+		),
 		seriesCounter: opts.SeriesCounter,
 		requestWriter: opts.RequestWriter,
 		database:      opts.Database,
@@ -189,5 +193,5 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 // filterDropMetrics remove metrics and labels configured to be dropped by slicing them out
 // of the passed prombpWriteRequest.  The modified request is returned to caller.
 func (s *Handler) filterDropMetrics(req prompb.WriteRequest) prompb.WriteRequest {
-	return s.requestFilter.Filter(req)
+	return s.requestFilter.TransformWriteRequest(req)
 }
