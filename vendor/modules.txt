@@ -150,6 +150,9 @@ github.com/davecgh/go-spew/spew
 # github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 ## explicit
 github.com/davidnarayan/go-flake
+# github.com/dgrijalva/jwt-go v3.2.0+incompatible
+## explicit
+github.com/dgrijalva/jwt-go
 # github.com/emicklei/go-restful/v3 v3.9.0
 ## explicit; go 1.13
 github.com/emicklei/go-restful/v3

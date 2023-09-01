@@ -16,6 +16,7 @@ import (
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
@@ -171,6 +172,13 @@ func (s *Service) Open(ctx context.Context) error {
 	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		DropLabels:  s.opts.DropLabels,
 		DropMetrics: s.opts.DropMetrics,
+
+		// Add this pods identity for all metrics received
+		AddLabels: map[string]string{
+			"adxmon_namespace": k8s.Instance.Namespace,
+			"adxmon_pod":       k8s.Instance.Pod,
+			"adxmon_container": k8s.Instance.Container,
+		},
 		RequestWriter: &promremote.RemoteWriteProxy{
 			Client:       s.remoteClient,
 			Endpoints:    s.opts.Endpoints,

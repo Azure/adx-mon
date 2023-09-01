@@ -153,9 +153,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(s.DropMetrics) > 0 || len(s.DropLabels) > 0 {
-		req = s.filterDropMetrics(req)
-	}
+	// Apply any label or metrics drops or additions
+	req = s.requestFilter.TransformWriteRequest(req)
 
 	if s.seriesCounter != nil {
 		seriesId := xxhash.New()
@@ -188,10 +187,4 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
-}
-
-// filterDropMetrics remove metrics and labels configured to be dropped by slicing them out
-// of the passed prombpWriteRequest.  The modified request is returned to caller.
-func (s *Handler) filterDropMetrics(req prompb.WriteRequest) prompb.WriteRequest {
-	return s.requestFilter.TransformWriteRequest(req)
 }

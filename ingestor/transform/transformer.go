@@ -44,12 +44,19 @@ func NewRequestTransformer(addLabels map[string]string, dropLabels map[*regexp.R
 }
 
 func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest {
-	var i int
-	for _, v := range req.Timeseries {
 
+	if len(f.DropMetrics) == 0 && len(f.DropLabels) == 0 && len(f.AddLabels) == 0 {
+		return req
+	}
+
+	var i int
+
+	for j := range req.Timeseries {
+		v := req.Timeseries[j]
 		// First skip any metrics that should be dropped.
-		if f.ShouldDropMetric(v.Labels[0].Value) {
-			metrics.MetricsDroppedTotal.WithLabelValues(string(v.Labels[0].Value)).Add(float64(len(v.Samples)))
+		name := prompb.MetricName(v)
+		if f.ShouldDropMetric(name) {
+			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			continue
 		}
 
@@ -57,6 +64,7 @@ func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prom
 		i++
 	}
 	req.Timeseries = req.Timeseries[:i]
+
 	return req
 }
 
@@ -87,13 +95,32 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 		if skipLabel {
 			continue
 		}
+
+		// Skip any labels that will be overwritten by the add labels.
+		for _, al := range f.AddLabels {
+			if bytes.Equal(l.Name, al.Name) {
+				skipLabel = true
+				break
+			}
+		}
+
+		if skipLabel {
+			continue
+		}
+
 		v.Labels[i] = v.Labels[j]
 		i++
 	}
 	v.Labels = v.Labels[:i]
 
-	for _, l := range f.AddLabels {
-		v.Labels = append(v.Labels, l)
+	// The RemoteWriteRequest protobuf unmarshalling uses a pool of labels setup as one contiguous array.  Each
+	// TimeSeries is assigned a slice of the pool.  If we need to grow this slice, we need to allocate a new slice
+	// as growing it implicitly will overwrite the labels of other TimeSeries.
+	if len(f.AddLabels) > 0 {
+		a := make([]prompb.Label, 0, len(v.Labels)+len(f.AddLabels))
+		a = append(a, v.Labels...)
+		a = append(a, f.AddLabels...)
+		v.Labels = a
 	}
 
 	sort.Sort(prompb.Labels(v.Labels))

@@ -19,6 +19,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	// Trigger initial identity load
+	_ "github.com/Azure/adx-mon/pkg/k8s"
 )
 
 func main() {
