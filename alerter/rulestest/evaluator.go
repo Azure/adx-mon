@@ -20,6 +20,27 @@ type Client interface {
 type EvaluatorOpts struct {
 }
 
+// Evaluator is a type that can run adx mon alerter tests, and outputs the results. Adx Mon Alerter tests are inspired
+// by prometheus tests, are typically defined in yaml files, and are run against a set of rules. An example test might
+// look like:
+/*
+name: TestApiServerSLOTooHigh
+values: ApiServerSLOBucket{le="0.5"} 1x5 _ 1+1x10 # Values are in prometheus style notation.
+interval: 1m
+expected_alerts:
+- name: ApiServerSLOTooHigh
+	eval_at: 10m
+	alerts:
+	- title: ApiServerSLOTooHigh
+		summary: The Api Server latency is too high
+		description: ...
+		severity: 1
+		...
+- name: ApiServerSLOTooHigh
+	eval_at: 30m
+	# Missing alerts means we expect no alerts to fire for this rule at this time.
+
+*/
 type Evaluator struct {
 	kustoClient Client
 	rules       map[string]*rules.Rule
