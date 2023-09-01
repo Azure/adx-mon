@@ -170,6 +170,7 @@ func (s *Service) Open(ctx context.Context) error {
 		DropMetrics:   s.opts.DropMetrics,
 		SeriesCounter: s.metricsSvc,
 		RequestWriter: &metricsHandler.FakeRequestWriter{},
+		HealthChecker: fakeHealthChecker{},
 	}))
 	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
 	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
@@ -604,3 +605,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 	return targets
 }
+
+type fakeHealthChecker struct{}
+
+func (f fakeHealthChecker) IsHealthy() bool { return true }
