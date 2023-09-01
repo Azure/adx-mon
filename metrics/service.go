@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/adx-mon/pkg/counter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	srv "github.com/Azure/adx-mon/pkg/service"
@@ -26,7 +25,6 @@ type MetricPartitioner interface {
 
 type Service interface {
 	srv.Component
-	AddSeries(key string, id uint64)
 }
 
 type ServiceOpts struct {
@@ -41,7 +39,6 @@ type service struct {
 	closeFn context.CancelFunc
 
 	hostname    string
-	estimator   *counter.MultiEstimator
 	partitioner MetricPartitioner
 	kustoCli    ingest.QueryClient
 	database    string
@@ -49,7 +46,6 @@ type service struct {
 
 func NewService(opts ServiceOpts) Service {
 	return &service{
-		estimator:   counter.NewMultiEstimator(),
 		partitioner: opts.Partitioner,
 		kustoCli:    opts.KustoCli,
 		database:    opts.Database,
@@ -66,10 +62,6 @@ func (s *service) Open(ctx context.Context) error {
 func (s *service) Close() error {
 	s.closeFn()
 	return nil
-}
-
-func (s *service) AddSeries(key string, id uint64) {
-	s.estimator.Add(key, id)
 }
 
 func (s *service) collect(ctx context.Context) {

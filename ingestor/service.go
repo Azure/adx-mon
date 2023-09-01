@@ -149,7 +149,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		DropLabels:    opts.DropLabels,
 		DropMetrics:   opts.DropMetrics,
-		SeriesCounter: metricsSvc,
 		RequestWriter: coord,
 		Database:      opts.MetricsDatabase,
 		HealthChecker: health,

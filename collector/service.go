@@ -168,7 +168,6 @@ func (s *Service) Open(ctx context.Context) error {
 	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		DropLabels:    s.opts.DropLabels,
 		DropMetrics:   s.opts.DropMetrics,
-		SeriesCounter: s.metricsSvc,
 		RequestWriter: &metricsHandler.FakeRequestWriter{},
 		HealthChecker: fakeHealthChecker{},
 	}))
