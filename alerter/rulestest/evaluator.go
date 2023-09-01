@@ -83,6 +83,8 @@ func (e *Evaluator) RunAndPrintTests(w io.Writer) error {
 	return nil
 }
 
+// ruleForTest returns a copy of the rule with the let statements that create the temporary datatables from the test
+// prepended to the query.
 func (e *Evaluator) ruleForTest(name string, test *Test) (*rules.Rule, error) {
 	rule, ok := e.rules[name]
 	if !ok {
@@ -107,6 +109,7 @@ func (e *Evaluator) runTests() []result {
 	return results
 }
 
+// runTest runs a single test which can output multiple results (1 for each expected alert).
 func (e *Evaluator) runTest(test *Test) (results []result) {
 	curTime := time.Time{}
 	for _, testAt := range test.expectedAlerts {
@@ -132,6 +135,7 @@ func (e *Evaluator) runTest(test *Test) (results []result) {
 	return
 }
 
+// nonMatchingAlerts returns the alerts that are in got but not in want, and the alerts that are in want but not in got.
 func nonMatchingAlerts(want, got []*alert.Alert) (additional []*alert.Alert, missing []*alert.Alert) {
 	for _, a := range got {
 		found := false

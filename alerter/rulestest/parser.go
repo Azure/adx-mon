@@ -14,6 +14,7 @@ var (
 	defaultMapping = storage.NewMetricsSchema()
 )
 
+// ExpectedAlert is the expected result for executing the rule with the given `Name` at `EvalAt`.
 type ExpectedAlerts struct {
 	Name   string
 	EvalAt time.Duration `yaml:"eval_at"`
@@ -27,6 +28,7 @@ type TestInput struct {
 	ExpectedAlerts []ExpectedAlerts `yaml:"expected_alerts"`
 }
 
+// parse parses a TestInput from a yaml string and returns the corresponding Test struct, or error.
 func parse(raw string) (*Test, error) {
 	testInput := TestInput{}
 	err := yaml.Unmarshal([]byte(raw), &testInput)

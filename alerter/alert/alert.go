@@ -1,7 +1,5 @@
 package alert
 
-import "fmt"
-
 type Alert struct {
 	// Destination is the identifier indicating where the alert should be routed by the alert receiver.
 	Destination string
@@ -27,8 +25,4 @@ type Alert struct {
 
 	// CustomerFields is a map of key/value pairs that provide additional information about the alert.
 	CustomFields map[string]string
-}
-
-func (a *Alert) PrettyString() string {
-	return fmt.Sprintf("Title: %s\nSummary: %s\nDescription: %s\nSeverity: %d\nSource: %s\nDestination: %s\nCorrelationID: %s\nCustomFields: %v", a.Title, a.Summary, a.Description, a.Severity, a.Source, a.Destination, a.CorrelationID, a.CustomFields)
 }

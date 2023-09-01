@@ -8,11 +8,11 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/cespare/xxhash"
-	"github.com/openconfig/goyang/pkg/indent"
 	"github.com/prometheus/prometheus/promql/parser"
 	"golang.org/x/exp/slices"
 )
 
+// How we output a list of results.
 var resultsTemplateStr = `{{- range $i, $res := . -}}
 {{- if $res.Succeeded }}
 Test {{ $res.Name }} - {{ $res.AlertName }} @ {{ $res.EvalAt }} PASS
@@ -76,13 +76,7 @@ func (r *result) Failed() bool {
 	return r.Err != nil || len(r.MissingAlerts) > 0 || len(r.AdditionalAlerts) > 0
 }
 
-func (r *result) String() string {
-	if r.Failed() {
-		return fmt.Sprintf("Test %s - %s @ %s failed:\n%s", r.Name, r.AlertName, r.EvalAt, indent.String("\t", r.Err.Error()))
-	}
-	return fmt.Sprintf("%s: ok\n", r.Name)
-}
-
+// Error is used to create a result that failed to execute.
 func (t *Test) Error(e ExpectedAlerts, err error) result {
 	return result{
 		Name:      t.name,
@@ -92,6 +86,7 @@ func (t *Test) Error(e ExpectedAlerts, err error) result {
 	}
 }
 
+// Result is used to create a new result from a test output.
 func (t *Test) Result(e ExpectedAlerts, missing, extra []*alert.Alert) result {
 	return result{
 		Name:             t.name,
@@ -102,6 +97,7 @@ func (t *Test) Result(e ExpectedAlerts, missing, extra []*alert.Alert) result {
 	}
 }
 
+// Validate validates whether the test's fields are valid.
 func (t *Test) validate() error {
 	if t.name == "" {
 		return fmt.Errorf("missing name")
@@ -139,6 +135,8 @@ func (t *Test) validate() error {
 	return nil
 }
 
+// getDatabableStatement generates the `let $metric = datatable(...)` statement for the given test and lifted labels.
+// It creates each row for the datatable based on the test's timeseries.
 func (t *Test) getDatatableStmt(liftedLabels []string) (string, error) {
 	var sb strings.Builder
 	startTime := time.Time{}
@@ -157,6 +155,7 @@ func (t *Test) getDatatableStmt(liftedLabels []string) (string, error) {
 	return sb.String(), nil
 }
 
+// getSchemaStr is a helper function used to generate the schema string for the datatable.
 func getSchemaStr(extraStringLabels []string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s:%s", defaultMapping[0].Column, defaultMapping[0].DataType))
@@ -191,6 +190,7 @@ func (t *Timeseries) seriesID() uint64 {
 	return xxhash.Sum64String(buf.String())
 }
 
+// stringFor generates the string representation of the timeseries for the given start time, interval, and lifted labels.
 func (t *Timeseries) stringFor(startTime time.Time, interval time.Duration, liftedLabels []string) (string, error) {
 	var sb strings.Builder
 	seriesID := t.seriesID()
@@ -217,6 +217,7 @@ func (t *Timeseries) stringFor(startTime time.Time, interval time.Duration, lift
 	return sb.String(), nil
 }
 
+// separateLabels separates the labels into two maps, one for the lifted labels and one for the remaining labels.
 func (t *Timeseries) separateLabels(liftedLabels []string) (map[string]string, map[string]string) {
 	liftedMap := make(map[string]string)
 	labelMap := make(map[string]string)

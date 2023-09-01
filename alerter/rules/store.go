@@ -10,6 +10,9 @@ import (
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -90,6 +93,9 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	// declaration because then Kusto will say it's an invalid query.
 	rule.IsMgmtQuery = strings.HasPrefix(r.Spec.Query, ".")
 
+	stmt := kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(r.Spec.Query)
+
+	rule.Stmt = stmt
 	return rule, nil
 }
 
@@ -159,4 +165,7 @@ type Rule struct {
 	// Management queries (starts with a dot) have to call a different
 	// query API in the Kusto Go SDK.
 	IsMgmtQuery bool
+
+	// Stmt specifies the underlayEtcdPeersQuery to execute.
+	Stmt kusto.Stmt
 }
