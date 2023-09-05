@@ -9,7 +9,8 @@ import (
 type ExampleTransform struct {
 }
 
-func (t *ExampleTransform) Init() {
+func (t *ExampleTransform) Open(ctx context.Context) error {
+	return nil
 }
 
 func (t *ExampleTransform) Transform(ctx context.Context, batch *logs.LogBatch) ([]*logs.LogBatch, error) {
@@ -20,6 +21,6 @@ func (t *ExampleTransform) Transform(ctx context.Context, batch *logs.LogBatch) 
 	return batches[:], nil
 }
 
-func (t *ExampleTransform) Close(ctx context.Context) error {
+func (t *ExampleTransform) Close() error {
 	return nil
 }

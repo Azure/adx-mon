@@ -45,14 +45,15 @@ func NewKubernetesTransform(client kubernetes.Interface) *KubernetesTransform {
 	}
 }
 
-func (t *KubernetesTransform) Init() {
+func (t *KubernetesTransform) Open(ctx context.Context) error {
 	if t.watchCtx != nil {
-		return
+		return nil
 	}
 
-	t.watchCtx, t.cancel = context.WithCancel(context.Background())
+	t.watchCtx, t.cancel = context.WithCancel(ctx)
 	t.wg.Add(1)
 	go t.watcherWorker()
+	return nil
 }
 
 func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatch) ([]*logs.LogBatch, error) {
@@ -78,9 +79,8 @@ func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatc
 	return batches[:], nil
 }
 
-func (t *KubernetesTransform) Close(ctx context.Context) error {
+func (t *KubernetesTransform) Close() error {
 	t.cancel()
-	// TODO attempt to wait only until the deadline
 	t.wg.Wait()
 	return nil
 }

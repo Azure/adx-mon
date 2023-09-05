@@ -33,7 +33,7 @@ func NewJournaldCollector(transforms []logs.Transformer) *JournaldCollector {
 
 func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
 	for _, transformer := range c.transforms {
-		transformer.Init()
+		transformer.Open(ctx)
 		// TODO shutdown transformers, going from first to last
 	}
 

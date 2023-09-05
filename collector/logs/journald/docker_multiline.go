@@ -12,8 +12,9 @@ type DockerMultiline struct {
 	partialMessages map[string]string
 }
 
-func (d *DockerMultiline) Init() {
+func (d *DockerMultiline) Open(ctx context.Context) error {
 	d.partialMessages = map[string]string{}
+	return nil
 }
 
 func (d *DockerMultiline) Transform(ctx context.Context, batch *logs.LogBatch) ([]*logs.LogBatch, error) {
@@ -43,6 +44,6 @@ func (d *DockerMultiline) Transform(ctx context.Context, batch *logs.LogBatch) (
 	return batches[:], nil
 }
 
-func (d *DockerMultiline) Close(ctx context.Context) error {
+func (d *DockerMultiline) Close() error {
 	return nil
 }
