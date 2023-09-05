@@ -56,7 +56,7 @@ func (t *KubernetesTransform) Open(ctx context.Context) error {
 	return nil
 }
 
-func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatch) ([]*logs.LogBatch, error) {
+func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatch) (*logs.LogBatch, error) {
 	for _, log := range batch.Logs {
 		podName, ok := log.Attributes["k8s.pod.name"]
 		if !ok {
@@ -75,8 +75,7 @@ func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatc
 		// TODO actually serialize labels
 		log.Attributes["k8s.pod.labels"] = fmt.Sprintf("%v", podMeta.Labels)
 	}
-	batches := [1]*logs.LogBatch{batch}
-	return batches[:], nil
+	return batch, nil
 }
 
 func (t *KubernetesTransform) Close() error {

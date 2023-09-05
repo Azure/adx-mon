@@ -17,7 +17,7 @@ func (d *DockerMultiline) Open(ctx context.Context) error {
 	return nil
 }
 
-func (d *DockerMultiline) Transform(ctx context.Context, batch *logs.LogBatch) ([]*logs.LogBatch, error) {
+func (d *DockerMultiline) Transform(ctx context.Context, batch *logs.LogBatch) (*logs.LogBatch, error) {
 	// TODO use ctx
 	for idx, log := range batch.Logs {
 		partialID, ok := log.Attributes["CONTAINER_PARTIAL_ID"]
@@ -40,8 +40,7 @@ func (d *DockerMultiline) Transform(ctx context.Context, batch *logs.LogBatch) (
 			batch.Logs = append(batch.Logs[:idx], batch.Logs[idx:]...)
 		}
 	}
-	batches := [1]*logs.LogBatch{batch}
-	return batches[:], nil
+	return batch, nil
 }
 
 func (d *DockerMultiline) Close() error {

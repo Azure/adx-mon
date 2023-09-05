@@ -120,23 +120,19 @@ func (c *JournaldCollector) waitForLogs(ctx context.Context, j *sdjournal.Journa
 }
 
 func (c *JournaldCollector) process(ctx context.Context, log *logs.Log) error {
-	batches := []*logs.LogBatch{{
+	batch := &logs.LogBatch{
 		Logs: []*logs.Log{log},
-	}}
+	}
 
+	var err error
 	for _, transformer := range c.transforms {
-		transformedBatches := []*logs.LogBatch{} // TODO fix alloc each time
-		for _, batch := range batches {
-			transformedBatch, err := transformer.Transform(ctx, batch)
-			if err != nil {
-				return err
-			}
-			transformedBatches = append(transformedBatches, transformedBatch...)
+		batch, err = transformer.Transform(ctx, batch)
+		if err != nil {
+			return err
 		}
-		batches = transformedBatches
 	}
 	// TODO
-	fmt.Println(batches)
+	fmt.Println(batch)
 	return nil
 }
 

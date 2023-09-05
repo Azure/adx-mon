@@ -33,6 +33,6 @@ func (l *LogBatch) String() string {
 
 type Transformer interface {
 	Open(context.Context) error
-	Transform(context.Context, *LogBatch) ([]*LogBatch, error)
+	Transform(context.Context, *LogBatch) (*LogBatch, error)
 	Close() error
 }
