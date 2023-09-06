@@ -456,6 +456,7 @@ func newUploader(kustoCli ingest.QueryClient, database, storageDir string, concu
 		Database:          database,
 		ConcurrentUploads: concurrentUploads,
 		DefaultMapping:    defaultMapping,
+		SampleType:        adx.PromMetrics,
 	})
 	return uploader, nil
 }
@@ -491,6 +492,7 @@ func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads i
 			Database:          database,
 			ConcurrentUploads: concurrentUploads,
 			DefaultMapping:    storage.DefaultLogsMapping,
+			SampleType:        adx.OTLPLogs,
 		}))
 	}
 	return uploaders, nil
