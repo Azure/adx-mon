@@ -3,7 +3,6 @@ package logs
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 )
 
 // Log represents a single log entry
@@ -48,7 +47,8 @@ type LogBatch struct {
 }
 
 func (l *LogBatch) String() string {
-	return fmt.Sprintf("logs: %v", l.Logs)
+	value, _ := json.Marshal(l)
+	return string(value)
 }
 
 type Transformer interface {
