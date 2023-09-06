@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"strconv"
 	"strings"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
@@ -16,7 +14,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	connect_go "github.com/bufbuild/connect-go"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var bytesPool = pool.NewBytes(1024)
@@ -37,7 +34,6 @@ func NewLogsServer(w cluster.OTLPLogsWriter, logsDatabases []string) logsv1conne
 
 func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.ExportLogsServiceRequest]) (*connect_go.Response[v1.ExportLogsServiceResponse], error) {
 	var (
-		m                  = metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": logsv1connect.LogsServiceExportProcedure})
 		d, t               string
 		invalidLogErrors   error = nil
 		rejectedLogRecords int64 = 0
@@ -60,8 +56,18 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 		} else if err := srv.w(ctx, d, t, logs); err != nil {
 			// Internal errors with writer. Bail out now and allow the client to retry.
 			logger.Errorf("Failed to write logs to %s.%s: %v", d, t, err)
-			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 			metrics.ValidLogsDropped.WithLabelValues().Add(float64(len(logs)))
+
+			err := errors.New("request missing destination metadata")
+			res := &v1.ExportLogsServiceResponse{
+				PartialSuccess: &v1.ExportLogsPartialSuccess{
+					RejectedLogRecords: int64(len(logs)),
+					ErrorMessage:       err.Error(),
+				},
+			}
+			return connect_go.NewResponse(res), err
+		}
+		if err := srv.w(ctx, d, t, logs); err != nil {
 			res := &v1.ExportLogsServiceResponse{
 				PartialSuccess: &v1.ExportLogsPartialSuccess{
 					RejectedLogRecords: int64(len(logs)),
@@ -76,7 +82,6 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 
 	if invalidLogErrors != nil {
 		logger.Warnf("Invalid logs received from %s: %v", req.Peer().Addr, invalidLogErrors)
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		metrics.InvalidLogsDropped.WithLabelValues().Add(float64(rejectedLogRecords))
 		res := &v1.ExportLogsServiceResponse{
 			PartialSuccess: &v1.ExportLogsPartialSuccess{
@@ -87,7 +92,6 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 		return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeInvalidArgument, invalidLogErrors)
 	}
 
-	m.WithLabelValues(strconv.Itoa(http.StatusOK)).Inc()
 	return connect_go.NewResponse(&v1.ExportLogsServiceResponse{}), nil
 }
 

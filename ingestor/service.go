@@ -256,7 +256,6 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if !s.health.IsHealthy() {
-		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
 	}

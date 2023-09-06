@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strconv"
 
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -112,7 +111,6 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if !s.health.IsHealthy() {
-		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
 	}
