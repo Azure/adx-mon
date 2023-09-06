@@ -18,6 +18,13 @@ import (
 	"github.com/cespare/xxhash"
 )
 
+type SampleType int
+
+const (
+	PromMetrics SampleType = iota
+	OTLPLogs
+)
+
 type columnDef struct {
 	name, typ string
 }
@@ -33,6 +40,7 @@ type Syncer struct {
 
 	mu       sync.RWMutex
 	mappings map[string]storage.SchemaMapping
+	st       SampleType
 
 	tables map[string]struct{}
 
@@ -48,12 +56,13 @@ type IngestionMapping struct {
 	Table         string    `kusto:"Table"`
 }
 
-func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping) *Syncer {
+func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping, st SampleType) *Syncer {
 	return &Syncer{
 		KustoCli:       kustoCli,
 		database:       database,
 		defaultMapping: defaultMapping,
 		mappings:       make(map[string]storage.SchemaMapping),
+		st:             st,
 		tables:         make(map[string]struct{}),
 	}
 }
@@ -233,6 +242,17 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
+	switch s.st {
+	case PromMetrics:
+		return s.ensurePromMetricsFunctions(ctx)
+	case OTLPLogs:
+		return s.ensureOTLPLogsFunctions(ctx)
+	default:
+		return fmt.Errorf("unknown sample type %d", s.st)
+	}
+}
+
+func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 	// functions is the list of functions that we need to create in the database.  They are executed in order.
 	functions := []struct {
 		name string
@@ -304,6 +324,10 @@ func (s *Syncer) ensureFunctions(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *Syncer) ensureOTLPLogsFunctions(ctx context.Context) error {
 	return nil
 }
 
