@@ -304,7 +304,7 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 				union withsource=table *
 				| where Timestamp >= ago(1h) and Timestamp < ago(5m)
 				| extend SeriesId=hash_xxhash64(table)
-				| summarize Value=toreal(dcount(SeriesId)) by table
+				| summarize Value=toreal(dcount(SeriesId)) by table, SeriesId
 				| extend Timestamp=bin(now(), 1m)
 				| extend Labels=bag_pack_columns(table)
 				| project Timestamp, SeriesId, Labels, Value
