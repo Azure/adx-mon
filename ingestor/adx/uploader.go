@@ -48,10 +48,11 @@ type UploaderOpts struct {
 	ConcurrentUploads int
 	Dimensions        []string
 	DefaultMapping    storage.SchemaMapping
+	Functions         []storage.StorageFunction
 }
 
 func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
-	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping)
+	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.Functions)
 
 	return &uploader{
 		KustoCli:   kustoCli,

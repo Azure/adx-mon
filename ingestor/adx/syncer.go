@@ -31,8 +31,9 @@ type Syncer struct {
 
 	database string
 
-	mu       sync.RWMutex
-	mappings map[string]storage.SchemaMapping
+	mu        sync.RWMutex
+	mappings  map[string]storage.SchemaMapping
+	functions []storage.StorageFunction
 
 	tables map[string]struct{}
 
@@ -48,7 +49,7 @@ type IngestionMapping struct {
 	Table         string    `kusto:"Table"`
 }
 
-func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping) *Syncer {
+func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping, functions []storage.StorageFunction) *Syncer {
 	return &Syncer{
 		KustoCli:       kustoCli,
 		database:       database,
@@ -233,72 +234,14 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
-	// functions is the list of functions that we need to create in the database.  They are executed in order.
-	functions := []struct {
-		name string
-		body string
-	}{
-		{
-			name: "prom_increase",
-			body: `.create-or-alter function prom_increase (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
-		T
-		| where isnan(Value)==false
-		| extend h=SeriesId
-		| partition hint.strategy=shuffle by h (
-			as Series
-			| order by h, Timestamp asc
-			| extend prevVal=prev(Value)
-			| extend diff=Value-prevVal
-			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
-			| project-away prevVal, diff, h
-		)}`},
-
-		{
-			name: "prom_rate",
-			body: `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
-		T
-		| invoke prom_increase(interval=interval)
-		| extend Value=Value/((Timestamp-prev(Timestamp))/1s)
-		| where isnotnull(Value)
-		| where isnan(Value) == false}`},
-
-		{
-
-			name: "prom_delta",
-			body: `.create-or-alter function prom_delta (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
-		T
-		| where isnan(Value)==false
-		| extend h=SeriesId
-		| partition hint.strategy=shuffle by h (
-			as Series
-			| order by h, Timestamp asc
-			| extend prevVal=prev(Value)
-			| extend diff=Value-prevVal
-			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
-			| project-away prevVal, diff, h
-		)}`},
-		{
-
-			name: "CountCardinality",
-			body: `.create-or-alter function CountCardinality () {
-				union withsource=table *
-				| where Timestamp >= ago(1h) and Timestamp < ago(5m)
-				| extend SeriesId=hash_xxhash64(table)
-				| summarize Value=toreal(dcount(SeriesId)) by table
-				| extend Timestamp=bin(now(), 1m)
-				| extend Labels=bag_pack_columns(table)
-				| project Timestamp, SeriesId, Labels, Value
-		}`},
-	}
-
-	// CountCardinality needs at least 1 table to exists before it can be created due to the union * statement.
-	if err := s.EnsureTable("AdxmonIngestorMetricsCardinalityCount"); err != nil {
+	// Some functions needs at least 1 table to exists before it can be created due to the union * statement.
+	if err := s.EnsureTable("AdxmonIngestor"); err != nil {
 		return err
 	}
 
-	for _, fn := range functions {
-		logger.Infof("Creating function %s", fn.name)
-		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
+	for _, fn := range s.functions {
+		logger.Infof("Creating function %s", fn.Name)
+		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.Body)
 		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 		if err != nil {
 			return err
