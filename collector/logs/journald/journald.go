@@ -79,7 +79,7 @@ func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
 		}
 
 		//TODO batch
-		attributes := map[string]string{}
+		attributes := map[string]any{}
 		for _, k := range CONTAINER_METADATA {
 			value, ok := entry.Fields[k]
 			if ok {
@@ -137,11 +137,12 @@ func (c *JournaldCollector) process(ctx context.Context, log *logs.Log) error {
 	return nil
 }
 
-func (c *JournaldCollector) addKubernetesAttributes(entry *sdjournal.JournalEntry, attributes map[string]string) {
-	containerNameAttribute, ok := attributes["CONTAINER_NAME"]
+func (c *JournaldCollector) addKubernetesAttributes(entry *sdjournal.JournalEntry, attributes map[string]any) {
+	containerNameAttributeVal, ok := attributes["CONTAINER_NAME"]
 	if !ok {
 		return
 	}
+	containerNameAttribute := containerNameAttributeVal.(string)
 
 	// example container_name: k8s_calico-node_canal-9dq4b_kube-system_e3e72bef-7f90-497e-8870-65509a3f95ad_0
 	split := strings.Split(containerNameAttribute, "_")

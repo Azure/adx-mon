@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -13,14 +14,15 @@ type Log struct {
 	ObservedTimestamp int64
 
 	// Body of the log entry
-	Body map[string]interface{}
+	Body map[string]any
 
-	//Message  string
-	Attributes map[string]string
+	// Attributes of the log entry, not included in the log body.
+	Attributes map[string]any
 }
 
 func (l *Log) String() string {
-	return fmt.Sprintf("timestamp: %d observedtimestamp: %d labels: %v Body: %v", l.Timestamp, l.ObservedTimestamp, l.Attributes, l.Body)
+	value, _ := json.Marshal(l)
+	return string(value)
 }
 
 type LogBatch struct {

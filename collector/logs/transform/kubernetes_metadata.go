@@ -3,7 +3,6 @@ package transform
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -58,11 +57,11 @@ func (t *KubernetesTransform) Open(ctx context.Context) error {
 
 func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatch) (*logs.LogBatch, error) {
 	for _, log := range batch.Logs {
-		podName, ok := log.Attributes["k8s.pod.name"]
+		podName, ok := log.Attributes["k8s.pod.name"].(string)
 		if !ok {
 			continue
 		}
-		namespace, ok := log.Attributes["k8s.namespace.name"]
+		namespace, ok := log.Attributes["k8s.namespace.name"].(string)
 		if !ok {
 			continue
 		}
@@ -72,8 +71,7 @@ func (t *KubernetesTransform) Transform(ctx context.Context, batch *logs.LogBatc
 			// TODO log
 			continue
 		}
-		// TODO actually serialize labels
-		log.Attributes["k8s.pod.labels"] = fmt.Sprintf("%v", podMeta.Labels)
+		log.Attributes["k8s.pod.labels"] = podMeta.Labels
 	}
 	return batch, nil
 }
