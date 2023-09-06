@@ -25,6 +25,24 @@ func (l *Log) String() string {
 	return string(value)
 }
 
+func (l *Log) Copy() *Log {
+	// TODO - what if we are storing pointers?
+	attributes := map[string]any{}
+	for k, v := range l.Attributes {
+		attributes[k] = v
+	}
+	body := map[string]any{}
+	for k, v := range l.Body {
+		body[k] = v
+	}
+	return &Log{
+		Timestamp:         l.Timestamp,
+		ObservedTimestamp: l.ObservedTimestamp,
+		Body:              body,
+		Attributes:        attributes,
+	}
+}
+
 type LogBatch struct {
 	Logs []*Log
 }
