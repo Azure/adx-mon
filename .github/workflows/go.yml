@@ -8,7 +8,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-    types: [opened, reopened]
+    types: [opened, review_requested, synchronize, reopened]
 
 jobs:
 
