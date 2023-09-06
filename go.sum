@@ -1035,6 +1035,8 @@ github.com/stretchr/testify v1.8.3 h1:RP3t2pwF7cMEbC1dqtB6poj3niw/9gnV4Cjg5oW5gt
 github.com/stretchr/testify v1.8.3/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/tj/assert v0.0.3 h1:Df/BlaZ20mq6kuai7f5z2TvPFiwC3xaWJSDQNiIS3Rk=
 github.com/tj/assert v0.0.3/go.mod h1:Ne6X72Q+TB1AteidzQncjw9PabbMp4PBMZ1k+vd1Pvk=
+github.com/traefik/yaegi v0.15.1 h1:YA5SbaL6HZA0Exh9T/oArRHqGN2HQ+zgmCY7dkoTXu4=
+github.com/traefik/yaegi v0.15.1/go.mod h1:AVRxhaI2G+nUsaM1zyktzwXn69G3t/AuTDrCiTds9p0=
 github.com/urfave/cli/v2 v2.24.3 h1:7Q1w8VN8yE0MJEHP06bv89PjYsN4IHWED2s1v/Zlfm0=
 github.com/urfave/cli/v2 v2.24.3/go.mod h1:GHupkWPMM0M/sj1a2b4wUrWBPzazNrIjouW6fmdJLxc=
 github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 h1:bAn7/zixMGCfxrRTfdpNzjtPYqr8smhKouy9mxVdGPU=

@@ -32,6 +32,7 @@ func NewJournaldCollector(transforms []logs.Transformer) *JournaldCollector {
 }
 
 func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
+	// TODO should probably start/stop transformers outside the context of a given collector
 	for _, transformer := range c.transforms {
 		transformer.Open(ctx)
 		// TODO shutdown transformers, going from first to last

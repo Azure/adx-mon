@@ -318,6 +318,11 @@ github.com/spf13/pflag
 ## explicit; go 1.20
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
+# github.com/traefik/yaegi v0.15.1
+## explicit; go 1.18
+github.com/traefik/yaegi/internal/unsafe2
+github.com/traefik/yaegi/interp
+github.com/traefik/yaegi/stdlib
 # github.com/urfave/cli/v2 v2.24.3
 ## explicit; go 1.18
 github.com/urfave/cli/v2

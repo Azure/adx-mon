@@ -38,8 +38,12 @@ func main() {
 	}
 
 	kubernetesTransform := transform.NewKubernetesTransform(client)
+	testPlugin, err := transform.NewGoPlugin("goms.io/aks/logs/pkg/ccp", "ccp")
+	if err != nil {
+		panic(err) // TODO
+	}
 
-	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, kubernetesTransform})
+	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, kubernetesTransform, testPlugin})
 	err = dockerCollector.CollectLogs(ctx)
 	fmt.Println(err)
 }

@@ -21,3 +21,6 @@ kustomize/overlays
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# Misc development directories
+local_plugins
