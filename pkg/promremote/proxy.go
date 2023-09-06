@@ -43,9 +43,11 @@ func (r *RemoteWriteProxy) Write(ctx context.Context, _ string, wr prompb.WriteR
 				batch.Timeseries = append(batch.Timeseries, wr.Timeseries[0])
 				wr.Timeseries = wr.Timeseries[1:]
 			}
-			logger.Infof("Sending %d timeseries to %s", len(batch.Timeseries), r.Endpoints[i])
+
+			endpoint := r.Endpoints[i]
+			logger.Infof("Sending %d timeseries to %s", len(batch.Timeseries), endpoint)
 			g.Go(func() error {
-				return r.Client.Write(gCtx, r.Endpoints[i], &batch)
+				return r.Client.Write(gCtx, endpoint, &batch)
 			})
 		}
 	}

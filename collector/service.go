@@ -335,6 +335,7 @@ func (s *Service) scrapeTargets() {
 								Value:     float64(q.GetCumulativeCount()),
 							},
 						}
+						ts = s.requestTransformer.TransformTimeSeries(ts)
 						wr.Timeseries = append(wr.Timeseries, ts)
 
 						wr = s.flushBatchIfNecessary(wr)
@@ -361,6 +362,7 @@ func (s *Service) scrapeTargets() {
 							Value:     float64(hist.GetSampleCount()),
 						},
 					}
+					ts = s.requestTransformer.TransformTimeSeries(ts)
 					wr.Timeseries = append(wr.Timeseries, ts)
 
 					wr = s.flushBatchIfNecessary(wr)
