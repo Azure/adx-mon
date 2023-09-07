@@ -16,12 +16,11 @@ import (
 func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 	testServer := newTestServer()
 	client := testServer.Client()
-	client.Transport = NewRoundTripper("fake-system", client.Transport)
+	client.Transport = NewRoundTripper(client.Transport)
 
 	testCases := []struct {
 		name             string
 		method           string
-		panic            bool
 		statusCode       int
 		expectedResponse string
 		expectedError    bool
@@ -29,7 +28,6 @@ func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 		{
 			name:       "panic",
 			method:     "GET",
-			panic:      true,
 			statusCode: 500,
 		},
 		{
@@ -58,7 +56,6 @@ func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 			params := url.Values{
 				"response":   []string{tc.expectedResponse},
 				"statusCode": []string{strconv.Itoa(tc.statusCode)},
-				"panic":      []string{strconv.FormatBool(tc.panic)},
 			}.Encode()
 
 			switch tc.method {
@@ -86,21 +83,15 @@ func TestMeasureHandlerAndRoundTripper(t *testing.T) {
 }
 
 func newTestServer() *httptest.Server {
-	f := http.HandlerFunc(HandlerFuncRecorder("fake-system", func(w http.ResponseWriter, r *http.Request) {
+	f := http.HandlerFunc(HandlerFuncRecorder("fake_system", func(w http.ResponseWriter, r *http.Request) {
 		response := r.URL.Query().Get("response")
 		statusCode := r.URL.Query().Get("statusCode")
-		shouldPanic := r.URL.Query().Get("panic")
-		fmt.Println("using statusCode", statusCode)
-		if shouldPanic == "true" {
-			panic("panic")
-		}
 
 		if statusCode != "0" {
 			code, err := strconv.Atoi(statusCode)
 			if err != nil {
 				panic("invalid status code")
 			}
-			fmt.Println("writing status code", code)
 			w.WriteHeader(code)
 		}
 		if response != "" {

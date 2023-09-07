@@ -16,7 +16,7 @@ var dialer = &net.Dialer{
 	Timeout: 5 * time.Second,
 }
 
-var transport = metrics.NewRoundTripper(metrics.CollectorSubsystem, &http.Transport{
+var transport = metrics.NewRoundTripper(&http.Transport{
 	DialContext:         dialer.DialContext,
 	TLSHandshakeTimeout: 5 * time.Second,
 })

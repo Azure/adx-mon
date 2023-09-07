@@ -12,6 +12,155 @@ var (
 	AlerterSubsystem   = "alerter"
 	CollectorSubsystem = "collector"
 
+	// Generic HTTP Metrics
+	InflightRequests = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "in_flight_requests",
+	}, []string{"path"})
+
+	RequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "requests_total",
+		Help:      "Counter of requests received for this http server",
+	}, []string{"path", "code"})
+
+	RequestDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "request_duration_seconds",
+		Help:      "A histogram of request latencies.",
+	}, []string{"path"})
+
+	RequestBytesReceived = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "request_bytes",
+		Help:      "A histogram of request sizes from the wrapped server.",
+		Buckets:   bytesBucket,
+	}, []string{"path"})
+
+	ResponseBytesSent = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "response_bytes",
+		Help:      "A histogram of response sizes from the wrapped server.",
+		Buckets:   bytesBucket,
+	}, []string{"path"})
+
+	ClientHttpRequestsInFlight = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "outbound_in_flight_requests",
+		Help:      "A gauge of in-flight requests for the wrapped client.",
+	}, []string{"host", "path"})
+
+	ClientHttpRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "outbound_requests_total",
+		Help:      "A counter for requests from the wrapped client.",
+	}, []string{"host", "path", "code"})
+
+	ClientHttpRequestsBytesSent = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "outbound_request_bytes",
+		Help:      "A histogram of request sizes for requests from the wrapped client.",
+		Buckets:   bytesBucket,
+	}, []string{"host", "path"})
+
+	ClientHttpResponseBytesReceived = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "outbound_response_bytes",
+		Help:      "A histogram of response sizes from the wrapped client.",
+		Buckets:   bytesBucket,
+	}, []string{"host", "path"})
+
+	ClientHttpRequestLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "http",
+		Name:      "outbound_request_duration_seconds",
+		Help:      "A histogram of request latencies.",
+	}, []string{"host", "path"})
+
+	// TODO: Consider collapsing http metrics into a single subsystem, and dileniate usage by scrape job/pod name.
+	// Ingestor HTTP Metrics
+	IngestorInflightRequests = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: IngestorSubsystem,
+		Name:      "in_flight_requests",
+	}, []string{"path"})
+
+	IngestorRequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: IngestorSubsystem,
+		Name:      "requests_total",
+		Help:      "Counter of requests received for this http server",
+	}, []string{"path", "code"})
+
+	IngestorRequestDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: IngestorSubsystem,
+		Name:      "request_duration_seconds",
+		Help:      "A histogram of request latencies.",
+	}, []string{"path"})
+
+	IngestorRequestBytesReceived = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: IngestorSubsystem,
+		Name:      "request_bytes",
+		Help:      "A histogram of request sizes from the wrapped server.",
+		Buckets:   bytesBucket,
+	}, []string{"path"})
+
+	IngestorResponseBytesSent = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: IngestorSubsystem,
+		Name:      "response_bytes",
+		Help:      "A histogram of response sizes from the wrapped server.",
+		Buckets:   bytesBucket,
+	}, []string{"path"})
+
+	// Collector HTTP Metrics
+	CollectorInflightRequests = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: CollectorSubsystem,
+		Name:      "in_flight_requests",
+	}, []string{"path"})
+
+	CollectorRequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: CollectorSubsystem,
+		Name:      "requests_total",
+		Help:      "Counter of requests received for this http server",
+	}, []string{"path", "code"})
+
+	CollectorRequestDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: CollectorSubsystem,
+		Name:      "request_duration_seconds",
+		Help:      "A histogram of request latencies.",
+	}, []string{"path"})
+
+	CollectorRequestBytesReceived = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: CollectorSubsystem,
+		Name:      "request_bytes",
+		Help:      "A histogram of request sizes from the wrapped server.",
+		Buckets:   bytesBucket,
+	}, []string{"path"})
+
+	CollectorResponseBytesSent = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: CollectorSubsystem,
+		Name:      "response_bytes",
+		Help:      "A histogram of response sizes from the wrapped server.",
+		Buckets:   bytesBucket,
+	}, []string{"path"})
+
 	// Ingestor metrics
 	IngestorUploadErrors = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: Namespace,

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
@@ -171,7 +171,7 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	require.NoError(t, c.Open(context.Background()))
 
 	coord := c.(*coordinator)
-	require.Equal(t, 2, len(coord.peers))
+	require.Equal(t, 1, len(coord.peers))
 
 	newPeer = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{

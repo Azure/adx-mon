@@ -30,7 +30,7 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) 
 
 	httpClient := &http.Client{
 		Timeout:   timeout,
-		Transport: metrics.NewRoundTripper(metrics.IngestorSubsystem, t),
+		Transport: metrics.NewRoundTripper(t),
 	}
 
 	return &Client{

@@ -451,7 +451,7 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	kcsb.WithDefaultAzureCredential()
 
 	httpClient := &http.Client{
-		Transport: metrics.NewRoundTripper(metrics.IngestorSubsystem, http.DefaultTransport),
+		Transport: metrics.NewRoundTripper(http.DefaultTransport),
 	}
 	return kusto.New(kcsb, kusto.WithHttpClient(httpClient))
 }

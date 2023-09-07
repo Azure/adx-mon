@@ -84,7 +84,7 @@ func NewClient(opts ClientOpts) (*Client, error) {
 
 	httpClient := &http.Client{
 		Timeout:   opts.Timeout,
-		Transport: metrics.NewRoundTripper(metrics.CollectorSubsystem, t),
+		Transport: metrics.NewRoundTripper(t),
 	}
 
 	return &Client{
