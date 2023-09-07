@@ -8,9 +8,9 @@ import (
 // Log represents a single log entry
 type Log struct {
 	// Timestamp of the event in nanoseconds since the unix epoch
-	Timestamp int64
+	Timestamp uint64
 	// Timestamp when this event was ingested in nanoseconds since the unix epoch
-	ObservedTimestamp int64
+	ObservedTimestamp uint64
 
 	// Body of the log entry
 	Body map[string]any
@@ -54,5 +54,11 @@ func (l *LogBatch) String() string {
 type Transformer interface {
 	Open(context.Context) error
 	Transform(context.Context, *LogBatch) (*LogBatch, error)
+	Close() error
+}
+
+type Sink interface {
+	Open(context.Context) error
+	Send(context.Context, *LogBatch) error
 	Close() error
 }

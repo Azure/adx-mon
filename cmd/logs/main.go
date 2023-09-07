@@ -9,6 +9,7 @@ import (
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/journald"
+	"github.com/Azure/adx-mon/collector/logs/sink"
 	"github.com/Azure/adx-mon/collector/logs/transform"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -43,7 +44,14 @@ func main() {
 		panic(err) // TODO
 	}
 
-	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, kubernetesTransform, testPlugin})
+	sink := sink.NewStdoutSink()
+	sinks := []logs.Sink{sink}
+
+	for _, sink := range sinks {
+		sink.Open(ctx)
+		defer sink.Close()
+	}
+	dockerCollector := journald.NewJournaldCollector([]logs.Transformer{&journald.DockerMultiline{}, kubernetesTransform, testPlugin}, sinks)
 	err = dockerCollector.CollectLogs(ctx)
 	fmt.Println(err)
 }

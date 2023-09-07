@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/coreos/go-systemd/sdjournal"
 )
 
@@ -23,11 +24,13 @@ const (
 
 type JournaldCollector struct {
 	transforms []logs.Transformer
+	sinks      []logs.Sink
 }
 
-func NewJournaldCollector(transforms []logs.Transformer) *JournaldCollector {
+func NewJournaldCollector(transforms []logs.Transformer, sinks []logs.Sink) *JournaldCollector {
 	return &JournaldCollector{
 		transforms: transforms,
+		sinks:      sinks,
 	}
 }
 
@@ -88,8 +91,8 @@ func (c *JournaldCollector) CollectLogs(ctx context.Context) error {
 		}
 		c.addKubernetesAttributes(entry, attributes)
 		log := &logs.Log{
-			Timestamp:         int64(entry.RealtimeTimestamp),
-			ObservedTimestamp: time.Now().UnixNano(),
+			Timestamp:         uint64(entry.RealtimeTimestamp),
+			ObservedTimestamp: uint64(time.Now().UnixNano()),
 			Body:              map[string]interface{}{"MESSAGE": entry.Fields["MESSAGE"]},
 			Attributes:        attributes,
 		}
@@ -132,8 +135,14 @@ func (c *JournaldCollector) process(ctx context.Context, log *logs.Log) error {
 			return err
 		}
 	}
-	// TODO
-	fmt.Println(batch)
+
+	for _, sink := range c.sinks {
+		err = sink.Send(ctx, batch)
+		if err != nil {
+			logger.Errorf("Sink send: %s", err)
+			// TODO collect these errors or skip
+		}
+	}
 	return nil
 }
 
