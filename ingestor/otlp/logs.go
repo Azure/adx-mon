@@ -50,7 +50,7 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 					ErrorMessage:       err.Error(),
 				},
 			}
-			return connect_go.NewResponse(res), err
+			return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeInvalidArgument, err)
 		}
 		if err := srv.w(ctx, d, t, logs); err != nil {
 			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
@@ -60,7 +60,7 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 					ErrorMessage:       err.Error(),
 				},
 			}
-			return connect_go.NewResponse(res), err
+			return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeDataLoss, err)
 		}
 		metrics.LogsReceived.WithLabelValues(d, t).Add(float64(len(logs)))
 	}

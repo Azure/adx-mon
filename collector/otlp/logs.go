@@ -162,10 +162,14 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				})
 			}
 
-			var respBodyBytes []byte
+			var (
+				respBodyBytes []byte
+				statusCode    int
+			)
 			if err := g.Wait(); err != nil {
 				// Construct a partial success response with the maximum number of rejected records
 				logger.Errorf("Failed to proxy request: %v", err)
+				statusCode = httpStatusCodeForGRPCError(err)
 				respBodyBytes, err = proto.Marshal(&v1.ExportLogsPartialSuccess{RejectedLogRecords: rejectedRecords})
 				if err != nil {
 					logger.Errorf("Failed to marshal response: %v", err)
@@ -176,6 +180,7 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			} else {
 				// The logs have been committed by the OTLP endpoint
 				respBodyBytes, err = proto.Marshal(&v1.ExportLogsServiceResponse{})
+				statusCode = http.StatusOK
 				if err != nil {
 					logger.Errorf("Failed to marshal response: %v", err)
 					w.WriteHeader(http.StatusInternalServerError)
@@ -185,10 +190,10 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 			}
 			// Even in the case of a partial response, OTLP API requires us to send StatusOK
 			w.Header().Add("Content-Type", "application/x-protobuf")
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(statusCode)
 			w.Write(respBodyBytes)
 
-			m.WithLabelValues(strconv.Itoa(http.StatusOK)).Inc()
+			m.WithLabelValues(strconv.Itoa(statusCode)).Inc()
 
 		case "application/json":
 			// We're receiving JSON, so we need to unmarshal the JSON
@@ -254,4 +259,23 @@ func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue
 	}
 
 	return msg, numLogs
+}
+
+func httpStatusCodeForGRPCError(err error) int {
+	// Differentiate between retryable and non-retryable errors
+	// https://opentelemetry.io/docs/specs/otlp/#failures-1
+
+	var connectErr *connect_go.Error
+	if errors.As(err, &connectErr) {
+		switch connectErr.Code() {
+		case connect_go.CodeInvalidArgument:
+			return http.StatusBadRequest
+		case connect_go.CodeDataLoss:
+			// while it might seem more natural to return a 500 here, the OTLP spec
+			// states that only 502, 503 and 504 are to be interpretted as retryable.
+			return http.StatusServiceUnavailable
+		}
+	}
+	// Unknown error, so we'll return a generic 500
+	return http.StatusInternalServerError
 }

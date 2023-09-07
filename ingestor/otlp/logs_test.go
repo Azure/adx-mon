@@ -2,6 +2,7 @@ package otlp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,12 +18,13 @@ import (
 type writer struct {
 	t      *testing.T
 	called int
+	err    error
 }
 
 func (w *writer) WriteLogRecords(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error {
 	w.t.Helper()
 	w.called++
-	return nil
+	return w.err
 }
 
 func TestOTLP(t *testing.T) {
@@ -43,13 +45,39 @@ func TestOTLP(t *testing.T) {
 
 	client := logsv1connect.NewLogsServiceClient(srv.Client(), srv.URL, connect.WithGRPC())
 	resp, err := client.Export(context.Background(), connect.NewRequest(&log))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	if resp.Msg.GetPartialSuccess() != nil {
 		t.Fatal("Did not expect a partial success")
 	}
 	require.Equal(t, 2, w.called)
+}
+
+func TestOTLPFailures(t *testing.T) {
+	w := &writer{t: t, err: errors.New("something happened")}
+
+	mux := http.NewServeMux()
+	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServer(w.WriteLogRecords)))
+
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlog, &log); err != nil {
+		require.NoError(t, err)
+	}
+
+	client := logsv1connect.NewLogsServiceClient(srv.Client(), srv.URL, connect.WithGRPC())
+	_, err := client.Export(context.Background(), connect.NewRequest(&log))
+	// Since the request payload, in this case, contains the necessary destination metadata,
+	// we're forcing the underlying writer, which in our case returns a failure, and from the
+	// calling code's perspective is interpretted as a failure to write to the WAL, the appropriate
+	// error is a write failure.
+	var connectErr *connect.Error
+	require.True(t, errors.As(err, &connectErr))
+	require.Equal(t, connect.CodeDataLoss, connectErr.Code())
 }
 
 func TestGroupbyKustoTable(t *testing.T) {
