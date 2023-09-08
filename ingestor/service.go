@@ -89,6 +89,9 @@ type ServiceOpts struct {
 
 	// MetricsDatabase is the name of the metrics database.
 	MetricsDatabase string
+
+	// LogsDatabases is a slice of log database names.
+	LogsDatabases []string
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -154,7 +157,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		HealthChecker: health,
 	})
 
-	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer(coord.WriteOTLPLogs))
+	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer(coord.WriteOTLPLogs, opts.LogsDatabases))
 
 	return &Service{
 		opts:        opts,
