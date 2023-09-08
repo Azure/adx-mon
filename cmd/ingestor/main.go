@@ -283,7 +283,7 @@ func realMain(ctx *cli.Context) error {
 	if err != nil {
 		logger.Fatalf("Failed to create uploader: %s", err)
 	}
-	otlpLogsUploaders, err := otlpLogUploaders(ctx.StringSlice("logs-kusto-endpoints"), storageDir, concurrentUploads)
+	otlpLogsUploaders, oltpLogDatabases, err := otlpLogUploaders(ctx.StringSlice("logs-kusto-endpoints"), storageDir, concurrentUploads)
 	if err != nil {
 		logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 	}
@@ -298,6 +298,7 @@ func realMain(ctx *cli.Context) error {
 		K8sCli:               k8scli,
 		MetricsKustoCli:      client,
 		MetricsDatabase:      database,
+		LogsDatabases:        oltpLogDatabases,
 		Namespace:            namespace,
 		Hostname:             hostname,
 		StorageDir:           storageDir,
@@ -476,16 +477,17 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 	return addr, database, nil
 }
 
-func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads int) ([]adx.Uploader, error) {
+func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads int) ([]adx.Uploader, []string, error) {
 	var uploaders []adx.Uploader
+	var uploadDatabaseNames []string
 	for _, endpoint := range endpoints {
 		addr, database, err := parseKustoEndpoint(endpoint)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		client, err := newKustoClient(addr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
 			StorageDir:        storageDir,
@@ -494,8 +496,9 @@ func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads i
 			DefaultMapping:    storage.DefaultLogsMapping,
 			SampleType:        adx.OTLPLogs,
 		}))
+		uploadDatabaseNames = append(uploadDatabaseNames, database)
 	}
-	return uploaders, nil
+	return uploaders, uploadDatabaseNames, nil
 }
 
 func newLogger() *log.Logger {

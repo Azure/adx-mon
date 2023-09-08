@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,18 +22,25 @@ import (
 var bytesPool = pool.NewBytes(1024)
 
 type logsServer struct {
-	w cluster.OTLPLogsWriter
+	w         cluster.OTLPLogsWriter
+	databases map[string]struct{}
 }
 
-func NewLogsServer(w cluster.OTLPLogsWriter) logsv1connect.LogsServiceHandler {
-	logger.Infof("Initializing OTLP logs server")
-	return &logsServer{w: w}
+func NewLogsServer(w cluster.OTLPLogsWriter, logsDatabases []string) logsv1connect.LogsServiceHandler {
+	logger.Infof("Initializing OTLP logs server with databases: %v", logsDatabases)
+	databases := make(map[string]struct{})
+	for _, d := range logsDatabases {
+		databases[d] = struct{}{}
+	}
+	return &logsServer{w: w, databases: databases}
 }
 
 func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.ExportLogsServiceRequest]) (*connect_go.Response[v1.ExportLogsServiceResponse], error) {
 	var (
-		m    = metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": logsv1connect.LogsServiceExportProcedure})
-		d, t string
+		m                  = metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": logsv1connect.LogsServiceExportProcedure})
+		d, t               string
+		invalidLogErrors   error = nil
+		rejectedLogRecords int64 = 0
 	)
 
 	for key, logs := range groupByKustoTable(req.Msg) {
@@ -42,17 +50,15 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 		}
 
 		if d == "" || t == "" {
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-			err := errors.New("request missing destination metadata")
-			res := &v1.ExportLogsServiceResponse{
-				PartialSuccess: &v1.ExportLogsPartialSuccess{
-					RejectedLogRecords: int64(len(logs)),
-					ErrorMessage:       err.Error(),
-				},
-			}
-			return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeInvalidArgument, err)
-		}
-		if err := srv.w(ctx, d, t, logs); err != nil {
+			invalidCount := len(logs)
+			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request missing destination metadata for %d logs", invalidCount))
+			rejectedLogRecords += int64(invalidCount)
+		} else if _, ok := srv.databases[d]; !ok {
+			invalidCount := len(logs)
+			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request destination not supported for %d logs: %s", invalidCount, d))
+			rejectedLogRecords += int64(invalidCount)
+		} else if err := srv.w(ctx, d, t, logs); err != nil {
+			// Internal errors with writer. Bail out now and allow the client to retry.
 			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 			res := &v1.ExportLogsServiceResponse{
 				PartialSuccess: &v1.ExportLogsPartialSuccess{
@@ -63,6 +69,17 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 			return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeDataLoss, err)
 		}
 		metrics.LogsReceived.WithLabelValues(d, t).Add(float64(len(logs)))
+	}
+
+	if invalidLogErrors != nil {
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		res := &v1.ExportLogsServiceResponse{
+			PartialSuccess: &v1.ExportLogsPartialSuccess{
+				RejectedLogRecords: rejectedLogRecords,
+				ErrorMessage:       invalidLogErrors.Error(),
+			},
+		}
+		return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeInvalidArgument, invalidLogErrors)
 	}
 
 	m.WithLabelValues(strconv.Itoa(http.StatusOK)).Inc()
