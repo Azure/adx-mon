@@ -2,6 +2,8 @@ package adx
 
 import (
 	"context"
+	"os"
+	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -11,12 +13,17 @@ type dispatcher struct {
 	uploaders map[string]Uploader
 	queue     chan *cluster.Batch
 	cancel    context.CancelFunc
+
+	// maxSegmentAgeUnknownDestination is the max age of a segment where we do not have an uploader defined.
+	// This is used to prevent segments from being stuck in the queue forever when they'll never get consumed.
+	maxSegmentAgeUnknownDestination time.Duration
 }
 
 func NewDispatcher(uploaders []Uploader) *dispatcher {
 	d := &dispatcher{
-		uploaders: make(map[string]Uploader),
-		queue:     make(chan *cluster.Batch, 10000),
+		uploaders:                       make(map[string]Uploader),
+		queue:                           make(chan *cluster.Batch, 10000),
+		maxSegmentAgeUnknownDestination: 12 * time.Hour,
 	}
 	for _, u := range uploaders {
 		logger.Infof("Registering uploader for database %s", u.Database())
@@ -65,6 +72,7 @@ func (d *dispatcher) upload(ctx context.Context) {
 			u, ok := d.uploaders[batch.Database]
 			if !ok {
 				logger.Errorf("No uploader for database %s", batch.Database)
+				d.deleteOldUnknownSegments(batch)
 				continue
 			}
 
@@ -73,6 +81,19 @@ func (d *dispatcher) upload(ctx context.Context) {
 			default:
 				logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(u.UploadQueue()), cap(u.UploadQueue()))
 			}
+		}
+	}
+}
+
+func (d *dispatcher) deleteOldUnknownSegments(batch *cluster.Batch) {
+	for _, segment := range batch.Paths {
+		segmentCreation, err := cluster.SegmentCreationTime(segment)
+		if err != nil {
+			continue
+		}
+		if time.Since(segmentCreation) > d.maxSegmentAgeUnknownDestination {
+			logger.Warnf("Segment %s is too old to be uploaded. Will be deleted.", segment)
+			os.Remove(segment)
 		}
 	}
 }

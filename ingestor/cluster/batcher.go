@@ -267,7 +267,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				continue
 			}
 
-			createdAt, err := segmentCreationTime(path)
+			createdAt, err := SegmentCreationTime(path)
 			if err != nil {
 				logger.Warnf("failed to determine segment creation time: %s", err)
 			}
@@ -349,7 +349,7 @@ func prioritizeOldest(a []*Batch) []*Batch {
 func maxCreated(batch []string) time.Time {
 	var maxTime time.Time
 	for _, v := range batch {
-		createdAt, err := segmentCreationTime(v)
+		createdAt, err := SegmentCreationTime(v)
 		if err != nil {
 			logger.Warnf("Invalid file name: %s: %s", v, err)
 			continue
@@ -362,7 +362,7 @@ func maxCreated(batch []string) time.Time {
 	return maxTime
 }
 
-func segmentCreationTime(filename string) (time.Time, error) {
+func SegmentCreationTime(filename string) (time.Time, error) {
 	_, _, epoch, err := wal.ParseFilename(filename)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid file name: %s: %w", filename, err)
