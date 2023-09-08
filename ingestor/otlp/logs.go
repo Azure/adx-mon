@@ -59,7 +59,9 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 			rejectedLogRecords += int64(invalidCount)
 		} else if err := srv.w(ctx, d, t, logs); err != nil {
 			// Internal errors with writer. Bail out now and allow the client to retry.
+			logger.Errorf("Failed to write logs to %s.%s: %v", d, t, err)
 			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			metrics.ValidLogsDropped.WithLabelValues().Add(float64(len(logs)))
 			res := &v1.ExportLogsServiceResponse{
 				PartialSuccess: &v1.ExportLogsPartialSuccess{
 					RejectedLogRecords: int64(len(logs)),
@@ -67,12 +69,15 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 				},
 			}
 			return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeDataLoss, err)
+		} else {
+			metrics.LogsReceived.WithLabelValues(d, t).Add(float64(len(logs)))
 		}
-		metrics.LogsReceived.WithLabelValues(d, t).Add(float64(len(logs)))
 	}
 
 	if invalidLogErrors != nil {
+		logger.Warnf("Invalid logs received from %s: %v", req.Peer().Addr, invalidLogErrors)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		metrics.InvalidLogsDropped.WithLabelValues().Add(float64(rejectedLogRecords))
 		res := &v1.ExportLogsServiceResponse{
 			PartialSuccess: &v1.ExportLogsPartialSuccess{
 				RejectedLogRecords: rejectedLogRecords,

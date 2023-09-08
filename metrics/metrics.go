@@ -65,6 +65,20 @@ var (
 		Help:      "Counter of the number of logs received",
 	}, []string{"database", "table"})
 
+	InvalidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "invalid_logs_dropped",
+		Help:      "Counter of the number of invalid logs dropped",
+	}, []string{})
+
+	ValidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "valid_logs_dropped",
+		Help:      "Counter of the number of logs dropped due to ingestor errors",
+	}, []string{})
+
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
