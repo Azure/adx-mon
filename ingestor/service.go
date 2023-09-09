@@ -75,9 +75,9 @@ type ServiceOpts struct {
 	// Hostname is the hostname of the current node.
 	Hostname string
 
-	// DisablePeerDiscovery disables peer discovery and prevents transfers of small segments to an owner.
+	// DisablePeerTransfer disables peer discovery and prevents transfers of small segments to an owner.
 	// Each instance of ingestor will upload received segments directly.
-	DisablePeerDiscovery bool
+	DisablePeerTransfer bool
 
 	// MaxTransferSize is the minimum size of a segment that will be transferred to another node.  If a segment
 	// exceeds this size, it will be uploaded directly by the current node.
@@ -103,12 +103,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
-		DisablePeerDiscovery: opts.DisablePeerDiscovery,
-		WriteTimeSeriesFn:    store.WriteTimeSeries,
-		WriteOTLPLogsFn:      store.WriteOTLPLogs,
-		K8sCli:               opts.K8sCli,
-		Hostname:             opts.Hostname,
-		Namespace:            opts.Namespace,
+		WriteTimeSeriesFn: store.WriteTimeSeries,
+		WriteOTLPLogsFn:   store.WriteOTLPLogs,
+		K8sCli:            opts.K8sCli,
+		Hostname:          opts.Hostname,
+		Namespace:         opts.Namespace,
 	})
 	if err != nil {
 		return nil, err
@@ -138,6 +137,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		UploadQueue:        opts.Uploader.UploadQueue(),
 		TransferQueue:      repl.TransferQueue(),
 		PeerHealthReporter: health,
+		TransfersDisabled:  opts.DisablePeerTransfer,
 	})
 
 	health.QueueSizer = batcher

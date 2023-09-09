@@ -97,58 +97,6 @@ func TestCoordinator_NewPeer(t *testing.T) {
 
 }
 
-func TestCoordinator_DiscoveryDisabled(t *testing.T) {
-	self := &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ingestor-1",
-			Namespace: "adx-mon",
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "StatefulSet",
-					Name: "ingestor",
-				},
-			},
-		},
-		Status: v1.PodStatus{
-			PodIP: "10.200.0.1",
-			Conditions: []v1.PodCondition{
-				{
-					Type:   v1.PodInitialized,
-					Status: v1.ConditionTrue,
-				},
-				{
-					Type:   v1.PodReady,
-					Status: v1.ConditionTrue,
-				},
-			},
-		},
-	}
-
-	kcli := fakek8s.NewSimpleClientset(&v1.PodList{Items: []v1.Pod{*self}})
-
-	// Test with no namespace or hostname, that discovery is disabled
-	c, err := NewCoordinator(&CoordinatorOpts{
-		WriteTimeSeriesFn:  nil,
-		K8sCli:             kcli,
-		Namespace:          "",
-		Hostname:           "ingestor-0",
-		InsecureSkipVerify: false,
-	})
-	require.NoError(t, c.Open(context.Background()))
-	defer c.Close()
-
-	require.NoError(t, err)
-
-	coord := c.(*coordinator)
-	require.Equal(t, 1, len(coord.peers))
-	require.True(t, coord.peers["ingestor-0"] != "") // Ensure we are in the list
-	require.True(t, coord.peers["ingestor-1"] == "") // Discovery disabled
-}
-
 func TestCoordinator_LostPeer(t *testing.T) {
 	self := &v1.Pod{
 		TypeMeta: metav1.TypeMeta{

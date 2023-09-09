@@ -55,16 +55,15 @@ type coordinator struct {
 
 	factory informers.SharedInformerFactory
 
-	tsw               TimeSeriesWriter
-	lw                OTLPLogsWriter
-	kcli              kubernetes.Interface
-	pl                v12.PodLister
-	discoveryDisabled bool
-	hostEntpoint      string
-	hostname          string
-	groupName         string
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
+	tsw          TimeSeriesWriter
+	lw           OTLPLogsWriter
+	kcli         kubernetes.Interface
+	pl           v12.PodLister
+	hostEntpoint string
+	hostname     string
+	groupName    string
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 type CoordinatorOpts struct {
@@ -82,26 +81,17 @@ type CoordinatorOpts struct {
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
-
-	// DisablePeerDiscovery disables peer discovery and prevents transfers of small segments to an owner.
-	// Each instance of ingestor will upload received segments directly.
-	DisablePeerDiscovery bool
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	ns := opts.Namespace
 	groupName := opts.Hostname
-	discoveryDisabled := opts.DisablePeerDiscovery
-	if opts.DisablePeerDiscovery {
-		logger.Warnf("Peer discovery disabled")
-	} else if ns == "" {
+	if ns == "" {
 		logger.Warnf("No namespace found, peer discovery disabled")
-		discoveryDisabled = true
 	} else {
 		logger.Infof("Using namespace %s for peer discovery", ns)
 		if !strings.Contains(groupName, "-") {
 			logger.Warnf("Hostname not in statefuleset format, peer discovery disabled")
-			discoveryDisabled = true
 		} else {
 			rindex := strings.LastIndex(groupName, "-")
 			groupName = groupName[:rindex]
@@ -110,12 +100,11 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	}
 
 	return &coordinator{
-		discoveryDisabled: discoveryDisabled,
-		groupName:         groupName,
-		hostname:          opts.Hostname,
-		namespace:         ns,
-		opts:              opts,
-		kcli:              opts.K8sCli,
+		groupName: groupName,
+		hostname:  opts.Hostname,
+		namespace: ns,
+		opts:      opts,
+		kcli:      opts.K8sCli,
 	}, nil
 }
 
@@ -153,11 +142,6 @@ func (c *coordinator) OnDelete(obj interface{}) {
 }
 
 func (c *coordinator) isPeer(p *v1.Pod) bool {
-	// Determine if peer discovery is enabled or not
-	if c.discoveryDisabled {
-		return false
-	}
-
 	if p.Namespace != c.namespace {
 		return false
 	}
@@ -212,14 +196,12 @@ func (c *coordinator) Open(ctx context.Context) error {
 		return err
 	}
 
-	if c.isPeerDiscoveryEnabled() {
-		if err := c.syncPeers(); err != nil {
-			return err
-		}
-
-		c.wg.Add(1)
-		go c.resyncPeers(ctx)
+	if err := c.syncPeers(); err != nil {
+		return err
 	}
+
+	c.wg.Add(1)
+	go c.resyncPeers(ctx)
 
 	return nil
 }
@@ -247,11 +229,6 @@ func (c *coordinator) WriteOTLPLogs(ctx context.Context, database, table string,
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
 func (c *coordinator) syncPeers() error {
-	// Determine if peer discovery is enabled or not
-	if !c.isPeerDiscoveryEnabled() {
-		return nil
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -283,10 +260,6 @@ func (c *coordinator) syncPeers() error {
 	}
 
 	return nil
-}
-
-func (c *coordinator) isPeerDiscoveryEnabled() bool {
-	return !c.discoveryDisabled
 }
 
 func (c *coordinator) setPartitioner(set map[string]string) error {
