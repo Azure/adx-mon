@@ -48,6 +48,8 @@ type Batcher interface {
 	BatchSegments() error
 	UploadQueueSize() int
 	TransferQueueSize() int
+	SegmentsTotal() int64
+	SegmentsSize() int64
 }
 
 // Batcher manages WAL segments that are ready for upload to kusto or that need
@@ -56,10 +58,16 @@ type batcher struct {
 	uploadQueue   chan *Batch
 	transferQueue chan *Batch
 
-	// pendingUploads is the count of segments on disk ready for upload but not in the upload queue.
+	// pendingUploads is the number of batches ready for upload but not in the upload queue.
 	pendingUploads uint64
-	// pendingTransfers is the count of segments on disk ready for transfer but not in the transfer queue.
+	// pendingTransfers is the number of batches ready for transfer but not in the transfer queue.
 	pendingTransfer uint64
+
+	// segmentsTotal is the total number of segments on disk.
+	segmentsTotal int64
+
+	// segmentsSize is the total size of segments on disk.
+	segementsSize int64
 
 	// transferDisabled is set to true when transfers are disabled.
 	transferDisabled bool
@@ -117,6 +125,14 @@ func (a *batcher) TransferQueueSize() int {
 
 func (a *batcher) UploadQueueSize() int {
 	return len(a.uploadQueue) + int(atomic.LoadUint64(&a.pendingUploads))
+}
+
+func (a *batcher) SegmentsTotal() int64 {
+	return atomic.LoadInt64(&a.segmentsTotal)
+}
+
+func (a *batcher) SegmentsSize() int64 {
+	return atomic.LoadInt64(&a.segementsSize)
 }
 
 func (a *batcher) watch(ctx context.Context) {
@@ -182,9 +198,10 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	// We need to find the segment that this node is responsible for uploading to kusto and ones that
 	// need to be transferred to other nodes.
 	var (
-		owned, notOwned []*Batch
-		lastSegmentKey  string
-		groupSize       int
+		owned, notOwned       []*Batch
+		lastSegmentKey        string
+		groupSize             int
+		totalFiles, totalSize int64
 	)
 	for _, v := range entries {
 		fi, err := os.Stat(v.Path)
@@ -192,6 +209,10 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			logger.Warnf("Failed to stat file: %s", v.Path)
 			continue
 		}
+
+		totalFiles++
+		totalSize += fi.Size()
+
 		groupSize += int(fi.Size())
 
 		createdAt, err := flake.ParseFlakeID(v.Epoch)
@@ -311,6 +332,9 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			notOwned = append(notOwned, batch)
 		}
 	}
+
+	atomic.StoreInt64(&a.segmentsTotal, totalFiles)
+	atomic.StoreInt64(&a.segementsSize, totalSize)
 
 	// Sort the owned and not-owned batches by creation time so that we prioritize uploading the old segments first
 	sort.Slice(owned, func(i, j int) bool {

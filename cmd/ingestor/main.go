@@ -65,6 +65,8 @@ func main() {
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
 			&cli.Int64Flag{Name: "max-transfer-size", Usage: "Maximum segment size in bytes allowed for segment transfers", Value: 100 * 1024 * 1024},
+			&cli.Int64Flag{Name: "max-disk-usage", Usage: "Maximum disk space usage allowed before signaling back-pressure", Value: 10 * 1024 * 1024 * 1024},
+			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
@@ -118,6 +120,8 @@ func realMain(ctx *cli.Context) error {
 	maxSegmentAge = ctx.Duration("max-segment-age")
 	maxTransferSize = ctx.Int64("max-transfer-size")
 	maxTransferAge = ctx.Duration("max-transfer-age")
+	maxSegmentCount := ctx.Int64("max-segment-count")
+	maxDiskUsage := ctx.Int64("max-disk-usage")
 	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
@@ -308,6 +312,8 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentAge:       maxSegmentAge,
 		MaxTransferSize:     maxTransferSize,
 		MaxTransferAge:      maxTransferAge,
+		MaxSegmentCount:     maxSegmentCount,
+		MaxDiskUsage:        maxDiskUsage,
 		InsecureSkipVerify:  insecureSkipVerify,
 		LiftedColumns:       sortedLiftedLabels,
 		DropLabels:          dropLabels,
