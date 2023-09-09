@@ -87,6 +87,12 @@ type ServiceOpts struct {
 	// exceeds this age, it will be uploaded directly by the current node.
 	MaxTransferAge time.Duration
 
+	// MaxSegmentCount is the maximum number of segments files allowed on disk before signaling back-pressure.
+	MaxSegmentCount int64
+
+	// MaxDiskUsage is the maximum disk usage allowed before signaling back-pressure.
+	MaxDiskUsage int64
+
 	// MetricsDatabase is the name of the metrics database.
 	MetricsDatabase string
 
@@ -115,6 +121,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	health := cluster.NewHealth(cluster.HealthOpts{
 		UnhealthyTimeout: time.Minute,
+		MaxSegmentCount:  opts.MaxSegmentCount,
+		MaxDiskUsage:     opts.MaxDiskUsage,
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{

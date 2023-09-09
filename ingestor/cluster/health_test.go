@@ -37,22 +37,30 @@ func TestHealth_SetPeerHealthy(t *testing.T) {
 
 func TestHealth_IsHealthy(t *testing.T) {
 	h := cluster.NewHealth(cluster.HealthOpts{
-		QueueSizer: &fakeQueueSizer{},
+		QueueSizer:      &fakeQueueSizer{},
+		MaxDiskUsage:    1000,
+		MaxSegmentCount: 10,
 	})
 	require.True(t, h.IsHealthy())
 
 	h = cluster.NewHealth(cluster.HealthOpts{
-		QueueSizer: &fakeQueueSizer{transferQueueSize: 3000, uploadQueueSize: 200},
+		QueueSizer:      &fakeQueueSizer{transferQueueSize: 3000, uploadQueueSize: 200},
+		MaxDiskUsage:    1000,
+		MaxSegmentCount: 10,
 	})
 	require.True(t, h.IsHealthy())
 
 	h = cluster.NewHealth(cluster.HealthOpts{
-		QueueSizer: &fakeQueueSizer{transferQueueSize: 10000},
+		QueueSizer:      &fakeQueueSizer{transferQueueSize: 10000},
+		MaxDiskUsage:    1000,
+		MaxSegmentCount: 10,
 	})
 	require.False(t, h.IsHealthy())
 
 	h = cluster.NewHealth(cluster.HealthOpts{
-		QueueSizer: &fakeQueueSizer{uploadQueueSize: 10000},
+		QueueSizer:      &fakeQueueSizer{uploadQueueSize: 10000},
+		MaxDiskUsage:    1000,
+		MaxSegmentCount: 10,
 	})
 	require.False(t, h.IsHealthy())
 
@@ -61,7 +69,11 @@ func TestHealth_IsHealthy(t *testing.T) {
 type fakeQueueSizer struct {
 	uploadQueueSize   int
 	transferQueueSize int
+	segmentsSize      int64
+	segmentsTotal     int64
 }
 
 func (f fakeQueueSizer) TransferQueueSize() int { return f.transferQueueSize }
 func (f fakeQueueSizer) UploadQueueSize() int   { return f.uploadQueueSize }
+func (f fakeQueueSizer) SegmentsSize() int64    { return f.segmentsSize }
+func (f fakeQueueSizer) SegmentsTotal() int64   { return f.segmentsTotal }

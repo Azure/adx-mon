@@ -26,7 +26,9 @@ type HealthOpts struct {
 	// UnhealthyTimeout is the amount of time to wait before marking a peer as healthy.
 	UnhealthyTimeout time.Duration
 
-	QueueSizer QueueSizer
+	QueueSizer      QueueSizer
+	MaxSegmentCount int64
+	MaxDiskUsage    int64
 }
 
 type PeerHealthReporter interface {
@@ -38,6 +40,8 @@ type PeerHealthReporter interface {
 type QueueSizer interface {
 	TransferQueueSize() int
 	UploadQueueSize() int
+	SegmentsTotal() int64
+	SegmentsSize() int64
 }
 
 func NewHealth(opts HealthOpts) *Health {
@@ -64,7 +68,13 @@ func (h *Health) IsHealthy() bool {
 	uploadQueue := h.QueueSizer.UploadQueueSize()
 	transferQueue := h.QueueSizer.TransferQueueSize()
 
-	return uploadQueue < 5000 && transferQueue < 5000
+	segmentsTotal := h.QueueSizer.SegmentsTotal()
+	segmentsSize := h.QueueSizer.SegmentsSize()
+
+	return uploadQueue < 5000 &&
+		transferQueue < 5000 &&
+		segmentsTotal < h.opts.MaxSegmentCount &&
+		segmentsSize < h.opts.MaxDiskUsage
 }
 
 func (h *Health) IsPeerHealthy(peer string) bool {
