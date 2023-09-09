@@ -205,7 +205,10 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	)
 	for _, v := range entries {
 		fi, err := os.Stat(v.Path)
-		if err != nil {
+		if os.IsNotExist(err) {
+			// File was in a prior batch and has been deleted.
+			continue
+		} else if err != nil {
 			logger.Warnf("Failed to stat file: %s", v.Path)
 			continue
 		}
@@ -262,7 +265,10 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		for _, path := range v {
 			stat, err := os.Stat(path)
-			if err != nil {
+			if os.IsNotExist(err) {
+				// File was in a prior batch and has been deleted.
+				continue
+			} else if err != nil {
 				logger.Warnf("Failed to stat file: %s", path)
 				continue
 			}
