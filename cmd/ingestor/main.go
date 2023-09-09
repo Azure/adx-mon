@@ -60,7 +60,7 @@ func main() {
 			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> [DEPRECATED]"},
 			&cli.StringFlag{Name: "metrics-kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
-			&cli.BoolFlag{Name: "disable-peer-discovery", Usage: "Disable peer discovery and segment transfers"},
+			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
 			&cli.Int64Flag{Name: "max-segment-size", Usage: "Maximum segment size in bytes", Value: 1024 * 1024 * 1024},
@@ -103,7 +103,7 @@ func realMain(ctx *cli.Context) error {
 	var (
 		storageDir, kustoEndpoint, metricsEndpoint string
 		cacert, key                                string
-		insecureSkipVerify, disablePeerDiscovery   bool
+		insecureSkipVerify, disablePeerTransfer    bool
 		concurrentUploads                          int
 		maxConns                                   int
 		maxSegmentSize, maxTransferSize            int64
@@ -124,7 +124,7 @@ func realMain(ctx *cli.Context) error {
 	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
 	namespace := ctx.String("namespace")
 	hostname := ctx.String("hostname")
-	disablePeerDiscovery = ctx.Bool("disable-peer-discovery")
+	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
 
 	if namespace == "" {
 		nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -295,23 +295,23 @@ func realMain(ctx *cli.Context) error {
 	defer uploadDispatcher.Close()
 
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
-		K8sCli:               k8scli,
-		MetricsKustoCli:      client,
-		MetricsDatabase:      database,
-		LogsDatabases:        oltpLogDatabases,
-		Namespace:            namespace,
-		Hostname:             hostname,
-		StorageDir:           storageDir,
-		Uploader:             uploadDispatcher,
-		DisablePeerDiscovery: disablePeerDiscovery,
-		MaxSegmentSize:       maxSegmentSize,
-		MaxSegmentAge:        maxSegmentAge,
-		MaxTransferSize:      maxTransferSize,
-		MaxTransferAge:       maxTransferAge,
-		InsecureSkipVerify:   insecureSkipVerify,
-		LiftedColumns:        sortedLiftedLabels,
-		DropLabels:           dropLabels,
-		DropMetrics:          dropMetrics,
+		K8sCli:              k8scli,
+		MetricsKustoCli:     client,
+		MetricsDatabase:     database,
+		LogsDatabases:       oltpLogDatabases,
+		Namespace:           namespace,
+		Hostname:            hostname,
+		StorageDir:          storageDir,
+		Uploader:            uploadDispatcher,
+		DisablePeerTransfer: disablePeerTransfer,
+		MaxSegmentSize:      maxSegmentSize,
+		MaxSegmentAge:       maxSegmentAge,
+		MaxTransferSize:     maxTransferSize,
+		MaxTransferAge:      maxTransferAge,
+		InsecureSkipVerify:  insecureSkipVerify,
+		LiftedColumns:       sortedLiftedLabels,
+		DropLabels:          dropLabels,
+		DropMetrics:         dropMetrics,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)

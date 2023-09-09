@@ -33,6 +33,8 @@ type BatcherOpts struct {
 	UploadQueue        chan *Batch
 	TransferQueue      chan *Batch
 	PeerHealthReporter PeerHealthReporter
+
+	TransfersDisabled bool
 }
 
 type Batch struct {
@@ -59,6 +61,9 @@ type batcher struct {
 	// pendingTransfers is the count of segments on disk ready for transfer but not in the transfer queue.
 	pendingTransfer uint64
 
+	// transferDisabled is set to true when transfers are disabled.
+	transferDisabled bool
+
 	wg         sync.WaitGroup
 	closeFn    context.CancelFunc
 	storageDir string
@@ -74,15 +79,16 @@ type batcher struct {
 
 func NewBatcher(opts BatcherOpts) Batcher {
 	return &batcher{
-		storageDir:      opts.StorageDir,
-		maxTransferAge:  opts.MaxTransferAge,
-		maxTransferSize: opts.MaxTransferSize,
-		minUploadSize:   100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
-		Partitioner:     opts.Partitioner,
-		Segmenter:       opts.Segmenter,
-		uploadQueue:     opts.UploadQueue,
-		transferQueue:   opts.TransferQueue,
-		health:          opts.PeerHealthReporter,
+		storageDir:       opts.StorageDir,
+		maxTransferAge:   opts.MaxTransferAge,
+		maxTransferSize:  opts.MaxTransferSize,
+		minUploadSize:    100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
+		Partitioner:      opts.Partitioner,
+		Segmenter:        opts.Segmenter,
+		uploadQueue:      opts.UploadQueue,
+		transferQueue:    opts.TransferQueue,
+		health:           opts.PeerHealthReporter,
+		transferDisabled: opts.TransfersDisabled,
 	}
 }
 
@@ -299,7 +305,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		// If the peer has signaled that it's unhealthy, upload the segments directly.
 		peerHealthy := a.health.IsPeerHealthy(owner)
 
-		if owner == a.hostname || !peerHealthy {
+		if owner == a.hostname || !peerHealthy || a.transferDisabled {
 			owned = append(owned, batch)
 		} else {
 			notOwned = append(notOwned, batch)
