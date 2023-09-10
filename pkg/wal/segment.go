@@ -36,7 +36,7 @@ var (
 
 	// encoder and decoder are used for compressing and decompressing blocks
 	encoder, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
-	decoder, _ = zstd.NewReader(nil)
+	decoder, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
 
 	// ringPool is a pool of ring buffers used for queuing writes to segments.  This allows these to be
 	// re-used across segments.  We allow up to 10000 ring buffers to be allocated to match the max number of
