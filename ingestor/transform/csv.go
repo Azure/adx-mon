@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
@@ -53,7 +53,7 @@ func (w *CSVWriter) MarshalCSV(t interface{}) error {
 	switch t := t.(type) {
 	case prompb.TimeSeries:
 		return w.marshalTS(t)
-	case []*logsv1.LogRecord:
+	case *otlp.Logs:
 		return w.marshalLog(t)
 	default:
 		return errors.New("unknown type")
@@ -167,7 +167,15 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 	return nil
 }
 
-func (w *CSVWriter) marshalLog(logs []*logsv1.LogRecord) error {
+func otlpTSToUTC(ts int64) string {
+	// check for nanosecond precision
+	if ts&0x1fffffffffffff == ts {
+		return time.Unix(ts/1000, (ts%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano)
+	}
+	return time.Unix(0, ts).UTC().Format(time.RFC3339Nano)
+}
+
+func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 	// See ingestor/storage/schema::NewLogsSchema
 	// we're writing a ExportLogsServiceRequest as a CSV
 
@@ -175,15 +183,18 @@ func (w *CSVWriter) marshalLog(logs []*logsv1.LogRecord) error {
 	fields := make([]string, 0, 9)
 	// Convert log records to CSV
 	// see samples at https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
-	for _, l := range logs {
+	for _, l := range logs.Logs {
 		// Reset fields
 		fields = fields[:0]
 		// Timestamp
-		ts := int64(l.GetTimeUnixNano())
-		fields = append(fields, time.Unix(ts/1000, (ts%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano))
+		fields = append(fields, otlpTSToUTC(int64(l.GetTimeUnixNano())))
 		// ObservedTimestamp
-		ts = int64(l.GetObservedTimeUnixNano())
-		fields = append(fields, time.Unix(ts/1000, (ts%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano))
+		if v := l.GetObservedTimeUnixNano(); v > 0 {
+			// Some clients don't set this value.
+			fields = append(fields, otlpTSToUTC(int64(l.GetObservedTimeUnixNano())))
+		} else {
+			fields = append(fields, time.Now().UTC().Format(time.RFC3339Nano))
+		}
 		// TraceId
 		fields = append(fields, string(l.GetTraceId()))
 		// SpanId
@@ -193,9 +204,37 @@ func (w *CSVWriter) marshalLog(logs []*logsv1.LogRecord) error {
 		// SeverityNumber
 		fields = append(fields, l.GetSeverityNumber().String())
 		// Body
-		fields = append(fields, l.GetBody().GetStringValue())
-		// Attributes
 		buf := w.buf
+		if v := l.GetBody().GetKvlistValue(); v != nil {
+			buf.Reset()
+			buf.WriteByte('{')
+			for _, kv := range v.GetValues() {
+				if buf.String()[buf.Len()-1] != '{' {
+					buf.WriteByte(',')
+				}
+				fflib.WriteJson(buf, []byte(kv.GetKey()))
+				buf.WriteByte(':')
+				fflib.WriteJson(buf, []byte(kv.GetValue().GetStringValue()))
+			}
+			buf.WriteByte('}')
+			fields = append(fields, buf.String())
+		} else {
+			fields = append(fields, l.GetBody().GetStringValue())
+		}
+		// Resource
+		buf.Reset()
+		buf.WriteByte('{')
+		for _, r := range logs.Resources {
+			if buf.String()[buf.Len()-1] != '{' {
+				buf.WriteByte(',')
+			}
+			fflib.WriteJson(buf, []byte(r.GetKey()))
+			buf.WriteByte(':')
+			fflib.WriteJson(buf, []byte(r.GetValue().GetStringValue()))
+		}
+		buf.WriteByte('}')
+		fields = append(fields, buf.String())
+		// Attributes
 		buf.Reset()
 		buf.WriteByte('{')
 		for _, a := range l.GetAttributes() {
