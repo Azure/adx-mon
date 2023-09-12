@@ -94,6 +94,23 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 	err, rows := e.kustoClient.Query(ctx, queryContext, e.HandlerFn)
 	if err != nil {
+		// This failed because we sent too many notifications.
+		if errors.Is(err, alert.ErrTooManyRequests) {
+			err := e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
+				Destination:   e.rule.Destination,
+				Title:         fmt.Sprintf("Alert %s/%s has too many notifications", e.rule.Namespace, e.rule.Name),
+				Summary:       "This alert has been throttled by ICM due to too many notifications.  Please reduce the number of notifications for this alert.",
+				Severity:      3,
+				Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
+				CorrelationID: fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
+			})
+			if err != nil {
+				logger.Errorf("Failed to send alert for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			}
+			return
+		}
+
+		// This failed because the query failed.
 		logger.Errorf("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
 		if !isUserError(err) {

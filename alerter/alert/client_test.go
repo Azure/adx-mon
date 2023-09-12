@@ -72,3 +72,23 @@ func TestClient_Create_BadRequest(t *testing.T) {
 	})
 	require.Errorf(t, err, "write failed: 400 Bad Request")
 }
+
+func TestClient_Create_TooManyRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.WriteHeader(http.StatusTooManyRequests)
+	}))
+	// Close the server when test finishes
+	defer server.Close()
+
+	c, err := alert.NewClient(time.Second)
+	require.NoError(t, err)
+
+	err = c.Create(context.Background(), server.URL+"/alerts", alert.Alert{
+		Summary:     "summary",
+		Title:       "title",
+		Severity:    1,
+		Destination: "MDM://Platform",
+		Description: "description",
+	})
+	require.ErrorIs(t, err, alert.ErrTooManyRequests)
+}

@@ -445,6 +445,45 @@ func TestWorker_MissingColumnsFromResults(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 }
 
+func TestWorker_AlertsThrottled(t *testing.T) {
+	kcli := &fakeKustoClient{
+		queryErr: alert.ErrTooManyRequests,
+	}
+
+	var createdAlert alert.Alert
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			createdAlert = alert
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace:   "namespace",
+		Name:        "name",
+		Destination: "destination/queue",
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+	}
+
+	// default healthy
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	w.ExecuteQuery(context.Background())
+	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+	// query should be healthy - notification was throttled.
+	require.Equal(t, QueryHealthHealthy, gaugeValue)
+
+	require.Equal(t, createdAlert.Destination, rule.Destination)
+	require.Contains(t, createdAlert.Title, "has too many notifications")
+}
+
 func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
 	t.Helper()
 
