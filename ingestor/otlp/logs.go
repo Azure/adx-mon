@@ -57,17 +57,6 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 			// Internal errors with writer. Bail out now and allow the client to retry.
 			logger.Errorf("Failed to write logs to %s.%s: %v", d, t, err)
 			metrics.ValidLogsDropped.WithLabelValues().Add(float64(len(logs)))
-
-			err := errors.New("request missing destination metadata")
-			res := &v1.ExportLogsServiceResponse{
-				PartialSuccess: &v1.ExportLogsPartialSuccess{
-					RejectedLogRecords: int64(len(logs)),
-					ErrorMessage:       err.Error(),
-				},
-			}
-			return connect_go.NewResponse(res), err
-		}
-		if err := srv.w(ctx, d, t, logs); err != nil {
 			res := &v1.ExportLogsServiceResponse{
 				PartialSuccess: &v1.ExportLogsPartialSuccess{
 					RejectedLogRecords: int64(len(logs)),

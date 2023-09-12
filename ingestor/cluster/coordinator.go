@@ -218,11 +218,6 @@ func (c *coordinator) WriteOTLPLogs(ctx context.Context, database, table string,
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
 func (c *coordinator) syncPeers() {
-	// Determine if peer discovery is enabled or not
-	if !c.isPeerDiscoveryEnabled() {
-		return
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
