@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
+)
+
+var (
+	// ErrTooManyRequests is returned when a given alert is sent too many times.
+	ErrTooManyRequests = errors.New("too many requests")
 )
 
 // Client is a client for alert notification services.  Notification services implement the JSON http API
@@ -57,6 +63,10 @@ func (c *Client) Create(ctx context.Context, endpoint string, alert Alert) error
 	}()
 
 	if resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return ErrTooManyRequests
+		}
+
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("read resp: %w", err)
