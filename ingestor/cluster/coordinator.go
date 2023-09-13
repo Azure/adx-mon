@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
@@ -30,7 +30,7 @@ var (
 
 type TimeSeriesWriter func(ctx context.Context, database string, ts []prompb.TimeSeries) error
 
-type OTLPLogsWriter func(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error
+type OTLPLogsWriter func(ctx context.Context, database, table string, logs *otlp.Logs) error
 
 type Coordinator interface {
 	MetricPartitioner
@@ -40,7 +40,7 @@ type Coordinator interface {
 	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
 
 	// WriteOTLPLogs writes the logs to the correct peer.
-	WriteOTLPLogs(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error
+	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -223,7 +223,7 @@ func (c *coordinator) Write(ctx context.Context, database string, wr prompb.Writ
 	return c.tsw(ctx, database, wr.Timeseries)
 }
 
-func (c *coordinator) WriteOTLPLogs(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error {
+func (c *coordinator) WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error {
 	return c.lw(ctx, database, table, logs)
 }
 

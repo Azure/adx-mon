@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
 	connect_go "github.com/bufbuild/connect-go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -46,31 +47,31 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 	for key, logs := range groupByKustoTable(req.Msg) {
 		d, t = metadataFromKey(key)
 		if logger.IsDebug() {
-			logger.Debugf("LogHandler received %d logs for %s.%s", len(logs), d, t)
+			logger.Debugf("LogHandler received %d logs for %s.%s", len(logs.Logs), d, t)
 		}
 
 		if d == "" || t == "" {
-			invalidCount := len(logs)
+			invalidCount := len(logs.Logs)
 			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request missing destination metadata for %d logs", invalidCount))
 			rejectedLogRecords += int64(invalidCount)
 		} else if _, ok := srv.databases[d]; !ok {
-			invalidCount := len(logs)
+			invalidCount := len(logs.Logs)
 			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request destination not supported for %d logs: %s", invalidCount, d))
 			rejectedLogRecords += int64(invalidCount)
 		} else if err := srv.w(ctx, d, t, logs); err != nil {
 			// Internal errors with writer. Bail out now and allow the client to retry.
 			logger.Errorf("Failed to write logs to %s.%s: %v", d, t, err)
 			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-			metrics.ValidLogsDropped.WithLabelValues().Add(float64(len(logs)))
+			metrics.ValidLogsDropped.WithLabelValues().Add(float64(len(logs.Logs)))
 			res := &v1.ExportLogsServiceResponse{
 				PartialSuccess: &v1.ExportLogsPartialSuccess{
-					RejectedLogRecords: int64(len(logs)),
+					RejectedLogRecords: int64(len(logs.Logs)),
 					ErrorMessage:       err.Error(),
 				},
 			}
 			return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeDataLoss, err)
 		} else {
-			metrics.LogsReceived.WithLabelValues(d, t).Add(float64(len(logs)))
+			metrics.LogsReceived.WithLabelValues(d, t).Add(float64(len(logs.Logs)))
 		}
 	}
 
@@ -114,13 +115,13 @@ var sep = []byte("_")
 // to their Kusto destination as well as their SchemaURL, which is defined by the OTLP
 // specification as applying to all the contained logs.
 // See https://opentelemetry.io/docs/specs/otel/schemas/#otlp-support
-func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string][]*logsv1.LogRecord {
+func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*otlp.Logs {
 	b := bytesPool.Get(1024)
 	defer bytesPool.Put(b)
 
 	var (
 		d, t string
-		m    = make(map[string][]*logsv1.LogRecord)
+		m    = make(map[string]*otlp.Logs)
 	)
 	for _, r := range req.GetResourceLogs() {
 		for _, s := range r.GetScopeLogs() {
@@ -128,7 +129,16 @@ func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string][]*logsv1.Lo
 				// Extract the destination Kusto Database and Table
 				d, t = kustoMetadata(l)
 				b = makeKey(b[:0], d, t)
-				m[string(b)] = append(m[string(b)], l)
+				v, ok := m[string(b)]
+				if !ok {
+					v = &otlp.Logs{
+						// The naming here is a bit confusing, but the spec defines this particular mapping
+						// in the logs data model
+						Resources: r.Resource.Attributes,
+					}
+				}
+				v.Logs = append(v.Logs, l)
+				m[string(b)] = v
 			}
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -224,17 +225,22 @@ func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue
 			// This is a parculiar case, but it can happen if the client sends an empty request.
 			break
 		}
+		if msg.ResourceLogs[i].Resource == nil {
+			msg.ResourceLogs[i].Resource = &resourcev1.Resource{
+				Attributes: []*commonv1.KeyValue{},
+			}
+		}
+
+		// Add any additional columns to the logs
+		msg.ResourceLogs[i].Resource.Attributes = append(
+			msg.ResourceLogs[i].Resource.Attributes,
+			add...,
+		)
 
 		for j := range msg.ResourceLogs[i].ScopeLogs {
 			numLogs += len(msg.ResourceLogs[i].ScopeLogs[j].LogRecords)
 
 			for k := range msg.ResourceLogs[i].ScopeLogs[j].LogRecords {
-
-				// Add any additional columns to the logs
-				msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Attributes = append(
-					msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Attributes,
-					add...,
-				)
 
 				// Now lift attributes from the body of the log message
 				if len(lift) > 0 {

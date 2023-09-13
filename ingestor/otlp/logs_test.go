@@ -9,7 +9,7 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,7 +21,7 @@ type writer struct {
 	err    error
 }
 
-func (w *writer) WriteLogRecords(ctx context.Context, database, table string, logs []*logsv1.LogRecord) error {
+func (w *writer) WriteLogRecords(ctx context.Context, database, table string, logs *otlp.Logs) error {
 	w.t.Helper()
 	w.called++
 	return w.err
@@ -151,22 +151,115 @@ func TestGroupbyKustoTable(t *testing.T) {
 
 		switch table {
 		case "ATable":
-			require.Len(t, logs, 2)
-			require.Equal(t, 2, len(logs[0].Attributes))
+			require.Len(t, logs.Logs, 2)
+			require.Equal(t, 2, len(logs.Logs[0].Attributes))
 			require.Equal(t, "ADatabase", database)
 		case "BTable":
-			require.Len(t, logs, 1)
-			require.Equal(t, 2, len(logs[0].Attributes))
+			require.Len(t, logs.Logs, 1)
+			require.Equal(t, 2, len(logs.Logs[0].Attributes))
 			require.Equal(t, "ADatabase", database)
 		case "CTable":
-			require.Len(t, logs, 1)
-			require.Equal(t, 2, len(logs[0].Attributes))
+			require.Len(t, logs.Logs, 1)
+			require.Equal(t, 2, len(logs.Logs[0].Attributes))
 			require.Equal(t, "BDatabase", database)
 		default:
 			require.Fail(t, "unknown table")
 		}
+
+		require.Equal(t, 1, len(logs.Resources))
+		require.Equal(t, "hostname", logs.Resources[0].GetValue().GetStringValue())
 	}
 }
+
+/*
+func BenchmarkGroupByKustoTable(b *testing.B) {
+
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlog, &log); err != nil {
+		require.NoError(b, err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		groupByKustoTable(&log)
+	}
+}
+
+func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string][]*logsv1.LogRecord {
+	b := bytesPool.Get(1024)
+	defer bytesPool.Put(b)
+
+	var (
+		d, t string
+		m    = make(map[string][]*logsv1.LogRecord)
+	)
+	for _, r := range req.GetResourceLogs() {
+		for _, s := range r.GetScopeLogs() {
+			for _, l := range s.GetLogRecords() {
+				// Extract the destination Kusto Database and Table
+				d, t = kustoMetadata(l)
+				b = makeKey(b[:0], d, t)
+				m[string(b)] = append(m[string(b)], l)
+			}
+		}
+	}
+	return m
+}
+
+ BenchmarkGroupByKustoTable-8   	 1331323	       899.3 ns/op	     504 B/op	      10 allocs/op
+*/
+
+/*
+func BenchmarkGroupByDestination(b *testing.B) {
+
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlog, &log); err != nil {
+		require.NoError(b, err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		groupByKustoTable(&log)
+	}
+}
+
+func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*v1.ExportLogsServiceRequest {
+	b := bytesPool.Get(1024)
+	defer bytesPool.Put(b)
+
+	var (
+		d, t string
+		m    = make(map[string]*v1.ExportLogsServiceRequest)
+	)
+	for _, r := range req.GetResourceLogs() {
+		for _, s := range r.GetScopeLogs() {
+			for _, l := range s.GetLogRecords() {
+				d, t = kustoMetadata(l)
+				b = makeKey(b[:0], d, t)
+				v, ok := m[string(b)]
+				if !ok {
+					v = &v1.ExportLogsServiceRequest{
+						ResourceLogs: []*logsv1.ResourceLogs{
+							{
+								Resource: r.Resource,
+								ScopeLogs: []*v11.ScopeLogs{
+									{
+										LogRecords: []*v11.LogRecord{l},
+									},
+								},
+							},
+						},
+					}
+				} else {
+					v.ResourceLogs[0].ScopeLogs[0].LogRecords = append(v.ResourceLogs[0].ScopeLogs[0].LogRecords, l)
+				}
+				m[string(b)] = v
+			}
+		}
+	}
+	return m
+}
+
+BenchmarkGroupByDestination-8   	  703296	      1598 ns/op	    1176 B/op	      25 allocs/op
+*/
 
 func BenchmarkGroupByKustoTable(b *testing.B) {
 
@@ -179,6 +272,11 @@ func BenchmarkGroupByKustoTable(b *testing.B) {
 		groupByKustoTable(&log)
 	}
 }
+
+// Our first iteration (see above) of this function was more performant (by 3 allocs/op) but lacked
+// transmitting Resources correctly per https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-resource
+//
+// BenchmarkGroupByKustoTable-8   	 1000000	      1022 ns/op	     504 B/op	      13 allocs/op
 
 func BenchmarkKustoMetadata(b *testing.B) {
 	var log v1.ExportLogsServiceRequest

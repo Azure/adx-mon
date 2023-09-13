@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -151,76 +152,186 @@ func TestNormalize(t *testing.T) {
 
 }
 
-func TestMarshalCSV_OTLPLog(t *testing.T) {
-	rawlog := []byte(`{
-    "resourceLogs": [
-        {
-            "resource": {
-                "attributes": [
-                    {
-                        "key": "source",
-                        "value": {
-                            "stringValue": "hostname"
-                        }
-                    }
-                ],
-                "droppedAttributesCount": 1
-            },
-            "scopeLogs": [
-                {
-                    "scope": {
-                        "name": "name",
-                        "version": "version",
-                        "droppedAttributesCount": 1
-                    },
-                    "logRecords": [
-                        {
-                            "timeUnixNano": "1669112524001",
-                            "observedTimeUnixNano": "1669112524001",
-                            "severityNumber": 17,
-                            "severityText": "Error",
-                            "body": {
-                                "stringValue": "{\"msg\":\"something happened\"}"
-                            },
-                            "attributes": [
-                                {
-                                    "key": "kusto.table",
-                                    "value": {
-                                        "stringValue": "ATable"
-                                    }
-                                },
-								{
-                                    "key": "kusto.database",
-                                    "value": {
-                                        "stringValue": "ADatabase"
-                                    }
-                                }
-                            ],
-                            "droppedAttributesCount": 1,
-                            "flags": 1,
-                            "traceId": "",
-                            "spanId": ""
-                        }
-                    ],
-                    "schemaUrl": "scope_schema"
-                }
-            ],
-            "schemaUrl": "resource_schema"
-        }
-    ]
-}`)
-	var log v1.ExportLogsServiceRequest
-	if err := protojson.Unmarshal(rawlog, &log); err != nil {
-		t.Fatal(err)
+func TestTimeConversionForOTLPLogs(t *testing.T) {
+	tests := []struct {
+		TS     int64
+		Expect string
+	}{
+		{
+			TS:     1694564005797489936,
+			Expect: "2023-09-13T00:13:25.797489936Z",
+		},
+		{
+			TS:     1669112524001,
+			Expect: "2022-11-22T10:22:04.001Z",
+		},
 	}
-	var b bytes.Buffer
-	w := NewCSVWriter(&b, nil)
+	for _, tt := range tests {
+		t.Run(tt.Expect, func(t *testing.T) {
+			require.Equal(t, tt.Expect, otlpTSToUTC(tt.TS))
+		})
+	}
+}
 
-	err := w.MarshalCSV(log.ResourceLogs[0].ScopeLogs[0].LogRecords)
-	// err := w.marshalLog(log.ResourceLogs[0].ScopeLogs[0].LogRecords)
-	require.NoError(t, err)
-	require.Equal(t, `2022-11-22T10:22:04.001Z,2022-11-22T10:22:04.001Z,,,Error,SEVERITY_NUMBER_ERROR,"{""msg"":""something happened""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
-`, b.String())
+func TestMarshalCSV_OTLPLog(t *testing.T) {
+	tests := []struct {
+		Name   string
+		Log    []byte
+		Expect string
+	}{
+		{
+			Name: "unstructured",
+			Log: []byte(`{
+				"resourceLogs": [
+					{
+						"resource": {
+							"attributes": [
+								{
+									"key": "source",
+									"value": {
+										"stringValue": "hostname"
+									}
+								}
+							],
+							"droppedAttributesCount": 1
+						},
+						"scopeLogs": [
+							{
+								"scope": {
+									"name": "name",
+									"version": "version",
+									"droppedAttributesCount": 1
+								},
+								"logRecords": [
+									{
+										"timeUnixNano": "1669112524001",
+										"observedTimeUnixNano": "1669112524001",
+										"severityNumber": 17,
+										"severityText": "Error",
+										"body": {
+											"stringValue": "{\"msg\":\"something happened\"}"
+										},
+										"attributes": [
+											{
+												"key": "kusto.table",
+												"value": {
+													"stringValue": "ATable"
+												}
+											},
+											{
+												"key": "kusto.database",
+												"value": {
+													"stringValue": "ADatabase"
+												}
+											}
+										],
+										"droppedAttributesCount": 1,
+										"flags": 1,
+										"traceId": "",
+										"spanId": ""
+									}
+								],
+								"schemaUrl": "scope_schema"
+							}
+						],
+						"schemaUrl": "resource_schema"
+					}
+				]
+			}`),
+			Expect: `2022-11-22T10:22:04.001Z,2022-11-22T10:22:04.001Z,,,Error,SEVERITY_NUMBER_ERROR,"{""msg"":""something happened""}","{""source"":""hostname""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
+`,
+		},
+		{
+			Name: "structured",
+			Log: []byte(`{
+				"resourceLogs": [
+					{
+						"resource": {
+							"attributes": [
+								{
+									"key": "source",
+									"value": {
+										"stringValue": "hostname"
+									}
+								}
+							],
+							"droppedAttributesCount": 1
+						},
+						"scopeLogs": [
+							{
+								"scope": {
+									"name": "name",
+									"version": "version",
+									"droppedAttributesCount": 1
+								},
+								"logRecords": [
+									{
+										"timeUnixNano": "1694564005797489936",
+										"observedTimeUnixNano": "1694564005797489936",
+										"severityNumber": 17,
+										"severityText": "Error",
+										"body": {
+											"kvlistValue": {
+												"values":[
+													{
+														"key":"namespace",
+														"value": {
+															"stringValue": "default"
+														}
+													}
+												]
+											}
+										},
+										"attributes": [
+											{
+												"key": "kusto.table",
+												"value": {
+													"stringValue": "ATable"
+												}
+											},
+											{
+												"key": "kusto.database",
+												"value": {
+													"stringValue": "ADatabase"
+												}
+											}
+										],
+										"droppedAttributesCount": 1,
+										"flags": 1,
+										"traceId": "",
+										"spanId": ""
+									}
+								],
+								"schemaUrl": "scope_schema"
+							}
+						],
+						"schemaUrl": "resource_schema"
+					}
+				]
+			}`),
+			Expect: `2023-09-13T00:13:25.797489936Z,2023-09-13T00:13:25.797489936Z,,,Error,SEVERITY_NUMBER_ERROR,"{""namespace"":""default""}","{""source"":""hostname""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			var log v1.ExportLogsServiceRequest
+			if err := protojson.Unmarshal(tt.Log, &log); err != nil {
+				t.Fatal(err)
+			}
+			var b bytes.Buffer
+			w := NewCSVWriter(&b, nil)
+
+			logs := &otlp.Logs{
+				Resources: log.ResourceLogs[0].Resource.Attributes,
+				Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
+			}
+
+			err := w.MarshalCSV(logs)
+			require.NoError(t, err)
+			require.Equal(t, tt.Expect, b.String())
+		})
+	}
 }
 
 func BenchmarkMarshalCSV_OTLPLog(b *testing.B) {
