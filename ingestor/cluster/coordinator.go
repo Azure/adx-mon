@@ -279,8 +279,6 @@ func (c *coordinator) resyncPeers(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
-	// Sync peers now
-	c.syncPeers()
 	for {
 		select {
 		case <-ctx.Done():

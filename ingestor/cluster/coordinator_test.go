@@ -171,7 +171,7 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	require.NoError(t, c.Open(context.Background()))
 
 	coord := c.(*coordinator)
-	require.Equal(t, 1, len(coord.peers))
+	require.Equal(t, 2, len(coord.peers))
 
 	newPeer = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{
