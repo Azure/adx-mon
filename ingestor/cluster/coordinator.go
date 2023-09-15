@@ -109,8 +109,7 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 }
 
 func (c *coordinator) OnAdd(obj interface{}) {
-	p := obj.(*v1.Pod)
-	if !c.isPeer(p) {
+	if p, ok := obj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}
 
@@ -120,8 +119,7 @@ func (c *coordinator) OnAdd(obj interface{}) {
 }
 
 func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
-	p := newObj.(*v1.Pod)
-	if !c.isPeer(p) {
+	if p, ok := newObj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}
 
@@ -131,8 +129,7 @@ func (c *coordinator) OnUpdate(oldObj, newObj interface{}) {
 }
 
 func (c *coordinator) OnDelete(obj interface{}) {
-	p := obj.(*v1.Pod)
-	if !c.isPeer(p) {
+	if p, ok := obj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}
 
