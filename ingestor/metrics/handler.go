@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/cespare/xxhash"
 	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -56,9 +55,6 @@ type HandlerOpts struct {
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
 
-	// SeriesCounter is an optional interface that can be used to count the number of series ingested.
-	SeriesCounter SeriesCounter
-
 	// RequestWriter is the interface that writes the time series to a destination.
 	RequestWriter RequestWriter
 
@@ -81,7 +77,6 @@ type Handler struct {
 		TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest
 	}
 
-	seriesCounter SeriesCounter
 	requestWriter RequestWriter
 	database      string
 	health        HealthChecker
@@ -99,7 +94,6 @@ func NewHandler(opts HandlerOpts) *Handler {
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
-		seriesCounter: opts.SeriesCounter,
 		requestWriter: opts.RequestWriter,
 		database:      opts.Database,
 	}
@@ -155,28 +149,6 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	// Apply any label or metrics drops or additions
 	req = s.requestFilter.TransformWriteRequest(req)
-
-	if s.seriesCounter != nil {
-		seriesId := xxhash.New()
-		for _, v := range req.Timeseries {
-			seriesId.Reset()
-			var metric string
-
-			// Labels should already be sorted by name, but just in case they aren't, sort them.
-			if !prompb.IsSorted(v.Labels) {
-				prompb.Sort(v.Labels)
-			}
-
-			for _, vv := range v.Labels {
-				if bytes.Equal(vv.Name, []byte("__name__")) {
-					metric = string(vv.Value)
-				}
-				seriesId.Write(vv.Name)
-				seriesId.Write(vv.Value)
-			}
-			s.seriesCounter.AddSeries(metric, seriesId.Sum64())
-		}
-	}
 
 	if err := s.requestWriter.Write(r.Context(), s.database, req); err != nil {
 		logger.Errorf("Failed to write ts: %s", err.Error())
