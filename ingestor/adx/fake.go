@@ -65,7 +65,7 @@ type fakeKustoMgmt struct {
 	expectedQuery, actualQuery string
 }
 
-func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
 	f.actualQuery = query.String()
 
 	rows, err := kusto.NewMockRows(table.Columns{
