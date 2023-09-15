@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math/rand"
 	"os"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // segmentIterator is an iterator for a segment file.  It allows reading back values written to the segment in the
@@ -30,6 +33,7 @@ type segmentIterator struct {
 
 	// decodeBuf is a temp buffer to re-use for decoding the block.
 	decodeBuf []byte
+	decoder   *zstd.Decoder
 }
 
 func NewSegmentIterator(f *os.File) (Iterator, error) {
@@ -38,6 +42,7 @@ func NewSegmentIterator(f *os.File) (Iterator, error) {
 		n:         0,
 		buf:       make([]byte, 0, 4096),
 		decodeBuf: make([]byte, 0, 4096),
+		decoder:   decoders[rand.Intn(len(decoders))],
 		value:     nil,
 	}, nil
 }
@@ -80,7 +85,7 @@ func (b *segmentIterator) Next() (bool, error) {
 		return false, fmt.Errorf("block checksum verification failed")
 	}
 
-	b.decodeBuf, err = decoder.DecodeAll(b.buf[:blockLen], b.decodeBuf[:0])
+	b.decodeBuf, err = b.decoder.DecodeAll(b.buf[:blockLen], b.decodeBuf[:0])
 	if err != nil {
 		return false, err
 	}
@@ -122,5 +127,6 @@ func (b *segmentIterator) Value() []byte {
 }
 
 func (b *segmentIterator) Close() error {
+	b.decoder = nil
 	return b.f.Close()
 }
