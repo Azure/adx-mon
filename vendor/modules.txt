@@ -7,7 +7,7 @@ buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/pr
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1
-# github.com/Azure/azure-kusto-go v0.10.2
+# github.com/Azure/azure-kusto-go v0.14.0
 ## explicit; go 1.19
 github.com/Azure/azure-kusto-go/kusto
 github.com/Azure/azure-kusto-go/kusto/data/errors
@@ -15,12 +15,12 @@ github.com/Azure/azure-kusto-go/kusto/data/table
 github.com/Azure/azure-kusto-go/kusto/data/types
 github.com/Azure/azure-kusto-go/kusto/data/value
 github.com/Azure/azure-kusto-go/kusto/ingest
-github.com/Azure/azure-kusto-go/kusto/ingest/internal/conn
 github.com/Azure/azure-kusto-go/kusto/ingest/internal/gzip
 github.com/Azure/azure-kusto-go/kusto/ingest/internal/properties
 github.com/Azure/azure-kusto-go/kusto/ingest/internal/queued
 github.com/Azure/azure-kusto-go/kusto/ingest/internal/resources
 github.com/Azure/azure-kusto-go/kusto/ingest/internal/status
+github.com/Azure/azure-kusto-go/kusto/ingest/internal/utils
 github.com/Azure/azure-kusto-go/kusto/internal/frames
 github.com/Azure/azure-kusto-go/kusto/internal/frames/unmarshal
 github.com/Azure/azure-kusto-go/kusto/internal/frames/unmarshal/json
@@ -29,6 +29,8 @@ github.com/Azure/azure-kusto-go/kusto/internal/frames/v2
 github.com/Azure/azure-kusto-go/kusto/internal/log
 github.com/Azure/azure-kusto-go/kusto/internal/response
 github.com/Azure/azure-kusto-go/kusto/internal/version
+github.com/Azure/azure-kusto-go/kusto/kql
+github.com/Azure/azure-kusto-go/kusto/trustedendpoints
 github.com/Azure/azure-kusto-go/kusto/unsafe
 github.com/Azure/azure-kusto-go/kusto/utils
 # github.com/Azure/azure-pipeline-go v0.2.3
@@ -38,7 +40,7 @@ github.com/Azure/azure-pipeline-go/pipeline
 ## explicit
 github.com/Azure/azure-sdk-for-go/storage
 github.com/Azure/azure-sdk-for-go/version
-# github.com/Azure/azure-sdk-for-go/sdk/azcore v1.3.1
+# github.com/Azure/azure-sdk-for-go/sdk/azcore v1.6.1
 ## explicit; go 1.18
 github.com/Azure/azure-sdk-for-go/sdk/azcore
 github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud
@@ -56,21 +58,24 @@ github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime
 github.com/Azure/azure-sdk-for-go/sdk/azcore/streaming
 github.com/Azure/azure-sdk-for-go/sdk/azcore/to
 github.com/Azure/azure-sdk-for-go/sdk/azcore/tracing
-# github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.2.1
+# github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.3.0
 ## explicit; go 1.18
 github.com/Azure/azure-sdk-for-go/sdk/azidentity
-# github.com/Azure/azure-sdk-for-go/sdk/internal v1.1.2
+# github.com/Azure/azure-sdk-for-go/sdk/internal v1.3.0
 ## explicit; go 1.18
 github.com/Azure/azure-sdk-for-go/sdk/internal/diag
 github.com/Azure/azure-sdk-for-go/sdk/internal/errorinfo
+github.com/Azure/azure-sdk-for-go/sdk/internal/exported
 github.com/Azure/azure-sdk-for-go/sdk/internal/log
+github.com/Azure/azure-sdk-for-go/sdk/internal/poller
 github.com/Azure/azure-sdk-for-go/sdk/internal/temporal
 github.com/Azure/azure-sdk-for-go/sdk/internal/uuid
-# github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v0.6.1
+# github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.0.0
 ## explicit; go 1.18
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/appendblob
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob
+github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blockblob
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/internal/base
@@ -90,7 +95,7 @@ github.com/Azure/go-autorest
 ## explicit; go 1.15
 github.com/Azure/go-autorest/autorest
 github.com/Azure/go-autorest/autorest/azure
-# github.com/Azure/go-autorest/autorest/adal v0.9.21
+# github.com/Azure/go-autorest/autorest/adal v0.9.22
 ## explicit; go 1.15
 github.com/Azure/go-autorest/autorest/adal
 # github.com/Azure/go-autorest/autorest/date v0.3.0
@@ -102,7 +107,7 @@ github.com/Azure/go-autorest/logger
 # github.com/Azure/go-autorest/tracing v0.6.0
 ## explicit; go 1.12
 github.com/Azure/go-autorest/tracing
-# github.com/AzureAD/microsoft-authentication-library-for-go v0.8.1
+# github.com/AzureAD/microsoft-authentication-library-for-go v1.0.0
 ## explicit; go 1.18
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/confidential
@@ -183,7 +188,7 @@ github.com/gofrs/uuid
 ## explicit; go 1.15
 github.com/gogo/protobuf/proto
 github.com/gogo/protobuf/sortkeys
-# github.com/golang-jwt/jwt/v4 v4.4.3
+# github.com/golang-jwt/jwt/v4 v4.5.0
 ## explicit; go 1.16
 github.com/golang-jwt/jwt/v4
 # github.com/golang/protobuf v1.5.3
@@ -307,6 +312,12 @@ github.com/prometheus/procfs/internal/util
 # github.com/russross/blackfriday/v2 v2.1.0
 ## explicit
 github.com/russross/blackfriday/v2
+# github.com/samber/lo v1.37.0
+## explicit; go 1.18
+github.com/samber/lo
+# github.com/shopspring/decimal v1.3.1
+## explicit; go 1.13
+github.com/shopspring/decimal
 # github.com/spf13/pflag v1.0.5
 ## explicit; go 1.12
 github.com/spf13/pflag
@@ -326,6 +337,9 @@ github.com/xrash/smetrics
 ## explicit; go 1.17
 golang.org/x/crypto/pkcs12
 golang.org/x/crypto/pkcs12/internal/rc2
+# golang.org/x/exp v0.0.0-20220827204233-334a2380cb91
+## explicit; go 1.18
+golang.org/x/exp/constraints
 # golang.org/x/net v0.12.0
 ## explicit; go 1.17
 golang.org/x/net/context
