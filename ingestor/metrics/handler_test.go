@@ -33,7 +33,6 @@ func TestHandler_HandleReceive(t *testing.T) {
 	h := NewHandler(HandlerOpts{
 		DropLabels:    nil,
 		DropMetrics:   nil,
-		SeriesCounter: nil,
 		RequestWriter: writer,
 		HealthChecker: &fakeHealthChecker{healthy: true},
 		Database:      "adxmetrics",
@@ -87,7 +86,6 @@ func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 	h := NewHandler(HandlerOpts{
 		DropLabels:    nil,
 		DropMetrics:   nil,
-		SeriesCounter: nil,
 		RequestWriter: writer,
 		HealthChecker: &fakeHealthChecker{healthy: false},
 		Database:      "adxmetrics",
