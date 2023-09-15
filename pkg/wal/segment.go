@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,15 +35,19 @@ const (
 var (
 	idgen *flake.Flake
 
-	// encoder and decoder are used for compressing and decompressing blocks
-	encoder, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
-	decoder, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(100))
+	// encoder and decoder pools are used for compressing and decompressing blocks
+	encoders [64]*zstd.Encoder
+	decoders [64]*zstd.Decoder
 
 	// ringPool is a pool of ring buffers used for queuing writes to segments.  This allows these to be
 	// re-used across segments.  We allow up to 10000 ring buffers to be allocated to match the max number of
 	// tables allowed in Kusto.
 	ringPool = pool.NewGeneric(10000, func(sz int) interface{} {
 		return ring.NewBuffer(sz)
+	})
+
+	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
+		return bufio.NewWriterSize(nil, DefaultIOBufSize)
 	})
 )
 
@@ -51,6 +56,22 @@ func init() {
 	idgen, err = flake.New()
 	if err != nil {
 		panic(err)
+	}
+
+	for i := 0; i < len(encoders); i++ {
+		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		if err != nil {
+			panic(err)
+		}
+		encoders[i] = encoder
+	}
+
+	for i := 0; i < len(decoders); i++ {
+		decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+		if err != nil {
+			panic(err)
+		}
+		decoders[i] = decoder
 	}
 }
 
@@ -92,6 +113,7 @@ type segment struct {
 	// encodeBuf is a buffer used for compressing blocks before writing to disk.
 	encodeBuf []byte
 	lenBuf    [8]byte
+	encoder   *zstd.Encoder
 
 	closing chan struct{}
 	closed  bool
@@ -115,7 +137,8 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		return nil, err
 	}
 
-	bf := bufio.NewWriterSize(fw, DefaultIOBufSize)
+	bf := bwPool.Get(0).(*bufio.Writer)
+	bf.Reset(fw)
 
 	f := &segment{
 		id:        flakeId.String(),
@@ -126,6 +149,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 
 		closing: make(chan struct{}),
 		ringBuf: ringPool.Get(DefaultRingSize).(*ring.Buffer),
+		encoder: encoders[rand.Intn(len(encoders))],
 	}
 
 	f.wg.Add(1)
@@ -233,6 +257,9 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 	default:
 	}
 
+	if cap(entry.Value) < len(buf) {
+		entry.Value = make([]byte, 0, len(buf))
+	}
 	entry.Value = append(entry.Value[:0], buf...)
 
 	s.ringBuf.Enqueue(entry)
@@ -272,6 +299,8 @@ func (s *segment) Close() error {
 	// Wait for flusher goroutine to flush any in-flight writes
 	s.wg.Wait()
 
+	s.encoder = nil
+	bwPool.Put(s.bw)
 	s.bw = nil
 	ringPool.Put(s.ringBuf)
 	s.ringBuf = nil
@@ -399,7 +428,7 @@ func (s *segment) flushBlock(blockBuf *bytes.Buffer, req *ring.Entry) {
 		return
 	}
 
-	s.encodeBuf = encoder.EncodeAll(blockBuf.Bytes(), s.encodeBuf[:0])
+	s.encodeBuf = s.encoder.EncodeAll(blockBuf.Bytes(), s.encodeBuf[:0])
 
 	err := s.blockWrite(s.bw, s.encodeBuf)
 
