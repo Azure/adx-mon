@@ -242,7 +242,11 @@ func (n *uploader) upload(ctx context.Context) error {
 					logger.Errorf("Failed to upload file: %s", err.Error())
 					return
 				}
-				logger.Infof("Uploaded %v duration=%s", paths, time.Since(now).String())
+
+				if logger.IsDebug() {
+					logger.Debugf("Uploaded %v duration=%s", paths, time.Since(now).String())
+				}
+
 				for _, f := range paths {
 					if err := os.RemoveAll(f); err != nil {
 						logger.Errorf("Failed to remove file: %s", err.Error())
