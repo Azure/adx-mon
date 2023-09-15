@@ -278,7 +278,9 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else {
-		logger.Infof("Imported %d bytes to %s", n, filename)
+		if logger.IsDebug() {
+			logger.Debugf("Imported %d bytes to %s", n, filename)
+		}
 	}
 	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)

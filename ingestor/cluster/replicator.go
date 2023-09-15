@@ -122,7 +122,10 @@ func (r *replicator) transfer(ctx context.Context) {
 					if err := os.Remove(seg); err != nil {
 						return fmt.Errorf("remove segment %s: %w", seg, err)
 					}
-					logger.Infof("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
+
+					if logger.IsDebug() {
+						logger.Debugf("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
+					}
 					return nil
 				})
 
