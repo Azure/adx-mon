@@ -190,6 +190,7 @@ func Open(path string) (Segment, error) {
 		bw:      bf,
 		closing: make(chan struct{}),
 		ringBuf: ring.NewBuffer(DefaultRingSize),
+		encoder: encoders[rand.Intn(len(encoders))],
 	}
 
 	if err := f.repair(); err != nil {
