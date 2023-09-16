@@ -1,12 +1,12 @@
 package wal
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"math/rand"
-	"os"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -14,8 +14,10 @@ import (
 // segmentIterator is an iterator for a segment file.  It allows reading back values written to the segment in the
 // same order they were written.
 type segmentIterator struct {
-	// f is the underlying segment file on disk.
-	f *os.File
+	// br is the underlying segment file on disk.
+	br *bufio.Reader
+
+	f io.ReadCloser
 
 	// n is the index into buf that allows iterating through values in a block.
 	n int
@@ -36,9 +38,10 @@ type segmentIterator struct {
 	decoder   *zstd.Decoder
 }
 
-func NewSegmentIterator(f *os.File) (Iterator, error) {
+func NewSegmentIterator(r io.ReadCloser) (Iterator, error) {
 	return &segmentIterator{
-		f:         f,
+		f:         r,
+		br:        bufio.NewReader(r),
 		n:         0,
 		buf:       make([]byte, 0, 4096),
 		decodeBuf: make([]byte, 0, 4096),
@@ -53,7 +56,7 @@ func (b *segmentIterator) Next() (bool, error) {
 	}
 
 	// Read the block length and CRC
-	n, err := b.f.Read(b.lenCrcBuf[:8])
+	n, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
 	if err == io.EOF {
 		return false, err
 	} else if err != nil || n != 8 {
@@ -70,7 +73,7 @@ func (b *segmentIterator) Next() (bool, error) {
 	crc := binary.BigEndian.Uint32(b.lenCrcBuf[4:8])
 
 	// Read the expected block length bytes
-	n, err = b.f.Read(b.buf[:blockLen])
+	n, err = io.ReadFull(b.br, b.buf[:blockLen])
 	if err != nil {
 		return false, err
 	}
