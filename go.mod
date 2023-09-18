@@ -11,7 +11,7 @@ require (
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/golang/snappy v0.0.4
-	github.com/klauspost/compress v1.16.7
+	github.com/klauspost/compress v1.17.0
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
 	github.com/lmittmann/tint v1.0.1
 	github.com/mattn/go-isatty v0.0.16
@@ -105,4 +105,7 @@ require (
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
 
-replace google.golang.org/grpc => github.com/grpc/grpc-go v1.56.2
+replace (
+	github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.0.0-20230918190252-4817e5d12832
+	google.golang.org/grpc => github.com/grpc/grpc-go v1.56.2
+)

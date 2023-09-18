@@ -7,7 +7,7 @@ buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/pr
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1
-# github.com/Azure/azure-kusto-go v0.14.0
+# github.com/Azure/azure-kusto-go v0.14.0 => github.com/jwilder/azure-kusto-go v0.0.0-20230918190252-4817e5d12832
 ## explicit; go 1.19
 github.com/Azure/azure-kusto-go/kusto
 github.com/Azure/azure-kusto-go/kusto/data/errors
@@ -231,11 +231,12 @@ github.com/josharian/intern
 # github.com/json-iterator/go v1.1.12
 ## explicit; go 1.12
 github.com/json-iterator/go
-# github.com/klauspost/compress v1.16.7
+# github.com/klauspost/compress v1.17.0
 ## explicit; go 1.18
 github.com/klauspost/compress
 github.com/klauspost/compress/flate
 github.com/klauspost/compress/fse
+github.com/klauspost/compress/gzip
 github.com/klauspost/compress/huff0
 github.com/klauspost/compress/internal/cpuinfo
 github.com/klauspost/compress/internal/snapref
@@ -872,4 +873,5 @@ sigs.k8s.io/structured-merge-diff/v4/value
 # sigs.k8s.io/yaml v1.3.0
 ## explicit; go 1.12
 sigs.k8s.io/yaml
+# github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.0.0-20230918190252-4817e5d12832
 # google.golang.org/grpc => github.com/grpc/grpc-go v1.56.2
