@@ -36,8 +36,8 @@ var (
 	idgen *flake.Flake
 
 	// encoder and decoder pools are used for compressing and decompressing blocks
-	encoders [64]*zstd.Encoder
-	decoders [64]*zstd.Decoder
+	encoders [16]*zstd.Encoder
+	decoders [16]*zstd.Decoder
 
 	// ringPool is a pool of ring buffers used for queuing writes to segments.  This allows these to be
 	// re-used across segments.  We allow up to 10000 ring buffers to be allocated to match the max number of
