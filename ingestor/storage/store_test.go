@@ -3,6 +3,7 @@ package storage_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -149,6 +150,29 @@ func BenchmarkSegmentKey(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		storage.SegmentKey(buf[:0], database, labels)
+	}
+}
+
+func BenchmarkWriteTimeSeries(b *testing.B) {
+	b.ReportAllocs()
+	database := "adxmetrics"
+	dir := b.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 100 * 1024 * 1024,
+		SegmentMaxAge:  time.Minute,
+	})
+
+	require.NoError(b, s.Open(context.Background()))
+	defer s.Close()
+	require.Equal(b, 0, s.WALCount())
+
+	batch := make([]prompb.TimeSeries, 2500)
+	for i := 0; i < 2500; i++ {
+		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), nil, 0, 0)
+	}
+	for i := 0; i < b.N; i++ {
+		require.NoError(b, s.WriteTimeSeries(context.Background(), database, batch))
 	}
 }
 
