@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -50,6 +51,9 @@ type LocalStore struct {
 
 	mu   sync.RWMutex
 	wals map[string]*wal.WAL
+
+	metricsMu sync.RWMutex
+	metrics   map[string]prometheus.Counter
 }
 
 type StoreOpts struct {
@@ -62,8 +66,9 @@ type StoreOpts struct {
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
-		opts: opts,
-		wals: make(map[string]*wal.WAL),
+		opts:    opts,
+		wals:    make(map[string]*wal.WAL),
+		metrics: make(map[string]prometheus.Counter),
 	}
 }
 
@@ -174,7 +179,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []
 			return err
 		}
 
-		metrics.SamplesStored.WithLabelValues(string(v.Labels[0].Value)).Add(float64(len(v.Samples)))
+		s.incMetrics(v.Labels[0].Value, len(v.Samples))
 
 		enc.Reset()
 		if err := enc.MarshalCSV(v); err != nil {
@@ -263,6 +268,27 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	}
 
 	return int(n), nil
+}
+
+func (s *LocalStore) incMetrics(value []byte, n int) {
+	s.metricsMu.RLock()
+	counter := s.metrics[string(value)]
+	s.metricsMu.RUnlock()
+
+	if counter != nil {
+		counter.Add(float64(n))
+		return
+	}
+
+	s.metricsMu.Lock()
+	counter = s.metrics[string(value)]
+	if counter == nil {
+		counter = metrics.SamplesStored.WithLabelValues(string(value))
+		s.metrics[string(value)] = counter
+	}
+	s.metricsMu.Unlock()
+
+	counter.Add(float64(n))
 }
 
 func SegmentKey(dst []byte, database []byte, labels []prompb.Label) []byte {
