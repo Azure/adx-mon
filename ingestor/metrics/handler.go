@@ -114,7 +114,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBuf := bytesBufPool.Get(1024 * 1024).(*bytes.Buffer)
+	bodyBuf := bytesBufPool.Get(64 * 1024).(*bytes.Buffer)
 	defer bytesBufPool.Put(bodyBuf)
 	bodyBuf.Reset()
 
@@ -126,7 +126,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	compressed := bodyBuf.Bytes()
-	buf := bytesPool.Get(1024 * 1024)
+	buf := bytesPool.Get(64 * 1024)
 	defer bytesPool.Put(buf)
 	buf = buf[:0]
 
