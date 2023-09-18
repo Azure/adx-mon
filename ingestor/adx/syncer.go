@@ -149,7 +149,9 @@ func (s *Syncer) EnsureTable(table string) error {
 	}
 	sb.WriteString(")")
 
-	logger.Infof("Creating table %s %s", table, sb.String())
+	if logger.IsDebug() {
+		logger.Debugf("Creating table %s %s", table, sb.String())
+	}
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
