@@ -131,10 +131,11 @@ func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*otlp.Logs {
 				b = makeKey(b[:0], d, t)
 				v, ok := m[string(b)]
 				if !ok {
-					v = &otlp.Logs{
-						// The naming here is a bit confusing, but the spec defines this particular mapping
-						// in the logs data model
-						Resources: r.Resource.Attributes,
+					v = &otlp.Logs{}
+					// The naming here is a bit confusing, but the spec defines this particular mapping
+					// in the logs data model
+					if r.Resource != nil {
+						v.Resources = r.Resource.Attributes
 					}
 				}
 				v.Logs = append(v.Logs, l)

@@ -136,8 +136,40 @@ func TestOTLPWriterFailures(t *testing.T) {
 	require.Equal(t, connect.CodeDataLoss, connectErr.Code())
 }
 
-func TestGroupbyKustoTable(t *testing.T) {
+func TestGroupbyKustoTable_NoResourceAttributes(t *testing.T) {
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlogNoResourceAttributes, &log); err != nil {
+		require.NoError(t, err)
+	}
 
+	grouped := groupByKustoTable(&log)
+	require.Len(t, grouped, 3)
+
+	for key, logs := range grouped {
+		database, table := metadataFromKey(key)
+
+		switch table {
+		case "ATable":
+			require.Len(t, logs.Logs, 2)
+			require.Equal(t, 2, len(logs.Logs[0].Attributes))
+			require.Equal(t, "ADatabase", database)
+		case "BTable":
+			require.Len(t, logs.Logs, 1)
+			require.Equal(t, 2, len(logs.Logs[0].Attributes))
+			require.Equal(t, "ADatabase", database)
+		case "CTable":
+			require.Len(t, logs.Logs, 1)
+			require.Equal(t, 2, len(logs.Logs[0].Attributes))
+			require.Equal(t, "BDatabase", database)
+		default:
+			require.Fail(t, "unknown table")
+		}
+
+		require.Equal(t, 0, len(logs.Resources))
+	}
+}
+
+func TestGroupbyKustoTable(t *testing.T) {
 	var log v1.ExportLogsServiceRequest
 	if err := protojson.Unmarshal(rawlog, &log); err != nil {
 		require.NoError(t, err)
@@ -556,6 +588,154 @@ var rawlogMissingDestinations = []byte(`{
 									"key": "kusto.table",
 									"value": {
 										"stringValue": "ATable"
+									}
+								}
+							],
+							"droppedAttributesCount": 1,
+							"flags": 1,
+							"traceId": "",
+							"spanId": ""
+						},
+						{
+							"timeUnixNano": "1669112524002",
+							"observedTimeUnixNano": "1669112524002",
+							"severityNumber": 17,
+							"severityText": "Error",
+							"body": {
+								"stringValue": "{\"msg\":\"something else happened\"}"
+							},
+							"attributes": [
+								{
+									"key": "kusto.table",
+									"value": {
+										"stringValue": "CTable"
+									}
+								},
+								{
+									"key": "kusto.database",
+									"value": {
+										"stringValue": "BDatabase"
+									}
+								}
+							],
+							"droppedAttributesCount": 1,
+							"flags": 1,
+							"traceId": "",
+							"spanId": ""
+						}
+					],
+					"schemaUrl": "scope_schema"
+				}
+			],
+			"schemaUrl": "resource_schema"
+		}
+	]
+}`)
+
+var rawlogNoResourceAttributes = []byte(`{
+	"resourceLogs": [
+		{
+			"scopeLogs": [
+				{
+					"scope": {
+						"name": "name",
+						"version": "version",
+						"droppedAttributesCount": 1
+					},
+					"logRecords": [
+						{
+							"timeUnixNano": "1669112524001",
+							"observedTimeUnixNano": "1669112524001",
+							"severityNumber": 17,
+							"severityText": "Error",
+							"body": {
+								"stringValue": "{\"msg\":\"something happened\"}"
+							},
+							"attributes": [
+								{
+									"key": "kusto.table",
+									"value": {
+										"stringValue": "ATable"
+									}
+								},
+								{
+									"key": "kusto.database",
+									"value": {
+										"stringValue": "ADatabase"
+									}
+								}
+							],
+							"droppedAttributesCount": 1,
+							"flags": 1,
+							"traceId": "",
+							"spanId": ""
+						}
+					],
+					"schemaUrl": "scope_schema"
+				},
+				{
+					"scope": {
+						"name": "name",
+						"version": "version",
+						"droppedAttributesCount": 1
+					},
+					"logRecords": [
+						{
+							"timeUnixNano": "1669112524001",
+							"observedTimeUnixNano": "1669112524001",
+							"severityNumber": 17,
+							"severityText": "Error",
+							"body": {
+								"stringValue": "{\"msg\":\"something happened\"}"
+							},
+							"attributes": [
+								{
+									"key": "kusto.table",
+									"value": {
+										"stringValue": "BTable"
+									}
+								},
+								{
+									"key": "kusto.database",
+									"value": {
+										"stringValue": "ADatabase"
+									}
+								}
+							],
+							"droppedAttributesCount": 1,
+							"flags": 1,
+							"traceId": "",
+							"spanId": ""
+						}
+					],
+					"schemaUrl": "scope_schema"
+				},
+				{
+					"scope": {
+						"name": "name",
+						"version": "version",
+						"droppedAttributesCount": 1
+					},
+					"logRecords": [
+						{
+							"timeUnixNano": "1669112524001",
+							"observedTimeUnixNano": "1669112524001",
+							"severityNumber": 17,
+							"severityText": "Error",
+							"body": {
+								"stringValue": "{\"msg\":\"something else happened\"}"
+							},
+							"attributes": [
+								{
+									"key": "kusto.table",
+									"value": {
+										"stringValue": "ATable"
+									}
+								},
+								{
+									"key": "kusto.database",
+									"value": {
+										"stringValue": "ADatabase"
 									}
 								}
 							],
