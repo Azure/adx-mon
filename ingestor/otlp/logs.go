@@ -52,7 +52,7 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 
 		if d == "" || t == "" {
 			invalidCount := len(logs.Logs)
-			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request missing destination metadata for %d logs", invalidCount))
+			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request missing destination metadata for %d logs, key=%s", invalidCount, key))
 			rejectedLogRecords += int64(invalidCount)
 		} else if _, ok := srv.databases[d]; !ok {
 			invalidCount := len(logs.Logs)
@@ -128,6 +128,9 @@ func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*otlp.Logs {
 			for _, l := range s.GetLogRecords() {
 				// Extract the destination Kusto Database and Table
 				d, t = kustoMetadata(l)
+				if (d == "" || t == "") && logger.IsDebug() {
+					logger.Debugf("Log missing destination metadata: %s", l.String())
+				}
 				b = makeKey(b[:0], d, t)
 				v, ok := m[string(b)]
 				if !ok {

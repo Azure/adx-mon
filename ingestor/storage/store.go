@@ -208,6 +208,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	wal, err := s.GetWAL(ctx, key)
 	if err != nil {
+		logger.Errorf("Failed to get WAL for %s.%s: %s", database, table, err)
 		return err
 	}
 
@@ -215,10 +216,12 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	enc.Reset()
 	if err := enc.MarshalCSV(logs); err != nil {
+		logger.Errorf("Failed to marshal logs for %s.%s: %s", database, table, err)
 		return err
 	}
 
 	if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		logger.Errorf("Failed to write logs for %s.%s: %s", database, table, err)
 		return err
 	}
 
