@@ -10,7 +10,6 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -127,7 +126,8 @@ func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*otlp.Logs {
 		for _, s := range r.GetScopeLogs() {
 			for _, l := range s.GetLogRecords() {
 				// Extract the destination Kusto Database and Table
-				d, t = kustoMetadata(l)
+				d, t = otlp.KustoMetadata(l)
+
 				b = makeKey(b[:0], d, t)
 				v, ok := m[string(b)]
 				if !ok {
@@ -144,24 +144,4 @@ func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*otlp.Logs {
 		}
 	}
 	return m
-}
-
-const (
-	dbKey  = "kusto.database"
-	tblKey = "kusto.table"
-)
-
-func kustoMetadata(l *logsv1.LogRecord) (database, table string) {
-	for _, a := range l.GetAttributes() {
-		switch a.GetKey() {
-		case dbKey:
-			database = a.GetValue().GetStringValue()
-		case tblKey:
-			table = a.GetValue().GetStringValue()
-		}
-		if database != "" && table != "" {
-			return
-		}
-	}
-	return
 }

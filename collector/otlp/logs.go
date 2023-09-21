@@ -18,6 +18,7 @@ import (
 	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
 	connect_go "github.com/bufbuild/connect-go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -122,9 +123,13 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 				return
 			}
 
-			var numLogs int
-			msg, numLogs = modifyAttributes(msg, add, lift)
-			metrics.LogsProxyReceived.Add(float64(numLogs))
+			msg, err = modifyAttributes(msg, add, lift)
+			if err != nil {
+				logger.Errorf("Failed to modify attributes: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+				return
+			}
 
 			// OTLP API https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
 			// requires us send a partial success where appropriate. We'll keep track
@@ -211,11 +216,11 @@ func LogsProxyHandler(ctx context.Context, endpoints []string, insecureSkipVerif
 	}
 }
 
-func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, lift map[string]struct{}) (*v1.ExportLogsServiceRequest, int) {
+func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, lift map[string]struct{}) (*v1.ExportLogsServiceRequest, error) {
 
 	var (
-		numLogs int
-		ok      bool
+		ok              bool
+		database, table string
 	)
 	for i := range msg.ResourceLogs {
 		// Logs schema https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
@@ -238,7 +243,6 @@ func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue
 		)
 
 		for j := range msg.ResourceLogs[i].ScopeLogs {
-			numLogs += len(msg.ResourceLogs[i].ScopeLogs[j].LogRecords)
 
 			for k := range msg.ResourceLogs[i].ScopeLogs[j].LogRecords {
 
@@ -260,11 +264,21 @@ func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue
 						}
 					}
 				}
+
+				// We want to prevent sending logs to Ingestor that will ultimately be rejected due to lack
+				// of routable metadata. While it might seem wasteful to perform this check on every log,
+				// we're at least ammortizing the cost at the Collector level instead of in the hot-path
+				// at Ingestor.
+				database, table = otlp.KustoMetadata(msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k])
+				if database == "" || table == "" {
+					return msg, errors.New("log is missing routing attributes")
+				}
+				metrics.LogsProxyReceived.WithLabelValues(database, table).Inc()
 			}
 		}
 	}
 
-	return msg, numLogs
+	return msg, nil
 }
 
 func httpStatusCodeForGRPCError(err error) int {
