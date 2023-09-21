@@ -30,8 +30,8 @@ func TestAttributes(t *testing.T) {
 		"kusto.database": {},
 	}
 
-	modified, records := modifyAttributes(&log, add, lift)
-	require.Equal(t, 1, records)
+	modified, err := modifyAttributes(&log, add, lift)
+	require.NoError(t, err)
 
 	require.Equal(t, 1, len(modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values))
 	require.Equal(t, "message", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values[0].Key)

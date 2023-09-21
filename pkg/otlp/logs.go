@@ -11,3 +11,26 @@ type Logs struct {
 	Resources []*commonv1.KeyValue
 	Logs      []*logsv1.LogRecord
 }
+
+const (
+	dbKey  = "kusto.database"
+	tblKey = "kusto.table"
+)
+
+func KustoMetadata(l *logsv1.LogRecord) (database, table string) {
+	if l == nil {
+		return
+	}
+	for _, a := range l.GetAttributes() {
+		switch a.GetKey() {
+		case dbKey:
+			database = a.GetValue().GetStringValue()
+		case tblKey:
+			table = a.GetValue().GetStringValue()
+		}
+		if database != "" && table != "" {
+			return
+		}
+	}
+	return
+}

@@ -95,12 +95,12 @@ var (
 	}, []string{"namespace", "name"})
 
 	// Collector metrics
-	LogsProxyReceived = promauto.NewCounter(prometheus.CounterOpts{
+	LogsProxyReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "collector",
 		Name:      "logs_received",
 		Help:      "Counter of the number of logs received by the proxy",
-	})
+	}, []string{"database", "table"})
 
 	LogsProxyFailures = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
