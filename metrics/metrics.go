@@ -115,4 +115,18 @@ var (
 		Name:      "logs_partial_failures",
 		Help:      "Counter of the number of partial failures when proxying logs to the OTLP endpoints",
 	}, []string{"endpoint"})
+
+	LogKeys = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_keys",
+		Help:      "Number of keys found in logs",
+	}, []string{"database", "table"})
+
+	LogSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_size",
+		Help:      "Size of logs in bytes",
+	}, []string{"database", "table"})
 )
