@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/ring"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/zstd"
 )
@@ -105,12 +107,12 @@ type segment struct {
 	mu sync.RWMutex
 
 	// w is the underlying segment file on disk
-	w *os.File
+	w file.File
 
 	// bw is a buffered writer for w that if flushed to disk in batches.
 	bw *bufio.Writer
 
-	// encodeBuf is a buffer used for compressing blocks before writing to disk.
+	// encodeBuf is a buffer used for compressing blocks before writing to file.
 	encodeBuf []byte
 	lenBuf    [8]byte
 	encoder   *zstd.Encoder
@@ -118,11 +120,11 @@ type segment struct {
 	closing chan struct{}
 	closed  bool
 
-	// ringBuf is a circular buffer that queues writes to allow for large IO batches to disk.
+	// ringBuf is a circular buffer that queues writes to allow for large IO batches to file.
 	ringBuf *ring.Buffer
 }
 
-func NewSegment(dir, prefix string) (Segment, error) {
+func NewSegment(dir, prefix string, w file.File) (Segment, error) {
 	flakeId := idgen.NextId()
 
 	createdAt, err := flakeutil.ParseFlakeID(flakeId.String())
@@ -131,8 +133,11 @@ func NewSegment(dir, prefix string) (Segment, error) {
 	}
 
 	fileName := fmt.Sprintf("%s_%s.wal", prefix, flakeId.String())
+	if !fs.ValidPath(fileName) {
+		return nil, fmt.Errorf("invalid segment filename: %s", fileName)
+	}
 	path := filepath.Join(dir, fileName)
-	fw, err := os.Create(path)
+	fw, err := w.Create(path)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +162,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 	return f, nil
 }
 
-func Open(path string) (Segment, error) {
+func Open(path string, w file.File) (Segment, error) {
 	ext := filepath.Ext(path)
 	if ext != ".wal" {
 		return nil, fmt.Errorf("invalid segment filename: %s", path)
@@ -174,7 +179,7 @@ func Open(path string) (Segment, error) {
 		return nil, err
 	}
 
-	fd, err := os.OpenFile(path, os.O_APPEND|os.O_RDWR, 0600)
+	fd, err := w.OpenFile(path, os.O_APPEND|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("open segment: %s: %w", path, err)
 	}
@@ -211,7 +216,7 @@ func (s *segment) Path() string {
 // Reader returns an io.Reader for the segment.  The Reader returns segment data automatically handling segment
 // blocks and validation.
 func (s *segment) Reader() (io.ReadCloser, error) {
-	return NewSegmentReader(s.Path())
+	return NewSegmentReader(s.Path(), s.w)
 }
 
 // CreateAt returns the time when the segment was created.
@@ -219,9 +224,9 @@ func (s *segment) CreatedAt() time.Time {
 	return s.createdAt
 }
 
-// Size returns the current size of the segment file on disk.
+// Size returns the current size of the segment file on file.
 func (s *segment) Size() (int64, error) {
-	stat, err := os.Stat(s.path)
+	stat, err := s.w.Stat()
 	if err != nil {
 		return 0, err
 	}
@@ -236,7 +241,7 @@ func (s *segment) ID() string {
 // Iterator returns an iterator to read values written to the segment.  Creating an iterator on a segment that is
 // still being written is not supported.
 func (s *segment) Iterator() (Iterator, error) {
-	f, err := os.Open(s.path)
+	f, err := s.w.Open(s.path)
 	if err != nil {
 		return nil, err
 	}

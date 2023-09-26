@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,7 +76,7 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(path)
+	r, err := wal.NewSegmentReader(path, &file.Disk{})
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 1, s.WALCount())
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(path)
+	r, err := wal.NewSegmentReader(path, &file.Disk{})
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)

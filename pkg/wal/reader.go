@@ -2,11 +2,12 @@ package wal
 
 import (
 	"io"
-	"os"
+
+	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
-func NewSegmentReader(path string) (io.ReadCloser, error) {
-	f, err := os.Open(path)
+func NewSegmentReader(path string, r file.File) (io.ReadCloser, error) {
+	f, err := r.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -19,7 +20,7 @@ func NewSegmentReader(path string) (io.ReadCloser, error) {
 }
 
 type segmentReader struct {
-	f    *os.File
+	f    file.File
 	iter Iterator
 
 	buf []byte
