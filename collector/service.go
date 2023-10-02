@@ -40,6 +40,7 @@ type Service struct {
 
 	requestTransformer *transform.RequestTransformer
 	remoteClient       *promremote.Client
+	metricsClient      *MetricsClient
 	watcher            watch.Interface
 
 	mu            sync.RWMutex
@@ -114,6 +115,12 @@ func (s *Service) Open(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	var err error
+
+	s.metricsClient, err = NewMetricsClient()
+	if err != nil {
+		return fmt.Errorf("failed to create metrics client: %w", err)
+	}
+
 	s.remoteClient, err = promremote.NewClient(
 		promremote.ClientOpts{
 			Timeout:            20 * time.Second,
@@ -209,6 +216,7 @@ func (s *Service) Open(ctx context.Context) error {
 }
 
 func (s *Service) Close() error {
+	s.metricsClient.Close()
 	s.metricsSvc.Close()
 	s.cancel()
 	s.srv.Shutdown(s.ctx)
@@ -242,7 +250,7 @@ func (s *Service) scrapeTargets() {
 
 	wr := &prompb.WriteRequest{}
 	for _, target := range targets {
-		fams, err := FetchMetrics(target.Addr)
+		fams, err := s.metricsClient.FetchMetrics(target.Addr)
 		if err != nil {
 			logger.Errorf("Failed to scrape metrics for %s: %s", target, err.Error())
 			continue
