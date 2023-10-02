@@ -3,11 +3,12 @@ package collector_test
 import (
 	"compress/gzip"
 	"fmt"
-	"github.com/Azure/adx-mon/collector"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Azure/adx-mon/collector"
+	"github.com/stretchr/testify/require"
 )
 
 func TestService_Client(t *testing.T) {
@@ -19,7 +20,7 @@ func TestService_Client(t *testing.T) {
 		if r.Header.Get("Accept-Encoding") != "gzip" {
 			t.Errorf("Expected gzip Accept-Encoding, got %s", r.Header.Get("Accept-Encoding"))
 		}
-		
+
 		fmt.Fprintf(w, `
 # HELP go_gc_duration_seconds A summary of the GC invocation durations.
 # TYPE go_gc_duration_seconds summary
@@ -34,7 +35,11 @@ go_gc_duration_seconds_count 8452
 	}))
 	defer svr.Close()
 
-	m, err := collector.FetchMetrics(svr.URL)
+	client, err := collector.NewMetricsClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	m, err := client.FetchMetrics(svr.URL)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(m))
 }
@@ -70,7 +75,11 @@ go_gc_duration_seconds_count 8452
 	}))
 	defer svr.Close()
 
-	m, err := collector.FetchMetrics(svr.URL)
+	client, err := collector.NewMetricsClient()
+	require.NoError(t, err)
+	defer client.Close()
+
+	m, err := client.FetchMetrics(svr.URL)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(m))
 }
