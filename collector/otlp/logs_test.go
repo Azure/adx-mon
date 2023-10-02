@@ -1,6 +1,8 @@
 package otlp
 
 import (
+	"context"
+	"os"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
@@ -49,6 +51,51 @@ func TestAttributes(t *testing.T) {
 
 	require.Equal(t, "kusto.database", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Key)
 	require.Equal(t, "ADatabase", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Value.GetStringValue())
+}
+
+func TestSerializedLogs(t *testing.T) {
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlog, &log); err != nil {
+		require.NoError(t, err)
+	}
+
+	add := []*commonv1.KeyValue{
+		{
+			Key: "SomeAttribute",
+			Value: &commonv1.AnyValue{
+				Value: &commonv1.AnyValue_StringValue{
+					StringValue: "SomeValue",
+				},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	wals, err := serializedLogs(context.Background(), &log, add, dir)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, len(wals))
+
+	for _, w := range wals {
+		b, err := os.ReadFile(w)
+		require.NoError(t, err)
+		require.NotEqual(t, 0, len(b))
+	}
+}
+
+func BenchmarkSerializedLogs(b *testing.B) {
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlog, &log); err != nil {
+		require.NoError(b, err)
+	}
+
+	dir := b.TempDir()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := serializedLogs(context.Background(), &log, nil, dir)
+		require.NoError(b, err)
+	}
 }
 
 func BenchmarkModifyAttributes(b *testing.B) {

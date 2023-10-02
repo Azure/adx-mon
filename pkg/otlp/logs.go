@@ -32,5 +32,20 @@ func KustoMetadata(l *logsv1.LogRecord) (database, table string) {
 			return
 		}
 	}
+	if b := l.GetBody(); b != nil {
+		if lv := b.GetKvlistValue(); lv != nil {
+			for _, v := range lv.GetValues() {
+				switch v.GetKey() {
+				case dbKey:
+					database = v.GetValue().GetStringValue()
+				case tblKey:
+					table = v.GetValue().GetStringValue()
+				}
+				if database != "" && table != "" {
+					return
+				}
+			}
+		}
+	}
 	return
 }

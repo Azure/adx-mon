@@ -14,7 +14,8 @@ pipeline:
       Match: "*"
       Host: collector
       Port: 8080
-      Logs_uri: /logs
+      # Logs_uri: /logs
+      Logs_uri: /v1/logs
       Log_response_payload: true
       TLS: false
       TLS.verify: false
