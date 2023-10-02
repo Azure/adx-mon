@@ -129,4 +129,25 @@ var (
 		Name:      "logs_size",
 		Help:      "Size of logs in bytes",
 	}, []string{"database", "table"})
+
+	LogsCollectorLogsCollected = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_collected",
+		Help:      "Counter of the number of logs collected by the collector",
+	}, []string{"source"})
+
+	LogsCollectorLogsSent = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_sent",
+		Help:      "Counter of the number of logs successfully sent by the collector",
+	}, []string{"source", "sink"})
+
+	LogsCollectorLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_dropped",
+		Help:      "Counter of the number of logs dropped due to errors",
+	}, []string{"source", "stage"})
 )
