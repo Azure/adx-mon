@@ -274,6 +274,8 @@ func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue
 					return msg, errors.New("log is missing routing attributes")
 				}
 				metrics.LogsProxyReceived.WithLabelValues(database, table).Inc()
+				metrics.LogKeys.WithLabelValues(database, table).Set(float64(len(msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().GetValues())))
+				metrics.LogSize.WithLabelValues(database, table).Set(float64(proto.Size(msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body)))
 			}
 		}
 	}
