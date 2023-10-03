@@ -99,6 +99,10 @@ type ServiceOpts struct {
 
 	// LogsDatabases is a slice of log database names.
 	LogsDatabases []string
+
+	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
+	// keys are distributed.
+	PartitionSize int
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -115,6 +119,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		K8sCli:            opts.K8sCli,
 		Hostname:          opts.Hostname,
 		Namespace:         opts.Namespace,
+		PartitionSize:     opts.PartitionSize,
 	})
 	if err != nil {
 		return nil, err

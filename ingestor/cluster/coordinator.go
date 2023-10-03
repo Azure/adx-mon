@@ -81,6 +81,10 @@ type CoordinatorOpts struct {
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
+
+	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
+	// keys are distributed.
+	PartitionSize int
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
@@ -265,7 +269,7 @@ func (c *coordinator) setPartitioner(set map[string]string) error {
 		c.peers[peer] = addr
 	}
 
-	part, err := NewPartition(set)
+	part, err := NewPartition(set, c.hostname, c.opts.PartitionSize)
 	if err != nil {
 		return err
 	}

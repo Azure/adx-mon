@@ -69,6 +69,7 @@ func main() {
 			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
+			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
 			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
 			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
@@ -122,6 +123,7 @@ func realMain(ctx *cli.Context) error {
 	maxTransferAge = ctx.Duration("max-transfer-age")
 	maxSegmentCount := ctx.Int64("max-segment-count")
 	maxDiskUsage := ctx.Int64("max-disk-usage")
+	partitionSize := ctx.Int("partition-size")
 	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
 	key = ctx.String("key")
@@ -308,6 +310,7 @@ func realMain(ctx *cli.Context) error {
 		StorageDir:          storageDir,
 		Uploader:            uploadDispatcher,
 		DisablePeerTransfer: disablePeerTransfer,
+		PartitionSize:       partitionSize,
 		MaxSegmentSize:      maxSegmentSize,
 		MaxSegmentAge:       maxSegmentAge,
 		MaxTransferSize:     maxTransferSize,
