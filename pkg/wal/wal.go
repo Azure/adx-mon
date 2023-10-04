@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 type WAL struct {
@@ -24,6 +25,9 @@ type WAL struct {
 type WALOpts struct {
 	StorageDir string
 
+	// StorageProvider is an implementation of the file.File interface.
+	StorageProvider file.File
+
 	// WAL segment prefix
 	Prefix string
 
@@ -37,6 +41,9 @@ type WALOpts struct {
 func NewWAL(opts WALOpts) (*WAL, error) {
 	if opts.StorageDir == "" {
 		return nil, fmt.Errorf("wal storage dir not defined")
+	}
+	if opts.StorageProvider == nil {
+		opts.StorageProvider = &file.Disk{}
 	}
 
 	return &WAL{
@@ -87,7 +94,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, w.opts.StorageProvider)
 		if err != nil {
 			w.mu.Unlock()
 			return err

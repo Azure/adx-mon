@@ -8,13 +8,6 @@ services:
     depends_on:
       - collector
 
-  otel:
-    image: otel/opentelemetry-collector-contrib
-    volumes:
-      - ./otlp.yaml:/etc/otelcol-contrib/config.yaml
-    ports:
-      - 4317:4317
-
   ingestor:
     build:
       dockerfile: tools/otlp/logs/Dockerfile.ingestor
@@ -38,9 +31,8 @@ services:
     # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
     # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
     # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
-    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --endpoints http://otel:4317 --insecure-skip-verify --target=.*=http://localhost:8080/metrics:adx-mon/collector/collector --add-attributes Environment=dev --lift-attributes kusto.database --lift-attributes kusto.table
+    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --insecure-skip-verify --target=.*=http://localhost:8080/metrics:adx-mon/collector/collector --add-attributes Environment=dev --lift-attributes kusto.database --lift-attributes kusto.table --storage-dir /tmp
     depends_on:
       - ingestor
-      - otel
     environment:
       - LOG_LEVEL=DEBUG

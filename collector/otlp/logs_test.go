@@ -1,6 +1,9 @@
 package otlp
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
@@ -49,6 +52,88 @@ func TestAttributes(t *testing.T) {
 
 	require.Equal(t, "kusto.database", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Key)
 	require.Equal(t, "ADatabase", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Value.GetStringValue())
+}
+
+func TestSerializedLogs(t *testing.T) {
+	tests := []struct {
+		Name        string
+		UserError   bool
+		ExpectError error
+		Records     []byte
+		NumRecords  int
+		Dir         string
+	}{
+		{
+			Name:       "success",
+			Records:    rawlog,
+			NumRecords: 1,
+			Dir:        t.TempDir(),
+		},
+		{
+			Name:        "empty",
+			UserError:   true,
+			ExpectError: ErrMalformedLogs,
+			Records:     []byte(`{}`),
+		},
+		{
+			Name:        "missing scope",
+			UserError:   true,
+			ExpectError: ErrMalformedLogs,
+			Records:     []byte(`{ "resourceLogs": [ { "resource": { "attributes": [ { "key": "source", "value": { "stringValue": "hostname" } } ], "droppedAttributesCount": 1 } } ] }`),
+		},
+		{
+			Name:        "no kusto metadata",
+			UserError:   true,
+			ExpectError: ErrMissingKustoMetadata,
+			Records:     []byte(`{ "resourceLogs": [ { "resource": { "attributes": [ { "key": "source", "value": { "stringValue": "hostname" } } ], "droppedAttributesCount": 1 }, "scopeLogs": [ { "scope": { "name": "name", "version": "version", "droppedAttributesCount": 1 }, "logRecords": [ { "timeUnixNano": "1669112524001", "observedTimeUnixNano": "1669112524001", "severityNumber": 17, "severityText": "Error", "body": { "kvlistValue": { "values": [ { "key": "message", "value": { "stringValue": "something worth logging" } } ] } }, "droppedAttributesCount": 1, "flags": 1, "traceId": "", "spanId": "" } ], "schemaUrl": "scope_schema" } ], "schemaUrl": "resource_schema" } ] }`),
+		},
+		{
+			Name:    "internal error",
+			Records: rawlog,
+			Dir:     filepath.Join("/invalid", t.TempDir()),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			var log v1.ExportLogsServiceRequest
+			if err := protojson.Unmarshal(tt.Records, &log); err != nil {
+				require.NoError(t, err)
+			}
+
+			wals, err := serializedLogs(context.Background(), &log, nil, tt.Dir)
+			require.Equal(t, tt.UserError, isUserError(err))
+			if tt.UserError {
+				require.Equal(t, tt.ExpectError, err)
+			}
+			if !tt.UserError && tt.ExpectError != nil {
+				require.NotEqual(t, err, nil)
+			}
+
+			require.Equal(t, tt.NumRecords, len(wals))
+
+			for _, w := range wals {
+				b, err := os.ReadFile(w)
+				require.NoError(t, err)
+				require.NotEqual(t, 0, len(b))
+			}
+		})
+	}
+}
+
+func BenchmarkSerializedLogs(b *testing.B) {
+	var log v1.ExportLogsServiceRequest
+	if err := protojson.Unmarshal(rawlog, &log); err != nil {
+		require.NoError(b, err)
+	}
+
+	dir := b.TempDir()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := serializedLogs(context.Background(), &log, nil, dir)
+		require.NoError(b, err)
+	}
 }
 
 func BenchmarkModifyAttributes(b *testing.B) {
