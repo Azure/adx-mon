@@ -3,6 +3,7 @@ package ingestor
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -270,6 +271,14 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	if filename == "" {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "missing filename", http.StatusBadRequest)
+		return
+	}
+	// https://pkg.go.dev/io/fs#ValidPath
+	// Check for possible traversal attacks.
+	if !fs.ValidPath(filename) {
+		logger.Errorf("Transfer requested with an invalid filename %s", filename)
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		http.Error(w, "filename is invalid", http.StatusBadRequest)
 		return
 	}
 

@@ -43,6 +43,7 @@ type File struct {
 	Key      string
 }
 
+// TODO: make file.File aware
 func ListDir(storageDir string) ([]File, error) {
 	var files []File
 	filepath.WalkDir(storageDir, func(path string, d os.DirEntry, err error) error {
