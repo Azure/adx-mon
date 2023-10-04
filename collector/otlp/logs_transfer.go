@@ -229,7 +229,7 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 				if d == "" || t == "" {
 					return nil, ErrMissingKustoMetadata
 				}
-				fn = fmt.Sprintf("%s_%s.wal", d, t)
+				fn = fmt.Sprintf("%s_%s", d, t)
 
 				if logger.IsDebug() {
 					logger.Debugf("Database: %s Table: %s", d, t)
@@ -243,7 +243,7 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 
 				w, ok := m[fn]
 				if !ok {
-					w, err = wal.NewWAL(wal.WALOpts{StorageDir: storageDir, Prefix: "collector"})
+					w, err = wal.NewWAL(wal.WALOpts{StorageDir: storageDir, Prefix: fn})
 					if err != nil {
 						return nil, fmt.Errorf("failed to create wal: %w", err)
 					}
