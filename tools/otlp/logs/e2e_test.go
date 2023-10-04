@@ -16,10 +16,13 @@ import (
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	cotlp "github.com/Azure/adx-mon/collector/otlp"
+	isvc "github.com/Azure/adx-mon/ingestor"
+	"github.com/Azure/adx-mon/ingestor/adx"
 	iotlp "github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -35,41 +38,59 @@ func TestOTLPLogsE2E(t *testing.T) {
 	// going to stop short of testing that logs are written to Kusto because that would
 	// be testing a shared code path that all handlers take, which will be left to a
 	// separate integration test.
-	ctx, cancel := context.WithCancel(context.Background())
-	dir := t.TempDir()
 
-	// Create our Ingestor HTTP instance, which exposes Ingestor's OTLP logs handler. This
-	// code path is identical to a real Ingestor instance at the point of OTLP logs ingestion.
-	ingestorURL, done := NewIngestorHandler(t, ctx, dir)
-	// Likewise, we create our Collector HTTP instance, which exposes Collector's OTLP logs
-	// and is identical to the way in which a downstream component, such as fluentbit, would
-	// interact with Collector. Here we pass the Ingestor URL as the endpoint to Collector,
-	// which Collector will use to Proxy the request to Ingestor.
-	collectorURL, hc := NewCollectorHandler(t, ctx, []string{ingestorURL})
+	// We're going to test both the Proxy and Transfer handlers, which are exposed by Collector.
+	tests := []struct {
+		URLPath string
+	}{
+		{
+			URLPath: logsv1connect.LogsServiceExportProcedure,
+		},
+		{
+			URLPath: "/v1/logs",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.URLPath, func(t *testing.T) {
 
-	// Now here we act on behalf of a logs producer, sending a valid OTLP logs payload to Collector.
-	// We expect a valid response object and status code, after verification, we'll then test
-	// the contents written to disk by Ingestor's store.
-	u, err := url.JoinPath(collectorURL, logsv1connect.LogsServiceExportProcedure)
-	require.NoError(t, err)
+			ctx, cancel := context.WithCancel(context.Background())
+			collectorDir := t.TempDir()
+			ingestorDir := t.TempDir()
 
-	var log v1.ExportLogsServiceRequest
-	err = protojson.Unmarshal(rawlog, &log)
-	require.NoError(t, err)
+			// Create our Ingestor HTTP instance, which exposes Ingestor's OTLP logs handler. This
+			// code path is identical to a real Ingestor instance at the point of OTLP logs ingestion.
+			ingestorURL, done := NewIngestorHandler(t, ctx, ingestorDir)
+			// Likewise, we create our Collector HTTP instance, which exposes Collector's OTLP logs
+			// and is identical to the way in which a downstream component, such as fluentbit, would
+			// interact with Collector. Here we pass the Ingestor URL as the endpoint to Collector,
+			// which Collector will use to Proxy the request to Ingestor.
+			collectorURL, hc := NewCollectorHandler(t, ctx, []string{ingestorURL}, collectorDir)
 
-	buf, err := proto.Marshal(&log)
-	require.NoError(t, err)
+			// Now here we act on behalf of a logs producer, sending a valid OTLP logs payload to Collector.
+			// We expect a valid response object and status code, after verification, we'll then test
+			// the contents written to disk by Ingestor's store.
+			u, err := url.JoinPath(collectorURL, tt.URLPath)
+			require.NoError(t, err)
 
-	resp, err := hc.Post(u, "application/x-protobuf", bytes.NewReader(buf))
-	require.NoError(t, err)
-	VerifyResponse(t, resp)
+			var log v1.ExportLogsServiceRequest
+			err = protojson.Unmarshal(rawlog, &log)
+			require.NoError(t, err)
 
-	// By canceling our context, we'll ensure Ingestor flushes all our segments to disk.
-	cancel()
-	<-done // Wait for the store to finish flushing
+			buf, err := proto.Marshal(&log)
+			require.NoError(t, err)
 
-	// Now verify the content of our segments.
-	VerifyStore(t, dir)
+			resp, err := hc.Post(u, "application/x-protobuf", bytes.NewReader(buf))
+			require.NoError(t, err)
+			VerifyResponse(t, resp)
+
+			// By canceling our context, we'll ensure Ingestor flushes all our segments to disk.
+			cancel()
+			<-done // Wait for the store to finish flushing
+
+			// Now verify the content of our segments.
+			VerifyStore(t, ingestorDir)
+		})
+	}
 }
 
 func VerifyResponse(t *testing.T, resp *http.Response) {
@@ -110,7 +131,13 @@ func VerifyStore(t *testing.T, dir string) {
 		require.NoError(t, err)
 		require.NotEqual(t, 0, info.Size())
 
-		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()))
+		// Ensure kusto metadata is present in the filename
+		ss := strings.Split(entry.Name(), "_")
+		require.Equal(t, 3, len(ss))
+		require.Contains(t, ss[0], "Database")
+		require.Contains(t, ss[1], "Table")
+
+		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()), &file.Disk{})
 		require.NoError(t, err)
 		b, err := io.ReadAll(s)
 		require.NoError(t, err)
@@ -127,7 +154,7 @@ func VerifyStore(t *testing.T, dir string) {
 	require.Equal(t, true, verified)
 }
 
-func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string) (string, *http.Client) {
+func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string, dir string) (string, *http.Client) {
 	t.Helper()
 	var (
 		insecureSkipVerify = true
@@ -139,7 +166,9 @@ func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string) 
 	)
 	mux := http.NewServeMux()
 	ph := cotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
+	th := cotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes, dir)
 	mux.Handle(logsv1connect.LogsServiceExportProcedure, ph)
+	mux.Handle("/v1/logs", th)
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -169,8 +198,17 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 		return store.WriteOTLPLogs(ctx, database, table, logs)
 	}
 
+	svc, err := isvc.NewService(isvc.ServiceOpts{
+		StorageDir:      dir,
+		Uploader:        adx.NewFakeUploader(),
+		MaxSegmentCount: 100,
+		MaxDiskUsage:    10 * 1024 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+
 	mux := http.NewServeMux()
 	mux.Handle(logsv1connect.NewLogsServiceHandler(iotlp.NewLogsServer(writer, []string{"ADatabase", "BDatabase"})))
+	mux.HandleFunc("/transfer", svc.HandleTransfer)
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
