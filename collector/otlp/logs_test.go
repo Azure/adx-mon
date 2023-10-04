@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
@@ -54,32 +55,69 @@ func TestAttributes(t *testing.T) {
 }
 
 func TestSerializedLogs(t *testing.T) {
-	var log v1.ExportLogsServiceRequest
-	if err := protojson.Unmarshal(rawlog, &log); err != nil {
-		require.NoError(t, err)
-	}
-
-	add := []*commonv1.KeyValue{
+	tests := []struct {
+		Name        string
+		UserError   bool
+		ExpectError error
+		Records     []byte
+		NumRecords  int
+		Dir         string
+	}{
 		{
-			Key: "SomeAttribute",
-			Value: &commonv1.AnyValue{
-				Value: &commonv1.AnyValue_StringValue{
-					StringValue: "SomeValue",
-				},
-			},
+			Name:       "success",
+			Records:    rawlog,
+			NumRecords: 1,
+			Dir:        t.TempDir(),
+		},
+		{
+			Name:        "empty",
+			UserError:   true,
+			ExpectError: ErrMalformedLogs,
+			Records:     []byte(`{}`),
+		},
+		{
+			Name:        "missing scope",
+			UserError:   true,
+			ExpectError: ErrMalformedLogs,
+			Records:     []byte(`{ "resourceLogs": [ { "resource": { "attributes": [ { "key": "source", "value": { "stringValue": "hostname" } } ], "droppedAttributesCount": 1 } } ] }`),
+		},
+		{
+			Name:        "no kusto metadata",
+			UserError:   true,
+			ExpectError: ErrMissingKustoMetadata,
+			Records:     []byte(`{ "resourceLogs": [ { "resource": { "attributes": [ { "key": "source", "value": { "stringValue": "hostname" } } ], "droppedAttributesCount": 1 }, "scopeLogs": [ { "scope": { "name": "name", "version": "version", "droppedAttributesCount": 1 }, "logRecords": [ { "timeUnixNano": "1669112524001", "observedTimeUnixNano": "1669112524001", "severityNumber": 17, "severityText": "Error", "body": { "kvlistValue": { "values": [ { "key": "message", "value": { "stringValue": "something worth logging" } } ] } }, "droppedAttributesCount": 1, "flags": 1, "traceId": "", "spanId": "" } ], "schemaUrl": "scope_schema" } ], "schemaUrl": "resource_schema" } ] }`),
+		},
+		{
+			Name:    "internal error",
+			Records: rawlog,
+			Dir:     filepath.Join("/invalid", t.TempDir()),
 		},
 	}
 
-	dir := t.TempDir()
-	wals, err := serializedLogs(context.Background(), &log, add, dir)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			var log v1.ExportLogsServiceRequest
+			if err := protojson.Unmarshal(tt.Records, &log); err != nil {
+				require.NoError(t, err)
+			}
 
-	require.Equal(t, 1, len(wals))
+			wals, err := serializedLogs(context.Background(), &log, nil, tt.Dir)
+			require.Equal(t, tt.UserError, isUserError(err))
+			if tt.UserError {
+				require.Equal(t, tt.ExpectError, err)
+			}
+			if !tt.UserError && tt.ExpectError != nil {
+				require.NotEqual(t, err, nil)
+			}
 
-	for _, w := range wals {
-		b, err := os.ReadFile(w)
-		require.NoError(t, err)
-		require.NotEqual(t, 0, len(b))
+			require.Equal(t, tt.NumRecords, len(wals))
+
+			for _, w := range wals {
+				b, err := os.ReadFile(w)
+				require.NoError(t, err)
+				require.NotEqual(t, 0, len(b))
+			}
+		})
 	}
 }
 

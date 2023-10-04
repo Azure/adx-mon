@@ -3,6 +3,7 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,8 +85,8 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			}
 			if n < int(r.ContentLength) {
 				logger.Warnf("Short read %d < %d", n, r.ContentLength)
-				w.WriteHeader(http.StatusInternalServerError)
-				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+				w.WriteHeader(http.StatusBadRequest)
+				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
 			}
 			if logger.IsDebug() {
@@ -102,10 +103,16 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 
 			// Serialize the logs into a WAL, grouped by Kusto destination database and table
 			wals, err := serializedLogs(ctx, msg, add, storageDir)
-			if err != nil {
-				logger.Errorf("Failed to serialize logs: %v", err)
+			if isUserError(err) {
+				logger.Errorf("Failed to serialize logs with user error: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+				return
+			}
+			if err != nil {
+				logger.Errorf("Failed to serialize logs with internal error: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
 			}
 			defer func() {
@@ -168,18 +175,26 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			// We're receiving JSON, so we need to unmarshal the JSON
 			// into an OTLP protobuf, then use gRPC to send the OTLP
 			// protobuf to the OTLP endpoint
-			w.WriteHeader(http.StatusNotImplemented)
-			m.WithLabelValues(strconv.Itoa(http.StatusNotImplemented)).Inc()
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
 
 		default:
 			logger.Errorf("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
-			w.WriteHeader(http.StatusBadRequest)
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
 		}
 	}
 }
 
 func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, storageDir string) ([]string, error) {
+	if req == nil {
+		return nil, ErrMalformedLogs
+	}
+	if len(req.GetResourceLogs()) == 0 {
+		logger.Error("Request contains no Resource Logs")
+		return nil, ErrMalformedLogs
+	}
+
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
@@ -193,27 +208,37 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 	for _, r := range req.GetResourceLogs() {
 		if r == nil {
 			logger.Error("Request contains no Resource Logs")
-			return nil, fmt.Errorf("missing resource logs")
+			return nil, ErrMalformedLogs
 		}
 		logs.Resources = add
 		if r.Resource != nil {
 			logs.Resources = append(logs.Resources, r.Resource.GetAttributes()...)
 		}
 
+		if len(r.GetScopeLogs()) == 0 {
+			logger.Error("Request contains no Scope Logs")
+			return nil, ErrMalformedLogs
+		}
 		for _, s := range r.GetScopeLogs() {
 			if s == nil {
-				return nil, fmt.Errorf("missing scope logs")
+				return nil, ErrMalformedLogs
 			}
 			for _, l := range s.GetLogRecords() {
 				logs.Logs = []*logsv1.LogRecord{l}
 				d, t = otlp.KustoMetadata(l)
 				if d == "" || t == "" {
-					return nil, fmt.Errorf("missing kusto metadata")
+					return nil, ErrMissingKustoMetadata
 				}
 				fn = fmt.Sprintf("%s_%s.wal", d, t)
 
 				if logger.IsDebug() {
 					logger.Debugf("Database: %s Table: %s", d, t)
+				}
+
+				metrics.LogsProxyReceived.WithLabelValues(d, t).Inc()
+				metrics.LogSize.WithLabelValues(d, t).Set(float64(proto.Size(l.Body)))
+				if kv := l.GetBody().GetKvlistValue(); kv != nil {
+					metrics.LogKeys.WithLabelValues(d, t).Set(float64(len(kv.GetValues())))
 				}
 
 				w, ok := m[fn]
@@ -246,4 +271,25 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 		}
 	}
 	return fns, nil
+}
+
+var (
+	ErrMissingKustoMetadata = errors.New("missing kusto metadata")
+	ErrMalformedLogs        = errors.New("malformed log records")
+)
+
+func isUserError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, ErrMissingKustoMetadata) {
+		return true
+	}
+
+	if errors.Is(err, ErrMalformedLogs) {
+		return true
+	}
+
+	return false
 }
