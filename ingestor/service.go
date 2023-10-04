@@ -157,10 +157,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	health.QueueSizer = batcher
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{
-		Hostname:    opts.Hostname,
-		Partitioner: coord,
-		KustoCli:    opts.MetricsKustoCli,
-		Database:    opts.MetricsDatabase,
+		Hostname: opts.Hostname,
+		Elector:  coord,
+		KustoCli: opts.MetricsKustoCli,
+		Database: opts.MetricsDatabase,
 	})
 
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{

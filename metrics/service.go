@@ -19,8 +19,8 @@ type TimeSeriesWriter interface {
 	Write(ctx context.Context, wr prompb.WriteRequest) error
 }
 
-type MetricPartitioner interface {
-	Owner([]byte) (string, string)
+type Elector interface {
+	IsLeader() bool
 }
 
 type Service interface {
@@ -28,28 +28,28 @@ type Service interface {
 }
 
 type ServiceOpts struct {
-	Hostname    string
-	Partitioner MetricPartitioner
-	KustoCli    ingest.QueryClient
-	Database    string
+	Hostname string
+	Elector  Elector
+	KustoCli ingest.QueryClient
+	Database string
 }
 
 // Service manages the collection of metrics for ingestors.
 type service struct {
 	closeFn context.CancelFunc
 
-	hostname    string
-	partitioner MetricPartitioner
-	kustoCli    ingest.QueryClient
-	database    string
+	hostname string
+	elector  Elector
+	kustoCli ingest.QueryClient
+	database string
 }
 
 func NewService(opts ServiceOpts) Service {
 	return &service{
-		partitioner: opts.Partitioner,
-		kustoCli:    opts.KustoCli,
-		database:    opts.Database,
-		hostname:    opts.Hostname,
+		elector:  opts.Elector,
+		kustoCli: opts.KustoCli,
+		database: opts.Database,
+		hostname: opts.Hostname,
 	}
 }
 
@@ -75,10 +75,9 @@ func (s *service) collect(ctx context.Context) {
 			return
 		case <-t.C:
 			// This is only set when running on ingestor currently.
-			if s.partitioner != nil {
+			if s.elector != nil {
 				// Only one node should execute the cardinality counts so see if we are the owner.
-				hostname, _ := s.partitioner.Owner([]byte("AdxmonIngestorTableCardinalityCount"))
-				if s.kustoCli != nil && hostname == s.hostname {
+				if s.kustoCli != nil && s.elector.IsLeader() {
 					stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
 						".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
 					)
