@@ -11,6 +11,8 @@ import (
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	collectorotlp "github.com/Azure/adx-mon/collector/otlp"
+	ingestorsvc "github.com/Azure/adx-mon/ingestor"
+	"github.com/Azure/adx-mon/ingestor/adx"
 	ingestorotlp "github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/otlp"
@@ -19,7 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func BenchmarkTransport(b *testing.B) {
+func BenchmarkProxyTransport(b *testing.B) {
 	b.ReportAllocs()
 	ctx, cancel := context.WithCancel(context.Background())
 	ingestorURL := ingestor(b, ctx)
@@ -44,6 +46,35 @@ func BenchmarkTransport(b *testing.B) {
 	}
 
 	cancel()
+	// 1789	    609463 ns/op	   62762 B/op	     626 allocs/op
+}
+
+func BenchmarkTransferTransport(b *testing.B) {
+	b.ReportAllocs()
+	ctx, cancel := context.WithCancel(context.Background())
+	ingestorURL := ingestor(b, ctx)
+	collectorURL, hc := collector(b, ctx, []string{ingestorURL})
+
+	var log v1.ExportLogsServiceRequest
+	err := protojson.Unmarshal(rawlog, &log)
+	require.NoError(b, err)
+
+	buf, err := proto.Marshal(&log)
+	require.NoError(b, err)
+	b.Logf("marshalled %d bytes", len(buf))
+
+	u, err := url.JoinPath(collectorURL, "/v1/logs")
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resp, err := hc.Post(u, "application/x-protobuf", bytes.NewReader(buf))
+		require.NoError(b, err)
+		require.Equal(b, resp.StatusCode, http.StatusOK)
+	}
+
+	cancel()
+	// 20	  58973292 ns/op	 3392054 B/op	     844 allocs/op
 }
 
 func collector(b *testing.B, ctx context.Context, endpoints []string) (string, *http.Client) {
@@ -57,8 +88,10 @@ func collector(b *testing.B, ctx context.Context, endpoints []string) (string, *
 		liftAttributes = []string{"kusto.table", "kusto.database"}
 	)
 	mux := http.NewServeMux()
-	h := collectorotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
-	mux.Handle(logsv1connect.LogsServiceExportProcedure, h)
+	hp := collectorotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
+	ht := collectorotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes, b.TempDir())
+	mux.Handle(logsv1connect.LogsServiceExportProcedure, hp)
+	mux.Handle("/v1/logs", ht)
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -86,8 +119,17 @@ func ingestor(b *testing.B, ctx context.Context) string {
 		return store.WriteOTLPLogs(ctx, database, table, logs)
 	}
 
+	svc, err := ingestorsvc.NewService(ingestorsvc.ServiceOpts{
+		StorageDir:      b.TempDir(),
+		Uploader:        adx.NewFakeUploader(),
+		MaxSegmentCount: int64(b.N) + 1,
+		MaxDiskUsage:    10 * 1024 * 1024 * 1024,
+	})
+	require.NoError(b, err)
+
 	mux := http.NewServeMux()
 	mux.Handle(logsv1connect.NewLogsServiceHandler(ingestorotlp.NewLogsServer(writer, []string{"ADatabase", "BDatabase"})))
+	mux.HandleFunc("/transfer", svc.HandleTransfer)
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
