@@ -17,7 +17,7 @@ require (
 	github.com/mattn/go-isatty v0.0.16
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.14.0
-	github.com/prometheus/client_model v0.3.0
+	github.com/prometheus/client_model v0.5.0
 	github.com/prometheus/common v0.37.1
 	github.com/stretchr/testify v1.8.3
 	github.com/urfave/cli/v2 v2.24.3
