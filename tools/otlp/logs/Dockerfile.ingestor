@@ -1,11 +1,11 @@
-FROM golang:1.21.0-bullseye as builder
+FROM mcr.microsoft.com/devcontainers/go:1.21-bullseye as builder
 
 ADD . /code
 WORKDIR /code
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/prom-adx-linux ./cmd/ingestor
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/ingestor ./cmd/ingestor
 
 FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
 COPY --from=builder /code/bin /
 
-ENTRYPOINT ["/prom-adx-linux"]
+ENTRYPOINT ["/ingestor"]

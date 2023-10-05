@@ -36,6 +36,9 @@ type Coordinator interface {
 	MetricPartitioner
 	service.Component
 
+	// IsLeader returns true if the current node is the leader.
+	IsLeader() bool
+
 	// Write writes the time series to the correct peer.
 	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
 
@@ -64,6 +67,7 @@ type coordinator struct {
 	groupName    string
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+	leader       bool
 }
 
 type CoordinatorOpts struct {
@@ -81,6 +85,10 @@ type CoordinatorOpts struct {
 
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
+
+	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
+	// keys are distributed.
+	PartitionSize int
 }
 
 func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
@@ -203,6 +211,12 @@ func (c *coordinator) Open(ctx context.Context) error {
 	return nil
 }
 
+func (c *coordinator) IsLeader() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.leader
+}
+
 func (c *coordinator) Owner(b []byte) (string, string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -234,6 +248,7 @@ func (c *coordinator) syncPeers() error {
 		return fmt.Errorf("list pods: %w", err)
 	}
 
+	var leastNode string
 	set := make(map[string]string, len(c.peers))
 	for _, p := range pods {
 		if p.Status.PodIP == "" {
@@ -250,7 +265,13 @@ func (c *coordinator) syncPeers() error {
 		}
 
 		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
+
+		if p.Name < leastNode || leastNode == "" {
+			leastNode = p.Name
+		}
 	}
+
+	c.leader = c.opts.Hostname == leastNode
 
 	if err := c.setPartitioner(set); err != nil {
 		return err
@@ -265,7 +286,7 @@ func (c *coordinator) setPartitioner(set map[string]string) error {
 		c.peers[peer] = addr
 	}
 
-	part, err := NewPartition(set)
+	part, err := NewPartition(set, c.hostname, c.opts.PartitionSize)
 	if err != nil {
 		return err
 	}

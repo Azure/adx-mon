@@ -54,7 +54,7 @@ func NewFakeTLSCredentials() ([]byte, []byte, error) {
 		BasicConstraintsValid: true,
 	}
 
-	certPrivKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	certPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
 	}
