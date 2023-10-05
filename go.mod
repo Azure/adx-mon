@@ -22,7 +22,7 @@ require (
 	github.com/stretchr/testify v1.8.3
 	github.com/urfave/cli/v2 v2.24.3
 	golang.org/x/net v0.12.0
-	golang.org/x/sync v0.3.0
+	golang.org/x/sync v0.4.0
 	google.golang.org/protobuf v1.31.0
 	k8s.io/api v0.26.1
 	k8s.io/apimachinery v0.26.1
