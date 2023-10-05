@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
@@ -40,7 +42,7 @@ type Service struct {
 	handler       *metricsHandler.Handler
 	logsHandler   http.Handler
 	requestFilter *transform.RequestTransformer
-	health        *cluster.Health
+	health        interface{ IsHealthy() bool }
 }
 
 type ServiceOpts struct {
@@ -280,14 +282,15 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	// https://pkg.go.dev/io/fs#ValidPath
 	// Check for possible traversal attacks.
-	if !fs.ValidPath(filename) {
-		logger.Errorf("Transfer requested with an invalid filename %s", filename)
+	f := s.validateFileName(filename)
+	if f == "" {
+		logger.Errorf("Transfer requested with an invalid filename %q", filename)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "filename is invalid", http.StatusBadRequest)
 		return
 	}
 
-	if n, err := s.store.Import(filename, r.Body); err != nil {
+	if n, err := s.store.Import(f, r.Body); err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -340,4 +343,31 @@ func (s *Service) DisableWrites() error {
 		return err
 	}
 	return nil
+}
+
+func (s *Service) validateFileName(filename string) string {
+	if !fs.ValidPath(filename) {
+		return ""
+	}
+
+	ext := filepath.Ext(filename)
+	if ext != ".wal" {
+		return ""
+	}
+
+	base := strings.Replace(filename, ext, "", 1)
+	parts := strings.Split(base, "_")
+	if len(parts) != 3 {
+		return ""
+	}
+
+	db := parts[0]
+	table := parts[1]
+	epoch := parts[2]
+
+	if db == "" || table == "" || epoch == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("%s_%s_%s.wal", db, table, epoch)
 }
