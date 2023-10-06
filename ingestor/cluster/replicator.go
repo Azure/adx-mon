@@ -49,7 +49,10 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
-	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify)
+	cli, err := NewClient(&ClientOptions{
+		Timeout:            30 * time.Second,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+	})
 	if err != nil {
 		return nil, err
 	}

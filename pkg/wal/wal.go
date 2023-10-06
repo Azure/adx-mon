@@ -39,7 +39,7 @@ type WALOpts struct {
 }
 
 func NewWAL(opts WALOpts) (*WAL, error) {
-	if opts.StorageDir == "" {
+	if opts.StorageDir == "" && opts.StorageProvider == nil {
 		return nil, fmt.Errorf("wal storage dir not defined")
 	}
 	if opts.StorageProvider == nil {

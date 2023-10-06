@@ -201,7 +201,7 @@ func (s *Service) Open(ctx context.Context) error {
 		HealthChecker: fakeHealthChecker{},
 	}))
 	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
-	mux.Handle("/v1/logs", otlp.LogsTransferHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.StorageDir))
+	mux.Handle("/v1/logs", otlp.LogsTransferHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes))
 	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
 
 	go func() {

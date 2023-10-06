@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -34,7 +34,7 @@ var (
 )
 
 // LogsTransferHandler implements an HTTP handler that receives OTLP logs, marshals them as CSV to our wal and transfers them to HTTP endpoins (e.g. Ingestor).
-func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string, storageDir string) http.HandlerFunc {
+func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string) http.HandlerFunc {
 
 	var add []*commonv1.KeyValue
 	for attribute, value := range addAttributes {
@@ -49,6 +49,7 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 		)
 	}
 
+	storageProvider := &file.Memory{}
 	rpcClients := make(map[string]*cluster.Client)
 	for _, endpoint := range endpoints {
 		uri, err := url.Parse(endpoint)
@@ -60,7 +61,11 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			logger.Debugf("Adding endpoint: %s", uri.String())
 		}
 
-		client, _ := cluster.NewClient(time.Minute, insecureSkipVerify)
+		client, _ := cluster.NewClient(&cluster.ClientOptions{
+			Timeout:            time.Minute,
+			InsecureSkipVerify: insecureSkipVerify,
+			StorageProvider:    storageProvider,
+		})
 		rpcClients[uri.String()] = client
 	}
 	bufs := pool.NewBytes(1024 * 1024)
@@ -102,7 +107,13 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			}
 
 			// Serialize the logs into a WAL, grouped by Kusto destination database and table
-			wals, err := serializedLogs(ctx, msg, add, storageDir)
+			wals, err := serializedLogs(ctx, msg, add, storageProvider)
+			// We want to ensure all wal entries are cleaned up so we don't leak memory
+			defer func() {
+				for _, fn := range wals {
+					storageProvider.Remove(fn)
+				}
+			}()
 			if isUserError(err) {
 				logger.Errorf("Failed to serialize logs with user error: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
@@ -115,12 +126,6 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
 			}
-			defer func() {
-				for _, fn := range wals {
-					os.Remove(fn)
-				}
-			}()
-
 			// Create our RPC request and send it
 			g, gctx := errgroup.WithContext(ctx)
 			for endpoint, rpcClient := range rpcClients {
@@ -186,7 +191,7 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 	}
 }
 
-func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, storageDir string) ([]string, error) {
+func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, storageProvider file.File) ([]string, error) {
 	if req == nil {
 		return nil, ErrMalformedLogs
 	}
@@ -208,7 +213,7 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 	for _, r := range req.GetResourceLogs() {
 		if r == nil {
 			logger.Error("Request contains no Resource Logs")
-			return nil, ErrMalformedLogs
+			return fns, ErrMalformedLogs
 		}
 		logs.Resources = add
 		if r.Resource != nil {
@@ -217,7 +222,7 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 
 		if len(r.GetScopeLogs()) == 0 {
 			logger.Error("Request contains no Scope Logs")
-			return nil, ErrMalformedLogs
+			return fns, ErrMalformedLogs
 		}
 		for _, s := range r.GetScopeLogs() {
 			if s == nil {
@@ -227,7 +232,7 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 				logs.Logs = []*logsv1.LogRecord{l}
 				d, t = otlp.KustoMetadata(l)
 				if d == "" || t == "" {
-					return nil, ErrMissingKustoMetadata
+					return fns, ErrMissingKustoMetadata
 				}
 				fn = fmt.Sprintf("%s_%s", d, t)
 
@@ -243,20 +248,20 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 
 				w, ok := m[fn]
 				if !ok {
-					w, err = wal.NewWAL(wal.WALOpts{StorageDir: storageDir, Prefix: fn})
+					w, err = wal.NewWAL(wal.WALOpts{Prefix: fn, StorageProvider: storageProvider})
 					if err != nil {
-						return nil, fmt.Errorf("failed to create wal: %w", err)
+						return fns, fmt.Errorf("failed to create wal: %w", err)
 					}
 					if err = w.Open(ctx); err != nil {
-						return nil, fmt.Errorf("failed to open wal: %w", err)
+						return fns, fmt.Errorf("failed to open wal: %w", err)
 					}
 				}
 				enc.Reset()
 				if err := enc.MarshalCSV(&logs); err != nil {
-					return nil, err
+					return fns, err
 				}
 				if err := w.Write(ctx, enc.Bytes()); err != nil {
-					return nil, err
+					return fns, err
 				}
 
 				m[fn] = w
@@ -267,7 +272,7 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 	for _, w := range m {
 		fns = append(fns, w.Path())
 		if err := w.Close(); err != nil {
-			return nil, err
+			return fns, err
 		}
 	}
 	return fns, nil

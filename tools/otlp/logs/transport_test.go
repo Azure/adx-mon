@@ -89,7 +89,7 @@ func collector(b *testing.B, ctx context.Context, endpoints []string) (string, *
 	)
 	mux := http.NewServeMux()
 	hp := collectorotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
-	ht := collectorotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes, b.TempDir())
+	ht := collectorotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes)
 	mux.Handle(logsv1connect.LogsServiceExportProcedure, hp)
 	mux.Handle("/v1/logs", ht)
 

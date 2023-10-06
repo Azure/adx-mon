@@ -166,7 +166,7 @@ func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string, 
 	)
 	mux := http.NewServeMux()
 	ph := cotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
-	th := cotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes, dir)
+	th := cotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes)
 	mux.Handle(logsv1connect.LogsServiceExportProcedure, ph)
 	mux.Handle("/v1/logs", th)
 
