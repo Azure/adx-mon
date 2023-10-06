@@ -26,6 +26,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// invalidEntityCharacters is a regex that matches invalid characters for Kusto entities and segment files.
+// This is a subset of the invalid characters for Kusto entities and segment files naming patterns.  This should
+// match tranform.Normalize.
+var invalidEntityCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
+
 type Service struct {
 	walOpts wal.WALOpts
 	opts    ServiceOpts
@@ -366,6 +371,10 @@ func (s *Service) validateFileName(filename string) string {
 	epoch := parts[2]
 
 	if db == "" || table == "" || epoch == "" {
+		return ""
+	}
+
+	if invalidEntityCharacters.MatchString(db) || invalidEntityCharacters.MatchString(table) || invalidEntityCharacters.MatchString(epoch) {
 		return ""
 	}
 
