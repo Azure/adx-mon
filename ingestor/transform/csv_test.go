@@ -149,7 +149,9 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, "UsedCpuUserChildren", string(Normalize([]byte("used_cpu_user_children"))))
 	require.Equal(t, "Host1", string(Normalize([]byte("host_1"))))
 	require.Equal(t, "Region", string(Normalize([]byte("region"))))
-
+	require.Equal(t, "JobEtcdRequestLatency75pctlrate5m", string(Normalize([]byte("Job:etcdRequestLatency:75pctlrate5m"))))
+	require.Equal(t, "TestLimit", string(Normalize([]byte("Test$limit"))))
+	require.Equal(t, "TestRateLimit", string(Normalize([]byte("Test::Rate$limit"))))
 }
 
 func TestTimeConversionForOTLPLogs(t *testing.T) {

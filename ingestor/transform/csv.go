@@ -291,8 +291,9 @@ func Normalize(s []byte) []byte {
 // AppendNormalize converts a metrics name to a ProperCase table name and appends it to dst.
 func AppendNormalize(dst, s []byte) []byte {
 	for i := 0; i < len(s); i++ {
-		// Skip _, but capitalize the first letter after an _
-		if s[i] == '_' {
+		// Skip any non-alphanumeric characters, but capitalize the first letter after it
+		allowedChar := s[i] >= 'a' && s[i] <= 'z' || s[i] >= '0' && s[i] <= '9' || s[i] >= 'A' && s[i] <= 'Z'
+		if !allowedChar {
 			if i+1 < len(s) {
 				if s[i+1] >= 'a' && s[i+1] <= 'z' {
 					dst = append(dst, byte(unicode.ToUpper(rune(s[i+1]))))
