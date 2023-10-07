@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs"
+	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/sources/journald"
 	"github.com/Azure/adx-mon/collector/otlp"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
@@ -50,6 +53,8 @@ type Service struct {
 	srv           *http.Server
 	seriesCreator *seriesCreator
 	metricsSvc    metrics.Service
+
+	logsSvc *logs.Service
 }
 
 type ServiceOpts struct {
@@ -75,6 +80,9 @@ type ServiceOpts struct {
 
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
+
+	// Log Service options
+	CollectLogs bool
 }
 
 type ScrapeTarget struct {
@@ -97,7 +105,7 @@ func (t ScrapeTarget) String() string {
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
-	return &Service{
+	svc := &Service{
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
 		seriesCreator: &seriesCreator{},
@@ -107,7 +115,24 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
-	}, nil
+	}
+
+	if opts.CollectLogs {
+		source, err := journald.NewJournaldSource(journald.JournaldSourceConfig{
+			CursorPath: "cursor.dat",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create journald source: %w", err)
+		}
+
+		logsSvc := &logs.Service{
+			Source: source,
+			Sink:   sinks.NewStdoutSink(),
+		}
+		svc.logsSvc = logsSvc
+	}
+
+	return svc, nil
 }
 
 func (s *Service) Open(ctx context.Context) error {
@@ -132,6 +157,12 @@ func (s *Service) Open(ctx context.Context) error {
 
 	if err := s.metricsSvc.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open metrics service: %w", err)
+	}
+
+	if s.logsSvc != nil {
+		if err := s.logsSvc.Open(ctx); err != nil {
+			return fmt.Errorf("failed to open logs service: %w", err)
+		}
 	}
 
 	// Add static targets
@@ -217,6 +248,9 @@ func (s *Service) Open(ctx context.Context) error {
 func (s *Service) Close() error {
 	s.metricsClient.Close()
 	s.metricsSvc.Close()
+	if s.logsSvc != nil {
+		s.logsSvc.Close()
+	}
 	s.cancel()
 	s.srv.Shutdown(s.ctx)
 	s.factory.Shutdown()

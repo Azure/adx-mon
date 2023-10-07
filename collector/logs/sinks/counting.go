@@ -37,6 +37,7 @@ func (s *CountingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 		close(s.doneChannel)
 	}
 	s.lock.Unlock()
+	batch.Ack()
 	return nil
 }
 

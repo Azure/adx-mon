@@ -2,10 +2,10 @@ package sources
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"golang.org/x/sync/errgroup"
 )
 
 type ConstSource struct {
@@ -14,10 +14,10 @@ type ConstSource struct {
 	MaxBatchSize  int
 
 	outputQueue   chan *types.LogBatch
-	internalQueue chan string
+	internalQueue chan *types.Log
 	closeFn       context.CancelFunc
 
-	wg sync.WaitGroup
+	errGroup *errgroup.Group
 }
 
 // TODO more variety of source values
@@ -27,24 +27,39 @@ func NewConstSource(value string, flushDuration time.Duration, maxBatchSize int)
 		FlushDuration: flushDuration,
 		MaxBatchSize:  maxBatchSize,
 		outputQueue:   make(chan *types.LogBatch, 1),
-		internalQueue: make(chan string, 1000),
+		internalQueue: make(chan *types.Log, 1000),
 	}
 }
 
 func (s *ConstSource) Open(ctx context.Context) error {
 	ctx, closeFn := context.WithCancel(ctx)
 	s.closeFn = closeFn
-	s.wg.Add(1)
-	go s.generate(ctx)
-	s.wg.Add(1)
-	go s.batch(ctx)
+	group, groupCtx := errgroup.WithContext(ctx)
+	s.errGroup = group
+
+	group.Go(func() error {
+		return s.generate(groupCtx)
+	})
+	config := types.BatchConfig{
+		MaxBatchSize: s.MaxBatchSize,
+		MaxBatchWait: s.FlushDuration,
+		InputQueue:   s.internalQueue,
+		OutputQueue:  s.outputQueue,
+		AckGenerator: func(log *types.Log) func() {
+			return func() {
+			}
+		},
+	}
+	group.Go(func() error {
+		return types.BatchLogs(groupCtx, config)
+	})
 
 	return nil
 }
 
 func (s *ConstSource) Close() error {
 	s.closeFn()
-	s.wg.Wait()
+	s.errGroup.Wait()
 	return nil
 }
 
@@ -56,47 +71,18 @@ func (s *ConstSource) Queue() <-chan *types.LogBatch {
 	return s.outputQueue
 }
 
-func (s *ConstSource) generate(ctx context.Context) {
-	defer s.wg.Done()
+func (s *ConstSource) generate(ctx context.Context) error {
 	for {
+		log := types.LogPool.Get(1).(*types.Log)
+		log.Reset()
+		log.Timestamp = uint64(time.Now().UnixNano())
+		log.ObservedTimestamp = uint64(time.Now().UnixNano())
+		log.Body["message"] = s.Value
+
 		select {
 		case <-ctx.Done():
-			return
-		case s.internalQueue <- s.Value:
-		}
-	}
-}
-
-func (s *ConstSource) batch(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(s.FlushDuration)
-	defer ticker.Stop()
-
-	currentBatch := types.LogBatchPool.Get(1024).(*types.LogBatch)
-	currentBatch.Reset()
-	for {
-		select {
-		case <-ctx.Done():
-			s.outputQueue <- currentBatch
-			return
-		case <-ticker.C:
-			s.outputQueue <- currentBatch
-			currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
-			currentBatch.Reset()
-			ticker.Reset(s.FlushDuration)
-		case msg := <-s.internalQueue:
-			log := types.LogPool.Get(1).(*types.Log)
-			log.Reset()
-			log.Timestamp = uint64(time.Now().UnixNano())
-			log.ObservedTimestamp = uint64(time.Now().UnixNano())
-			log.Body["message"] = msg
-			currentBatch.Logs = append(currentBatch.Logs, log)
-			if len(currentBatch.Logs) > s.MaxBatchSize {
-				s.outputQueue <- currentBatch
-				currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
-				currentBatch.Reset()
-				ticker.Reset(s.FlushDuration)
-			}
+			return nil
+		case s.internalQueue <- log:
 		}
 	}
 }
