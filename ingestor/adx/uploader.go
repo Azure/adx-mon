@@ -206,7 +206,7 @@ func (n *uploader) upload(ctx context.Context) error {
 						continue
 					}
 
-					f, err := wal.NewSegmentReader(path, &file.Disk{})
+					f, err := wal.NewSegmentReader(path, &file.DiskProvider{})
 					if os.IsNotExist(err) {
 						// batches are not disjoint, so the same segments could be included in multiple batches.
 						continue

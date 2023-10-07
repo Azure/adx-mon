@@ -26,7 +26,7 @@ type WALOpts struct {
 	StorageDir string
 
 	// StorageProvider is an implementation of the file.File interface.
-	StorageProvider file.File
+	StorageProvider file.Provider
 
 	// WAL segment prefix
 	Prefix string
@@ -43,7 +43,7 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 		return nil, fmt.Errorf("wal storage dir not defined")
 	}
 	if opts.StorageProvider == nil {
-		opts.StorageProvider = &file.Disk{}
+		opts.StorageProvider = &file.DiskProvider{}
 	}
 
 	return &WAL{

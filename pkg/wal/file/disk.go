@@ -5,35 +5,31 @@ import (
 	"os"
 )
 
+type DiskProvider struct{}
+
+func (d *DiskProvider) Create(name string) (File, error) {
+	df := &Disk{}
+	var err error
+	df.f, err = os.Create(name)
+	return df, err
+}
+
+func (d *DiskProvider) OpenFile(name string, flag int, perm os.FileMode) (File, error) {
+	df := &Disk{}
+	var err error
+	df.f, err = os.OpenFile(name, flag, perm)
+	return df, err
+}
+
+func (d *DiskProvider) Open(name string) (File, error) {
+	df := &Disk{}
+	var err error
+	df.f, err = os.Open(name)
+	return df, err
+}
+
 type Disk struct {
 	f *os.File
-}
-
-func (d *Disk) Create(name string) (File, error) {
-	if d == nil {
-		d = &Disk{}
-	}
-	var err error
-	d.f, err = os.Create(name)
-	return d, err
-}
-
-func (d *Disk) OpenFile(name string, flag int, perm os.FileMode) (File, error) {
-	if d == nil {
-		d = &Disk{}
-	}
-	var err error
-	d.f, err = os.OpenFile(name, flag, perm)
-	return d, err
-}
-
-func (d *Disk) Open(name string) (File, error) {
-	if d == nil {
-		d = &Disk{}
-	}
-	var err error
-	d.f, err = os.Open(name)
-	return d, err
 }
 
 func (d *Disk) Stat() (fs.FileInfo, error) {

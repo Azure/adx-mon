@@ -6,8 +6,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
-func NewSegmentReader(path string, r file.File) (io.ReadCloser, error) {
-	f, err := r.Open(path)
+func NewSegmentReader(path string, fp file.Provider) (io.ReadCloser, error) {
+	f, err := fp.Open(path)
 	if err != nil {
 		return nil, err
 	}

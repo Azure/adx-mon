@@ -13,15 +13,15 @@ import (
 func TestSegmentReader(t *testing.T) {
 	tests := []struct {
 		Name            string
-		StorageProvider file.File
+		StorageProvider file.Provider
 	}{
 		{
 			Name:            "Disk",
-			StorageProvider: &file.Disk{},
+			StorageProvider: &file.DiskProvider{},
 		},
 		{
 			Name:            "Memory",
-			StorageProvider: &file.Memory{},
+			StorageProvider: &file.MemoryProvider{},
 		},
 	}
 	for _, tt := range tests {
