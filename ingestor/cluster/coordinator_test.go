@@ -86,13 +86,17 @@ func TestCoordinator_NewPeer(t *testing.T) {
 	require.NoError(t, c.Open(context.Background()))
 
 	coord := c.(*coordinator)
+	coord.mu.RLock()
 	require.Equal(t, 1, len(coord.peers))
+	coord.mu.RUnlock()
 
 	// Swap in fake pod lister to simulate a new peer
 	coord.pl = &fakePodLister{pods: []*v1.Pod{self, newPeer}}
 
 	coord.OnAdd(newPeer)
+	coord.mu.RLock()
 	require.Equal(t, 2, len(coord.peers))
+	coord.mu.RUnlock()
 	require.NoError(t, c.Close())
 
 }
@@ -207,7 +211,9 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	coord.pl = &fakePodLister{pods: []*v1.Pod{self, newPeer}}
 
 	coord.OnDelete(newPeer)
+	coord.mu.RLock()
 	require.Equal(t, 1, len(coord.peers))
+	coord.mu.RUnlock()
 	require.NoError(t, c.Close())
 
 }
