@@ -18,7 +18,9 @@ import (
 )
 
 type worker struct {
-	cancel      context.CancelFunc
+	mu     sync.Mutex
+	cancel context.CancelFunc
+
 	wg          sync.WaitGroup
 	rule        *rules.Rule
 	Region      string
@@ -32,7 +34,10 @@ type worker struct {
 }
 
 func (e *worker) Run(ctx context.Context) {
+	e.mu.Lock()
 	ctx, e.cancel = context.WithCancel(ctx)
+	defer e.mu.Unlock()
+
 	e.wg.Add(1)
 	defer e.wg.Done()
 
@@ -149,9 +154,12 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 }
 
 func (e *worker) Close() {
+	e.mu.Lock()
 	if e.cancel != nil {
 		e.cancel()
 	}
+	e.mu.Unlock()
+
 	e.wg.Wait()
 }
 
