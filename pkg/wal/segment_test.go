@@ -20,15 +20,15 @@ import (
 func TestNewSegment(t *testing.T) {
 	tests := []struct {
 		Name            string
-		StorageProvider file.File
+		StorageProvider file.Provider
 	}{
 		{
 			Name:            "Disk",
-			StorageProvider: &file.Disk{},
+			StorageProvider: &file.DiskProvider{},
 		},
 		{
 			Name:            "Memory",
-			StorageProvider: &file.Memory{},
+			StorageProvider: &file.MemoryProvider{},
 		},
 	}
 	for _, tt := range tests {
@@ -67,7 +67,7 @@ func TestSegment_CreatedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	seg, err := wal.Open(path, &file.Disk{})
+	seg, err := wal.Open(path, &file.DiskProvider{})
 	require.NoError(t, err)
 
 	require.Equal(t, createdAt, seg.CreatedAt())
@@ -75,7 +75,7 @@ func TestSegment_CreatedAt(t *testing.T) {
 
 func TestSegment_Corrupted(t *testing.T) {
 	dir := t.TempDir()
-	s, err := wal.NewSegment(dir, "Foo", &file.Disk{})
+	s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
 	require.NoError(t, err)
 	require.NoError(t, s.Write(context.Background(), []byte("test")))
 	require.NoError(t, s.Close())
@@ -85,7 +85,7 @@ func TestSegment_Corrupted(t *testing.T) {
 	_, err = f.WriteString("a,")
 	require.NoError(t, err)
 
-	s, err = wal.Open(s.Path(), &file.Disk{})
+	s, err = wal.Open(s.Path(), &file.DiskProvider{})
 
 	b, err := s.Bytes()
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestSegment_Corrupted(t *testing.T) {
 
 func TestSegment_Corrupted_BigFile(t *testing.T) {
 	dir := t.TempDir()
-	d := &file.Disk{}
+	d := &file.DiskProvider{}
 	s, err := wal.NewSegment(dir, "Foo", d)
 	require.NoError(t, err)
 	require.NoError(t, s.Write(context.Background(), []byte("test")))
@@ -121,15 +121,15 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 func TestSegment_Iterator(t *testing.T) {
 	tests := []struct {
 		Name            string
-		StorageProvider file.File
+		StorageProvider file.Provider
 	}{
 		{
 			Name:            "Disk",
-			StorageProvider: &file.Disk{},
+			StorageProvider: &file.DiskProvider{},
 		},
 		{
 			Name:            "Memory",
-			StorageProvider: &file.Memory{},
+			StorageProvider: &file.MemoryProvider{},
 		},
 	}
 	for _, tt := range tests {
@@ -172,15 +172,15 @@ func TestSegment_Iterator(t *testing.T) {
 func TestSegment_LargeSegments(t *testing.T) {
 	tests := []struct {
 		Name            string
-		StorageProvider file.File
+		StorageProvider file.Provider
 	}{
 		{
 			Name:            "Disk",
-			StorageProvider: &file.Disk{},
+			StorageProvider: &file.DiskProvider{},
 		},
 		{
 			Name:            "Memory",
-			StorageProvider: &file.Memory{},
+			StorageProvider: &file.MemoryProvider{},
 		},
 	}
 	for _, tt := range tests {
@@ -222,7 +222,7 @@ func TestSegment_LargeSegments(t *testing.T) {
 
 func BenchmarkSegment_Write(b *testing.B) {
 	dir := b.TempDir()
-	s, err := wal.NewSegment(dir, "Foo", &file.Disk{})
+	s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
 	require.NoError(b, err)
 	defer s.Close()
 	buf := []byte("test")

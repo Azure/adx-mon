@@ -76,7 +76,7 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(path, &file.Disk{})
+	r, err := wal.NewSegmentReader(path, &file.DiskProvider{})
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestLocalStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 1, s.WALCount())
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(path, &file.Disk{})
+	r, err := wal.NewSegmentReader(path, &file.DiskProvider{})
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)

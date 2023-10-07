@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var (
+type MemoryProvider struct {
 	// Note that simulating a filesystem here is only necessary due to the way
 	// wal hands off to segments. Deletions of segments are managed upstream,
 	// which would seem like a problem since os.Remove is being used in those
@@ -17,9 +17,128 @@ var (
 	// and Collector _is_ handling deletions through the file.Remove method.
 	mufs sync.RWMutex
 	mfs  map[string]*Memory
-)
+}
+
+func (p *MemoryProvider) Create(name string) (File, error) {
+	p.mufs.Lock()
+	defer p.mufs.Unlock()
+
+	if p.mfs == nil {
+		p.mfs = make(map[string]*Memory)
+	}
+
+	// If the instance already exists, it's truncated
+	// https://pkg.go.dev/os#Create
+
+	// First we'll check our store
+	f, ok := p.mfs[name]
+	if ok {
+		f.Lock()
+		f.b = nil
+		f.mode.size = 0
+		f.mode.modtime = time.Now()
+		f.Unlock()
+
+		return f, nil
+	}
+
+	// Create a new instance and store it
+	f = &Memory{
+		mode: &Info{
+			name:    name,
+			modtime: time.Now(),
+			perm:    0666,
+		},
+		fp: p,
+	}
+	p.mfs[name] = f
+
+	return f, nil
+}
+
+func (p *MemoryProvider) OpenFile(name string, flag int, perm os.FileMode) (File, error) {
+	p.mufs.Lock()
+	defer p.mufs.Unlock()
+
+	if p.mfs == nil {
+		p.mfs = make(map[string]*Memory)
+	}
+
+	// Retrieve the instance from our store
+	f, ok := p.mfs[name]
+
+	// No instance exists but our flag specifies to create a new instance
+	if !ok && flag&os.O_CREATE == 0 {
+		f = &Memory{
+			mode: &Info{
+				name:    name,
+				perm:    perm,
+				modtime: time.Now(),
+			},
+			fp: p,
+		}
+
+		p.mfs[name] = f
+		return f, nil
+	}
+
+	// If the instance exits, it's opened with O_RDONLY
+	// https://pkg.go.dev/os#OpenFile
+	if ok {
+		f.Lock()
+		f.closed = false
+		f.offset = 0
+		f.mode.perm = fs.FileMode(os.O_RDONLY)
+		f.Unlock()
+
+		p.mfs[name] = f
+		return f, nil
+	}
+
+	return nil, fs.ErrNotExist
+}
+
+func (p *MemoryProvider) Open(name string) (File, error) {
+	p.mufs.Lock()
+	defer p.mufs.Unlock()
+
+	if p.mfs == nil {
+		p.mfs = make(map[string]*Memory)
+	}
+
+	// If the instance exits, it's opened with O_RDONLY
+	// https://pkg.go.dev/os#Open
+	f, ok := p.mfs[name]
+	if ok {
+		f.Lock()
+		f.closed = false
+		f.offset = 0
+		f.mode.perm = fs.FileMode(os.O_RDONLY)
+		f.Unlock()
+
+		p.mfs[name] = f
+		return f, nil
+	}
+
+	return nil, fs.ErrNotExist
+}
+
+func (p *MemoryProvider) Remove(name string) error {
+	p.mufs.Lock()
+	defer p.mufs.Unlock()
+
+	if p.mfs == nil {
+		return nil
+	}
+
+	delete(p.mfs, name)
+
+	return nil
+}
 
 type Memory struct {
+	fp *MemoryProvider
+
 	sync.RWMutex
 	b      []byte
 	mode   *Info
@@ -59,119 +178,8 @@ func (i Info) Sys() any {
 	return nil
 }
 
-func (m *Memory) Create(name string) (File, error) {
-	mufs.Lock()
-	defer mufs.Unlock()
-
-	if mfs == nil {
-		mfs = make(map[string]*Memory)
-	}
-
-	// If the instance already exists, it's truncated
-	// https://pkg.go.dev/os#Create
-
-	// First we'll check our store
-	f, ok := mfs[name]
-	if ok {
-		f.Lock()
-		f.b = nil
-		f.mode.size = 0
-		f.mode.modtime = time.Now()
-		f.Unlock()
-
-		return f, nil
-	}
-
-	// Create a new instance and store it
-	f = &Memory{
-		mode: &Info{
-			name:    name,
-			modtime: time.Now(),
-			perm:    0666,
-		},
-	}
-	mfs[name] = f
-
-	return f, nil
-}
-
-func (m *Memory) OpenFile(name string, flag int, perm os.FileMode) (File, error) {
-	mufs.Lock()
-	defer mufs.Unlock()
-
-	if mfs == nil {
-		mfs = make(map[string]*Memory)
-	}
-
-	// Retrieve the instance from our store
-	f, ok := mfs[name]
-
-	// No instance exists but our flag specifies to create a new instance
-	if !ok && flag&os.O_CREATE == 0 {
-		f = &Memory{
-			mode: &Info{
-				name:    name,
-				perm:    perm,
-				modtime: time.Now(),
-			},
-		}
-
-		mfs[name] = f
-		return f, nil
-	}
-
-	// If the instance exits, it's opened with O_RDONLY
-	// https://pkg.go.dev/os#OpenFile
-	if ok {
-		f.Lock()
-		f.closed = false
-		f.offset = 0
-		f.mode.perm = fs.FileMode(os.O_RDONLY)
-		f.Unlock()
-
-		mfs[name] = f
-		return f, nil
-	}
-
-	return nil, fs.ErrNotExist
-}
-
-func (m *Memory) Open(name string) (File, error) {
-	mufs.Lock()
-	defer mufs.Unlock()
-
-	if mfs == nil {
-		mfs = make(map[string]*Memory)
-	}
-
-	// If the instance exits, it's opened with O_RDONLY
-	// https://pkg.go.dev/os#Open
-	f, ok := mfs[name]
-	if ok {
-		f.Lock()
-		f.closed = false
-		f.offset = 0
-		f.mode.perm = fs.FileMode(os.O_RDONLY)
-		f.Unlock()
-
-		mfs[name] = f
-		return f, nil
-	}
-
-	return nil, fs.ErrNotExist
-}
-
 func (m *Memory) Remove(name string) error {
-	mufs.Lock()
-	defer mufs.Unlock()
-
-	if mfs == nil {
-		mfs = make(map[string]*Memory)
-		return nil
-	}
-
-	delete(mfs, name)
-
+	m.fp.Remove(name)
 	return nil
 }
 

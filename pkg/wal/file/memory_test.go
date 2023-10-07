@@ -12,15 +12,15 @@ import (
 func TestMemory(t *testing.T) {
 	tests := []struct {
 		Name            string
-		StorageProvider file.File
+		StorageProvider file.Provider
 	}{
 		{
 			Name:            "Disk",
-			StorageProvider: &file.Disk{},
+			StorageProvider: &file.DiskProvider{},
 		},
 		{
 			Name:            "Memory",
-			StorageProvider: &file.Memory{},
+			StorageProvider: &file.MemoryProvider{},
 		},
 	}
 	for _, tt := range tests {
@@ -85,10 +85,11 @@ func TestMemory(t *testing.T) {
 func BenchmarkMemoryWrite(b *testing.B) {
 	b.ReportAllocs()
 	var (
-		m   *file.Memory
 		buf = []byte("test")
 	)
-	f, _ := m.Create("foo")
+	mp := &file.MemoryProvider{}
+	f, _ := mp.Create("foo")
+	defer f.Close()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -99,10 +100,11 @@ func BenchmarkMemoryWrite(b *testing.B) {
 func BenchmarkMemoryRead(b *testing.B) {
 	b.ReportAllocs()
 	var (
-		m   *file.Memory
 		buf = []byte("test")
 	)
-	f, _ := m.Create("foo")
+	mp := &file.MemoryProvider{}
+	f, _ := mp.Create("foo")
+	defer f.Close()
 	f.Write(buf)
 
 	b.ResetTimer()

@@ -137,7 +137,7 @@ func VerifyStore(t *testing.T, dir string) {
 		require.Contains(t, ss[0], "Database")
 		require.Contains(t, ss[1], "Table")
 
-		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()), &file.Disk{})
+		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()), &file.DiskProvider{})
 		require.NoError(t, err)
 		b, err := io.ReadAll(s)
 		require.NoError(t, err)
