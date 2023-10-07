@@ -44,6 +44,7 @@ func (l *Log) Copy() *Log {
 // LogBatch represents a batch of logs
 type LogBatch struct {
 	Logs []*Log
+	Ack  func()
 }
 
 func (l *LogBatch) Reset() {
@@ -51,4 +52,7 @@ func (l *LogBatch) Reset() {
 		l.Logs[i] = nil
 	}
 	l.Logs = l.Logs[:0]
+	l.Ack = noop
 }
+
+func noop() {}
