@@ -14,7 +14,7 @@ require (
 	github.com/klauspost/compress v1.17.0
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
 	github.com/lmittmann/tint v1.0.1
-	github.com/mattn/go-isatty v0.0.16
+	github.com/mattn/go-isatty v0.0.19
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.14.0
 	github.com/prometheus/client_model v0.5.0
