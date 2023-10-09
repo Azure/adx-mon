@@ -35,6 +35,9 @@ type Service struct {
 	walOpts wal.WALOpts
 	opts    ServiceOpts
 
+	// database is a map of known DB names used for validating requests.
+	databases map[string]struct{}
+
 	uploader    adx.Uploader
 	replicator  cluster.Replicator
 	coordinator cluster.Coordinator
@@ -180,8 +183,15 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer(coord.WriteOTLPLogs, opts.LogsDatabases))
 
+	databases := make(map[string]struct{})
+	for _, db := range opts.LogsDatabases {
+		databases[db] = struct{}{}
+	}
+	databases[opts.MetricsDatabase] = struct{}{}
+
 	return &Service{
 		opts:        opts,
+		databases:   databases,
 		uploader:    opts.Uploader,
 		replicator:  repl,
 		store:       store,
@@ -375,6 +385,10 @@ func (s *Service) validateFileName(filename string) string {
 	}
 
 	if invalidEntityCharacters.MatchString(db) || invalidEntityCharacters.MatchString(table) || invalidEntityCharacters.MatchString(epoch) {
+		return ""
+	}
+
+	if _, ok := s.databases[db]; !ok {
 		return ""
 	}
 
