@@ -40,7 +40,6 @@ type uploader struct {
 	wg        sync.WaitGroup
 	mu        sync.RWMutex
 	ingestors map[string]*ingest.Ingestion
-	uploading map[string]struct{}
 }
 
 type UploaderOpts struct {
@@ -63,7 +62,6 @@ func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 		opts:       opts,
 		queue:      make(chan *cluster.Batch, 10000),
 		ingestors:  make(map[string]*ingest.Ingestion),
-		uploading:  make(map[string]struct{}),
 	}
 }
 
@@ -184,6 +182,8 @@ func (n *uploader) upload(ctx context.Context) error {
 			}
 
 			func() {
+				defer batch.Release()
+
 				var (
 					readers  = make([]io.Reader, 0, len(paths))
 					files    = make([]io.Closer, 0, len(paths))
@@ -191,15 +191,8 @@ func (n *uploader) upload(ctx context.Context) error {
 					table    string
 					err      error
 				)
-				n.mu.Lock()
+
 				for _, path := range paths {
-
-					if _, ok := n.uploading[path]; ok {
-						logger.Debugf("File %s is already uploading", path)
-						continue
-					}
-					n.uploading[path] = struct{}{}
-
 					database, table, _, err = wal.ParseFilename(path)
 					if err != nil {
 						logger.Errorf("Failed to parse file: %s", err.Error())
@@ -218,18 +211,11 @@ func (n *uploader) upload(ctx context.Context) error {
 					readers = append(readers, f)
 					files = append(files, f)
 				}
-				n.mu.Unlock()
 
 				defer func(paths []string, files []io.Closer) {
 					for _, f := range files {
 						f.Close()
 					}
-
-					n.mu.Lock()
-					for _, path := range paths {
-						delete(n.uploading, path)
-					}
-					n.mu.Unlock()
 				}(paths, files)
 
 				if len(readers) == 0 {

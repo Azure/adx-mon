@@ -27,6 +27,7 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node1"},
 		Segmenter:   &fakeSegmenter{active: filepath.Join(dir, wal.Filename("db", "Cpu", "bbbb"))},
+		segments:    make(map[string]struct{}),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -61,6 +62,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node2"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
 		health:          &fakeHealthChecker{healthy: true},
+		segments:        make(map[string]struct{}),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -85,6 +87,7 @@ func TestBatcher_NewestFirst(t *testing.T) {
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node1"},
 		Segmenter:   &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		segments:    make(map[string]struct{}),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -133,6 +136,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
 		health:          fakeHealthChecker{healthy: true},
+		segments:        make(map[string]struct{}),
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -183,6 +187,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
 		health:          fakeHealthChecker{healthy: true},
+		segments:        make(map[string]struct{}),
 	}
 	owned, notOwned, err := a.processSegments()
 
