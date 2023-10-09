@@ -3,10 +3,10 @@ module github.com/Azure/adx-mon
 go 1.21
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.9.0-20230607214311-b93f1c8ac185.1
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230607214311-b93f1c8ac185.1
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230914171856-c5370fbbc768.1
 	github.com/Azure/azure-kusto-go v0.14.0
-	github.com/bufbuild/connect-go v1.9.0
+	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/golang-jwt/jwt/v5 v5.0.0
@@ -14,12 +14,12 @@ require (
 	github.com/klauspost/compress v1.17.0
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
 	github.com/lmittmann/tint v1.0.1
-	github.com/mattn/go-isatty v0.0.16
+	github.com/mattn/go-isatty v0.0.19
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.14.0
 	github.com/prometheus/client_model v0.5.0
 	github.com/prometheus/common v0.37.1
-	github.com/stretchr/testify v1.8.3
+	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
 	golang.org/x/net v0.12.0
 	golang.org/x/sync v0.4.0

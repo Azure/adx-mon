@@ -1,7 +1,7 @@
-# buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.9.0-20230607214311-b93f1c8ac185.1
+# buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1
 ## explicit; go 1.19
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect
-# buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230607214311-b93f1c8ac185.1
+# buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230914171856-c5370fbbc768.1
 ## explicit
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1
@@ -133,7 +133,7 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
-# github.com/bufbuild/connect-go v1.9.0
+# github.com/bufbuild/connect-go v1.10.0
 ## explicit; go 1.19
 github.com/bufbuild/connect-go
 github.com/bufbuild/connect-go/internal/gen/connectext/grpc/status/v1
@@ -263,7 +263,7 @@ github.com/mailru/easyjson/jwriter
 # github.com/mattn/go-ieproxy v0.0.1
 ## explicit; go 1.14
 github.com/mattn/go-ieproxy
-# github.com/mattn/go-isatty v0.0.16
+# github.com/mattn/go-isatty v0.0.19
 ## explicit; go 1.15
 github.com/mattn/go-isatty
 # github.com/matttproud/golang_protobuf_extensions v1.0.2
@@ -322,7 +322,7 @@ github.com/shopspring/decimal
 # github.com/spf13/pflag v1.0.5
 ## explicit; go 1.12
 github.com/spf13/pflag
-# github.com/stretchr/testify v1.8.3
+# github.com/stretchr/testify v1.8.4
 ## explicit; go 1.20
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require

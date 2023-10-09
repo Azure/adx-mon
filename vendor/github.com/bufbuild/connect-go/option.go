@@ -166,6 +166,17 @@ func WithRequireConnectProtocolHeader() HandlerOption {
 	return &requireConnectProtocolHeaderOption{}
 }
 
+// WithConditionalHandlerOptions allows procedures in the same service to have
+// different configurations: for example, one procedure may need a much larger
+// WithReadMaxBytes setting than the others.
+//
+// WithConditionalHandlerOptions takes a function which may inspect each
+// procedure's Spec before deciding which options to apply. Returning a nil
+// slice is safe.
+func WithConditionalHandlerOptions(conditional func(spec Spec) []HandlerOption) HandlerOption {
+	return &conditionalHandlerOptions{conditional: conditional}
+}
+
 // Option implements both [ClientOption] and [HandlerOption], so it can be
 // applied both client-side and server-side.
 type Option interface {
@@ -556,4 +567,18 @@ func withProtoJSONCodecs() HandlerOption {
 		WithCodec(&protoJSONCodec{codecNameJSON}),
 		WithCodec(&protoJSONCodec{codecNameJSONCharsetUTF8}),
 	)
+}
+
+type conditionalHandlerOptions struct {
+	conditional func(spec Spec) []HandlerOption
+}
+
+func (o *conditionalHandlerOptions) applyToHandler(config *handlerConfig) {
+	spec := config.newSpec()
+	if spec.Procedure == "" {
+		return // ignore empty specs
+	}
+	for _, option := range o.conditional(spec) {
+		option.applyToHandler(config)
+	}
 }
