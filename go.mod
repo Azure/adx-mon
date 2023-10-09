@@ -19,7 +19,7 @@ require (
 	github.com/prometheus/client_golang v1.14.0
 	github.com/prometheus/client_model v0.5.0
 	github.com/prometheus/common v0.37.1
-	github.com/stretchr/testify v1.8.3
+	github.com/stretchr/testify v1.8.4
 	github.com/urfave/cli/v2 v2.25.7
 	golang.org/x/net v0.12.0
 	golang.org/x/sync v0.4.0
