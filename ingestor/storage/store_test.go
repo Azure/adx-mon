@@ -93,7 +93,7 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 }
 
-func TestLocalStore_WriteTimeSeries(t *testing.T) {
+func TestStore_WriteTimeSeries(t *testing.T) {
 	b := make([]byte, 256)
 	database := "adxmetrics"
 	ctx := context.Background()
@@ -141,6 +141,23 @@ func TestStore_SkipNonCSV(t *testing.T) {
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 	require.Equal(t, 0, s.WALCount())
+}
+
+func TestStore_Import_Partial(t *testing.T) {
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024 * 1025,
+		SegmentMaxAge:  time.Minute,
+	})
+
+	n, err := s.Import("Database_Metric_123.wal", io.NopCloser(shortReader{}))
+	require.Error(t, err)
+	require.Equal(t, 0, n)
+
+	dirs, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(dirs))
 }
 
 func BenchmarkSegmentKey(b *testing.B) {
@@ -201,4 +218,10 @@ func newTimeSeries(name string, labels map[string]string, ts int64, val float64)
 			},
 		},
 	}
+}
+
+type shortReader struct{}
+
+func (s shortReader) Read(p []byte) (n int, err error) {
+	return 0, io.ErrUnexpectedEOF
 }

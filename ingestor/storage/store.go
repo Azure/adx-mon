@@ -252,30 +252,36 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	bw := bufio.NewWriterSize(f, 16*1024)
+	if n, err := func() (int, error) {
+		bw := bufio.NewWriterSize(f, 16*1024)
 
-	n, err := io.Copy(bw, body)
-	if err != nil {
-		return 0, err
+		n, err := io.Copy(bw, body)
+		if err != nil {
+			return 0, err
+		}
+
+		if err := bw.Flush(); err != nil {
+			return 0, err
+		}
+
+		if err := f.Sync(); err != nil {
+			return 0, err
+		}
+
+		if err := f.Close(); err != nil {
+			return 0, err
+		}
+		return int(n), nil
+	}(); err != nil {
+		_ = os.Remove(dstPath)
+		return n, err
+	} else {
+		if err := os.Rename(dstPath, filepath.Join(s.opts.StorageDir, filename)); err != nil {
+			return 0, err
+		}
+		return n, nil
 	}
 
-	if err := bw.Flush(); err != nil {
-		return 0, err
-	}
-
-	if err := f.Sync(); err != nil {
-		return 0, err
-	}
-
-	if err := f.Close(); err != nil {
-		return 0, err
-	}
-
-	if err := os.Rename(dstPath, filepath.Join(s.opts.StorageDir, filename)); err != nil {
-		return 0, err
-	}
-
-	return int(n), nil
 }
 
 func (s *LocalStore) incMetrics(value []byte, n int) {
