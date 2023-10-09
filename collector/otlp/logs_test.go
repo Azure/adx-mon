@@ -2,12 +2,12 @@ package otlp
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"io"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -87,11 +87,6 @@ func TestSerializedLogs(t *testing.T) {
 			ExpectError: ErrMissingKustoMetadata,
 			Records:     []byte(`{ "resourceLogs": [ { "resource": { "attributes": [ { "key": "source", "value": { "stringValue": "hostname" } } ], "droppedAttributesCount": 1 }, "scopeLogs": [ { "scope": { "name": "name", "version": "version", "droppedAttributesCount": 1 }, "logRecords": [ { "timeUnixNano": "1669112524001", "observedTimeUnixNano": "1669112524001", "severityNumber": 17, "severityText": "Error", "body": { "kvlistValue": { "values": [ { "key": "message", "value": { "stringValue": "something worth logging" } } ] } }, "droppedAttributesCount": 1, "flags": 1, "traceId": "", "spanId": "" } ], "schemaUrl": "scope_schema" } ], "schemaUrl": "resource_schema" } ] }`),
 		},
-		{
-			Name:    "internal error",
-			Records: rawlog,
-			Dir:     filepath.Join("/invalid", t.TempDir()),
-		},
 	}
 
 	for _, tt := range tests {
@@ -101,7 +96,8 @@ func TestSerializedLogs(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			wals, err := serializedLogs(context.Background(), &log, nil, tt.Dir)
+			mp := &file.MemoryProvider{}
+			wals, err := serializedLogs(context.Background(), &log, nil, mp)
 			require.Equal(t, tt.UserError, isUserError(err))
 			if tt.UserError {
 				require.Equal(t, tt.ExpectError, err)
@@ -113,9 +109,13 @@ func TestSerializedLogs(t *testing.T) {
 			require.Equal(t, tt.NumRecords, len(wals))
 
 			for _, w := range wals {
-				b, err := os.ReadFile(w)
+				f, err := mp.Open(w)
+				require.NoError(t, err)
+				b, err := io.ReadAll(f)
 				require.NoError(t, err)
 				require.NotEqual(t, 0, len(b))
+				err = f.Close()
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -127,11 +127,11 @@ func BenchmarkSerializedLogs(b *testing.B) {
 		require.NoError(b, err)
 	}
 
-	dir := b.TempDir()
+	mp := &file.MemoryProvider{}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := serializedLogs(context.Background(), &log, nil, dir)
+		_, err := serializedLogs(context.Background(), &log, nil, mp)
 		require.NoError(b, err)
 	}
 }

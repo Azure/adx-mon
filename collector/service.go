@@ -61,7 +61,6 @@ type ServiceOpts struct {
 	AddLabels      map[string]string
 	AddAttributes  map[string]string
 	LiftAttributes []string
-	StorageDir     string
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
 
@@ -201,7 +200,7 @@ func (s *Service) Open(ctx context.Context) error {
 		HealthChecker: fakeHealthChecker{},
 	}))
 	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
-	mux.Handle("/v1/logs", otlp.LogsTransferHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.StorageDir))
+	mux.Handle("/v1/logs", otlp.LogsTransferHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes))
 	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
 
 	go func() {

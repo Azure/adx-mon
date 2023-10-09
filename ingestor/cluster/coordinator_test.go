@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
@@ -175,7 +175,9 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	require.NoError(t, c.Open(context.Background()))
 
 	coord := c.(*coordinator)
+	coord.mu.RLock()
 	require.Equal(t, 2, len(coord.peers))
+	coord.mu.RUnlock()
 
 	newPeer = &v1.Pod{
 		TypeMeta: metav1.TypeMeta{
@@ -208,7 +210,9 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	}
 
 	// Swap in fake pod lister to simulate a new peer
+	coord.mu.Lock()
 	coord.pl = &fakePodLister{pods: []*v1.Pod{self, newPeer}}
+	coord.mu.Unlock()
 
 	coord.OnDelete(newPeer)
 	coord.mu.RLock()

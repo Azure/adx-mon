@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -49,7 +50,7 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
-	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify)
+	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify, &file.DiskProvider{})
 	if err != nil {
 		return nil, err
 	}
