@@ -57,6 +57,7 @@ func (f *fakeUploader) upload(ctx context.Context) {
 					logger.Errorf("Failed to remove file: %s", err.Error())
 				}
 			}
+			batch.Release()
 		}
 	}
 }

@@ -41,6 +41,12 @@ type Batch struct {
 	Paths    []string
 	Database string
 	Table    string
+
+	batcher *batcher
+}
+
+func (b *Batch) Release() {
+	b.batcher.release(b)
 }
 
 type Batcher interface {
@@ -83,6 +89,9 @@ type batcher struct {
 	maxTransferAge  time.Duration
 	maxTransferSize int64
 	minUploadSize   int64
+
+	mu       sync.Mutex
+	segments map[string]struct{}
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
@@ -97,47 +106,48 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		transferQueue:    opts.TransferQueue,
 		health:           opts.PeerHealthReporter,
 		transferDisabled: opts.TransfersDisabled,
+		segments:         make(map[string]struct{}),
 	}
 }
 
-func (a *batcher) Open(ctx context.Context) error {
-	ctx, a.closeFn = context.WithCancel(ctx)
+func (b *batcher) Open(ctx context.Context) error {
+	ctx, b.closeFn = context.WithCancel(ctx)
 	var err error
-	a.hostname, err = os.Hostname()
+	b.hostname, err = os.Hostname()
 	if err != nil {
 		return err
 	}
 
-	go a.watch(ctx)
+	go b.watch(ctx)
 
 	return nil
 }
 
-func (a *batcher) Close() error {
-	a.closeFn()
-	a.wg.Wait()
+func (b *batcher) Close() error {
+	b.closeFn()
+	b.wg.Wait()
 	return nil
 }
 
-func (a *batcher) TransferQueueSize() int {
-	return len(a.transferQueue) + int(atomic.LoadUint64(&a.pendingTransfer))
+func (b *batcher) TransferQueueSize() int {
+	return len(b.transferQueue) + int(atomic.LoadUint64(&b.pendingTransfer))
 }
 
-func (a *batcher) UploadQueueSize() int {
-	return len(a.uploadQueue) + int(atomic.LoadUint64(&a.pendingUploads))
+func (b *batcher) UploadQueueSize() int {
+	return len(b.uploadQueue) + int(atomic.LoadUint64(&b.pendingUploads))
 }
 
-func (a *batcher) SegmentsTotal() int64 {
-	return atomic.LoadInt64(&a.segmentsTotal)
+func (b *batcher) SegmentsTotal() int64 {
+	return atomic.LoadInt64(&b.segmentsTotal)
 }
 
-func (a *batcher) SegmentsSize() int64 {
-	return atomic.LoadInt64(&a.segementsSize)
+func (b *batcher) SegmentsSize() int64 {
+	return atomic.LoadInt64(&b.segementsSize)
 }
 
-func (a *batcher) watch(ctx context.Context) {
-	a.wg.Add(1)
-	defer a.wg.Done()
+func (b *batcher) watch(ctx context.Context) {
+	b.wg.Add(1)
+	defer b.wg.Done()
 
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -146,30 +156,30 @@ func (a *batcher) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := a.BatchSegments(); err != nil {
+			if err := b.BatchSegments(); err != nil {
 				logger.Errorf("Failed to batch segments: %v", err)
 			}
 		}
 	}
 }
 
-func (a *batcher) BatchSegments() error {
-	owned, notOwned, err := a.processSegments()
+func (b *batcher) BatchSegments() error {
+	owned, notOwned, err := b.processSegments()
 	if err != nil {
 		return fmt.Errorf("process segments: %w", err)
 	}
-	atomic.StoreUint64(&a.pendingUploads, uint64(len(owned)))
-	atomic.StoreUint64(&a.pendingTransfer, uint64(len(notOwned)))
+	atomic.StoreUint64(&b.pendingUploads, uint64(len(owned)))
+	atomic.StoreUint64(&b.pendingTransfer, uint64(len(notOwned)))
 
-	metrics.IngestorQueueSize.WithLabelValues("upload").Set(float64(len(a.uploadQueue) + len(owned)))
-	metrics.IngestorQueueSize.WithLabelValues("transfer").Set(float64(len(a.transferQueue) + len(notOwned)))
+	metrics.IngestorQueueSize.WithLabelValues("upload").Set(float64(len(b.uploadQueue) + len(owned)))
+	metrics.IngestorQueueSize.WithLabelValues("transfer").Set(float64(len(b.transferQueue) + len(notOwned)))
 
 	for _, v := range owned {
-		a.uploadQueue <- v
+		b.uploadQueue <- v
 	}
 
 	for _, v := range notOwned {
-		a.transferQueue <- v
+		b.transferQueue <- v
 	}
 
 	return nil
@@ -180,8 +190,8 @@ func (a *batcher) BatchSegments() error {
 // segments that are owned by other peers if they are already past the max age or max size
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
-func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
-	entries, err := wal.ListDir(a.storageDir)
+func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
+	entries, err := wal.ListDir(b.storageDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
 	}
@@ -192,7 +202,7 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 	metrics.IngestorSegmentsTotal.Reset()
 
-	// Groups is a map of metrics name to a list of segments for that metric.
+	// Groups is b map of metrics name to b list of segments for that metric.
 	groups := make(map[string][]string)
 
 	// We need to find the segment that this node is responsible for uploading to kusto and ones that
@@ -203,10 +213,12 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		groupSize             int
 		totalFiles, totalSize int64
 	)
+
+	b.mu.Lock()
 	for _, v := range entries {
 		fi, err := os.Stat(v.Path)
 		if os.IsNotExist(err) {
-			// File was in a prior batch and has been deleted.
+			// File was in b prior batch and has been deleted.
 			continue
 		} else if err != nil {
 			logger.Warnf("Failed to stat file: %s", v.Path)
@@ -232,15 +244,24 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		metrics.IngestorSegmentsTotal.WithLabelValues(v.Key).Inc()
 
-		if a.Segmenter.IsActiveSegment(v.Path) {
+		if b.Segmenter.IsActiveSegment(v.Path) {
 			if logger.IsDebug() {
 				logger.Debugf("Skipping active segment: %s", v.Path)
 			}
 			continue
 		}
 
+		if _, ok := b.segments[v.Key]; ok {
+			if logger.IsDebug() {
+				logger.Debugf("Skipping already processed segment: %s", v.Path)
+			}
+			continue
+		}
+
+		b.segments[v.Path] = struct{}{}
 		groups[v.Key] = append(groups[v.Key], v.Path)
 	}
+	b.mu.Unlock()
 
 	// For each sample, sort the segments by name.  The last segment is the current segment.
 	for k, v := range groups {
@@ -261,12 +282,13 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		batch = &Batch{
 			Database: db,
 			Table:    table,
+			batcher:  b,
 		}
 
 		for _, path := range v {
 			stat, err := os.Stat(path)
 			if os.IsNotExist(err) {
-				// File was in a prior batch and has been deleted.
+				// File was in b prior batch and has been deleted.
 				continue
 			} else if err != nil {
 				logger.Warnf("Failed to stat file: %s", path)
@@ -276,10 +298,10 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			batch.Paths = append(batch.Paths, path)
 			batchSize += stat.Size()
 
-			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
-			if batchSize >= a.minUploadSize {
+			// The batch is at the optimal size for uploading to kusto, upload directly and start b new batch.
+			if batchSize >= b.minUploadSize {
 				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, (a.minUploadSize)/1e6, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, (b.minUploadSize)/1e6, batchSize)
 				}
 
 				owned = append(owned, batch)
@@ -292,9 +314,9 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				continue
 			}
 
-			if batchSize >= a.maxTransferSize {
+			if batchSize >= b.maxTransferSize {
 				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, a.maxTransferSize/1e6, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, b.maxTransferSize/1e6, batchSize)
 				}
 				directUpload = true
 				continue
@@ -307,10 +329,10 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
-			// rather take that hit than have a node that's behind on uploading.
-			if time.Since(createdAt) > a.maxTransferAge {
+			// rather take that hit than have b node that's behind on uploading.
+			if time.Since(createdAt) > b.maxTransferAge {
 				if logger.IsDebug() {
-					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", path, a.maxTransferAge.String(), time.Since(createdAt).String())
+					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", path, b.maxTransferAge.String(), time.Since(createdAt).String())
 				}
 				directUpload = true
 			}
@@ -327,20 +349,20 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			continue
 		}
 
-		owner, _ := a.Partitioner.Owner([]byte(k))
+		owner, _ := b.Partitioner.Owner([]byte(k))
 
 		// If the peer has signaled that it's unhealthy, upload the segments directly.
-		peerHealthy := a.health.IsPeerHealthy(owner)
+		peerHealthy := b.health.IsPeerHealthy(owner)
 
-		if owner == a.hostname || !peerHealthy || a.transferDisabled {
+		if owner == b.hostname || !peerHealthy || b.transferDisabled {
 			owned = append(owned, batch)
 		} else {
 			notOwned = append(notOwned, batch)
 		}
 	}
 
-	atomic.StoreInt64(&a.segmentsTotal, totalFiles)
-	atomic.StoreInt64(&a.segementsSize, totalSize)
+	atomic.StoreInt64(&b.segmentsTotal, totalFiles)
+	atomic.StoreInt64(&b.segementsSize, totalSize)
 
 	// Sort the owned and not-owned batches by creation time so that we prioritize uploading the old segments first
 	sort.Slice(owned, func(i, j int) bool {
@@ -368,6 +390,15 @@ func (a *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	notOwned = prioritizeOldest(notOwned)
 
 	return owned, notOwned, nil
+}
+
+func (b *batcher) release(batch *Batch) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, v := range batch.Paths {
+		delete(b.segments, v)
+	}
 }
 
 func prioritizeOldest(a []*Batch) []*Batch {

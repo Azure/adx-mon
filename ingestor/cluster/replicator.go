@@ -134,6 +134,8 @@ func (r *replicator) transfer(ctx context.Context) {
 					logger.Errorf("Failed to transfer segment %s to %s: %v", seg, addr, err)
 				}
 			}
+
+			batch.Release()
 		}
 	}
 }
