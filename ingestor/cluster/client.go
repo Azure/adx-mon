@@ -6,18 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 var ErrPeerOverloaded = fmt.Errorf("peer overloaded")
 
 type Client struct {
-	httpClient *http.Client
+	httpClient      *http.Client
+	storageProvider file.Provider
 }
 
-func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) {
+func NewClient(timeout time.Duration, insecureSkipVerify bool, storageProvider file.Provider) (*Client, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConns = 100
 	t.MaxConnsPerHost = 100
@@ -32,12 +34,13 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) 
 	}
 
 	return &Client{
-		httpClient: httpClient,
+		httpClient:      httpClient,
+		storageProvider: storageProvider,
 	}, nil
 }
 
 func (c *Client) Write(ctx context.Context, endpoint string, path string) error {
-	f, err := os.Open(path)
+	f, err := c.storageProvider.Open(path)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}

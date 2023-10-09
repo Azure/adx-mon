@@ -54,7 +54,6 @@ func TestOTLPLogsE2E(t *testing.T) {
 		t.Run(tt.URLPath, func(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
-			collectorDir := t.TempDir()
 			ingestorDir := t.TempDir()
 
 			// Create our Ingestor HTTP instance, which exposes Ingestor's OTLP logs handler. This
@@ -64,7 +63,7 @@ func TestOTLPLogsE2E(t *testing.T) {
 			// and is identical to the way in which a downstream component, such as fluentbit, would
 			// interact with Collector. Here we pass the Ingestor URL as the endpoint to Collector,
 			// which Collector will use to Proxy the request to Ingestor.
-			collectorURL, hc := NewCollectorHandler(t, ctx, []string{ingestorURL}, collectorDir)
+			collectorURL, hc := NewCollectorHandler(t, ctx, []string{ingestorURL})
 
 			// Now here we act on behalf of a logs producer, sending a valid OTLP logs payload to Collector.
 			// We expect a valid response object and status code, after verification, we'll then test
@@ -154,7 +153,7 @@ func VerifyStore(t *testing.T, dir string) {
 	require.Equal(t, true, verified)
 }
 
-func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string, dir string) (string, *http.Client) {
+func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string) (string, *http.Client) {
 	t.Helper()
 	var (
 		insecureSkipVerify = true
@@ -166,7 +165,7 @@ func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string, 
 	)
 	mux := http.NewServeMux()
 	ph := cotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
-	th := cotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes, dir)
+	th := cotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes)
 	mux.Handle(logsv1connect.LogsServiceExportProcedure, ph)
 	mux.Handle("/v1/logs", th)
 
