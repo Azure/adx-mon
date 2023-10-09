@@ -1,7 +1,7 @@
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.9.0-20230607214311-b93f1c8ac185.1 h1:ePoQslL1W6CqNZd/inzhAkvri8sNdebyHCvEWC7izlA=
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.9.0-20230607214311-b93f1c8ac185.1/go.mod h1:bmhUlZMMIaA7b54E9VfXw1uIn702CiDP2K8zdHc7/Tw=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230607214311-b93f1c8ac185.1 h1:OySWUYokzb08+9ZZG+j/hmQAwr9+REtrkMLdHAXJSKs=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230607214311-b93f1c8ac185.1/go.mod h1:Z8vHgcMy12BQ89FTPKtYuX6U8UgU5/LMlV6MVq7BBlE=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230914171856-c5370fbbc768.1 h1:BGmyAWhLKN7eii+J7amyKDzjK8tFQao/PTLmujPRC/g=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230914171856-c5370fbbc768.1/go.mod h1:Z8vHgcMy12BQ89FTPKtYuX6U8UgU5/LMlV6MVq7BBlE=
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.38.0/go.mod h1:990N+gfupTy94rShfmMCWGDn0LpTmnzTp2qbd1dvSRU=
 cloud.google.com/go v0.44.1/go.mod h1:iSa0KzasP4Uvy3f1mN/7PiObzGgflwredwwASm/v6AU=
