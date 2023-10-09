@@ -187,7 +187,7 @@ func (r *envelopeReader) Unmarshal(message any) *Error {
 		if r.compressionPool == nil {
 			return errorf(
 				CodeInvalidArgument,
-				"gRPC protocol error: sent compressed message without Grpc-Encoding header",
+				"protocol error: sent compressed message without Grpc-Encoding header",
 			)
 		}
 		decompressed := r.bufferPool.Get()
@@ -199,6 +199,12 @@ func (r *envelopeReader) Unmarshal(message any) *Error {
 	}
 
 	if env.Flags != 0 && env.Flags != flagEnvelopeCompressed {
+		// Drain the rest of the stream to ensure there is no extra data.
+		if n, err := discard(r.reader); err != nil {
+			return errorf(CodeInternal, "corrupt response: I/O error after end-stream message: %w", err)
+		} else if n > 0 {
+			return errorf(CodeInternal, "corrupt response: %d extra bytes after end of stream", n)
+		}
 		// One of the protocol-specific flags are set, so this is the end of the
 		// stream. Save the message for protocol-specific code to process and
 		// return a sentinel error. Since we've deferred functions to return env's
@@ -242,6 +248,9 @@ func (r *envelopeReader) Read(env *envelope) *Error {
 		if maxBytesErr := asMaxBytesError(err, "read 5 byte message prefix"); maxBytesErr != nil {
 			// We're reading from an http.MaxBytesHandler, and we've exceeded the read limit.
 			return maxBytesErr
+		}
+		if err == nil {
+			err = io.ErrUnexpectedEOF
 		}
 		return errorf(
 			CodeInvalidArgument,

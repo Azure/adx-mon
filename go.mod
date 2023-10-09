@@ -3,10 +3,10 @@ module github.com/Azure/adx-mon
 go 1.21
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.9.0-20230607214311-b93f1c8ac185.1
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230607214311-b93f1c8ac185.1
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230914171856-c5370fbbc768.1
 	github.com/Azure/azure-kusto-go v0.14.0
-	github.com/bufbuild/connect-go v1.9.0
+	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/golang-jwt/jwt/v5 v5.0.0
