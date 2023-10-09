@@ -50,6 +50,7 @@ func TestService_HandleTransfer_InvalidFilename(t *testing.T) {
 		{name: "path traversal", filename: "../../foo_bar_baz.wal"},
 		{name: "colon", filename: "DB_Metric:avg_123.wal"},
 		{name: "period", filename: "DB.wal_Metricavg_123.wal"},
+		{name: "unknown DB", filename: "Database_Metric_123.wal"},
 	}
 
 	s := &Service{
@@ -72,7 +73,6 @@ func TestService_HandleTransfer_InvalidFilename(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, resp.Code, resp.Body.String())
 		})
 	}
-
 }
 
 type fakeStore struct{}

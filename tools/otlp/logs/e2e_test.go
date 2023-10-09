@@ -200,6 +200,7 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 	svc, err := isvc.NewService(isvc.ServiceOpts{
 		StorageDir:      dir,
 		Uploader:        adx.NewFakeUploader(),
+		LogsDatabases:   []string{"ADatabase", "BDatabase"},
 		MaxSegmentCount: 100,
 		MaxDiskUsage:    10 * 1024 * 1024 * 1024,
 	})

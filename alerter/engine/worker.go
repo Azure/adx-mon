@@ -155,10 +155,11 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 func (e *worker) Close() {
 	e.mu.Lock()
-	if e.cancel != nil {
-		e.cancel()
-	}
+	cancelFn := e.cancel
 	e.mu.Unlock()
+	if cancelFn != nil {
+		cancelFn()
+	}
 
 	e.wg.Wait()
 }
