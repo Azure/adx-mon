@@ -305,6 +305,12 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.store.SegmentExists(f) {
+		m.WithLabelValues(strconv.Itoa(http.StatusConflict)).Inc()
+		http.Error(w, "segment already exists", http.StatusConflict)
+		return
+	}
+
 	if n, err := s.store.Import(f, r.Body); err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)

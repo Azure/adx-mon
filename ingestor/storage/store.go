@@ -43,6 +43,9 @@ type Store interface {
 
 	// Import imports a file into the LocalStore and returns the number of bytes stored.
 	Import(filename string, body io.ReadCloser) (int, error)
+
+	// SegmentExsts returns true if the given segment exists.
+	SegmentExists(filename string) bool
 }
 
 // LocalStore provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
@@ -235,6 +238,11 @@ func (s *LocalStore) IsActiveSegment(path string) bool {
 		}
 	}
 	return false
+}
+
+func (s *LocalStore) SegmentExists(filename string) bool {
+	_, err := os.Stat(filepath.Join(s.opts.StorageDir, filename))
+	return err == nil
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
