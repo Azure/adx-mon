@@ -36,7 +36,7 @@ type worker struct {
 func (e *worker) Run(ctx context.Context) {
 	e.mu.Lock()
 	ctx, e.cancel = context.WithCancel(ctx)
-	defer e.mu.Unlock()
+	e.mu.Unlock()
 
 	e.wg.Add(1)
 	defer e.wg.Done()
