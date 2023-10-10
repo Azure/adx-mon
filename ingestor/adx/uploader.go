@@ -1,6 +1,7 @@
 package adx
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -153,9 +155,12 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	// Count the number of samples we are uploading.
+	scr := &samplesCounter{r: reader}
+
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, scr, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
 		return err
 	}
@@ -165,6 +170,14 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	if err != nil {
 		return err
 	}
+
+	switch n.opts.SampleType {
+	case PromMetrics:
+		metrics.MetricsUploaded.WithLabelValues(database, table).Add(float64(scr.count))
+	case OTLPLogs:
+		metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(scr.count))
+	}
+
 	// return os.Remove(file)
 	return nil
 
@@ -257,4 +270,20 @@ func (n *uploader) upload(ctx context.Context) error {
 
 		}
 	}
+}
+
+var nl = []byte{'\n'}
+
+type samplesCounter struct {
+	r     io.Reader
+	count int
+}
+
+func (c *samplesCounter) Read(p []byte) (n int, err error) {
+	n, err = c.r.Read(p)
+	if err != nil {
+		return
+	}
+	c.count += bytes.Count(p[:n], nl)
+	return
 }
