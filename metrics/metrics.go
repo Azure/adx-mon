@@ -58,11 +58,25 @@ var (
 		Help:      "Counter of metrics droopped for an ingestor instance",
 	}, []string{"metric"})
 
+	MetricsUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "metrics_uploaded_total",
+		Help:      "Counter of the number of metrics uploaded to Kusto",
+	}, []string{"database", "table"})
+
 	LogsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
-		Name:      "logs_received",
+		Name:      "logs_received_total",
 		Help:      "Counter of the number of logs received",
+	}, []string{"database", "table"})
+
+	LogsUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "logs_uploaded_total",
+		Help:      "Counter of the number of logs uploaded to Kusto",
 	}, []string{"database", "table"})
 
 	InvalidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
