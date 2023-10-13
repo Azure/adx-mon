@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,6 +36,13 @@ var (
 
 // LogsTransferHandler implements an HTTP handler that receives OTLP logs, marshals them as CSV to our wal and transfers them to HTTP endpoins (e.g. Ingestor).
 func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string) http.HandlerFunc {
+
+	log := slog.Default().With(
+		slog.Group(
+			"handler",
+			slog.String("protocol", "otlp"),
+		),
+	)
 
 	var add []*commonv1.KeyValue
 	for attribute, value := range addAttributes {
@@ -67,7 +75,7 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 	bufs := pool.NewBytes(1024 * 1024)
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/logs"})
+		m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/v1/logs"})
 		defer r.Body.Close()
 
 		switch r.Header.Get("Content-Type") {
@@ -79,24 +87,24 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 
 			n, err := io.ReadFull(r.Body, b)
 			if err != nil {
-				logger.Errorf("Failed to read request body: %v", err)
+				log.Error("Failed to read request body", "Error", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
 			}
 			if n < int(r.ContentLength) {
-				logger.Warnf("Short read %d < %d", n, r.ContentLength)
+				log.Warn("Short read")
 				w.WriteHeader(http.StatusBadRequest)
 				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
 			}
 			if logger.IsDebug() {
-				logger.Debugf("Received %d bytes", n)
+				log.Debug("Received request body", "Bytes", n)
 			}
 
 			msg := &v1.ExportLogsServiceRequest{}
 			if err := proto.Unmarshal(b, msg); err != nil {
-				logger.Errorf("Failed to unmarshal request body: %v", err)
+				log.Error("Failed to unmarshal request body", "Error", err)
 				w.WriteHeader(http.StatusBadRequest)
 				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
@@ -108,18 +116,18 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				// Clean up the WALs
 				for _, fn := range wals {
 					if err := mp.Remove(fn); err != nil {
-						logger.Errorf("Failed to remove %s: %v", fn, err)
+						log.Error("Failed to remove WAL", "Filename", fn, "Error", err)
 					}
 				}
 			}()
 			if isUserError(err) {
-				logger.Errorf("Failed to serialize logs with user error: %v", err)
+				log.Error("Failed to serialize logs with user error", "Error", err)
 				w.WriteHeader(http.StatusBadRequest)
 				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 				return
 			}
 			if err != nil {
-				logger.Errorf("Failed to serialize logs with internal error: %v", err)
+				log.Error("Failed to serialize logs with internal error", "Error", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 				return
@@ -133,7 +141,7 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				g.Go(func() error {
 					for _, fn := range wals {
 						if err := rpcClient.Write(gctx, endpoint, fn); err != nil {
-							logger.Error("Failed to send logs to %s: %w", endpoint, err)
+							log.Error("Failed to send logs", "Endpoint", endpoint, "Error", err)
 							return err
 						}
 					}
@@ -148,11 +156,11 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			)
 			if err := g.Wait(); err != nil {
 				// Construct a partial success response with the maximum number of rejected records
-				logger.Errorf("Failed to proxy request: %v", err)
+				log.Error("Failed to proxy request", "Error", err)
 				statusCode = httpStatusCodeForGRPCError(err)
 				respBodyBytes, err = proto.Marshal(&v1.ExportLogsPartialSuccess{RejectedLogRecords: int64(len(msg.GetResourceLogs()))})
 				if err != nil {
-					logger.Errorf("Failed to marshal response: %v", err)
+					log.Error("Failed to marshal response", "Error", err)
 					w.WriteHeader(http.StatusInternalServerError)
 					m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 					return
@@ -162,7 +170,7 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				respBodyBytes, err = proto.Marshal(&v1.ExportLogsServiceResponse{})
 				statusCode = http.StatusOK
 				if err != nil {
-					logger.Errorf("Failed to marshal response: %v", err)
+					log.Error("Failed to marshal response", "Error", err)
 					w.WriteHeader(http.StatusInternalServerError)
 					m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 					return
