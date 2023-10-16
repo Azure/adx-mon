@@ -11,7 +11,7 @@ require (
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/golang/snappy v0.0.4
-	github.com/klauspost/compress v1.17.0
+	github.com/klauspost/compress v1.17.1
 	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
 	github.com/lmittmann/tint v1.0.1
 	github.com/mattn/go-isatty v0.0.19
