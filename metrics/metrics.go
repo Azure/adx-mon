@@ -58,25 +58,11 @@ var (
 		Help:      "Counter of metrics droopped for an ingestor instance",
 	}, []string{"metric"})
 
-	MetricsUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "metrics_uploaded_total",
-		Help:      "Counter of the number of metrics uploaded to Kusto",
-	}, []string{"database", "table"})
-
 	LogsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "logs_received_total",
 		Help:      "Counter of the number of logs received",
-	}, []string{"database", "table"})
-
-	LogsUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "logs_uploaded_total",
-		Help:      "Counter of the number of logs uploaded to Kusto",
 	}, []string{"database", "table"})
 
 	InvalidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -92,6 +78,13 @@ var (
 		Name:      "valid_logs_dropped",
 		Help:      "Counter of the number of logs dropped due to ingestor errors",
 	}, []string{})
+
+	UploadedSamplesInSegments = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "samples_segments_uploaded",
+		Help:      "Number of samples uploaded in each segment",
+	}, []string{"database", "table", "filename"})
 
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -164,4 +157,11 @@ var (
 		Name:      "logs_dropped",
 		Help:      "Counter of the number of logs dropped due to errors",
 	}, []string{"source", "stage"})
+
+	TransferredSamplesInSegments = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "samples_segments_transferred",
+		Help:      "Number of samples uploaded in each segment",
+	}, []string{"database", "table", "filename"})
 )

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -153,12 +154,9 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Count the number of samples we are uploading.
-	scr := &samplesCounter{r: reader}
-
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, scr, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
 		return err
 	}
@@ -167,13 +165,6 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	err = <-res.Wait(ctx)
 	if err != nil {
 		return err
-	}
-
-	switch n.opts.SampleType {
-	case PromMetrics:
-		metrics.MetricsUploaded.WithLabelValues(database, table).Add(float64(scr.count))
-	case OTLPLogs:
-		metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(scr.count))
 	}
 
 	// return os.Remove(file)
@@ -221,7 +212,7 @@ func (n *uploader) upload(ctx context.Context) error {
 						continue
 					}
 
-					readers = append(readers, f)
+					readers = append(readers, &samplesCounter{r: f, path: path})
 					files = append(files, f)
 				}
 
@@ -252,8 +243,18 @@ func (n *uploader) upload(ctx context.Context) error {
 						logger.Errorf("Failed to remove file: %s", err.Error())
 					}
 				}
-			}()
 
+				for _, r := range readers {
+					scr, ok := r.(*samplesCounter)
+					if !ok {
+						logger.Error("Failed to cast reader to samplesCounter")
+						continue
+					}
+					metrics.UploadedSamplesInSegments.
+						WithLabelValues(database, table, filepath.Base(scr.path)).
+						Set(float64(scr.count))
+				}
+			}()
 		}
 	}
 }
@@ -263,6 +264,7 @@ var nl = []byte{'\n'}
 type samplesCounter struct {
 	r     io.Reader
 	count int
+	path  string
 }
 
 func (c *samplesCounter) Read(p []byte) (n int, err error) {
