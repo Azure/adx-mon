@@ -121,6 +121,7 @@ func (s *service) collect(ctx context.Context) {
 			IngestorSegmentsTotal.Reset()
 			TransferredSamplesInSegments.Reset()
 			UploadedSamplesInSegments.Reset()
+			ReceivedSamplesInSegments.Reset()
 		}
 	}
 }

@@ -284,6 +284,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if !s.health.IsHealthy() {
+		logger.Error("Transfer endpoint is overloaded")
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
@@ -291,6 +292,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	filename := r.URL.Query().Get("filename")
 	if filename == "" {
+		logger.Error("Transfer requested without filename")
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "missing filename", http.StatusBadRequest)
 		return
@@ -306,16 +308,19 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.store.SegmentExists(f) {
+		logger.Errorf("Transfer requested for an existing segment %q", filename)
 		m.WithLabelValues(strconv.Itoa(http.StatusConflict)).Inc()
 		http.Error(w, "segment already exists", http.StatusConflict)
 		return
 	}
 
 	if n, err := s.store.Import(f, r.Body); err != nil {
+		logger.Errorf("Failed to import file: %s", err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	} else {
+		metrics.ReceivedSamplesInSegments.WithLabelValues(filename).Inc()
 		if logger.IsDebug() {
 			logger.Debugf("Imported %d bytes to %s", n, filename)
 		}

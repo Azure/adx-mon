@@ -86,6 +86,13 @@ var (
 		Help:      "Number of samples uploaded in each segment",
 	}, []string{"database", "table", "filename"})
 
+	ReceivedSamplesInSegments = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "samples_segments_received_total",
+		Help:      "Number of times segments are received by filename",
+	}, []string{"filename"})
+
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
