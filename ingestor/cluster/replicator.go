@@ -2,17 +2,17 @@ package cluster
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	pkgfile "github.com/Azure/adx-mon/pkg/file"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
-	"golang.org/x/sync/errgroup"
 )
 
 type ReplicatorOpts struct {
@@ -22,11 +22,18 @@ type ReplicatorOpts struct {
 	// Health is used to report the health of the peer replication.
 	Health PeerHealthReporter
 
+	// SegmentRemover is used to remove segments after they have been replicated.
+	SegmentRemover SegmentRemover
+
 	// InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
 	InsecureSkipVerify bool
 
 	// Hostname is the name of the current node.
 	Hostname string
+}
+
+type SegmentRemover interface {
+	Remove(path string) error
 }
 
 // Replicator manages the transfer of local segments to other nodes.
@@ -45,8 +52,9 @@ type replicator struct {
 	hostname string
 
 	// Partitioner is used to determine which node owns a given metric.
-	Partitioner MetricPartitioner
-	Health      PeerHealthReporter
+	Partitioner    MetricPartitioner
+	Health         PeerHealthReporter
+	SegmentRemover SegmentRemover
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
@@ -55,17 +63,21 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		return nil, err
 	}
 	return &replicator{
-		queue:       make(chan *Batch, 10000),
-		cli:         cli,
-		hostname:    opts.Hostname,
-		Partitioner: opts.Partitioner,
-		Health:      opts.Health,
+		queue:          make(chan *Batch, 10000),
+		cli:            cli,
+		hostname:       opts.Hostname,
+		Partitioner:    opts.Partitioner,
+		Health:         opts.Health,
+		SegmentRemover: opts.SegmentRemover,
 	}, nil
 }
 
 func (r *replicator) Open(ctx context.Context) error {
 	ctx, r.closeFn = context.WithCancel(ctx)
-	go r.transfer(ctx)
+	r.wg.Add(5)
+	for i := 0; i < 5; i++ {
+		go r.transfer(ctx)
+	}
 	return nil
 }
 
@@ -80,7 +92,6 @@ func (r *replicator) TransferQueue() chan *Batch {
 }
 
 func (r *replicator) transfer(ctx context.Context) {
-	r.wg.Add(1)
 	defer r.wg.Done()
 
 	for {
@@ -90,11 +101,22 @@ func (r *replicator) transfer(ctx context.Context) {
 		case batch := <-r.queue:
 			segments := batch.Paths
 
-			for _, seg := range segments {
-				db, table, _, err := wal.ParseFilename(seg)
+			if err := func() error {
+				mr, err := pkgfile.NewMultiReader(segments...)
+				if err != nil && os.IsNotExist(err) {
+					return nil
+				} else if err != nil {
+					return fmt.Errorf("open segments: %w", err)
+				}
+				defer mr.Close()
+
+				// Merge batch of files into the first file at the destination.  This ensures we transfer
+				// the full batch atomimcally.
+				filename := filepath.Base(segments[0])
+
+				db, table, _, err := wal.ParseFilename(filename)
 				if err != nil {
-					logger.Errorf("Failed to parse segment filename: %v", err)
-					continue
+					return fmt.Errorf("parse segment filename: %w", err)
 				}
 
 				key := fmt.Sprintf("%s_%s", db, table)
@@ -106,33 +128,34 @@ func (r *replicator) transfer(ctx context.Context) {
 
 				// We're the owner of the file... leave it for the ingestor to upload.
 				if owner == r.hostname {
-					continue
-				}
-
-				g, gCtx := errgroup.WithContext(ctx)
-				g.SetLimit(5)
-				g.Go(func() error {
-					start := time.Now()
-					err := r.cli.Write(gCtx, addr, seg)
-					if errors.Is(err, ErrPeerOverloaded) {
-						r.Health.SetPeerUnhealthy(owner)
-						return fmt.Errorf("transfer segment %s to %s: %w", seg, addr, err)
-					} else if err != nil {
-						return fmt.Errorf("transfer segment %s to %s: %w", seg, addr, err)
-					}
-					if err := os.Remove(seg); err != nil {
-						return fmt.Errorf("remove segment %s: %w", seg, err)
-					}
-
-					if logger.IsDebug() {
-						logger.Debugf("Transferred %s to %s addr=%s duration=%s ", seg, owner, addr, time.Since(start).String())
-					}
 					return nil
-				})
-
-				if err := g.Wait(); err != nil {
-					logger.Errorf("Failed to transfer segment %s to %s: %v", seg, addr, err)
 				}
+
+				// If the peer is not healthy, don't attmept transferring the segment.  This could happen if we marked
+				// the peer unhealthy after we received the batch to process.
+				if !r.Health.IsPeerHealthy(owner) {
+					return nil
+				}
+
+				start := time.Now()
+				err = r.cli.Write(ctx, addr, filename, mr)
+				if err != nil {
+					r.Health.SetPeerUnhealthy(owner)
+					return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
+				} else {
+					for _, seg := range segments {
+						if logger.IsDebug() {
+							logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg, filename, owner, addr, time.Since(start).String())
+						}
+
+						if err := r.SegmentRemover.Remove(seg); err != nil {
+							logger.Errorf("Failed to remove segment %s: %s", seg, err)
+						}
+					}
+				}
+				return nil
+			}(); err != nil {
+				logger.Errorf("Failed to transfer batch: %v", err)
 			}
 
 			batch.Release()

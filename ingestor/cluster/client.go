@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/wal/file"
@@ -39,16 +38,12 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool, storageProvider f
 	}, nil
 }
 
-func (c *Client) Write(ctx context.Context, endpoint string, path string) error {
-	f, err := c.storageProvider.Open(path)
-	if err != nil {
-		return fmt.Errorf("open file: %w", err)
-	}
-	defer f.Close()
+// Write writes the given paths to the given endpoint.  If multiple paths are given, they are
+// merged into the first file at the destination.  This ensures we transfer the full batch
+// atomimcally.
+func (c *Client) Write(ctx context.Context, endpoint string, filename string, body io.Reader) error {
 
-	filename := filepath.Base(path)
-
-	br := bufio.NewReaderSize(f, 1024*1024)
+	br := bufio.NewReaderSize(body, 4*1024)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, br)
 	if err != nil {

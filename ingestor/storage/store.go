@@ -281,7 +281,20 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		}
 		return n, nil
 	}
+}
 
+func (s *LocalStore) Remove(path string) error {
+	db, table, _, err := wal.ParseFilename(path)
+	if err != nil {
+		return err
+	}
+
+	key := fmt.Sprintf("%s_%s", db, table)
+	wal, err := s.GetWAL(context.Background(), []byte(key))
+	if err != nil {
+		return err
+	}
+	return wal.Remove(path)
 }
 
 func (s *LocalStore) incMetrics(value []byte, n int) {

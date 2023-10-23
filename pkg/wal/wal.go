@@ -3,6 +3,7 @@ package wal
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -20,6 +21,9 @@ type WAL struct {
 
 	mu      sync.RWMutex
 	segment Segment
+
+	closedMu       sync.RWMutex
+	closedSegments []string
 }
 
 type WALOpts struct {
@@ -175,4 +179,8 @@ func (w *WAL) Path() string {
 	}
 
 	return w.segment.Path()
+}
+
+func (w *WAL) Remove(path string) error {
+	return os.Remove(path)
 }
