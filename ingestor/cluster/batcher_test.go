@@ -33,6 +33,9 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa"))}, owner[0].Paths)
 	require.Equal(t, 0, len(notOwned))
+
+	requireValidBatch(t, owner)
+	requireValidBatch(t, notOwned)
 }
 
 func TestBatcher_NodeOwned(t *testing.T) {
@@ -68,6 +71,9 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, len(owner))
 	require.Equal(t, []string{filepath.Join(dir, fName), filepath.Join(dir, f1Name)}, notOwned[0].Paths)
+
+	requireValidBatch(t, owner)
+	requireValidBatch(t, notOwned)
 }
 
 func TestBatcher_NewestFirst(t *testing.T) {
@@ -101,6 +107,8 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	require.Equal(t, "db", owner[1].Database)
 	require.Equal(t, "Disk", owner[1].Table)
 
+	requireValidBatch(t, owner)
+	requireValidBatch(t, notOwned)
 }
 
 func TestBatcher_BigFileBatch(t *testing.T) {
@@ -148,6 +156,8 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	require.Equal(t, []string{f.Name()}, owned[1].Paths)
 	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths)
 
+	requireValidBatch(t, owned)
+	requireValidBatch(t, notOwned)
 }
 
 func TestBatcher_BigBatch(t *testing.T) {
@@ -198,6 +208,18 @@ func TestBatcher_BigBatch(t *testing.T) {
 	require.Equal(t, []string{f2.Name()}, owned[0].Paths)
 	require.Equal(t, []string{f.Name(), f1.Name()}, owned[1].Paths)
 	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths)
+
+	requireValidBatch(t, owned)
+	requireValidBatch(t, notOwned)
+}
+
+func requireValidBatch(t *testing.T, batch []*Batch) {
+	for _, o := range batch {
+		require.NotEmptyf(t, o.Table, "batch segment %v has no ID", o)
+		require.NotEmptyf(t, o.Database, "batch segment %v has no ID", o)
+		require.NotNilf(t, o.batcher, "batch segment %v has no batcher", o)
+		require.True(t, len(o.Paths) > 0, "batch segment %v has no paths", o)
+	}
 }
 
 type fakePartitioner struct {

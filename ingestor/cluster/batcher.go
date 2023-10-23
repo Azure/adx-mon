@@ -308,6 +308,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				batch = &Batch{
 					Database: db,
 					Table:    table,
+					batcher:  b,
 				}
 				batchSize = 0
 				directUpload = false
