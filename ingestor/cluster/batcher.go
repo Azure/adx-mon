@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -63,6 +64,7 @@ type Batcher interface {
 type batcher struct {
 	uploadQueue   chan *Batch
 	transferQueue chan *Batch
+	store         storage.Store
 
 	// pendingUploads is the number of batches ready for upload but not in the upload queue.
 	pendingUploads uint64
@@ -365,7 +367,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	atomic.StoreInt64(&b.segmentsTotal, totalFiles)
 	atomic.StoreInt64(&b.segementsSize, totalSize)
 
-	// Sort the owned and not-owned batches by creation time so that we prioritize uploading the old segments first
+	// Sort the owned and not-owned batches by creation time so that we prioritize uploading the newest segments first
 	sort.Slice(owned, func(i, j int) bool {
 		groupA := owned[i]
 		groupB := owned[j]

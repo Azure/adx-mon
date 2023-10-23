@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -133,14 +134,29 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				return
 			}
 
+			if logger.IsDebug() {
+				for _, fn := range wals {
+					log.Debug("Serialized logs", "Filename", fn)
+				}
+			}
+
 			// Create our RPC request and send it
 			g, gctx := errgroup.WithContext(ctx)
 			for endpoint, rpcClient := range rpcClients {
 				endpoint := endpoint
 				rpcClient := rpcClient
 				g.Go(func() error {
-					for _, w := range wals {
-						if err := rpcClient.Write(gctx, endpoint, w.Path); err != nil {
+					for _, fn := range wals {
+						f, err := mp.Open(fn.Path)
+						if err != nil {
+							log.Error("Failed to open WAL", "Filename", fn, "Error", err)
+							return err
+						}
+						defer f.Close()
+
+						filename := filepath.Base(fn.Path)
+
+						if err := rpcClient.Write(gctx, endpoint, filename, f); err != nil {
 							log.Error("Failed to send logs", "Endpoint", endpoint, "Error", err)
 							return err
 						}

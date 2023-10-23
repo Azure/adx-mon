@@ -146,6 +146,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Partitioner:        coord,
 		InsecureSkipVerify: opts.InsecureSkipVerify,
 		Health:             health,
+		SegmentRemover:     store,
 	})
 	if err != nil {
 		return nil, err
@@ -399,4 +400,20 @@ func (s *Service) validateFileName(filename string) string {
 	}
 
 	return fmt.Sprintf("%s_%s_%s.wal", db, table, epoch)
+}
+
+func newUploader(kustoCli ingest.QueryClient, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
+	if kustoCli == nil {
+		logger.Warnf("No kusto endpoint provided, using fake uploader")
+		return adx.NewFakeUploader(), nil
+	}
+
+	uploader := adx.NewUploader(kustoCli, adx.UploaderOpts{
+		StorageDir:        storageDir,
+		Database:          database,
+		ConcurrentUploads: concurrentUploads,
+		DefaultMapping:    defaultMapping,
+		SampleType:        adx.PromMetrics,
+	})
+	return uploader, nil
 }
