@@ -12,7 +12,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/golang/snappy v0.0.4
 	github.com/klauspost/compress v1.17.2
-	github.com/klauspost/pgzip v1.0.2-0.20170402124221-0bf5dcad4ada
+	github.com/klauspost/pgzip v1.2.6
 	github.com/lmittmann/tint v1.0.1
 	github.com/mattn/go-isatty v0.0.19
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
@@ -68,7 +68,6 @@ require (
 	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/crc32 v0.0.0-20161016154125-cb6bfca970f6 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-ieproxy v0.0.1 // indirect
