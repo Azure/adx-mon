@@ -119,6 +119,7 @@ func (s *service) collect(ctx context.Context) {
 			IngestorSegmentsMaxAge.Reset()
 			IngestorSegmentsSizeBytes.Reset()
 			IngestorSegmentsTotal.Reset()
+			LogsProxyUploaded.Reset()
 		}
 	}
 }
