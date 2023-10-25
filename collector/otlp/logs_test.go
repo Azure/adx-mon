@@ -109,7 +109,7 @@ func TestSerializedLogs(t *testing.T) {
 			require.Equal(t, tt.NumRecords, len(wals))
 
 			for _, w := range wals {
-				f, err := mp.Open(w)
+				f, err := mp.Open(w.Path)
 				require.NoError(t, err)
 				b, err := io.ReadAll(f)
 				require.NoError(t, err)
