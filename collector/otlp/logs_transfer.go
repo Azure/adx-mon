@@ -114,9 +114,9 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			wals, err := serializedLogs(ctx, msg, add, mp)
 			defer func() {
 				// Clean up the WALs
-				for _, fn := range wals {
-					if err := mp.Remove(fn); err != nil {
-						log.Error("Failed to remove WAL", "Filename", fn, "Error", err)
+				for _, w := range wals {
+					if err := mp.Remove(w.Path); err != nil {
+						log.Error("Failed to remove WAL", "Filename", w.Path, "Error", err)
 					}
 				}
 			}()
@@ -139,8 +139,8 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				endpoint := endpoint
 				rpcClient := rpcClient
 				g.Go(func() error {
-					for _, fn := range wals {
-						if err := rpcClient.Write(gctx, endpoint, fn); err != nil {
+					for _, w := range wals {
+						if err := rpcClient.Write(gctx, endpoint, w.Path); err != nil {
 							log.Error("Failed to send logs", "Endpoint", endpoint, "Error", err)
 							return err
 						}
@@ -183,6 +183,14 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 
 			m.WithLabelValues(strconv.Itoa(statusCode)).Inc()
 
+			// We only want to increment the number of logs sent if we
+			// are returning a successful response to the client
+			if statusCode == http.StatusOK {
+				for _, w := range wals {
+					metrics.LogsProxyUploaded.WithLabelValues(w.Database, w.Table).Add(float64(w.Logs))
+				}
+			}
+
 		case "application/json":
 			// We're receiving JSON, so we need to unmarshal the JSON
 			// into an OTLP protobuf, then use gRPC to send the OTLP
@@ -198,7 +206,15 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 	}
 }
 
-func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, mp *file.MemoryProvider) ([]string, error) {
+type groupedLogs struct {
+	Path     string
+	Logs     int
+	Database string
+	Table    string
+	w        *wal.WAL
+}
+
+func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, mp *file.MemoryProvider) (map[string]*groupedLogs, error) {
 	if req == nil {
 		return nil, ErrMalformedLogs
 	}
@@ -213,14 +229,12 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 	var (
 		d, t, fn string
 		logs     otlp.Logs
-		fns      []string
-		m        = make(map[string]*wal.WAL)
-		err      error
+		gl       = make(map[string]*groupedLogs)
 	)
 	for _, r := range req.GetResourceLogs() {
 		if r == nil {
 			logger.Error("Request contains no Resource Logs")
-			return fns, ErrMalformedLogs
+			return gl, ErrMalformedLogs
 		}
 		logs.Resources = add
 		if r.Resource != nil {
@@ -233,13 +247,13 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 		}
 		for _, s := range r.GetScopeLogs() {
 			if s == nil {
-				return fns, ErrMalformedLogs
+				return gl, ErrMalformedLogs
 			}
 			for _, l := range s.GetLogRecords() {
 				logs.Logs = []*logsv1.LogRecord{l}
 				d, t = otlp.KustoMetadata(l)
 				if d == "" || t == "" {
-					return fns, ErrMissingKustoMetadata
+					return gl, ErrMissingKustoMetadata
 				}
 				fn = fmt.Sprintf("%s_%s", d, t)
 
@@ -253,36 +267,47 @@ func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add [
 					metrics.LogKeys.WithLabelValues(d, t).Set(float64(len(kv.GetValues())))
 				}
 
-				w, ok := m[fn]
+				g, ok := gl[fn]
 				if !ok {
-					w, err = wal.NewWAL(wal.WALOpts{StorageProvider: mp, Prefix: fn})
+					w, err := wal.NewWAL(wal.WALOpts{StorageProvider: mp, Prefix: fn})
 					if err != nil {
-						return fns, fmt.Errorf("failed to create wal: %w", err)
+						return gl, fmt.Errorf("failed to create wal: %w", err)
 					}
 					if err = w.Open(ctx); err != nil {
-						return fns, fmt.Errorf("failed to open wal: %w", err)
+						return gl, fmt.Errorf("failed to open wal: %w", err)
+					}
+					g = &groupedLogs{
+						Path:     w.Path(),
+						w:        w,
+						Database: d,
+						Table:    t,
 					}
 				}
 				enc.Reset()
 				if err := enc.MarshalCSV(&logs); err != nil {
-					return fns, err
+					return gl, err
 				}
-				if err := w.Write(ctx, enc.Bytes()); err != nil {
-					return fns, err
+				if err := g.w.Write(ctx, enc.Bytes()); err != nil {
+					return gl, err
+				}
+				g.Logs += len(logs.Logs)
+
+				// WALs will return an empty path until a segment is created
+				if g.Path == "" {
+					g.Path = g.w.Path()
 				}
 
-				m[fn] = w
+				gl[fn] = g
 			}
 		}
 	}
 
-	for _, w := range m {
-		fns = append(fns, w.Path())
-		if err := w.Close(); err != nil {
-			return fns, err
+	for _, g := range gl {
+		if err := g.w.Close(); err != nil {
+			return gl, err
 		}
 	}
-	return fns, nil
+	return gl, nil
 }
 
 var (

@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -88,6 +89,9 @@ func TestOTLPLogsE2E(t *testing.T) {
 
 			// Now verify the content of our segments.
 			VerifyStore(t, ingestorDir)
+
+			// Ensure our internal Prometheus metrics state is as expected.
+			VerifyMetrics(t, &log)
 		})
 	}
 }
@@ -225,4 +229,69 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 	}(srv, t)
 
 	return srv.URL, done
+}
+
+func VerifyMetrics(t *testing.T, log *v1.ExportLogsServiceRequest) {
+	t.Helper()
+
+	// First let's determine our expected state
+	var (
+		databaseA, databaseB int
+		tableA, tableB       int
+	)
+	for _, r := range log.GetResourceLogs() {
+		for _, s := range r.GetScopeLogs() {
+			for _, l := range s.GetLogRecords() {
+				d, t := otlp.KustoMetadata(l)
+				switch d {
+				case "ADatabase":
+					databaseA++
+					switch t {
+					case "ATable":
+						tableA++
+					case "BTable":
+						tableB++
+					}
+				case "BDatabase":
+					databaseB++
+					switch t {
+					case "ATable":
+						tableA++
+					case "BTable":
+						tableB++
+					}
+				}
+			}
+		}
+	}
+
+	// Now let's gather our metrics
+	mets, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, m := range mets {
+		switch m.GetName() {
+		// Verify the Collector has the correct metrics for number of logs uploaded to Ingestor
+		case "adxmon_collector_logs_uploaded_total":
+			mm := m.GetMetric()
+			require.Equal(t, 2, len(mm))
+
+			for i := 0; i < len(mm); i++ {
+				met := mm[i]
+				labels := met.GetLabel()
+
+				// Now let's verify our metric values
+				switch labels[1].GetValue() {
+				case "ATable":
+					require.Equal(t, met.Counter.GetValue(), float64(tableA))
+				case "BTable":
+					require.Equal(t, met.Counter.GetValue(), float64(tableB))
+				}
+			}
+			// As for Ingestor's metrics, we're stopping short at writing the
+			// logs to storage, and VerifyStore already verifies the content
+			// therein. If we ever expand this test to include a fake uploader,
+			// that would be an opportunity to verify adxmon_ingestor_logs_uploaded_total
+		}
+	}
 }
