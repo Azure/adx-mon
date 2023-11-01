@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -31,6 +32,7 @@ func FromPath(path, region string) (*fileStore, error) {
 			return fmt.Errorf("failed to open file '%s': %w", path, err)
 		}
 		defer f.Close()
+		logger.Infof("reading file %q", path)
 		err = s.fromStream(f, region)
 		if err != nil {
 			return fmt.Errorf("failed to read file '%s': %w", path, err)
@@ -49,6 +51,23 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 
 	chunks := bytes.Split(contents, []byte("---"))
 	for _, chunk := range chunks {
+		whitespaceTrimmed := strings.TrimSpace(string(chunk))
+		if len(whitespaceTrimmed) == 0 {
+			continue
+		}
+
+		genericStructure := make(map[string]interface{})
+		err = yaml.Unmarshal(chunk, &genericStructure)
+		if err != nil {
+			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)
+		}
+		// check if this is a rule
+		kind, ok := genericStructure["kind"]
+		if !ok || kind != "AlertRule" {
+			logger.Warn("found non-rule yaml, skipping")
+			continue
+		}
+
 		// create new spec here
 		rule := alertrulev1.AlertRule{}
 
@@ -58,7 +77,7 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)
 		}
 
-		logger.Infof("found rule '%s'", rule.ObjectMeta.Name)
+		logger.Infof("found rule %q", rule.ObjectMeta.Name)
 		r, err := toRule(rule, region)
 		if err != nil {
 			return fmt.Errorf("fromStream failed to convert rule: %w", err)
