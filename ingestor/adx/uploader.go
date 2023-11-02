@@ -258,11 +258,17 @@ func (n *uploader) upload(ctx context.Context) error {
 	}
 }
 
-var nl = []byte{'\n'}
+var (
+	nl = byte(0x0A)
+	cr = byte(0x0D)
+	es = byte(0x1B)
+)
 
 type samplesCounter struct {
 	r     io.Reader
 	count int
+	at    int
+	last  byte
 }
 
 func (c *samplesCounter) Read(p []byte) (n int, err error) {
@@ -270,6 +276,20 @@ func (c *samplesCounter) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	c.count += bytes.Count(p[:n], nl)
+	for i := 0; i < n; i++ {
+		c.at = bytes.IndexByte(p[i:], nl)
+		if c.at == -1 {
+			break
+		}
+		i += c.at
+		if i == 0 && c.last != cr && c.last != es {
+			c.count++
+		} else if i > 0 && p[i-1] != cr && p[i-1] != es {
+			c.count++
+		}
+	}
+	if n > 0 {
+		c.last = p[n-1]
+	}
 	return
 }
