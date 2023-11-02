@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
-	"github.com/Azure/adx-mon/collector/logs/sinks"
-	"github.com/Azure/adx-mon/collector/logs/sources/journald"
 	"github.com/Azure/adx-mon/collector/otlp"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
@@ -120,20 +118,21 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		),
 	}
 
-	if opts.CollectLogs {
-		source, err := journald.NewJournaldSource(journald.JournaldSourceConfig{
-			CursorPath: "cursor.dat",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create journald source: %w", err)
-		}
+	// Removed for now - need to get journald working with static compiliation.
+	// if opts.CollectLogs {
+	// 	source, err := journald.NewJournaldSource(journald.JournaldSourceConfig{
+	// 		CursorPath: "cursor.dat",
+	// 	})
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("create journald source: %w", err)
+	// 	}
 
-		logsSvc := &logs.Service{
-			Source: source,
-			Sink:   sinks.NewStdoutSink(),
-		}
-		svc.logsSvc = logsSvc
-	}
+	// 	logsSvc := &logs.Service{
+	// 		Source: source,
+	// 		Sink:   sinks.NewStdoutSink(),
+	// 	}
+	// 	svc.logsSvc = logsSvc
+	// }
 
 	return svc, nil
 }
