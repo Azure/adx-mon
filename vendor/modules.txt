@@ -249,7 +249,7 @@ github.com/klauspost/pgzip
 ## explicit; go 1.11
 github.com/kylelemons/godebug/diff
 github.com/kylelemons/godebug/pretty
-# github.com/lmittmann/tint v1.0.1
+# github.com/lmittmann/tint v1.0.3
 ## explicit; go 1.21
 github.com/lmittmann/tint
 # github.com/mailru/easyjson v0.7.7

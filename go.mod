@@ -13,7 +13,7 @@ require (
 	github.com/golang/snappy v0.0.4
 	github.com/klauspost/compress v1.17.2
 	github.com/klauspost/pgzip v1.2.6
-	github.com/lmittmann/tint v1.0.1
+	github.com/lmittmann/tint v1.0.3
 	github.com/mattn/go-isatty v0.0.19
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.14.0
