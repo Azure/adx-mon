@@ -37,6 +37,18 @@ func TestCountSamples(t *testing.T) {
 			Input:    bytes.NewBufferString("test\\ntest\ntest\ntest\\ntest\n").Bytes(),
 			Expected: 3,
 		},
+		{
+			Input:    []byte("test\r\ntest"),
+			Expected: 0,
+		},
+		{
+			Input:    []byte("\ntest\r\ntest\\ntest"),
+			Expected: 1,
+		},
+		{
+			Input:    append([]byte("\ntest\ntest"), bytes.Repeat([]byte("abc\r\nfoo\\nbar"), 513)...),
+			Expected: 2,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.Input), func(t *testing.T) {
@@ -57,6 +69,7 @@ func BenchmarkCountSamples(b *testing.B) {
 	r := bytes.NewReader(data)
 	scr := &samplesCounter{r: r}
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		io.ReadAll(scr)
 		r.Seek(0, io.SeekStart)
