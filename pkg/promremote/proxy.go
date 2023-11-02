@@ -10,9 +10,10 @@ import (
 )
 
 type RemoteWriteProxy struct {
-	Client       *Client
-	Endpoints    []string
-	MaxBatchSize int
+	Client                   *Client
+	Endpoints                []string
+	MaxBatchSize             int
+	DisableMetricsForwarding bool
 }
 
 func (r *RemoteWriteProxy) Write(ctx context.Context, _ string, wr prompb.WriteRequest) error {
@@ -33,6 +34,10 @@ func (r *RemoteWriteProxy) Write(ctx context.Context, _ string, wr prompb.WriteR
 				logger.Debugf("%s %d %f", sb.String(), s.Timestamp, s.Value)
 			}
 		}
+	}
+
+	if r.DisableMetricsForwarding {
+		return nil
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
