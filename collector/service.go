@@ -83,6 +83,9 @@ type ServiceOpts struct {
 
 	// Log Service options
 	CollectLogs bool
+
+	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
+	DisableMetricsForwarding bool
 }
 
 type ScrapeTarget struct {
@@ -224,9 +227,10 @@ func (s *Service) Open(ctx context.Context) error {
 		DropMetrics: s.opts.DropMetrics,
 		AddLabels:   addLabels,
 		RequestWriter: &promremote.RemoteWriteProxy{
-			Client:       s.remoteClient,
-			Endpoints:    s.opts.Endpoints,
-			MaxBatchSize: s.opts.MaxBatchSize,
+			Client:                   s.remoteClient,
+			Endpoints:                s.opts.Endpoints,
+			MaxBatchSize:             s.opts.MaxBatchSize,
+			DisableMetricsForwarding: s.opts.DisableMetricsForwarding,
 		},
 		HealthChecker: fakeHealthChecker{},
 	}))

@@ -49,6 +49,7 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of " +
 				"<host regex>=<url>:namespace/pod/container.  Multiple targets can be specified by repeating this flag. See usage for more details."},
 			&cli.StringSliceFlag{Name: "endpoints", Usage: "Prometheus remote write endpoint URLs"},
+			&cli.BoolFlag{Name: "disable-metrics-forwarding", Usage: "Disable metrics forwarding to endpoints", Value: false},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification of remote write endpoints"},
 			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
 			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
@@ -182,20 +183,21 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	opts := &collector.ServiceOpts{
-		K8sCli:             k8scli,
-		ListentAddr:        ctx.String("listen-addr"),
-		ScrapeInterval:     ctx.Duration("scrape-interval"),
-		NodeName:           hostname,
-		Targets:            staticTargets,
-		Endpoints:          endpoints,
-		DropMetrics:        dropMetrics,
-		AddLabels:          addLabels,
-		AddAttributes:      addAttributes,
-		LiftAttributes:     ctx.StringSlice("lift-attributes"),
-		DropLabels:         dropLabels,
-		InsecureSkipVerify: ctx.Bool("insecure-skip-verify"),
-		MaxBatchSize:       ctx.Int("max-batch-size"),
-		CollectLogs:        ctx.Bool("experimental-log-collection"),
+		K8sCli:                   k8scli,
+		ListentAddr:              ctx.String("listen-addr"),
+		ScrapeInterval:           ctx.Duration("scrape-interval"),
+		NodeName:                 hostname,
+		Targets:                  staticTargets,
+		Endpoints:                endpoints,
+		DropMetrics:              dropMetrics,
+		AddLabels:                addLabels,
+		AddAttributes:            addAttributes,
+		LiftAttributes:           ctx.StringSlice("lift-attributes"),
+		DropLabels:               dropLabels,
+		InsecureSkipVerify:       ctx.Bool("insecure-skip-verify"),
+		MaxBatchSize:             ctx.Int("max-batch-size"),
+		CollectLogs:              ctx.Bool("experimental-log-collection"),
+		DisableMetricsForwarding: ctx.Bool("disable-metrics-forwarding"),
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
