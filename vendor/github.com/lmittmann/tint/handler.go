@@ -181,7 +181,7 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 			if a.Value.Kind() == slog.KindTime {
 				h.appendTime(buf, a.Value.Time())
 			} else {
-				appendValue(buf, a.Value, false)
+				h.appendValue(buf, a.Value, false)
 			}
 			buf.WriteByte(' ')
 		}
@@ -191,12 +191,8 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 	if rep == nil {
 		h.appendLevel(buf, r.Level)
 		buf.WriteByte(' ')
-	} else if a := rep(nil /* groups */, slog.Int(slog.LevelKey, int(r.Level))); a.Key != "" {
-		if a.Value.Kind() == slog.KindInt64 {
-			h.appendLevel(buf, slog.Level(a.Value.Int64()))
-		} else {
-			appendValue(buf, a.Value, false)
-		}
+	} else if a := rep(nil /* groups */, slog.Any(slog.LevelKey, r.Level)); a.Key != "" {
+		h.appendValue(buf, a.Value, false)
 		buf.WriteByte(' ')
 	}
 
@@ -215,7 +211,7 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 				h.appendSource(buf, src)
 				buf.WriteByte(' ')
 			} else if a := rep(nil /* groups */, slog.Any(slog.SourceKey, src)); a.Key != "" {
-				appendValue(buf, a.Value, false)
+				h.appendValue(buf, a.Value, false)
 				buf.WriteByte(' ')
 			}
 		}
@@ -226,7 +222,7 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 		buf.WriteString(r.Message)
 		buf.WriteByte(' ')
 	} else if a := rep(nil /* groups */, slog.String(slog.MessageKey, r.Message)); a.Key != "" {
-		appendValue(buf, a.Value, false)
+		h.appendValue(buf, a.Value, false)
 		buf.WriteByte(' ')
 	}
 
@@ -237,10 +233,7 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 
 	// write attributes
 	r.Attrs(func(attr slog.Attr) bool {
-		if rep != nil {
-			attr = rep(h.groups, attr)
-		}
-		h.appendAttr(buf, attr, h.groupPrefix)
+		h.appendAttr(buf, attr, h.groupPrefix, h.groups)
 		return true
 	})
 
@@ -267,10 +260,7 @@ func (h *handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 	// write attributes to buffer
 	for _, attr := range attrs {
-		if h.replaceAttr != nil {
-			attr = h.replaceAttr(h.groups, attr)
-		}
-		h.appendAttr(buf, attr, h.groupPrefix)
+		h.appendAttr(buf, attr, h.groupPrefix, h.groups)
 	}
 	h2.attrsPrefix = h.attrsPrefix + string(*buf)
 	return h2
@@ -293,34 +283,35 @@ func (h *handler) appendTime(buf *buffer, t time.Time) {
 }
 
 func (h *handler) appendLevel(buf *buffer, level slog.Level) {
-	delta := func(buf *buffer, val slog.Level) {
-		if val == 0 {
-			return
-		}
-		buf.WriteByte('+')
-		*buf = strconv.AppendInt(*buf, int64(val), 10)
-	}
-
 	switch {
 	case level < slog.LevelInfo:
 		buf.WriteString("DBG")
-		delta(buf, level-slog.LevelDebug)
+		appendLevelDelta(buf, level-slog.LevelDebug)
 	case level < slog.LevelWarn:
 		buf.WriteStringIf(!h.noColor, ansiBrightGreen)
 		buf.WriteString("INF")
-		delta(buf, level-slog.LevelInfo)
+		appendLevelDelta(buf, level-slog.LevelInfo)
 		buf.WriteStringIf(!h.noColor, ansiReset)
 	case level < slog.LevelError:
 		buf.WriteStringIf(!h.noColor, ansiBrightYellow)
 		buf.WriteString("WRN")
-		delta(buf, level-slog.LevelWarn)
+		appendLevelDelta(buf, level-slog.LevelWarn)
 		buf.WriteStringIf(!h.noColor, ansiReset)
 	default:
 		buf.WriteStringIf(!h.noColor, ansiBrightRed)
 		buf.WriteString("ERR")
-		delta(buf, level-slog.LevelError)
+		appendLevelDelta(buf, level-slog.LevelError)
 		buf.WriteStringIf(!h.noColor, ansiReset)
 	}
+}
+
+func appendLevelDelta(buf *buffer, delta slog.Level) {
+	if delta == 0 {
+		return
+	} else if delta > 0 {
+		buf.WriteByte('+')
+	}
+	*buf = strconv.AppendInt(*buf, int64(delta), 10)
 }
 
 func (h *handler) appendSource(buf *buffer, src *slog.Source) {
@@ -333,31 +324,32 @@ func (h *handler) appendSource(buf *buffer, src *slog.Source) {
 	buf.WriteStringIf(!h.noColor, ansiReset)
 }
 
-func (h *handler) appendAttr(buf *buffer, attr slog.Attr, groupsPrefix string) {
+func (h *handler) appendAttr(buf *buffer, attr slog.Attr, groupsPrefix string, groups []string) {
+	attr.Value = attr.Value.Resolve()
+	if rep := h.replaceAttr; rep != nil && attr.Value.Kind() != slog.KindGroup {
+		attr = rep(groups, attr)
+		attr.Value = attr.Value.Resolve()
+	}
+
 	if attr.Equal(slog.Attr{}) {
 		return
 	}
-	attr.Value = attr.Value.Resolve()
 
-	switch attr.Value.Kind() {
-	case slog.KindGroup:
+	if attr.Value.Kind() == slog.KindGroup {
 		if attr.Key != "" {
 			groupsPrefix += attr.Key + "."
+			groups = append(groups, attr.Key)
 		}
 		for _, groupAttr := range attr.Value.Group() {
-			h.appendAttr(buf, groupAttr, groupsPrefix)
+			h.appendAttr(buf, groupAttr, groupsPrefix, groups)
 		}
-	case slog.KindAny:
-		if err, ok := attr.Value.Any().(tintError); ok {
-			// append tintError
-			h.appendTintError(buf, err, groupsPrefix)
-			buf.WriteByte(' ')
-			break
-		}
-		fallthrough
-	default:
+	} else if err, ok := attr.Value.Any().(tintError); ok {
+		// append tintError
+		h.appendTintError(buf, err, groupsPrefix)
+		buf.WriteByte(' ')
+	} else {
 		h.appendKey(buf, attr.Key, groupsPrefix)
-		appendValue(buf, attr.Value, true)
+		h.appendValue(buf, attr.Value, true)
 		buf.WriteByte(' ')
 	}
 }
@@ -369,7 +361,7 @@ func (h *handler) appendKey(buf *buffer, key, groups string) {
 	buf.WriteStringIf(!h.noColor, ansiReset)
 }
 
-func appendValue(buf *buffer, v slog.Value, quote bool) {
+func (h *handler) appendValue(buf *buffer, v slog.Value, quote bool) {
 	switch v.Kind() {
 	case slog.KindString:
 		appendString(buf, v.String(), quote)
@@ -386,21 +378,26 @@ func appendValue(buf *buffer, v slog.Value, quote bool) {
 	case slog.KindTime:
 		appendString(buf, v.Time().String(), quote)
 	case slog.KindAny:
-		if tm, ok := v.Any().(encoding.TextMarshaler); ok {
-			data, err := tm.MarshalText()
+		switch cv := v.Any().(type) {
+		case slog.Level:
+			h.appendLevel(buf, cv)
+		case encoding.TextMarshaler:
+			data, err := cv.MarshalText()
 			if err != nil {
 				break
 			}
 			appendString(buf, string(data), quote)
-			break
+		case *slog.Source:
+			h.appendSource(buf, cv)
+		default:
+			appendString(buf, fmt.Sprint(v.Any()), quote)
 		}
-		appendString(buf, fmt.Sprint(v.Any()), quote)
 	}
 }
 
-func (h *handler) appendTintError(buf *buffer, err error, groups string) {
+func (h *handler) appendTintError(buf *buffer, err error, groupsPrefix string) {
 	buf.WriteStringIf(!h.noColor, ansiBrightRedFaint)
-	appendString(buf, h.groupPrefix+groups+errKey, true)
+	appendString(buf, groupsPrefix+errKey, true)
 	buf.WriteByte('=')
 	buf.WriteStringIf(!h.noColor, ansiResetFaint)
 	appendString(buf, err.Error(), true)
