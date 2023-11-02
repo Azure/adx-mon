@@ -179,6 +179,10 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 	// See ingestor/storage/schema::NewLogsSchema
 	// we're writing a ExportLogsServiceRequest as a CSV
 
+	// Logs often contain unespcaped newlines, particularly at the end of a log line
+	// but also in case of stacktraces.
+	replacer := strings.NewReplacer("\r\n", "%0D%0A", "\n", "%0A")
+
 	// There are 9 fields defined in an OTLP log schema
 	fields := make([]string, 0, 9)
 	// Convert log records to CSV
@@ -217,9 +221,9 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 				fflib.WriteJson(buf, []byte(kv.GetValue().GetStringValue()))
 			}
 			buf.WriteByte('}')
-			fields = append(fields, buf.String())
+			fields = append(fields, replacer.Replace(buf.String()))
 		} else {
-			fields = append(fields, l.GetBody().GetStringValue())
+			fields = append(fields, replacer.Replace(l.GetBody().GetStringValue()))
 		}
 		// Resource
 		buf.Reset()

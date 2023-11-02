@@ -314,6 +314,68 @@ func TestMarshalCSV_OTLPLog(t *testing.T) {
 			Expect: `2023-09-13T00:13:25.797489936Z,2023-09-13T00:13:25.797489936Z,,,Error,SEVERITY_NUMBER_ERROR,"{""namespace"":""default""}","{""source"":""hostname""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
 `,
 		},
+		{
+			Name: "unescaped newline",
+			Log: []byte(`{
+				"resourceLogs": [
+					{
+						"resource": {
+							"attributes": [
+								{
+									"key": "source",
+									"value": {
+										"stringValue": "hostname"
+									}
+								}
+							],
+							"droppedAttributesCount": 1
+						},
+						"scopeLogs": [
+							{
+								"scope": {
+									"name": "name",
+									"version": "version",
+									"droppedAttributesCount": 1
+								},
+								"logRecords": [
+									{
+										"timeUnixNano": "1669112524001",
+										"observedTimeUnixNano": "1669112524001",
+										"severityNumber": 17,
+										"severityText": "Error",
+										"body": {
+											"stringValue": "{\"msg\":\"something happened\n\"}"
+										},
+										"attributes": [
+											{
+												"key": "kusto.table",
+												"value": {
+													"stringValue": "ATable"
+												}
+											},
+											{
+												"key": "kusto.database",
+												"value": {
+													"stringValue": "ADatabase"
+												}
+											}
+										],
+										"droppedAttributesCount": 1,
+										"flags": 1,
+										"traceId": "",
+										"spanId": ""
+									}
+								],
+								"schemaUrl": "scope_schema"
+							}
+						],
+						"schemaUrl": "resource_schema"
+					}
+				]
+			}`),
+			Expect: `2022-11-22T10:22:04.001Z,2022-11-22T10:22:04.001Z,,,Error,SEVERITY_NUMBER_ERROR,"{""msg"":""something happened%0A""}","{""source"":""hostname""}","{""kusto.table"":""ATable"",""kusto.database"":""ADatabase""}"
+`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
