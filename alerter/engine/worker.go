@@ -34,12 +34,12 @@ type worker struct {
 }
 
 func (e *worker) Run(ctx context.Context) {
+	e.wg.Add(1)
+	defer e.wg.Done()
+
 	e.mu.Lock()
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.mu.Unlock()
-
-	e.wg.Add(1)
-	defer e.wg.Done()
 
 	logger.Infof("Creating query executor for %s/%s in %s executing every %s",
 		e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
