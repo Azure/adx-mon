@@ -591,7 +591,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 	var targets []ScrapeTarget
 
 	// Skip the pod if it has not opted in to scraping
-	if p.Annotations["adx-mon/scrape"] != "true" {
+	if !strings.EqualFold(getAnnotationOrDefault(p, "adx-mon/scrape", "false"), "true") {
 		return nil
 	}
 
@@ -600,32 +600,15 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 		return nil
 	}
 
-	scheme := "http"
-	if p.Annotations["adx-mon/scheme"] != "" {
-		scheme = p.Annotations["adx-mon/scheme"]
-	}
-
-	path := "/metrics"
-	if p.Annotations["adx-mon/path"] != "" {
-		path = p.Annotations["adx-mon/path"]
-	}
+	scheme := getAnnotationOrDefault(p, "adx-mon/scheme", "http")
+	path := getAnnotationOrDefault(p, "adx-mon/path", "/metrics")
 
 	// Just scrape this one port
-	port := p.Annotations["adx-mon/port"]
+	port := getAnnotationOrDefault(p, "adx-mon/port", "")
 
 	// Scrape a comma separated list of targets with the format path:port like /metrics:8080
-	targetMap := make(map[string]string)
-	targetList := p.Annotations["adx-mon/targets"]
-	if targetList != "" {
-		temp, err := parseTargetList(targetList)
-		if err != nil {
-			logger.Warnf(err.Error())
-		} else {
-			targetMap = temp
-		}
-	}
+	targetMap := getTargetAnnotationMapOrDefault(p, "adx-mon/targets", make(map[string]string))
 
-	// Otherwise, scrape all the ports on the pod
 	for _, c := range p.Spec.Containers {
 		for _, cp := range c.Ports {
 			var readinessPort, livenessPort string
@@ -644,7 +627,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 					// if the current port, liveness port, or readiness port exist in the targetMap, add that to scrape targets
 					if target, added := addTargetFromMap(podIP, scheme, checkPort, path, p.Namespace, p.Name, c.Name, targetMap); added {
 						targets = append(targets, target)
-						// if all targets are used, return target list
+						// if all targets are accounted for, return target list
 						if len(targetMap) == 0 {
 							return targets
 						}
@@ -698,7 +681,7 @@ func parseTargetList(targetList string) (map[string]string, error) {
 		// Split each rawTarget by ':'
 		targetPair := strings.Split(strings.TrimSpace(rawTarget), ":")
 		if len(targetPair) != 2 {
-			return nil, fmt.Errorf("Target list contains malformed grouping: " + rawTarget)
+			return nil, fmt.Errorf("Using default scrape rules - target list contains malformed grouping: " + rawTarget)
 		}
 		// flipping expected order to ensure that port is the key
 		m[targetPair[1]] = targetPair[0]
@@ -719,4 +702,25 @@ func addTargetFromMap(podIP, scheme, port, path, namespace, pod, container strin
 		return target, true
 	}
 	return ScrapeTarget{}, false
+}
+
+func getAnnotationOrDefault(p *v1.Pod, key, def string) string {
+	if value, ok := p.Annotations[key]; ok && value != "" {
+		return value
+	}
+	return def
+}
+
+func getTargetAnnotationMapOrDefault(p *v1.Pod, key string, defaultVal map[string]string) map[string]string {
+	rawVal, exists := p.Annotations[key]
+	if !exists || rawVal == "" {
+		return defaultVal
+	}
+
+	parsedMap, err := parseTargetList(rawVal)
+	if err != nil {
+		logger.Warnf(err.Error())
+		return defaultVal
+	}
+	return parsedMap
 }
