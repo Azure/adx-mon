@@ -299,6 +299,9 @@ func TestMakeTargetsFromList(t *testing.T) {
 
 	targets := makeTargets(pod)
 	require.Equal(t, 2, len(targets))
+	require.Equal(t, "/metrics", targets[0].Addr)
+	require.Equal(t, "/somethingelse", targets[1].Addr)
+	require.Equal(t, "othercontainer", targets[1].Container)
 }
 
 // invalid target port, should add all container ports to targets
