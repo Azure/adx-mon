@@ -313,6 +313,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if n, err := s.store.Import(f, r.Body); err != nil {
+		logger.Errorf("Failed to import %s: %s", filename, err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

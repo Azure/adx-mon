@@ -184,3 +184,33 @@ func (w *WAL) Path() string {
 func (w *WAL) Remove(path string) error {
 	return os.Remove(path)
 }
+
+func (w *WAL) Append(ctx context.Context, buf []byte) error {
+	var seg Segment
+
+	// fast path
+	w.mu.RLock()
+	if w.segment != nil {
+		seg = w.segment
+		w.mu.RUnlock()
+
+		return seg.Append(ctx, buf)
+
+	}
+	w.mu.RUnlock()
+
+	w.mu.Lock()
+	if w.segment == nil {
+		var err error
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, w.opts.StorageProvider)
+		if err != nil {
+			w.mu.Unlock()
+			return err
+		}
+		w.segment = seg
+	}
+	seg = w.segment
+	w.mu.Unlock()
+
+	return seg.Append(ctx, buf)
+}

@@ -78,6 +78,7 @@ func init() {
 }
 
 type Segment interface {
+	Append(ctx context.Context, buf []byte) error
 	Write(ctx context.Context, buf []byte) error
 	Bytes() ([]byte, error)
 	Close() error
@@ -123,6 +124,9 @@ type segment struct {
 
 	// ringBuf is a circular buffer that queues writes to allow for large IO batches to file.
 	ringBuf *ring.Buffer
+
+	// appendCh is channel used to append raw blocks to the segment.
+	appendCh chan ring.Entry
 }
 
 func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
@@ -154,9 +158,10 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		bw:        bf,
 		fp:        fp,
 
-		closing: make(chan struct{}),
-		ringBuf: ringPool.Get(DefaultRingSize).(*ring.Buffer),
-		encoder: encoders[rand.Intn(len(encoders))],
+		closing:  make(chan struct{}),
+		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
+		encoder:  encoders[rand.Intn(len(encoders))],
+		appendCh: make(chan ring.Entry),
 	}
 
 	f.wg.Add(1)
@@ -194,11 +199,12 @@ func Open(path string, fp file.Provider) (Segment, error) {
 		path:      path,
 		fp:        fp,
 
-		w:       fd,
-		bw:      bf,
-		closing: make(chan struct{}),
-		ringBuf: ring.NewBuffer(DefaultRingSize),
-		encoder: encoders[rand.Intn(len(encoders))],
+		w:        fd,
+		bw:       bf,
+		closing:  make(chan struct{}),
+		ringBuf:  ring.NewBuffer(DefaultRingSize),
+		encoder:  encoders[rand.Intn(len(encoders))],
+		appendCh: make(chan ring.Entry),
 	}
 
 	if err := f.repair(); err != nil {
@@ -249,6 +255,22 @@ func (s *segment) Iterator() (Iterator, error) {
 		return nil, err
 	}
 	return NewSegmentIterator(f)
+}
+
+// Append appends a raw blocks to the segment.  This is used for appending blocks that have already been compressed.
+// Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
+func (s *segment) Append(ctx context.Context, buf []byte) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}
+	s.appendCh <- entry
+	select {
+	case err := <-entry.ErrCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Write writes buf to the segment.
@@ -398,6 +420,12 @@ func (s *segment) flusher() {
 			s.flushQueue(blockBuf)
 
 			s.flushBlock(blockBuf, req)
+		case req := <-s.appendCh:
+			err := s.appendBlocks(req.Value)
+			select {
+			case req.ErrCh <- err:
+			default:
+			}
 
 		case <-t.C:
 			if err := s.bw.Flush(); err != nil {
@@ -429,6 +457,16 @@ func (s *segment) flusher() {
 			return
 		}
 	}
+}
+
+func (s *segment) appendBlocks(val []byte) error {
+	n, err := s.bw.Write(val)
+	if err != nil {
+		return err
+	} else if n != len(val) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func (s *segment) flushBlock(blockBuf *bytes.Buffer, req *ring.Entry) {
