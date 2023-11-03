@@ -690,7 +690,7 @@ func parseTargetList(targetList string) (map[string]string, error) {
 	return m, nil
 }
 
-func addTargetFromMap(podIP, scheme, port, path, namespace, pod, container string, targetMap map[string]string) (ScrapeTarget, bool) {
+func addTargetFromMap(podIP, scheme, port, namespace, pod, container string, targetMap map[string]string) (ScrapeTarget, bool) {
 	if tPath, ok := targetMap[port]; ok {
 		target := ScrapeTarget{
 			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, tPath),
