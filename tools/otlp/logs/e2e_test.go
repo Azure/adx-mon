@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
@@ -83,7 +84,9 @@ func TestOTLPLogsE2E(t *testing.T) {
 			require.NoError(t, err)
 			VerifyResponse(t, resp)
 
-			// By canceling our context, we'll ensure Ingestor flushes all our segments to disk.
+			// Wait for segments to flush
+			time.Sleep(100 * time.Millisecond)
+
 			cancel()
 			<-done // Wait for the store to finish flushing
 

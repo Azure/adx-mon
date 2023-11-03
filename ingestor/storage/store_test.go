@@ -160,6 +160,64 @@ func TestStore_Import_Partial(t *testing.T) {
 	require.Equal(t, 0, len(dirs))
 }
 
+func TestStore_Import_Append(t *testing.T) {
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024 * 1025,
+		SegmentMaxAge:  time.Minute,
+	})
+
+	seg1, err := wal.NewSegment(dir, "Database_Metric", &file.DiskProvider{})
+	require.NoError(t, err)
+	seg1.Write(context.Background(), []byte("foo\n"))
+	seg1Path := seg1.Path()
+	require.NoError(t, seg1.Close())
+	seg1Bytes, err := os.ReadFile(seg1Path)
+	require.NoError(t, err)
+
+	seg2, err := wal.NewSegment(dir, "Database_Metric", &file.DiskProvider{})
+	require.NoError(t, err)
+	seg2.Write(context.Background(), []byte("bar\n"))
+	seg2Path := seg2.Path()
+	require.NoError(t, seg2.Close())
+	seg2Bytes, err := os.ReadFile(seg2Path)
+	require.NoError(t, err)
+
+	s1, err := os.Open(seg1Path)
+	require.NoError(t, err)
+	defer s1.Close()
+
+	s2, err := os.Open(seg2Path)
+	require.NoError(t, err)
+	defer s2.Close()
+
+	n, err := s.Import("Database_Metric_123.wal", s1)
+	require.NoError(t, err)
+	require.Equal(t, len(seg1Bytes), n)
+
+	n, err = s.Import("Database_Metric_123.wal", s2)
+	require.NoError(t, err)
+	require.Equal(t, len(seg2Bytes), n)
+
+	dirs, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 3, len(dirs))
+
+	activeSeg, err := s.GetWAL(context.Background(), []byte("Database_Metric"))
+	require.NoError(t, err)
+	activeSegPath := activeSeg.Path()
+
+	require.NoError(t, s.Close())
+
+	r, err := wal.NewSegmentReader(activeSegPath, &file.DiskProvider{})
+	require.NoError(t, err)
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "foo\nbar\n", string(data))
+
+}
+
 func BenchmarkSegmentKey(b *testing.B) {
 	buf := make([]byte, 256)
 	database := []byte("adxmetrics")

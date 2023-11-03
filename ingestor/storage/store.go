@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -27,6 +26,10 @@ var (
 		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 	bytesPool = pool.NewBytes(1000)
+
+	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
+		return bytes.NewBuffer(make([]byte, 0, sz))
+	})
 )
 
 type Store interface {
@@ -246,41 +249,31 @@ func (s *LocalStore) SegmentExists(filename string) bool {
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
-	dstPath := filepath.Join(s.opts.StorageDir, fmt.Sprint(filename, ".tmp"))
-	f, err := os.Create(dstPath)
+	db, table, _, err := wal.ParseFilename(filename)
 	if err != nil {
 		return 0, err
 	}
 
-	if n, err := func() (int, error) {
-		bw := bufio.NewWriterSize(f, 16*1024)
+	key := bytesPool.Get(256)
+	defer bytesPool.Put(key)
 
-		n, err := io.Copy(bw, body)
-		if err != nil {
-			return 0, err
-		}
+	key = fmt.Appendf(key[:0], "%s_%s", db, table)
 
-		if err := bw.Flush(); err != nil {
-			return 0, err
-		}
-
-		if err := f.Sync(); err != nil {
-			return 0, err
-		}
-
-		if err := f.Close(); err != nil {
-			return 0, err
-		}
-		return int(n), nil
-	}(); err != nil {
-		_ = os.Remove(dstPath)
-		return n, err
-	} else {
-		if err := os.Rename(dstPath, filepath.Join(s.opts.StorageDir, filename)); err != nil {
-			return 0, err
-		}
-		return n, nil
+	wal, err := s.GetWAL(context.Background(), key)
+	if err != nil {
+		return 0, err
 	}
+
+	buf := bytesBufPool.Get(8 * 1024).(*bytes.Buffer)
+	defer bytesBufPool.Put(buf)
+	buf.Reset()
+
+	n, err := io.Copy(buf, body)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(n), wal.Append(context.Background(), buf.Bytes())
 }
 
 func (s *LocalStore) Remove(path string) error {
