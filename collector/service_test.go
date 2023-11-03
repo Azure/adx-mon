@@ -300,7 +300,7 @@ func TestMakeTargetsFromList(t *testing.T) {
 	targets := makeTargets(pod)
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
-	require.Equal(t, "/somethingelse", targets[1].Addr)
+	require.Equal(t, "http://172.31.1.18:9999/somethingelse", targets[1].Addr)
 	require.Equal(t, "othercontainer", targets[1].Container)
 }
 
