@@ -625,7 +625,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 				checkPorts := []string{strconv.Itoa(int(cp.ContainerPort)), readinessPort, livenessPort}
 				for _, checkPort := range checkPorts {
 					// if the current port, liveness port, or readiness port exist in the targetMap, add that to scrape targets
-					if target, added := addTargetFromMap(podIP, scheme, checkPort, path, p.Namespace, p.Name, c.Name, targetMap); added {
+					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap); added {
 						targets = append(targets, target)
 						// if all targets are accounted for, return target list
 						if len(targetMap) == 0 {
