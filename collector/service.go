@@ -628,7 +628,6 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 	// Otherwise, scrape all the ports on the pod
 	for _, c := range p.Spec.Containers {
 		for _, cp := range c.Ports {
-
 			var readinessPort, livenessPort string
 			if c.ReadinessProbe != nil && c.ReadinessProbe.HTTPGet != nil {
 				readinessPort = c.ReadinessProbe.HTTPGet.Port.String()
@@ -648,12 +647,11 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 						// if all targets are used, return target list
 						if len(targetMap) == 0 {
 							return targets
-						} else {
-							// if there are remaining targets, continue iterating through containers
-							continue
 						}
 					}
 				}
+				// if there are remaining targets, continue iterating through containers
+				continue
 			}
 
 			// If a port is specified, only scrape that port on the pod

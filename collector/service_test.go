@@ -298,7 +298,7 @@ func TestMakeTargetsFromList(t *testing.T) {
 	}
 
 	targets := makeTargets(pod)
-	require.Equal(t, 1, len(targets))
+	require.Equal(t, 2, len(targets))
 }
 
 // invalid target port, should add all container ports to targets
@@ -334,7 +334,7 @@ func TestMakeTargetsFromListNegative(t *testing.T) {
 	}
 
 	targets := makeTargets(pod)
-	require.Equal(t, 3, len(targets))
+	require.Equal(t, 0, len(targets))
 }
 
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
