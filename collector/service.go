@@ -613,6 +613,18 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 	// Just scrape this one port
 	port := p.Annotations["adx-mon/port"]
 
+	// Scrape a comma separated list of targets with the format path:port like /metrics:8080
+	targetMap := make(map[string]string)
+	targetList := p.Annotations["adx-mon/targets"]
+	if targetList != "" {
+		temp, err := parseTargetList(targetList)
+		if err != nil {
+			logger.Warnf(err.Error())
+		} else {
+			targetMap = temp
+		}
+	}
+
 	// Otherwise, scrape all the ports on the pod
 	for _, c := range p.Spec.Containers {
 		for _, cp := range c.Ports {
@@ -624,6 +636,24 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 			if c.LivenessProbe != nil && c.LivenessProbe.HTTPGet != nil {
 				livenessPort = c.LivenessProbe.HTTPGet.Port.String()
+			}
+
+			// If target list is specified, only scrape those path/port combinations
+			if len(targetMap) != 0 {
+				checkPorts := []string{strconv.Itoa(int(cp.ContainerPort)), readinessPort, livenessPort}
+				for _, checkPort := range checkPorts {
+					// if the current port, liveness port, or readiness port exist in the targetMap, add that to scrape targets
+					if target, added := addTargetFromMap(podIP, scheme, checkPort, path, p.Namespace, p.Name, c.Name, targetMap); added {
+						targets = append(targets, target)
+						// if all targets are used, return target list
+						if len(targetMap) == 0 {
+							return targets
+						} else {
+							// if there are remaining targets, continue iterating through containers
+							continue
+						}
+					}
+				}
 			}
 
 			// If a port is specified, only scrape that port on the pod
@@ -657,3 +687,38 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 type fakeHealthChecker struct{}
 
 func (f fakeHealthChecker) IsHealthy() bool { return true }
+
+func parseTargetList(targetList string) (map[string]string, error) {
+	// Split the string by ','
+	rawTargets := strings.Split(targetList, ",")
+
+	// Initialize the map
+	m := make(map[string]string)
+
+	// Iterate over the rawTargets
+	for _, rawTarget := range rawTargets {
+		// Split each rawTarget by ':'
+		targetPair := strings.Split(strings.TrimSpace(rawTarget), ":")
+		if len(targetPair) != 2 {
+			return nil, fmt.Errorf("Target list contains malformed grouping: " + rawTarget)
+		}
+		// flipping expected order to ensure that port is the key
+		m[targetPair[1]] = targetPair[0]
+	}
+
+	return m, nil
+}
+
+func addTargetFromMap(podIP, scheme, port, path, namespace, pod, container string, targetMap map[string]string) (ScrapeTarget, bool) {
+	if tPath, ok := targetMap[port]; ok {
+		target := ScrapeTarget{
+			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, tPath),
+			Namespace: namespace,
+			Pod:       pod,
+			Container: container,
+		}
+		delete(targetMap, port)
+		return target, true
+	}
+	return ScrapeTarget{}, false
+}
