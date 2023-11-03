@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -139,7 +140,7 @@ func (r *replicator) transfer(ctx context.Context) {
 
 				start := time.Now()
 				err = r.cli.Write(ctx, addr, filename, mr)
-				if err != nil {
+				if err != nil && !errors.Is(err, ErrSegmentExists) {
 					r.Health.SetPeerUnhealthy(owner)
 					return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
 				} else {
