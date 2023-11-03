@@ -16,6 +16,8 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 )
 
+const icmTitleMaxLength = 150
+
 type fakeKustoClient struct {
 	endpoint string
 }
@@ -107,9 +109,16 @@ func (lh *lintAlertHandler) Handler() http.Handler {
 			return
 		}
 		lh.alertCount[a.CorrelationID]++
+		if len(a.Title) > icmTitleMaxLength {
+			logger.Errorf("Title Exceeded Max Length: %s", a.Title)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
 		if strings.HasPrefix(a.CorrelationID, "alert-failure") {
 			lh.hasFailedQueries = true
 		}
+
 		w.WriteHeader(http.StatusCreated)
 	})
 }
