@@ -11,7 +11,10 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
-var ErrPeerOverloaded = fmt.Errorf("peer overloaded")
+var (
+	ErrPeerOverloaded = fmt.Errorf("peer overloaded")
+	ErrSegmentExists  = fmt.Errorf("segment already exists")
+)
 
 type Client struct {
 	httpClient      *http.Client
@@ -73,6 +76,10 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return ErrPeerOverloaded
+		}
+
+		if resp.StatusCode == http.StatusConflict {
+			return ErrSegmentExists
 		}
 
 		return fmt.Errorf("write failed: %s", string(body))
