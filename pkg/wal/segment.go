@@ -382,12 +382,8 @@ func (s *segment) Bytes() ([]byte, error) {
 
 func (s *segment) Flush() error {
 	doneCh := make(chan error)
-	select {
-	case s.flushCh <- doneCh:
-		return <-doneCh
-	default:
-		return fmt.Errorf("segment flush failed")
-	}
+	s.flushCh <- doneCh
+	return <-doneCh
 }
 
 // Close closes the segment for writing.
