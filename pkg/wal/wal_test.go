@@ -41,6 +41,7 @@ func TestWAL_Segment(t *testing.T) {
 			w, err := wal.NewWAL(wal.WALOpts{
 				StorageDir:      t.TempDir(),
 				StorageProvider: tt.StorageProvider,
+				Index:           wal.NewIndex(),
 			})
 			require.NoError(t, err)
 			require.NoError(t, w.Open(context.Background()))

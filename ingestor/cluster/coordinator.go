@@ -273,6 +273,10 @@ func (c *coordinator) syncPeers() error {
 
 	c.leader = c.opts.Hostname == leastNode
 
+	if len(set) == 0 {
+		return nil
+	}
+
 	if err := c.setPartitioner(set); err != nil {
 		return err
 	}
