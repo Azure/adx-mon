@@ -22,14 +22,8 @@ func TestNewSegment(t *testing.T) {
 		Name            string
 		StorageProvider file.Provider
 	}{
-		{
-			Name:            "Disk",
-			StorageProvider: &file.DiskProvider{},
-		},
-		{
-			Name:            "Memory",
-			StorageProvider: &file.MemoryProvider{},
-		},
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
@@ -52,69 +46,108 @@ func TestNewSegment(t *testing.T) {
 }
 
 func TestSegment_CreatedAt(t *testing.T) {
-	dir := t.TempDir()
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
 
-	idgen, err := flake.New()
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
 
-	id := idgen.NextId()
-	createdAt, err := flakeutil.ParseFlakeID(id.String())
-	require.NoError(t, err)
+			dir := t.TempDir()
 
-	path := filepath.Join(dir, fmt.Sprintf("Foo_%s.wal", id.String()))
-	f, err := os.Create(path)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+			idgen, err := flake.New()
+			require.NoError(t, err)
 
-	seg, err := wal.Open(path, &file.DiskProvider{})
-	require.NoError(t, err)
+			id := idgen.NextId()
+			createdAt, err := flakeutil.ParseFlakeID(id.String())
+			require.NoError(t, err)
 
-	require.Equal(t, createdAt, seg.CreatedAt())
+			path := filepath.Join(dir, fmt.Sprintf("Foo_%s.wal", id.String()))
+			f, err := os.Create(path)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+
+			seg, err := wal.Open(path, tt.StorageProvider)
+			require.NoError(t, err)
+
+			require.Equal(t, createdAt, seg.CreatedAt())
+		})
+	}
 }
 
 func TestSegment_Corrupted(t *testing.T) {
-	dir := t.TempDir()
-	s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
-	require.NoError(t, err)
-	require.NoError(t, s.Write(context.Background(), []byte("test")))
-	require.NoError(t, s.Close())
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
 
-	f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
-	require.NoError(t, err)
-	_, err = f.WriteString("a,")
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
 
-	s, err = wal.Open(s.Path(), &file.DiskProvider{})
+			dir := t.TempDir()
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			require.NoError(t, err)
+			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			require.NoError(t, s.Close())
 
-	b, err := s.Bytes()
-	require.NoError(t, err)
-	require.Equal(t, uint8('t'), b[len(b)-1])
+			f, err := tt.StorageProvider.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
+			require.NoError(t, err)
+			_, err = f.Write([]byte("a,"))
+			require.NoError(t, err)
+
+			s, err = wal.Open(s.Path(), tt.StorageProvider)
+
+			b, err := s.Bytes()
+			require.NoError(t, err)
+			require.Equal(t, uint8('t'), b[len(b)-1])
+		})
+	}
 }
 
 func TestSegment_Corrupted_BigFile(t *testing.T) {
-	dir := t.TempDir()
-	d := &file.DiskProvider{}
-	s, err := wal.NewSegment(dir, "Foo", d)
-	require.NoError(t, err)
-	require.NoError(t, s.Write(context.Background(), []byte("test")))
-	require.NoError(t, s.Close())
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
 
-	f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
-	require.NoError(t, err)
-	str := strings.Repeat("a", 8092)
-	_, err = f.WriteString(fmt.Sprintf("%s,", str))
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
 
-	s, err = wal.Open(s.Path(), d)
+			dir := t.TempDir()
+			d := tt.StorageProvider
+			s, err := wal.NewSegment(dir, "Foo", d)
+			require.NoError(t, err)
+			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			require.NoError(t, s.Close())
 
-	b, err := s.Bytes()
-	require.NoError(t, err)
-	require.Equal(t, uint8('t'), b[len(b)-1])
+			f, err := tt.StorageProvider.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
+			require.NoError(t, err)
+			str := strings.Repeat("a", 8092)
+			_, err = f.Write([]byte(fmt.Sprintf("%s,", str)))
+			require.NoError(t, err)
 
-	require.NoError(t, s.Write(context.Background(), []byte("test")))
-	b, err = s.Bytes()
-	require.NoError(t, err)
-	require.Equal(t, "test", string(b[len(b)-4:]))
+			s, err = wal.Open(s.Path(), d)
+
+			b, err := s.Bytes()
+			require.NoError(t, err)
+			require.Equal(t, uint8('t'), b[len(b)-1])
+
+			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			b, err = s.Bytes()
+			require.NoError(t, err)
+			require.Equal(t, "test", string(b[len(b)-4:]))
+		})
+	}
 }
 
 func TestSegment_Iterator(t *testing.T) {
@@ -122,15 +155,10 @@ func TestSegment_Iterator(t *testing.T) {
 		Name            string
 		StorageProvider file.Provider
 	}{
-		{
-			Name:            "Disk",
-			StorageProvider: &file.DiskProvider{},
-		},
-		{
-			Name:            "Memory",
-			StorageProvider: &file.MemoryProvider{},
-		},
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -173,15 +201,10 @@ func TestSegment_LargeSegments(t *testing.T) {
 		Name            string
 		StorageProvider file.Provider
 	}{
-		{
-			Name:            "Disk",
-			StorageProvider: &file.DiskProvider{},
-		},
-		{
-			Name:            "Memory",
-			StorageProvider: &file.MemoryProvider{},
-		},
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -220,21 +243,33 @@ func TestSegment_LargeSegments(t *testing.T) {
 }
 
 func TestSegment_Closed(t *testing.T) {
-	dir := t.TempDir()
-	s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
-	require.NoError(t, err)
-	require.NoError(t, s.Close())
-	require.Equal(t, s.Write(context.Background(), []byte("test")), wal.ErrSegmentClosed)
-	require.Equal(t, s.Append(context.Background(), []byte("test")), wal.ErrSegmentClosed)
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
 
-	_, err = s.Iterator()
-	require.Equal(t, err, wal.ErrSegmentClosed)
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
+			require.NoError(t, err)
+			require.NoError(t, s.Close())
+			require.Equal(t, s.Write(context.Background(), []byte("test")), wal.ErrSegmentClosed)
+			require.Equal(t, s.Append(context.Background(), []byte("test")), wal.ErrSegmentClosed)
 
-	_, err = s.Reader()
-	require.Equal(t, err, wal.ErrSegmentClosed)
+			_, err = s.Iterator()
+			require.Equal(t, err, wal.ErrSegmentClosed)
 
-	_, err = s.Info()
-	require.Equal(t, err, wal.ErrSegmentClosed)
+			_, err = s.Reader()
+			require.Equal(t, err, wal.ErrSegmentClosed)
+
+			_, err = s.Info()
+			require.Equal(t, err, wal.ErrSegmentClosed)
+		})
+	}
 }
 
 func BenchmarkSegment_Write(b *testing.B) {

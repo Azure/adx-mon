@@ -10,16 +10,29 @@ import (
 )
 
 func TestNewWAL(t *testing.T) {
-	w, err := wal.NewWAL(wal.WALOpts{
-		StorageDir: t.TempDir(),
-	})
-	require.NoError(t, err)
-	require.NoError(t, w.Open(context.Background()))
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
 
-	w.Write(context.Background(), []byte("foo"))
-	w.Write(context.Background(), []byte("foo"))
-	w.Write(context.Background(), []byte("foo"))
-	require.Equal(t, 1, w.Size())
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			w, err := wal.NewWAL(wal.WALOpts{
+				StorageDir:      t.TempDir(),
+				StorageProvider: tt.StorageProvider,
+			})
+			require.NoError(t, err)
+			require.NoError(t, w.Open(context.Background()))
+
+			w.Write(context.Background(), []byte("foo"))
+			w.Write(context.Background(), []byte("foo"))
+			w.Write(context.Background(), []byte("foo"))
+			require.Equal(t, 1, w.Size())
+		})
+	}
 }
 
 func TestWAL_Segment(t *testing.T) {
@@ -27,15 +40,10 @@ func TestWAL_Segment(t *testing.T) {
 		Name            string
 		StorageProvider file.Provider
 	}{
-		{
-			Name:            "Disk",
-			StorageProvider: &file.DiskProvider{},
-		},
-		{
-			Name:            "Memory",
-			StorageProvider: &file.MemoryProvider{},
-		},
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			w, err := wal.NewWAL(wal.WALOpts{
@@ -72,15 +80,10 @@ func TestWAL_Open(t *testing.T) {
 		Name            string
 		StorageProvider file.Provider
 	}{
-		{
-			Name:            "Disk",
-			StorageProvider: &file.DiskProvider{},
-		},
-		{
-			Name:            "Memory",
-			StorageProvider: &file.MemoryProvider{},
-		},
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
