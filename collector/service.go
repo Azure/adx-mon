@@ -591,7 +591,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 	var targets []ScrapeTarget
 
 	// Skip the pod if it has not opted in to scraping
-	if p.Annotations["adx-mon/scrape"] != "true" {
+	if !strings.EqualFold(getAnnotationOrDefault(p, "adx-mon/scrape", "false"), "true") {
 		return nil
 	}
 
@@ -600,23 +600,17 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 		return nil
 	}
 
-	scheme := "http"
-	if p.Annotations["adx-mon/scheme"] != "" {
-		scheme = p.Annotations["adx-mon/scheme"]
-	}
-
-	path := "/metrics"
-	if p.Annotations["adx-mon/path"] != "" {
-		path = p.Annotations["adx-mon/path"]
-	}
+	scheme := getAnnotationOrDefault(p, "adx-mon/scheme", "http")
+	path := getAnnotationOrDefault(p, "adx-mon/path", "/metrics")
 
 	// Just scrape this one port
-	port := p.Annotations["adx-mon/port"]
+	port := getAnnotationOrDefault(p, "adx-mon/port", "")
 
-	// Otherwise, scrape all the ports on the pod
+	// Scrape a comma separated list of targets with the format path:port like /metrics:8080
+	targetMap := getTargetAnnotationMapOrDefault(p, "adx-mon/targets", make(map[string]string))
+
 	for _, c := range p.Spec.Containers {
 		for _, cp := range c.Ports {
-
 			var readinessPort, livenessPort string
 			if c.ReadinessProbe != nil && c.ReadinessProbe.HTTPGet != nil {
 				readinessPort = c.ReadinessProbe.HTTPGet.Port.String()
@@ -624,6 +618,23 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 			if c.LivenessProbe != nil && c.LivenessProbe.HTTPGet != nil {
 				livenessPort = c.LivenessProbe.HTTPGet.Port.String()
+			}
+
+			// If target list is specified, only scrape those path/port combinations
+			if len(targetMap) != 0 {
+				checkPorts := []string{strconv.Itoa(int(cp.ContainerPort)), readinessPort, livenessPort}
+				for _, checkPort := range checkPorts {
+					// if the current port, liveness port, or readiness port exist in the targetMap, add that to scrape targets
+					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap); added {
+						targets = append(targets, target)
+						// if all targets are accounted for, return target list
+						if len(targetMap) == 0 {
+							return targets
+						}
+					}
+				}
+				// if there are remaining targets, continue iterating through containers
+				continue
 			}
 
 			// If a port is specified, only scrape that port on the pod
@@ -657,3 +668,59 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 type fakeHealthChecker struct{}
 
 func (f fakeHealthChecker) IsHealthy() bool { return true }
+
+func parseTargetList(targetList string) (map[string]string, error) {
+	// Split the string by ','
+	rawTargets := strings.Split(targetList, ",")
+
+	// Initialize the map
+	m := make(map[string]string)
+
+	// Iterate over the rawTargets
+	for _, rawTarget := range rawTargets {
+		// Split each rawTarget by ':'
+		targetPair := strings.Split(strings.TrimSpace(rawTarget), ":")
+		if len(targetPair) != 2 {
+			return nil, fmt.Errorf("Using default scrape rules - target list contains malformed grouping: " + rawTarget)
+		}
+		// flipping expected order to ensure that port is the key
+		m[targetPair[1]] = targetPair[0]
+	}
+
+	return m, nil
+}
+
+func addTargetFromMap(podIP, scheme, port, namespace, pod, container string, targetMap map[string]string) (ScrapeTarget, bool) {
+	if tPath, ok := targetMap[port]; ok {
+		target := ScrapeTarget{
+			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, tPath),
+			Namespace: namespace,
+			Pod:       pod,
+			Container: container,
+		}
+		delete(targetMap, port)
+		return target, true
+	}
+	return ScrapeTarget{}, false
+}
+
+func getAnnotationOrDefault(p *v1.Pod, key, def string) string {
+	if value, ok := p.Annotations[key]; ok && value != "" {
+		return value
+	}
+	return def
+}
+
+func getTargetAnnotationMapOrDefault(p *v1.Pod, key string, defaultVal map[string]string) map[string]string {
+	rawVal, exists := p.Annotations[key]
+	if !exists || rawVal == "" {
+		return defaultVal
+	}
+
+	parsedMap, err := parseTargetList(rawVal)
+	if err != nil {
+		logger.Warnf(err.Error())
+		return defaultVal
+	}
+	return parsedMap
+}

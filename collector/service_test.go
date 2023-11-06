@@ -245,6 +245,101 @@ func TestMakeTargets(t *testing.T) {
 	require.Equal(t, 1, len(targets))
 }
 
+func TestMakeTargetsFromList(t *testing.T) {
+	pod := fakePod("namespace", "pod", map[string]string{"app": "test"}, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape":  "true",
+		"adx-mon/targets": "/metrics:10254, /somethingelse:9999",
+	}
+	pod.Status.PodIP = "172.31.1.18"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			ReadinessProbe: &v1.Probe{
+				ProbeHandler: v1.ProbeHandler{
+					HTTPGet: &v1.HTTPGetAction{
+						Port: intstr.FromInt(10254),
+					},
+				},
+			},
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+				{
+					ContainerPort: 8081,
+				},
+				{
+					ContainerPort: 8082,
+				},
+			},
+		},
+		{
+			Name: "othercontainer",
+			ReadinessProbe: &v1.Probe{
+				ProbeHandler: v1.ProbeHandler{
+					HTTPGet: &v1.HTTPGetAction{
+						Port: intstr.FromInt(11111),
+					},
+				},
+			},
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+				{
+					ContainerPort: 8081,
+				},
+				{
+					ContainerPort: 9999,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 2, len(targets))
+	require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
+	require.Equal(t, "http://172.31.1.18:9999/somethingelse", targets[1].Addr)
+	require.Equal(t, "othercontainer", targets[1].Container)
+}
+
+// invalid target port, should add all container ports to targets
+func TestMakeTargetsFromListNegative(t *testing.T) {
+	pod := fakePod("namespace", "pod", map[string]string{"app": "test"}, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape":  "true",
+		"adx-mon/targets": "/somethingelse:9999",
+	}
+	pod.Status.PodIP = "172.31.1.18"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			ReadinessProbe: &v1.Probe{
+				ProbeHandler: v1.ProbeHandler{
+					HTTPGet: &v1.HTTPGetAction{
+						Port: intstr.FromInt(10254),
+					},
+				},
+			},
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+				{
+					ContainerPort: 8081,
+				},
+				{
+					ContainerPort: 8082,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 0, len(targets))
+}
+
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
 	m := map[string]string{}
 	for k, v := range labels {
