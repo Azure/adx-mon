@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,19 +125,21 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 
 			dir := t.TempDir()
-			d := tt.StorageProvider
-			s, err := wal.NewSegment(dir, "Foo", d)
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
 			require.NoError(t, err)
 			require.NoError(t, s.Write(context.Background(), []byte("test")))
 			require.NoError(t, s.Close())
 
 			f, err := tt.StorageProvider.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
 			require.NoError(t, err)
+			defer f.Close()
+
 			str := strings.Repeat("a", 8092)
 			_, err = f.Write([]byte(fmt.Sprintf("%s,", str)))
 			require.NoError(t, err)
 
-			s, err = wal.Open(s.Path(), d)
+			s, err = wal.Open(s.Path(), tt.StorageProvider)
+			defer s.Close()
 
 			b, err := s.Bytes()
 			require.NoError(t, err)
@@ -254,7 +257,7 @@ func TestSegment_Closed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
-			s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
 			require.NoError(t, err)
 			require.NoError(t, s.Close())
 			require.Equal(t, s.Write(context.Background(), []byte("test")), wal.ErrSegmentClosed)
@@ -268,6 +271,48 @@ func TestSegment_Closed(t *testing.T) {
 
 			_, err = s.Info()
 			require.Equal(t, err, wal.ErrSegmentClosed)
+		})
+	}
+}
+
+func TestSegment_Size(t *testing.T) {
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			require.NoError(t, err)
+
+			for i := 0; i < 100; i++ {
+				require.NoError(t, s.Write(context.Background(), []byte(strings.Repeat("a", rand.Intn(8*1024)))))
+			}
+
+			// Force all buffered writes to disk.
+			require.NoError(t, s.Flush())
+
+			sz, err := s.Size()
+			require.NoError(t, err)
+			info, err := s.Info()
+			require.NoError(t, err)
+			require.NoError(t, s.Close())
+
+			f, err := tt.StorageProvider.Open(s.Path())
+			require.NoError(t, err)
+
+			stat, err := f.Stat()
+			require.NoError(t, err)
+
+			fsSz := stat.Size()
+
+			require.Equal(t, fsSz, sz)
+			require.Equal(t, fsSz, info.Size)
 		})
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	pkgfile "github.com/Azure/adx-mon/pkg/file"
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -92,6 +93,7 @@ type Segment interface {
 
 	Iterator() (Iterator, error)
 	Info() (SegmentInfo, error)
+	Flush() error
 }
 
 type Iterator interface {
@@ -117,6 +119,7 @@ type segment struct {
 
 	// bw is a buffered writer for w that if flushed to disk in batches.
 	bw *bufio.Writer
+	cw *pkgfile.CountingWriter
 
 	// encodeBuf is a buffer used for compressing blocks before writing to file.
 	encodeBuf []byte
@@ -131,6 +134,7 @@ type segment struct {
 
 	// appendCh is channel used to append raw blocks to the segment.
 	appendCh chan ring.Entry
+	flushCh  chan chan error
 }
 
 func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
@@ -151,8 +155,10 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		return nil, err
 	}
 
+	cw := pkgfile.NewCountingWriter(fw)
+
 	bf := bwPool.Get(0).(*bufio.Writer)
-	bf.Reset(fw)
+	bf.Reset(cw)
 
 	f := &segment{
 		id:        flakeId.String(),
@@ -161,12 +167,14 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		path:      path,
 		w:         fw,
 		bw:        bf,
+		cw:        cw,
 		fp:        fp,
 
 		closing:  make(chan struct{}),
 		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
 		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry),
+		flushCh:  make(chan chan error),
 	}
 
 	f.wg.Add(1)
@@ -197,7 +205,16 @@ func Open(path string, fp file.Provider) (Segment, error) {
 		return nil, fmt.Errorf("open segment: %s: %fp", path, err)
 	}
 
+	stat, err := fd.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	cw := pkgfile.NewCountingWriter(fd)
+	cw.SetWritten(stat.Size())
+
 	bf := bufio.NewWriterSize(fd, DefaultIOBufSize)
+	bf.Reset(cw)
 
 	f := &segment{
 		id:        id,
@@ -208,10 +225,12 @@ func Open(path string, fp file.Provider) (Segment, error) {
 
 		w:        fd,
 		bw:       bf,
+		cw:       cw,
 		closing:  make(chan struct{}),
 		ringBuf:  ring.NewBuffer(DefaultRingSize),
 		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry),
+		flushCh:  make(chan chan error),
 	}
 
 	if err := f.repair(); err != nil {
@@ -249,11 +268,7 @@ func (s *segment) CreatedAt() time.Time {
 
 // Size returns the current size of the segment file on file.
 func (s *segment) Size() (int64, error) {
-	stat, err := s.w.Stat()
-	if err != nil {
-		return 0, err
-	}
-	return stat.Size(), nil
+	return s.cw.BytesWritten(), nil
 }
 
 // ID returns the ID of the segment.
@@ -365,6 +380,16 @@ func (s *segment) Bytes() ([]byte, error) {
 	return io.ReadAll(f)
 }
 
+func (s *segment) Flush() error {
+	doneCh := make(chan error)
+	select {
+	case s.flushCh <- doneCh:
+		return <-doneCh
+	default:
+		return fmt.Errorf("segment flush failed")
+	}
+}
+
 // Close closes the segment for writing.
 func (s *segment) Close() error {
 	s.mu.Lock()
@@ -460,7 +485,6 @@ func (s *segment) flusher() {
 	for {
 		select {
 		case req := <-s.ringBuf.Queue():
-
 			blockBuf.Reset()
 			err := s.blockWrite(blockBuf, req.Value)
 			select {
@@ -478,9 +502,15 @@ func (s *segment) flusher() {
 			default:
 			}
 
+		case doneCh := <-s.flushCh:
+			err := s.bw.Flush()
+			if err != nil {
+				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
+			}
+			doneCh <- err
 		case <-t.C:
 			if err := s.bw.Flush(); err != nil {
-				logger.Errorf("Failed to flush writer for segment1: %s: %s", s.path, err)
+				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 		case <-s.closing:
 			blockBuf.Reset()
@@ -576,6 +606,7 @@ func (s *segment) truncate(ofs int64) error {
 	if err := s.w.Sync(); err != nil {
 		return err
 	}
+	s.cw.SetWritten(ofs)
 
 	return nil
 }
