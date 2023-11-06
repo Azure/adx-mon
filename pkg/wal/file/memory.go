@@ -82,13 +82,11 @@ func (p *MemoryProvider) OpenFile(name string, flag int, perm os.FileMode) (File
 		return f, nil
 	}
 
-	// If the instance exits, it's opened with O_RDONLY
-	// https://pkg.go.dev/os#OpenFile
 	if ok {
 		f.Lock()
 		f.closed = false
 		f.offset = 0
-		f.mode.perm = fs.FileMode(os.O_RDONLY)
+		f.mode.perm = perm
 		f.Unlock()
 
 		p.mfs[name] = f
@@ -224,7 +222,8 @@ func (m *Memory) Write(p []byte) (n int, err error) {
 	if m.closed {
 		return 0, os.ErrClosed
 	}
-	if m.mode.perm&fs.FileMode(os.O_RDWR) == 0 {
+
+	if m.mode.perm&0x200 != 0 {
 		return 0, os.ErrPermission
 	}
 
@@ -273,7 +272,7 @@ func (m *Memory) Truncate(size int64) error {
 	if m.closed {
 		return os.ErrClosed
 	}
-	if m.mode.perm&fs.FileMode(os.O_RDWR) == 0 {
+	if m.mode.perm&0x200 != 0 {
 		return os.ErrPermission
 	}
 

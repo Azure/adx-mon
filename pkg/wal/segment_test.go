@@ -49,7 +49,6 @@ func TestNewSegment(t *testing.T) {
 			require.Equal(t, epoch, s.ID())
 		})
 	}
-
 }
 
 func TestSegment_CreatedAt(t *testing.T) {
@@ -218,6 +217,24 @@ func TestSegment_LargeSegments(t *testing.T) {
 			require.Equal(t, 100000, bytes.Count(b, []byte("\n")))
 		})
 	}
+}
+
+func TestSegment_Closed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := wal.NewSegment(dir, "Foo", &file.DiskProvider{})
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+	require.Equal(t, s.Write(context.Background(), []byte("test")), wal.ErrSegmentClosed)
+	require.Equal(t, s.Append(context.Background(), []byte("test")), wal.ErrSegmentClosed)
+
+	_, err = s.Iterator()
+	require.Equal(t, err, wal.ErrSegmentClosed)
+
+	_, err = s.Reader()
+	require.Equal(t, err, wal.ErrSegmentClosed)
+
+	_, err = s.Info()
+	require.Equal(t, err, wal.ErrSegmentClosed)
 }
 
 func BenchmarkSegment_Write(b *testing.B) {

@@ -132,7 +132,7 @@ func (r *replicator) transfer(ctx context.Context) {
 					return nil
 				}
 
-				// If the peer is not healthy, don't attmept transferring the segment.  This could happen if we marked
+				// If the peer is not healthy, don't attempt transferring the segment.  This could happen if we marked
 				// the peer unhealthy after we received the batch to process.
 				if !r.Health.IsPeerHealthy(owner) {
 					return nil

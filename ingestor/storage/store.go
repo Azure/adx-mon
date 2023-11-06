@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -55,8 +53,8 @@ type Store interface {
 type LocalStore struct {
 	opts StoreOpts
 
-	mu   sync.RWMutex
-	wals map[string]*wal.WAL
+	mu         sync.RWMutex
+	repository *wal.Repository
 
 	metricsMu sync.RWMutex
 	metrics   map[string]prometheus.Counter
@@ -72,100 +70,30 @@ type StoreOpts struct {
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
-		opts:    opts,
-		wals:    make(map[string]*wal.WAL),
+		opts: opts,
+		repository: wal.NewRepository(wal.RepositoryOpts{
+			StorageDir:     opts.StorageDir,
+			SegmentMaxSize: opts.SegmentMaxSize,
+			SegmentMaxAge:  opts.SegmentMaxAge,
+		}),
 		metrics: make(map[string]prometheus.Counter),
 	}
 }
 
 func (s *LocalStore) Open(ctx context.Context) error {
-	wals, err := wal.ListDir(s.opts.StorageDir)
-	if err != nil {
-		return fmt.Errorf("failed to list %s: %w", s.opts.StorageDir, err)
-	}
-	for _, w := range wals {
-		prefix := fmt.Sprintf("%s_%s", w.Database, w.Table)
-		_, ok := s.wals[prefix]
-		if ok {
-			return nil
-		}
-
-		wal, err := s.newWAL(ctx, prefix)
-		if err != nil {
-			return err
-		}
-		s.wals[prefix] = wal
-	}
-	return nil
+	return s.repository.Open(ctx)
 }
 
 func (s *LocalStore) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, v := range s.wals {
-		if err := v.Close(); err != nil {
-			return err
-		}
-	}
-	s.wals = nil
-	return nil
-}
-
-func (s *LocalStore) newWAL(ctx context.Context, prefix string) (*wal.WAL, error) {
-	walOpts := wal.WALOpts{
-		StorageDir:     s.opts.StorageDir,
-		Prefix:         prefix,
-		SegmentMaxSize: s.opts.SegmentMaxSize,
-		SegmentMaxAge:  s.opts.SegmentMaxAge,
-	}
-
-	wal, err := wal.NewWAL(walOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := wal.Open(ctx); err != nil {
-		return nil, err
-	}
-
-	return wal, nil
+	return s.repository.Close()
 }
 
 func (s *LocalStore) GetWAL(ctx context.Context, key []byte) (*wal.WAL, error) {
-
-	s.mu.RLock()
-	wal := s.wals[string(key)]
-	s.mu.RUnlock()
-
-	if wal != nil {
-		return wal, nil
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	wal = s.wals[string(key)]
-	if wal != nil {
-		return wal, nil
-	}
-
-	prefix := key
-
-	var err error
-	wal, err = s.newWAL(ctx, string(prefix))
-	if err != nil {
-		return nil, err
-	}
-	s.wals[string(key)] = wal
-
-	return wal, nil
+	return s.repository.Get(ctx, key)
 }
 
 func (s *LocalStore) WALCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.wals)
+	return s.repository.Count()
 }
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []prompb.TimeSeries) error {
@@ -235,17 +163,13 @@ func (s *LocalStore) IsActiveSegment(path string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, v := range s.wals {
-		if v.Path() == path {
-			return true
-		}
-	}
-	return false
+	return s.repository.IsActiveSegment(path)
 }
 
 func (s *LocalStore) SegmentExists(filename string) bool {
-	_, err := os.Stat(filepath.Join(s.opts.StorageDir, filename))
-	return err == nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.repository.SegmentExists(filename)
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {

@@ -51,6 +51,8 @@ var (
 	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
 		return bufio.NewWriterSize(nil, DefaultIOBufSize)
 	})
+
+	ErrSegmentClosed = errors.New("segment closed")
 )
 
 func init() {
@@ -89,6 +91,7 @@ type Segment interface {
 	Path() string
 
 	Iterator() (Iterator, error)
+	Info() (SegmentInfo, error)
 }
 
 type Iterator interface {
@@ -103,6 +106,7 @@ type segment struct {
 	id        string
 	createdAt time.Time
 	path      string
+	prefix    string
 
 	wg sync.WaitGroup
 	mu sync.RWMutex
@@ -152,6 +156,7 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 
 	f := &segment{
 		id:        flakeId.String(),
+		prefix:    prefix,
 		createdAt: createdAt.UTC(),
 		path:      path,
 		w:         fw,
@@ -179,6 +184,7 @@ func Open(path string, fp file.Provider) (Segment, error) {
 	fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
 	i := strings.LastIndex(fileName, "_")
 
+	prefix := fileName[:i]
 	id := fileName[i+1:]
 
 	createdAt, err := flakeutil.ParseFlakeID(id)
@@ -195,6 +201,7 @@ func Open(path string, fp file.Provider) (Segment, error) {
 
 	f := &segment{
 		id:        id,
+		prefix:    prefix,
 		createdAt: createdAt,
 		path:      path,
 		fp:        fp,
@@ -225,6 +232,13 @@ func (s *segment) Path() string {
 // Reader returns an io.Reader for the segment.  The Reader returns segment data automatically handling segment
 // blocks and validation.
 func (s *segment) Reader() (io.ReadCloser, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, ErrSegmentClosed
+	}
+
 	return NewSegmentReader(s.Path(), s.fp)
 }
 
@@ -247,9 +261,38 @@ func (s *segment) ID() string {
 	return s.id
 }
 
+func (s *segment) Info() (SegmentInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return SegmentInfo{}, ErrSegmentClosed
+	}
+
+	sz, err := s.Size()
+	if err != nil {
+		return SegmentInfo{}, err
+	}
+
+	return SegmentInfo{
+		Prefix:    s.prefix,
+		Ulid:      s.id,
+		Size:      sz,
+		CreatedAt: s.createdAt,
+		Path:      s.path,
+	}, nil
+}
+
 // Iterator returns an iterator to read values written to the segment.  Creating an iterator on a segment that is
 // still being written is not supported.
 func (s *segment) Iterator() (Iterator, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, ErrSegmentClosed
+	}
+
 	f, err := s.fp.Open(s.path)
 	if err != nil {
 		return nil, err
@@ -262,6 +305,10 @@ func (s *segment) Iterator() (Iterator, error) {
 func (s *segment) Append(ctx context.Context, buf []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.closed {
+		return ErrSegmentClosed
+	}
 
 	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}
 	s.appendCh <- entry
@@ -277,6 +324,10 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 func (s *segment) Write(ctx context.Context, buf []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.closed {
+		return ErrSegmentClosed
+	}
 
 	entry := s.ringBuf.Reserve()
 	defer s.ringBuf.Release(entry)
@@ -429,7 +480,7 @@ func (s *segment) flusher() {
 
 		case <-t.C:
 			if err := s.bw.Flush(); err != nil {
-				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
+				logger.Errorf("Failed to flush writer for segment1: %s: %s", s.path, err)
 			}
 		case <-s.closing:
 			blockBuf.Reset()
@@ -440,10 +491,6 @@ func (s *segment) flusher() {
 
 			if err := s.bw.Flush(); err != nil {
 				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
-			}
-
-			if err := s.w.Sync(); err != nil {
-				logger.Errorf("Failed to sync segment: %s: %s", s.path, err)
 			}
 
 			select {
