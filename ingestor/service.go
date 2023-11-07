@@ -307,12 +307,6 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.store.SegmentExists(f) {
-		m.WithLabelValues(strconv.Itoa(http.StatusConflict)).Inc()
-		http.Error(w, "segment already exists", http.StatusConflict)
-		return
-	}
-
 	n, err := s.store.Import(f, r.Body)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
