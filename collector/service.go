@@ -258,6 +258,7 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 	}()
 
+	s.wg.Add(1)
 	go s.scrape()
 	return nil
 }
@@ -276,7 +277,6 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) scrape() {
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	reconnectTimer := time.NewTicker(5 * time.Minute)
