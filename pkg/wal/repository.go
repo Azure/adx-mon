@@ -32,6 +32,9 @@ type RepositoryOpts struct {
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
 
+	MaxDiskUsage    int64
+	MaxSegmentCount int
+
 	// StorageProvider is an implementation of the file.File interface.
 	StorageProvider file.Provider
 }

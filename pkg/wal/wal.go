@@ -16,6 +16,11 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
+var (
+	ErrMaxDiskUsageExceeded = fmt.Errorf("max disk usage exceeded")
+	ErrMaxSegmentsExceeded  = fmt.Errorf("max segments exceeded")
+)
+
 type WAL struct {
 	opts WALOpts
 
@@ -55,6 +60,12 @@ type WALOpts struct {
 	// SegmentMaxAge is the max age of a segment before it will be rotated and compressed.
 	SegmentMaxAge time.Duration
 
+	// MaxDiskUsage is the max disk usage of WAL segments allowed before writes should be rejected.
+	MaxDiskUsage int64
+
+	// MaxSegmentCount is the max number of segments allowed before writes should be rejected.
+	MaxSegmentCount int
+
 	// Index is the index of the WAL segments.
 	Index *Index
 }
@@ -82,7 +93,12 @@ func (w *WAL) Open(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	dir, err := os.Open(w.opts.StorageDir)
+	// Loading existing segments is not supported for memory provider
+	if _, ok := w.opts.StorageProvider.(*file.MemoryProvider); ok {
+		return nil
+	}
+
+	dir, err := w.opts.StorageProvider.Open(w.opts.StorageDir)
 	if err != nil {
 		return err
 	}
@@ -96,7 +112,7 @@ func (w *WAL) Open(ctx context.Context) error {
 		}
 
 		for _, d := range entries {
-			path := d.Name()
+			path := filepath.Join(w.opts.StorageDir, d.Name())
 			if d.IsDir() || filepath.Ext(path) != ".wal" {
 				return nil
 			}
@@ -163,6 +179,10 @@ func (w *WAL) Close() error {
 func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	var seg Segment
 
+	if err := w.validateLimits(buf); err != nil {
+		return err
+	}
+
 	// fast path
 	w.mu.RLock()
 	if w.segment != nil {
@@ -188,6 +208,17 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	w.mu.Unlock()
 
 	return seg.Write(ctx, buf)
+}
+
+func (w *WAL) validateLimits(buf []byte) error {
+	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+int64(len(buf)) > w.opts.MaxDiskUsage {
+		return ErrMaxDiskUsageExceeded
+	}
+
+	if w.opts.MaxSegmentCount > 0 && w.index.TotalSegments() >= w.opts.MaxSegmentCount {
+		return ErrMaxSegmentsExceeded
+	}
+	return nil
 }
 
 func (w *WAL) Size() int {
@@ -274,6 +305,10 @@ func (w *WAL) Remove(path string) error {
 func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	var seg Segment
 
+	if err := w.validateLimits(buf); err != nil {
+		return err
+	}
+
 	// fast path
 	w.mu.RLock()
 	if w.segment != nil {
@@ -321,4 +356,15 @@ func (w *WAL) RemoveAll() error {
 		return w.Remove(w.segment.Path())
 	}
 	return nil
+}
+
+func (w *WAL) Flush() error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if w.segment == nil {
+		return nil
+	}
+
+	return w.segment.Flush()
 }
