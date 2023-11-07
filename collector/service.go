@@ -6,6 +6,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
+	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/otlp"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
@@ -118,21 +121,32 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		),
 	}
 
-	// Removed for now - need to get journald working with static compiliation.
-	// if opts.CollectLogs {
-	// 	source, err := journald.NewJournaldSource(journald.JournaldSourceConfig{
-	// 		CursorPath: "cursor.dat",
-	// 	})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("create journald source: %w", err)
-	// 	}
+	if opts.CollectLogs {
+		files, err := filepath.Glob("/var/log/containers/*.log")
+		if err != nil {
+			return nil, fmt.Errorf("glob: %w", err)
+		}
+		targets := make([]tail.FileTailTarget, 0, len(files))
+		for _, file := range files {
+			targets = append(targets, tail.FileTailTarget{
+				FilePath: file,
+				LogType:  tail.LogTypeDocker,
+			})
+		}
 
-	// 	logsSvc := &logs.Service{
-	// 		Source: source,
-	// 		Sink:   sinks.NewStdoutSink(),
-	// 	}
-	// 	svc.logsSvc = logsSvc
-	// }
+		source, err := tail.NewTailSource(tail.TailSourceConfig{
+			StaticTargets: targets,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create tail source: %w", err)
+		}
+
+		logsSvc := &logs.Service{
+			Source: source,
+			Sink:   sinks.NewStdoutSink(),
+		}
+		svc.logsSvc = logsSvc
+	}
 
 	return svc, nil
 }

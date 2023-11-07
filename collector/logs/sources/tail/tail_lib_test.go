@@ -41,6 +41,7 @@ func TestLib(t *testing.T) {
 	tailer, err := tail.TailFile(testFile, tail.Config{Follow: true, ReOpen: true})
 	require.NoError(t, err)
 	defer tailer.Cleanup()
+	defer tailer.Stop()
 
 	group, ctx := errgroup.WithContext(context.Background())
 	counterCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
