@@ -15,6 +15,8 @@ type Logs struct {
 const (
 	dbKey  = "kusto.database"
 	tblKey = "kusto.table"
+
+	LogsTotalTag = tlv.Tag(0xAB)
 )
 
 func KustoMetadata(l *logsv1.LogRecord) (database, table string) {
