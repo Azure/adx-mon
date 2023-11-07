@@ -2,6 +2,7 @@ package ingestor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -312,7 +313,12 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if n, err := s.store.Import(f, r.Body); err != nil {
+	n, err := s.store.Import(f, r.Body)
+	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		return
+	} else if err != nil {
 		logger.Errorf("Failed to import %s: %s", filename, err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)

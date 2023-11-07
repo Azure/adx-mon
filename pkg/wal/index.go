@@ -3,6 +3,7 @@ package wal
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -10,6 +11,8 @@ import (
 type Index struct {
 	mu       sync.RWMutex
 	segments map[string][]SegmentInfo
+
+	totalSize int64
 }
 
 // NewIndex returns a new index.
@@ -24,6 +27,7 @@ func (i *Index) Add(s SegmentInfo) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	atomic.AddInt64(&i.totalSize, s.Size)
 	i.segments[s.Prefix] = append(i.segments[s.Prefix], s)
 }
 
@@ -48,6 +52,7 @@ func (i *Index) Remove(s SegmentInfo) {
 			segments = append(segments[:idx], segments[idx+1:]...)
 			if len(segments) == 0 {
 				delete(i.segments, s.Prefix)
+				atomic.AddInt64(&i.totalSize, -s.Size)
 				break
 			}
 			i.segments[s.Prefix] = segments
@@ -242,4 +247,8 @@ func (i *Index) SegmentExists(filename string) bool {
 		}
 	}
 	return false
+}
+
+func (i *Index) TotalSize() int64 {
+	return atomic.LoadInt64(&i.totalSize)
 }

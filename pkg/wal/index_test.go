@@ -163,5 +163,23 @@ func TestIndex_PrefixesByCount(t *testing.T) {
 	require.Equal(t, 2, len(i.PrefixesByCount()))
 	require.Equal(t, "test", i.PrefixesByCount()[0])
 	require.Equal(t, "test1", i.PrefixesByCount()[1])
+}
 
+func TestIndex_TotalSize(t *testing.T) {
+	i := NewIndex()
+
+	require.Equal(t, int64(0), i.TotalSize())
+	i.Add(SegmentInfo{Prefix: "test", Ulid: "test", Path: "/test", Size: 1, CreatedAt: time.Unix(1, 0)})
+
+	require.Equal(t, int64(1), i.TotalSize())
+
+	info := SegmentInfo{Prefix: "test1", Ulid: "test", Path: "/test1", Size: 2, CreatedAt: time.Unix(2, 0)}
+	i.Add(info)
+	require.Equal(t, int64(3), i.TotalSize())
+
+	i.Add(SegmentInfo{Prefix: "test2", Ulid: "test", Path: "/test2", Size: 3, CreatedAt: time.Unix(0, 0)})
+	require.Equal(t, int64(6), i.TotalSize())
+
+	i.Remove(info)
+	require.Equal(t, int64(4), i.TotalSize())
 }
