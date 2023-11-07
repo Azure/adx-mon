@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,41 +82,53 @@ func (w *WAL) Open(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	filepath.WalkDir(w.opts.StorageDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
+	dir, err := os.Open(w.opts.StorageDir)
+	if err != nil {
+		return err
+	}
+
+	for {
+		entries, err := dir.ReadDir(100)
+		if err == io.EOF {
+			return nil
+		} else if err != nil {
 			return err
 		}
-		if d.IsDir() || filepath.Ext(path) != ".wal" {
-			return nil
+
+		for _, d := range entries {
+			path := d.Name()
+			if d.IsDir() || filepath.Ext(path) != ".wal" {
+				return nil
+			}
+
+			fileName := filepath.Base(path)
+			if bytes.HasPrefix([]byte(fileName), []byte(w.opts.Prefix)) {
+				fi, err := d.Info()
+				if err != nil {
+					logger.Warnf("Failed to get file info: %s %s", path, err.Error())
+					continue
+				}
+
+				fields := strings.Split(fileName, "_")
+				epoch := fields[len(fields)-1][:len(fields[len(fields)-1])-4]
+
+				createdAt, err := flakeutil.ParseFlakeID(epoch)
+				if err != nil {
+					logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
+					continue
+				}
+
+				info := SegmentInfo{
+					Prefix:    w.opts.Prefix,
+					Ulid:      epoch,
+					Path:      path,
+					Size:      fi.Size(),
+					CreatedAt: createdAt,
+				}
+				w.index.Add(info)
+			}
 		}
-
-		fileName := filepath.Base(path)
-		if bytes.HasPrefix([]byte(fileName), []byte(w.opts.Prefix)) {
-			fi, err := d.Info()
-			if err != nil {
-				return err
-			}
-
-			fields := strings.Split(fileName, "_")
-			epoch := fields[len(fields)-1][:len(fields[len(fields)-1])-4]
-
-			createdAt, err := flakeutil.ParseFlakeID(epoch)
-			if err != nil {
-				return err
-			}
-
-			info := SegmentInfo{
-				Prefix:    w.opts.Prefix,
-				Ulid:      epoch,
-				Path:      path,
-				Size:      fi.Size(),
-				CreatedAt: createdAt,
-			}
-			w.index.Add(info)
-
-		}
-		return nil
-	})
+	}
 
 	go w.rotate(ctx)
 
