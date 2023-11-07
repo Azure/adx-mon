@@ -106,7 +106,7 @@ func (w *WAL) Open(ctx context.Context) error {
 	for {
 		entries, err := dir.ReadDir(100)
 		if err == io.EOF {
-			return nil
+			break
 		} else if err != nil {
 			return err
 		}
@@ -114,7 +114,7 @@ func (w *WAL) Open(ctx context.Context) error {
 		for _, d := range entries {
 			path := filepath.Join(w.opts.StorageDir, d.Name())
 			if d.IsDir() || filepath.Ext(path) != ".wal" {
-				return nil
+				continue
 			}
 
 			fileName := filepath.Base(path)
