@@ -149,7 +149,7 @@ func (s *Repository) IsActiveSegment(path string) bool {
 	var active bool
 	s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
-		if wal.Path() == path {
+		if wal.path == path {
 			active = true
 		}
 		return nil
@@ -165,7 +165,7 @@ func (s *Repository) SegmentExists(filename string) bool {
 	var exists bool
 	s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
-		if wal.Path() == filename {
+		if wal.path == filename {
 			exists = true
 		}
 		return nil
