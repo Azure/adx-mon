@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/partmap"
@@ -23,7 +22,6 @@ type Repository struct {
 
 	index *Index
 
-	mu   sync.RWMutex
 	wals *partmap.Map
 }
 
@@ -69,9 +67,6 @@ func (s *Repository) Open(ctx context.Context) error {
 }
 
 func (s *Repository) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if err := s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
 		return wal.Close()
@@ -151,13 +146,6 @@ func (s *Repository) Index() *Index {
 }
 
 func (s *Repository) IsActiveSegment(path string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.wals == nil {
-		return false
-	}
-
 	var active bool
 	s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
@@ -170,15 +158,8 @@ func (s *Repository) IsActiveSegment(path string) bool {
 }
 
 func (s *Repository) SegmentExists(filename string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.index.SegmentExists(filename) {
 		return true
-	}
-
-	if s.wals == nil {
-		return false
 	}
 
 	var exists bool

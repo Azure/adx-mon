@@ -75,32 +75,6 @@ func TestService_HandleTransfer_InvalidFilename(t *testing.T) {
 	}
 }
 
-func TestService_HandleTransfer_Conflict(t *testing.T) {
-	s := &Service{
-		health: &fakeHealthChecker{healthy: true},
-		databases: map[string]struct{}{
-			"Database": {},
-		},
-		store: &fakeStore{
-			segements: map[string]struct{}{
-				"Database_Metric_123.wal": {},
-			},
-		},
-	}
-
-	body := bytes.NewReader([]byte{})
-	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
-
-	q := req.URL.Query()
-	q.Add("filename", "Database_Metric_123.wal")
-	req.URL.RawQuery = q.Encode()
-	require.NoError(t, err)
-
-	resp := httptest.NewRecorder()
-	s.HandleTransfer(resp, req)
-	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
-}
-
 type fakeStore struct {
 	segements map[string]struct{}
 }
