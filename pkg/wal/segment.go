@@ -174,7 +174,7 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		closing:  make(chan struct{}),
 		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
 		encoder:  encoders[rand.Intn(len(encoders))],
-		appendCh: make(chan ring.Entry),
+		appendCh: make(chan ring.Entry, DefaultRingSize),
 		flushCh:  make(chan chan error),
 	}
 
@@ -230,7 +230,7 @@ func Open(path string, fp file.Provider) (Segment, error) {
 		closing:  make(chan struct{}),
 		ringBuf:  ring.NewBuffer(DefaultRingSize),
 		encoder:  encoders[rand.Intn(len(encoders))],
-		appendCh: make(chan ring.Entry),
+		appendCh: make(chan ring.Entry, DefaultRingSize),
 		flushCh:  make(chan chan error),
 	}
 
