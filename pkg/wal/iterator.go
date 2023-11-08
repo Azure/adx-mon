@@ -133,3 +133,20 @@ func (b *segmentIterator) Close() error {
 	b.decoder = nil
 	return b.f.Close()
 }
+
+// Verify iterates through the entire segment and verifies the checksums for each block.  The iterator must be
+// re-created after calling this method.
+func (b *segmentIterator) Verify() error {
+	for {
+		next, err := b.Next()
+		if err == io.EOF {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if !next {
+			break
+		}
+	}
+	return nil
+}
