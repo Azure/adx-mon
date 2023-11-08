@@ -100,7 +100,7 @@ type Iterator interface {
 	Next() (bool, error)
 	Value() []byte
 	Close() error
-	Verify() error
+	Verify() (int, error)
 }
 
 type segment struct {
@@ -332,8 +332,10 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 	}
 
 	// Verify the block is valid before appending
-	if err := iter.Verify(); err != nil {
+	if n, err := iter.Verify(); err != nil {
 		return err
+	} else if n == 0 {
+		return nil
 	}
 
 	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}

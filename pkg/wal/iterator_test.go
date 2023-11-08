@@ -29,7 +29,9 @@ func TestSegmentIterator_Verify(t *testing.T) {
 			require.NoError(t, err)
 			defer iter.Close()
 
-			require.Error(t, iter.Verify())
+			n, err := iter.Verify()
+			require.Error(t, err)
+			require.Equal(t, 0, n)
 
 			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
 			require.NoError(t, err)
@@ -44,7 +46,9 @@ func TestSegmentIterator_Verify(t *testing.T) {
 			defer iter.Close()
 			defer f.Close()
 
-			require.NoError(t, iter.Verify())
+			n, err = iter.Verify()
+			require.NoError(t, err)
+			require.Equal(t, 2, n)
 
 		})
 	}
