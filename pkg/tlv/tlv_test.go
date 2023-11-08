@@ -21,122 +21,144 @@ import (
 )
 
 func TestEmbedTLV(t *testing.T) {
-	// We're immulating the path a segment would take as received
-	// via the /transfer endpoint in Ingestor, where a segment, as
-	// represented by a WAL being streamed from a client, is written
-	// to disk using the `store` package.
-	storageDir := t.TempDir()
-	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir: storageDir,
-	})
-	err := store.Open(context.Background())
-	require.NoError(t, err)
-
-	idgen, err := flake.New()
-	require.NoError(t, err)
-
-	var (
-		numSegments         = 10
-		segmentBytesWritten = 0
-		numLogs             = 0
-		database            = "DBA"
-		table               = "TableA"
-	)
-	for i := 0; i < numSegments; i++ {
-
-		// Transform our log into CSV
-		var log v1.ExportLogsServiceRequest
-		err := protojson.Unmarshal(otlpLog, &log)
-		require.NoError(t, err)
-
-		var b bytes.Buffer
-		w := transform.NewCSVWriter(&b, nil)
-		logs := &otlp.Logs{
-			Resources: log.ResourceLogs[0].Resource.Attributes,
-			Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
-		}
-		err = w.MarshalCSV(logs)
-		require.NoError(t, err)
-
-		segmentBytes := b.Bytes()
-
-		// Number of Logs in the segment
-		numLogs += len(logs.Logs)
-		tc := tlv.New(tlv.Tag(0x11), []byte(strconv.Itoa(len(logs.Logs))))
-		// Number of bytes in the segment
-		segmentBytesWritten += len(segmentBytes)
-		tl := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(segmentBytes))))
-		// The segment
-		s := append(tlv.Encode(tc, tl), segmentBytes...)
-
-		// Write our CSV to disk as a WAL segment
-		id := idgen.NextId()
-		fn := wal.Filename(database, table, id.String())
-		n, err := store.Import(fn, io.NopCloser(bytes.NewReader(s)))
-		require.NoError(t, err)
-		require.Greater(t, n, b.Len())
+	tests := []struct {
+		TLV bool
+	}{
+		{
+			TLV: true,
+		},
+		{
+			TLV: false,
+		},
 	}
-	// Close the store to flush the WAL
-	err = store.Close()
-	require.NoError(t, err)
-	// Retrieve the WAL segments from disk. We only
-	// expect a single file on disk because the WAL
-	// is going to merge all the segments together
-	// since they have a common prefix, namely the
-	// database and table variable contents.
-	files, err := wal.ListDir(storageDir)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(files))
-	// Create a reader and closer for each file,
-	// then merge them into a single reader, thereby
-	// immulating the behavior of adx::upload.
-	var (
-		readers []io.Reader
-		closers []io.Closer
-	)
-	for _, fi := range files {
-		f, err := os.Open(fi.Path)
-		require.NoError(t, err)
-		readers = append(readers, f)
-		closers = append(closers, f)
-	}
-	mr := io.MultiReader(readers...)
-	// Now wrap our readers with a TLV streaming reader,
-	// which is going to attempt discovery of any embedded TLV.
-	tlvr := tlv.NewStreaming(mr)
-	// We don't actually care about the content here, we just
-	// want to fully read the file.
-	n, err := io.Copy(io.Discard, tlvr)
-	require.NoError(t, err)
-	// While we don't care about the content of the file, we do
-	// want to ensure that the segment bytes written are equal
-	// to the amount we just read from disk. We want to ensure
-	// no TLV bytes polluted the segment bytes.
-	require.Equal(t, segmentBytesWritten, int(n))
-	// Shut down all our readers. While not strictly necessary
-	// since the test will just delete all these, it's still a
-	// good practice.
-	for _, c := range closers {
-		err := c.Close()
-		require.NoError(t, err)
-	}
-	// Iteratte through all our discovered TLV. We want to
-	// find all the TLV that have our special tag 0x11, which
-	// is the number of logs in the segment. We want to ensure
-	// that the sum of all the logs in the segment is equal to
-	// the number of logs we wrote to disk.
-	var (
-		numLogsInTLV int
-		headers      = tlvr.Header()
-	)
-	for _, h := range headers {
-		if h.Tag == tlv.Tag(0x11) {
-			v, err := strconv.Atoi(string(h.Value))
+	for _, tt := range tests {
+		t.Run(strconv.FormatBool(tt.TLV), func(t *testing.T) {
+			// We're immulating the path a segment would take as received
+			// via the /transfer endpoint in Ingestor, where a segment, as
+			// represented by a WAL being streamed from a client, is written
+			// to disk using the `store` package.
+			storageDir := t.TempDir()
+			store := storage.NewLocalStore(storage.StoreOpts{
+				StorageDir: storageDir,
+			})
+			err := store.Open(context.Background())
 			require.NoError(t, err)
-			numLogsInTLV += v
-		}
+
+			idgen, err := flake.New()
+			require.NoError(t, err)
+
+			var (
+				numSegments         = 10
+				segmentBytesWritten = 0
+				numLogs             = 0
+				database            = "DBA"
+				table               = "TableA"
+			)
+			for i := 0; i < numSegments; i++ {
+
+				// Transform our log into CSV
+				var log v1.ExportLogsServiceRequest
+				err := protojson.Unmarshal(otlpLog, &log)
+				require.NoError(t, err)
+
+				var b bytes.Buffer
+				w := transform.NewCSVWriter(&b, nil)
+				logs := &otlp.Logs{
+					Resources: log.ResourceLogs[0].Resource.Attributes,
+					Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
+				}
+				err = w.MarshalCSV(logs)
+				require.NoError(t, err)
+
+				segmentBytes := b.Bytes()
+				segmentBytesWritten += len(segmentBytes)
+				var s []byte
+				if tt.TLV {
+					// Number of Logs in the segment
+					numLogs += len(logs.Logs)
+					tc := tlv.New(tlv.Tag(0x11), []byte(strconv.Itoa(len(logs.Logs))))
+					// Number of bytes in the segment
+					tl := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(segmentBytes))))
+					// The segment
+					s = append(tlv.Encode(tc, tl), segmentBytes...)
+				} else {
+					s = segmentBytes
+				}
+
+				// Write our CSV to disk as a WAL segment
+				id := idgen.NextId()
+				fn := wal.Filename(database, table, id.String())
+				n, err := store.Import(fn, io.NopCloser(bytes.NewReader(s)))
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, n, b.Len())
+			}
+			// Close the store to flush the WAL
+			err = store.Close()
+			require.NoError(t, err)
+			// Retrieve the WAL segments from disk. We only
+			// expect a single file on disk because the WAL
+			// is going to merge all the segments together
+			// since they have a common prefix, namely the
+			// database and table variable contents.
+			files, err := wal.ListDir(storageDir)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(files))
+			// Create a reader and closer for each file,
+			// then merge them into a single reader, thereby
+			// immulating the behavior of adx::upload.
+			var (
+				readers []io.Reader
+				closers []io.Closer
+			)
+			for _, fi := range files {
+				f, err := os.Open(fi.Path)
+				require.NoError(t, err)
+				readers = append(readers, f)
+				closers = append(closers, f)
+			}
+			mr := io.MultiReader(readers...)
+			// Now wrap our readers with a TLV streaming reader,
+			// which is going to attempt discovery of any embedded TLV.
+			tlvr := tlv.NewStreaming(mr)
+			// We don't actually care about the content here, we just
+			// want to fully read the file.
+			n, err := io.Copy(io.Discard, tlvr)
+			require.NoError(t, err)
+			// While we don't care about the content of the file, we do
+			// want to ensure that the segment bytes written are equal
+			// to the amount we just read from disk. We want to ensure
+			// no TLV bytes polluted the segment bytes.
+			require.Equal(t, segmentBytesWritten, int(n))
+			// Shut down all our readers. While not strictly necessary
+			// since the test will just delete all these, it's still a
+			// good practice.
+			for _, c := range closers {
+				err := c.Close()
+				require.NoError(t, err)
+			}
+			// Iteratte through all our discovered TLV. We want to
+			// find all the TLV that have our special tag 0x11, which
+			// is the number of logs in the segment. We want to ensure
+			// that the sum of all the logs in the segment is equal to
+			// the number of logs we wrote to disk.
+			var (
+				numLogsInTLV int
+				headers      = tlvr.Header()
+			)
+			if !tt.TLV {
+				require.Equal(t, 0, len(headers))
+				return
+			}
+			for _, h := range headers {
+				if h.Tag == tlv.Tag(0x11) {
+					v, err := strconv.Atoi(string(h.Value))
+					require.NoError(t, err)
+					numLogsInTLV += v
+				}
+			}
+			require.Equal(t, numLogs, numLogsInTLV)
+		})
 	}
-	require.Equal(t, numLogs, numLogsInTLV)
 }
 
 func TestTLV(t *testing.T) {

@@ -77,6 +77,10 @@ type Reader struct {
 	streaming bool
 	offset    int
 	term      int
+
+	// fastpath is set when we fail to discover a TLV header,
+	// at which point we're just streaming bytes.
+	fastpath bool
 }
 
 func NewReader(r io.Reader) *Reader {
@@ -102,7 +106,7 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 	}
 	// limit the number of bytes we can read to the length of
 	// the remainder of the payload (if we know it)
-	if r.streaming && r.discovered {
+	if r.streaming && r.discovered && !r.fastpath {
 		if cap(p) > r.term-r.offset {
 			n, err = io.LimitReader(r.source, int64(r.term-r.offset)).Read(p)
 			r.offset += n
@@ -134,6 +138,7 @@ func (r *Reader) decode() error {
 	// source has no header
 	if Tag(binary.BigEndian.Uint16(p)) != magicn {
 		r.discovered = true
+		r.fastpath = true
 		// we need to keep these bytes around until someone calls Read
 		r.buf = make([]byte, len(p))
 		copy(r.buf, p)
