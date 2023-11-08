@@ -136,17 +136,41 @@ func (b *segmentIterator) Close() error {
 
 // Verify iterates through the entire segment and verifies the checksums for each block.  The iterator must be
 // re-created after calling this method.
-func (b *segmentIterator) Verify() error {
+func (b *segmentIterator) Verify() (int, error) {
+	var blocks int
 	for {
-		next, err := b.Next()
+		// Read the block length and CRC
+		n, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
 		if err == io.EOF {
-			return nil
-		} else if err != nil {
-			return err
+			return blocks, nil
+		} else if err != nil || n != 8 {
+			return 0, fmt.Errorf("short read: expected 8, got %d", n)
 		}
-		if !next {
-			break
+
+		// Extract the block length and expand the read buffer if it is too small.
+		blockLen := binary.BigEndian.Uint32(b.lenCrcBuf[:4])
+		if uint32(cap(b.buf)) < blockLen {
+			b.buf = make([]byte, 0, blockLen)
 		}
+
+		// Extract the CRC value for the block
+		crc := binary.BigEndian.Uint32(b.lenCrcBuf[4:8])
+
+		// Read the expected block length bytes
+		n, err = io.ReadFull(b.br, b.buf[:blockLen])
+		if err != nil {
+			return 0, err
+		}
+
+		// Make sure we actually read the number of bytes we were expecting.
+		if uint32(n) != blockLen {
+			return 0, fmt.Errorf("short block read: expected %d, got %d", blockLen, n)
+		}
+
+		// Validate the block checksum matches still
+		if crc32.ChecksumIEEE(b.buf[:blockLen]) != crc {
+			return 0, fmt.Errorf("block checksum verification failed")
+		}
+		blocks++
 	}
-	return nil
 }
