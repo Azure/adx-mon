@@ -15,13 +15,13 @@ import (
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
-	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
+	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
@@ -112,12 +112,12 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			}
 
 			// Serialize the logs into a WAL, grouped by Kusto destination database and table
-			wals, err := serializedLogs(ctx, msg, add, mp)
+			serialized, err := serialize(ctx, msg, add, mp, log)
 			defer func() {
 				// Clean up the WALs
-				for _, w := range wals {
-					if err := mp.Remove(w.Path); err != nil {
-						log.Error("Failed to remove WAL", "Filename", w.Path, "Error", err)
+				for _, s := range serialized {
+					if err := mp.Remove(s.Path); err != nil {
+						log.Error("Failed to remove WAL", "Filename", s.Path, "Error", err)
 					}
 				}
 			}()
@@ -134,27 +134,21 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 				return
 			}
 
-			if logger.IsDebug() {
-				for _, fn := range wals {
-					log.Debug("Serialized logs", "Filename", fn)
-				}
-			}
-
 			// Create our RPC request and send it
 			g, gctx := errgroup.WithContext(ctx)
 			for endpoint, rpcClient := range rpcClients {
 				endpoint := endpoint
 				rpcClient := rpcClient
 				g.Go(func() error {
-					for _, fn := range wals {
-						f, err := mp.Open(fn.Path)
+					for _, s := range serialized {
+						f, err := mp.Open(s.Path)
 						if err != nil {
-							log.Error("Failed to open WAL", "Filename", fn, "Error", err)
+							log.Error("Failed to open WAL", "Filename", s, "Error", err)
 							return err
 						}
 						defer f.Close()
 
-						filename := filepath.Base(fn.Path)
+						filename := filepath.Base(s.Path)
 
 						if err := rpcClient.Write(gctx, endpoint, filename, f); err != nil {
 							log.Error("Failed to send logs", "Endpoint", endpoint, "Error", err)
@@ -202,8 +196,8 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 			// We only want to increment the number of logs sent if we
 			// are returning a successful response to the client
 			if statusCode == http.StatusOK {
-				for _, w := range wals {
-					metrics.LogsProxyUploaded.WithLabelValues(w.Database, w.Table).Add(float64(w.Logs))
+				for _, s := range serialized {
+					metrics.LogsProxyUploaded.WithLabelValues(s.Database, s.Table).Add(float64(s.Logs))
 				}
 			}
 
@@ -222,108 +216,47 @@ func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVe
 	}
 }
 
-type groupedLogs struct {
+type serialized struct {
 	Path     string
-	Logs     int
 	Database string
 	Table    string
-	w        *wal.WAL
+	Logs     int
 }
 
-func serializedLogs(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, mp *file.MemoryProvider) (map[string]*groupedLogs, error) {
-	if req == nil {
-		return nil, ErrMalformedLogs
-	}
-	if len(req.GetResourceLogs()) == 0 {
-		logger.Error("Request contains no Resource Logs")
-		return nil, ErrMalformedLogs
-	}
+func serialize(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, mp *file.MemoryProvider, log *slog.Logger) ([]serialized, error) {
+	var s []serialized
 
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
-	var (
-		d, t, fn string
-		logs     otlp.Logs
-		gl       = make(map[string]*groupedLogs)
-	)
-	for _, r := range req.GetResourceLogs() {
-		if r == nil {
-			logger.Error("Request contains no Resource Logs")
-			return gl, ErrMalformedLogs
+	grouped := otlp.Group(req, add, log)
+	for _, group := range grouped {
+		metrics.LogsProxyReceived.WithLabelValues(group.Database, group.Table).Add(float64(len(group.Logs)))
+		w, err := wal.NewWAL(wal.WALOpts{StorageProvider: mp, Prefix: fmt.Sprintf("%s_%s", group.Database, group.Table)})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create wal: %w", err)
 		}
-		logs.Resources = add
-		if r.Resource != nil {
-			logs.Resources = append(logs.Resources, r.Resource.GetAttributes()...)
+		if err := w.Open(ctx); err != nil {
+			return nil, fmt.Errorf("failed to open wal: %w", err)
 		}
-
-		if len(r.GetScopeLogs()) == 0 {
-			logger.Error("Request contains no Scope Logs")
-			return nil, ErrMalformedLogs
+		enc.Reset()
+		if err := enc.MarshalCSV(group); err != nil {
+			return nil, fmt.Errorf("failed to marshal csv: %w", err)
 		}
-		for _, s := range r.GetScopeLogs() {
-			if s == nil {
-				return gl, ErrMalformedLogs
-			}
-			for _, l := range s.GetLogRecords() {
-				logs.Logs = []*logsv1.LogRecord{l}
-				d, t = otlp.KustoMetadata(l)
-				if d == "" || t == "" {
-					return gl, ErrMissingKustoMetadata
-				}
-				fn = fmt.Sprintf("%s_%s", d, t)
-
-				if logger.IsDebug() {
-					logger.Debugf("Database: %s Table: %s", d, t)
-				}
-
-				metrics.LogsProxyReceived.WithLabelValues(d, t).Inc()
-				metrics.LogSize.WithLabelValues(d, t).Set(float64(proto.Size(l.Body)))
-				if kv := l.GetBody().GetKvlistValue(); kv != nil {
-					metrics.LogKeys.WithLabelValues(d, t).Set(float64(len(kv.GetValues())))
-				}
-
-				g, ok := gl[fn]
-				if !ok {
-					w, err := wal.NewWAL(wal.WALOpts{StorageProvider: mp, Prefix: fn})
-					if err != nil {
-						return gl, fmt.Errorf("failed to create wal: %w", err)
-					}
-					if err = w.Open(ctx); err != nil {
-						return gl, fmt.Errorf("failed to open wal: %w", err)
-					}
-					g = &groupedLogs{
-						Path:     w.Path(),
-						w:        w,
-						Database: d,
-						Table:    t,
-					}
-				}
-				enc.Reset()
-				if err := enc.MarshalCSV(&logs); err != nil {
-					return gl, err
-				}
-				if err := g.w.Write(ctx, enc.Bytes()); err != nil {
-					return gl, err
-				}
-				g.Logs += len(logs.Logs)
-
-				// WALs will return an empty path until a segment is created
-				if g.Path == "" {
-					g.Path = g.w.Path()
-				}
-
-				gl[fn] = g
-			}
+		// Add our TLV metadata
+		b := enc.Bytes()
+		tNumLogs := tlv.New(otlp.LogsTotalTag, []byte(strconv.Itoa(len(group.Logs))))
+		tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(b))))
+		if err := w.Write(ctx, append(tlv.Encode(tNumLogs, tPayloadSize), b...)); err != nil {
+			return nil, fmt.Errorf("failed to write to wal: %w", err)
+		}
+		s = append(s, serialized{Path: w.Path(), Database: group.Database, Table: group.Table, Logs: len(group.Logs)})
+		if err := w.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close wal: %w", err)
 		}
 	}
 
-	for _, g := range gl {
-		if err := g.w.Close(); err != nil {
-			return gl, err
-		}
-	}
-	return gl, nil
+	return s, nil
 }
 
 var (
