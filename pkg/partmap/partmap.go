@@ -15,6 +15,18 @@ type syncMap struct {
 	m  map[string]any
 }
 
+func (s *syncMap) apply(fn func(key string, value any) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for key, value := range s.m {
+		if err := fn(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *syncMap) get(key string) (any, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -111,14 +123,9 @@ func (m *Map) partition(key string) uint64 {
 
 func (m *Map) Each(fn func(key string, value any) error) error {
 	for _, partition := range m.partitions {
-		partition.mu.RLock()
-		for key, value := range partition.m {
-			if err := fn(key, value); err != nil {
-				partition.mu.RUnlock()
-				return err
-			}
+		if err := partition.apply(fn); err != nil {
+			return err
 		}
-		partition.mu.RUnlock()
 	}
 	return nil
 }
