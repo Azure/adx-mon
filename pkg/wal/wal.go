@@ -24,7 +24,6 @@ var (
 type WAL struct {
 	opts WALOpts
 
-	path       string
 	schemaPath string
 
 	// index is the index of closed wal segments.  The active segment is not part of the index.
@@ -291,10 +290,13 @@ func (w *WAL) Path() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	return w.path()
+}
+
+func (w *WAL) path() string {
 	if w.segment == nil {
 		return ""
 	}
-
 	return w.segment.Path()
 }
 
