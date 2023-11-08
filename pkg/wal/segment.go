@@ -100,6 +100,7 @@ type Iterator interface {
 	Next() (bool, error)
 	Value() []byte
 	Close() error
+	Verify() error
 }
 
 type segment struct {
@@ -323,6 +324,16 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 
 	if s.closed {
 		return ErrSegmentClosed
+	}
+
+	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
+	if err != nil {
+		return err
+	}
+
+	// Verify the block is valid before appending
+	if err := iter.Verify(); err != nil {
+		return err
 	}
 
 	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}
