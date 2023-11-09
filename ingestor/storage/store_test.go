@@ -44,9 +44,10 @@ func TestStore_Open(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
+		StorageDir:      dir,
+		SegmentMaxSize:  1024,
+		SegmentMaxAge:   time.Minute,
+		StorageProvider: &file.DiskProvider{},
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -78,14 +79,14 @@ func TestStore_Open(t *testing.T) {
 
 	r, err := wal.NewSegmentReader(path, &file.DiskProvider{})
 	require.NoError(t, err)
-	data, err := io.ReadAll(r)
+	_, err = io.ReadAll(r)
 	require.NoError(t, err)
-	println(string(data))
 
 	s = storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
+		StorageDir:      dir,
+		SegmentMaxSize:  1024,
+		SegmentMaxAge:   time.Minute,
+		StorageProvider: &file.DiskProvider{},
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -99,9 +100,10 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
+		StorageDir:      dir,
+		SegmentMaxSize:  1024,
+		SegmentMaxAge:   time.Minute,
+		StorageProvider: &file.DiskProvider{},
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -129,9 +131,10 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 func TestStore_SkipNonCSV(t *testing.T) {
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
+		StorageDir:      dir,
+		SegmentMaxSize:  1024,
+		SegmentMaxAge:   time.Minute,
+		StorageProvider: &file.DiskProvider{},
 	})
 
 	f, err := os.Create(filepath.Join(dir, "foo.csv.gz.tmp"))

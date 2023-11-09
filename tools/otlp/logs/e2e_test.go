@@ -215,7 +215,8 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 	t.Helper()
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir: dir,
+		StorageDir:      dir,
+		StorageProvider: &file.DiskProvider{},
 	})
 	err := store.Open(ctx)
 	require.NoError(t, err)

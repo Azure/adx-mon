@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -66,15 +67,18 @@ type StoreOpts struct {
 	SegmentMaxAge  time.Duration
 
 	LiftedColumns []string
+
+	StorageProvider file.Provider
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
 		opts: opts,
 		repository: wal.NewRepository(wal.RepositoryOpts{
-			StorageDir:     opts.StorageDir,
-			SegmentMaxSize: opts.SegmentMaxSize,
-			SegmentMaxAge:  opts.SegmentMaxAge,
+			StorageDir:      opts.StorageDir,
+			SegmentMaxSize:  opts.SegmentMaxSize,
+			SegmentMaxAge:   opts.SegmentMaxAge,
+			StorageProvider: opts.StorageProvider,
 		}),
 		metrics: make(map[string]prometheus.Counter),
 	}
