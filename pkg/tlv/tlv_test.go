@@ -40,7 +40,8 @@ func TestEmbedTLV(t *testing.T) {
 			// to disk using the `store` package.
 			storageDir := t.TempDir()
 			store := storage.NewLocalStore(storage.StoreOpts{
-				StorageDir: storageDir,
+				StorageDir:      storageDir,
+				StorageProvider: &file.DiskProvider{},
 			})
 			err := store.Open(context.Background())
 			require.NoError(t, err)
