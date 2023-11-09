@@ -49,12 +49,12 @@ func (f *fakeUploader) upload(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case batch := <-f.queue:
-			files := batch.Paths
+			segments := batch.Segments
 
-			for _, file := range files {
-				logger.Warnf("Uploading file %s", file)
-				if err := os.RemoveAll(file); err != nil {
-					logger.Errorf("Failed to remove file: %s", err.Error())
+			for _, si := range segments {
+				logger.Warnf("Uploading si %s", si.Path)
+				if err := os.RemoveAll(si.Path); err != nil {
+					logger.Errorf("Failed to remove si: %s", err.Error())
 				}
 			}
 			batch.Release()

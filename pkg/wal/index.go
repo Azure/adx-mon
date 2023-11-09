@@ -209,8 +209,8 @@ func (i *Index) PrefixesByAge() []string {
 	return prefixes
 }
 
-// PrefixesByCount returns all prefixes sorted by total count least to greatest.  If there is a tie, the prefix with
-// the prefix that is lexigraphically first is returned.
+// PrefixesByCount returns all prefixes sorted by total count least to greatest.  If there is a tie, the prefix
+// that is lexicographically first is returned.
 func (i *Index) PrefixesByCount() []string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()

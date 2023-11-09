@@ -100,10 +100,14 @@ func (r *replicator) transfer(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case batch := <-r.queue:
-			segments := batch.Paths
+			segments := batch.Segments
 
 			if err := func() error {
-				mr, err := pkgfile.NewMultiReader(segments...)
+				paths := make([]string, len(segments))
+				for i, seg := range segments {
+					paths[i] = seg.Path
+				}
+				mr, err := pkgfile.NewMultiReader(paths...)
 				if err != nil && os.IsNotExist(err) {
 					return nil
 				} else if err != nil {
@@ -113,7 +117,7 @@ func (r *replicator) transfer(ctx context.Context) {
 
 				// Merge batch of files into the first file at the destination.  This ensures we transfer
 				// the full batch atomimcally.
-				filename := filepath.Base(segments[0])
+				filename := filepath.Base(paths[0])
 
 				db, table, _, err := wal.ParseFilename(filename)
 				if err != nil {
@@ -146,11 +150,11 @@ func (r *replicator) transfer(ctx context.Context) {
 				} else {
 					for _, seg := range segments {
 						if logger.IsDebug() {
-							logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg, filename, owner, addr, time.Since(start).String())
+							logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
 						}
 
-						if err := r.SegmentRemover.Remove(seg); err != nil {
-							logger.Errorf("Failed to remove segment %s: %s", seg, err)
+						if err := batch.Remove(); err != nil {
+							logger.Errorf("Failed to remove segment %s: %s", seg.Path, err)
 						}
 					}
 				}

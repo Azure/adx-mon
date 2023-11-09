@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -12,14 +13,15 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 )
 
 type Segmenter interface {
-	IsActiveSegment(path string) bool
+	Get(prefix string) []wal.SegmentInfo
+	PrefixesByAge() []string
+	Remove(si wal.SegmentInfo)
 }
 
 type BatcherOpts struct {
@@ -39,15 +41,28 @@ type BatcherOpts struct {
 }
 
 type Batch struct {
-	Paths    []string
+	Segments []wal.SegmentInfo
 	Database string
 	Table    string
+	Prefix   string
 
 	batcher *batcher
 }
 
 func (b *Batch) Release() {
 	b.batcher.release(b)
+}
+
+func (b *Batch) Remove() error {
+	return b.batcher.remove(b)
+}
+
+func (b *Batch) Paths() []string {
+	var paths []string
+	for _, v := range b.Segments {
+		paths = append(paths, v.Path)
+	}
+	return paths
 }
 
 type Batcher interface {
@@ -92,8 +107,8 @@ type batcher struct {
 	maxTransferSize int64
 	minUploadSize   int64
 
-	mu       sync.Mutex
-	segments map[string]struct{}
+	mu       sync.RWMutex
+	segments map[string]int
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
@@ -108,7 +123,7 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		transferQueue:    opts.TransferQueue,
 		health:           opts.PeerHealthReporter,
 		transferDisabled: opts.TransfersDisabled,
-		segments:         make(map[string]struct{}),
+		segments:         make(map[string]int),
 	}
 }
 
@@ -193,81 +208,70 @@ func (b *batcher) BatchSegments() error {
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
 func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
-	entries, err := wal.ListDir(b.storageDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read storage dir: %w", err)
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Path < entries[j].Path
-	})
-
 	metrics.IngestorSegmentsTotal.Reset()
 
 	// Groups is b map of metrics name to b list of segments for that metric.
-	groups := make(map[string][]string)
+	groups := make(map[string][]wal.SegmentInfo)
+
+	byAge := b.Segmenter.PrefixesByAge()
+
+	// Order them by newest first so we process recent data first.
+	slices.Reverse(byAge)
+
+	// Add a small percentage of the oldest segments to the front of the list to ensure that
+	// we're ticking away through the backlog.
+	byAge = prioritizeOldest(byAge)
 
 	// We need to find the segment that this node is responsible for uploading to kusto and ones that
 	// need to be transferred to other nodes.
 	var (
 		owned, notOwned       []*Batch
-		lastSegmentKey        string
 		groupSize             int
 		totalFiles, totalSize int64
 	)
 
 	b.mu.Lock()
-	for _, v := range entries {
-		fi, err := os.Stat(v.Path)
-		if os.IsNotExist(err) {
-			// File was in b prior batch and has been deleted.
-			continue
-		} else if err != nil {
-			logger.Warnf("Failed to stat file: %s", v.Path)
-			continue
-		}
+	for _, prefix := range byAge {
+		entries := b.Segmenter.Get(prefix)
 
-		totalFiles++
-		totalSize += fi.Size()
-
-		groupSize += int(fi.Size())
-
-		createdAt, err := flake.ParseFlakeID(v.Epoch)
-		if err != nil {
-			logger.Warnf("Failed to parse flake id: %s: %s", v.Epoch, err)
-		} else {
-			if lastSegmentKey == "" || v.Key != lastSegmentKey {
-				metrics.IngestorSegmentsMaxAge.WithLabelValues(lastSegmentKey).Set(time.Since(createdAt).Seconds())
-				metrics.IngestorSegmentsSizeBytes.WithLabelValues(lastSegmentKey).Set(float64(groupSize))
-				groupSize = 0
+		groupSize = 0
+		var oldestSegment time.Time
+		for _, v := range entries {
+			if oldestSegment.IsZero() || v.CreatedAt.Before(oldestSegment) {
+				oldestSegment = v.CreatedAt
 			}
+			groupSize += int(v.Size)
+			totalFiles++
 		}
-		lastSegmentKey = v.Key
 
-		metrics.IngestorSegmentsTotal.WithLabelValues(v.Key).Inc()
+		totalSize += int64(groupSize)
 
-		if b.Segmenter.IsActiveSegment(v.Path) {
+		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
+		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
+		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(entries)))
+
+		if n := b.segments[prefix]; n > 0 {
 			if logger.IsDebug() {
-				logger.Debugf("Skipping active segment: %s", v.Path)
+				logger.Debugf("Skipping prefix %s, already processing %d segment batches", prefix, n)
 			}
 			continue
 		}
 
-		if _, ok := b.segments[v.Key]; ok {
-			if logger.IsDebug() {
-				logger.Debugf("Skipping already processed segment: %s", v.Path)
-			}
-			continue
-		}
-
-		b.segments[v.Path] = struct{}{}
-		groups[v.Key] = append(groups[v.Key], v.Path)
+		groups[prefix] = append(groups[prefix], entries...)
 	}
 	b.mu.Unlock()
 
 	// For each sample, sort the segments by name.  The last segment is the current segment.
-	for k, v := range groups {
-		sort.Strings(v)
+	for _, prefix := range byAge {
+		v := groups[prefix]
+
+		if len(v) == 0 {
+			continue
+		}
+
+		sort.Slice(v, func(i, j int) bool {
+			return v[i].Path < v[j].Path
+		})
 
 		var (
 			batchSize    int64
@@ -275,39 +279,36 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			directUpload bool
 		)
 
-		db, table, _, err := wal.ParseFilename(v[0])
+		db, table, _, err := wal.ParseFilename(v[0].Path)
 		if err != nil {
 			logger.Errorf("Failed to parse segment filename: %s", err)
 			continue
 		}
 
 		batch = &Batch{
+			Prefix:   prefix,
 			Database: db,
 			Table:    table,
 			batcher:  b,
 		}
 
-		for _, path := range v {
-			stat, err := os.Stat(path)
-			if os.IsNotExist(err) {
-				// File was in b prior batch and has been deleted.
-				continue
-			} else if err != nil {
-				logger.Warnf("Failed to stat file: %s", path)
-				continue
-			}
-
-			batch.Paths = append(batch.Paths, path)
-			batchSize += stat.Size()
+		for _, si := range v {
+			batch.Segments = append(batch.Segments, si)
+			batchSize += si.Size
 
 			// The batch is at the optimal size for uploading to kusto, upload directly and start b new batch.
 			if batchSize >= b.minUploadSize {
 				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, (b.minUploadSize)/1e6, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
 				}
+
+				b.mu.Lock()
+				b.segments[prefix]++
+				b.mu.Unlock()
 
 				owned = append(owned, batch)
 				batch = &Batch{
+					Prefix:   prefix,
 					Database: db,
 					Table:    table,
 					batcher:  b,
@@ -319,40 +320,45 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 			if batchSize >= b.maxTransferSize {
 				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", path, b.maxTransferSize/1e6, batchSize)
+					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, b.maxTransferSize/1e6, batchSize)
 				}
 				directUpload = true
 				continue
 			}
 
-			createdAt, err := segmentCreationTime(path)
-			if err != nil {
-				logger.Warnf("failed to determine segment creation time: %s", err)
-			}
+			createdAt := si.CreatedAt
 
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have b node that's behind on uploading.
 			if time.Since(createdAt) > b.maxTransferAge {
 				if logger.IsDebug() {
-					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", path, b.maxTransferAge.String(), time.Since(createdAt).String())
+					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
 				}
 				directUpload = true
 			}
 		}
 
-		if len(batch.Paths) == 0 {
+		if len(batch.Segments) == 0 {
 			continue
 		}
 
 		if directUpload {
+			b.mu.Lock()
+			b.segments[prefix]++
+			b.mu.Unlock()
+
 			owned = append(owned, batch)
 			batch = nil
 			batchSize = 0
 			continue
 		}
 
-		owner, _ := b.Partitioner.Owner([]byte(k))
+		b.mu.Lock()
+		b.segments[prefix]++
+		b.mu.Unlock()
+
+		owner, _ := b.Partitioner.Owner([]byte(prefix))
 
 		// If the peer has signaled that it's unhealthy, upload the segments directly.
 		peerHealthy := b.health.IsPeerHealthy(owner)
@@ -367,31 +373,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	atomic.StoreInt64(&b.segmentsTotal, totalFiles)
 	atomic.StoreInt64(&b.segementsSize, totalSize)
 
-	// Sort the owned and not-owned batches by creation time so that we prioritize uploading the newest segments first
-	sort.Slice(owned, func(i, j int) bool {
-		groupA := owned[i]
-		groupB := owned[j]
-
-		minA := maxCreated(groupA.Paths)
-		minB := maxCreated(groupB.Paths)
-		return minB.Before(minA)
-	})
-
-	// Prioritize the oldest 10% of batches to the front of the list
-	owned = prioritizeOldest(owned)
-
-	sort.Slice(notOwned, func(i, j int) bool {
-		groupA := notOwned[i]
-		groupB := notOwned[j]
-
-		minA := maxCreated(groupA.Paths)
-		minB := maxCreated(groupB.Paths)
-		return minB.Before(minA)
-	})
-
-	// Prioritize the oldest 10% of batches to the front of the list
-	notOwned = prioritizeOldest(notOwned)
-
 	return owned, notOwned, nil
 }
 
@@ -399,13 +380,29 @@ func (b *batcher) release(batch *Batch) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for _, v := range batch.Paths {
-		delete(b.segments, v)
+	b.segments[batch.Prefix]--
+	if b.segments[batch.Prefix] <= 0 {
+		delete(b.segments, batch.Prefix)
 	}
 }
 
-func prioritizeOldest(a []*Batch) []*Batch {
-	var b []*Batch
+func (b *batcher) remove(batch *Batch) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, si := range batch.Segments {
+		err := os.Remove(si.Path)
+		if err != nil && !os.IsNotExist(err) {
+			logger.Errorf("Failed to remove segment %s: %s", si.Path, err)
+			continue
+		}
+		b.Segmenter.Remove(si)
+	}
+	return nil
+}
+
+func prioritizeOldest(a []string) []string {
+	var b []string
 
 	// Find the index that is roughly 10% from the end of the list
 	idx := len(a) - int(math.Round(float64(len(a))*0.1))
@@ -414,34 +411,4 @@ func prioritizeOldest(a []*Batch) []*Batch {
 	// Move first 90% of batches to the end of the list
 	b = append(b, a[:idx]...)
 	return b
-}
-
-func maxCreated(batch []string) time.Time {
-	var maxTime time.Time
-	for _, v := range batch {
-		createdAt, err := segmentCreationTime(v)
-		if err != nil {
-			logger.Warnf("Invalid file name: %s: %s", v, err)
-			continue
-		}
-
-		if maxTime.IsZero() || createdAt.After(maxTime) {
-			maxTime = createdAt
-		}
-	}
-	return maxTime
-}
-
-func segmentCreationTime(filename string) (time.Time, error) {
-	_, _, epoch, err := wal.ParseFilename(filename)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid file name: %s: %w", filename, err)
-	}
-
-	createdAt, err := flake.ParseFlakeID(epoch)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid file name: %s: %w", filename, err)
-
-	}
-	return createdAt, nil
 }

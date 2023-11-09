@@ -49,11 +49,12 @@ func NewHealth(opts HealthOpts) *Health {
 		opts.UnhealthyTimeout = time.Minute
 	}
 
-	return &Health{
+	h := &Health{
 		opts:       opts,
 		QueueSizer: opts.QueueSizer,
 		state:      make(map[string]*HealthStatus),
 	}
+	return h
 }
 
 func (h *Health) Open(ctx context.Context) error {
@@ -116,4 +117,20 @@ func (h *Health) SetPeerHealthy(peer string) {
 	s.Healthy = true
 	s.NextCheck = time.Time{}
 	h.state[peer] = s
+}
+
+func (h *Health) UploadQueueSize() int {
+	return h.QueueSizer.UploadQueueSize()
+}
+
+func (h *Health) TransferQueueSize() int {
+	return h.QueueSizer.TransferQueueSize()
+}
+
+func (h *Health) SegmentsTotal() int64 {
+	return h.QueueSizer.SegmentsTotal()
+}
+
+func (h *Health) SegmentsSize() int64 {
+	return h.QueueSizer.SegmentsSize()
 }
