@@ -7,7 +7,7 @@ import (
 )
 
 type Map struct {
-	partitions []syncMap
+	partitions []*syncMap
 }
 
 type syncMap struct {
@@ -86,9 +86,9 @@ func (s *syncMap) getOrCreate(key string, fn func() (any, error)) (any, error) {
 }
 
 func NewMap(partitons int) *Map {
-	partitions := make([]syncMap, partitons)
+	partitions := make([]*syncMap, partitons)
 	for i := range partitions {
-		partitions[i] = syncMap{
+		partitions[i] = &syncMap{
 			m: make(map[string]any),
 		}
 	}
