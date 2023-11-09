@@ -100,6 +100,7 @@ type Iterator interface {
 	Next() (bool, error)
 	Value() []byte
 	Close() error
+	Verify() (int, error)
 }
 
 type segment struct {
@@ -173,7 +174,7 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		closing:  make(chan struct{}),
 		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
 		encoder:  encoders[rand.Intn(len(encoders))],
-		appendCh: make(chan ring.Entry),
+		appendCh: make(chan ring.Entry, DefaultRingSize),
 		flushCh:  make(chan chan error),
 	}
 
@@ -229,7 +230,7 @@ func Open(path string, fp file.Provider) (Segment, error) {
 		closing:  make(chan struct{}),
 		ringBuf:  ring.NewBuffer(DefaultRingSize),
 		encoder:  encoders[rand.Intn(len(encoders))],
-		appendCh: make(chan ring.Entry),
+		appendCh: make(chan ring.Entry, DefaultRingSize),
 		flushCh:  make(chan chan error),
 	}
 
@@ -323,6 +324,18 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 
 	if s.closed {
 		return ErrSegmentClosed
+	}
+
+	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
+	if err != nil {
+		return err
+	}
+
+	// Verify the block is valid before appending
+	if n, err := iter.Verify(); err != nil {
+		return err
+	} else if n == 0 {
+		return nil
 	}
 
 	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}

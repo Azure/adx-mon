@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
+	"github.com/Azure/adx-mon/pkg/wal"
 	connect_go "github.com/bufbuild/connect-go"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -58,6 +59,16 @@ func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.Ex
 			invalidLogErrors = errors.Join(invalidLogErrors, fmt.Errorf("request destination not supported for %d logs: %s", invalidCount, d))
 			rejectedLogRecords += int64(invalidCount)
 		} else if err := srv.w(ctx, d, t, logs); err != nil {
+			if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+				m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+				res := &v1.ExportLogsServiceResponse{
+					PartialSuccess: &v1.ExportLogsPartialSuccess{
+						RejectedLogRecords: int64(len(logs.Logs)),
+						ErrorMessage:       err.Error(),
+					},
+				}
+				return connect_go.NewResponse(res), connect_go.NewError(connect_go.CodeResourceExhausted, err)
+			}
 			// Internal errors with writer. Bail out now and allow the client to retry.
 			logger.Errorf("Failed to write logs to %s.%s: %v", d, t, err)
 			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()

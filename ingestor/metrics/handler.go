@@ -3,6 +3,7 @@ package metrics
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -150,7 +152,12 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	// Apply any label or metrics drops or additions
 	req = s.requestFilter.TransformWriteRequest(req)
 
-	if err := s.requestWriter.Write(r.Context(), s.database, req); err != nil {
+	err = s.requestWriter.Write(r.Context(), s.database, req)
+	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		return
+	} else if err != nil {
 		logger.Errorf("Failed to write ts: %s", err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)

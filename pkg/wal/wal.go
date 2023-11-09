@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,10 +16,14 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
+var (
+	ErrMaxDiskUsageExceeded = fmt.Errorf("max disk usage exceeded")
+	ErrMaxSegmentsExceeded  = fmt.Errorf("max segments exceeded")
+)
+
 type WAL struct {
 	opts WALOpts
 
-	path       string
 	schemaPath string
 
 	// index is the index of closed wal segments.  The active segment is not part of the index.
@@ -54,6 +59,12 @@ type WALOpts struct {
 	// SegmentMaxAge is the max age of a segment before it will be rotated and compressed.
 	SegmentMaxAge time.Duration
 
+	// MaxDiskUsage is the max disk usage of WAL segments allowed before writes should be rejected.
+	MaxDiskUsage int64
+
+	// MaxSegmentCount is the max number of segments allowed before writes should be rejected.
+	MaxSegmentCount int
+
 	// Index is the index of the WAL segments.
 	Index *Index
 }
@@ -81,41 +92,58 @@ func (w *WAL) Open(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	filepath.WalkDir(w.opts.StorageDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
+	// Loading existing segments is not supported for memory provider
+	if _, ok := w.opts.StorageProvider.(*file.MemoryProvider); ok {
+		return nil
+	}
+
+	dir, err := w.opts.StorageProvider.Open(w.opts.StorageDir)
+	if err != nil {
+		return err
+	}
+
+	for {
+		entries, err := dir.ReadDir(100)
+		if err == io.EOF {
+			break
+		} else if err != nil {
 			return err
 		}
-		if d.IsDir() || filepath.Ext(path) != ".wal" {
-			return nil
+
+		for _, d := range entries {
+			path := filepath.Join(w.opts.StorageDir, d.Name())
+			if d.IsDir() || filepath.Ext(path) != ".wal" {
+				continue
+			}
+
+			fileName := filepath.Base(path)
+			if bytes.HasPrefix([]byte(fileName), []byte(w.opts.Prefix)) {
+				fi, err := d.Info()
+				if err != nil {
+					logger.Warnf("Failed to get file info: %s %s", path, err.Error())
+					continue
+				}
+
+				fields := strings.Split(fileName, "_")
+				epoch := fields[len(fields)-1][:len(fields[len(fields)-1])-4]
+
+				createdAt, err := flakeutil.ParseFlakeID(epoch)
+				if err != nil {
+					logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
+					continue
+				}
+
+				info := SegmentInfo{
+					Prefix:    w.opts.Prefix,
+					Ulid:      epoch,
+					Path:      path,
+					Size:      fi.Size(),
+					CreatedAt: createdAt,
+				}
+				w.index.Add(info)
+			}
 		}
-
-		fileName := filepath.Base(path)
-		if bytes.HasPrefix([]byte(fileName), []byte(w.opts.Prefix)) {
-			fi, err := d.Info()
-			if err != nil {
-				return err
-			}
-
-			fields := strings.Split(fileName, "_")
-			epoch := fields[len(fields)-1][:len(fields[len(fields)-1])-4]
-
-			createdAt, err := flakeutil.ParseFlakeID(epoch)
-			if err != nil {
-				return err
-			}
-
-			info := SegmentInfo{
-				Prefix:    w.opts.Prefix,
-				Ulid:      epoch,
-				Path:      path,
-				Size:      fi.Size(),
-				CreatedAt: createdAt,
-			}
-			w.index.Add(info)
-
-		}
-		return nil
-	})
+	}
 
 	go w.rotate(ctx)
 
@@ -150,6 +178,10 @@ func (w *WAL) Close() error {
 func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	var seg Segment
 
+	if err := w.validateLimits(buf); err != nil {
+		return err
+	}
+
 	// fast path
 	w.mu.RLock()
 	if w.segment != nil {
@@ -175,6 +207,17 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	w.mu.Unlock()
 
 	return seg.Write(ctx, buf)
+}
+
+func (w *WAL) validateLimits(buf []byte) error {
+	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+int64(len(buf)) > w.opts.MaxDiskUsage {
+		return ErrMaxDiskUsageExceeded
+	}
+
+	if w.opts.MaxSegmentCount > 0 && w.index.TotalSegments() >= w.opts.MaxSegmentCount {
+		return ErrMaxSegmentsExceeded
+	}
+	return nil
 }
 
 func (w *WAL) Size() int {
@@ -247,10 +290,13 @@ func (w *WAL) Path() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	return w.path()
+}
+
+func (w *WAL) path() string {
 	if w.segment == nil {
 		return ""
 	}
-
 	return w.segment.Path()
 }
 
@@ -260,6 +306,10 @@ func (w *WAL) Remove(path string) error {
 
 func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	var seg Segment
+
+	if err := w.validateLimits(buf); err != nil {
+		return err
+	}
 
 	// fast path
 	w.mu.RLock()
@@ -308,4 +358,15 @@ func (w *WAL) RemoveAll() error {
 		return w.Remove(w.segment.Path())
 	}
 	return nil
+}
+
+func (w *WAL) Flush() error {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if w.segment == nil {
+		return nil
+	}
+
+	return w.segment.Flush()
 }

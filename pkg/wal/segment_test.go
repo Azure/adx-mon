@@ -14,6 +14,7 @@ import (
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/davidnarayan/go-flake"
 	"github.com/stretchr/testify/require"
 )
@@ -313,6 +314,134 @@ func TestSegment_Size(t *testing.T) {
 
 			require.Equal(t, fsSz, sz)
 			require.Equal(t, fsSz, info.Size)
+		})
+	}
+}
+
+func TestSegment_Append(t *testing.T) {
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			require.NoError(t, err)
+			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			require.NoError(t, s.Write(context.Background(), []byte("test1")))
+			require.NoError(t, s.Flush())
+			require.NoError(t, s.Close())
+			f, err := tt.StorageProvider.Open(s.Path())
+			require.NoError(t, err)
+			b, err := io.ReadAll(f)
+			require.NoError(t, err)
+
+			s, err = wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			require.NoError(t, err)
+			require.NoError(t, s.Append(context.Background(), b))
+			require.NoError(t, s.Append(context.Background(), b))
+			require.NoError(t, s.Flush())
+
+			f, err = tt.StorageProvider.Open(s.Path())
+			require.NoError(t, err)
+			iter, err := wal.NewSegmentIterator(f)
+			require.NoError(t, err)
+
+			next, err := iter.Next()
+			require.NoError(t, err)
+			require.True(t, next)
+			require.Equal(t, []byte("test"), iter.Value())
+
+			next, err = iter.Next()
+			require.NoError(t, err)
+			require.True(t, next)
+			require.Equal(t, []byte("test1"), iter.Value())
+
+			next, err = iter.Next()
+			require.NoError(t, err)
+			require.True(t, next)
+			require.Equal(t, []byte("test"), iter.Value())
+
+			next, err = iter.Next()
+			require.NoError(t, err)
+			require.True(t, next)
+			require.Equal(t, []byte("test1"), iter.Value())
+
+			next, err = iter.Next()
+			require.ErrorIs(t, err, io.EOF)
+			require.False(t, next)
+		})
+	}
+}
+
+func TestSegment_Append_Corrupted(t *testing.T) {
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			require.NoError(t, err)
+			require.Error(t, s.Append(context.Background(), []byte("test")))
+			require.NoError(t, s.Close())
+		})
+	}
+}
+
+func TestSegment_Write(t *testing.T) {
+	tests := []struct {
+		Name            string
+		StorageProvider file.Provider
+	}{
+		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			require.NoError(t, err)
+			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			require.NoError(t, s.Write(context.Background(), []byte("test1")))
+			require.NoError(t, s.Flush())
+
+			b, err := s.Bytes()
+			require.NoError(t, err)
+			spew.Dump(b)
+			println(s.Path())
+
+			f, err := tt.StorageProvider.Open(s.Path())
+			require.NoError(t, err)
+			iter, err := wal.NewSegmentIterator(f)
+			require.NoError(t, err)
+			defer f.Close()
+
+			next, err := iter.Next()
+			require.NoError(t, err)
+			require.True(t, next)
+			require.Equal(t, []byte("test"), iter.Value())
+
+			next, err = iter.Next()
+			require.NoError(t, err)
+			require.True(t, next)
+			require.Equal(t, []byte("test1"), iter.Value())
+
+			next, err = iter.Next()
+			require.ErrorIs(t, err, io.EOF)
+			require.False(t, next)
 		})
 	}
 }

@@ -26,6 +26,7 @@ func main() {
 		verbose, dryRun                 bool
 		concurrency                     int
 		batchSize, metrics, cardinality int
+		totalSamples                    int64
 	)
 
 	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
@@ -37,6 +38,7 @@ func main() {
 	flag.IntVar(&metrics, "metrics", 100, "Numbe of distinct metrics")
 	flag.IntVar(&cardinality, "cardinality", 100000, "Total cardinality per metric")
 	flag.BoolVar(&dryRun, "dry-run", false, "Read data but don't send it")
+	flag.Int64Var(&totalSamples, "total-samples", 0, "Total samples to send (0 = continuous)")
 
 	flag.Parse()
 
@@ -47,8 +49,9 @@ func main() {
 			NumMetrics:  metrics,
 			Cardinality: cardinality,
 		}),
-		startTime: time.Now().UTC(),
-		batchSize: batchSize,
+		startTime:    time.Now().UTC(),
+		batchSize:    batchSize,
+		totalSamples: totalSamples,
 	}
 	dataGen = generator
 
@@ -164,18 +167,24 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 }
 
 type continuousDataGenerator struct {
-	set       *data.Set
-	startTime time.Time
-	batchSize int
+	set          *data.Set
+	startTime    time.Time
+	batchSize    int
+	totalSamples int64
+	sent         int64
 }
 
 func (c *continuousDataGenerator) Read() (*prompb.WriteRequest, error) {
+	if c.totalSamples > 0 && atomic.LoadInt64(&c.sent) >= c.totalSamples {
+		return nil, io.EOF
+	}
 	wr := &prompb.WriteRequest{}
 	for i := 0; i < c.batchSize; i++ {
 		ts := c.set.Next(c.startTime)
 		wr.Timeseries = append(wr.Timeseries, ts)
 	}
 	c.startTime = c.startTime.Add(time.Second)
+	atomic.AddInt64(&c.sent, int64(c.batchSize))
 	return wr, nil
 }
 

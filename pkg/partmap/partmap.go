@@ -7,12 +7,24 @@ import (
 )
 
 type Map struct {
-	partitions []syncMap
+	partitions []*syncMap
 }
 
 type syncMap struct {
 	mu sync.RWMutex
 	m  map[string]any
+}
+
+func (s *syncMap) apply(fn func(key string, value any) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for key, value := range s.m {
+		if err := fn(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *syncMap) get(key string) (any, bool) {
@@ -74,9 +86,9 @@ func (s *syncMap) getOrCreate(key string, fn func() (any, error)) (any, error) {
 }
 
 func NewMap(partitons int) *Map {
-	partitions := make([]syncMap, partitons)
+	partitions := make([]*syncMap, partitons)
 	for i := range partitions {
-		partitions[i] = syncMap{
+		partitions[i] = &syncMap{
 			m: make(map[string]any),
 		}
 	}
@@ -111,14 +123,9 @@ func (m *Map) partition(key string) uint64 {
 
 func (m *Map) Each(fn func(key string, value any) error) error {
 	for _, partition := range m.partitions {
-		partition.mu.RLock()
-		for key, value := range partition.m {
-			if err := fn(key, value); err != nil {
-				partition.mu.RUnlock()
-				return err
-			}
+		if err := partition.apply(fn); err != nil {
+			return err
 		}
-		partition.mu.RUnlock()
 	}
 	return nil
 }

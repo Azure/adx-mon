@@ -32,6 +32,10 @@ type Disk struct {
 	f *os.File
 }
 
+func (d *Disk) ReadDir(i int) ([]os.DirEntry, error) {
+	return d.f.ReadDir(i)
+}
+
 func (d *Disk) Stat() (fs.FileInfo, error) {
 	return d.f.Stat()
 }

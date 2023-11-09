@@ -169,6 +169,22 @@ type Memory struct {
 	closed bool
 }
 
+func (m *Memory) ReadDir(i int) ([]os.DirEntry, error) {
+	m.fp.mufs.RLock()
+	defer m.fp.mufs.RUnlock()
+
+	if m.fp.mfs == nil {
+		return nil, nil
+	}
+
+	entries := make([]os.DirEntry, 0, len(m.fp.mfs))
+	for _, f := range m.fp.mfs {
+		entries = append(entries, f.mode)
+	}
+
+	return entries, nil
+}
+
 type Info struct {
 	mu      sync.RWMutex
 	name    string
@@ -176,6 +192,16 @@ type Info struct {
 	modtime time.Time
 	perm    os.FileMode
 	dir     bool
+}
+
+func (i *Info) Type() fs.FileMode {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.perm
+}
+
+func (i *Info) Info() (fs.FileInfo, error) {
+	return i, nil
 }
 
 func (i *Info) Name() string {

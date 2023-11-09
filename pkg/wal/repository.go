@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/partmap"
@@ -23,7 +22,6 @@ type Repository struct {
 
 	index *Index
 
-	mu   sync.RWMutex
 	wals *partmap.Map
 }
 
@@ -31,6 +29,9 @@ type RepositoryOpts struct {
 	StorageDir     string
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
+
+	MaxDiskUsage    int64
+	MaxSegmentCount int
 
 	// StorageProvider is an implementation of the file.File interface.
 	StorageProvider file.Provider
@@ -66,9 +67,6 @@ func (s *Repository) Open(ctx context.Context) error {
 }
 
 func (s *Repository) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if err := s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
 		return wal.Close()
@@ -148,17 +146,12 @@ func (s *Repository) Index() *Index {
 }
 
 func (s *Repository) IsActiveSegment(path string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.wals == nil {
-		return false
-	}
-
 	var active bool
 	s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
-		if wal.Path() == path {
+
+		walPath := wal.Path()
+		if walPath != "" && walPath == path {
 			active = true
 		}
 		return nil
@@ -167,21 +160,15 @@ func (s *Repository) IsActiveSegment(path string) bool {
 }
 
 func (s *Repository) SegmentExists(filename string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.index.SegmentExists(filename) {
 		return true
-	}
-
-	if s.wals == nil {
-		return false
 	}
 
 	var exists bool
 	s.wals.Each(func(key string, value any) error {
 		wal := value.(*WAL)
-		if wal.Path() == filename {
+		walPath := wal.Path()
+		if walPath != "" && walPath == filename {
 			exists = true
 		}
 		return nil
