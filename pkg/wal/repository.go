@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/wal/file"
@@ -46,23 +51,75 @@ func NewRepository(opts RepositoryOpts) *Repository {
 }
 
 func (s *Repository) Open(ctx context.Context) error {
-	wals, err := ListDir(s.opts.StorageDir)
-	if err != nil {
-		return fmt.Errorf("failed to list %s: %w", s.opts.StorageDir, err)
+	// Loading existing segments is not supported for memory provider
+	if _, ok := s.opts.StorageProvider.(*file.MemoryProvider); ok {
+		return nil
 	}
-	for _, w := range wals {
-		prefix := fmt.Sprintf("%s_%s", w.Database, w.Table)
-		_, ok := s.wals.Get(prefix)
-		if ok {
-			continue
-		}
 
-		wal, err := s.newWAL(ctx, prefix)
-		if err != nil {
+	dir, err := s.opts.StorageProvider.Open(s.opts.StorageDir)
+	if err != nil {
+		return err
+	}
+
+	for {
+		entries, err := dir.ReadDir(100)
+		if err == io.EOF {
+			break
+		} else if err != nil {
 			return err
 		}
-		s.wals.Set(prefix, wal)
+
+		for _, d := range entries {
+			path := filepath.Join(s.opts.StorageDir, d.Name())
+			if d.IsDir() || filepath.Ext(path) != ".wal" {
+				continue
+			}
+
+			fileName := filepath.Base(path)
+			fields := strings.Split(fileName, "_")
+			if len(fields) != 3 || fields[0] == "" {
+				continue
+			}
+
+			database := fields[0]
+			table := fields[1]
+			epoch := fields[2][:len(fields[2])-4]
+			prefix := fmt.Sprintf("%s_%s", database, table)
+
+			createdAt, err := flakeutil.ParseFlakeID(epoch)
+			if err != nil {
+				logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
+				continue
+			}
+
+			fi, err := d.Info()
+			if err != nil {
+				logger.Warnf("Failed to get file info: %s %s", path, err.Error())
+				continue
+			}
+
+			info := SegmentInfo{
+				Prefix:    prefix,
+				Ulid:      epoch,
+				Path:      path,
+				Size:      fi.Size(),
+				CreatedAt: createdAt,
+			}
+			s.index.Add(info)
+
+			_, ok := s.wals.Get(prefix)
+			if ok {
+				continue
+			}
+
+			wal, err := s.newWAL(ctx, prefix)
+			if err != nil {
+				return err
+			}
+			s.wals.Set(prefix, wal)
+		}
 	}
+
 	return nil
 }
 

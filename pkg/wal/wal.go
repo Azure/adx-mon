@@ -1,17 +1,12 @@
 package wal
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
-	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal/file"
 )
@@ -91,59 +86,6 @@ func (w *WAL) Open(ctx context.Context) error {
 	ctx, w.closeFn = context.WithCancel(context.Background())
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	// Loading existing segments is not supported for memory provider
-	if _, ok := w.opts.StorageProvider.(*file.MemoryProvider); ok {
-		return nil
-	}
-
-	dir, err := w.opts.StorageProvider.Open(w.opts.StorageDir)
-	if err != nil {
-		return err
-	}
-
-	for {
-		entries, err := dir.ReadDir(100)
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return err
-		}
-
-		for _, d := range entries {
-			path := filepath.Join(w.opts.StorageDir, d.Name())
-			if d.IsDir() || filepath.Ext(path) != ".wal" {
-				continue
-			}
-
-			fileName := filepath.Base(path)
-			if bytes.HasPrefix([]byte(fileName), []byte(w.opts.Prefix)) {
-				fi, err := d.Info()
-				if err != nil {
-					logger.Warnf("Failed to get file info: %s %s", path, err.Error())
-					continue
-				}
-
-				fields := strings.Split(fileName, "_")
-				epoch := fields[len(fields)-1][:len(fields[len(fields)-1])-4]
-
-				createdAt, err := flakeutil.ParseFlakeID(epoch)
-				if err != nil {
-					logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
-					continue
-				}
-
-				info := SegmentInfo{
-					Prefix:    w.opts.Prefix,
-					Ulid:      epoch,
-					Path:      path,
-					Size:      fi.Size(),
-					CreatedAt: createdAt,
-				}
-				w.index.Add(info)
-			}
-		}
-	}
 
 	go w.rotate(ctx)
 
