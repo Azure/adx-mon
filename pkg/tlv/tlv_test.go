@@ -3,6 +3,7 @@ package tlv_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
@@ -15,7 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/davidnarayan/go-flake"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -44,9 +45,6 @@ func TestEmbedTLV(t *testing.T) {
 			err := store.Open(context.Background())
 			require.NoError(t, err)
 
-			idgen, err := flake.New()
-			require.NoError(t, err)
-
 			var (
 				numSegments         = 10
 				segmentBytesWritten = 0
@@ -54,6 +52,13 @@ func TestEmbedTLV(t *testing.T) {
 				database            = "DBA"
 				table               = "TableA"
 			)
+
+			segmentDir := t.TempDir()
+			sw, err := wal.NewWAL(wal.WALOpts{StorageDir: segmentDir, Prefix: fmt.Sprintf("%s_%s", database, table)})
+			require.NoError(t, err)
+			err = sw.Open(context.Background())
+			require.NoError(t, err)
+
 			for i := 0; i < numSegments; i++ {
 
 				// Transform our log into CSV
@@ -86,12 +91,23 @@ func TestEmbedTLV(t *testing.T) {
 				}
 
 				// Write our CSV to disk as a WAL segment
-				id := idgen.NextId()
-				fn := wal.Filename(database, table, id.String())
-				n, err := store.Import(fn, io.NopCloser(bytes.NewReader(s)))
+				err = sw.Write(context.Background(), s)
 				require.NoError(t, err)
-				require.GreaterOrEqual(t, n, b.Len())
 			}
+			segment := sw.Path()
+			err = sw.Close()
+			require.NoError(t, err)
+
+			// Import our segments. This emulates the path where Collector has written
+			// segments that _might_ contain TLV and has sent them to Ingestor via
+			// the transfer handler.
+			f, err := os.Open(segment)
+			require.NoError(t, err)
+			_, err = store.Import(segment, f)
+			require.NoError(t, err)
+			err = f.Close()
+			require.NoError(t, err)
+
 			// Close the store to flush the WAL
 			err = store.Close()
 			require.NoError(t, err)
@@ -111,7 +127,7 @@ func TestEmbedTLV(t *testing.T) {
 				closers []io.Closer
 			)
 			for _, fi := range files {
-				f, err := os.Open(fi.Path)
+				f, err := wal.NewSegmentReader(fi.Path, &file.DiskProvider{})
 				require.NoError(t, err)
 				readers = append(readers, f)
 				closers = append(closers, f)
