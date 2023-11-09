@@ -1,7 +1,6 @@
 package adx
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"os"
@@ -10,9 +9,10 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
@@ -154,11 +154,11 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	defer cancel()
 
 	// Count the number of samples we are uploading.
-	scr := &samplesCounter{r: reader}
+	tlvr := tlv.NewStreaming(reader)
 
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, scr, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, tlvr, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
 		return err
 	}
@@ -169,11 +169,8 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 		return err
 	}
 
-	switch n.opts.SampleType {
-	case PromMetrics:
-		metrics.MetricsUploaded.WithLabelValues(database, table).Add(float64(scr.count))
-	case OTLPLogs:
-		metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(scr.count))
+	if n.opts.SampleType == OTLPLogs {
+		otlp.EmitMetricsForTLV(tlvr.Header(), database, table)
 	}
 
 	// return os.Remove(file)
@@ -256,40 +253,4 @@ func (n *uploader) upload(ctx context.Context) error {
 
 		}
 	}
-}
-
-var (
-	nl = byte(0x0A)
-	cr = byte(0x0D)
-	es = byte(0x1B)
-)
-
-type samplesCounter struct {
-	r     io.Reader
-	count int
-	at    int
-	last  byte
-}
-
-func (c *samplesCounter) Read(p []byte) (n int, err error) {
-	n, err = c.r.Read(p)
-	if err != nil {
-		return
-	}
-	for i := 0; i < n; i++ {
-		c.at = bytes.IndexByte(p[i:], nl)
-		if c.at == -1 {
-			break
-		}
-		i += c.at
-		if i == 0 && c.last != cr && c.last != es {
-			c.count++
-		} else if i > 0 && p[i-1] != cr && p[i-1] != es {
-			c.count++
-		}
-	}
-	if n > 0 {
-		c.last = p[n-1]
-	}
-	return
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"strconv"
 
 	"github.com/Azure/adx-mon/pkg/pool"
 )
@@ -21,7 +22,12 @@ var (
 	magicn = Tag(0x1)
 )
 
-const sizeOfHeader = binary.MaxVarintLen16 /* T */ + binary.MaxVarintLen32 /* L */ + binary.MaxVarintLen32 /* V */
+const (
+	sizeOfHeader = binary.MaxVarintLen16 /* T */ + binary.MaxVarintLen32 /* L */ + binary.MaxVarintLen32 /* V */
+
+	// PayloadTag is used to indicate the length of the payload.
+	PayloadTag = Tag(0xCB)
+)
 
 func New(tag Tag, value []byte) *TLV {
 
@@ -67,10 +73,22 @@ type Reader struct {
 	discovered bool
 	header     []TLV
 	buf        []byte
+
+	streaming bool
+	offset    int
+	term      int
+
+	// fastpath is set when we fail to discover a TLV header,
+	// at which point we're just streaming bytes.
+	fastpath bool
 }
 
 func NewReader(r io.Reader) *Reader {
 	return &Reader{source: r}
+}
+
+func NewStreaming(r io.Reader) *Reader {
+	return &Reader{source: r, streaming: true}
 }
 
 func (r *Reader) Read(p []byte) (n int, err error) {
@@ -86,21 +104,26 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 		r.buf = r.buf[n:]
 		return
 	}
+	// limit the number of bytes we can read to the length of
+	// the remainder of the payload (if we know it)
+	if r.streaming && r.discovered && !r.fastpath {
+		if cap(p) > r.term-r.offset {
+			n, err = io.LimitReader(r.source, int64(r.term-r.offset)).Read(p)
+			r.offset += n
+			r.discovered = false
+			return
+		}
+	}
+
 	// fast path
 	n, err = r.source.Read(p)
+	r.offset += n
+
 	return
 }
 
-func (r *Reader) Header() ([]TLV, error) {
-	if r.discovered {
-		return r.header, nil
-	}
-
-	if err := r.decode(); err != nil {
-		return nil, err
-	}
-
-	return r.header, nil
+func (r *Reader) Header() []TLV {
+	return r.header
 }
 
 func (r *Reader) decode() error {
@@ -115,6 +138,7 @@ func (r *Reader) decode() error {
 	// source has no header
 	if Tag(binary.BigEndian.Uint16(p)) != magicn {
 		r.discovered = true
+		r.fastpath = true
 		// we need to keep these bytes around until someone calls Read
 		r.buf = make([]byte, len(p))
 		copy(r.buf, p)
@@ -128,7 +152,7 @@ func (r *Reader) decode() error {
 	offset += binary.MaxVarintLen32
 
 	// at this point we know how much data we need from our source, so fill the buffer
-	if n < int(sizeOfElements) {
+	if n < offset+int(sizeOfElements) {
 		// read the remaining bytes needed to extract our header
 		l := &io.LimitedReader{R: r.source, N: int64(int(sizeOfElements))}
 		var read []byte
@@ -151,7 +175,6 @@ func (r *Reader) decode() error {
 	}
 
 	// no bounds checks are necessary, all sizes are known
-	r.header = make([]TLV, elements)
 	for i := 0; i < elements; i++ {
 		t := TLV{}
 		t.Tag = Tag(binary.BigEndian.Uint16(p[offset:]))
@@ -160,7 +183,21 @@ func (r *Reader) decode() error {
 		offset += binary.MaxVarintLen32
 		t.Value = p[offset : offset+int(t.Length)]
 		offset += int(t.Length)
-		r.header[i] = t
+		r.header = append(r.header, t)
+	}
+
+	// If there is a Tag that indicates the length of the payload, we can
+	// use skip checking for additional TLV until we've read the payload.
+	if r.streaming {
+		for _, t := range r.header {
+			if t.Tag == PayloadTag {
+				r.offset += offset
+				if v, err := strconv.Atoi(string(t.Value)); err == nil {
+					r.term += v + offset
+				}
+				break
+			}
+		}
 	}
 
 	r.discovered = true
