@@ -5,6 +5,7 @@ import (
 	"flag"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -31,27 +32,69 @@ func main() {
 	}
 	defer f.Close()
 
+	stat, err := f.Stat()
+	if err != nil {
+		logger.Fatalf("stat file: %s", err)
+	}
+
+	var segments []*os.File
+	if stat.IsDir() {
+		files, err := f.Readdir(0)
+		if err != nil {
+			logger.Fatalf("readdir: %s", err)
+		}
+
+		for _, file := range files {
+			if filepath.Ext(file.Name()) != ".wal" {
+				continue
+			}
+
+			f, err := os.Open(filepath.Join(dataFile, file.Name()))
+			if err != nil {
+				logger.Fatalf("open file: %s", err)
+			}
+			segments = append(segments, f)
+		}
+	} else {
+		segments = append(segments, f)
+	}
+
 	var (
 		blocks int
 		lines  int
 	)
 
-	iter, err := wal.NewSegmentIterator(f)
-	for {
-		next, err := iter.Next()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			println(err.Error())
-			return
-		} else if !next {
-			break
+	defer func() {
+		for _, f := range segments {
+			f.Close()
 		}
-		blocks++
-		lines += bytes.Count(iter.Value(), []byte("\n"))
+	}()
 
-		if !silent {
-			print(string(iter.Value()))
+	for _, f := range segments {
+		if len(segments) > 0 {
+			println("Processing", f.Name())
+		}
+
+		iter, err := wal.NewSegmentIterator(f)
+		if err != nil {
+			logger.Fatalf("new segment iterator: %s: %s", f.Name(), err)
+		}
+		for {
+			next, err := iter.Next()
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				println(err.Error())
+				return
+			} else if !next {
+				break
+			}
+			blocks++
+			lines += bytes.Count(iter.Value(), []byte("\n"))
+
+			if !silent {
+				print(string(iter.Value()))
+			}
 		}
 	}
 
