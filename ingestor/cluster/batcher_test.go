@@ -1,11 +1,11 @@
 package cluster
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
 	"github.com/stretchr/testify/require"
@@ -14,24 +14,33 @@ import (
 func TestBatcher_ClosedSegments(t *testing.T) {
 	dir := t.TempDir()
 
-	f, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa")))
-	require.NoError(t, err)
-	defer f.Close()
+	idx := wal.NewIndex()
+	idx.Add(wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "aaaa",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa")),
+		Size:      100,
+		CreatedAt: time.Unix(1, 0),
+	})
 
-	f1, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", "bbbb")))
-	require.NoError(t, err)
-	defer f1.Close()
+	idx.Add(wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "bbbb",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "bbbb")),
+		Size:      100,
+		CreatedAt: time.Unix(0, 0),
+	})
 
 	a := &batcher{
 		hostname:    "node1",
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node1"},
-		Segmenter:   &fakeSegmenter{active: filepath.Join(dir, wal.Filename("db", "Cpu", "bbbb"))},
-		segments:    make(map[string]struct{}),
+		Segmenter:   idx,
+		segments:    make(map[string]int),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa"))}, owner[0].Paths)
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa"))}, owner[0].Paths())
 	require.Equal(t, 0, len(notOwned))
 
 	requireValidBatch(t, owner)
@@ -45,16 +54,31 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	require.NoError(t, err)
 	now := idgen.NextId()
 
-	fName := wal.Filename("db", "Cpu", now.String())
-	f, err := os.Create(filepath.Join(dir, fName))
+	created, err := flakeutil.ParseFlakeID(now.String())
 	require.NoError(t, err)
-	defer f.Close()
+
+	idx := wal.NewIndex()
+	f1 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      now.String(),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", now.String())),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f1)
 
 	now = idgen.NextId()
-	f1Name := wal.Filename("db", "Cpu", now.String())
-	f1, err := os.Create(filepath.Join(dir, f1Name))
+	created, err = flakeutil.ParseFlakeID(now.String())
 	require.NoError(t, err)
-	defer f1.Close()
+
+	f2 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      now.String(),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", now.String())),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f2)
 
 	a := &batcher{
 		hostname:        "node1",
@@ -63,14 +87,14 @@ func TestBatcher_NodeOwned(t *testing.T) {
 		maxTransferSize: 100 * 1024 * 1024,
 		minUploadSize:   100 * 1024 * 1024,
 		Partitioner:     &fakePartitioner{owner: "node2"},
-		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		Segmenter:       idx,
 		health:          &fakeHealthChecker{healthy: true},
-		segments:        make(map[string]struct{}),
+		segments:        make(map[string]int),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
 	require.Equal(t, 0, len(owner))
-	require.Equal(t, []string{filepath.Join(dir, fName), filepath.Join(dir, f1Name)}, notOwned[0].Paths)
+	require.Equal(t, []string{f1.Path, f2.Path}, notOwned[0].Paths())
 
 	requireValidBatch(t, owner)
 	requireValidBatch(t, notOwned)
@@ -79,31 +103,47 @@ func TestBatcher_NodeOwned(t *testing.T) {
 func TestBatcher_NewestFirst(t *testing.T) {
 	dir := t.TempDir()
 
-	f, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001")))
+	created, err := flakeutil.ParseFlakeID("2359cdac7d6f0001")
 	require.NoError(t, err)
-	defer f.Close()
 
-	// This segment is older, but lexicographically greater.  It should be the in the first batch.
-	f1, err := os.Create(filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")))
+	idx := wal.NewIndex()
+	f1 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac7d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001")),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f1)
+
+	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
 	require.NoError(t, err)
-	defer f1.Close()
+
+	f2 := wal.SegmentInfo{
+		Prefix:    "db_Disk",
+		Ulid:      "2359cd7e3aef0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f2)
 
 	a := &batcher{
 		hostname:    "node1",
 		storageDir:  dir,
 		Partitioner: &fakePartitioner{owner: "node1"},
-		Segmenter:   &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
-		segments:    make(map[string]struct{}),
+		Segmenter:   idx,
+		segments:    make(map[string]int),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
 	require.Equal(t, 2, len(owner))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[0].Paths)
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[0].Paths())
 	require.Equal(t, "db", owner[0].Database)
 	require.Equal(t, "Cpu", owner[0].Table)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[1].Paths)
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[1].Paths())
 	require.Equal(t, "db", owner[1].Database)
 	require.Equal(t, "Disk", owner[1].Table)
 
@@ -114,26 +154,42 @@ func TestBatcher_NewestFirst(t *testing.T) {
 func TestBatcher_BigFileBatch(t *testing.T) {
 	dir := t.TempDir()
 
-	idgen, err := flake.New()
+	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
 	require.NoError(t, err)
-	now := idgen.NextId()
 
-	f, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now.String())))
-	require.NoError(t, f.Truncate(100*1024)) // Meets min transfer size, separate batch
-	require.NoError(t, err)
-	defer f.Close()
+	idx := wal.NewIndex()
+	f1 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac8d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac8d6f0001")),
+		Size:      100 * 1024, // Meets min transfer size, separate batch
+		CreatedAt: created,
+	}
+	idx.Add(f1)
 
-	now1 := idgen.NextId()
-	require.True(t, now1 > now)
-	f1, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now1.String())))
-	require.NoError(t, f1.Truncate(100)) // Meets min transfer size, separate batch
+	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
 	require.NoError(t, err)
-	defer f1.Close()
 
-	// This segment is older, but lexicographically greater.  It should be the in the first batch.
-	f2, err := os.Create(filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")))
+	f2 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac9d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac9d6f0001")),
+		Size:      100, // This should be in a new batch
+		CreatedAt: created,
+	}
+	idx.Add(f2)
+
+	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
 	require.NoError(t, err)
-	defer f2.Close()
+
+	f3 := wal.SegmentInfo{
+		Prefix:    "db_Disk",
+		Ulid:      "2359cd7e3aef0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f3)
 
 	a := &batcher{
 		hostname:        "node1",
@@ -142,9 +198,9 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 		minUploadSize:   100 * 1024,
 		maxTransferAge:  time.Minute,
 		Partitioner:     &fakePartitioner{owner: "node1"},
-		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		Segmenter:       idx,
 		health:          fakeHealthChecker{healthy: true},
-		segments:        make(map[string]struct{}),
+		segments:        make(map[string]int),
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -152,9 +208,9 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{f1.Name()}, owned[0].Paths)
-	require.Equal(t, []string{f.Name()}, owned[1].Paths)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths)
+	require.Equal(t, []string{f1.Path}, owned[0].Paths())
+	require.Equal(t, []string{f2.Path}, owned[1].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)
@@ -163,30 +219,54 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 func TestBatcher_BigBatch(t *testing.T) {
 	dir := t.TempDir()
 
-	idgen, err := flake.New()
+	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
 	require.NoError(t, err)
-	now := idgen.NextId()
 
-	f, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now.String())))
-	f.Truncate(50 * 1024)
-	require.NoError(t, err)
-	defer f.Close()
+	idx := wal.NewIndex()
+	f1 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac8d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac8d6f0001")),
+		Size:      50 * 1024,
+		CreatedAt: created,
+	}
+	idx.Add(f1)
 
-	now = idgen.NextId()
-	f1, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now.String())))
-	f1.Truncate(50 * 1024) // Current batch size meets min transfer size, this should trigger a new batch
+	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
 	require.NoError(t, err)
-	defer f1.Close()
 
-	now = idgen.NextId()
-	f2, err := os.Create(filepath.Join(dir, wal.Filename("db", "Cpu", now.String())))
-	require.NoError(t, err)
-	defer f2.Close()
+	f2 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac9d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac9d6f0001")),
+		Size:      50 * 1024,
+		CreatedAt: created,
+	}
+	idx.Add(f2)
 
-	// This segment is older, but lexicographically greater.  It should be the in the first batch.
-	f4, err := os.Create(filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")))
+	created, err = flakeutil.ParseFlakeID("2359cdacad6f0001")
 	require.NoError(t, err)
-	defer f4.Close()
+
+	f3 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdacad6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdacad6f0001")),
+		Size:      1024,
+		CreatedAt: created,
+	}
+	idx.Add(f3)
+
+	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
+	require.NoError(t, err)
+
+	f4 := wal.SegmentInfo{
+		Prefix:    "db_Disk",
+		Ulid:      "2359cd7e3aef0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f4)
 
 	a := &batcher{
 		hostname:        "node1",
@@ -195,9 +275,9 @@ func TestBatcher_BigBatch(t *testing.T) {
 		minUploadSize:   100 * 1024,
 		maxTransferAge:  time.Minute,
 		Partitioner:     &fakePartitioner{owner: "node1"},
-		Segmenter:       &fakeSegmenter{active: wal.Filename("db", "Memory", "aaaa")},
+		Segmenter:       idx,
 		health:          fakeHealthChecker{healthy: true},
-		segments:        make(map[string]struct{}),
+		segments:        make(map[string]int),
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -205,12 +285,113 @@ func TestBatcher_BigBatch(t *testing.T) {
 	require.Equal(t, 3, len(owned))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{f2.Name()}, owned[0].Paths)
-	require.Equal(t, []string{f.Name(), f1.Name()}, owned[1].Paths)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths)
+	require.Equal(t, []string{f1.Path, f2.Path}, owned[0].Paths())
+	require.Equal(t, []string{f3.Path}, owned[1].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)
+}
+
+func TestBatcher_Stats(t *testing.T) {
+	dir := t.TempDir()
+
+	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
+	require.NoError(t, err)
+
+	segments := []wal.SegmentInfo{}
+
+	idx := wal.NewIndex()
+	f1 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac8d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac8d6f0001")),
+		Size:      50 * 1024,
+		CreatedAt: created,
+	}
+	idx.Add(f1)
+	segments = append(segments, f1)
+
+	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
+	require.NoError(t, err)
+
+	f2 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac9d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac9d6f0001")),
+		Size:      50 * 1024,
+		CreatedAt: created,
+	}
+	idx.Add(f2)
+	segments = append(segments, f2)
+
+	created, err = flakeutil.ParseFlakeID("2359cdacad6f0001")
+	require.NoError(t, err)
+
+	f3 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdacad6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdacad6f0001")),
+		Size:      1024,
+		CreatedAt: created,
+	}
+	idx.Add(f3)
+	segments = append(segments, f3)
+
+	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
+	require.NoError(t, err)
+
+	f4 := wal.SegmentInfo{
+		Prefix:    "db_Disk",
+		Ulid:      "2359cd7e3aef0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f4)
+	segments = append(segments, f4)
+
+	a := &batcher{
+		hostname:        "node1",
+		storageDir:      dir,
+		maxTransferSize: 100 * 1024,
+		minUploadSize:   100 * 1024,
+		maxTransferAge:  time.Minute,
+		Partitioner:     &fakePartitioner{owner: "node1"},
+		Segmenter:       idx,
+		health:          fakeHealthChecker{healthy: true},
+		segments:        make(map[string]int),
+	}
+	_, _, err = a.processSegments()
+	require.NoError(t, err)
+	require.Equal(t, int64(4), a.SegmentsTotal())
+
+	println(a.UploadQueueSize(), a.TransferQueueSize())
+
+	var sz int64
+	for _, s := range segments {
+		sz += s.Size
+	}
+	require.Equal(t, sz, a.SegmentsSize())
+
+	_, _, err = a.processSegments()
+	require.NoError(t, err)
+	require.Equal(t, int64(4), a.SegmentsTotal())
+	require.Equal(t, sz, a.SegmentsSize())
+	println(a.UploadQueueSize(), a.TransferQueueSize())
+
+	idx.Remove(f1)
+	segments = segments[1:]
+	sz = 0
+	for _, s := range segments {
+		sz += s.Size
+	}
+
+	_, _, err = a.processSegments()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), a.SegmentsTotal())
+	require.Equal(t, sz, a.SegmentsSize())
+
 }
 
 func requireValidBatch(t *testing.T, batch []*Batch) {
@@ -218,7 +399,7 @@ func requireValidBatch(t *testing.T, batch []*Batch) {
 		require.NotEmptyf(t, o.Table, "batch segment %v has no ID", o)
 		require.NotEmptyf(t, o.Database, "batch segment %v has no ID", o)
 		require.NotNilf(t, o.batcher, "batch segment %v has no batcher", o)
-		require.True(t, len(o.Paths) > 0, "batch segment %v has no paths", o)
+		require.True(t, len(o.Paths()) > 0, "batch segment %v has no paths", o)
 	}
 }
 

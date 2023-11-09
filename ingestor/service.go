@@ -22,6 +22,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
@@ -118,10 +119,11 @@ type ServiceOpts struct {
 
 func NewService(opts ServiceOpts) (*Service, error) {
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     opts.StorageDir,
-		SegmentMaxSize: opts.MaxSegmentSize,
-		SegmentMaxAge:  opts.MaxSegmentAge,
-		LiftedColumns:  opts.LiftedColumns,
+		StorageDir:      opts.StorageDir,
+		SegmentMaxSize:  opts.MaxSegmentSize,
+		SegmentMaxAge:   opts.MaxSegmentAge,
+		LiftedColumns:   opts.LiftedColumns,
+		StorageProvider: &file.DiskProvider{},
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
@@ -159,7 +161,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxTransferSize:    opts.MaxTransferSize,
 		MaxTransferAge:     opts.MaxTransferAge,
 		Partitioner:        coord,
-		Segmenter:          store,
+		Segmenter:          store.Index(),
 		UploadQueue:        opts.Uploader.UploadQueue(),
 		TransferQueue:      repl.TransferQueue(),
 		PeerHealthReporter: health,
@@ -169,10 +171,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	health.QueueSizer = batcher
 
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{
-		Hostname: opts.Hostname,
-		Elector:  coord,
-		KustoCli: opts.MetricsKustoCli,
-		Database: opts.MetricsDatabase,
+		Hostname:         opts.Hostname,
+		Elector:          coord,
+		KustoCli:         opts.MetricsKustoCli,
+		Database:         opts.MetricsDatabase,
+		PeerHealthReport: health,
 	})
 
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{

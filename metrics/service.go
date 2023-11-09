@@ -15,6 +15,14 @@ import (
 	io_prometheus_client "github.com/prometheus/client_model/go"
 )
 
+type HealthReporter interface {
+	IsHealthy() bool
+	TransferQueueSize() int
+	UploadQueueSize() int
+	SegmentsTotal() int64
+	SegmentsSize() int64
+}
+
 type TimeSeriesWriter interface {
 	Write(ctx context.Context, wr prompb.WriteRequest) error
 }
@@ -28,10 +36,11 @@ type Service interface {
 }
 
 type ServiceOpts struct {
-	Hostname string
-	Elector  Elector
-	KustoCli ingest.QueryClient
-	Database string
+	Hostname         string
+	Elector          Elector
+	KustoCli         ingest.QueryClient
+	Database         string
+	PeerHealthReport HealthReporter
 }
 
 // Service manages the collection of metrics for ingestors.
@@ -42,6 +51,7 @@ type service struct {
 	elector  Elector
 	kustoCli ingest.QueryClient
 	database string
+	health   HealthReporter
 }
 
 func NewService(opts ServiceOpts) Service {
@@ -50,6 +60,7 @@ func NewService(opts ServiceOpts) Service {
 		kustoCli: opts.KustoCli,
 		database: opts.Database,
 		hostname: opts.Hostname,
+		health:   opts.PeerHealthReport,
 	}
 }
 
@@ -112,7 +123,15 @@ func (s *service) collect(ctx context.Context) {
 				}
 			}
 
-			logger.Infof("Ingestion rate %0.2f samples/sec, samples ingested=%d", (currentTotal-lastCount)/60, uint64(currentTotal))
+			logger.Infof("Ingestion rate %0.2f samples/sec, samples ingested=%d, health=%v, "+
+				"upload queue size=%d, transfer queue size=%d, segments total=%d, segments size=%d",
+				(currentTotal-lastCount)/60, uint64(currentTotal),
+				s.health.IsHealthy(),
+				s.health.UploadQueueSize(),
+				s.health.TransferQueueSize(),
+				s.health.SegmentsTotal(),
+				s.health.SegmentsSize())
+
 			lastCount = currentTotal
 
 			// Clear the gauges to prune old metrics that may not be collected anymore.

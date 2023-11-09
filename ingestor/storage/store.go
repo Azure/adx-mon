@@ -176,6 +176,18 @@ func (s *LocalStore) SegmentExists(filename string) bool {
 	return s.repository.SegmentExists(filename)
 }
 
+func (s *LocalStore) Get(prefix string) []wal.SegmentInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.repository.GetSegments(prefix)
+}
+
+func (s *LocalStore) PrefixesByAge() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.repository.PrefixesByAge()
+}
+
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	db, table, _, err := wal.ParseFilename(filename)
 	if err != nil {
@@ -237,6 +249,10 @@ func (s *LocalStore) incMetrics(value []byte, n int) {
 	s.metricsMu.Unlock()
 
 	counter.Add(float64(n))
+}
+
+func (s *LocalStore) Index() *wal.Index {
+	return s.repository.Index()
 }
 
 func SegmentKey(dst []byte, database []byte, labels []prompb.Label) []byte {

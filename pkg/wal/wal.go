@@ -243,7 +243,11 @@ func (w *WAL) path() string {
 }
 
 func (w *WAL) Remove(path string) error {
-	return os.Remove(path)
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (w *WAL) Append(ctx context.Context, buf []byte) error {

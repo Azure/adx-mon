@@ -232,3 +232,15 @@ func (s *Repository) SegmentExists(filename string) bool {
 	})
 	return exists
 }
+
+func (s *Repository) GetSegments(prefix string) []SegmentInfo {
+	return s.index.Get(prefix)
+}
+
+func (s *Repository) RemoveSegment(si SegmentInfo) {
+	s.index.Remove(si)
+}
+
+func (s *Repository) PrefixesByAge() []string {
+	return s.index.PrefixesByAge()
+}

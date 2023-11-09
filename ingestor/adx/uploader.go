@@ -184,7 +184,7 @@ func (n *uploader) upload(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case batch := <-n.queue:
-			paths := batch.Paths
+			segments := batch.Segments
 
 			if batch.Database != n.database {
 				logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
@@ -195,21 +195,21 @@ func (n *uploader) upload(ctx context.Context) error {
 				defer batch.Release()
 
 				var (
-					readers  = make([]io.Reader, 0, len(paths))
-					files    = make([]io.Closer, 0, len(paths))
+					readers  = make([]io.Reader, 0, len(segments))
+					files    = make([]io.Closer, 0, len(segments))
 					database string
 					table    string
 					err      error
 				)
 
-				for _, path := range paths {
-					database, table, _, err = wal.ParseFilename(path)
+				for _, si := range segments {
+					database, table, _, err = wal.ParseFilename(si.Path)
 					if err != nil {
 						logger.Errorf("Failed to parse file: %s", err.Error())
 						continue
 					}
 
-					f, err := wal.NewSegmentReader(path, &file.DiskProvider{})
+					f, err := wal.NewSegmentReader(si.Path, &file.DiskProvider{})
 					if os.IsNotExist(err) {
 						// batches are not disjoint, so the same segments could be included in multiple batches.
 						continue
@@ -222,11 +222,11 @@ func (n *uploader) upload(ctx context.Context) error {
 					files = append(files, f)
 				}
 
-				defer func(paths []string, files []io.Closer) {
+				defer func(paths []wal.SegmentInfo, files []io.Closer) {
 					for _, f := range files {
 						f.Close()
 					}
-				}(paths, files)
+				}(segments, files)
 
 				if len(readers) == 0 {
 					return
@@ -241,13 +241,11 @@ func (n *uploader) upload(ctx context.Context) error {
 				}
 
 				if logger.IsDebug() {
-					logger.Debugf("Uploaded %v duration=%s", paths, time.Since(now).String())
+					logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())
 				}
 
-				for _, f := range paths {
-					if err := os.RemoveAll(f); err != nil {
-						logger.Errorf("Failed to remove file: %s", err.Error())
-					}
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove batch: %s", err.Error())
 				}
 			}()
 
