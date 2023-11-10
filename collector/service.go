@@ -3,9 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
-	"net/http"
 	_ "net/http/pprof"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -16,15 +14,12 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
-	"github.com/Azure/adx-mon/collector/otlp"
-	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,22 +39,22 @@ type Service struct {
 
 	requestTransformer *transform.RequestTransformer
 	remoteClient       *promremote.Client
-	metricsClient      *MetricsClient
+	scrapeClient       *MetricsClient
 	watcher            watch.Interface
 
 	mu            sync.RWMutex
 	targets       []ScrapeTarget
 	factory       informers.SharedInformerFactory
 	pl            v12.PodLister
-	srv           *http.Server
 	seriesCreator *seriesCreator
 	metricsSvc    metrics.Service
 
 	logsSvc *logs.Service
+	http    *HttpServer
 }
 
 type ServiceOpts struct {
-	ListentAddr    string
+	ListenAddr     string
 	K8sCli         kubernetes.Interface
 	NodeName       string
 	Targets        []ScrapeTarget
@@ -113,7 +108,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
 		seriesCreator: &seriesCreator{},
-		metricsSvc:    metrics.NewService(metrics.ServiceOpts{}),
+		metricsSvc: metrics.NewService(metrics.ServiceOpts{
+			PeerHealthReport: &fakeHealthChecker{},
+		}),
 		requestTransformer: transform.NewRequestTransformer(
 			opts.AddLabels,
 			opts.DropLabels,
@@ -156,7 +153,7 @@ func (s *Service) Open(ctx context.Context) error {
 
 	var err error
 
-	s.metricsClient, err = NewMetricsClient()
+	s.scrapeClient, err = NewMetricsClient()
 	if err != nil {
 		return fmt.Errorf("failed to create metrics client: %w", err)
 	}
@@ -232,31 +229,24 @@ func (s *Service) Open(ctx context.Context) error {
 		addLabels[k] = v
 	}
 
-	logger.Infof("Listening at %s", s.opts.ListentAddr)
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/remote_write", metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-		DropLabels:  s.opts.DropLabels,
-		DropMetrics: s.opts.DropMetrics,
-		AddLabels:   addLabels,
-		RequestWriter: &promremote.RemoteWriteProxy{
-			Client:                   s.remoteClient,
-			Endpoints:                s.opts.Endpoints,
-			MaxBatchSize:             s.opts.MaxBatchSize,
-			DisableMetricsForwarding: s.opts.DisableMetricsForwarding,
-		},
-		HealthChecker: fakeHealthChecker{},
-	}))
-	mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
-	mux.Handle("/v1/logs", otlp.LogsTransferHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes))
-	s.srv = &http.Server{Addr: s.opts.ListentAddr, Handler: mux}
+	s.http = NewHttpServer(&HttpServerOpts{
+		ListenAddr:               s.opts.ListenAddr,
+		InsecureSkipVerify:       s.opts.InsecureSkipVerify,
+		Endpoints:                s.opts.Endpoints,
+		MaxBatchSize:             s.opts.MaxBatchSize,
+		DisableMetricsForwarding: s.opts.DisableMetricsForwarding,
+		RemoteWriteClient:        s.remoteClient,
+		AddLabels:                s.opts.AddLabels,
+		DropLabels:               s.opts.DropLabels,
+		DropMetrics:              s.opts.DropMetrics,
+		AddAttributes:            s.opts.AddAttributes,
+		LiftAttributes:           s.opts.LiftAttributes,
+	})
 
-	go func() {
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}()
+	logger.Infof("Listening at %s", s.opts.ListenAddr)
+	if err := s.http.Open(ctx); err != nil {
+		return err
+	}
 
 	s.wg.Add(1)
 	go s.scrape()
@@ -264,13 +254,13 @@ func (s *Service) Open(ctx context.Context) error {
 }
 
 func (s *Service) Close() error {
-	s.metricsClient.Close()
+	s.scrapeClient.Close()
 	s.metricsSvc.Close()
 	if s.logsSvc != nil {
 		s.logsSvc.Close()
 	}
 	s.cancel()
-	s.srv.Shutdown(s.ctx)
+	s.http.Close()
 	s.factory.Shutdown()
 	s.wg.Wait()
 	return nil
@@ -300,7 +290,7 @@ func (s *Service) scrapeTargets() {
 
 	wr := &prompb.WriteRequest{}
 	for _, target := range targets {
-		fams, err := s.metricsClient.FetchMetrics(target.Addr)
+		fams, err := s.scrapeClient.FetchMetrics(target.Addr)
 		if err != nil {
 			logger.Errorf("Failed to scrape metrics for %s: %s", target, err.Error())
 			continue
@@ -681,7 +671,11 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 type fakeHealthChecker struct{}
 
-func (f fakeHealthChecker) IsHealthy() bool { return true }
+func (f fakeHealthChecker) TransferQueueSize() int { return 0 }
+func (f fakeHealthChecker) UploadQueueSize() int   { return 0 }
+func (f fakeHealthChecker) SegmentsTotal() int64   { return 0 }
+func (f fakeHealthChecker) SegmentsSize() int64    { return 0 }
+func (f fakeHealthChecker) IsHealthy() bool        { return true }
 
 func parseTargetList(targetList string) (map[string]string, error) {
 	// Split the string by ','

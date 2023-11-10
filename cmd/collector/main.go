@@ -184,7 +184,7 @@ func realMain(ctx *cli.Context) error {
 
 	opts := &collector.ServiceOpts{
 		K8sCli:                   k8scli,
-		ListentAddr:              ctx.String("listen-addr"),
+		ListenAddr:               ctx.String("listen-addr"),
 		ScrapeInterval:           ctx.Duration("scrape-interval"),
 		NodeName:                 hostname,
 		Targets:                  staticTargets,

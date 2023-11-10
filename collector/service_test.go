@@ -17,7 +17,7 @@ const MetricListenAddr = ":9090"
 func TestService_Open(t *testing.T) {
 	cli := fake.NewSimpleClientset()
 	s, err := NewService(&ServiceOpts{
-		ListentAddr:    MetricListenAddr,
+		ListenAddr:     MetricListenAddr,
 		K8sCli:         cli,
 		ScrapeInterval: 10 * time.Second,
 	})
@@ -31,8 +31,8 @@ func TestService_Open(t *testing.T) {
 func TestService_Open_Static(t *testing.T) {
 	cli := fake.NewSimpleClientset()
 	s, err := NewService(&ServiceOpts{
-		ListentAddr: MetricListenAddr,
-		K8sCli:      cli,
+		ListenAddr: MetricListenAddr,
+		K8sCli:     cli,
 		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
@@ -48,9 +48,9 @@ func TestService_Open_Static(t *testing.T) {
 func TestService_Open_NoMatchingHost(t *testing.T) {
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
 	s, err := NewService(&ServiceOpts{
-		ListentAddr: MetricListenAddr,
-		K8sCli:      cli,
-		NodeName:    "ks8-master-123",
+		ListenAddr: MetricListenAddr,
+		K8sCli:     cli,
+		NodeName:   "ks8-master-123",
 		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
@@ -66,9 +66,9 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
 	s, err := NewService(&ServiceOpts{
-		ListentAddr: MetricListenAddr,
-		K8sCli:      cli,
-		NodeName:    "ks8-master-123",
+		ListenAddr: MetricListenAddr,
+		K8sCli:     cli,
+		NodeName:   "ks8-master-123",
 		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
@@ -99,9 +99,9 @@ func TestService_Open_Matching(t *testing.T) {
 	}
 	cli := fake.NewSimpleClientset(pod)
 	s, err := NewService(&ServiceOpts{
-		ListentAddr: MetricListenAddr,
-		K8sCli:      cli,
-		NodeName:    "ks8-master-123",
+		ListenAddr: MetricListenAddr,
+		K8sCli:     cli,
+		NodeName:   "ks8-master-123",
 		Targets: []ScrapeTarget{
 			{
 				Addr:      "http://localhost:8080/metrics",
@@ -154,7 +154,7 @@ func TestService_Open_HostPort(t *testing.T) {
 	}
 	cli := fake.NewSimpleClientset(pod)
 	s, err := NewService(&ServiceOpts{
-		ListentAddr:    MetricListenAddr,
+		ListenAddr:     MetricListenAddr,
 		K8sCli:         cli,
 		NodeName:       "ks8-master-123",
 		ScrapeInterval: 10 * time.Second,
@@ -190,9 +190,9 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	pod.Status.PodIP = "172.31.1.18"
 	cli := fake.NewSimpleClientset(pod)
 	s, err := NewService(&ServiceOpts{
-		ListentAddr: MetricListenAddr,
-		K8sCli:      cli,
-		NodeName:    "ks8-master-123",
+		ListenAddr: MetricListenAddr,
+		K8sCli:     cli,
+		NodeName:   "ks8-master-123",
 		Targets: []ScrapeTarget{
 			{Addr: "http://localhost:8080/metrics"},
 		},
