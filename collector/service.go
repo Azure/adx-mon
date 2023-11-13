@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/otlp"
+	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
@@ -57,8 +58,10 @@ type Service struct {
 
 	repository *wal.Repository
 
-	otelLogsSvc  *otlp.LogsService
-	otelProxySvc *otlp.LogsProxyService
+	otelLogsSvc      *otlp.LogsService
+	otelProxySvc     *otlp.LogsProxyService
+	metricsProxySvc  *metricsHandler.Handler
+	promRemoteClient *promremote.Client
 }
 
 type ServiceOpts struct {
@@ -136,6 +139,29 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		InsecureSkipVerify: opts.InsecureSkipVerify,
 	})
 
+	remoteClient, err := promremote.NewClient(
+		promremote.ClientOpts{
+			Timeout:            20 * time.Second,
+			InsecureSkipVerify: opts.InsecureSkipVerify,
+			Close:              true,
+		})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
+	}
+
+	metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
+		DropLabels:  opts.DropLabels,
+		DropMetrics: opts.DropMetrics,
+		AddLabels:   opts.AddLabels,
+		RequestWriter: &promremote.RemoteWriteProxy{
+			Client:                   remoteClient,
+			Endpoints:                opts.Endpoints,
+			MaxBatchSize:             opts.MaxBatchSize,
+			DisableMetricsForwarding: opts.DisableMetricsForwarding,
+		},
+		HealthChecker: fakeHealthChecker{},
+	})
+
 	svc := &Service{
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
@@ -148,9 +174,11 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
-		repository:   repo,
-		otelLogsSvc:  logsSvc,
-		otelProxySvc: logsProxySvc,
+		repository:       repo,
+		otelLogsSvc:      logsSvc,
+		otelProxySvc:     logsProxySvc,
+		metricsProxySvc:  metricsProxySvc,
+		promRemoteClient: remoteClient,
 	}
 
 	if opts.CollectLogs {
@@ -195,16 +223,6 @@ func (s *Service) Open(ctx context.Context) error {
 	s.scrapeClient, err = NewMetricsClient()
 	if err != nil {
 		return fmt.Errorf("failed to create metrics client: %w", err)
-	}
-
-	s.remoteClient, err = promremote.NewClient(
-		promremote.ClientOpts{
-			Timeout:            20 * time.Second,
-			InsecureSkipVerify: s.opts.InsecureSkipVerify,
-			Close:              true,
-		})
-	if err != nil {
-		return fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
 
 	if err := s.metricsSvc.Open(ctx); err != nil {
@@ -277,19 +295,12 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	s.http = NewHttpServer(&HttpServerOpts{
-		ListenAddr:               s.opts.ListenAddr,
-		InsecureSkipVerify:       s.opts.InsecureSkipVerify,
-		Endpoints:                s.opts.Endpoints,
-		MaxBatchSize:             s.opts.MaxBatchSize,
-		DisableMetricsForwarding: s.opts.DisableMetricsForwarding,
-		RemoteWriteClient:        s.remoteClient,
-		AddLabels:                s.opts.AddLabels,
-		DropLabels:               s.opts.DropLabels,
-		DropMetrics:              s.opts.DropMetrics,
+		ListenAddr: s.opts.ListenAddr,
 	})
 
 	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
 	s.http.RegisterHandler("/logs", s.otelProxySvc.Handler)
+	s.http.RegisterHandler("/remote_write", s.metricsProxySvc.HandleReceive)
 
 	logger.Infof("Listening at %s", s.opts.ListenAddr)
 	if err := s.http.Open(ctx); err != nil {
