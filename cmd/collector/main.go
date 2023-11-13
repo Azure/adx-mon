@@ -60,6 +60,7 @@ Add a static pod scrape for etcd pods running outside of Kubernetes on masters a
 			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
 			&cli.IntFlag{Name: "max-batch-size", Usage: "Maximum number of samples to send in a single batch", Value: 5000},
 			&cli.BoolFlag{Name: "experimental-log-collection", Usage: "Enable experimental log collection.", Hidden: true},
+			&cli.StringFlag{Name: "storage-dir", Usage: "Storage directory for the WAL", Value: ""},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -182,6 +183,12 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using remote write endpoint %s", endpoint)
 	}
 
+	if ctx.String("storage-dir") == "" {
+		logger.Fatalf("storage-dir is required")
+	} else {
+		logger.Infof("Using storage dir: %s", ctx.String("storage-dir"))
+	}
+
 	opts := &collector.ServiceOpts{
 		K8sCli:                   k8scli,
 		ListenAddr:               ctx.String("listen-addr"),
@@ -198,6 +205,7 @@ func realMain(ctx *cli.Context) error {
 		MaxBatchSize:             ctx.Int("max-batch-size"),
 		CollectLogs:              ctx.Bool("experimental-log-collection"),
 		DisableMetricsForwarding: ctx.Bool("disable-metrics-forwarding"),
+		StorageDir:               ctx.String("storage-dir"),
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())

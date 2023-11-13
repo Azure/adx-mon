@@ -68,7 +68,6 @@ func NewHttpServer(opts *HttpServerOpts) *HttpServer {
 
 func (s *HttpServer) Open(ctx context.Context) error {
 	s.mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
-	s.mux.Handle("/v1/logs", otlp.LogsTransferHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes))
 	s.srv = &http.Server{Addr: s.opts.ListenAddr, Handler: s.mux}
 
 	go func() {
@@ -82,4 +81,8 @@ func (s *HttpServer) Open(ctx context.Context) error {
 
 func (s *HttpServer) Close() error {
 	return s.srv.Shutdown(context.Background())
+}
+
+func (s *HttpServer) RegisterHandler(path string, handlerFunc http.HandlerFunc) {
+	s.mux.Handle(path, handlerFunc)
 }

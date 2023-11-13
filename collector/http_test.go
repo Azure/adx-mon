@@ -11,7 +11,9 @@ import (
 )
 
 func TestNewHttpServer_Endpoints(t *testing.T) {
-	h := NewHttpServer(&HttpServerOpts{})
+	h := NewHttpServer(&HttpServerOpts{
+		ListenAddr: "localhost:0",
+	})
 	require.NoError(t, h.Open(context.Background()))
 	defer h.Close()
 
@@ -25,7 +27,6 @@ func TestNewHttpServer_Endpoints(t *testing.T) {
 		{"/metrics", http.StatusOK},
 		{"/remote_write", http.StatusBadRequest},
 		{"/logs", http.StatusBadRequest},
-		{"/v1/logs", http.StatusUnsupportedMediaType},
 	}
 
 	for _, tt := range tests {
