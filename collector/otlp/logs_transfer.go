@@ -33,7 +33,165 @@ var (
 	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
+	bufs = pool.NewBytes(1024 * 1024)
 )
+
+type LogsServiceOpts struct {
+	Repository    *wal.Repository
+	AddAttributes map[string]string
+}
+
+type LogsService struct {
+	repo   *wal.Repository
+	logger *slog.Logger
+
+	staticAttributes []*commonv1.KeyValue
+}
+
+func NewLogsService(opts LogsServiceOpts) *LogsService {
+	var add []*commonv1.KeyValue
+	for attribute, value := range opts.AddAttributes {
+		add = append(add, &commonv1.KeyValue{
+			Key: attribute,
+			Value: &commonv1.AnyValue{
+				Value: &commonv1.AnyValue_StringValue{
+					StringValue: value,
+				},
+			},
+		},
+		)
+	}
+
+	return &LogsService{
+		repo: opts.Repository,
+		logger: slog.Default().With(
+			slog.Group(
+				"handler",
+				slog.String("protocol", "otlp"),
+			),
+		),
+		staticAttributes: add,
+	}
+}
+
+func (s *LogsService) Open(ctx context.Context) error {
+	return nil
+}
+
+func (s *LogsService) Close() error {
+	return nil
+}
+
+func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
+	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/v1/logs"})
+	defer r.Body.Close()
+
+	switch r.Header.Get("Content-Type") {
+	case "application/x-protobuf":
+
+		// Consume the request body and marshal into a protobuf
+		b := bufs.Get(int(r.ContentLength))
+		defer bufs.Put(b)
+
+		n, err := io.ReadFull(r.Body, b)
+		if err != nil {
+			s.logger.Error("Failed to read request body", "Error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			return
+		}
+		if n < int(r.ContentLength) {
+			s.logger.Warn("Short read")
+			w.WriteHeader(http.StatusBadRequest)
+			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			return
+		}
+		if logger.IsDebug() {
+			s.logger.Debug("Received request body", "Bytes", n)
+		}
+
+		msg := &v1.ExportLogsServiceRequest{}
+		if err := proto.Unmarshal(b, msg); err != nil {
+			s.logger.Error("Failed to unmarshal request body", "Error", err)
+			w.WriteHeader(http.StatusBadRequest)
+			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			return
+		}
+
+		enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+		defer csvWriterPool.Put(enc)
+
+		grouped := otlp.Group(msg, s.staticAttributes, s.logger)
+		for _, group := range grouped {
+			err := func() error {
+				metrics.LogsProxyReceived.WithLabelValues(group.Database, group.Table).Add(float64(len(group.Logs)))
+
+				enc.Reset()
+				if err := enc.MarshalCSV(group); err != nil {
+					return fmt.Errorf("failed to marshal csv: %w", err)
+				}
+
+				// Add our TLV metadata
+				b := enc.Bytes()
+				tNumLogs := tlv.New(otlp.LogsTotalTag, []byte(strconv.Itoa(len(group.Logs))))
+				tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(b))))
+
+				prefix := fmt.Sprintf("%s_%s", group.Database, group.Table)
+				w, err := s.repo.Get(r.Context(), []byte(prefix))
+				if err != nil {
+					return fmt.Errorf("failed to get wal: %w", err)
+				}
+
+				if err := w.Write(r.Context(), append(tlv.Encode(tNumLogs, tPayloadSize), b...)); err != nil {
+					return fmt.Errorf("failed to write to wal: %w", err)
+				}
+				return nil
+			}()
+
+			// Serialize the logs into a WAL, grouped by Kusto destination database and table
+			if isUserError(err) {
+				s.logger.Error("Failed to serialize logs with user error", "Error", err)
+				w.WriteHeader(http.StatusBadRequest)
+				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+				return
+			}
+			if err != nil {
+				s.logger.Error("Failed to serialize logs with internal error", "Error", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+				return
+			}
+		}
+
+		// The logs have been committed by the OTLP endpoint
+		respBodyBytes, err := proto.Marshal(&v1.ExportLogsServiceResponse{})
+		if err != nil {
+			s.logger.Error("Failed to marshal response", "Error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			return
+		}
+
+		// Even in the case of a partial response, OTLP API requires us to send StatusOK
+		w.Header().Add("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBodyBytes)
+		m.WithLabelValues(strconv.Itoa(http.StatusOK)).Inc()
+
+	case "application/json":
+		// We're receiving JSON, so we need to unmarshal the JSON
+		// into an OTLP protobuf, then use gRPC to send the OTLP
+		// protobuf to the OTLP endpoint
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
+
+	default:
+		logger.Errorf("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
+	}
+
+}
 
 // LogsTransferHandler implements an HTTP handler that receives OTLP logs, marshals them as CSV to our wal and transfers them to HTTP endpoins (e.g. Ingestor).
 func LogsTransferHandler(ctx context.Context, endpoints []string, insecureSkipVerify bool, addAttributes map[string]string) http.HandlerFunc {

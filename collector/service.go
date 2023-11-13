@@ -14,12 +14,15 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
+	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/wal/file"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,6 +54,10 @@ type Service struct {
 
 	logsSvc *logs.Service
 	http    *HttpServer
+
+	repository *wal.Repository
+
+	otelLogsSvc *otlp.LogsService
 }
 
 type ServiceOpts struct {
@@ -82,6 +89,9 @@ type ServiceOpts struct {
 
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
+
+	// StorageDir is the directory where the WAL will be stored
+	StorageDir string
 }
 
 type ScrapeTarget struct {
@@ -104,6 +114,20 @@ func (t ScrapeTarget) String() string {
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
+	repo := wal.NewRepository(wal.RepositoryOpts{
+		StorageDir:      opts.StorageDir,
+		StorageProvider: &file.DiskProvider{},
+		SegmentMaxAge:   30 * time.Second,
+		SegmentMaxSize:  1024 * 1024,
+		MaxDiskUsage:    100 * 1024 * 1024,
+		MaxSegmentCount: 500,
+	})
+
+	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
+		Repository:    repo,
+		AddAttributes: opts.AddAttributes,
+	})
+
 	svc := &Service{
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
@@ -116,6 +140,8 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
+		repository:  repo,
+		otelLogsSvc: logsSvc,
 	}
 
 	if opts.CollectLogs {
@@ -152,6 +178,10 @@ func (s *Service) Open(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	var err error
+
+	if err := s.repository.Open(s.ctx); err != nil {
+		return fmt.Errorf("failed to open wal repository: %w", err)
+	}
 
 	s.scrapeClient, err = NewMetricsClient()
 	if err != nil {
@@ -229,6 +259,10 @@ func (s *Service) Open(ctx context.Context) error {
 		addLabels[k] = v
 	}
 
+	if err := s.otelLogsSvc.Open(ctx); err != nil {
+		return err
+	}
+
 	s.http = NewHttpServer(&HttpServerOpts{
 		ListenAddr:               s.opts.ListenAddr,
 		InsecureSkipVerify:       s.opts.InsecureSkipVerify,
@@ -242,6 +276,8 @@ func (s *Service) Open(ctx context.Context) error {
 		AddAttributes:            s.opts.AddAttributes,
 		LiftAttributes:           s.opts.LiftAttributes,
 	})
+
+	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
 
 	logger.Infof("Listening at %s", s.opts.ListenAddr)
 	if err := s.http.Open(ctx); err != nil {
@@ -262,6 +298,7 @@ func (s *Service) Close() error {
 	s.cancel()
 	s.http.Close()
 	s.factory.Shutdown()
+	s.repository.Close()
 	s.wg.Wait()
 	return nil
 }

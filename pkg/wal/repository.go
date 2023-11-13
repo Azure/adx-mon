@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -51,6 +52,21 @@ func NewRepository(opts RepositoryOpts) *Repository {
 }
 
 func (s *Repository) Open(ctx context.Context) error {
+	if s.opts.StorageDir == "" {
+		return fmt.Errorf("storage dir is required")
+	}
+
+	stat, err := os.Stat(s.opts.StorageDir)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(s.opts.StorageDir, 0755); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if !stat.IsDir() {
+		return fmt.Errorf("storage dir is not a directory")
+	}
+
 	// Loading existing segments is not supported for memory provider
 	if _, ok := s.opts.StorageProvider.(*file.MemoryProvider); ok {
 		return nil
