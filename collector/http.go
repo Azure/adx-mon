@@ -7,7 +7,6 @@ import (
 	"os"
 	"regexp"
 
-	"github.com/Azure/adx-mon/collector/otlp"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -32,9 +31,6 @@ type HttpServerOpts struct {
 	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
-
-	AddAttributes  map[string]string
-	LiftAttributes []string
 }
 
 type HttpServer struct {
@@ -67,7 +63,6 @@ func NewHttpServer(opts *HttpServerOpts) *HttpServer {
 }
 
 func (s *HttpServer) Open(ctx context.Context) error {
-	s.mux.Handle("/logs", otlp.LogsProxyHandler(ctx, s.opts.Endpoints, s.opts.InsecureSkipVerify, s.opts.AddAttributes, s.opts.LiftAttributes))
 	s.srv = &http.Server{Addr: s.opts.ListenAddr, Handler: s.mux}
 
 	go func() {

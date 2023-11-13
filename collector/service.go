@@ -57,7 +57,8 @@ type Service struct {
 
 	repository *wal.Repository
 
-	otelLogsSvc *otlp.LogsService
+	otelLogsSvc  *otlp.LogsService
+	otelProxySvc *otlp.LogsProxyService
 }
 
 type ServiceOpts struct {
@@ -128,6 +129,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		AddAttributes: opts.AddAttributes,
 	})
 
+	logsProxySvc := otlp.NewLogsProxyService(otlp.LogsProxyServiceOpts{
+		LiftAttributes:     opts.LiftAttributes,
+		AddAttributes:      opts.AddAttributes,
+		Endpoints:          opts.Endpoints,
+		InsecureSkipVerify: opts.InsecureSkipVerify,
+	})
+
 	svc := &Service{
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
@@ -140,8 +148,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
-		repository:  repo,
-		otelLogsSvc: logsSvc,
+		repository:   repo,
+		otelLogsSvc:  logsSvc,
+		otelProxySvc: logsProxySvc,
 	}
 
 	if opts.CollectLogs {
@@ -263,6 +272,10 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
+	if err := s.otelProxySvc.Open(ctx); err != nil {
+		return err
+	}
+
 	s.http = NewHttpServer(&HttpServerOpts{
 		ListenAddr:               s.opts.ListenAddr,
 		InsecureSkipVerify:       s.opts.InsecureSkipVerify,
@@ -273,11 +286,10 @@ func (s *Service) Open(ctx context.Context) error {
 		AddLabels:                s.opts.AddLabels,
 		DropLabels:               s.opts.DropLabels,
 		DropMetrics:              s.opts.DropMetrics,
-		AddAttributes:            s.opts.AddAttributes,
-		LiftAttributes:           s.opts.LiftAttributes,
 	})
 
 	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
+	s.http.RegisterHandler("/logs", s.otelProxySvc.Handler)
 
 	logger.Infof("Listening at %s", s.opts.ListenAddr)
 	if err := s.http.Open(ctx); err != nil {
@@ -294,6 +306,9 @@ func (s *Service) Close() error {
 	s.metricsSvc.Close()
 	if s.logsSvc != nil {
 		s.logsSvc.Close()
+	}
+	if s.otelProxySvc != nil {
+		s.otelProxySvc.Close()
 	}
 	s.cancel()
 	s.http.Close()

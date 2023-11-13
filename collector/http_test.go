@@ -26,7 +26,6 @@ func TestNewHttpServer_Endpoints(t *testing.T) {
 	}{
 		{"/metrics", http.StatusOK},
 		{"/remote_write", http.StatusBadRequest},
-		{"/logs", http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {
