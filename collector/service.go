@@ -18,6 +18,7 @@ import (
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -54,7 +55,7 @@ type Service struct {
 	metricsSvc    metrics.Service
 
 	logsSvc *logs.Service
-	http    *HttpServer
+	http    *http.HttpServer
 
 	repository *wal.Repository
 
@@ -294,7 +295,7 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	s.http = NewHttpServer(&HttpServerOpts{
+	s.http = http.NewServer(&http.ServerOpts{
 		ListenAddr: s.opts.ListenAddr,
 	})
 

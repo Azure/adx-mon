@@ -1,4 +1,4 @@
-package collector
+package http
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestNewHttpServer_Endpoints(t *testing.T) {
-	h := NewHttpServer(&HttpServerOpts{
+	h := NewServer(&ServerOpts{
 		ListenAddr: "localhost:0",
 	})
 	require.NoError(t, h.Open(context.Background()))
