@@ -88,10 +88,23 @@ func collector(b *testing.B, ctx context.Context, endpoints []string) (string, *
 		liftAttributes = []string{"kusto.table", "kusto.database"}
 	)
 	mux := http.NewServeMux()
-	hp := collectorotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
-	ht := collectorotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes)
-	mux.Handle(logsv1connect.LogsServiceExportProcedure, hp)
-	mux.Handle("/v1/logs", ht)
+	logsProxySvc := collectorotlp.NewLogsProxyService(collectorotlp.LogsProxyServiceOpts{
+		Endpoints:          endpoints,
+		InsecureSkipVerify: insecureSkipVerify,
+		AddAttributes:      addAttributes,
+		LiftAttributes:     liftAttributes,
+	})
+
+	store := storage.NewLocalStore(storage.StoreOpts{StorageDir: b.TempDir()})
+	require.NoError(b, store.Open(ctx))
+
+	logsTransferSvc := collectorotlp.NewLogsService(collectorotlp.LogsServiceOpts{
+		Store:         store,
+		AddAttributes: addAttributes,
+	})
+
+	mux.HandleFunc(logsv1connect.LogsServiceExportProcedure, logsProxySvc.Handler)
+	mux.HandleFunc("/v1/logs", logsTransferSvc.Handler)
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -100,6 +113,7 @@ func collector(b *testing.B, ctx context.Context, endpoints []string) (string, *
 	go func(srv *httptest.Server, b *testing.B) {
 		b.Helper()
 		<-ctx.Done()
+		store.Close()
 		srv.Close()
 	}(srv, b)
 

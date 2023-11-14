@@ -66,7 +66,7 @@ func TestOTLPLogsE2E(t *testing.T) {
 			// and is identical to the way in which a downstream component, such as fluentbit, would
 			// interact with Collector. Here we pass the Ingestor URL as the endpoint to Collector,
 			// which Collector will use to Proxy the request to Ingestor.
-			collectorURL, hc := NewCollectorHandler(t, ctx, []string{ingestorURL})
+			collectorURL, hc := NewCollectorHandler(t, ctx, ingestorDir, []string{ingestorURL})
 
 			// Now here we act on behalf of a logs producer, sending a valid OTLP logs payload to Collector.
 			// We expect a valid response object and status code, after verification, we'll then test
@@ -182,7 +182,7 @@ func VerifyStore(t *testing.T, dir string, expectTLV bool) {
 	require.Equal(t, true, verified)
 }
 
-func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string) (string, *http.Client) {
+func NewCollectorHandler(t *testing.T, ctx context.Context, dir string, endpoints []string) (string, *http.Client) {
 	t.Helper()
 	var (
 		insecureSkipVerify = true
@@ -193,10 +193,25 @@ func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string) 
 		liftAttributes = []string{"kusto.table", "kusto.database"}
 	)
 	mux := http.NewServeMux()
-	ph := cotlp.LogsProxyHandler(ctx, endpoints, insecureSkipVerify, addAttributes, liftAttributes)
-	th := cotlp.LogsTransferHandler(ctx, endpoints, insecureSkipVerify, addAttributes)
-	mux.Handle(logsv1connect.LogsServiceExportProcedure, ph)
-	mux.Handle("/v1/logs", th)
+	logsProxySvc := cotlp.NewLogsProxyService(cotlp.LogsProxyServiceOpts{
+		Endpoints:          endpoints,
+		InsecureSkipVerify: insecureSkipVerify,
+		AddAttributes:      addAttributes,
+		LiftAttributes:     liftAttributes,
+	})
+
+	store := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:      dir,
+		StorageProvider: &file.DiskProvider{},
+	})
+	require.NoError(t, store.Open(ctx))
+
+	logsTransferSvc := cotlp.NewLogsService(cotlp.LogsServiceOpts{
+		Store:         store,
+		AddAttributes: addAttributes,
+	})
+	mux.HandleFunc(logsv1connect.LogsServiceExportProcedure, logsProxySvc.Handler)
+	mux.HandleFunc("/v1/logs", logsTransferSvc.Handler)
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -205,6 +220,7 @@ func NewCollectorHandler(t *testing.T, ctx context.Context, endpoints []string) 
 	go func(srv *httptest.Server, t *testing.T) {
 		t.Helper()
 		<-ctx.Done()
+		store.Close()
 		srv.Close()
 	}(srv, t)
 
