@@ -26,6 +26,7 @@ type WAL struct {
 
 	closeFn context.CancelFunc
 
+	wg      sync.WaitGroup
 	mu      sync.RWMutex
 	closed  bool
 	segment Segment
@@ -87,6 +88,7 @@ func (w *WAL) Open(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	w.wg.Add(1)
 	go w.rotate(ctx)
 
 	return nil
@@ -94,6 +96,8 @@ func (w *WAL) Open(ctx context.Context) error {
 
 func (w *WAL) Close() error {
 	w.closeFn()
+
+	w.wg.Wait()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -178,6 +182,8 @@ func (w *WAL) Segment() Segment {
 }
 
 func (w *WAL) rotate(ctx context.Context) {
+	defer w.wg.Done()
+
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
 
