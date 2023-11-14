@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
@@ -18,16 +18,16 @@ import (
 func TestLogsService(t *testing.T) {
 	dir := t.TempDir()
 
-	repo := wal.NewRepository(
-		wal.RepositoryOpts{
+	store := storage.NewLocalStore(
+		storage.StoreOpts{
 			StorageDir:      dir,
 			StorageProvider: &file.DiskProvider{},
 		})
 
-	require.NoError(t, repo.Open(context.Background()))
-	defer repo.Close()
+	require.NoError(t, store.Open(context.Background()))
+	defer store.Close()
 	s := NewLogsService(LogsServiceOpts{
-		Repository: repo,
+		Store: store,
 	})
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
@@ -46,7 +46,9 @@ func TestLogsService(t *testing.T) {
 	s.Handler(resp, req)
 	require.Equal(t, http.StatusOK, resp.Code)
 
-	keys := repo.Keys()
+	require.NoError(t, store.Close())
+
+	keys := store.PrefixesByAge()
 	require.Equal(t, 1, len(keys))
 	require.Equal(t, "ADatabase_ATable", string(keys[0]))
 }

@@ -16,6 +16,7 @@ import (
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -37,12 +38,12 @@ var (
 )
 
 type LogsServiceOpts struct {
-	Repository    *wal.Repository
+	Store         storage.Store
 	AddAttributes map[string]string
 }
 
 type LogsService struct {
-	repo   *wal.Repository
+	store  storage.Store
 	logger *slog.Logger
 
 	staticAttributes []*commonv1.KeyValue
@@ -63,7 +64,7 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 	}
 
 	return &LogsService{
-		repo: opts.Repository,
+		store: opts.Store,
 		logger: slog.Default().With(
 			slog.Group(
 				"handler",
@@ -118,32 +119,12 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
-		defer csvWriterPool.Put(enc)
-
 		grouped := otlp.Group(msg, s.staticAttributes, s.logger)
 		for _, group := range grouped {
 			err := func() error {
 				metrics.LogsProxyReceived.WithLabelValues(group.Database, group.Table).Add(float64(len(group.Logs)))
-
-				enc.Reset()
-				if err := enc.MarshalCSV(group); err != nil {
-					return fmt.Errorf("failed to marshal csv: %w", err)
-				}
-
-				// Add our TLV metadata
-				b := enc.Bytes()
-				tNumLogs := tlv.New(otlp.LogsTotalTag, []byte(strconv.Itoa(len(group.Logs))))
-				tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(b))))
-
-				prefix := fmt.Sprintf("%s_%s", group.Database, group.Table)
-				w, err := s.repo.Get(r.Context(), []byte(prefix))
-				if err != nil {
-					return fmt.Errorf("failed to get wal: %w", err)
-				}
-
-				if err := w.Write(r.Context(), append(tlv.Encode(tNumLogs, tPayloadSize), b...)); err != nil {
-					return fmt.Errorf("failed to write to wal: %w", err)
+				if err := s.store.WriteOTLPLogs(r.Context(), group.Database, group.Table, group); err != nil {
+					return fmt.Errorf("failed to write to store: %w", err)
 				}
 				return nil
 			}()

@@ -32,11 +32,12 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 	})
 
 	a := &batcher{
-		hostname:    "node1",
-		storageDir:  dir,
-		Partitioner: &fakePartitioner{owner: "node1"},
-		Segmenter:   idx,
-		segments:    make(map[string]int),
+		hostname:      "node1",
+		storageDir:    dir,
+		Partitioner:   &fakePartitioner{owner: "node1"},
+		Segmenter:     idx,
+		segments:      make(map[string]int),
+		minUploadSize: 1,
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -129,11 +130,12 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	idx.Add(f2)
 
 	a := &batcher{
-		hostname:    "node1",
-		storageDir:  dir,
-		Partitioner: &fakePartitioner{owner: "node1"},
-		Segmenter:   idx,
-		segments:    make(map[string]int),
+		hostname:      "node1",
+		storageDir:    dir,
+		Partitioner:   &fakePartitioner{owner: "node1"},
+		Segmenter:     idx,
+		segments:      make(map[string]int),
+		minUploadSize: 1,
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)

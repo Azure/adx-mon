@@ -92,7 +92,7 @@ func TestOTLPLogsE2E(t *testing.T) {
 			<-done // Wait for the store to finish flushing
 
 			// Now verify the content of our segments.
-			VerifyStore(t, ingestorDir, tt.URLPath == "/v1/logs")
+			VerifyStore(t, ingestorDir, true)
 
 			// Ensure our internal Prometheus metrics state is as expected.
 			VerifyMetrics(t, &log)
