@@ -26,6 +26,7 @@ type Segmenter interface {
 
 type BatcherOpts struct {
 	StorageDir      string
+	MinUploadSize   int64
 	MaxSegmentAge   time.Duration
 	MaxTransferSize int64
 	MaxTransferAge  time.Duration
@@ -112,11 +113,15 @@ type batcher struct {
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
+	minUploadSize := opts.MinUploadSize
+	if minUploadSize == 0 {
+		minUploadSize = 100 * 1024 * 1024 // This is the minimal "optimal" size for kusto uploads.
+	}
 	return &batcher{
 		storageDir:       opts.StorageDir,
 		maxTransferAge:   opts.MaxTransferAge,
 		maxTransferSize:  opts.MaxTransferSize,
-		minUploadSize:    100 * 1024 * 1024, // This is the minimal "optimal" size for kusto uploads.
+		minUploadSize:    minUploadSize, // This is the minimal "optimal" size for kusto uploads.
 		Partitioner:      opts.Partitioner,
 		Segmenter:        opts.Segmenter,
 		uploadQueue:      opts.UploadQueue,
@@ -297,7 +302,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			batchSize += si.Size
 
 			// The batch is at the optimal size for uploading to kusto, upload directly and start b new batch.
-			if batchSize >= b.minUploadSize {
+			if b.minUploadSize > 0 && batchSize >= b.minUploadSize {
 				if logger.IsDebug() {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
 				}
@@ -318,7 +323,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				continue
 			}
 
-			if batchSize >= b.maxTransferSize {
+			if b.maxTransferSize > 0 && batchSize >= b.maxTransferSize {
 				if logger.IsDebug() {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, b.maxTransferSize/1e6, batchSize)
 				}
@@ -331,7 +336,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have b node that's behind on uploading.
-			if time.Since(createdAt) > b.maxTransferAge {
+			if b.maxTransferSize > 0 && time.Since(createdAt) > b.maxTransferAge {
 				if logger.IsDebug() {
 					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
 				}

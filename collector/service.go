@@ -15,7 +15,9 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/otlp"
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/http"
@@ -23,7 +25,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
-	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal/file"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
@@ -57,12 +59,14 @@ type Service struct {
 	logsSvc *logs.Service
 	http    *http.HttpServer
 
-	repository *wal.Repository
+	store storage.Store
 
 	otelLogsSvc      *otlp.LogsService
 	otelProxySvc     *otlp.LogsProxyService
 	metricsProxySvc  *metricsHandler.Handler
 	promRemoteClient *promremote.Client
+	batcher          cluster.Batcher
+	replicator       service.Component
 }
 
 type ServiceOpts struct {
@@ -119,17 +123,15 @@ func (t ScrapeTarget) String() string {
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
-	repo := wal.NewRepository(wal.RepositoryOpts{
+	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:      opts.StorageDir,
 		StorageProvider: &file.DiskProvider{},
 		SegmentMaxAge:   30 * time.Second,
 		SegmentMaxSize:  1024 * 1024,
-		MaxDiskUsage:    100 * 1024 * 1024,
-		MaxSegmentCount: 500,
 	})
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
-		Repository:    repo,
+		Store:         store,
 		AddAttributes: opts.AddAttributes,
 	})
 
@@ -163,6 +165,52 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		HealthChecker: fakeHealthChecker{},
 	})
 
+	var (
+		replicator    service.Component
+		transferQueue chan *cluster.Batch
+		partitioner   cluster.MetricPartitioner
+	)
+	if len(opts.Endpoints) > 0 {
+		// This is a static partitioner that forces all entries to be assigned to the remote endpoint.
+		partitioner = remotePartitioner{
+			host: "remote",
+			addr: opts.Endpoints[0],
+		}
+
+		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+			Hostname:           opts.NodeName,
+			Partitioner:        partitioner,
+			Health:             fakeHealthChecker{},
+			SegmentRemover:     store,
+			InsecureSkipVerify: opts.InsecureSkipVerify,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create replicator: %w", err)
+		}
+		transferQueue = r.TransferQueue()
+		replicator = r
+	} else {
+		partitioner = remotePartitioner{
+			host: "remote",
+			addr: "http://remotehost:1234",
+		}
+
+		r := cluster.NewFakeReplicator()
+		transferQueue = r.TransferQueue()
+		replicator = r
+	}
+
+	batcher := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:         opts.StorageDir,
+		MaxSegmentAge:      opts.ScrapeInterval * 2,
+		Partitioner:        partitioner,
+		Segmenter:          store.Index(),
+		MinUploadSize:      4 * 1024 * 1024,
+		UploadQueue:        transferQueue,
+		TransferQueue:      transferQueue,
+		PeerHealthReporter: fakeHealthChecker{},
+	})
+
 	svc := &Service{
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
@@ -175,11 +223,14 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
-		repository:       repo,
+		store:            store,
 		otelLogsSvc:      logsSvc,
 		otelProxySvc:     logsProxySvc,
 		metricsProxySvc:  metricsProxySvc,
 		promRemoteClient: remoteClient,
+		batcher:          batcher,
+		replicator:       replicator,
+		remoteClient:     remoteClient,
 	}
 
 	if opts.CollectLogs {
@@ -217,8 +268,8 @@ func (s *Service) Open(ctx context.Context) error {
 
 	var err error
 
-	if err := s.repository.Open(s.ctx); err != nil {
-		return fmt.Errorf("failed to open wal repository: %w", err)
+	if err := s.store.Open(s.ctx); err != nil {
+		return fmt.Errorf("failed to open wal store: %w", err)
 	}
 
 	s.scrapeClient, err = NewMetricsClient()
@@ -287,6 +338,14 @@ func (s *Service) Open(ctx context.Context) error {
 		addLabels[k] = v
 	}
 
+	if err := s.replicator.Open(ctx); err != nil {
+		return err
+	}
+
+	if err := s.batcher.Open(ctx); err != nil {
+		return err
+	}
+
 	if err := s.otelLogsSvc.Open(ctx); err != nil {
 		return err
 	}
@@ -324,8 +383,10 @@ func (s *Service) Close() error {
 	}
 	s.cancel()
 	s.http.Close()
+	s.batcher.Close()
+	s.replicator.Close()
 	s.factory.Shutdown()
-	s.repository.Close()
+	s.store.Close()
 	s.wg.Wait()
 	return nil
 }
@@ -735,11 +796,14 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 type fakeHealthChecker struct{}
 
-func (f fakeHealthChecker) TransferQueueSize() int { return 0 }
-func (f fakeHealthChecker) UploadQueueSize() int   { return 0 }
-func (f fakeHealthChecker) SegmentsTotal() int64   { return 0 }
-func (f fakeHealthChecker) SegmentsSize() int64    { return 0 }
-func (f fakeHealthChecker) IsHealthy() bool        { return true }
+func (f fakeHealthChecker) IsPeerHealthy(peer string) bool { return true }
+func (f fakeHealthChecker) SetPeerUnhealthy(peer string)   {}
+func (f fakeHealthChecker) SetPeerHealthy(peer string)     {}
+func (f fakeHealthChecker) TransferQueueSize() int         { return 0 }
+func (f fakeHealthChecker) UploadQueueSize() int           { return 0 }
+func (f fakeHealthChecker) SegmentsTotal() int64           { return 0 }
+func (f fakeHealthChecker) SegmentsSize() int64            { return 0 }
+func (f fakeHealthChecker) IsHealthy() bool                { return true }
 
 func parseTargetList(targetList string) (map[string]string, error) {
 	// Split the string by ','
@@ -795,4 +859,13 @@ func getTargetAnnotationMapOrDefault(p *v1.Pod, key string, defaultVal map[strin
 		return defaultVal
 	}
 	return parsedMap
+}
+
+// remotePartitioner is a Partitioner that always returns the same owner that forces a remove transfer.
+type remotePartitioner struct {
+	host, addr string
+}
+
+func (f remotePartitioner) Owner(bytes []byte) (string, string) {
+	return f.host, f.addr
 }

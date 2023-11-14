@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
@@ -156,7 +158,11 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 		return err
 	}
 
-	if err := wal.Write(ctx, enc.Bytes()); err != nil {
+	b := enc.Bytes()
+	tNumLogs := tlv.New(otlp.LogsTotalTag, []byte(strconv.Itoa(len(logs.Logs))))
+	tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(b))))
+
+	if err := wal.Write(ctx, append(tlv.Encode(tNumLogs, tPayloadSize), b...)); err != nil {
 		return err
 	}
 
