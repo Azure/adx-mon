@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http/pprof"
 	_ "net/http/pprof"
+	"os"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -271,8 +272,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			})
 		}
 
+		cursorDirectory := filepath.Join(opts.StorageDir, "log-cursors")
+		if err := os.MkdirAll(cursorDirectory, 0755); err != nil {
+			return nil, fmt.Errorf("log-cursors mkdir: %w", err)
+		}
 		source, err := tail.NewTailSource(tail.TailSourceConfig{
-			StaticTargets: targets,
+			StaticTargets:   targets,
+			CursorDirectory: cursorDirectory,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create tail source: %w", err)

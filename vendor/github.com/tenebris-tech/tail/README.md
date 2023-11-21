@@ -13,7 +13,7 @@ for line := range t.Lines {
 }
 ```
 
-See [API documentation](http://godoc.org/github.com/hpcloud/tail).
+See [API documentation](http://godoc.org/github.com/tenebris-tech/tail).
 
 ## Log rotation
 
