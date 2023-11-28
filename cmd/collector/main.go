@@ -14,6 +14,7 @@ import (
 
 	"github.com/Azure/adx-mon/collector"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -26,41 +27,28 @@ import (
 
 func main() {
 	app := &cli.App{
-		Name:  "collector",
-		Usage: "adx-mon metrics collector",
-		UsageText: `
-Static Targets:
-
-Static targets can be specified with the --target flag.  The format is <host regex>=<url>,namespace/pod/container.
-This is intended to support non-kubernetes workloads.  The host regex is matched against the hostname of the node
-to determine if the target will be scraped.  To scrape all nodes, use .* as the host regex.  The namespace/pod/container
-is used to label metrics with a namespace, pod and container name.  This value must have two slashes.
-Multiple targets can be specified by repeating the --target flag.
-
-Scrape port 9100 on all nodes:
-  --target=.*=http://$(HOSTNAME):9100/metrics
-
-Add a static pod scrape for etcd pods running outside of Kubernetes on masters and label metrics in kube-system namespace, etcd pod and etcd container.:
-  --target=.+-master-.+=http://$(HOSTNAME):2381/metrics:kube-system/etcd/etcd
-`,
+		Name:      "collector",
+		Usage:     "adx-mon metrics collector",
+		UsageText: ``,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/kubelet.conf"},
-			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
-			&cli.StringSliceFlag{Name: "target", Usage: "Static Prometheus scrape target in the format of " +
-				"<host regex>=<url>:namespace/pod/container.  Multiple targets can be specified by repeating this flag. See usage for more details."},
-			&cli.StringSliceFlag{Name: "endpoints", Usage: "Prometheus remote write endpoint URLs"},
-			&cli.BoolFlag{Name: "disable-metrics-forwarding", Usage: "Disable metrics forwarding to endpoints", Value: false},
-			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification of remote write endpoints"},
-			&cli.StringFlag{Name: "listen-addr", Usage: "Address to listen on for Prometheus scrape requests", Value: ":8080"},
-			&cli.DurationFlag{Name: "scrape-interval", Usage: "Scrape interval", Value: 30 * time.Second},
-			&cli.StringSliceFlag{Name: "add-labels", Usage: "Label in the format of <name>=<value>.  These are added to all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "add-attributes", Usage: "Attributes in the format of <name>=<value>.  These are added to all logs collected by this agent"},
-			&cli.StringSliceFlag{Name: "lift-attributes", Usage: "Attributes lifted from the Body and added to Attributes."},
-			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
-			&cli.IntFlag{Name: "max-batch-size", Usage: "Maximum number of samples to send in a single batch", Value: 5000},
+			&cli.StringFlag{Name: "config", Usage: "Config file path"},
 			&cli.BoolFlag{Name: "experimental-log-collection", Usage: "Enable experimental log collection.", Hidden: true},
-			&cli.StringFlag{Name: "storage-dir", Usage: "Storage directory for the WAL", Value: ""},
+		},
+
+		Commands: []*cli.Command{
+			{
+				Name:  "config",
+				Usage: "Generate a config file",
+				Action: func(c *cli.Context) error {
+					b, err := toml.Marshal(DefaultConfig)
+					if err != nil {
+						return err
+					}
+					fmt.Println(string(b))
+					return nil
+				},
+			},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -78,34 +66,38 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
 
+	var cfg = DefaultConfig
+	configFile := ctx.String("config")
+	if configFile != "" {
+
+		configBytes, err := os.ReadFile(configFile)
+		if err != nil {
+			return err
+		}
+
+		var fileConfig Config
+		if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
+			return err
+		}
+		cfg = fileConfig
+	}
+
 	_, k8scli, _, err := newKubeClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	addLabels, err := parseKeyPairs(ctx.StringSlice("add-labels"))
-	if err != nil {
-		logger.Fatalf("invalid labels: %s", ctx.StringSlice("add-labels"))
-	}
-	addAttributes, err := parseKeyPairs(ctx.StringSlice("add-attributes"))
-	if err != nil {
-		logger.Fatalf("invalid attributes: %s", ctx.StringSlice("add-attributes"))
-	}
+	addLabels := cfg.AddLabels
+	addAttributes := cfg.AddAttributes
 
 	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-	for _, v := range ctx.StringSlice("drop-labels") {
-		// The format is <metrics region>=<label regex>
-		fields := strings.Split(v, "=")
-		if len(fields) > 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		metricRegex, err := regexp.Compile(fields[0])
+	for k, v := range cfg.DropLabels {
+		metricRegex, err := regexp.Compile(k)
 		if err != nil {
 			logger.Fatalf("invalid metric regex: %s", err)
 		}
 
-		labelRegex, err := regexp.Compile(fields[1])
+		labelRegex, err := regexp.Compile(v)
 		if err != nil {
 			logger.Fatalf("invalid label regex: %s", err)
 		}
@@ -114,7 +106,7 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	dropMetrics := []*regexp.Regexp{}
-	for _, v := range ctx.StringSlice("drop-metrics") {
+	for _, v := range cfg.DropMetrics {
 		metricRegex, err := regexp.Compile(v)
 		if err != nil {
 			logger.Fatalf("invalid metric regex: %s", err)
@@ -123,7 +115,7 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	hostname := ctx.String("hostname")
+	hostname := cfg.Hostname
 	if hostname == "" {
 		var err error
 		hostname, err = os.Hostname()
@@ -133,33 +125,17 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	var staticTargets []collector.ScrapeTarget
-	for _, target := range ctx.StringSlice("target") {
-		split := strings.Split(target, "=")
-		if len(split) != 2 {
-			return fmt.Errorf("invalid target %s, Expected <host regex>=<url>:namespace/pod/container", target)
-		}
-
-		if match, err := regexp.MatchString(split[0], hostname); err != nil {
-			return fmt.Errorf("failed to match hostname %s with regex %s: %w", hostname, split[0], err)
+	for _, target := range cfg.PrometheusScrape.StaticScrapeTarget {
+		if match, err := regexp.MatchString(target.HostRegex, hostname); err != nil {
+			return fmt.Errorf("failed to match hostname %s with regex %s: %w", hostname, target.HostRegex, err)
 		} else if !match {
 			continue
 		}
 
-		i := strings.LastIndex(split[1], ":")
-		if i == -1 {
-			return fmt.Errorf("invalid target %s. Missing :namespace/pod/container", target)
-		}
-
-		url := split[1][:i]
-		metaPart := split[1][i+1:]
-
-		meta := strings.Split(metaPart, "/")
-		if len(meta) != 3 {
-			return fmt.Errorf("invalid target %s. Expected namespace/pod/container", target)
-		}
-		namespace := meta[0]
-		pod := meta[1]
-		container := meta[2]
+		url := target.URL
+		namespace := target.Namespace
+		pod := target.Pod
+		container := target.Container
 
 		staticTargets = append(staticTargets, collector.ScrapeTarget{
 			Addr:      url,
@@ -169,43 +145,45 @@ func realMain(ctx *cli.Context) error {
 		})
 	}
 
-	endpoints := ctx.StringSlice("endpoints")
-	for _, endpoint := range endpoints {
-		u, err := url.Parse(endpoint)
-		if err != nil {
-			return fmt.Errorf("failed to parse endpoint %s: %w", endpoint, err)
-		}
+	var endpoints []string
+	if cfg.Endpoint != "" {
+		for _, endpoint := range []string{cfg.Endpoint} {
+			u, err := url.Parse(endpoint)
+			if err != nil {
+				return fmt.Errorf("failed to parse endpoint %s: %w", endpoint, err)
+			}
 
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("endpoint %s must be http or https", endpoint)
-		}
+			if u.Scheme != "http" && u.Scheme != "https" {
+				return fmt.Errorf("endpoint %s must be http or https", endpoint)
+			}
 
-		logger.Infof("Using remote write endpoint %s", endpoint)
+			logger.Infof("Using remote write endpoint %s", endpoint)
+		}
 	}
 
-	if ctx.String("storage-dir") == "" {
+	if cfg.StorageDir == "" {
 		logger.Fatalf("storage-dir is required")
 	} else {
-		logger.Infof("Using storage dir: %s", ctx.String("storage-dir"))
+		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 
 	opts := &collector.ServiceOpts{
 		K8sCli:                   k8scli,
-		ListenAddr:               ctx.String("listen-addr"),
-		ScrapeInterval:           ctx.Duration("scrape-interval"),
+		ListenAddr:               cfg.ListenAddr,
+		ScrapeInterval:           time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
 		NodeName:                 hostname,
 		Targets:                  staticTargets,
 		Endpoints:                endpoints,
 		DropMetrics:              dropMetrics,
 		AddLabels:                addLabels,
 		AddAttributes:            addAttributes,
-		LiftAttributes:           ctx.StringSlice("lift-attributes"),
+		LiftAttributes:           cfg.LiftAttributes,
 		DropLabels:               dropLabels,
-		InsecureSkipVerify:       ctx.Bool("insecure-skip-verify"),
-		MaxBatchSize:             ctx.Int("max-batch-size"),
+		InsecureSkipVerify:       cfg.InsecureSkipVerify,
+		MaxBatchSize:             cfg.MaxBatchSize,
 		CollectLogs:              ctx.Bool("experimental-log-collection"),
-		DisableMetricsForwarding: ctx.Bool("disable-metrics-forwarding"),
-		StorageDir:               ctx.String("storage-dir"),
+		DisableMetricsForwarding: cfg.DisableMetricsForwarding,
+		StorageDir:               cfg.StorageDir,
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
