@@ -66,6 +66,7 @@ type Config struct {
 }
 
 type PrometheusScrape struct {
+	Database                 string         `toml:"database" comment:"Database to store metrics in."`
 	StaticScrapeTarget       []ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
 	ScrapeIntervalSeconds    int            `toml:"scrape-interval" comment:"Scrape interval in seconds."`
 	DisableMetricsForwarding bool           `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
@@ -76,6 +77,10 @@ type PrometheusScrape struct {
 }
 
 func (s PrometheusScrape) Validate() error {
+	if s.Database == "" {
+		return errors.New("prom-scrape.database must be set")
+	}
+
 	for i, v := range s.StaticScrapeTarget {
 		if err := v.Validate(); err != nil {
 			return fmt.Errorf("prom-scrape.static-scrape-target[%d].%w", i, err)
@@ -116,6 +121,7 @@ func (t ScrapeTarget) Validate() error {
 }
 
 type PrometheusRemoteWrite struct {
+	Database    string            `toml:"database" comment:"Database to store metrics in."`
 	Path        string            `toml:"path" comment:"The path to listen on for prometheus remote write requests.  Defaults to /receive."`
 	AddLabels   map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
 	DropLabels  map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
@@ -127,6 +133,10 @@ type PrometheusRemoteWrite struct {
 func (w PrometheusRemoteWrite) Validate() error {
 	if w.Path == "" {
 		return errors.New("prometheus-remote-write.path must be set")
+	}
+
+	if w.Database == "" {
+		return errors.New("prometheus-remote-write.database must be set")
 	}
 
 	for k, v := range w.AddLabels {
@@ -184,8 +194,10 @@ func (c Config) Validate() error {
 		return err
 	}
 
-	if err := c.PrometheusScrape.Validate(); err != nil {
-		return err
+	if c.PrometheusScrape != nil {
+		if err := c.PrometheusScrape.Validate(); err != nil {
+			return err
+		}
 	}
 
 	return nil

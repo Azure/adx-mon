@@ -27,7 +27,9 @@ import (
 type ScraperOpts struct {
 	NodeName string
 
+	// AddLabels is a map of key/value pairs that will be added to all metrics.
 	AddLabels map[string]string
+
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
 
@@ -35,6 +37,10 @@ type ScraperOpts struct {
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
 
+	// Database is the name of the database to write metrics to.
+	Database string
+
+	// ScrapeInterval is the interval at which to scrape metrics from the targets.
 	ScrapeInterval time.Duration
 
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
@@ -42,12 +48,14 @@ type ScraperOpts struct {
 
 	K8sCli kubernetes.Interface
 
+	// Targets is a list of static scrape targets.
 	Targets []ScrapeTarget
 
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
-	Endpoints    []string
+	Endpoints []string
+
 	RemoteClient *promremote.Client
 }
 
