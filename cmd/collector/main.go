@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -42,11 +44,14 @@ func main() {
 				Name:  "config",
 				Usage: "Generate a config file",
 				Action: func(c *cli.Context) error {
-					b, err := toml.Marshal(DefaultConfig)
-					if err != nil {
+					buf := bytes.Buffer{}
+					enc := toml.NewEncoder(&buf)
+					enc.SetIndentTables(true)
+					if err := enc.Encode(DefaultConfig); err != nil {
 						return err
 					}
-					fmt.Println(string(b))
+
+					fmt.Println(buf.String())
 					return nil
 				},
 			},
@@ -78,9 +83,21 @@ func realMain(ctx *cli.Context) error {
 
 		var fileConfig Config
 		if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
+			var derr *toml.DecodeError
+			if errors.As(err, &derr) {
+				fmt.Println(derr.String())
+				row, col := derr.Position()
+				fmt.Println("error occurred at row", row, "column", col)
+			}
+
 			return err
 		}
+
 		cfg = fileConfig
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
 
 	_, k8scli, _, err := newKubeClient(ctx)
@@ -130,6 +147,12 @@ func realMain(ctx *cli.Context) error {
 
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
+
+		if cfg.PrometheusScrape.AddLabels == nil {
+			cfg.PrometheusScrape.AddLabels = make(map[string]string)
+		}
+		cfg.PrometheusScrape.AddLabels["adxmon_database"] = cfg.PrometheusScrape.Database
+
 		var staticTargets []collector.ScrapeTarget
 		for _, target := range cfg.PrometheusScrape.StaticScrapeTarget {
 			if match, err := regexp.MatchString(target.HostRegex, hostname); err != nil {
@@ -174,6 +197,7 @@ func realMain(ctx *cli.Context) error {
 		scraperOpts = &collector.ScraperOpts{
 			NodeName:                 hostname,
 			K8sCli:                   k8scli,
+			Database:                 cfg.PrometheusScrape.Database,
 			AddLabels:                mergeMaps(addLabels, cfg.PrometheusScrape.AddLabels),
 			DropLabels:               dropLabels,
 			DropMetrics:              dropMetrics,
@@ -197,6 +221,10 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {
+		writeLabels := mergeMaps(addLabels, map[string]string{
+			"adxmon_database": v.Database,
+		})
+
 		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
 		for k, v := range cfg.DropLabels {
 			metricRegex, err := regexp.Compile(k)
@@ -224,7 +252,7 @@ func realMain(ctx *cli.Context) error {
 
 		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
 			Path:        v.Path,
-			AddLabels:   mergeMaps(addLabels, v.AddLabels),
+			AddLabels:   mergeMaps(writeLabels, v.AddLabels),
 			DropMetrics: dropMetrics,
 			DropLabels:  dropLabels,
 		})

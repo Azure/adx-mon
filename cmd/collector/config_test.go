@@ -171,7 +171,7 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := Config{
-				PrometheusScrape: PrometheusScrape{
+				PrometheusScrape: &PrometheusScrape{
 					StaticScrapeTarget: tt.targets,
 				},
 			}
@@ -199,11 +199,32 @@ func TestConfig_PromScrape_Interval(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := Config{
-				PrometheusScrape: PrometheusScrape{
+				PrometheusScrape: &PrometheusScrape{
 					ScrapeIntervalSeconds: tt.interval,
 				},
 			}
 			require.Equal(t, tt.err, c.Validate().Error())
 		})
 	}
+}
+
+func TestConfig_PromScrape_Database(t *testing.T) {
+	c := Config{
+		PrometheusScrape: &PrometheusScrape{
+			Database: "",
+		},
+	}
+	require.Equal(t, "prom-scrape.database must be set", c.Validate().Error())
+}
+
+func TestConfig_PromWrite_Database(t *testing.T) {
+	c := Config{
+		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+			{
+				Path:     "/receive",
+				Database: "",
+			},
+		},
+	}
+	require.Equal(t, "prometheus-remote-write.database must be set", c.Validate().Error())
 }
