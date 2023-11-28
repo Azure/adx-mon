@@ -179,11 +179,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-		DropLabels:    opts.DropLabels,
-		DropMetrics:   opts.DropMetrics,
-		RequestWriter: coord,
-		Database:      opts.MetricsDatabase,
-		HealthChecker: health,
+		RequestTransformer: transform.NewRequestTransformer(nil, opts.DropLabels, opts.DropMetrics),
+		RequestWriter:      coord,
+		Database:           opts.MetricsDatabase,
+		HealthChecker:      health,
 	})
 
 	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer(coord.WriteOTLPLogs, opts.LogsDatabases))

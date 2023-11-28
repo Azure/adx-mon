@@ -18,16 +18,18 @@ func TestService_Open(t *testing.T) {
 	dir := t.TempDir()
 	cli := fake.NewSimpleClientset()
 	s, err := NewService(&ServiceOpts{
-		StorageDir:     dir,
-		ListenAddr:     MetricListenAddr,
-		K8sCli:         cli,
-		ScrapeInterval: 10 * time.Second,
+		StorageDir: dir,
+		ListenAddr: MetricListenAddr,
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			ScrapeInterval: 10 * time.Second,
+		},
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	require.Equal(t, 0, len(s.Targets()))
+	require.Equal(t, 0, len(s.scraper.Targets()))
 }
 
 func TestService_Open_Static(t *testing.T) {
@@ -36,17 +38,19 @@ func TestService_Open_Static(t *testing.T) {
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
-		K8sCli:     cli,
-		Targets: []ScrapeTarget{
-			{Addr: "http://localhost:8080/metrics"},
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			ScrapeInterval: 10 * time.Second,
+			Targets: []ScrapeTarget{
+				{Addr: "http://localhost:8080/metrics"},
+			},
 		},
-		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	require.Equal(t, 1, len(s.Targets()))
+	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_NoMatchingHost(t *testing.T) {
@@ -55,18 +59,20 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
-		K8sCli:     cli,
-		NodeName:   "ks8-master-123",
-		Targets: []ScrapeTarget{
-			{Addr: "http://localhost:8080/metrics"},
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			NodeName:       "ks8-master-123",
+			ScrapeInterval: 10 * time.Second,
+			Targets: []ScrapeTarget{
+				{Addr: "http://localhost:8080/metrics"},
+			},
 		},
-		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	require.Equal(t, 1, len(s.Targets()))
+	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
@@ -75,18 +81,20 @@ func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
-		K8sCli:     cli,
-		NodeName:   "ks8-master-123",
-		Targets: []ScrapeTarget{
-			{Addr: "http://localhost:8080/metrics"},
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			NodeName:       "ks8-master-123",
+			ScrapeInterval: 10 * time.Second,
+			Targets: []ScrapeTarget{
+				{Addr: "http://localhost:8080/metrics"},
+			},
 		},
-		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	require.Equal(t, 1, len(s.Targets()))
+	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_Matching(t *testing.T) {
@@ -110,23 +118,25 @@ func TestService_Open_Matching(t *testing.T) {
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
-		K8sCli:     cli,
-		NodeName:   "ks8-master-123",
-		Targets: []ScrapeTarget{
-			{
-				Addr:      "http://localhost:8080/metrics",
-				Namespace: "namespace",
-				Pod:       "pod",
-				Container: "container",
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			NodeName:       "ks8-master-123",
+			ScrapeInterval: 10 * time.Second,
+			Targets: []ScrapeTarget{
+				{
+					Addr:      "http://localhost:8080/metrics",
+					Namespace: "namespace",
+					Pod:       "pod",
+					Container: "container",
+				},
 			},
 		},
-		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	targets := s.Targets()
+	targets := s.scraper.Targets()
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
 	require.Equal(t, "namespace", targets[0].Namespace)
@@ -165,17 +175,19 @@ func TestService_Open_HostPort(t *testing.T) {
 	}
 	cli := fake.NewSimpleClientset(pod)
 	s, err := NewService(&ServiceOpts{
-		StorageDir:     dir,
-		ListenAddr:     MetricListenAddr,
-		K8sCli:         cli,
-		NodeName:       "ks8-master-123",
-		ScrapeInterval: 10 * time.Second,
+		StorageDir: dir,
+		ListenAddr: MetricListenAddr,
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			NodeName:       "ks8-master-123",
+			ScrapeInterval: 10 * time.Second,
+		},
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	targets := s.Targets()
+	targets := s.scraper.Targets()
 	require.Equal(t, 1, len(targets))
 	require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
 	require.Equal(t, "default", targets[0].Namespace)
@@ -205,18 +217,20 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
-		K8sCli:     cli,
-		NodeName:   "ks8-master-123",
-		Targets: []ScrapeTarget{
-			{Addr: "http://localhost:8080/metrics"},
+		Scraper: &ScraperOpts{
+			K8sCli:         cli,
+			NodeName:       "ks8-master-123",
+			ScrapeInterval: 10 * time.Second,
+			Targets: []ScrapeTarget{
+				{Addr: "http://localhost:8080/metrics"},
+			},
 		},
-		ScrapeInterval: 10 * time.Second,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
-	targets := s.Targets()
+	targets := s.scraper.Targets()
 	require.Equal(t, 2, len(targets))
 	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
 	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
