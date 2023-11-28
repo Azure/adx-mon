@@ -26,7 +26,7 @@ var DefaultConfig = Config{
 	MaxBatchSize: 5000,
 	ListenAddr:   ":8080",
 	StorageDir:   homedir,
-	PrometheusScrape: PrometheusScrape{
+	PrometheusScrape: &PrometheusScrape{
 		StaticScrapeTarget:    []ScrapeTarget{},
 		ScrapeIntervalSeconds: 30,
 	},
@@ -60,7 +60,7 @@ type Config struct {
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 
-	PrometheusScrape      PrometheusScrape        `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
+	PrometheusScrape      *PrometheusScrape       `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
 	PrometheusRemoteWrite []PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
 	OtelLog               OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint."`
 }

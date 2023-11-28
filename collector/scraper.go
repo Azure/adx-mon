@@ -104,6 +104,7 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 }
 
 func (s *Scraper) Open(ctx context.Context) error {
+	logger.Infof("Starting prometheus scraper for node %s", s.opts.NodeName)
 	ctx, cancelFn := context.WithCancel(ctx)
 	s.cancel = cancelFn
 
