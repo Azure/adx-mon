@@ -76,7 +76,7 @@ func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
 		w.seriesIdBuf.Write(v.Value)
 
 		// Drop the __name__ label since it is implied that the name of the CSV file is the name of the metric.
-		if bytes.Equal(v.Name, []byte("__name__")) {
+		if bytes.Equal(v.Name, []byte("__name__")) || bytes.HasPrefix(v.Name, []byte("adxmon_")) {
 			continue
 		}
 

@@ -60,7 +60,7 @@ type ScraperOpts struct {
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
-	return transform.NewRequestTransformer(s.AddLabels, s.DropLabels, s.DropMetrics)
+	return transform.NewRequestTransformer(s.AddLabels, s.DropLabels, s.DropMetrics, nil)
 }
 
 type ScrapeTarget struct {

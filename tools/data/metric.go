@@ -12,6 +12,7 @@ import (
 type SetOptions struct {
 	NumMetrics  int
 	Cardinality int
+	Database    string
 }
 
 type Metric struct {
@@ -48,6 +49,10 @@ type Set struct {
 func (s *Set) Next(timestamp time.Time) prompb.TimeSeries {
 	metric := s.metrics[s.i%len(s.metrics)]
 	ts := metric.Next(timestamp)
+	ts.Labels = append(ts.Labels, prompb.Label{
+		Name:  []byte("adxmon_database"),
+		Value: []byte(s.opts.Database),
+	})
 	ts.Labels = append(ts.Labels, prompb.Label{
 		Name:  []byte("host"),
 		Value: []byte(fmt.Sprintf("host_%d", metric.n%metric.cardinality)),

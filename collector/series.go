@@ -39,7 +39,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 	}
 
 	for _, l := range m.Label {
-		if l.GetName() == "adxmon_namespace" || l.GetName() == "adxmon_pod" || l.GetName() == "adxmon_container" {
+		if l.GetName() == "adxmon_namespace" || l.GetName() == "adxmon_pod" || l.GetName() == "adxmon_container" || l.GetName() == "adxmon_database" {
 			continue
 		}
 

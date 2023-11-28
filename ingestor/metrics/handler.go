@@ -38,7 +38,7 @@ type SeriesCounter interface {
 
 type RequestWriter interface {
 	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, database string, wr prompb.WriteRequest) error
+	Write(ctx context.Context, wr prompb.WriteRequest) error
 }
 
 type HealthChecker interface {
@@ -147,7 +147,13 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	// Apply any label or metrics drops or additions
 	req = s.requestTransformer.TransformWriteRequest(req)
 
-	err = s.requestWriter.Write(r.Context(), s.database, req)
+	if len(req.Timeseries) == 0 {
+		m.WithLabelValues(strconv.Itoa(http.StatusNoContent)).Inc()
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	err = s.requestWriter.Write(r.Context(), req)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)

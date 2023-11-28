@@ -268,6 +268,7 @@ func realMain(ctx *cli.Context) error {
 		kustoEndpoint = metricsEndpoint
 	}
 
+	var allowedDatabases []string
 	if kustoEndpoint != "" {
 		var (
 			err  error
@@ -285,6 +286,8 @@ func realMain(ctx *cli.Context) error {
 		defer client.Close()
 	}
 
+	allowedDatabases = append(allowedDatabases, database)
+
 	metricsUploader, err := newUploader(client, database, storageDir, concurrentUploads, defaultMapping)
 	if err != nil {
 		logger.Fatalf("Failed to create uploader: %s", err)
@@ -293,6 +296,8 @@ func realMain(ctx *cli.Context) error {
 	if err != nil {
 		logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 	}
+
+	allowedDatabases = append(allowedDatabases, oltpLogDatabases...)
 
 	uploadDispatcher := adx.NewDispatcher(append(otlpLogsUploaders, metricsUploader))
 	if err := uploadDispatcher.Open(svcCtx); err != nil {
@@ -304,6 +309,7 @@ func realMain(ctx *cli.Context) error {
 		K8sCli:              k8scli,
 		MetricsKustoCli:     client,
 		MetricsDatabase:     database,
+		AllowedDatabase:     allowedDatabases,
 		LogsDatabases:       oltpLogDatabases,
 		Namespace:           namespace,
 		Hostname:            hostname,

@@ -106,6 +106,9 @@ type ServiceOpts struct {
 	// MaxDiskUsage is the maximum disk usage allowed before signaling back-pressure.
 	MaxDiskUsage int64
 
+	// AllowedDatabases is the distinct set of database names that are allowed to be written to.
+	AllowedDatabase []string
+
 	// MetricsDatabase is the name of the metrics database.
 	MetricsDatabase string
 
@@ -178,8 +181,13 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		PeerHealthReport: health,
 	})
 
+	dbs := make(map[string]struct{}, len(opts.AllowedDatabase))
+	for _, db := range opts.AllowedDatabase {
+		dbs[db] = struct{}{}
+	}
+
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-		RequestTransformer: transform.NewRequestTransformer(nil, opts.DropLabels, opts.DropMetrics),
+		RequestTransformer: transform.NewRequestTransformer(nil, opts.DropLabels, opts.DropMetrics, dbs),
 		RequestWriter:      coord,
 		Database:           opts.MetricsDatabase,
 		HealthChecker:      health,

@@ -22,7 +22,7 @@ type generator interface {
 // This program generates remote write load against a target endpoint.
 func main() {
 	var (
-		dataFile, target                string
+		dataFile, database, target      string
 		verbose, dryRun                 bool
 		concurrency                     int
 		batchSize, metrics, cardinality int
@@ -34,6 +34,7 @@ func main() {
 	flag.StringVar(&target, "target", "", "Remote write URL")
 	flag.IntVar(&concurrency, "concurrency", 1, "Concurrent writers")
 
+	flag.StringVar(&database, "database", "FakeDatabase", "Database name")
 	flag.IntVar(&batchSize, "batch-size", 2500, "Batch size of requests")
 	flag.IntVar(&metrics, "metrics", 100, "Numbe of distinct metrics")
 	flag.IntVar(&cardinality, "cardinality", 100000, "Total cardinality per metric")
@@ -42,12 +43,17 @@ func main() {
 
 	flag.Parse()
 
+	if database == "" {
+		logger.Fatalf("database is required")
+	}
+
 	var dataGen generator
 
 	generator := &continuousDataGenerator{
 		set: data.NewDataSet(data.SetOptions{
 			NumMetrics:  metrics,
 			Cardinality: cardinality,
+			Database:    database,
 		}),
 		startTime:    time.Now().UTC(),
 		batchSize:    batchSize,
