@@ -87,33 +87,7 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
-	addLabels := cfg.AddLabels
 	addAttributes := cfg.AddAttributes
-
-	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-	for k, v := range cfg.DropLabels {
-		metricRegex, err := regexp.Compile(k)
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		labelRegex, err := regexp.Compile(v)
-		if err != nil {
-			logger.Fatalf("invalid label regex: %s", err)
-		}
-
-		dropLabels[metricRegex] = labelRegex
-	}
-
-	dropMetrics := []*regexp.Regexp{}
-	for _, v := range cfg.DropMetrics {
-		metricRegex, err := regexp.Compile(v)
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		dropMetrics = append(dropMetrics, metricRegex)
-	}
 
 	hostname := cfg.Hostname
 	if hostname == "" {
@@ -167,23 +141,50 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 
+	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
+	for k, v := range cfg.PrometheusScrape.DropLabels {
+		metricRegex, err := regexp.Compile(k)
+		if err != nil {
+			logger.Fatalf("invalid metric regex: %s", err)
+		}
+
+		labelRegex, err := regexp.Compile(v)
+		if err != nil {
+			logger.Fatalf("invalid label regex: %s", err)
+		}
+
+		dropLabels[metricRegex] = labelRegex
+	}
+
+	dropMetrics := []*regexp.Regexp{}
+	for _, v := range cfg.PrometheusScrape.DropMetrics {
+		metricRegex, err := regexp.Compile(v)
+		if err != nil {
+			logger.Fatalf("invalid metric regex: %s", err)
+		}
+
+		dropMetrics = append(dropMetrics, metricRegex)
+	}
+
 	opts := &collector.ServiceOpts{
-		K8sCli:                   k8scli,
-		ListenAddr:               cfg.ListenAddr,
-		ScrapeInterval:           time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
-		NodeName:                 hostname,
-		Targets:                  staticTargets,
-		Endpoints:                endpoints,
-		DropMetrics:              dropMetrics,
-		AddLabels:                addLabels,
-		AddAttributes:            addAttributes,
-		LiftAttributes:           cfg.LiftAttributes,
-		DropLabels:               dropLabels,
-		InsecureSkipVerify:       cfg.InsecureSkipVerify,
-		MaxBatchSize:             cfg.MaxBatchSize,
-		CollectLogs:              ctx.Bool("experimental-log-collection"),
-		DisableMetricsForwarding: cfg.DisableMetricsForwarding,
-		StorageDir:               cfg.StorageDir,
+		Scraper: &collector.ScraperOpts{
+			K8sCli:                   k8scli,
+			AddLabels:                cfg.PrometheusScrape.AddLabels,
+			DropLabels:               dropLabels,
+			DropMetrics:              dropMetrics,
+			DisableMetricsForwarding: cfg.PrometheusScrape.DisableMetricsForwarding,
+			ScrapeInterval:           time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
+			Targets:                  staticTargets,
+		},
+		ListenAddr:         cfg.ListenAddr,
+		NodeName:           hostname,
+		Endpoints:          endpoints,
+		AddAttributes:      addAttributes,
+		LiftAttributes:     cfg.LiftAttributes,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		MaxBatchSize:       cfg.MaxBatchSize,
+		CollectLogs:        ctx.Bool("experimental-log-collection"),
+		StorageDir:         cfg.StorageDir,
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {

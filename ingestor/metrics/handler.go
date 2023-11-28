@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -50,15 +49,9 @@ type HandlerOpts struct {
 	// Path is the path where the handler will be registered.
 	Path string
 
-	// AddLabels is a map of label names and values.  These labels will be added to all metrics.
-	AddLabels map[string]string
-
-	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
-	DropLabels map[*regexp.Regexp]*regexp.Regexp
-
-	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
-	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
-	DropMetrics []*regexp.Regexp
+	RequestTransformer interface {
+		TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest
+	}
 
 	// RequestWriter is the interface that writes the time series to a destination.
 	RequestWriter RequestWriter
@@ -80,7 +73,7 @@ type Handler struct {
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
 
-	requestFilter interface {
+	requestTransformer interface {
 		TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest
 	}
 
@@ -95,15 +88,11 @@ func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 func NewHandler(opts HandlerOpts) *Handler {
 	return &Handler{
-		Path:   opts.Path,
-		health: opts.HealthChecker,
-		requestFilter: transform.NewRequestTransformer(
-			opts.AddLabels,
-			opts.DropLabels,
-			opts.DropMetrics,
-		),
-		requestWriter: opts.RequestWriter,
-		database:      opts.Database,
+		Path:               opts.Path,
+		health:             opts.HealthChecker,
+		requestTransformer: opts.RequestTransformer,
+		requestWriter:      opts.RequestWriter,
+		database:           opts.Database,
 	}
 }
 
@@ -156,7 +145,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply any label or metrics drops or additions
-	req = s.requestFilter.TransformWriteRequest(req)
+	req = s.requestTransformer.TransformWriteRequest(req)
 
 	err = s.requestWriter.Write(r.Context(), s.database, req)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {

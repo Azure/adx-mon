@@ -33,7 +33,7 @@ var DefaultConfig = Config{
 
 	PrometheusRemoteWrite: []PrometheusRemoteWrite{
 		{
-			Path:      "/receive",
+			Path:      "/remote_write",
 			AddLabels: make(map[string]string),
 		},
 	},
