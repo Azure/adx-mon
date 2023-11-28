@@ -99,27 +99,6 @@ func realMain(ctx *cli.Context) error {
 		}
 	}
 
-	var staticTargets []collector.ScrapeTarget
-	for _, target := range cfg.PrometheusScrape.StaticScrapeTarget {
-		if match, err := regexp.MatchString(target.HostRegex, hostname); err != nil {
-			return fmt.Errorf("failed to match hostname %s with regex %s: %w", hostname, target.HostRegex, err)
-		} else if !match {
-			continue
-		}
-
-		url := target.URL
-		namespace := target.Namespace
-		pod := target.Pod
-		container := target.Container
-
-		staticTargets = append(staticTargets, collector.ScrapeTarget{
-			Addr:      url,
-			Namespace: namespace,
-			Pod:       pod,
-			Container: container,
-		})
-	}
-
 	var endpoints []string
 	if cfg.Endpoint != "" {
 		for _, endpoint := range []string{cfg.Endpoint} {
@@ -142,31 +121,6 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 
-	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-	for k, v := range cfg.PrometheusScrape.DropLabels {
-		metricRegex, err := regexp.Compile(k)
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		labelRegex, err := regexp.Compile(v)
-		if err != nil {
-			logger.Fatalf("invalid label regex: %s", err)
-		}
-
-		dropLabels[metricRegex] = labelRegex
-	}
-
-	dropMetrics := []*regexp.Regexp{}
-	for _, v := range cfg.PrometheusScrape.DropMetrics {
-		metricRegex, err := regexp.Compile(v)
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		dropMetrics = append(dropMetrics, metricRegex)
-	}
-
 	// Add this pods identity for all metrics received
 	addLabels := map[string]string{
 		"adxmon_namespace": k8s.Instance.Namespace,
@@ -174,8 +128,56 @@ func realMain(ctx *cli.Context) error {
 		"adxmon_container": k8s.Instance.Container,
 	}
 
-	opts := &collector.ServiceOpts{
-		Scraper: &collector.ScraperOpts{
+	var scraperOpts *collector.ScraperOpts
+	if cfg.PrometheusScrape != nil {
+		var staticTargets []collector.ScrapeTarget
+		for _, target := range cfg.PrometheusScrape.StaticScrapeTarget {
+			if match, err := regexp.MatchString(target.HostRegex, hostname); err != nil {
+				return fmt.Errorf("failed to match hostname %s with regex %s: %w", hostname, target.HostRegex, err)
+			} else if !match {
+				continue
+			}
+
+			url := target.URL
+			namespace := target.Namespace
+			pod := target.Pod
+			container := target.Container
+
+			staticTargets = append(staticTargets, collector.ScrapeTarget{
+				Addr:      url,
+				Namespace: namespace,
+				Pod:       pod,
+				Container: container,
+			})
+		}
+
+		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
+		for k, v := range cfg.PrometheusScrape.DropLabels {
+			metricRegex, err := regexp.Compile(k)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			labelRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid label regex: %s", err)
+			}
+
+			dropLabels[metricRegex] = labelRegex
+		}
+
+		dropMetrics := []*regexp.Regexp{}
+		for _, v := range cfg.PrometheusScrape.DropMetrics {
+			metricRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			dropMetrics = append(dropMetrics, metricRegex)
+		}
+
+		scraperOpts = &collector.ScraperOpts{
+			NodeName:                 hostname,
 			K8sCli:                   k8scli,
 			AddLabels:                mergeMaps(addLabels, cfg.PrometheusScrape.AddLabels),
 			DropLabels:               dropLabels,
@@ -183,7 +185,11 @@ func realMain(ctx *cli.Context) error {
 			DisableMetricsForwarding: cfg.PrometheusScrape.DisableMetricsForwarding,
 			ScrapeInterval:           time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
 			Targets:                  staticTargets,
-		},
+		}
+	}
+
+	opts := &collector.ServiceOpts{
+		Scraper:            scraperOpts,
 		ListenAddr:         cfg.ListenAddr,
 		NodeName:           hostname,
 		Endpoints:          endpoints,

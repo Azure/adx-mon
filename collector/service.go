@@ -201,10 +201,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		PeerHealthReporter: fakeHealthChecker{},
 	})
 
-	scraperOpts := opts.Scraper
-	scraperOpts.RemoteClient = remoteClient
+	var scraper *Scraper
+	if opts.Scraper != nil {
+		scraperOpts := opts.Scraper
+		scraperOpts.RemoteClient = remoteClient
 
-	scraper := NewScraper(opts.Scraper)
+		scraper = NewScraper(opts.Scraper)
+	}
 
 	svc := &Service{
 		opts: opts,
@@ -284,8 +287,10 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.scraper.Open(ctx); err != nil {
-		return err
+	if s.scraper != nil {
+		if err := s.scraper.Open(ctx); err != nil {
+			return err
+		}
 	}
 
 	s.http = http.NewServer(&http.ServerOpts{
@@ -308,7 +313,10 @@ func (s *Service) Open(ctx context.Context) error {
 }
 
 func (s *Service) Close() error {
-	s.scraper.Close()
+	if s.scraper != nil {
+		s.scraper.Close()
+	}
+
 	s.metricsSvc.Close()
 	if s.logsSvc != nil {
 		s.logsSvc.Close()
