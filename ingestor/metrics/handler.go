@@ -47,6 +47,9 @@ type HealthChecker interface {
 }
 
 type HandlerOpts struct {
+	// Path is the path where the handler will be registered.
+	Path string
+
 	// AddLabels is a map of label names and values.  These labels will be added to all metrics.
 	AddLabels map[string]string
 
@@ -68,6 +71,8 @@ type HandlerOpts struct {
 }
 
 type Handler struct {
+	Path string
+
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
 
@@ -90,6 +95,7 @@ func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 func NewHandler(opts HandlerOpts) *Handler {
 	return &Handler{
+		Path:   opts.Path,
 		health: opts.HealthChecker,
 		requestFilter: transform.NewRequestTransformer(
 			opts.AddLabels,

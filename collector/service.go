@@ -63,18 +63,21 @@ type Service struct {
 
 	otelLogsSvc      *otlp.LogsService
 	otelProxySvc     *otlp.LogsProxyService
-	metricsProxySvc  *metricsHandler.Handler
+	metricsProxySvcs []*metricsHandler.Handler
 	promRemoteClient *promremote.Client
 	batcher          cluster.Batcher
 	replicator       service.Component
 }
 
 type ServiceOpts struct {
-	ListenAddr     string
-	K8sCli         kubernetes.Interface
-	NodeName       string
-	Targets        []ScrapeTarget
-	Endpoints      []string
+	ListenAddr string
+	K8sCli     kubernetes.Interface
+	NodeName   string
+	Targets    []ScrapeTarget
+	Endpoints  []string
+
+	MetricsHandlers []MetricsHandlerOpts
+
 	AddLabels      map[string]string
 	AddAttributes  map[string]string
 	LiftAttributes []string
@@ -101,6 +104,23 @@ type ServiceOpts struct {
 
 	// StorageDir is the directory where the WAL will be stored
 	StorageDir string
+}
+
+type MetricsHandlerOpts struct {
+	// Path is the path where the handler will be registered.
+	Path string
+
+	AddLabels map[string]string
+
+	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
+	DropLabels map[*regexp.Regexp]*regexp.Regexp
+
+	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
+	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
+	DropMetrics []*regexp.Regexp
+
+	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
+	DisableMetricsForwarding bool
 }
 
 type ScrapeTarget struct {
@@ -152,30 +172,35 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
 
-	// Add this pods identity for all metrics received
-	addLabels := map[string]string{
-		"adxmon_namespace": k8s.Instance.Namespace,
-		"adxmon_pod":       k8s.Instance.Pod,
-		"adxmon_container": k8s.Instance.Container,
-	}
+	var metricsHandlers []*metricsHandler.Handler
+	for _, handlerOpts := range opts.MetricsHandlers {
+		// Add this pods identity for all metrics received
+		addLabels := map[string]string{
+			"adxmon_namespace": k8s.Instance.Namespace,
+			"adxmon_pod":       k8s.Instance.Pod,
+			"adxmon_container": k8s.Instance.Container,
+		}
 
-	// Add the other static labels
-	for k, v := range opts.AddLabels {
-		addLabels[k] = v
-	}
+		// Add the other static labels
+		for k, v := range handlerOpts.AddLabels {
+			addLabels[k] = v
+		}
 
-	metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-		DropLabels:  opts.DropLabels,
-		DropMetrics: opts.DropMetrics,
-		AddLabels:   addLabels,
-		RequestWriter: &promremote.RemoteWriteProxy{
-			Client:                   remoteClient,
-			Endpoints:                opts.Endpoints,
-			MaxBatchSize:             opts.MaxBatchSize,
-			DisableMetricsForwarding: opts.DisableMetricsForwarding,
-		},
-		HealthChecker: fakeHealthChecker{},
-	})
+		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
+			Path:        handlerOpts.Path,
+			DropLabels:  handlerOpts.DropLabels,
+			DropMetrics: handlerOpts.DropMetrics,
+			AddLabels:   addLabels,
+			RequestWriter: &promremote.RemoteWriteProxy{
+				Client:                   remoteClient,
+				Endpoints:                opts.Endpoints,
+				MaxBatchSize:             opts.MaxBatchSize,
+				DisableMetricsForwarding: handlerOpts.DisableMetricsForwarding,
+			},
+			HealthChecker: fakeHealthChecker{},
+		})
+		metricsHandlers = append(metricsHandlers, metricsProxySvc)
+	}
 
 	var (
 		replicator    service.Component
@@ -223,6 +248,18 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		PeerHealthReporter: fakeHealthChecker{},
 	})
 
+	// Add this pods identity for all metrics received
+	addLabels := map[string]string{
+		"adxmon_namespace": k8s.Instance.Namespace,
+		"adxmon_pod":       k8s.Instance.Pod,
+		"adxmon_container": k8s.Instance.Container,
+	}
+
+	// Add the other static labels
+	for k, v := range opts.AddLabels {
+		addLabels[k] = v
+	}
+
 	svc := &Service{
 		opts:          opts,
 		K8sCli:        opts.K8sCli,
@@ -238,7 +275,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		store:            store,
 		otelLogsSvc:      logsSvc,
 		otelProxySvc:     logsProxySvc,
-		metricsProxySvc:  metricsProxySvc,
+		metricsProxySvcs: metricsHandlers,
 		promRemoteClient: remoteClient,
 		batcher:          batcher,
 		replicator:       replicator,
@@ -360,7 +397,10 @@ func (s *Service) Open(ctx context.Context) error {
 
 	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
 	s.http.RegisterHandler("/logs", s.otelProxySvc.Handler)
-	s.http.RegisterHandler("/remote_write", s.metricsProxySvc.HandleReceive)
+
+	for _, handler := range s.metricsProxySvcs {
+		s.http.RegisterHandler(handler.Path, handler.HandleReceive)
+	}
 
 	logger.Infof("Listening at %s", s.opts.ListenAddr)
 	if err := s.http.Open(ctx); err != nil {

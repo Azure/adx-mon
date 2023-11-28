@@ -186,6 +186,40 @@ func realMain(ctx *cli.Context) error {
 		StorageDir:               cfg.StorageDir,
 	}
 
+	for _, v := range cfg.PrometheusRemoteWrite {
+		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
+		for k, v := range cfg.DropLabels {
+			metricRegex, err := regexp.Compile(k)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			labelRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid label regex: %s", err)
+			}
+
+			dropLabels[metricRegex] = labelRegex
+		}
+
+		dropMetrics := []*regexp.Regexp{}
+		for _, v := range cfg.DropMetrics {
+			metricRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			dropMetrics = append(dropMetrics, metricRegex)
+		}
+
+		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
+			Path:        v.Path,
+			AddLabels:   v.AddLabels,
+			DropMetrics: dropMetrics,
+			DropLabels:  dropLabels,
+		})
+	}
+
 	svcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
