@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v2"
@@ -166,10 +167,17 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
+	// Add this pods identity for all metrics received
+	addLabels := map[string]string{
+		"adxmon_namespace": k8s.Instance.Namespace,
+		"adxmon_pod":       k8s.Instance.Pod,
+		"adxmon_container": k8s.Instance.Container,
+	}
+
 	opts := &collector.ServiceOpts{
 		Scraper: &collector.ScraperOpts{
 			K8sCli:                   k8scli,
-			AddLabels:                cfg.PrometheusScrape.AddLabels,
+			AddLabels:                mergeMaps(addLabels, cfg.PrometheusScrape.AddLabels),
 			DropLabels:               dropLabels,
 			DropMetrics:              dropMetrics,
 			DisableMetricsForwarding: cfg.PrometheusScrape.DisableMetricsForwarding,
@@ -215,7 +223,7 @@ func realMain(ctx *cli.Context) error {
 
 		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
 			Path:        v.Path,
-			AddLabels:   v.AddLabels,
+			AddLabels:   mergeMaps(addLabels, v.AddLabels),
 			DropMetrics: dropMetrics,
 			DropLabels:  dropLabels,
 		})
@@ -247,6 +255,16 @@ func realMain(ctx *cli.Context) error {
 	}()
 	<-svcCtx.Done()
 	return nil
+}
+
+func mergeMaps(labels ...map[string]string) map[string]string {
+	m := make(map[string]string)
+	for _, l := range labels {
+		for k, v := range l {
+			m[k] = v
+		}
+	}
+	return m
 }
 
 func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {

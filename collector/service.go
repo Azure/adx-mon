@@ -18,7 +18,6 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/http"
-	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -106,6 +105,10 @@ type MetricsHandlerOpts struct {
 	DisableMetricsForwarding bool
 }
 
+func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
+	return transform.NewRequestTransformer(o.AddLabels, o.DropLabels, o.DropMetrics)
+}
+
 func NewService(opts *ServiceOpts) (*Service, error) {
 	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:      opts.StorageDir,
@@ -138,25 +141,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	var metricsHandlers []*metricsHandler.Handler
 	for _, handlerOpts := range opts.MetricsHandlers {
-		// Add this pods identity for all metrics received
-		addLabels := map[string]string{
-			"adxmon_namespace": k8s.Instance.Namespace,
-			"adxmon_pod":       k8s.Instance.Pod,
-			"adxmon_container": k8s.Instance.Container,
-		}
-
-		// Add the other static labels
-		for k, v := range handlerOpts.AddLabels {
-			addLabels[k] = v
-		}
-
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-			Path: handlerOpts.Path,
-			RequestTransformer: transform.NewRequestTransformer(
-				handlerOpts.AddLabels,
-				handlerOpts.DropLabels,
-				handlerOpts.DropMetrics,
-			),
+			Path:               handlerOpts.Path,
+			RequestTransformer: handlerOpts.RequestTransformer(),
 			RequestWriter: &promremote.RemoteWriteProxy{
 				Client:                   remoteClient,
 				Endpoints:                opts.Endpoints,
@@ -214,24 +201,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		PeerHealthReporter: fakeHealthChecker{},
 	})
 
-	// Add this pods identity for all metrics received
-	addLabels := map[string]string{
-		"adxmon_namespace": k8s.Instance.Namespace,
-		"adxmon_pod":       k8s.Instance.Pod,
-		"adxmon_container": k8s.Instance.Container,
-	}
-
-	// Add the other static labels
-	for k, v := range opts.Scraper.AddLabels {
-		addLabels[k] = v
-	}
-
 	scraperOpts := opts.Scraper
-	scraperOpts.RequestTransformer = transform.NewRequestTransformer(
-		addLabels,
-		opts.Scraper.DropLabels,
-		opts.Scraper.DropMetrics,
-	)
 	scraperOpts.RemoteClient = remoteClient
 
 	scraper := NewScraper(opts.Scraper)
