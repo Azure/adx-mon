@@ -152,10 +152,22 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
 
+	// Add this pods identity for all metrics received
+	addLabels := map[string]string{
+		"adxmon_namespace": k8s.Instance.Namespace,
+		"adxmon_pod":       k8s.Instance.Pod,
+		"adxmon_container": k8s.Instance.Container,
+	}
+
+	// Add the other static labels
+	for k, v := range opts.AddLabels {
+		addLabels[k] = v
+	}
+
 	metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		DropLabels:  opts.DropLabels,
 		DropMetrics: opts.DropMetrics,
-		AddLabels:   opts.AddLabels,
+		AddLabels:   addLabels,
 		RequestWriter: &promremote.RemoteWriteProxy{
 			Client:                   remoteClient,
 			Endpoints:                opts.Endpoints,
@@ -219,7 +231,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			PeerHealthReport: &fakeHealthChecker{},
 		}),
 		requestTransformer: transform.NewRequestTransformer(
-			opts.AddLabels,
+			addLabels,
 			opts.DropLabels,
 			opts.DropMetrics,
 		),
@@ -324,18 +336,6 @@ func (s *Service) Open(ctx context.Context) error {
 
 	if _, err := podsInformer.AddEventHandler(s); err != nil {
 		return err
-	}
-
-	// Add this pods identity for all metrics received
-	addLabels := map[string]string{
-		"adxmon_namespace": k8s.Instance.Namespace,
-		"adxmon_pod":       k8s.Instance.Pod,
-		"adxmon_container": k8s.Instance.Container,
-	}
-
-	// Add the other static labels
-	for k, v := range s.opts.AddLabels {
-		addLabels[k] = v
 	}
 
 	if err := s.replicator.Open(ctx); err != nil {
