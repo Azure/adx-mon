@@ -50,13 +50,13 @@ type Config struct {
 	MaxBatchSize       int    `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
 	StorageDir         string `toml:"storage-dir" comment:"Storage directory for the WAL."`
 
-	// TODO: Move these to endpoint specific config.
+	// These are global config options that apply to all endpoints.
 	AddLabels                map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
 	DropLabels               map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
 	DropMetrics              []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 	DisableMetricsForwarding bool              `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
-	// TODO: Move these to endpoint specific config.
+	// TODO: Move these to endpoint specific config(?).
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 
@@ -80,6 +80,10 @@ func (s PrometheusScrape) Validate() error {
 		if err := v.Validate(); err != nil {
 			return fmt.Errorf("prom-scrape.static-scrape-target[%d].%w", i, err)
 		}
+	}
+
+	if s.ScrapeIntervalSeconds <= 0 {
+		return errors.New("prom-scrape.scrape-interval must be greater than 0")
 	}
 	return nil
 }

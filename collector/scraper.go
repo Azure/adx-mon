@@ -27,8 +27,6 @@ import (
 type ScraperOpts struct {
 	NodeName string
 
-	RequestTransformer *transform.RequestTransformer
-
 	AddLabels map[string]string
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
@@ -51,6 +49,10 @@ type ScraperOpts struct {
 
 	Endpoints    []string
 	RemoteClient *promremote.Client
+}
+
+func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
+	return transform.NewRequestTransformer(s.AddLabels, s.DropLabels, s.DropMetrics)
 }
 
 type ScrapeTarget struct {
@@ -96,7 +98,7 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		K8sCli:             opts.K8sCli,
 		opts:               *opts,
 		seriesCreator:      &seriesCreator{},
-		requestTransformer: opts.RequestTransformer,
+		requestTransformer: opts.RequestTransformer(),
 		remoteClient:       opts.RemoteClient,
 	}
 }

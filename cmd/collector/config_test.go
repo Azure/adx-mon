@@ -179,3 +179,31 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_PromScrape_Interval(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		interval int
+		err      string
+	}{
+		{
+			name:     "empty interval",
+			interval: 0,
+			err:      "prom-scrape.scrape-interval must be greater than 0",
+		},
+		{
+			name:     "invalid interval",
+			interval: -1,
+			err:      "prom-scrape.scrape-interval must be greater than 0",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{
+				PrometheusScrape: PrometheusScrape{
+					ScrapeIntervalSeconds: tt.interval,
+				},
+			}
+			require.Equal(t, tt.err, c.Validate().Error())
+		})
+	}
+}
