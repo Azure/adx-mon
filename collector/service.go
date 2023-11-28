@@ -30,21 +30,39 @@ type Service struct {
 
 	cancel context.CancelFunc
 
+	// remoteClient is the metrics client used to send metrics to ingestor.
 	remoteClient *promremote.Client
 
+	// metricsSvc is the internal metrics component for collector specific metrics.
 	metricsSvc metrics.Service
 
+	// logsSvc is the http service that receives logs from fluentbit.
 	logsSvc *logs.Service
-	http    *http.HttpServer
 
+	// http is the shared HTTP server for the collector.  The logs and metrics services are registered with this server.
+	http *http.HttpServer
+
+	// store is the local WAL store.
 	store storage.Store
 
-	scraper          *Scraper
-	otelLogsSvc      *otlp.LogsService
-	otelProxySvc     *otlp.LogsProxyService
+	// scraper is the metrics scraper that scrapes metrics from the local node.
+	scraper *Scraper
+
+	// otelLogsSvc is the OpenTelemetry logs service that receives logs from OpenTelemetry clients and stores them
+	// in the local WAL.
+	otelLogsSvc *otlp.LogsService
+
+	// otelProxySvc is the OpenTelemetry logs proxy service that forwards logs to the ingestor.
+	otelProxySvc *otlp.LogsProxyService
+
+	// metricsProxySvcs are the prometheus remote write endpoints that receive metrics from Prometheus clients.
 	metricsProxySvcs []*metricsHandler.Handler
-	batcher          cluster.Batcher
-	replicator       service.Component
+
+	// batcher is the component that batches metrics and logs for transferring to ingestor.
+	batcher cluster.Batcher
+
+	// replicator is the component that replicates metrics and logs to the ingestor.
+	replicator service.Component
 }
 
 type ServiceOpts struct {
