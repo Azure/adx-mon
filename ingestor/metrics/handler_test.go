@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/golang/snappy"
 	"github.com/stretchr/testify/require"
@@ -31,11 +32,10 @@ func TestHandler_HandleReceive(t *testing.T) {
 	}
 
 	h := NewHandler(HandlerOpts{
-		DropLabels:    nil,
-		DropMetrics:   nil,
-		RequestWriter: writer,
-		HealthChecker: &fakeHealthChecker{healthy: true},
-		Database:      "adxmetrics",
+		RequestTransformer: transform.NewRequestTransformer(nil, nil, nil),
+		RequestWriter:      writer,
+		HealthChecker:      &fakeHealthChecker{healthy: true},
+		Database:           "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{
@@ -84,11 +84,10 @@ func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 	}
 
 	h := NewHandler(HandlerOpts{
-		DropLabels:    nil,
-		DropMetrics:   nil,
-		RequestWriter: writer,
-		HealthChecker: &fakeHealthChecker{healthy: false},
-		Database:      "adxmetrics",
+		RequestTransformer: transform.NewRequestTransformer(nil, nil, nil),
+		RequestWriter:      writer,
+		HealthChecker:      &fakeHealthChecker{healthy: false},
+		Database:           "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{
