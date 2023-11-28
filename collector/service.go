@@ -71,24 +71,14 @@ type Service struct {
 
 type ServiceOpts struct {
 	ListenAddr string
-	K8sCli     kubernetes.Interface
 	NodeName   string
-	Targets    []ScrapeTarget
 	Endpoints  []string
 
 	MetricsHandlers []MetricsHandlerOpts
+	Scraper         *ScraperOpts
 
-	AddLabels      map[string]string
 	AddAttributes  map[string]string
 	LiftAttributes []string
-	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
-	DropLabels map[*regexp.Regexp]*regexp.Regexp
-
-	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
-	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
-	DropMetrics []*regexp.Regexp
-
-	ScrapeInterval time.Duration
 
 	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
 	InsecureSkipVerify bool
@@ -99,11 +89,27 @@ type ServiceOpts struct {
 	// Log Service options
 	CollectLogs bool
 
+	// StorageDir is the directory where the WAL will be stored
+	StorageDir string
+}
+
+type ScraperOpts struct {
+	AddLabels map[string]string
+	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
+	DropLabels map[*regexp.Regexp]*regexp.Regexp
+
+	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
+	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
+	DropMetrics []*regexp.Regexp
+
+	ScrapeInterval time.Duration
+
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
 
-	// StorageDir is the directory where the WAL will be stored
-	StorageDir string
+	K8sCli kubernetes.Interface
+
+	Targets []ScrapeTarget
 }
 
 type MetricsHandlerOpts struct {
@@ -187,10 +193,12 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}
 
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-			Path:        handlerOpts.Path,
-			DropLabels:  handlerOpts.DropLabels,
-			DropMetrics: handlerOpts.DropMetrics,
-			AddLabels:   addLabels,
+			Path: handlerOpts.Path,
+			RequestTransformer: transform.NewRequestTransformer(
+				handlerOpts.AddLabels,
+				handlerOpts.DropLabels,
+				handlerOpts.DropMetrics,
+			),
 			RequestWriter: &promremote.RemoteWriteProxy{
 				Client:                   remoteClient,
 				Endpoints:                opts.Endpoints,
@@ -239,7 +247,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	batcher := cluster.NewBatcher(cluster.BatcherOpts{
 		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      opts.ScrapeInterval * 2,
+		MaxSegmentAge:      time.Minute,
 		Partitioner:        partitioner,
 		Segmenter:          store.Index(),
 		MinUploadSize:      4 * 1024 * 1024,
@@ -256,21 +264,21 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	// Add the other static labels
-	for k, v := range opts.AddLabels {
+	for k, v := range opts.Scraper.AddLabels {
 		addLabels[k] = v
 	}
 
 	svc := &Service{
 		opts:          opts,
-		K8sCli:        opts.K8sCli,
+		K8sCli:        opts.Scraper.K8sCli,
 		seriesCreator: &seriesCreator{},
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
 			PeerHealthReport: &fakeHealthChecker{},
 		}),
 		requestTransformer: transform.NewRequestTransformer(
 			addLabels,
-			opts.DropLabels,
-			opts.DropMetrics,
+			opts.Scraper.DropLabels,
+			opts.Scraper.DropMetrics,
 		),
 		store:            store,
 		otelLogsSvc:      logsSvc,
@@ -337,7 +345,7 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	// Add static targets
-	for _, target := range s.opts.Targets {
+	for _, target := range s.opts.Scraper.Targets {
 		logger.Infof("Adding static target %s", target)
 		s.targets = append(s.targets, target)
 	}
@@ -436,7 +444,7 @@ func (s *Service) scrape() {
 
 	reconnectTimer := time.NewTicker(5 * time.Minute)
 	defer reconnectTimer.Stop()
-	t := time.NewTicker(s.opts.ScrapeInterval)
+	t := time.NewTicker(s.opts.Scraper.ScrapeInterval)
 	defer t.Stop()
 	for {
 		select {
