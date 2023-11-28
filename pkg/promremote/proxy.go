@@ -16,7 +16,7 @@ type RemoteWriteProxy struct {
 	DisableMetricsForwarding bool
 }
 
-func (r *RemoteWriteProxy) Write(ctx context.Context, _ string, wr prompb.WriteRequest) error {
+func (r *RemoteWriteProxy) Write(ctx context.Context, wr prompb.WriteRequest) error {
 	if logger.IsDebug() {
 		var sb strings.Builder
 		for _, ts := range wr.Timeseries {

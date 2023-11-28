@@ -21,10 +21,12 @@ func TestConfig_ValidatePromRemoteWrite_PromRemoteWrite(t *testing.T) {
 	c := Config{
 		PrometheusRemoteWrite: []PrometheusRemoteWrite{
 			{
-				Path: "/receive",
+				Path:     "/receive",
+				Database: "foo",
 			},
 			{
-				Path: "/receive",
+				Path:     "/receive",
+				Database: "foo",
 			},
 		},
 	}
@@ -40,6 +42,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 				AddLabels: map[string]string{
 					"foo": "",
 				},
+				Database: "foo",
 			},
 		},
 	}
@@ -53,6 +56,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 				AddLabels: map[string]string{
 					"": "bar",
 				},
+				Database: "foo",
 			},
 		},
 	}
@@ -68,6 +72,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 				DropLabels: map[string]string{
 					"foo": "",
 				},
+				Database: "foo",
 			},
 		},
 	}
@@ -81,6 +86,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 				DropLabels: map[string]string{
 					"": "bar",
 				},
+				Database: "foo",
 			},
 		},
 	}
@@ -172,6 +178,7 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := Config{
 				PrometheusScrape: &PrometheusScrape{
+					Database:           "foo",
 					StaticScrapeTarget: tt.targets,
 				},
 			}
@@ -200,6 +207,7 @@ func TestConfig_PromScrape_Interval(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := Config{
 				PrometheusScrape: &PrometheusScrape{
+					Database:              "foo",
 					ScrapeIntervalSeconds: tt.interval,
 				},
 			}

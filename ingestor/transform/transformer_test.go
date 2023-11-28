@@ -226,13 +226,47 @@ func TestRequestTransformer_TransformTimeSeries_AddLabels(t *testing.T) {
 
 }
 
+func TestRequestTransformer_TransformWriteRequest_AllowedDatabases(t *testing.T) {
+	f := &transform.RequestTransformer{
+		AllowedDatabase: map[string]struct{}{"foo": {}},
+	}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+					{
+						Name:  []byte("adxmon_database"),
+						Value: []byte("foo"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 1, len(res.Timeseries))
+}
+
 func BenchmarkRequestTransformer_TransformTimeSeries(b *testing.B) {
 	b.ReportAllocs()
 	f := transform.NewRequestTransformer(map[string]string{
 		"adxmon_namespace": "default",
 		"adxmon_pod":       "pod",
 		"adxmon_container": "container",
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	ts := prompb.TimeSeries{
 		Labels: []prompb.Label{

@@ -20,9 +20,12 @@ type RequestTransformer struct {
 
 	// AddLabels is a map of label names to label values that will be added to all metrics.
 	AddLabels []prompb.Label
+
+	// AllowedDatabase is a map of database names that are allowed to be written to.
+	AllowedDatabase map[string]struct{}
 }
 
-func NewRequestTransformer(addLabels map[string]string, dropLabels map[*regexp.Regexp]*regexp.Regexp, dropMetrics []*regexp.Regexp) *RequestTransformer {
+func NewRequestTransformer(addLabels map[string]string, dropLabels map[*regexp.Regexp]*regexp.Regexp, dropMetrics []*regexp.Regexp, allowedDatabase map[string]struct{}) *RequestTransformer {
 	addLabelsSlice := make([]prompb.Label, 0, len(addLabels))
 	if dropLabels == nil {
 		dropLabels = make(map[*regexp.Regexp]*regexp.Regexp)
@@ -37,15 +40,16 @@ func NewRequestTransformer(addLabels map[string]string, dropLabels map[*regexp.R
 	prompb.Sort(addLabelsSlice)
 
 	return &RequestTransformer{
-		DropLabels:  dropLabels,
-		DropMetrics: dropMetrics,
-		AddLabels:   addLabelsSlice,
+		DropLabels:      dropLabels,
+		DropMetrics:     dropMetrics,
+		AddLabels:       addLabelsSlice,
+		AllowedDatabase: allowedDatabase,
 	}
 }
 
 func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest {
 
-	if len(f.DropMetrics) == 0 && len(f.DropLabels) == 0 && len(f.AddLabels) == 0 {
+	if len(f.DropMetrics) == 0 && len(f.DropLabels) == 0 && len(f.AddLabels) == 0 && len(f.AllowedDatabase) == 0 {
 		return req
 	}
 
@@ -58,6 +62,21 @@ func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prom
 		if f.ShouldDropMetric(name) {
 			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			continue
+		}
+
+		if len(f.AllowedDatabase) > 0 {
+			var db []byte
+			for _, l := range v.Labels {
+				if bytes.Equal(l.Name, []byte("adxmon_database")) {
+					db = l.Value
+					break
+				}
+			}
+
+			if _, ok := f.AllowedDatabase[string(db)]; !ok {
+				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+				continue
+			}
 		}
 
 		req.Timeseries[i] = f.TransformTimeSeries(v)

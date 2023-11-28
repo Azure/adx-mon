@@ -37,7 +37,7 @@ type Store interface {
 	service.Component
 
 	// WriteTimeSeries writes a batch of time series to the Store.
-	WriteTimeSeries(ctx context.Context, database string, ts []prompb.TimeSeries) error
+	WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error
 
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
@@ -102,7 +102,7 @@ func (s *LocalStore) WALCount() int {
 	return s.repository.Count()
 }
 
-func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []prompb.TimeSeries) error {
+func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedColumns)
@@ -110,10 +110,12 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, database string, ts []
 	b := bytesPool.Get(256)
 	defer bytesPool.Put(b)
 
-	db := []byte(database)
 	for _, v := range ts {
+		key, err := SegmentKey(b[:0], v.Labels)
+		if err != nil {
+			return err
+		}
 
-		key := SegmentKey(b[:0], db, v.Labels)
 		wal, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
@@ -261,16 +263,31 @@ func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
 }
 
-func SegmentKey(dst []byte, database []byte, labels []prompb.Label) []byte {
-	dst = append(dst, database...)
-	dst = append(dst, delim...)
+func SegmentKey(dst []byte, labels []prompb.Label) ([]byte, error) {
+	var name, database []byte
 	for _, v := range labels {
+		if bytes.Equal(v.Name, []byte("adxmon_database")) {
+			database = v.Value
+			continue
+		}
+
 		if bytes.Equal(v.Name, []byte("__name__")) {
-			// return fmt.Sprintf("%s%d", string(transform.Normalize(v.Value)), int(atomic.AddUint64(&idx, 1))%2)
-			return transform.AppendNormalize(dst, v.Value)
+			name = v.Value
+			continue
 		}
 	}
-	return transform.AppendNormalize(dst, labels[0].Value)
+
+	if len(database) == 0 {
+		return nil, fmt.Errorf("database label not found")
+	}
+
+	if len(name) == 0 {
+		return nil, fmt.Errorf("name label not found")
+	}
+
+	dst = append(dst, database...)
+	dst = append(dst, delim...)
+	return transform.AppendNormalize(dst, name), nil
 }
 
 var delim = []byte("_")

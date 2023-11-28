@@ -106,7 +106,7 @@ type MetricsHandlerOpts struct {
 }
 
 func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
-	return transform.NewRequestTransformer(o.AddLabels, o.DropLabels, o.DropMetrics)
+	return transform.NewRequestTransformer(o.AddLabels, o.DropLabels, o.DropMetrics, nil)
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
