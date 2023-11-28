@@ -138,16 +138,11 @@ func realMain(ctx *cli.Context) error {
 				continue
 			}
 
-			url := target.URL
-			namespace := target.Namespace
-			pod := target.Pod
-			container := target.Container
-
 			staticTargets = append(staticTargets, collector.ScrapeTarget{
-				Addr:      url,
-				Namespace: namespace,
-				Pod:       pod,
-				Container: container,
+				Addr:      target.URL,
+				Namespace: target.Namespace,
+				Pod:       target.Pod,
+				Container: target.Container,
 			})
 		}
 
