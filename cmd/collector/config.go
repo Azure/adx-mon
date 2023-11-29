@@ -161,7 +161,8 @@ func (w PrometheusRemoteWrite) Validate() error {
 }
 
 type OtelLog struct {
-	AddAttributes map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 }
 
 func (w OtelLog) Validate() error {
