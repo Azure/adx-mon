@@ -34,6 +34,7 @@ func main() {
 		Usage:     "adx-mon metrics collector",
 		UsageText: ``,
 		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/kubelet.conf"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
 			&cli.BoolFlag{Name: "experimental-log-collection", Usage: "Enable experimental log collection.", Hidden: true},
@@ -107,7 +108,7 @@ func realMain(ctx *cli.Context) error {
 
 	addAttributes := cfg.AddAttributes
 
-	hostname := cfg.Hostname
+	hostname := ctx.String("hostname")
 	if hostname == "" {
 		var err error
 		hostname, err = os.Hostname()
@@ -115,6 +116,8 @@ func realMain(ctx *cli.Context) error {
 			return fmt.Errorf("failed to get hostname: %w", err)
 		}
 	}
+
+	cfg.ReplaceVariable("${HOSTNAME}", ctx.String("hostname"))
 
 	var endpoints []string
 	if cfg.Endpoint != "" {

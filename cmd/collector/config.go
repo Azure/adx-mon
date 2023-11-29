@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 )
 
 var homedir string
@@ -27,24 +29,23 @@ var DefaultConfig = Config{
 	ListenAddr:   ":8080",
 	StorageDir:   homedir,
 	PrometheusScrape: &PrometheusScrape{
-		StaticScrapeTarget:    []ScrapeTarget{},
+		StaticScrapeTarget:    []*ScrapeTarget{},
 		ScrapeIntervalSeconds: 30,
 	},
 
-	PrometheusRemoteWrite: []PrometheusRemoteWrite{
+	PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 		{
 			Path:      "/remote_write",
 			AddLabels: make(map[string]string),
 		},
 	},
-	OtelLog: OtelLog{
+	OtelLog: &OtelLog{
 		AddAttributes: make(map[string]string),
 	},
 }
 
 type Config struct {
 	Endpoint           string `toml:"endpoint" comment:"Ingestor URL to send collected telemetry."`
-	Hostname           string `toml:"hostname" comment:"Hostname filter override."`
 	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
 	MaxBatchSize       int    `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
@@ -60,23 +61,23 @@ type Config struct {
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 
-	PrometheusScrape      *PrometheusScrape       `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
-	PrometheusRemoteWrite []PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
-	OtelLog               OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint."`
+	PrometheusScrape      *PrometheusScrape        `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
+	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
+	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint."`
 }
 
 type PrometheusScrape struct {
-	Database                 string         `toml:"database" comment:"Database to store metrics in."`
-	StaticScrapeTarget       []ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
-	ScrapeIntervalSeconds    int            `toml:"scrape-interval" comment:"Scrape interval in seconds."`
-	DisableMetricsForwarding bool           `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
+	Database                 string          `toml:"database" comment:"Database to store metrics in."`
+	StaticScrapeTarget       []*ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
+	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
+	DisableMetricsForwarding bool            `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	AddLabels   map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
 	DropLabels  map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
 	DropMetrics []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 }
 
-func (s PrometheusScrape) Validate() error {
+func (s *PrometheusScrape) Validate() error {
 	if s.Database == "" {
 		return errors.New("prom-scrape.database must be set")
 	}
@@ -101,7 +102,7 @@ type ScrapeTarget struct {
 	Container string `toml:"container" comment:"The container label to add for metrics scraped at this URL."`
 }
 
-func (t ScrapeTarget) Validate() error {
+func (t *ScrapeTarget) Validate() error {
 	if t.HostRegex == "" {
 		return errors.New("host-regex must be set")
 	}
@@ -130,7 +131,7 @@ type PrometheusRemoteWrite struct {
 	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 }
 
-func (w PrometheusRemoteWrite) Validate() error {
+func (w *PrometheusRemoteWrite) Validate() error {
 	if w.Path == "" {
 		return errors.New("prometheus-remote-write.path must be set")
 	}
@@ -165,7 +166,7 @@ type OtelLog struct {
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 }
 
-func (w OtelLog) Validate() error {
+func (w *OtelLog) Validate() error {
 	for k, v := range w.AddAttributes {
 		if k == "" {
 			return errors.New("otel-log.add-attributes key must be set")
@@ -178,7 +179,7 @@ func (w OtelLog) Validate() error {
 	return nil
 }
 
-func (c Config) Validate() error {
+func (c *Config) Validate() error {
 	existingPaths := make(map[string]struct{})
 	for _, v := range c.PrometheusRemoteWrite {
 		if err := v.Validate(); err != nil {
@@ -191,8 +192,10 @@ func (c Config) Validate() error {
 		existingPaths[v.Path] = struct{}{}
 	}
 
-	if err := c.OtelLog.Validate(); err != nil {
-		return err
+	if c.OtelLog != nil {
+		if err := c.OtelLog.Validate(); err != nil {
+			return err
+		}
 	}
 
 	if c.PrometheusScrape != nil {
@@ -202,4 +205,41 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+func (c *Config) processStringFields(v reflect.Value, f func(string) string) {
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(f(v.String()))
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			c.processStringFields(v.Field(i), f)
+		}
+	case reflect.Ptr:
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+		c.processStringFields(v, f)
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			c.processStringFields(v.Index(i), f)
+		}
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			value := v.MapIndex(key)
+			if value.Kind() == reflect.String {
+				v.SetMapIndex(key, reflect.ValueOf(f(value.String())))
+				return
+			}
+
+			c.processStringFields(v.MapIndex(key), f)
+		}
+	}
+}
+
+func (c *Config) ReplaceVariable(variable, value string) {
+	c.processStringFields(reflect.ValueOf(c), func(s string) string {
+		return strings.ReplaceAll(s, variable, value)
+	})
 }
