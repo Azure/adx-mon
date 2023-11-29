@@ -101,7 +101,7 @@ func (c *Client) Write(ctx context.Context, endpoint string, wr *prompb.WriteReq
 	encoded := snappy.Encode(nil, b)
 	body := bytes.NewReader(encoded)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/receive", endpoint), body)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}

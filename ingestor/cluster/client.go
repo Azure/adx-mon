@@ -48,7 +48,7 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 	br := bufio.NewReaderSize(body, 4*1024)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, br)
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/transfer", endpoint), br)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}

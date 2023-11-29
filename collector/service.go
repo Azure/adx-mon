@@ -205,6 +205,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	if opts.Scraper != nil {
 		scraperOpts := opts.Scraper
 		scraperOpts.RemoteClient = remoteClient
+		scraperOpts.Endpoints = opts.Endpoints
 
 		scraper = NewScraper(opts.Scraper)
 	}
