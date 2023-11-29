@@ -212,7 +212,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	svc := &Service{
 		opts: opts,
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
-			PeerHealthReport: &fakeHealthChecker{},
+			PeerHealthReport: fakeHealthChecker{},
 		}),
 		store:            store,
 		scraper:          scraper,
