@@ -188,7 +188,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 
 	hostName := c.opts.Hostname
 
-	hostEndpoint := fmt.Sprintf("https://%s:9090/transfer", myIP.To4().String())
+	hostEndpoint := fmt.Sprintf("https://%s:9090", myIP.To4().String())
 	c.hostEntpoint = hostEndpoint
 	c.hostname = hostName
 
@@ -264,7 +264,7 @@ func (c *coordinator) syncPeers() error {
 			continue
 		}
 
-		set[p.Name] = fmt.Sprintf("https://%s:9090/transfer", p.Status.PodIP)
+		set[p.Name] = fmt.Sprintf("https://%s:9090", p.Status.PodIP)
 
 		if p.Name < leastNode || leastNode == "" {
 			leastNode = p.Name

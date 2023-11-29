@@ -135,14 +135,14 @@ func ingestor(b *testing.B, ctx context.Context) string {
 
 	svc, err := ingestorsvc.NewService(ingestorsvc.ServiceOpts{
 		StorageDir:      b.TempDir(),
-		Uploader:        adx.NewFakeUploader(),
+		Uploader:        adx.NewFakeUploader("ADatabase"),
 		MaxSegmentCount: int64(b.N) + 1,
 		MaxDiskUsage:    10 * 1024 * 1024 * 1024,
 	})
 	require.NoError(b, err)
 
 	mux := http.NewServeMux()
-	mux.Handle(logsv1connect.NewLogsServiceHandler(ingestorotlp.NewLogsServer(writer, []string{"ADatabase", "BDatabase"})))
+	mux.Handle(logsv1connect.NewLogsServiceHandler(ingestorotlp.NewLogsServiceHandler(writer, []string{"ADatabase", "BDatabase"})))
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 
 	srv := httptest.NewUnstartedServer(mux)

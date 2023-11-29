@@ -78,7 +78,6 @@ type Handler struct {
 	}
 
 	requestWriter RequestWriter
-	database      string
 	health        HealthChecker
 }
 
@@ -92,7 +91,6 @@ func NewHandler(opts HandlerOpts) *Handler {
 		health:             opts.HealthChecker,
 		requestTransformer: opts.RequestTransformer,
 		requestWriter:      opts.RequestWriter,
-		database:           opts.Database,
 	}
 }
 

@@ -245,7 +245,7 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 
 	svc, err := isvc.NewService(isvc.ServiceOpts{
 		StorageDir:      dir,
-		Uploader:        adx.NewFakeUploader(),
+		Uploader:        adx.NewFakeUploader("ADatabase"),
 		LogsDatabases:   []string{"ADatabase", "BDatabase"},
 		MaxSegmentCount: 100,
 		MaxDiskUsage:    10 * 1024 * 1024 * 1024,
@@ -253,7 +253,7 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
-	mux.Handle(logsv1connect.NewLogsServiceHandler(iotlp.NewLogsServer(writer, []string{"ADatabase", "BDatabase"})))
+	mux.Handle(logsv1connect.NewLogsServiceHandler(iotlp.NewLogsServiceHandler(writer, []string{"ADatabase", "BDatabase"})))
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 
 	srv := httptest.NewUnstartedServer(mux)

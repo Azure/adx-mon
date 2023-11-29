@@ -241,6 +241,7 @@ func TestConfig_ReplaceVariables(t *testing.T) {
 	c := &Config{
 		AddLabels: map[string]string{
 			"foo": "$(HOSTNAME)_bar",
+			"bar": "bar",
 		},
 		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{

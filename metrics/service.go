@@ -9,7 +9,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	srv "github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus_client "github.com/prometheus/client_model/go"
@@ -27,6 +26,10 @@ type TimeSeriesWriter interface {
 	Write(ctx context.Context, wr prompb.WriteRequest) error
 }
 
+type StatementExecutor interface {
+	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+}
+
 type Elector interface {
 	IsLeader() bool
 }
@@ -38,8 +41,7 @@ type Service interface {
 type ServiceOpts struct {
 	Hostname         string
 	Elector          Elector
-	KustoCli         ingest.QueryClient
-	Database         string
+	KustoCli         []StatementExecutor
 	PeerHealthReport HealthReporter
 }
 
@@ -47,20 +49,18 @@ type ServiceOpts struct {
 type service struct {
 	closeFn context.CancelFunc
 
-	hostname string
-	elector  Elector
-	kustoCli ingest.QueryClient
-	database string
-	health   HealthReporter
+	hostname  string
+	elector   Elector
+	kustoClis []StatementExecutor
+	health    HealthReporter
 }
 
 func NewService(opts ServiceOpts) Service {
 	return &service{
-		elector:  opts.Elector,
-		kustoCli: opts.KustoCli,
-		database: opts.Database,
-		hostname: opts.Hostname,
-		health:   opts.PeerHealthReport,
+		elector:   opts.Elector,
+		kustoClis: opts.KustoCli,
+		hostname:  opts.Hostname,
+		health:    opts.PeerHealthReport,
 	}
 }
 
@@ -88,15 +88,18 @@ func (s *service) collect(ctx context.Context) {
 			// This is only set when running on ingestor currently.
 			if s.elector != nil {
 				// Only one node should execute the cardinality counts so see if we are the owner.
-				if s.kustoCli != nil && s.elector.IsLeader() {
+				if len(s.kustoClis) > 0 && s.elector.IsLeader() {
 					stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
 						".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
 					)
-					iter, err := s.kustoCli.Mgmt(ctx, s.database, stmt)
-					if err != nil {
-						logger.Errorf("Failed to execute cardinality counts: %s", err)
-					} else {
-						iter.Stop()
+
+					for _, cli := range s.kustoClis {
+						iter, err := cli.Mgmt(ctx, stmt)
+						if err != nil {
+							logger.Errorf("Failed to execute cardinality counts: %s", err)
+						} else {
+							iter.Stop()
+						}
 					}
 				}
 			}

@@ -143,13 +143,6 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 
-	// Add this pods identity for all metrics received
-	addLabels = mergeMaps(addLabels, map[string]string{
-		"adxmon_namespace": k8s.Instance.Namespace,
-		"adxmon_pod":       k8s.Instance.Pod,
-		"adxmon_container": k8s.Instance.Container,
-	})
-
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
 
@@ -227,8 +220,12 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {
+		// Add this pods identity for all metrics received
 		writeLabels := mergeMaps(addLabels, map[string]string{
-			"adxmon_database": v.Database,
+			"adxmon_namespace": k8s.Instance.Namespace,
+			"adxmon_pod":       k8s.Instance.Pod,
+			"adxmon_container": k8s.Instance.Container,
+			"adxmon_database":  v.Database,
 		})
 
 		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)

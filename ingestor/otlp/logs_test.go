@@ -31,7 +31,7 @@ func TestOTLP(t *testing.T) {
 	w := &writer{t: t}
 
 	mux := http.NewServeMux()
-	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServer(w.WriteLogRecords, []string{"ADatabase", "BDatabase"})))
+	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServiceHandler(w.WriteLogRecords, []string{"ADatabase", "BDatabase"})))
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -58,7 +58,7 @@ func TestUnknownDestination(t *testing.T) {
 	w := &writer{t: t}
 
 	mux := http.NewServeMux()
-	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServer(w.WriteLogRecords, []string{"ADatabase"})))
+	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServiceHandler(w.WriteLogRecords, []string{"ADatabase"})))
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -86,7 +86,7 @@ func TestUnconfiguredDestination(t *testing.T) {
 	w := &writer{t: t}
 
 	mux := http.NewServeMux()
-	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServer(w.WriteLogRecords, []string{"ADatabase", "BDatabase"})))
+	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServiceHandler(w.WriteLogRecords, []string{"ADatabase", "BDatabase"})))
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true
@@ -113,7 +113,7 @@ func TestOTLPWriterFailures(t *testing.T) {
 	w := &writer{t: t, err: errors.New("something happened")}
 
 	mux := http.NewServeMux()
-	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServer(w.WriteLogRecords, []string{"ADatabase", "BDatabase"})))
+	mux.Handle(logsv1connect.NewLogsServiceHandler(NewLogsServiceHandler(w.WriteLogRecords, []string{"ADatabase", "BDatabase"})))
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.EnableHTTP2 = true

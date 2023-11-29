@@ -23,7 +23,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 )
@@ -77,7 +76,7 @@ type ServiceOpts struct {
 	K8sCli kubernetes.Interface
 
 	// MetricsKustoCli is the Kusto client connected to the metrics kusto cluster.
-	MetricsKustoCli ingest.QueryClient
+	MetricsKustoCli []metrics.StatementExecutor
 
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
@@ -110,7 +109,7 @@ type ServiceOpts struct {
 	AllowedDatabase []string
 
 	// MetricsDatabase is the name of the metrics database.
-	MetricsDatabase string
+	MetricsDatabases []string
 
 	// LogsDatabases is a slice of log database names.
 	LogsDatabases []string
@@ -177,7 +176,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Hostname:         opts.Hostname,
 		Elector:          coord,
 		KustoCli:         opts.MetricsKustoCli,
-		Database:         opts.MetricsDatabase,
 		PeerHealthReport: health,
 	})
 
@@ -189,17 +187,18 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		RequestTransformer: transform.NewRequestTransformer(nil, opts.DropLabels, opts.DropMetrics, dbs),
 		RequestWriter:      coord,
-		Database:           opts.MetricsDatabase,
 		HealthChecker:      health,
 	})
 
-	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServer(coord.WriteOTLPLogs, opts.LogsDatabases))
+	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServiceHandler(coord.WriteOTLPLogs, opts.LogsDatabases))
 
 	databases := make(map[string]struct{})
 	for _, db := range opts.LogsDatabases {
 		databases[db] = struct{}{}
 	}
-	databases[opts.MetricsDatabase] = struct{}{}
+	for _, db := range opts.MetricsDatabases {
+		databases[db] = struct{}{}
+	}
 
 	return &Service{
 		opts:        opts,
@@ -411,20 +410,4 @@ func (s *Service) validateFileName(filename string) string {
 	}
 
 	return fmt.Sprintf("%s_%s_%s.wal", db, table, epoch)
-}
-
-func newUploader(kustoCli ingest.QueryClient, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
-	if kustoCli == nil {
-		logger.Warnf("No kusto endpoint provided, using fake uploader")
-		return adx.NewFakeUploader(), nil
-	}
-
-	uploader := adx.NewUploader(kustoCli, adx.UploaderOpts{
-		StorageDir:        storageDir,
-		Database:          database,
-		ConcurrentUploads: concurrentUploads,
-		DefaultMapping:    defaultMapping,
-		SampleType:        adx.PromMetrics,
-	})
-	return uploader, nil
 }

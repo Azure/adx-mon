@@ -5,6 +5,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/azure-kusto-go/kusto"
 )
 
 type dispatcher struct {
@@ -53,6 +54,11 @@ func (d *dispatcher) UploadQueue() chan *cluster.Batch {
 
 func (d *dispatcher) Database() string {
 	return ""
+}
+
+func (d *dispatcher) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	// Not implemented.  Should this fanout to all uploaders?
+	return nil, nil
 }
 
 func (d *dispatcher) upload(ctx context.Context) {
