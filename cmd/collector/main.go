@@ -106,8 +106,6 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
-	addAttributes := cfg.AddAttributes
-
 	hostname := ctx.String("hostname")
 	if hostname == "" {
 		var err error
@@ -117,7 +115,10 @@ func realMain(ctx *cli.Context) error {
 		}
 	}
 
-	cfg.ReplaceVariable("${HOSTNAME}", ctx.String("hostname"))
+	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
+
+	addLabels := cfg.AddLabels
+	addAttributes := cfg.AddAttributes
 
 	var endpoints []string
 	if cfg.Endpoint != "" {
@@ -132,6 +133,7 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			logger.Infof("Using remote write endpoint %s", endpoint)
+			endpoints = append(endpoints, endpoint)
 		}
 	}
 
@@ -142,11 +144,11 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	// Add this pods identity for all metrics received
-	addLabels := map[string]string{
+	addLabels = mergeMaps(addLabels, map[string]string{
 		"adxmon_namespace": k8s.Instance.Namespace,
 		"adxmon_pod":       k8s.Instance.Pod,
 		"adxmon_container": k8s.Instance.Container,
-	}
+	})
 
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
@@ -207,6 +209,7 @@ func realMain(ctx *cli.Context) error {
 			DisableMetricsForwarding: cfg.PrometheusScrape.DisableMetricsForwarding,
 			ScrapeInterval:           time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
 			Targets:                  staticTargets,
+			MaxBatchSize:             cfg.MaxBatchSize,
 		}
 	}
 
