@@ -8,7 +8,7 @@ import (
 
 func TestConfig_ValidatePromRemoteWrite_PathRequired(t *testing.T) {
 	c := Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{},
 		},
 	}
@@ -19,7 +19,7 @@ func TestConfig_ValidatePromRemoteWrite_PathRequired(t *testing.T) {
 
 func TestConfig_ValidatePromRemoteWrite_PromRemoteWrite(t *testing.T) {
 	c := Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{
 				Path:     "/receive",
 				Database: "foo",
@@ -36,7 +36,7 @@ func TestConfig_ValidatePromRemoteWrite_PromRemoteWrite(t *testing.T) {
 
 func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 	c := Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{
 				Path: "/receive",
 				AddLabels: map[string]string{
@@ -50,7 +50,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 	require.Equal(t, "prometheus-remote-write.add-labels value must be set", c.Validate().Error())
 
 	c = Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{
 				Path: "/receive",
 				AddLabels: map[string]string{
@@ -66,7 +66,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 
 func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 	c := Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{
 				Path: "/receive",
 				DropLabels: map[string]string{
@@ -80,7 +80,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 	require.Equal(t, "prometheus-remote-write.drop-labels value must be set", c.Validate().Error())
 
 	c = Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{
 				Path: "/receive",
 				DropLabels: map[string]string{
@@ -96,7 +96,7 @@ func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 
 func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	c := Config{
-		OtelLog: OtelLog{
+		OtelLog: &OtelLog{
 			AddAttributes: map[string]string{
 				"foo": "",
 			},
@@ -106,7 +106,7 @@ func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	require.Equal(t, "otel-log.add-attributes value must be set", c.Validate().Error())
 
 	c = Config{
-		OtelLog: OtelLog{
+		OtelLog: &OtelLog{
 			AddAttributes: map[string]string{
 				"": "bar",
 			},
@@ -119,12 +119,12 @@ func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		targets []ScrapeTarget
+		targets []*ScrapeTarget
 		err     string
 	}{
 		{
 			name: "empty host regex",
-			targets: []ScrapeTarget{
+			targets: []*ScrapeTarget{
 				{
 					HostRegex: "",
 				},
@@ -133,7 +133,7 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 		},
 		{
 			name: "empty url",
-			targets: []ScrapeTarget{
+			targets: []*ScrapeTarget{
 				{
 					HostRegex: "foo",
 					URL:       "",
@@ -143,7 +143,7 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 		},
 		{
 			name: "empty namespace",
-			targets: []ScrapeTarget{
+			targets: []*ScrapeTarget{
 				{
 					HostRegex: "foo",
 					URL:       "http://foo",
@@ -153,7 +153,7 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 		},
 		{
 			name: "empty scheme",
-			targets: []ScrapeTarget{
+			targets: []*ScrapeTarget{
 				{
 					HostRegex: "foo",
 					URL:       "https://foo",
@@ -164,7 +164,7 @@ func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 		},
 		{
 			name: "empty container",
-			targets: []ScrapeTarget{
+			targets: []*ScrapeTarget{
 				{
 					HostRegex: "foo",
 					URL:       "https://foo",
@@ -227,7 +227,7 @@ func TestConfig_PromScrape_Database(t *testing.T) {
 
 func TestConfig_PromWrite_Database(t *testing.T) {
 	c := Config{
-		PrometheusRemoteWrite: []PrometheusRemoteWrite{
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
 			{
 				Path:     "/receive",
 				Database: "",
@@ -235,4 +235,32 @@ func TestConfig_PromWrite_Database(t *testing.T) {
 		},
 	}
 	require.Equal(t, "prometheus-remote-write.database must be set", c.Validate().Error())
+}
+
+func TestConfig_ReplaceVariables(t *testing.T) {
+	c := &Config{
+		AddLabels: map[string]string{
+			"foo": "$(HOSTNAME)_bar",
+		},
+		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
+			{
+				Path:     "/receive",
+				Database: "$(HOSTNAME)_bar",
+			},
+		},
+		PrometheusScrape: &PrometheusScrape{
+			Database: "$(HOSTNAME)_bar",
+			StaticScrapeTarget: []*ScrapeTarget{
+				{
+					URL: "http://$(HOSTNAME):9999",
+				},
+			},
+		},
+	}
+
+	c.ReplaceVariable("$(HOSTNAME)", "FOO")
+	require.Equal(t, "FOO_bar", c.PrometheusRemoteWrite[0].Database)
+	require.Equal(t, "FOO_bar", c.PrometheusScrape.Database)
+	require.Equal(t, "http://FOO:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
+	require.Equal(t, "FOO_bar", c.AddLabels["foo"])
 }
