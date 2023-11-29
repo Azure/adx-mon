@@ -16,10 +16,24 @@ import (
 type fakeUploader struct {
 	queue   chan *cluster.Batch
 	closeFn context.CancelFunc
+	db      string
 }
 
-func NewFakeUploader() Uploader {
+func (f *fakeUploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	rows, err := kusto.NewMockRows(table.Columns{
+		{Name: "Name", Type: "string"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	iter := &kusto.RowIterator{}
+	iter.Mock(rows)
+	return iter, nil
+}
+
+func NewFakeUploader(db string) Uploader {
 	return &fakeUploader{
+		db:    db,
 		queue: make(chan *cluster.Batch, 10000),
 	}
 }
@@ -40,7 +54,7 @@ func (f *fakeUploader) UploadQueue() chan *cluster.Batch {
 }
 
 func (f *fakeUploader) Database() string {
-	return "FakeDatabase"
+	return f.db
 }
 
 func (f *fakeUploader) upload(ctx context.Context) {
@@ -52,9 +66,9 @@ func (f *fakeUploader) upload(ctx context.Context) {
 			segments := batch.Segments
 
 			for _, si := range segments {
-				logger.Warnf("Uploading si %s", si.Path)
+				logger.Warnf("Uploading segment %s", si.Path)
 				if err := os.RemoveAll(si.Path); err != nil {
-					logger.Errorf("Failed to remove si: %s", err.Error())
+					logger.Errorf("Failed to remove segment: %s", err.Error())
 				}
 			}
 			batch.Release()

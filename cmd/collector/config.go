@@ -230,7 +230,7 @@ func (c *Config) processStringFields(v reflect.Value, f func(string) string) {
 			value := v.MapIndex(key)
 			if value.Kind() == reflect.String {
 				v.SetMapIndex(key, reflect.ValueOf(f(value.String())))
-				return
+				continue
 			}
 
 			c.processStringFields(v.MapIndex(key), f)

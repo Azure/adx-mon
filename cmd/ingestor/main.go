@@ -22,6 +22,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -57,8 +58,7 @@ func main() {
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
-			&cli.StringFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> [DEPRECATED]"},
-			&cli.StringFlag{Name: "metrics-kusto-endpoint", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
+			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
 			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
@@ -104,18 +104,15 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetMutexProfileFraction(1)
 
 	var (
-		storageDir, kustoEndpoint, metricsEndpoint string
-		cacert, key                                string
-		insecureSkipVerify, disablePeerTransfer    bool
-		concurrentUploads                          int
-		maxConns                                   int
-		maxSegmentSize, maxTransferSize            int64
-		maxSegmentAge, maxTransferAge              time.Duration
+		storageDir                              string
+		cacert, key                             string
+		insecureSkipVerify, disablePeerTransfer bool
+		concurrentUploads                       int
+		maxConns                                int
+		maxSegmentSize, maxTransferSize         int64
+		maxSegmentAge, maxTransferAge           time.Duration
 	)
 	storageDir = ctx.String("storage-dir")
-	kustoEndpoint = ctx.String("kusto-endpoint")
-	metricsEndpoint = ctx.String("metrics-kusto-endpoint")
-
 	concurrentUploads = ctx.Int("uploads")
 	maxSegmentSize = ctx.Int64("max-segment-size")
 	maxSegmentAge = ctx.Duration("max-segment-age")
@@ -261,56 +258,61 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	var (
-		client   ingest.QueryClient
-		database = "FakeDatabase"
+		allowedDatabases                []string
+		metricsUploaders, logsUploaders []adx.Uploader
+		metricsDatabases, logsDatabases []string
 	)
-	if metricsEndpoint != "" {
-		kustoEndpoint = metricsEndpoint
-	}
 
-	var allowedDatabases []string
-	if kustoEndpoint != "" {
-		var (
-			err  error
-			addr string
-		)
-		addr, database, err = parseKustoEndpoint(kustoEndpoint)
+	metricsKusto := ctx.StringSlice("metrics-kusto-endpoints")
+	if len(metricsKusto) > 0 {
+		metricsUploaders, metricsDatabases, err = newUploaders(
+			metricsKusto, storageDir, concurrentUploads,
+			defaultMapping, adx.PromMetrics)
 		if err != nil {
-			logger.Fatalf("Failed to parse kusto endpoint: %s", err)
+			logger.Fatalf("Failed to create uploader: %s", err)
 		}
+	} else {
+		logger.Warnf("No kusto endpoint provided, using fake metrics uploader")
+		uploader := adx.NewFakeUploader("FakeMetrics")
+		metricsUploaders = append(metricsUploaders, uploader)
+		metricsDatabases = append(metricsDatabases, uploader.Database())
+	}
 
-		client, err = newKustoClient(addr)
+	logsKusto := ctx.StringSlice("logs-kusto-endpoints")
+	if len(logsKusto) > 0 {
+		logsUploaders, logsDatabases, err = newUploaders(
+			logsKusto, storageDir, concurrentUploads,
+			storage.DefaultLogsMapping, adx.OTLPLogs)
 		if err != nil {
-			logger.Fatalf("Failed to create kusto client: %s", err)
+			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 		}
-		defer client.Close()
+	} else {
+		logger.Warnf("No kusto endpoint provided, using fake logs uploader")
+		uploader := adx.NewFakeUploader("FakeLogs")
+		logsUploaders = append(logsUploaders, uploader)
+		logsDatabases = append(logsDatabases, uploader.Database())
 	}
 
-	allowedDatabases = append(allowedDatabases, database)
+	allowedDatabases = append(allowedDatabases, metricsDatabases...)
+	allowedDatabases = append(allowedDatabases, logsDatabases...)
 
-	metricsUploader, err := newUploader(client, database, storageDir, concurrentUploads, defaultMapping)
-	if err != nil {
-		logger.Fatalf("Failed to create uploader: %s", err)
-	}
-	otlpLogsUploaders, oltpLogDatabases, err := otlpLogUploaders(ctx.StringSlice("logs-kusto-endpoints"), storageDir, concurrentUploads)
-	if err != nil {
-		logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
-	}
-
-	allowedDatabases = append(allowedDatabases, oltpLogDatabases...)
-
-	uploadDispatcher := adx.NewDispatcher(append(otlpLogsUploaders, metricsUploader))
+	uploadDispatcher := adx.NewDispatcher(append(logsUploaders, metricsUploaders...))
 	if err := uploadDispatcher.Open(svcCtx); err != nil {
 		logger.Fatalf("Failed to start upload dispatcher: %s", err)
 	}
 	defer uploadDispatcher.Close()
 
+	var metricsKustoCli []metrics.StatementExecutor
+	for _, cli := range metricsUploaders {
+		metricsKustoCli = append(metricsKustoCli, cli)
+	}
+
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:              k8scli,
-		MetricsKustoCli:     client,
-		MetricsDatabase:     database,
-		AllowedDatabase:     allowedDatabases,
-		LogsDatabases:       oltpLogDatabases,
+		MetricsKustoCli:     metricsKustoCli,
+		MetricsDatabases:    metricsDatabases,
+		AllowedDatabase:     metricsDatabases,
+		LogsDatabases:       logsDatabases,
 		Namespace:           namespace,
 		Hostname:            hostname,
 		StorageDir:          storageDir,
@@ -364,7 +366,7 @@ func realMain(ctx *cli.Context) error {
 		Handler: mux,
 		// Close idle connections fairly often to establish new connections through the load balancer
 		// so that long-lived connections don't stay pinned to the same node indefinitely.
-		IdleTimeout: 15 * time.Second,
+		IdleTimeout: 2 * time.Minute,
 	}
 	srv.ErrorLog = newLogger()
 
@@ -461,22 +463,6 @@ func newKustoClient(endpoint string) (ingest.QueryClient, error) {
 	return kusto.New(kcsb)
 }
 
-func newUploader(kustoCli ingest.QueryClient, database, storageDir string, concurrentUploads int, defaultMapping storage.SchemaMapping) (adx.Uploader, error) {
-	if kustoCli == nil {
-		logger.Warnf("No kusto endpoint provided, using fake uploader")
-		return adx.NewFakeUploader(), nil
-	}
-
-	uploader := adx.NewUploader(kustoCli, adx.UploaderOpts{
-		StorageDir:        storageDir,
-		Database:          database,
-		ConcurrentUploads: concurrentUploads,
-		DefaultMapping:    defaultMapping,
-		SampleType:        adx.PromMetrics,
-	})
-	return uploader, nil
-}
-
 func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 	if !strings.Contains(kustoEndpoint, "=") {
 		return "", "", fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
@@ -492,7 +478,9 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 	return addr, database, nil
 }
 
-func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads int) ([]adx.Uploader, []string, error) {
+func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
+	defaultMapping storage.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
+
 	var uploaders []adx.Uploader
 	var uploadDatabaseNames []string
 	for _, endpoint := range endpoints {
@@ -508,8 +496,8 @@ func otlpLogUploaders(endpoints []string, storageDir string, concurrentUploads i
 			StorageDir:        storageDir,
 			Database:          database,
 			ConcurrentUploads: concurrentUploads,
-			DefaultMapping:    storage.DefaultLogsMapping,
-			SampleType:        adx.OTLPLogs,
+			DefaultMapping:    defaultMapping,
+			SampleType:        sampleType,
 		}))
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
 	}

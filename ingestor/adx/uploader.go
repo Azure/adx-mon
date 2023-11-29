@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/pkg/wal/file"
+	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 )
 
@@ -27,6 +28,9 @@ type Uploader interface {
 
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan *cluster.Batch
+
+	// Mgmt executes a management query against the database.
+	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
 type uploader struct {
@@ -106,6 +110,10 @@ func (n *uploader) UploadQueue() chan *cluster.Batch {
 
 func (n *uploader) Database() string {
 	return n.database
+}
+
+func (n *uploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	return n.KustoCli.Mgmt(ctx, n.database, query, options...)
 }
 
 func (n *uploader) uploadReader(reader io.Reader, database, table string) error {

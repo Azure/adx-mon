@@ -22,21 +22,21 @@ import (
 
 var bytesPool = pool.NewBytes(1024)
 
-type logsServer struct {
+type logsServiceHandler struct {
 	w         cluster.OTLPLogsWriter
 	databases map[string]struct{}
 }
 
-func NewLogsServer(w cluster.OTLPLogsWriter, logsDatabases []string) logsv1connect.LogsServiceHandler {
-	logger.Infof("Initializing OTLP logs server with databases: %v", logsDatabases)
+func NewLogsServiceHandler(w cluster.OTLPLogsWriter, logsDatabases []string) logsv1connect.LogsServiceHandler {
+	logger.Infof("Initializing OTLP logs service with databases: %v", logsDatabases)
 	databases := make(map[string]struct{})
 	for _, d := range logsDatabases {
 		databases[d] = struct{}{}
 	}
-	return &logsServer{w: w, databases: databases}
+	return &logsServiceHandler{w: w, databases: databases}
 }
 
-func (srv *logsServer) Export(ctx context.Context, req *connect_go.Request[v1.ExportLogsServiceRequest]) (*connect_go.Response[v1.ExportLogsServiceResponse], error) {
+func (srv *logsServiceHandler) Export(ctx context.Context, req *connect_go.Request[v1.ExportLogsServiceRequest]) (*connect_go.Response[v1.ExportLogsServiceResponse], error) {
 	var (
 		m                  = metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": logsv1connect.LogsServiceExportProcedure})
 		d, t               string
