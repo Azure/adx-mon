@@ -117,9 +117,6 @@ func realMain(ctx *cli.Context) error {
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
 
-	addLabels := cfg.AddLabels
-	addAttributes := cfg.AddAttributes
-
 	var endpoints []string
 	if cfg.Endpoint != "" {
 		for _, endpoint := range []string{cfg.Endpoint} {
@@ -145,11 +142,8 @@ func realMain(ctx *cli.Context) error {
 
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
-
-		if cfg.PrometheusScrape.AddLabels == nil {
-			cfg.PrometheusScrape.AddLabels = make(map[string]string)
-		}
-		cfg.PrometheusScrape.AddLabels["adxmon_database"] = cfg.PrometheusScrape.Database
+		addLabels := mergeMaps(cfg.AddLabels, cfg.PrometheusScrape.AddLabels)
+		addLabels["adxmon_database"] = cfg.PrometheusScrape.Database
 
 		var staticTargets []collector.ScrapeTarget
 		for _, target := range cfg.PrometheusScrape.StaticScrapeTarget {
@@ -168,7 +162,7 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-		for k, v := range cfg.PrometheusScrape.DropLabels {
+		for k, v := range mergeMaps(cfg.DropLabels, cfg.PrometheusScrape.DropLabels) {
 			metricRegex, err := regexp.Compile(k)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
@@ -183,7 +177,7 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		dropMetrics := []*regexp.Regexp{}
-		for _, v := range cfg.PrometheusScrape.DropMetrics {
+		for _, v := range unionSlice(cfg.DropMetrics, cfg.PrometheusScrape.DropMetrics) {
 			metricRegex, err := regexp.Compile(v)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
@@ -196,7 +190,7 @@ func realMain(ctx *cli.Context) error {
 			NodeName:                 hostname,
 			K8sCli:                   k8scli,
 			Database:                 cfg.PrometheusScrape.Database,
-			AddLabels:                mergeMaps(addLabels, cfg.PrometheusScrape.AddLabels),
+			AddLabels:                addLabels,
 			DropLabels:               dropLabels,
 			DropMetrics:              dropMetrics,
 			DisableMetricsForwarding: cfg.PrometheusScrape.DisableMetricsForwarding,
@@ -206,13 +200,22 @@ func realMain(ctx *cli.Context) error {
 		}
 	}
 
+	// Add the global add attributes to the log config
+	addAttributes := cfg.AddAttributes
+	liftAttributes := cfg.LiftAttributes
+
+	if cfg.OtelLog != nil {
+		addAttributes = mergeMaps(addAttributes, cfg.OtelLog.AddAttributes)
+		liftAttributes = unionSlice(liftAttributes, cfg.OtelLog.LiftAttributes)
+	}
+
 	opts := &collector.ServiceOpts{
 		Scraper:            scraperOpts,
 		ListenAddr:         cfg.ListenAddr,
 		NodeName:           hostname,
 		Endpoints:          endpoints,
 		AddAttributes:      addAttributes,
-		LiftAttributes:     cfg.LiftAttributes,
+		LiftAttributes:     liftAttributes,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		MaxBatchSize:       cfg.MaxBatchSize,
 		CollectLogs:        ctx.Bool("experimental-log-collection"),
@@ -221,7 +224,7 @@ func realMain(ctx *cli.Context) error {
 
 	for _, v := range cfg.PrometheusRemoteWrite {
 		// Add this pods identity for all metrics received
-		writeLabels := mergeMaps(addLabels, map[string]string{
+		addLabels := mergeMaps(cfg.AddLabels, map[string]string{
 			"adxmon_namespace": k8s.Instance.Namespace,
 			"adxmon_pod":       k8s.Instance.Pod,
 			"adxmon_container": k8s.Instance.Container,
@@ -229,7 +232,7 @@ func realMain(ctx *cli.Context) error {
 		})
 
 		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-		for k, v := range cfg.DropLabels {
+		for k, v := range mergeMaps(cfg.DropLabels, v.DropLabels) {
 			metricRegex, err := regexp.Compile(k)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
@@ -244,7 +247,7 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		dropMetrics := []*regexp.Regexp{}
-		for _, v := range cfg.DropMetrics {
+		for _, v := range unionSlice(cfg.DropMetrics, v.DropMetrics) {
 			metricRegex, err := regexp.Compile(v)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
@@ -255,7 +258,7 @@ func realMain(ctx *cli.Context) error {
 
 		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
 			Path:        v.Path,
-			AddLabels:   mergeMaps(writeLabels, v.AddLabels),
+			AddLabels:   addLabels,
 			DropMetrics: dropMetrics,
 			DropLabels:  dropLabels,
 		})
@@ -287,6 +290,25 @@ func realMain(ctx *cli.Context) error {
 	}()
 	<-svcCtx.Done()
 	return nil
+}
+
+// unionSlice returns a union of two string slices
+func unionSlice(a []string, b []string) []string {
+	m := make(map[string]struct{})
+	for _, v := range a {
+		m[v] = struct{}{}
+	}
+
+	for _, v := range b {
+		m[v] = struct{}{}
+	}
+
+	var result []string
+	for k := range m {
+		result = append(result, k)
+	}
+
+	return result
 }
 
 func mergeMaps(labels ...map[string]string) map[string]string {
