@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20230914171856-c5370fbbc768.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20231108222406-3341592ed9fd.2
 	github.com/Azure/azure-kusto-go v0.14.0
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
