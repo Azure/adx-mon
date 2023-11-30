@@ -26,7 +26,7 @@ require (
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/urfave/cli/v2 v2.25.7
 	golang.org/x/net v0.18.0
-	golang.org/x/sync v0.4.0
+	golang.org/x/sync v0.5.0
 	google.golang.org/protobuf v1.31.0
 	k8s.io/api v0.26.1
 	k8s.io/apimachinery v0.26.1
