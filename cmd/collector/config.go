@@ -52,9 +52,9 @@ type Config struct {
 	StorageDir         string `toml:"storage-dir" comment:"Storage directory for the WAL."`
 
 	// These are global config options that apply to all endpoints.
-	AddLabels                map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels               map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
-	DropMetrics              []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	AddLabels                map[string]string `toml:"add-labels" comment:"Global Key/value pairs of labels to add to all metrics."`
+	DropLabels               map[string]string `toml:"drop-labels" comment:"Global labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropMetrics              []string          `toml:"drop-metrics" comment:"Global Regexes of metrics to drop."`
 	DisableMetricsForwarding bool              `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	// TODO: Move these to endpoint specific config(?).
