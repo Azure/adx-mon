@@ -215,6 +215,7 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	opts := &collector.ServiceOpts{
+		EnablePprof:        cfg.EnablePprof,
 		Scraper:            scraperOpts,
 		ListenAddr:         cfg.ListenAddr,
 		NodeName:           hostname,
