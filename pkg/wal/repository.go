@@ -14,12 +14,7 @@ import (
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/wal/file"
-)
-
-var (
-	bytesPool = pool.NewBytes(1000)
 )
 
 // Repository is a collection of WALs.
