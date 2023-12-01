@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"net/http/pprof"
 	_ "net/http/pprof"
 	"path/filepath"
 	"regexp"
@@ -86,6 +87,9 @@ type ServiceOpts struct {
 
 	// StorageDir is the directory where the WAL will be stored
 	StorageDir string
+
+	// EnablePprof enables pprof endpoints.
+	EnablePprof bool
 }
 
 type MetricsHandlerOpts struct {
@@ -297,6 +301,14 @@ func (s *Service) Open(ctx context.Context) error {
 	s.http = http.NewServer(&http.ServerOpts{
 		ListenAddr: s.opts.ListenAddr,
 	})
+
+	if s.opts.EnablePprof {
+		s.http.RegisterHandler("/debug/pprof/", pprof.Index)
+		s.http.RegisterHandler("/debug/pprof/cmdline", pprof.Cmdline)
+		s.http.RegisterHandler("/debug/pprof/profile", pprof.Profile)
+		s.http.RegisterHandler("/debug/pprof/symbol", pprof.Symbol)
+		s.http.RegisterHandler("/debug/pprof/trace", pprof.Trace)
+	}
 
 	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
 	s.http.RegisterHandler("/logs", s.otelProxySvc.Handler)

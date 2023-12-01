@@ -50,6 +50,7 @@ type Config struct {
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
 	MaxBatchSize       int    `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
 	StorageDir         string `toml:"storage-dir" comment:"Storage directory for the WAL."`
+	EnablePprof        bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
 
 	// These are global config options that apply to all endpoints.
 	AddLabels                map[string]string `toml:"add-labels" comment:"Global Key/value pairs of labels to add to all metrics."`
@@ -57,7 +58,7 @@ type Config struct {
 	DropMetrics              []string          `toml:"drop-metrics" comment:"Global Regexes of metrics to drop."`
 	DisableMetricsForwarding bool              `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
-	// TODO: Move these to endpoint specific config(?).
+	// These are global config options that apply to all endpoints.
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 
