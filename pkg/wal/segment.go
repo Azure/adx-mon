@@ -39,8 +39,8 @@ var (
 	idgen *flake.Flake
 
 	// encoder and decoder pools are used for compressing and decompressing blocks
-	encoders [16]*zstd.Encoder
-	decoders [16]*zstd.Decoder
+	encoders []*zstd.Encoder
+	decoders []*zstd.Decoder
 
 	// ringPool is a pool of ring buffers used for queuing writes to segments.  This allows these to be
 	// re-used across segments.  We allow up to 10000 ring buffers to be allocated to match the max number of
@@ -63,6 +63,13 @@ func init() {
 		panic(err)
 	}
 
+	SetEncoderPoolSize(16)
+	SetDecoderPoolSize(16)
+}
+
+// SetEncoderPoolSize sets the size of the encoder pool.
+func SetEncoderPoolSize(sz int) {
+	encoders = make([]*zstd.Encoder, sz)
 	for i := 0; i < len(encoders); i++ {
 		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 		if err != nil {
@@ -70,7 +77,11 @@ func init() {
 		}
 		encoders[i] = encoder
 	}
+}
 
+// SetDecoderPoolSize sets the size of the decoder pool.
+func SetDecoderPoolSize(sz int) {
+	decoders = make([]*zstd.Decoder, sz)
 	for i := 0; i < len(decoders); i++ {
 		decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
 		if err != nil {

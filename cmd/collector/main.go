@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/collector"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -116,6 +117,10 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
+
+	// Set some lower level WAL values to use less memory from the defaults which are set for ingestor.
+	wal.SetEncoderPoolSize(1)
+	wal.SetDecoderPoolSize(1)
 
 	var endpoints []string
 	if cfg.Endpoint != "" {
