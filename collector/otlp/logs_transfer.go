@@ -29,7 +29,7 @@ var (
 	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
-	bufs = pool.NewBytes(1024 * 1024)
+	bufs = pool.NewBytes(1024)
 )
 
 type LogsServiceOpts struct {
