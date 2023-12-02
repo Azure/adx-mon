@@ -366,7 +366,7 @@ func realMain(ctx *cli.Context) error {
 		Handler: mux,
 		// Close idle connections fairly often to establish new connections through the load balancer
 		// so that long-lived connections don't stay pinned to the same node indefinitely.
-		IdleTimeout: 2 * time.Minute,
+		IdleTimeout: 5 * time.Minute,
 	}
 	srv.ErrorLog = newLogger()
 
