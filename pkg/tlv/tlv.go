@@ -74,6 +74,7 @@ type Reader struct {
 	header     []TLV
 	buf        []byte
 
+	preserve  bool
 	streaming bool
 	offset    int
 	term      int
@@ -83,12 +84,31 @@ type Reader struct {
 	fastpath bool
 }
 
-func NewReader(r io.Reader) *Reader {
-	return &Reader{source: r}
+type ReaderOption func(*Reader)
+
+// WithPreserveTLV will read TLV in the stream but preserve
+// the TLV instead of extracting it (default).
+func WithPreserveTLV() ReaderOption {
+	return func(r *Reader) {
+		r.preserve = true
+	}
 }
 
-func NewStreaming(r io.Reader) *Reader {
-	return &Reader{source: r, streaming: true}
+// WithoutStreaming will only attempt to extract TLV from
+// the head of the byte stream. The default scenario is
+// to continuously sampling the byte slice looking for TLV.
+func WithoutStreaming() ReaderOption {
+	return func(r *Reader) {
+		r.streaming = false
+	}
+}
+
+func NewReader(r io.Reader, opts ...ReaderOption) *Reader {
+	re := &Reader{source: r, streaming: true}
+	for _, opt := range opts {
+		opt(re)
+	}
+	return re
 }
 
 func (r *Reader) Read(p []byte) (n int, err error) {
@@ -198,6 +218,11 @@ func (r *Reader) decode() error {
 				break
 			}
 		}
+	}
+
+	if r.preserve {
+		r.buf = make([]byte, len(p))
+		copy(r.buf, p)
 	}
 
 	r.discovered = true

@@ -7,8 +7,8 @@ import (
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
-	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/tlv"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Logs is a collection of logs and their resources.
@@ -27,11 +27,11 @@ const (
 	LogsTotalTag = tlv.Tag(0xAB)
 )
 
-func EmitMetricsForTLV(tlvs []tlv.TLV, database, table string) {
+func EmitMetricsForTLV(tlvs []tlv.TLV, counter *prometheus.CounterVec, database, table string) {
 	for _, t := range tlvs {
 		if t.Tag == LogsTotalTag {
 			if v, err := strconv.Atoi(string(t.Value)); err == nil {
-				metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(v))
+				counter.WithLabelValues(database, table).Add(float64(v))
 			}
 		}
 	}

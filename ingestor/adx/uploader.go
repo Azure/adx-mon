@@ -9,6 +9,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -162,7 +163,7 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	defer cancel()
 
 	// Count the number of samples we are uploading.
-	tlvr := tlv.NewStreaming(reader)
+	tlvr := tlv.NewReader(reader)
 
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
@@ -178,7 +179,7 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	}
 
 	if n.opts.SampleType == OTLPLogs {
-		otlp.EmitMetricsForTLV(tlvr.Header(), database, table)
+		otlp.EmitMetricsForTLV(tlvr.Header(), metrics.LogsUploaded, database, table)
 	}
 
 	// return os.Remove(file)

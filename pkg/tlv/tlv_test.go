@@ -136,7 +136,7 @@ func TestEmbedTLV(t *testing.T) {
 			mr := io.MultiReader(readers...)
 			// Now wrap our readers with a TLV streaming reader,
 			// which is going to attempt discovery of any embedded TLV.
-			tlvr := tlv.NewStreaming(mr)
+			tlvr := tlv.NewReader(mr)
 			// We don't actually care about the content here, we just
 			// want to fully read the file.
 			n, err := io.Copy(io.Discard, tlvr)
@@ -199,7 +199,7 @@ func TestTLV(t *testing.T) {
 	require.NoError(t, err)
 	defer tf.Close()
 
-	r := tlv.NewReader(tf)
+	r := tlv.NewReader(tf, tlv.WithoutStreaming())
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, randomBytes, data)
@@ -239,7 +239,7 @@ func TestReader(t *testing.T) {
 			}
 
 			source := bytes.NewBuffer(b)
-			r := tlv.NewReader(source)
+			r := tlv.NewReader(source, tlv.WithoutStreaming())
 
 			have, err := io.ReadAll(r)
 			require.NoError(t, err)
@@ -260,17 +260,101 @@ func TestUnluckyMagicNumber(t *testing.T) {
 	require.NoError(t, err)
 	_, err = b.WriteString("I kind of look like a TLV")
 	require.NoError(t, err)
-	r := tlv.NewReader(bytes.NewBuffer(b.Bytes()))
+	r := tlv.NewReader(bytes.NewBuffer(b.Bytes()), tlv.WithoutStreaming())
 	have, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.True(t, reflect.DeepEqual(have, b.Bytes()))
+}
+
+func TestPreserveTLV(t *testing.T) {
+	tests := []struct {
+		PreserveTLV bool
+	}{
+		{
+			PreserveTLV: true,
+		},
+		{
+			PreserveTLV: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.FormatBool(tt.PreserveTLV), func(t *testing.T) {
+			// Unmarshal our Log, which is an sample OTLP Log request
+			// as received by Collector.
+			var log v1.ExportLogsServiceRequest
+			err := protojson.Unmarshal(otlpLog, &log)
+			require.NoError(t, err)
+
+			// Transform our log into CSV.
+			var b bytes.Buffer
+			w := transform.NewCSVWriter(&b, nil)
+			logs := &otlp.Logs{
+				Resources: log.ResourceLogs[0].Resource.Attributes,
+				Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
+			}
+			err = w.MarshalCSV(logs)
+			require.NoError(t, err)
+
+			marshaledBytes := b.Bytes()
+			numCSVBytes := len(marshaledBytes)
+
+			// Setup our TLV
+			tNumLogs := tlv.New(otlp.LogsTotalTag, []byte(strconv.Itoa(len(logs.Logs))))
+			tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(numCSVBytes)))
+			tlvb := tlv.Encode(tNumLogs, tPayloadSize)
+			numTotalBytes := len(tlvb) + numCSVBytes
+
+			// Create our TLV reader with or without preserving the TLV.
+			var tlvr *tlv.Reader
+			if tt.PreserveTLV {
+				tlvr = tlv.NewReader(bytes.NewBuffer(append(tlvb, marshaledBytes...)), tlv.WithPreserveTLV())
+			} else {
+				tlvr = tlv.NewReader(bytes.NewBuffer(append(tlvb, marshaledBytes...)))
+			}
+
+			// Read the TLV and ensure we get the expected number of bytes.
+			var writerTo bytes.Buffer
+			n, err := io.Copy(&writerTo, tlvr)
+			require.NoError(t, err)
+			if tt.PreserveTLV {
+				require.Equal(t, numTotalBytes, int(n))
+			} else {
+				require.Equal(t, numCSVBytes, int(n))
+			}
+
+			// Ensure our TLV header is correct.
+			h := tlvr.Header()
+			require.Equal(t, 2, len(h))
+
+			for _, v := range h {
+				if v.Tag == otlp.LogsTotalTag {
+					vv, err := strconv.Atoi(string(v.Value))
+					require.NoError(t, err)
+					require.Equal(t, len(logs.Logs), vv)
+				}
+			}
+
+			// Now let's read the bytes in writerTo and check if they contain
+			// TLV based on the PreserveTLV option.
+			writtenTLV := tlv.NewReader(&writerTo)
+			_, err = io.Copy(io.Discard, writtenTLV)
+			require.NoError(t, err)
+
+			h = writtenTLV.Header()
+			if tt.PreserveTLV {
+				require.Equal(t, 2, len(h))
+			} else {
+				require.Equal(t, 0, len(h))
+			}
+		})
+	}
 }
 
 func BenchmarkReader(b *testing.B) {
 	t := tlv.New(tlv.Tag(0x2), []byte("some tag payload"))
 	h := tlv.Encode(t)
 	p := bytes.NewReader(append(h, []byte("body payload")...))
-	r := tlv.NewReader(p)
+	r := tlv.NewReader(p, tlv.WithoutStreaming())
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

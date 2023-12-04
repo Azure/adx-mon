@@ -114,17 +114,16 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Serialize the logs into a WAL, grouped by Kusto destination database and table
 		grouped := otlp.Group(msg, s.staticAttributes, s.logger)
 		for _, group := range grouped {
 			err := func(g *otlp.Logs) error {
-				metrics.LogsProxyReceived.WithLabelValues(g.Database, g.Table).Add(float64(len(g.Logs)))
 				if err := s.store.WriteOTLPLogs(r.Context(), g.Database, g.Table, g); err != nil {
 					return fmt.Errorf("failed to write to store: %w", err)
 				}
 				return nil
 			}(group)
 
-			// Serialize the logs into a WAL, grouped by Kusto destination database and table
 			if isUserError(err) {
 				s.logger.Error("Failed to serialize logs with user error", "Error", err)
 				w.WriteHeader(http.StatusBadRequest)

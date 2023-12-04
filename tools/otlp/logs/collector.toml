@@ -1,0 +1,51 @@
+# Ingestor URL to send collected telemetry.
+endpoint = 'https://ingestor:9090'
+# Skip TLS verification.
+insecure-skip-verify = true
+# Address to listen on for endpoints.
+listen-addr = ':8080'
+# Maximum number of samples to send in a single batch.
+max-batch-size = 5000
+# Storage directory for the WAL.
+storage-dir = '/tmp/.adx-mon/collector'
+# Global Regexes of metrics to drop.
+drop-metrics = []
+# Disable metrics forwarding to endpoints.
+disable-metrics-forwarding = false
+# Attributes lifted from the Body and added to Attributes.
+lift-attributes = ['kusto.database', 'kusto.table']
+
+# Defines a prometheus scrape endpoint.
+[prometheus-scrape]
+  # Database to store metrics in.
+  database = 'AKSMetrics'
+  # Defines a static scrape target.
+  static-scrape-target = []
+  # Scrape interval in seconds.
+  scrape-interval = 30
+  # Disable metrics forwarding to endpoints.
+  disable-metrics-forwarding = false
+  # Regexes of metrics to drop.
+  drop-metrics = []
+
+# Defines a prometheus remote write endpoint.
+[[prometheus-remote-write]]
+  # Database to store metrics in.
+  database = 'AKSMetrics'
+  # The path to listen on for prometheus remote write requests.  Defaults to /receive.
+  path = '/remote_write'
+  # Regexes of metrics to drop.
+  drop-metrics = []
+  # Disable metrics forwarding to endpoints.
+  disable-metrics-forwarding = false
+
+  # Key/value pairs of labels to add to all metrics.
+  [prometheus-remote-write.add-labels]
+
+# Defines an OpenTelemetry log endpoint.
+[otel-log]
+  # Attributes lifted from the Body and added to Attributes.
+  lift-attributes = ['kusto.database', 'kusto.table']
+
+  # Key/value pairs of attributes to add to all logs.
+  [otel-log.add-attributes]
