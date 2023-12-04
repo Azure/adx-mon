@@ -68,6 +68,7 @@ type Config struct {
 }
 
 type PrometheusScrape struct {
+	Kubeconfig               string          `toml:"kube-config" comment:"Path to kubernetes client config"`
 	Database                 string          `toml:"database" comment:"Database to store metrics in."`
 	StaticScrapeTarget       []*ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
