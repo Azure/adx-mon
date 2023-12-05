@@ -75,27 +75,29 @@ func realMain(ctx *cli.Context) error {
 
 	var cfg = DefaultConfig
 	configFile := ctx.String("config")
-	if configFile != "" {
 
-		configBytes, err := os.ReadFile(configFile)
-		if err != nil {
-			return err
-		}
-
-		var fileConfig Config
-		if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
-			var derr *toml.DecodeError
-			if errors.As(err, &derr) {
-				fmt.Println(derr.String())
-				row, col := derr.Position()
-				fmt.Println("error occurred at row", row, "column", col)
-			}
-
-			return err
-		}
-
-		cfg = fileConfig
+	if configFile == "" {
+		logger.Fatalf("config file is required.  Run `collector config` to generate a config file")
 	}
+
+	configBytes, err := os.ReadFile(configFile)
+	if err != nil {
+		return err
+	}
+
+	var fileConfig Config
+	if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
+		var derr *toml.DecodeError
+		if errors.As(err, &derr) {
+			fmt.Println(derr.String())
+			row, col := derr.Position()
+			fmt.Println("error occurred at row", row, "column", col)
+		}
+
+		return err
+	}
+
+	cfg = fileConfig
 
 	if err := cfg.Validate(); err != nil {
 		return err
