@@ -6,35 +6,28 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSegmentReader(t *testing.T) {
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
 		{
-			Name:            "Disk",
-			StorageProvider: &file.DiskProvider{},
-		},
-		{
-			Name:            "Memory",
-			StorageProvider: &file.MemoryProvider{},
+			Name: "Disk",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
-			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
 			require.NoError(t, s.Write(context.Background(), []byte("test")))
 			require.NoError(t, s.Write(context.Background(), []byte("test1")))
 			require.NoError(t, s.Write(context.Background(), []byte("test2")))
 			require.NoError(t, s.Close())
 
-			s, err = wal.Open(s.Path(), tt.StorageProvider)
+			s, err = wal.Open(s.Path())
 			require.NoError(t, err)
 
 			r, err := s.Reader()

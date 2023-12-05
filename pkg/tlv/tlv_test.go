@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -40,8 +39,7 @@ func TestEmbedTLV(t *testing.T) {
 			// to disk using the `store` package.
 			storageDir := t.TempDir()
 			store := storage.NewLocalStore(storage.StoreOpts{
-				StorageDir:      storageDir,
-				StorageProvider: &file.DiskProvider{},
+				StorageDir: storageDir,
 			})
 			err := store.Open(context.Background())
 			require.NoError(t, err)
@@ -128,7 +126,7 @@ func TestEmbedTLV(t *testing.T) {
 				closers []io.Closer
 			)
 			for _, fi := range files {
-				f, err := wal.NewSegmentReader(fi.Path, &file.DiskProvider{})
+				f, err := wal.NewSegmentReader(fi.Path)
 				require.NoError(t, err)
 				readers = append(readers, f)
 				closers = append(closers, f)
