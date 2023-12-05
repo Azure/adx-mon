@@ -67,6 +67,7 @@ type StoreOpts struct {
 	StorageDir     string
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
+	MaxDiskUsage   int64
 
 	LiftedColumns []string
 
@@ -81,6 +82,7 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			SegmentMaxSize:  opts.SegmentMaxSize,
 			SegmentMaxAge:   opts.SegmentMaxAge,
 			StorageProvider: opts.StorageProvider,
+			MaxDiskUsage:    opts.MaxDiskUsage,
 		}),
 		metrics: make(map[string]prometheus.Counter),
 	}

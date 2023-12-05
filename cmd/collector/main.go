@@ -223,6 +223,8 @@ func realMain(ctx *cli.Context) error {
 		LiftAttributes:     liftAttributes,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		MaxBatchSize:       cfg.MaxBatchSize,
+		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
+		MaxSegmentSize:     cfg.MaxSegmentSize,
 		CollectLogs:        ctx.Bool("experimental-log-collection"),
 		StorageDir:         cfg.StorageDir,
 	}
