@@ -235,20 +235,6 @@ func (i *Index) PrefixesByCount() []string {
 	return prefixes
 }
 
-func (i *Index) SegmentExists(filename string) bool {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-
-	for _, segments := range i.segments {
-		for _, seg := range segments {
-			if seg.Path == filename {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (i *Index) TotalSize() int64 {
 	return atomic.LoadInt64(&i.totalSize)
 }

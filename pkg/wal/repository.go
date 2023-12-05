@@ -214,41 +214,6 @@ func (s *Repository) Index() *Index {
 	return s.index
 }
 
-func (s *Repository) IsActiveSegment(path string) bool {
-	var active bool
-	s.wals.Each(func(key string, value any) error {
-		wal := value.(*WAL)
-
-		walPath := wal.Path()
-		if walPath != "" && walPath == path {
-			active = true
-		}
-		return nil
-	})
-	return active
-}
-
-func (s *Repository) SegmentExists(filename string) bool {
-	if s.index.SegmentExists(filename) {
-		return true
-	}
-
-	var exists bool
-	s.wals.Each(func(key string, value any) error {
-		wal := value.(*WAL)
-		walPath := wal.Path()
-		if walPath != "" && walPath == filename {
-			exists = true
-		}
-		return nil
-	})
-	return exists
-}
-
-func (s *Repository) GetSegments(prefix string) []SegmentInfo {
-	return s.index.Get(prefix)
-}
-
 func (s *Repository) RemoveSegment(si SegmentInfo) {
 	s.index.Remove(si)
 }
