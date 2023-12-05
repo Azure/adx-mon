@@ -6,24 +6,20 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepository_Write(t *testing.T) {
 	var providerTests = []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 	for _, tt := range providerTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
 			r := wal.NewRepository(wal.RepositoryOpts{
-				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
+				StorageDir: dir,
 			})
 			defer r.Close()
 
@@ -37,11 +33,9 @@ func TestRepository_Write(t *testing.T) {
 
 func TestRepository_Keys(t *testing.T) {
 	var providerTests = []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range providerTests {
@@ -49,8 +43,7 @@ func TestRepository_Keys(t *testing.T) {
 
 			dir := t.TempDir()
 			r := wal.NewRepository(wal.RepositoryOpts{
-				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
+				StorageDir: dir,
 			})
 			defer r.Close()
 
@@ -75,23 +68,21 @@ func TestRepository_Keys(t *testing.T) {
 
 func TestRepository_Remove(t *testing.T) {
 	var providerTests = []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
+		{Name: "Disk"},
 	}
 	for _, tt := range providerTests {
 		t.Run(tt.Name, func(t *testing.T) {
 
 			dir := t.TempDir()
 			r := wal.NewRepository(wal.RepositoryOpts{
-				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
+				StorageDir: dir,
 			})
 			defer r.Close()
 
 			// Add a closed segment for this WAL.
-			seg, err := wal.NewSegment(dir, "db_foo", tt.StorageProvider)
+			seg, err := wal.NewSegment(dir, "db_foo")
 			require.NoError(t, err)
 			require.NoError(t, seg.Close())
 

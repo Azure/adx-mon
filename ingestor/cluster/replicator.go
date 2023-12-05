@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 type ReplicatorOpts struct {
@@ -59,7 +58,7 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
-	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify, &file.DiskProvider{})
+	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 type Service struct {
@@ -135,11 +134,10 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      opts.StorageDir,
-		StorageProvider: &file.DiskProvider{},
-		SegmentMaxAge:   maxSegmentAge,
-		SegmentMaxSize:  maxSegmentSize,
-		MaxDiskUsage:    opts.MaxDiskUsage,
+		StorageDir:     opts.StorageDir,
+		SegmentMaxAge:  maxSegmentAge,
+		SegmentMaxSize: maxSegmentSize,
+		MaxDiskUsage:   opts.MaxDiskUsage,
 	})
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{

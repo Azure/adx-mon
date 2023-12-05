@@ -6,24 +6,20 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewWAL(t *testing.T) {
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			w, err := wal.NewWAL(wal.WALOpts{
-				StorageDir:      t.TempDir(),
-				StorageProvider: tt.StorageProvider,
+				StorageDir: t.TempDir(),
 			})
 			require.NoError(t, err)
 			require.NoError(t, w.Open(context.Background()))
@@ -38,19 +34,16 @@ func TestNewWAL(t *testing.T) {
 
 func TestWAL_Segment(t *testing.T) {
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			w, err := wal.NewWAL(wal.WALOpts{
-				StorageDir:      t.TempDir(),
-				StorageProvider: tt.StorageProvider,
-				Index:           wal.NewIndex(),
+				StorageDir: t.TempDir(),
+				Index:      wal.NewIndex(),
 			})
 			require.NoError(t, err)
 			require.NoError(t, w.Open(context.Background()))
@@ -64,7 +57,7 @@ func TestWAL_Segment(t *testing.T) {
 
 			require.NoError(t, w.Close())
 
-			seg, err := wal.Open(path, tt.StorageProvider)
+			seg, err := wal.Open(path)
 			require.NoError(t, err)
 
 			b, err := seg.Bytes()
@@ -78,20 +71,17 @@ func TestWAL_Segment(t *testing.T) {
 
 func TestWAL_Open(t *testing.T) {
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
 			w, err := wal.NewWAL(wal.WALOpts{
-				Prefix:          "Foo",
-				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
+				Prefix:     "Foo",
+				StorageDir: dir,
 			})
 			require.NoError(t, err)
 			require.NoError(t, w.Open(context.Background()))
@@ -101,9 +91,8 @@ func TestWAL_Open(t *testing.T) {
 			require.NoError(t, w.Close())
 
 			w, err = wal.NewWAL(wal.WALOpts{
-				Prefix:          "Foo",
-				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
+				Prefix:     "Foo",
+				StorageDir: dir,
 			})
 			require.NoError(t, err)
 			require.NoError(t, w.Open(context.Background()))
@@ -117,21 +106,18 @@ func TestWAL_Open(t *testing.T) {
 
 func TestWAL_MaxDiskUsage(t *testing.T) {
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
 			w, err := wal.NewWAL(wal.WALOpts{
-				Prefix:          "Foo",
-				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
-				MaxDiskUsage:    10,
+				Prefix:       "Foo",
+				StorageDir:   dir,
+				MaxDiskUsage: 10,
 			})
 			require.NoError(t, err)
 			require.NoError(t, w.Open(context.Background()))
@@ -150,11 +136,9 @@ func TestWAL_MaxDiskUsage(t *testing.T) {
 
 func TestWAL_MaxSegmentCount(t *testing.T) {
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range tests {
@@ -165,7 +149,6 @@ func TestWAL_MaxSegmentCount(t *testing.T) {
 			w, err := wal.NewWAL(wal.WALOpts{
 				Prefix:          "Foo",
 				StorageDir:      dir,
-				StorageProvider: tt.StorageProvider,
 				SegmentMaxSize:  1,
 				MaxSegmentCount: 1,
 				Index:           idx,

@@ -14,7 +14,6 @@ import (
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 // Repository is a collection of WALs.
@@ -33,9 +32,6 @@ type RepositoryOpts struct {
 
 	MaxDiskUsage    int64
 	MaxSegmentCount int
-
-	// StorageProvider is an implementation of the file.File interface.
-	StorageProvider file.Provider
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
@@ -62,12 +58,7 @@ func (s *Repository) Open(ctx context.Context) error {
 		return fmt.Errorf("storage dir is not a directory")
 	}
 
-	// Loading existing segments is not supported for memory provider
-	if _, ok := s.opts.StorageProvider.(*file.MemoryProvider); ok {
-		return nil
-	}
-
-	dir, err := s.opts.StorageProvider.Open(s.opts.StorageDir)
+	dir, err := os.Open(s.opts.StorageDir)
 	if err != nil {
 		return err
 	}
@@ -147,13 +138,12 @@ func (s *Repository) Close() error {
 
 func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	walOpts := WALOpts{
-		Prefix:          prefix,
-		StorageDir:      s.opts.StorageDir,
-		StorageProvider: s.opts.StorageProvider,
-		SegmentMaxSize:  s.opts.SegmentMaxSize,
-		SegmentMaxAge:   s.opts.SegmentMaxAge,
-		MaxDiskUsage:    s.opts.MaxDiskUsage,
-		Index:           s.index,
+		Prefix:         prefix,
+		StorageDir:     s.opts.StorageDir,
+		SegmentMaxSize: s.opts.SegmentMaxSize,
+		SegmentMaxAge:  s.opts.SegmentMaxAge,
+		MaxDiskUsage:   s.opts.MaxDiskUsage,
+		Index:          s.index,
 	}
 
 	wal, err := NewWAL(walOpts)

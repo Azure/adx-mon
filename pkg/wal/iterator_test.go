@@ -4,21 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSegmentIterator_Verify(t *testing.T) {
 
 	tests := []struct {
-		Name            string
-		StorageProvider file.Provider
+		Name string
 	}{
-		{Name: "Disk", StorageProvider: &file.DiskProvider{}},
-		{Name: "Memory", StorageProvider: &file.MemoryProvider{}},
+		{Name: "Disk"},
 	}
 
 	for _, tt := range tests {
@@ -33,13 +31,13 @@ func TestSegmentIterator_Verify(t *testing.T) {
 			require.Error(t, err)
 			require.Equal(t, 0, n)
 
-			s, err := wal.NewSegment(dir, "Foo", tt.StorageProvider)
+			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
 			require.NoError(t, s.Write(context.Background(), []byte("test")))
 			require.NoError(t, s.Write(context.Background(), []byte("test1")))
 			require.NoError(t, s.Flush())
 
-			f, err := tt.StorageProvider.Open(s.Path())
+			f, err := os.Open(s.Path())
 			require.NoError(t, err)
 			iter, err = wal.NewSegmentIterator(f)
 			require.NoError(t, err)

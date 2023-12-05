@@ -1,13 +1,10 @@
 package otlp
 
 import (
-	"context"
-	"log/slog"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -52,21 +49,6 @@ func TestAttributes(t *testing.T) {
 
 	require.Equal(t, "kusto.database", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Key)
 	require.Equal(t, "ADatabase", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Attributes[1].Value.GetStringValue())
-}
-
-func BenchmarkSerializedLogs(b *testing.B) {
-	var log v1.ExportLogsServiceRequest
-	if err := protojson.Unmarshal(rawlog, &log); err != nil {
-		require.NoError(b, err)
-	}
-
-	mp := &file.MemoryProvider{}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := serialize(context.Background(), &log, nil, mp, slog.Default())
-		require.NoError(b, err)
-	}
 }
 
 func BenchmarkModifyAttributes(b *testing.B) {

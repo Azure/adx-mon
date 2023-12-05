@@ -24,7 +24,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -144,7 +143,7 @@ func VerifyStore(t *testing.T, dir string, expectTLV bool) {
 		require.Contains(t, ss[0], "Database")
 		require.Contains(t, ss[1], "Table")
 
-		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()), &file.DiskProvider{})
+		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()))
 		require.NoError(t, err)
 		tlvr := tlv.NewStreaming(s)
 		b, err := io.ReadAll(tlvr)
@@ -201,8 +200,7 @@ func NewCollectorHandler(t *testing.T, ctx context.Context, dir string, endpoint
 	})
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      dir,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir: dir,
 	})
 	require.NoError(t, store.Open(ctx))
 
@@ -231,8 +229,7 @@ func NewIngestorHandler(t *testing.T, ctx context.Context, dir string) (string, 
 	t.Helper()
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      dir,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir: dir,
 	})
 	err := store.Open(ctx)
 	require.NoError(t, err)

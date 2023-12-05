@@ -7,8 +7,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 var (
@@ -17,11 +15,10 @@ var (
 )
 
 type Client struct {
-	httpClient      *http.Client
-	storageProvider file.Provider
+	httpClient *http.Client
 }
 
-func NewClient(timeout time.Duration, insecureSkipVerify bool, storageProvider file.Provider) (*Client, error) {
+func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConns = 100
 	t.MaxConnsPerHost = 100
@@ -36,8 +33,7 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool, storageProvider f
 	}
 
 	return &Client{
-		httpClient:      httpClient,
-		storageProvider: storageProvider,
+		httpClient: httpClient,
 	}, nil
 }
 
