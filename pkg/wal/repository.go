@@ -152,6 +152,7 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 		StorageProvider: s.opts.StorageProvider,
 		SegmentMaxSize:  s.opts.SegmentMaxSize,
 		SegmentMaxAge:   s.opts.SegmentMaxAge,
+		MaxDiskUsage:    s.opts.MaxDiskUsage,
 		Index:           s.index,
 	}
 
