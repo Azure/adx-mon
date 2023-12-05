@@ -42,14 +42,8 @@ type Store interface {
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
 
-	// IsActiveSegment returns true if the given path is an active segment.
-	IsActiveSegment(path string) bool
-
 	// Import imports a file into the LocalStore and returns the number of bytes stored.
 	Import(filename string, body io.ReadCloser) (int, error)
-
-	// SegmentExsts returns true if the given segment exists.
-	SegmentExists(filename string) bool
 }
 
 // LocalStore provides local storage of time series data.  It manages Write Ahead Logs (WALs) for each metric.
@@ -171,25 +165,6 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	}
 
 	return nil
-}
-
-func (s *LocalStore) IsActiveSegment(path string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.repository.IsActiveSegment(path)
-}
-
-func (s *LocalStore) SegmentExists(filename string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.repository.SegmentExists(filename)
-}
-
-func (s *LocalStore) Get(prefix string) []wal.SegmentInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.repository.GetSegments(prefix)
 }
 
 func (s *LocalStore) PrefixesByAge() []string {
