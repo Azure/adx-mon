@@ -52,7 +52,7 @@ type Config struct {
 	MaxBatchSize         int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
 	MaxSegmentAgeSeconds int   `toml:"max-segment-age-seconds" comment:"Max segment agent in seconds."`
 	MaxSegmentSize       int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
-	MaxDiskUsage         int64 `tome:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
+	MaxDiskUsage         int64 `toml:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
 
 	StorageDir  string `toml:"storage-dir" comment:"Storage directory for the WAL."`
 	EnablePprof bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
