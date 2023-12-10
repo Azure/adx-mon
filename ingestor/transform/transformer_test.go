@@ -182,20 +182,12 @@ func TestRequestTransformer_TransformWriteRequest_SkipNameLabel(t *testing.T) {
 
 func TestRequestTransformer_TransformTimeSeries_AddLabels(t *testing.T) {
 	f := &transform.RequestTransformer{
-		AddLabels: []prompb.Label{
-			{
-				Name:  []byte("adxmon_namespace"),
-				Value: []byte("namespace"),
-			},
-			{
-				Name:  []byte("adxmon_pod"),
-				Value: []byte("pod"),
-			},
-			{
-				Name:  []byte("adxmon_container"),
-				Value: []byte("container"),
-			},
-		}}
+		AddLabels: map[string]string{
+			"adxmon_namespace": "namespace",
+			"adxmon_pod":       "pod",
+			"adxmon_container": "container",
+		},
+	}
 
 	ts := prompb.TimeSeries{
 		Labels: []prompb.Label{
@@ -260,13 +252,301 @@ func TestRequestTransformer_TransformWriteRequest_AllowedDatabases(t *testing.T)
 	require.Equal(t, 1, len(res.Timeseries))
 }
 
+func TestRequestTransformer_TransformWriteRequest_DefaultDropMetrics(t *testing.T) {
+	f := &transform.RequestTransformer{DefaultDropMetrics: true}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("net"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 0, len(res.Timeseries))
+}
+
+func TestRequestTransformer_TransformWriteRequest_KeepMetrics(t *testing.T) {
+	f := &transform.RequestTransformer{
+		DefaultDropMetrics: true,
+		KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
+	}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("net"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 2, len(res.Timeseries))
+	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
+	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
+	require.Equal(t, []byte("__name__"), res.Timeseries[1].Labels[0].Name)
+	require.Equal(t, []byte("mem"), res.Timeseries[1].Labels[0].Value)
+}
+
+func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.T) {
+	f := &transform.RequestTransformer{
+		DefaultDropMetrics: true,
+		KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
+		DropMetrics:        []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
+	}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("net"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 2, len(res.Timeseries))
+	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
+	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
+	require.Equal(t, []byte("__name__"), res.Timeseries[1].Labels[0].Name)
+	require.Equal(t, []byte("mem"), res.Timeseries[1].Labels[0].Value)
+}
+
+func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValue(t *testing.T) {
+	f := &transform.RequestTransformer{
+		DefaultDropMetrics: true,
+		KeepMetricsWithLabelValue: map[*regexp.Regexp]*regexp.Regexp{
+			regexp.MustCompile("reg.+"): regexp.MustCompile("eastus"),
+		},
+	}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+					{
+						Name:  []byte("region"),
+						Value: []byte("eastus"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+					{
+						Name:  []byte("region"),
+						Value: []byte("westus"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("net"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 1, len(res.Timeseries))
+	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
+	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
+}
+
+func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t *testing.T) {
+	f := &transform.RequestTransformer{
+		DefaultDropMetrics: true,
+		KeepMetricsWithLabelValue: map[*regexp.Regexp]*regexp.Regexp{
+			regexp.MustCompile("__name__"): regexp.MustCompile("cpu"),
+			regexp.MustCompile("region"):   regexp.MustCompile("eastus"),
+		},
+		DropMetrics: []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
+	}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+					{
+						Name:  []byte("region"),
+						Value: []byte("eastus"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+					{
+						Name:  []byte("region"),
+						Value: []byte("westus"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 1, len(res.Timeseries))
+	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
+	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
+}
+
+func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropLabels(t *testing.T) {
+	f := &transform.RequestTransformer{
+		DefaultDropMetrics: true,
+		KeepMetricsWithLabelValue: map[*regexp.Regexp]*regexp.Regexp{
+			regexp.MustCompile("reg.+"): regexp.MustCompile("eastus"),
+		},
+		DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+			regexp.MustCompile(".*"): regexp.MustCompile("region"),
+		},
+	}
+
+	req := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("cpu"),
+					},
+					{
+						Name:  []byte("region"),
+						Value: []byte("eastus"),
+					},
+					{
+						Name:  []byte("zone"),
+						Value: []byte("3"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem"),
+					},
+					{
+						Name:  []byte("region"),
+						Value: []byte("westus"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("net"),
+					},
+				},
+			},
+		},
+	}
+
+	res := f.TransformWriteRequest(req)
+	require.Equal(t, 1, len(res.Timeseries))
+	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
+	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
+	require.Equal(t, []byte("zone"), res.Timeseries[0].Labels[1].Name)
+	require.Equal(t, []byte("3"), res.Timeseries[0].Labels[1].Value)
+}
+
 func BenchmarkRequestTransformer_TransformTimeSeries(b *testing.B) {
 	b.ReportAllocs()
-	f := transform.NewRequestTransformer(map[string]string{
-		"adxmon_namespace": "default",
-		"adxmon_pod":       "pod",
-		"adxmon_container": "container",
-	}, nil, nil, nil)
+	f := &transform.RequestTransformer{
+		AddLabels: map[string]string{
+			"adxmon_namespace": "default",
+			"adxmon_pod":       "pod",
+			"adxmon_container": "container",
+		}}
 
 	ts := prompb.TimeSeries{
 		Labels: []prompb.Label{

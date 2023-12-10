@@ -5,12 +5,25 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"sync"
 
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
 )
 
 type RequestTransformer struct {
+	// DefaultDropMetrics is a flag that indicates whether metrics should be dropped by default unless they match
+	// a keep rule.
+	DefaultDropMetrics bool
+
+	// KeepMetrics is a slice of regexes that keeps metrics when the metric name matches.  A metric matching a
+	// Keep rule will not be dropped even if it matches a drop rule.
+	KeepMetrics []*regexp.Regexp
+
+	// KeepMetricsWithLabelValue is a map of regexes of label names to regexes of label values.  When both match,
+	// the metric will be kept.
+	KeepMetricsWithLabelValue map[*regexp.Regexp]*regexp.Regexp
+
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
 	DropLabels map[*regexp.Regexp]*regexp.Regexp
 
@@ -19,46 +32,57 @@ type RequestTransformer struct {
 	DropMetrics []*regexp.Regexp
 
 	// AddLabels is a map of label names to label values that will be added to all metrics.
-	AddLabels []prompb.Label
+	AddLabels map[string]string
+
+	addLabels []prompb.Label
 
 	// AllowedDatabase is a map of database names that are allowed to be written to.
 	AllowedDatabase map[string]struct{}
+
+	initOnce sync.Once
 }
 
-func NewRequestTransformer(addLabels map[string]string, dropLabels map[*regexp.Regexp]*regexp.Regexp, dropMetrics []*regexp.Regexp, allowedDatabase map[string]struct{}) *RequestTransformer {
-	addLabelsSlice := make([]prompb.Label, 0, len(addLabels))
-	if dropLabels == nil {
-		dropLabels = make(map[*regexp.Regexp]*regexp.Regexp)
-	}
-	for k, v := range addLabels {
-		addLabelsSlice = append(addLabelsSlice, prompb.Label{
-			Name:  []byte(k),
-			Value: []byte(v),
-		})
-		dropLabels[regexp.MustCompile(fmt.Sprintf("^%s\\b", k))] = regexp.MustCompile(".*")
-	}
-	prompb.Sort(addLabelsSlice)
+func (f *RequestTransformer) init() {
+	f.initOnce.Do(func() {
+		addLabelsSlice := make([]prompb.Label, 0, len(f.AddLabels))
+		if f.DropLabels == nil {
+			f.DropLabels = make(map[*regexp.Regexp]*regexp.Regexp)
+		}
 
-	return &RequestTransformer{
-		DropLabels:      dropLabels,
-		DropMetrics:     dropMetrics,
-		AddLabels:       addLabelsSlice,
-		AllowedDatabase: allowedDatabase,
-	}
+		if f.KeepMetricsWithLabelValue == nil {
+			f.KeepMetricsWithLabelValue = make(map[*regexp.Regexp]*regexp.Regexp)
+		}
+
+		// Translate KeepMetrics rules into KeepMetricsWithLabelValue rules so we only have set of rules to check.
+		for _, v := range f.KeepMetrics {
+			f.KeepMetricsWithLabelValue[regexp.MustCompile("^__name__\\b")] = v
+		}
+
+		for k, v := range f.AddLabels {
+			addLabelsSlice = append(addLabelsSlice, prompb.Label{
+				Name:  []byte(k),
+				Value: []byte(v),
+			})
+			f.DropLabels[regexp.MustCompile(fmt.Sprintf("^%s\\b", k))] = regexp.MustCompile(".*")
+		}
+		prompb.Sort(addLabelsSlice)
+		f.addLabels = addLabelsSlice
+	})
 }
 
 func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest {
-
-	if len(f.DropMetrics) == 0 && len(f.DropLabels) == 0 && len(f.AddLabels) == 0 && len(f.AllowedDatabase) == 0 {
-		return req
-	}
-
+	f.init()
 	var i int
-
 	for j := range req.Timeseries {
 		v := req.Timeseries[j]
 		// First skip any metrics that should be dropped.
 		name := prompb.MetricName(v)
+
+		if !f.ShouldKeepTimeSeries(v) {
+			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+			continue
+		}
+
 		if f.ShouldDropMetric(name) {
 			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			continue
@@ -88,6 +112,7 @@ func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prom
 }
 
 func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.TimeSeries {
+	f.init()
 	// If labels are configured to be dropped, filter them next.
 	var (
 		i         int
@@ -116,7 +141,7 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 		}
 
 		// Skip any labels that will be overwritten by the add labels.
-		for _, al := range f.AddLabels {
+		for _, al := range f.addLabels {
 			if bytes.Equal(l.Name, al.Name) {
 				skipLabel = true
 				break
@@ -138,7 +163,7 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 	if len(f.AddLabels) > 0 {
 		a := make([]prompb.Label, 0, len(v.Labels)+len(f.AddLabels))
 		a = append(a, v.Labels...)
-		a = append(a, f.AddLabels...)
+		a = append(a, f.addLabels...)
 		v.Labels = a
 	}
 
@@ -147,10 +172,30 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 	return v
 }
 
+func (f *RequestTransformer) ShouldKeepTimeSeries(v prompb.TimeSeries) bool {
+	if len(f.KeepMetricsWithLabelValue) > 0 {
+		var matchCount int
+		for _, label := range v.Labels {
+			// Keep metrics that have a certain label
+			for lableRe, valueRe := range f.KeepMetricsWithLabelValue {
+				if lableRe.Match(label.Name) && valueRe.Match(label.Value) {
+					matchCount++
+				}
+			}
+		}
+
+		return matchCount == len(f.KeepMetricsWithLabelValue)
+	}
+
+	return !f.DefaultDropMetrics
+}
+
 func (f *RequestTransformer) ShouldDropMetric(name []byte) bool {
-	for _, r := range f.DropMetrics {
-		if r.Match(name) {
-			return true
+	if !f.DefaultDropMetrics {
+		for _, r := range f.DropMetrics {
+			if r.Match(name) {
+				return true
+			}
 		}
 	}
 	return false

@@ -114,12 +114,22 @@ type MetricsHandlerOpts struct {
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
 
+	KeepMetrics []*regexp.Regexp
+
+	KeepMetricsLabelValues map[*regexp.Regexp]*regexp.Regexp
+
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
+	DefaultDropMetrics       bool
 }
 
 func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
-	return transform.NewRequestTransformer(o.AddLabels, o.DropLabels, o.DropMetrics, nil)
+	return &transform.RequestTransformer{
+		AddLabels:   o.AddLabels,
+		DropLabels:  o.DropLabels,
+		DropMetrics: o.DropMetrics,
+		KeepMetrics: o.KeepMetrics,
+	}
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
