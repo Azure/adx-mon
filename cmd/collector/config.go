@@ -58,10 +58,14 @@ type Config struct {
 	EnablePprof bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
 
 	// These are global config options that apply to all endpoints.
-	AddLabels                map[string]string `toml:"add-labels" comment:"Global Key/value pairs of labels to add to all metrics."`
-	DropLabels               map[string]string `toml:"drop-labels" comment:"Global labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
-	DropMetrics              []string          `toml:"drop-metrics" comment:"Global Regexes of metrics to drop."`
-	DisableMetricsForwarding bool              `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
+	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string `toml:"add-labels" comment:"Global Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string `toml:"drop-labels" comment:"Global labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropMetrics               []string          `toml:"drop-metrics" comment:"Global Regexes of metrics to drop."`
+	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+
+	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	// These are global config options that apply to all endpoints.
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
@@ -79,9 +83,12 @@ type PrometheusScrape struct {
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
 	DisableMetricsForwarding bool            `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
-	AddLabels   map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels  map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
-	DropMetrics []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
 }
 
 func (s *PrometheusScrape) Validate() error {
@@ -99,6 +106,11 @@ func (s *PrometheusScrape) Validate() error {
 		return errors.New("prom-scrape.scrape-interval must be greater than 0")
 	}
 	return nil
+}
+
+type LabelMatcher struct {
+	LabelRegex string `toml:"label-regex" comment:"The regex to match the label value against.  If the label value matches, the metric will be kept."`
+	ValueRegex string `toml:"value-regex" comment:"The regex to match the label value against.  If the label value matches, the metric will be kept."`
 }
 
 type ScrapeTarget struct {
@@ -129,13 +141,16 @@ func (t *ScrapeTarget) Validate() error {
 }
 
 type PrometheusRemoteWrite struct {
-	Database    string            `toml:"database" comment:"Database to store metrics in."`
-	Path        string            `toml:"path" comment:"The path to listen on for prometheus remote write requests.  Defaults to /receive."`
-	AddLabels   map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels  map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
-	DropMetrics []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	Database                 string `toml:"database" comment:"Database to store metrics in."`
+	Path                     string `toml:"path" comment:"The path to listen on for prometheus remote write requests.  Defaults to /receive."`
+	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
-	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
+	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
 }
 
 func (w *PrometheusRemoteWrite) Validate() error {
@@ -162,6 +177,16 @@ func (w *PrometheusRemoteWrite) Validate() error {
 		}
 		if v == "" {
 			return errors.New("prometheus-remote-write.drop-labels value must be set")
+		}
+	}
+
+	for _, v := range w.KeepMetricsWithLabelValue {
+		if v.LabelRegex == "" {
+			return errors.New("prometheus-remote-write.keep-metrics-with-label-value key must be set")
+		}
+
+		if v.ValueRegex == "" {
+			return errors.New("prometheus-remote-write.keep-metrics-with-label-value value must be set")
 		}
 	}
 
@@ -245,6 +270,7 @@ func (c *Config) processStringFields(v reflect.Value, f func(string) string) {
 	}
 }
 
+// ReplaceVariable replaces all instances of the given variable with the given value.
 func (c *Config) ReplaceVariable(variable, value string) {
 	c.processStringFields(reflect.ValueOf(c), func(s string) string {
 		return strings.ReplaceAll(s, variable, value)

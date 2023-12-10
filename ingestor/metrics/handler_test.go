@@ -32,7 +32,7 @@ func TestHandler_HandleReceive(t *testing.T) {
 	}
 
 	h := NewHandler(HandlerOpts{
-		RequestTransformer: transform.NewRequestTransformer(nil, nil, nil, nil),
+		RequestTransformer: &transform.RequestTransformer{},
 		RequestWriter:      writer,
 		HealthChecker:      &fakeHealthChecker{healthy: true},
 		Database:           "adxmetrics",
@@ -84,10 +84,12 @@ func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 	}
 
 	h := NewHandler(HandlerOpts{
-		RequestTransformer: transform.NewRequestTransformer(nil, nil, nil, map[string]struct{}{"adxmetrics": {}}),
-		RequestWriter:      writer,
-		HealthChecker:      &fakeHealthChecker{healthy: false},
-		Database:           "adxmetrics",
+		RequestTransformer: &transform.RequestTransformer{
+			AllowedDatabase: map[string]struct{}{"adxmetrics": {}},
+		},
+		RequestWriter: writer,
+		HealthChecker: &fakeHealthChecker{healthy: false},
+		Database:      "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{
@@ -136,10 +138,12 @@ func TestHandler_HandleReceive_AllowedDBs(t *testing.T) {
 	}
 
 	h := NewHandler(HandlerOpts{
-		RequestTransformer: transform.NewRequestTransformer(nil, nil, nil, map[string]struct{}{"adxmetrics": {}}),
-		RequestWriter:      writer,
-		HealthChecker:      &fakeHealthChecker{healthy: true},
-		Database:           "adxmetrics",
+		RequestTransformer: &transform.RequestTransformer{
+			AllowedDatabase: map[string]struct{}{"adxmetrics": {}},
+		},
+		RequestWriter: writer,
+		HealthChecker: &fakeHealthChecker{healthy: true},
+		Database:      "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{

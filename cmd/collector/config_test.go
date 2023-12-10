@@ -237,6 +237,122 @@ func TestConfig_PromWrite_Database(t *testing.T) {
 	require.Equal(t, "prometheus-remote-write.database must be set", c.Validate().Error())
 }
 
+func TestConfig_Validate_PrometheusRemoteWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  PrometheusRemoteWrite
+		wantErr bool
+	}{
+		{
+			name: "Success_all_parameters_set",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				AddLabels: map[string]string{
+					"key1": "value1",
+				},
+				DropLabels: map[string]string{
+					"key2": "value2",
+				},
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "key3", ValueRegex: "value3"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Failure_empty_path",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_database",
+			config: PrometheusRemoteWrite{
+				Path: "/path",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_key_in_AddLabels",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				AddLabels: map[string]string{
+					"": "value",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_value_in_AddLabels",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				AddLabels: map[string]string{
+					"key": "",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_key_in_DropLabels",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				DropLabels: map[string]string{
+					"": "value",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_value_in_DropLabels",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				DropLabels: map[string]string{
+					"key": "",
+				},
+			},
+			wantErr: true,
+		},
+
+		{
+			name: "Failure_empty_key_in_KeepMetricsWithLabelValue",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "", ValueRegex: "value"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_value_in_KeepMetricsWithLabelValue",
+			config: PrometheusRemoteWrite{
+				Database: "db",
+				Path:     "/path",
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "key", ValueRegex: ""},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestConfig_ReplaceVariables(t *testing.T) {
 	c := &Config{
 		AddLabels: map[string]string{
