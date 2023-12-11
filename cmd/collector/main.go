@@ -36,7 +36,6 @@ func main() {
 		UsageText: ``,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
-			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/kubelet.conf"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
 			&cli.BoolFlag{Name: "experimental-log-collection", Usage: "Enable experimental log collection.", Hidden: true},
 		},
@@ -76,34 +75,31 @@ func realMain(ctx *cli.Context) error {
 
 	var cfg = DefaultConfig
 	configFile := ctx.String("config")
-	if configFile != "" {
 
-		configBytes, err := os.ReadFile(configFile)
-		if err != nil {
-			return err
-		}
-
-		var fileConfig Config
-		if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
-			var derr *toml.DecodeError
-			if errors.As(err, &derr) {
-				fmt.Println(derr.String())
-				row, col := derr.Position()
-				fmt.Println("error occurred at row", row, "column", col)
-			}
-
-			return err
-		}
-
-		cfg = fileConfig
+	if configFile == "" {
+		logger.Fatalf("config file is required.  Run `collector config` to generate a config file")
 	}
 
-	if err := cfg.Validate(); err != nil {
+	configBytes, err := os.ReadFile(configFile)
+	if err != nil {
 		return err
 	}
 
-	_, k8scli, _, err := newKubeClient(ctx)
-	if err != nil {
+	var fileConfig Config
+	if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
+		var derr *toml.DecodeError
+		if errors.As(err, &derr) {
+			fmt.Println(derr.String())
+			row, col := derr.Position()
+			fmt.Println("error occurred at row", row, "column", col)
+		}
+
+		return err
+	}
+
+	cfg = fileConfig
+
+	if err := cfg.Validate(); err != nil {
 		return err
 	}
 
@@ -147,6 +143,11 @@ func realMain(ctx *cli.Context) error {
 
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
+		_, k8scli, _, err := newKubeClient(cfg.PrometheusScrape.Kubeconfig)
+		if err != nil {
+			return err
+		}
+
 		addLabels := mergeMaps(cfg.AddLabels, cfg.PrometheusScrape.AddLabels)
 		addLabels["adxmon_database"] = cfg.PrometheusScrape.Database
 
@@ -224,6 +225,8 @@ func realMain(ctx *cli.Context) error {
 		LiftAttributes:     liftAttributes,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		MaxBatchSize:       cfg.MaxBatchSize,
+		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
+		MaxSegmentSize:     cfg.MaxSegmentSize,
 		CollectLogs:        ctx.Bool("experimental-log-collection"),
 		StorageDir:         cfg.StorageDir,
 	}
@@ -327,11 +330,11 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
+func newKubeClient(kubeconfig string) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		logger.Warnf("No kube config provided, using fake kube client")
-		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)
+		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", kubeconfig, err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)

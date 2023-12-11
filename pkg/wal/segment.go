@@ -22,7 +22,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/ring"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/zstd"
 )
@@ -126,8 +125,7 @@ type segment struct {
 	mu sync.RWMutex
 
 	// w is the underlying segment file on disk
-	w  file.File
-	fp file.Provider
+	w *os.File
 
 	// bw is a buffered writer for w that if flushed to disk in batches.
 	bw *bufio.Writer
@@ -149,7 +147,7 @@ type segment struct {
 	flushCh  chan chan error
 }
 
-func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
+func NewSegment(dir, prefix string) (Segment, error) {
 	flakeId := idgen.NextId()
 
 	createdAt, err := flakeutil.ParseFlakeID(flakeId.String())
@@ -162,7 +160,7 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		return nil, fmt.Errorf("invalid segment filename: %s", fileName)
 	}
 	path := filepath.Join(dir, fileName)
-	fw, err := fp.Create(path)
+	fw, err := os.Create(path)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +178,6 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 		w:         fw,
 		bw:        bf,
 		cw:        cw,
-		fp:        fp,
 
 		closing:  make(chan struct{}),
 		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
@@ -194,7 +191,7 @@ func NewSegment(dir, prefix string, fp file.Provider) (Segment, error) {
 	return f, nil
 }
 
-func Open(path string, fp file.Provider) (Segment, error) {
+func Open(path string) (Segment, error) {
 	ext := filepath.Ext(path)
 	if ext != ".wal" {
 		return nil, fmt.Errorf("invalid segment filename: %s", path)
@@ -212,7 +209,7 @@ func Open(path string, fp file.Provider) (Segment, error) {
 		return nil, err
 	}
 
-	fd, err := fp.OpenFile(path, os.O_APPEND|os.O_RDWR, 0600)
+	fd, err := os.OpenFile(path, os.O_APPEND|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("open segment: %s: %fp", path, err)
 	}
@@ -233,7 +230,6 @@ func Open(path string, fp file.Provider) (Segment, error) {
 		prefix:    prefix,
 		createdAt: createdAt,
 		path:      path,
-		fp:        fp,
 
 		w:        fd,
 		bw:       bf,
@@ -270,7 +266,7 @@ func (s *segment) Reader() (io.ReadCloser, error) {
 		return nil, ErrSegmentClosed
 	}
 
-	return NewSegmentReader(s.Path(), s.fp)
+	return NewSegmentReader(s.Path())
 }
 
 // CreateAt returns the time when the segment was created.
@@ -320,7 +316,7 @@ func (s *segment) Iterator() (Iterator, error) {
 		return nil, ErrSegmentClosed
 	}
 
-	f, err := s.fp.Open(s.path)
+	f, err := os.Open(s.path)
 	if err != nil {
 		return nil, err
 	}

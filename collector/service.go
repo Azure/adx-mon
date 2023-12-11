@@ -22,7 +22,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 )
 
 type Service struct {
@@ -82,6 +81,16 @@ type ServiceOpts struct {
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
+	// MaxSegmentAge is the maximum time allowed before a segment is rolled over.
+	MaxSegmentAge time.Duration
+
+	// MaxSegmentSize is the maximum size allowed for a segment before it is rolled over.
+	MaxSegmentSize int64
+
+	// MaxDiskUsage is the max size in bytes to use for segment store.  If this value is exceeded, writes
+	// will be rejected until space is freed.  A value of 0 means no max usage.
+	MaxDiskUsage int64
+
 	// Log Service options
 	CollectLogs bool
 
@@ -114,11 +123,21 @@ func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
+	maxSegmentAge := 30 * time.Second
+	if opts.MaxSegmentAge.Seconds() > 0 {
+		maxSegmentAge = opts.MaxSegmentAge
+	}
+
+	maxSegmentSize := int64(1024 * 1024)
+	if opts.MaxSegmentSize > 0 {
+		maxSegmentSize = opts.MaxSegmentSize
+	}
+
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      opts.StorageDir,
-		StorageProvider: &file.DiskProvider{},
-		SegmentMaxAge:   30 * time.Second,
-		SegmentMaxSize:  1024 * 1024,
+		StorageDir:     opts.StorageDir,
+		SegmentMaxAge:  maxSegmentAge,
+		SegmentMaxSize: maxSegmentSize,
+		MaxDiskUsage:   opts.MaxDiskUsage,
 	})
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{

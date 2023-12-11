@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,10 +48,9 @@ func TestStore_Open(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      dir,
-		SegmentMaxSize:  1024,
-		SegmentMaxAge:   time.Minute,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -85,16 +83,15 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(path, &file.DiskProvider{})
+	r, err := wal.NewSegmentReader(path)
 	require.NoError(t, err)
 	_, err = io.ReadAll(r)
 	require.NoError(t, err)
 
 	s = storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      dir,
-		SegmentMaxSize:  1024,
-		SegmentMaxAge:   time.Minute,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -108,10 +105,9 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      dir,
-		SegmentMaxSize:  1024,
-		SegmentMaxAge:   time.Minute,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -131,7 +127,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 1, s.WALCount())
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(path, &file.DiskProvider{})
+	r, err := wal.NewSegmentReader(path)
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -141,10 +137,9 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 func TestStore_SkipNonCSV(t *testing.T) {
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      dir,
-		SegmentMaxSize:  1024,
-		SegmentMaxAge:   time.Minute,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
 	})
 
 	f, err := os.Create(filepath.Join(dir, "foo.csv.gz.tmp"))
@@ -181,7 +176,7 @@ func TestStore_Import_Append(t *testing.T) {
 		SegmentMaxAge:  time.Minute,
 	})
 
-	seg1, err := wal.NewSegment(dir, "Database_Metric", &file.DiskProvider{})
+	seg1, err := wal.NewSegment(dir, "Database_Metric")
 	require.NoError(t, err)
 	seg1.Write(context.Background(), []byte("foo\n"))
 	seg1Path := seg1.Path()
@@ -189,7 +184,7 @@ func TestStore_Import_Append(t *testing.T) {
 	seg1Bytes, err := os.ReadFile(seg1Path)
 	require.NoError(t, err)
 
-	seg2, err := wal.NewSegment(dir, "Database_Metric", &file.DiskProvider{})
+	seg2, err := wal.NewSegment(dir, "Database_Metric")
 	require.NoError(t, err)
 	seg2.Write(context.Background(), []byte("bar\n"))
 	seg2Path := seg2.Path()
@@ -223,7 +218,7 @@ func TestStore_Import_Append(t *testing.T) {
 
 	require.NoError(t, s.Close())
 
-	r, err := wal.NewSegmentReader(activeSegPath, &file.DiskProvider{})
+	r, err := wal.NewSegmentReader(activeSegPath)
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)

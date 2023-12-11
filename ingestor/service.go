@@ -22,7 +22,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 )
@@ -121,11 +120,10 @@ type ServiceOpts struct {
 
 func NewService(opts ServiceOpts) (*Service, error) {
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:      opts.StorageDir,
-		SegmentMaxSize:  opts.MaxSegmentSize,
-		SegmentMaxAge:   opts.MaxSegmentAge,
-		LiftedColumns:   opts.LiftedColumns,
-		StorageProvider: &file.DiskProvider{},
+		StorageDir:     opts.StorageDir,
+		SegmentMaxSize: opts.MaxSegmentSize,
+		SegmentMaxAge:  opts.MaxSegmentAge,
+		LiftedColumns:  opts.LiftedColumns,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{

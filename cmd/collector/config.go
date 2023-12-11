@@ -48,9 +48,14 @@ type Config struct {
 	Endpoint           string `toml:"endpoint" comment:"Ingestor URL to send collected telemetry."`
 	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
-	MaxBatchSize       int    `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
-	StorageDir         string `toml:"storage-dir" comment:"Storage directory for the WAL."`
-	EnablePprof        bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
+
+	MaxBatchSize         int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
+	MaxSegmentAgeSeconds int   `toml:"max-segment-age-seconds" comment:"Max segment agent in seconds."`
+	MaxSegmentSize       int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
+	MaxDiskUsage         int64 `tome:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
+
+	StorageDir  string `toml:"storage-dir" comment:"Storage directory for the WAL."`
+	EnablePprof bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
 
 	// These are global config options that apply to all endpoints.
 	AddLabels                map[string]string `toml:"add-labels" comment:"Global Key/value pairs of labels to add to all metrics."`
@@ -68,6 +73,7 @@ type Config struct {
 }
 
 type PrometheusScrape struct {
+	Kubeconfig               string          `toml:"kube-config" comment:"Path to kubernetes client config"`
 	Database                 string          `toml:"database" comment:"Database to store metrics in."`
 	StaticScrapeTarget       []*ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`

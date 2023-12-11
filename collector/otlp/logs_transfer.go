@@ -18,9 +18,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
-	"github.com/Azure/adx-mon/pkg/tlv"
-	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/pkg/wal/file"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 )
@@ -174,42 +171,6 @@ type serialized struct {
 	Database string
 	Table    string
 	Logs     int
-}
-
-func serialize(ctx context.Context, req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, mp *file.MemoryProvider, log *slog.Logger) ([]serialized, error) {
-	var s []serialized
-
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
-	defer csvWriterPool.Put(enc)
-
-	grouped := otlp.Group(req, add, log)
-	for _, group := range grouped {
-		metrics.LogsProxyReceived.WithLabelValues(group.Database, group.Table).Add(float64(len(group.Logs)))
-		w, err := wal.NewWAL(wal.WALOpts{StorageProvider: mp, Prefix: fmt.Sprintf("%s_%s", group.Database, group.Table)})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create wal: %w", err)
-		}
-		if err := w.Open(ctx); err != nil {
-			return nil, fmt.Errorf("failed to open wal: %w", err)
-		}
-		enc.Reset()
-		if err := enc.MarshalCSV(group); err != nil {
-			return nil, fmt.Errorf("failed to marshal csv: %w", err)
-		}
-		// Add our TLV metadata
-		b := enc.Bytes()
-		tNumLogs := tlv.New(otlp.LogsTotalTag, []byte(strconv.Itoa(len(group.Logs))))
-		tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(b))))
-		if err := w.Write(ctx, append(tlv.Encode(tNumLogs, tPayloadSize), b...)); err != nil {
-			return nil, fmt.Errorf("failed to write to wal: %w", err)
-		}
-		s = append(s, serialized{Path: w.Path(), Database: group.Database, Table: group.Table, Logs: len(group.Logs)})
-		if err := w.Close(); err != nil {
-			return nil, fmt.Errorf("failed to close wal: %w", err)
-		}
-	}
-
-	return s, nil
 }
 
 var (
