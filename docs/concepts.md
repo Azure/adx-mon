@@ -17,6 +17,20 @@ queries are used for analysis, alerting and visualization.
 
 ## Metrics
 
+Metrics track a numeric value over time with associated labels to identify series.  Metrics are collected from
+Kubernetes via the [Prometheus](https://prometheus.io/) scrape protocol as well as received via prometheus
+remote write protocol and [OTLP](https://opentelemetry.io/docs/specs/otlp/) metrics protocol.
+
+Metrics are translated to a distinct table per metric.  Each metric table has the following columns:
+
+* `Timestamp` - The timestamp of the metric.
+* `Value` - The value of the metric.
+* `Labels` - A dynamic column that contains all labels associated with the metric.
+* `SeriesId` - A unique ID for the metric series that comprises the `Labels` and metric name.
+
+Labels may have common identifying attributes that can be pulled up to top level columns via update policies.  For
+example, the `pod` label may be common to all metrics and can be pulled up to a top level `Pod` column.
+
 ## Logs
 
 ## Traces
@@ -30,7 +44,7 @@ Alerts are triggered when the alerting criteria is met.  The alerting criteria i
 executed against the ADX cluster.  The query is executed on a schedule and if the query returns any results, the
 alert triggers.  Each row of the result translates into an alert notification.
 
-Below is a sample alerter on a metric.
+Below is a sample alert on a metric.
 
 ```yaml
 ---
