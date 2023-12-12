@@ -18,7 +18,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/tools/data"
 	"github.com/golang/protobuf/proto"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type generator interface {
@@ -45,27 +44,7 @@ func main() {
 
 	flag.Parse()
 
-	var msg v1.ExportLogsServiceRequest
-	protojson.Unmarshal(rawlog, &msg)
-
-	b, err := proto.Marshal(&msg)
-	if err != nil {
-		logger.Fatalf("marshal: %s", err)
-	}
-	req, err := http.NewRequest("POST", target, bytes.NewReader(b))
-	if err != nil {
-		logger.Fatalf("new request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/x-protobuf")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		logger.Fatalf("do: %s", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		logger.Fatalf("status: %s", resp.Status)
-	}
-	defer resp.Body.Close()
+	target = fmt.Sprintf("%s/v1/logs", target)
 
 	var dataGen generator
 
