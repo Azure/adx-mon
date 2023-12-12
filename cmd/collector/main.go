@@ -265,6 +265,7 @@ func realMain(ctx *cli.Context) error {
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
 		MaxSegmentSize:     cfg.MaxSegmentSize,
+		MaxDiskUsage:       cfg.MaxDiskUsage,
 		CollectLogs:        ctx.Bool("experimental-log-collection"),
 		StorageDir:         cfg.StorageDir,
 	}
@@ -304,7 +305,7 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		keepMetrics := []*regexp.Regexp{}
-		for _, v := range unionSlice(cfg.KeepMetrics, cfg.PrometheusScrape.KeepMetrics) {
+		for _, v := range unionSlice(cfg.KeepMetrics, v.KeepMetrics) {
 			metricRegex, err := regexp.Compile(v)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
@@ -314,7 +315,7 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		keepMetricLabelValues := make(map[*regexp.Regexp]*regexp.Regexp)
-		for _, v := range append(cfg.KeepMetricsWithLabelValue, cfg.PrometheusScrape.KeepMetricsWithLabelValue...) {
+		for _, v := range append(cfg.KeepMetricsWithLabelValue, v.KeepMetricsWithLabelValue...) {
 			labelRe, err := regexp.Compile(v.LabelRegex)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
