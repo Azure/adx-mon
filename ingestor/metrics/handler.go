@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -15,14 +14,11 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/golang/snappy"
+	pool2 "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
-
 	bytesPool = pool.NewBytes(1000)
 
 	writeReqPool = pool.NewGeneric(1000, func(sz int) interface{} {
@@ -109,8 +105,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBuf := bytesBufPool.Get(64 * 1024).(*bytes.Buffer)
-	defer bytesBufPool.Put(bodyBuf)
+	bodyBuf := pool.BytesBufferPool.Get(64 * 1024).(*pool2.Buffer)
+	defer pool.BytesBufferPool.Put(bodyBuf)
 	bodyBuf.Reset()
 
 	_, err := io.Copy(bodyBuf, r.Body)
