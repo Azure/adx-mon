@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"strconv"
 
 	"github.com/Azure/adx-mon/pkg/pool"
 )
@@ -19,7 +18,7 @@ type Tag uint16
 
 var (
 	buf    = pool.NewBytes(1024)
-	magicn = Tag(0x1)
+	marker = Tag(0xFEDA)
 )
 
 const (
@@ -61,145 +60,266 @@ func Encode(tlvs ...*TLV) []byte {
 	// V is the size in bytes of all the TLVs
 	v := buf.Get(sizeOfHeader)
 	defer buf.Put(v)
-	binary.BigEndian.PutUint16(v, uint16(magicn))                                                  // T
+	binary.BigEndian.PutUint16(v, uint16(marker))
 	binary.BigEndian.PutUint32(v[binary.MaxVarintLen16:], uint32(b.Len()))                         // L
 	binary.BigEndian.PutUint32(v[binary.MaxVarintLen16+binary.MaxVarintLen32:], uint32(len(tlvs))) // V
 
 	return append(v, b.Bytes()...)
 }
 
+type ReaderOption func(*Reader)
+
+func WithPreserve(preserve bool) ReaderOption {
+	return func(r *Reader) {
+		r.preserve = preserve
+	}
+}
+
+func WithBufferSize(size int) ReaderOption {
+	return func(r *Reader) {
+		r.bufferSize = size
+	}
+}
+
 type Reader struct {
-	source     io.Reader
-	discovered bool
-	header     []TLV
-	buf        []byte
+	source io.Reader
+	header []TLV
+	buf    []byte
 
-	streaming bool
-	offset    int
-	term      int
+	// underRunIndex is the index of the first byte
+	// in buf that marks the end of the last TLV bytes.
+	//
+	// This value is set when our buffer contains a TLV
+	// marker but does not have enough bytes to extract
+	// the full TLV sequence.
+	// Upon our next Read invocation, we'll reference the
+	// underRunIndex to continue filling the buffer from
+	// that point.
+	underRunIndex int
 
-	// fastpath is set when we fail to discover a TLV header,
-	// at which point we're just streaming bytes.
-	fastpath bool
+	// preserve indicates that we should not discard TLV
+	// read from the source.
+	preserve bool
+
+	// bufferSize is the size of the buffer used for the
+	// lifetime of the Reader.
+	bufferSize int
 }
 
-func NewReader(r io.Reader) *Reader {
-	return &Reader{source: r}
-}
-
-func NewStreaming(r io.Reader) *Reader {
-	return &Reader{source: r, streaming: true}
-}
-
-func (r *Reader) Read(p []byte) (n int, err error) {
-	// extract our header
-	if !r.discovered {
-		if err := r.decode(); err != nil {
-			return 0, err
-		}
+func NewReader(r io.Reader, opts ...ReaderOption) *Reader {
+	// Our buffer is necessary because we'll need to reslice
+	// the provided slice in order to remove TLVs. Since slices
+	// are references to an underlying array, any reslicing
+	// we do within the body of Read won't translate to the
+	// caller's slice.
+	tlvr := &Reader{source: r, bufferSize: 4096}
+	for _, opt := range opts {
+		opt(tlvr)
 	}
-	// drain
-	if len(r.buf) != 0 {
-		n = copy(p, r.buf)
-		r.buf = r.buf[n:]
-		return
-	}
-	// limit the number of bytes we can read to the length of
-	// the remainder of the payload (if we know it)
-	if r.streaming && r.discovered && !r.fastpath {
-		if cap(p) > r.term-r.offset {
-			n, err = io.LimitReader(r.source, int64(r.term-r.offset)).Read(p)
-			r.offset += n
-			r.discovered = false
-			return
-		}
-	}
-
-	// fast path
-	n, err = r.source.Read(p)
-	r.offset += n
-
-	return
+	tlvr.buf = buf.Get(tlvr.bufferSize)
+	return tlvr
 }
 
 func (r *Reader) Header() []TLV {
 	return r.header
 }
 
-func (r *Reader) decode() error {
-	p := buf.Get(sizeOfHeader)
-	defer buf.Put(p)
-
-	n, err := r.source.Read(p)
-	if err != nil {
-		return err
-	}
-
-	// source has no header
-	if Tag(binary.BigEndian.Uint16(p)) != magicn {
-		r.discovered = true
-		r.fastpath = true
-		// we need to keep these bytes around until someone calls Read
-		r.buf = make([]byte, len(p))
-		copy(r.buf, p)
-		return nil
-	}
-	offset := binary.MaxVarintLen16
-
-	sizeOfElements := binary.BigEndian.Uint32(p[offset:])
-	offset += binary.MaxVarintLen32
-	elements := int(binary.BigEndian.Uint32(p[offset:]))
-	offset += binary.MaxVarintLen32
-
-	// at this point we know how much data we need from our source, so fill the buffer
-	if n < offset+int(sizeOfElements) {
-		// read the remaining bytes needed to extract our header
-		l := &io.LimitedReader{R: r.source, N: int64(int(sizeOfElements))}
-		var read []byte
-		read, err = io.ReadAll(l)
-		if err != nil {
-
-			// we thought we had a header, but we just got unlucky
-			// with the first byte being our magic number.
-			if err == io.EOF {
-				r.discovered = true
-				r.buf = make([]byte, len(read)+n)
-				copy(r.buf, p)
-				copy(r.buf[n:], read)
-				return nil
-			}
-			return err
+func (r *Reader) Read(p []byte) (n int, err error) {
+	// Upon return, if we're at EOF, we'll return our buffer to the pool.
+	defer func() {
+		if err == io.EOF {
+			buf.Put(r.buf)
 		}
-		// resize
-		p = append(p, read...)
+	}()
+
+	// Read from our source into our buffer. If the parameter slice has less
+	// capacity than our own buffer, we'll use a limit reader so as to be capable
+	// of returning the entire slice.
+	if len(p) < r.bufferSize {
+		n, err = io.LimitReader(r.source, int64(len(p))).Read(r.buf[r.underRunIndex:])
+	} else {
+		n, err = r.source.Read(r.buf[r.underRunIndex:])
 	}
 
-	// no bounds checks are necessary, all sizes are known
+	if err == io.EOF {
+		// If there's anything remaining in our buffer, copy it over
+		if r.underRunIndex > 0 {
+			n = copy(p, r.buf[0:r.underRunIndex])
+		}
+		return
+	}
+
+	// Initialize our index state
+	var (
+		head = 0
+		tail = r.underRunIndex + n
+
+		// `stop` is returned by `next` and denotes no additional buffer procssing
+		stop bool
+		// `markerHead` and `markerTail` is returned by `next` and denotes the indices
+		// where TLV has been found.
+		markerHead, markerTail int
+		// `dstIndex` is the index of the next byte to copy into the destination slice.
+		dstIndex int
+	)
+
+	// Reset our `underRunIndex`
+	r.underRunIndex = 0
+
+	// Also reset `n`, which will be updated as we copy bytes into `p`
+	n = 0
+
+	// process our buffer
+	for {
+		// Find our next TLV
+		stop, markerHead, markerTail = r.next(head, tail)
+
+		// If `markerTail` != `tail` yet `stop` is true, we have
+		// insufficient space in our buffer to fully evaluate
+		// the presence of TLV. So we're going to move the remaining
+		// bytes to the beginning of our buffer and set `underRunIndex`
+		// to the end of our moved bytes such that the next time Read
+		// is called, we'll fill the remainder of our buffer starting
+		// at `underRunIndex`.
+		//
+		//                       tail
+		//                         │
+		//                         ▼
+		// ┌───────────────┬────────┐
+		// │               │        │
+		// └───────────────┴────────┘
+		//                 ▲
+		//                 │
+		//             markerTail
+		//
+		// ┌──────┬─────────────────┐
+		// │      │                 │
+		// └──────┴─────────────────┘
+		//        ▲
+		//        │
+		//     underRunIndex
+		if stop && markerTail != tail {
+			// An edge case is where we have TLV but not enough buffer to finish
+			// reading the full TLV context, but we've not advanced the head index.
+			// Fortunately, we already return the starting point for where we've
+			// found the TLV marker, so we can set the head index to that value.
+			if head == 0 {
+				head = markerHead
+			}
+			r.underRunIndex = copy(r.buf[0:], r.buf[head:tail])
+			break
+		}
+
+		if !r.preserve {
+			// If we don't want to preserve TLV
+			// ┌───────────────────────────┐
+			// └───────────────────────────┘
+			// ▲    ▲     ▲
+			// │    │     │
+			// d   mh     mt
+			//
+			// We want to copy into `p` from `dstIndex` to `markerHead`
+			if markerHead == -1 {
+				// If we didn't find TLV in the remaining bytes of our buffer,
+				// we'll copy the remaining bytes into `p` and return.
+				markerHead = tail
+			}
+			dstIndex += copy(p[dstIndex:], r.buf[head:markerHead])
+			n = dstIndex
+		} else {
+			// If we want to preserve TLV
+			// ┌───────────────────────────┐
+			// └───────────────────────────┘
+			//  ▲    ▲     ▲
+			//  │    │     │
+			//  d   mh     mt
+			//
+			// We want to copy into `p` from `dstIndex` to `markerTail`
+			dstIndex += copy(p[dstIndex:], r.buf[head:markerTail])
+			n = dstIndex
+		}
+
+		// Advance our index state
+		//
+		//           head
+		//             │
+		//             ▼
+		//  ┌───────────────────────────┐
+		//  └───────────────────────────┘
+		//  ▲    ▲     ▲
+		//  │    │     │
+		//  d   mh     mt
+		//
+		head = markerTail
+
+		if stop {
+			break
+		}
+	}
+
+	return
+}
+
+func (r *Reader) next(start, end int) (stop bool, markerHead, markerTail int) {
+	// If our buffer has insufficient remaining bytes to read a TLV header,
+	// we'll set underRunIndex so we can continue filling the buffer from
+	// that point on the next call to Read.
+	if start+sizeOfHeader > end {
+		stop = true
+		return
+	}
+
+	// Find our marker
+	markerHead = bytes.Index(r.buf[start:end], []byte{0xFE, 0xDA})
+	stop = markerHead == -1
+	if stop {
+		// Advance `markerTail` to the end of our buffer, no more TLV
+		markerTail = end
+		return
+	}
+
+	// Since we're indexing into the buffer from `start`, we need to
+	// advance `markerHead` by `start` to get the actual index of the
+	// marker in the buffer.
+	//
+	//                 markerHead [5]
+	//                   │
+	//                   ▼
+	// ┌─────────────────────────────┐
+	// └─────────────────────────────┘
+	//           ▲
+	//           │
+	//         start [10]
+	markerHead += start
+
+	// Read the header
+	markerTail = markerHead + binary.MaxVarintLen16
+	sizeOfElements := binary.BigEndian.Uint32(r.buf[markerTail:])
+	markerTail += binary.MaxVarintLen32
+	elements := int(binary.BigEndian.Uint32(r.buf[markerTail:]))
+	markerTail += binary.MaxVarintLen32
+
+	// At this point we have a TLV header. If there is insufficient
+	// space in the buffer to extract the full TLV, we'll set underRunIndex
+	// so we can continue filling the buffer from that point on the next
+	// call to Read.
+	stop = markerTail+int(sizeOfElements) > end
+	if stop {
+		return
+	}
+
+	// We have a TLV header and enough bytes in our buffer to extract
+	// the full TLV.
 	for i := 0; i < elements; i++ {
 		t := TLV{}
-		t.Tag = Tag(binary.BigEndian.Uint16(p[offset:]))
-		offset += binary.MaxVarintLen16
-		t.Length = binary.BigEndian.Uint32(p[offset:])
-		offset += binary.MaxVarintLen32
-		t.Value = p[offset : offset+int(t.Length)]
-		offset += int(t.Length)
+		t.Tag = Tag(binary.BigEndian.Uint16(r.buf[markerTail:]))
+		markerTail += binary.MaxVarintLen16
+		t.Length = binary.BigEndian.Uint32(r.buf[markerTail:])
+		markerTail += binary.MaxVarintLen32
+		t.Value = append(t.Value, r.buf[markerTail:markerTail+int(t.Length)]...)
+		markerTail += int(t.Length)
 		r.header = append(r.header, t)
 	}
 
-	// If there is a Tag that indicates the length of the payload, we can
-	// use skip checking for additional TLV until we've read the payload.
-	if r.streaming {
-		for _, t := range r.header {
-			if t.Tag == PayloadTag {
-				r.offset += offset
-				if v, err := strconv.Atoi(string(t.Value)); err == nil {
-					r.term += v + offset
-				}
-				break
-			}
-		}
-	}
-
-	r.discovered = true
-	return nil
+	return
 }

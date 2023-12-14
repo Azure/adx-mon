@@ -161,7 +161,7 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	defer cancel()
 
 	// Count the number of samples we are uploading.
-	tlvr := tlv.NewStreaming(reader)
+	tlvr := tlv.NewReader(reader)
 
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.

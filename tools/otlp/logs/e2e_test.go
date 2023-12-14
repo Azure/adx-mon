@@ -145,7 +145,7 @@ func VerifyStore(t *testing.T, dir string, expectTLV bool) {
 
 		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()))
 		require.NoError(t, err)
-		tlvr := tlv.NewStreaming(s)
+		tlvr := tlv.NewReader(s)
 		b, err := io.ReadAll(tlvr)
 		require.NoError(t, err)
 

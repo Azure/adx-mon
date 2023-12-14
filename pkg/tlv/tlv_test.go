@@ -2,277 +2,223 @@ package tlv_test
 
 import (
 	"bytes"
-	"context"
-	"fmt"
 	"io"
 	"os"
-	"reflect"
+	"path/filepath"
 	"strconv"
 	"testing"
 
-	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/ingestor/transform"
-	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/tlv"
-	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
-func TestEmbedTLV(t *testing.T) {
+func TestTLVAtHead(t *testing.T) {
 	tests := []struct {
-		TLV bool
+		Preserve bool
 	}{
 		{
-			TLV: true,
+			Preserve: true,
 		},
 		{
-			TLV: false,
+			Preserve: false,
 		},
 	}
 	for _, tt := range tests {
-		t.Run(strconv.FormatBool(tt.TLV), func(t *testing.T) {
-			// We're immulating the path a segment would take as received
-			// via the /transfer endpoint in Ingestor, where a segment, as
-			// represented by a WAL being streamed from a client, is written
-			// to disk using the `store` package.
-			storageDir := t.TempDir()
-			store := storage.NewLocalStore(storage.StoreOpts{
-				StorageDir: storageDir,
-			})
-			err := store.Open(context.Background())
+		t.Run(strconv.FormatBool(tt.Preserve), func(t *testing.T) {
+			// Create a couple TLVs
+			t1 := tlv.New(tlv.Tag(0x1), []byte("Tag1Value"))
+			t2 := tlv.New(tlv.Tag(0x2), []byte("Tag2Value"))
+			ts := []*tlv.TLV{t1, t2}
+			encoded := tlv.Encode(ts...)
+
+			// Create a payload
+			payload := []byte("foo bar baz")
+
+			// Our source stream
+			r := bytes.NewReader(append(encoded, payload...))
+
+			// Create a TLV reader
+			tr := tlv.NewReader(r, tlv.WithPreserve(tt.Preserve))
+
+			// Consume our stream
+			var w bytes.Buffer
+			n, err := io.Copy(&w, tr)
 			require.NoError(t, err)
 
-			var (
-				numSegments         = 10
-				segmentBytesWritten = 0
-				numLogs             = 0
-				database            = "DBA"
-				table               = "TableA"
-			)
-
-			segmentDir := t.TempDir()
-			sw, err := wal.NewWAL(wal.WALOpts{StorageDir: segmentDir, Prefix: fmt.Sprintf("%s_%s", database, table)})
-			require.NoError(t, err)
-			err = sw.Open(context.Background())
-			require.NoError(t, err)
-
-			for i := 0; i < numSegments; i++ {
-
-				// Transform our log into CSV
-				var log v1.ExportLogsServiceRequest
-				err := protojson.Unmarshal(otlpLog, &log)
-				require.NoError(t, err)
-
-				var b bytes.Buffer
-				w := transform.NewCSVWriter(&b, nil)
-				logs := &otlp.Logs{
-					Resources: log.ResourceLogs[0].Resource.Attributes,
-					Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
-				}
-				err = w.MarshalCSV(logs)
-				require.NoError(t, err)
-
-				segmentBytes := b.Bytes()
-				segmentBytesWritten += len(segmentBytes)
-				var s []byte
-				if tt.TLV {
-					// Number of Logs in the segment
-					numLogs += len(logs.Logs)
-					tc := tlv.New(tlv.Tag(0x11), []byte(strconv.Itoa(len(logs.Logs))))
-					// Number of bytes in the segment
-					tl := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(segmentBytes))))
-					// The segment
-					s = append(tlv.Encode(tc, tl), segmentBytes...)
-				} else {
-					s = segmentBytes
-				}
-
-				// Write our CSV to disk as a WAL segment
-				err = sw.Write(context.Background(), s)
-				require.NoError(t, err)
-			}
-			segment := sw.Path()
-			err = sw.Close()
-			require.NoError(t, err)
-
-			// Import our segments. This emulates the path where Collector has written
-			// segments that _might_ contain TLV and has sent them to Ingestor via
-			// the transfer handler.
-			f, err := os.Open(segment)
-			require.NoError(t, err)
-			_, err = store.Import(segment, f)
-			require.NoError(t, err)
-			err = f.Close()
-			require.NoError(t, err)
-
-			// Close the store to flush the WAL
-			err = store.Close()
-			require.NoError(t, err)
-			// Retrieve the WAL segments from disk. We only
-			// expect a single file on disk because the WAL
-			// is going to merge all the segments together
-			// since they have a common prefix, namely the
-			// database and table variable contents.
-			files, err := wal.ListDir(storageDir)
-			require.NoError(t, err)
-			require.Equal(t, 1, len(files))
-			// Create a reader and closer for each file,
-			// then merge them into a single reader, thereby
-			// immulating the behavior of adx::upload.
-			var (
-				readers []io.Reader
-				closers []io.Closer
-			)
-			for _, fi := range files {
-				f, err := wal.NewSegmentReader(fi.Path)
-				require.NoError(t, err)
-				readers = append(readers, f)
-				closers = append(closers, f)
-			}
-			mr := io.MultiReader(readers...)
-			// Now wrap our readers with a TLV streaming reader,
-			// which is going to attempt discovery of any embedded TLV.
-			tlvr := tlv.NewStreaming(mr)
-			// We don't actually care about the content here, we just
-			// want to fully read the file.
-			n, err := io.Copy(io.Discard, tlvr)
-			require.NoError(t, err)
-			// While we don't care about the content of the file, we do
-			// want to ensure that the segment bytes written are equal
-			// to the amount we just read from disk. We want to ensure
-			// no TLV bytes polluted the segment bytes.
-			require.Equal(t, segmentBytesWritten, int(n))
-			// Shut down all our readers. While not strictly necessary
-			// since the test will just delete all these, it's still a
-			// good practice.
-			for _, c := range closers {
-				err := c.Close()
-				require.NoError(t, err)
-			}
-			// Iteratte through all our discovered TLV. We want to
-			// find all the TLV that have our special tag 0x11, which
-			// is the number of logs in the segment. We want to ensure
-			// that the sum of all the logs in the segment is equal to
-			// the number of logs we wrote to disk.
-			var (
-				numLogsInTLV int
-				headers      = tlvr.Header()
-			)
-			if !tt.TLV {
-				require.Equal(t, 0, len(headers))
-				return
-			}
-			for _, h := range headers {
-				if h.Tag == tlv.Tag(0x11) {
-					v, err := strconv.Atoi(string(h.Value))
-					require.NoError(t, err)
-					numLogsInTLV += v
-				}
-			}
-			require.Equal(t, numLogs, numLogsInTLV)
-		})
-	}
-}
-
-func TestTLV(t *testing.T) {
-	// Setup our file
-	dir := t.TempDir()
-	f, err := os.CreateTemp(dir, "")
-	require.NoError(t, err)
-
-	// Create our TLV and write it to disk
-	k := tlv.Tag(0x01)
-	v := "Tag1Value"
-	tt := tlv.New(k, []byte(v))
-	randomBytes := []byte("foo bar baz")
-
-	_, err = f.Write(append(tlv.Encode(tt), randomBytes...))
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	// Decode our file
-	tf, err := os.Open(f.Name())
-	require.NoError(t, err)
-	defer tf.Close()
-
-	r := tlv.NewReader(tf)
-	data, err := io.ReadAll(r)
-	require.NoError(t, err)
-	require.Equal(t, randomBytes, data)
-
-	tlvs := r.Header()
-	require.Equal(t, 1, len(tlvs))
-	require.Equal(t, v, string(tlvs[0].Value))
-}
-
-func TestReader(t *testing.T) {
-	tests := []struct {
-		Name      string
-		HeaderLen int
-	}{
-		{
-			Name:      "single header entry",
-			HeaderLen: 1,
-		},
-		{
-			Name: "this payload contains no tlv header",
-		},
-		{
-			Name:      "Several header entries",
-			HeaderLen: 5,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.Name, func(t *testing.T) {
-			b := []byte(tt.Name)
-
-			if tt.HeaderLen != 0 {
-				var tlvs []*tlv.TLV
-				for i := 0; i < tt.HeaderLen; i++ {
-					tlvs = append(tlvs, tlv.New(tlv.Tag(i), []byte(tt.Name)))
-				}
-				b = append(tlv.Encode(tlvs...), b...)
+			if tt.Preserve {
+				require.Equal(t, len(payload)+len(encoded), int(n))
+			} else {
+				require.Equal(t, len(payload), int(n))
 			}
 
-			source := bytes.NewBuffer(b)
-			r := tlv.NewReader(source)
+			// Test header
+			for i, h := range tr.Header() {
+				require.Equal(t, ts[i].Tag, h.Tag)
+				require.Equal(t, ts[i].Length, h.Length)
+				require.Equal(t, ts[i].Value, h.Value)
+			}
 
-			have, err := io.ReadAll(r)
-			require.NoError(t, err)
-			require.Equal(t, tt.Name, string(have))
-
-			h := r.Header()
-			require.Equal(t, tt.HeaderLen, len(h))
-			for _, metadata := range h {
-				require.Equal(t, tt.Name, string(metadata.Value))
+			// Ensure payload is intact
+			if tt.Preserve {
+				require.Equal(t, append(encoded, payload...), w.Bytes())
+			} else {
+				require.Equal(t, payload, w.Bytes())
 			}
 		})
 	}
 }
 
-func TestUnluckyMagicNumber(t *testing.T) {
-	var b bytes.Buffer
-	_, err := b.Write([]byte{0x1})
-	require.NoError(t, err)
-	_, err = b.WriteString("I kind of look like a TLV")
-	require.NoError(t, err)
-	r := tlv.NewReader(bytes.NewBuffer(b.Bytes()))
-	have, err := io.ReadAll(r)
-	require.NoError(t, err)
-	require.True(t, reflect.DeepEqual(have, b.Bytes()))
+func TestTLVInPayload(t *testing.T) {
+	tests := []struct {
+		Preserve bool
+	}{
+		{
+			Preserve: true,
+		},
+		{
+			Preserve: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.FormatBool(tt.Preserve), func(t *testing.T) {
+			// We want to test the case where TLV is present in
+			// the stream but not at the head of the stream.
+			// | Payload | TLV | Payload |
+
+			// Create a TLV
+			t1 := tlv.New(tlv.Tag(0x1), []byte("Tag1Value"))
+			encoded := tlv.Encode(t1)
+
+			// Create a payload
+			payload1 := []byte("foo bar baz")
+			payload2 := []byte("baz bar foo")
+
+			// Our source stream
+			streamBytes := append(payload1, encoded...)
+			streamBytes = append(streamBytes, payload2...)
+			r := bytes.NewReader(streamBytes)
+
+			// Create a TLV reader
+			tr := tlv.NewReader(r, tlv.WithPreserve(tt.Preserve))
+
+			// Consume our stream
+			var w bytes.Buffer
+			n, err := io.Copy(&w, tr)
+			require.NoError(t, err)
+
+			if tt.Preserve {
+				require.Equal(t, len(streamBytes), int(n))
+			} else {
+				require.Equal(t, len(payload1)+len(payload2), int(n))
+			}
+
+			// Test header
+			h := tr.Header()
+			require.Equal(t, 1, len(h))
+			require.Equal(t, t1.Tag, h[0].Tag)
+			require.Equal(t, t1.Length, h[0].Length)
+			require.Equal(t, t1.Value, h[0].Value)
+
+			// Ensure payload is intact
+			if tt.Preserve {
+				require.Equal(t, streamBytes, w.Bytes())
+			} else {
+				require.Equal(t, append(payload1, payload2...), w.Bytes())
+			}
+		})
+	}
+}
+
+func TestMultiReadCalls(t *testing.T) {
+	tests := []struct {
+		Preserve bool
+	}{
+		{
+			Preserve: true,
+		},
+		{
+			Preserve: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.FormatBool(tt.Preserve), func(t *testing.T) {
+			// We want to test the case where Read is called multiple times.
+			// This is going to test our most common case, where we have a
+			// stream that contains checksums at the head and TLVs
+			// scattered throughout the stream.
+			// | Checksum | TLV | Payload | TLV | Payload
+
+			checksum := []byte("checksum")
+			payload1 := bytes.Repeat([]byte("payload1"), 100)
+			t1 := tlv.New(tlv.Tag(0x1), []byte("Tag1Value"))
+			tp1 := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(payload1))))
+
+			payload2 := bytes.Repeat([]byte("payload2"), 127)
+			t2 := tlv.New(tlv.Tag(0x1), []byte("Tag2Value"))
+			tp2 := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(payload2))))
+
+			// Our source stream
+			streamBytes := append(checksum, tlv.Encode(t1, tp1)...)
+			streamBytes = append(streamBytes, payload1...)
+
+			streamBytes = append(streamBytes, tlv.Encode(t2, tp2)...)
+			streamBytes = append(streamBytes, payload2...)
+
+			r := bytes.NewReader(streamBytes)
+
+			// Create a TLV reader
+			tr := tlv.NewReader(r, tlv.WithPreserve(tt.Preserve), tlv.WithBufferSize(128))
+
+			// Consume our stream
+			var w bytes.Buffer
+			n, err := io.Copy(&w, tr)
+			require.NoError(t, err)
+
+			if tt.Preserve {
+				require.Equal(t, len(streamBytes), int(n))
+			} else {
+				require.Equal(t, len(checksum)+len(payload1)+len(payload2), int(n))
+			}
+
+			h := tr.Header()
+			require.Equal(t, 4, len(h))
+			tltvs := []*tlv.TLV{t1, tp1, t2, tp2}
+			for i, hh := range h {
+				require.Equal(t, tltvs[i].Tag, hh.Tag)
+				require.Equal(t, tltvs[i].Length, hh.Length)
+				require.Equal(t, tltvs[i].Value, hh.Value)
+			}
+
+		})
+	}
 }
 
 func BenchmarkReader(b *testing.B) {
-	t := tlv.New(tlv.Tag(0x2), []byte("some tag payload"))
-	h := tlv.Encode(t)
-	p := bytes.NewReader(append(h, []byte("body payload")...))
-	r := tlv.NewReader(p)
+	dir := b.TempDir()
+	fn := filepath.Join(dir, "test")
+	b.Logf("writing to %s", fn)
 
+	f, err := os.Create(fn)
+	require.NoError(b, err)
+	for i := 0; i < 10; i++ {
+		t := tlv.New(tlv.Tag(0xAB), []byte("some tag payload"))
+		payload := bytes.Repeat([]byte("payload"), 100)
+		f.Write(tlv.Encode(t))
+		f.Write(payload)
+	}
+	require.NoError(b, f.Close())
+
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		io.ReadAll(r)
+		f, err := os.Open(fn)
+		require.NoError(b, err)
+
+		r := tlv.NewReader(f, tlv.WithBufferSize(128))
+
+		io.Copy(io.Discard, r)
+
+		require.NoError(b, f.Close())
 	}
 }
 
