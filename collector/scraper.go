@@ -27,6 +27,8 @@ import (
 type ScraperOpts struct {
 	NodeName string
 
+	DefaultDropMetrics bool
+
 	// AddLabels is a map of key/value pairs that will be added to all metrics.
 	AddLabels map[string]string
 
@@ -36,6 +38,10 @@ type ScraperOpts struct {
 	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
+
+	KeepMetricsWithLabelValue map[*regexp.Regexp]*regexp.Regexp
+
+	KeepMetrics []*regexp.Regexp
 
 	// Database is the name of the database to write metrics to.
 	Database string
@@ -60,7 +66,14 @@ type ScraperOpts struct {
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
-	return transform.NewRequestTransformer(s.AddLabels, s.DropLabels, s.DropMetrics, nil)
+	return &transform.RequestTransformer{
+
+		AddLabels:                 s.AddLabels,
+		DropLabels:                s.DropLabels,
+		DropMetrics:               s.DropMetrics,
+		KeepMetrics:               s.KeepMetrics,
+		KeepMetricsWithLabelValue: s.KeepMetricsWithLabelValue,
+	}
 }
 
 type ScrapeTarget struct {

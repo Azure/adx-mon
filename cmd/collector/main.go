@@ -53,6 +53,7 @@ func main() {
 					}
 
 					fmt.Println(buf.String())
+
 					return nil
 				},
 			},
@@ -192,17 +193,54 @@ func realMain(ctx *cli.Context) error {
 			dropMetrics = append(dropMetrics, metricRegex)
 		}
 
+		keepMetrics := []*regexp.Regexp{}
+		for _, v := range unionSlice(cfg.KeepMetrics, cfg.PrometheusScrape.KeepMetrics) {
+			metricRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			keepMetrics = append(keepMetrics, metricRegex)
+		}
+
+		keepMetricLabelValues := make(map[*regexp.Regexp]*regexp.Regexp)
+		for _, v := range append(cfg.KeepMetricsWithLabelValue, cfg.PrometheusScrape.KeepMetricsWithLabelValue...) {
+			lableRe, err := regexp.Compile(v.LabelRegex)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			valueRe, err := regexp.Compile(v.ValueRegex)
+			if err != nil {
+				logger.Fatalf("invalid label regex: %s", err)
+			}
+
+			keepMetricLabelValues[lableRe] = valueRe
+		}
+
+		var defaultDropMetrics bool
+		if cfg.DefaultDropMetrics != nil {
+			defaultDropMetrics = *cfg.DefaultDropMetrics
+		}
+
+		if cfg.PrometheusScrape.DefaultDropMetrics != nil {
+			defaultDropMetrics = *cfg.PrometheusScrape.DefaultDropMetrics
+		}
+
 		scraperOpts = &collector.ScraperOpts{
-			NodeName:                 hostname,
-			K8sCli:                   k8scli,
-			Database:                 cfg.PrometheusScrape.Database,
-			AddLabels:                addLabels,
-			DropLabels:               dropLabels,
-			DropMetrics:              dropMetrics,
-			DisableMetricsForwarding: cfg.PrometheusScrape.DisableMetricsForwarding,
-			ScrapeInterval:           time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
-			Targets:                  staticTargets,
-			MaxBatchSize:             cfg.MaxBatchSize,
+			NodeName:                  hostname,
+			K8sCli:                    k8scli,
+			Database:                  cfg.PrometheusScrape.Database,
+			AddLabels:                 addLabels,
+			DropLabels:                dropLabels,
+			DropMetrics:               dropMetrics,
+			KeepMetrics:               keepMetrics,
+			KeepMetricsWithLabelValue: keepMetricLabelValues,
+			DefaultDropMetrics:        defaultDropMetrics,
+			DisableMetricsForwarding:  cfg.PrometheusScrape.DisableMetricsForwarding,
+			ScrapeInterval:            time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
+			Targets:                   staticTargets,
+			MaxBatchSize:              cfg.MaxBatchSize,
 		}
 	}
 
@@ -227,6 +265,7 @@ func realMain(ctx *cli.Context) error {
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
 		MaxSegmentSize:     cfg.MaxSegmentSize,
+		MaxDiskUsage:       cfg.MaxDiskUsage,
 		CollectLogs:        ctx.Bool("experimental-log-collection"),
 		StorageDir:         cfg.StorageDir,
 	}
@@ -265,11 +304,48 @@ func realMain(ctx *cli.Context) error {
 			dropMetrics = append(dropMetrics, metricRegex)
 		}
 
+		keepMetrics := []*regexp.Regexp{}
+		for _, v := range unionSlice(cfg.KeepMetrics, v.KeepMetrics) {
+			metricRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			keepMetrics = append(keepMetrics, metricRegex)
+		}
+
+		keepMetricLabelValues := make(map[*regexp.Regexp]*regexp.Regexp)
+		for _, v := range append(cfg.KeepMetricsWithLabelValue, v.KeepMetricsWithLabelValue...) {
+			labelRe, err := regexp.Compile(v.LabelRegex)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			valueRe, err := regexp.Compile(v.ValueRegex)
+			if err != nil {
+				logger.Fatalf("invalid label regex: %s", err)
+			}
+
+			keepMetricLabelValues[labelRe] = valueRe
+		}
+
+		var defaultDropMetrics bool
+		if cfg.DefaultDropMetrics != nil {
+			defaultDropMetrics = *cfg.DefaultDropMetrics
+		}
+
+		if v.DefaultDropMetrics != nil {
+			defaultDropMetrics = *v.DefaultDropMetrics
+		}
+
 		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
-			Path:        v.Path,
-			AddLabels:   addLabels,
-			DropMetrics: dropMetrics,
-			DropLabels:  dropLabels,
+			Path:                   v.Path,
+			DefaultDropMetrics:     defaultDropMetrics,
+			AddLabels:              addLabels,
+			DropMetrics:            dropMetrics,
+			DropLabels:             dropLabels,
+			KeepMetrics:            keepMetrics,
+			KeepMetricsLabelValues: keepMetricLabelValues,
 		})
 	}
 
