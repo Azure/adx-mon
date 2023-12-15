@@ -24,6 +24,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/ring"
 	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/zstd"
+	gbp "github.com/libp2p/go-buffer-pool"
 )
 
 const (
@@ -49,7 +50,7 @@ var (
 	})
 
 	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
-		return bufio.NewWriterSize(nil, DefaultIOBufSize)
+		return bufio.NewWriterSize(nil, 4*1024)
 	})
 
 	ErrSegmentClosed = errors.New("segment closed")
@@ -70,7 +71,10 @@ func init() {
 func SetEncoderPoolSize(sz int) {
 	encoders = make([]*zstd.Encoder, sz)
 	for i := 0; i < len(encoders); i++ {
-		encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		encoder, err := zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithLowerEncoderMem(true),
+			zstd.WithWindowSize(64*1024))
 		if err != nil {
 			panic(err)
 		}
@@ -167,7 +171,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 
 	cw := pkgfile.NewCountingWriter(fw)
 
-	bf := bwPool.Get(0).(*bufio.Writer)
+	bf := bwPool.Get(DefaultIOBufSize).(*bufio.Writer)
 	bf.Reset(cw)
 
 	f := &segment{
@@ -182,7 +186,7 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		closing:  make(chan struct{}),
 		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
 		encoder:  encoders[rand.Intn(len(encoders))],
-		appendCh: make(chan ring.Entry, DefaultRingSize),
+		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
 	}
 
@@ -222,7 +226,7 @@ func Open(path string) (Segment, error) {
 	cw := pkgfile.NewCountingWriter(fd)
 	cw.SetWritten(stat.Size())
 
-	bf := bufio.NewWriterSize(fd, DefaultIOBufSize)
+	bf := bwPool.Get(DefaultIOBufSize).(*bufio.Writer)
 	bf.Reset(cw)
 
 	f := &segment{
@@ -237,7 +241,7 @@ func Open(path string) (Segment, error) {
 		closing:  make(chan struct{}),
 		ringBuf:  ring.NewBuffer(DefaultRingSize),
 		encoder:  encoders[rand.Intn(len(encoders))],
-		appendCh: make(chan ring.Entry, DefaultRingSize),
+		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
 	}
 
@@ -374,10 +378,10 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 	default:
 	}
 
-	if cap(entry.Value) < len(buf) {
-		entry.Value = make([]byte, 0, len(buf))
-	}
-	entry.Value = append(entry.Value[:0], buf...)
+	b := gbp.Get(len(buf))
+	defer gbp.Put(b)
+
+	entry.Value = append(b[:0], buf...)
 
 	s.ringBuf.Enqueue(entry)
 
