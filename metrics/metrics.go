@@ -93,6 +93,13 @@ var (
 		Help:      "Counter of the number of logs dropped due to ingestor errors",
 	}, []string{})
 
+	SamplesUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "samples_uploaded_total",
+		Help:      "Counter of the number of samples uploaded to Kusto",
+	}, []string{"database", "table", "type"})
+
 	// Alerting metrics
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,

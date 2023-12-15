@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-func NewSegmentReader(path string) (io.ReadCloser, error) {
+func NewSegmentReader(path string) (*SegmentReader, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -15,17 +15,17 @@ func NewSegmentReader(path string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &segmentReader{f: f, iter: iter}, nil
+	return &SegmentReader{f: f, iter: iter}, nil
 }
 
-type segmentReader struct {
+type SegmentReader struct {
 	f    *os.File
 	iter Iterator
 
 	buf []byte
 }
 
-func (s *segmentReader) Read(p []byte) (n int, err error) {
+func (s *SegmentReader) Read(p []byte) (n int, err error) {
 	if len(s.buf) > 0 {
 		n := copy(p, s.buf)
 		s.buf = s.buf[n:]
@@ -47,6 +47,10 @@ func (s *segmentReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-func (s *segmentReader) Close() error {
+func (s *SegmentReader) Close() error {
 	return s.f.Close()
+}
+
+func (s *SegmentReader) Metadata() (SampleType, uint16) {
+	return s.iter.Metadata()
 }

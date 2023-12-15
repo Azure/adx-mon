@@ -29,9 +29,13 @@ type segmentIterator struct {
 	// value is the current value that is returned for the iterator.
 	value []byte
 
-	// lenCrcBuf is a temp buffer to re-use for extracting the 8 byte (4 len, 4 crc) values
+	// lenCrcBuf is a temp buffer to re-use for extracting the 12 byte (4 len, 4 crc, 2 sample type, 2 sample count) values
 	// when iterating.
-	lenCrcBuf [8]byte
+	lenCrcBuf [12]byte
+
+	// sample metadata
+	sampleType  uint16
+	sampleCount uint16
 
 	// decodeBuf is a temp buffer to re-use for decoding the block.
 	decodeBuf []byte
@@ -55,12 +59,12 @@ func (b *segmentIterator) Next() (bool, error) {
 		return b.nextValue()
 	}
 
-	// Read the block length and CRC
-	n, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
+	// Read the block length, CRC, sample type, and sample count
+	n, err := io.ReadFull(b.br, b.lenCrcBuf[:12])
 	if err == io.EOF {
 		return false, err
-	} else if err != nil || n != 8 {
-		return false, fmt.Errorf("short read: expected 8, got %d", n)
+	} else if err != nil || n != 12 {
+		return false, fmt.Errorf("short read: expected 12, got %d", n)
 	}
 
 	// Extract the block length and expand the read buffer if it is too small.
@@ -71,6 +75,10 @@ func (b *segmentIterator) Next() (bool, error) {
 
 	// Extract the CRC value for the block
 	crc := binary.BigEndian.Uint32(b.lenCrcBuf[4:8])
+
+	// Extract sample metadata
+	b.sampleType = binary.BigEndian.Uint16(b.lenCrcBuf[8:10])
+	b.sampleCount = binary.BigEndian.Uint16(b.lenCrcBuf[10:12])
 
 	// Read the expected block length bytes
 	n, err = io.ReadFull(b.br, b.buf[:blockLen])
@@ -108,19 +116,21 @@ func (b *segmentIterator) nextValue() (bool, error) {
 	}
 	blockLen := binary.BigEndian.Uint32(b.buf[b.n : b.n+4])
 	crc := binary.BigEndian.Uint32(b.buf[b.n+4 : b.n+8])
+	b.sampleType = binary.BigEndian.Uint16(b.buf[b.n+8 : b.n+10])
+	b.sampleCount = binary.BigEndian.Uint16(b.buf[b.n+10 : b.n+12])
 
-	if int(blockLen) > len(b.buf[b.n+8:]) {
-		return false, fmt.Errorf("short block read: expected %d, got %d", blockLen, len(b.buf[b.n+8:]))
+	if int(blockLen) > len(b.buf[b.n+12:]) {
+		return false, fmt.Errorf("short block read: expected %d, got %d", blockLen, len(b.buf[b.n+12:]))
 	}
 
-	value := b.buf[b.n+8 : b.n+8+int(blockLen)]
+	value := b.buf[b.n+12 : b.n+12+int(blockLen)]
 
 	if crc32.ChecksumIEEE(value) != crc {
 		return false, fmt.Errorf("block checksum verification failed")
 	}
 
 	b.value = value
-	b.n += 8 + int(blockLen)
+	b.n += 12 + int(blockLen)
 
 	return true, nil
 }
@@ -139,12 +149,12 @@ func (b *segmentIterator) Close() error {
 func (b *segmentIterator) Verify() (int, error) {
 	var blocks int
 	for {
-		// Read the block length and CRC
-		n, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
+		// Read the block length, CRC, sample type and sample count
+		n, err := io.ReadFull(b.br, b.lenCrcBuf[:12])
 		if err == io.EOF {
 			return blocks, nil
-		} else if err != nil || n != 8 {
-			return 0, fmt.Errorf("short read: expected 8, got %d", n)
+		} else if err != nil || n != 12 {
+			return 0, fmt.Errorf("short read: expected 12, got %d", n)
 		}
 
 		// Extract the block length and expand the read buffer if it is too small.
@@ -155,6 +165,10 @@ func (b *segmentIterator) Verify() (int, error) {
 
 		// Extract the CRC value for the block
 		crc := binary.BigEndian.Uint32(b.lenCrcBuf[4:8])
+
+		// Extract sample metadata
+		b.sampleType = binary.BigEndian.Uint16(b.lenCrcBuf[8:10])
+		b.sampleCount = binary.BigEndian.Uint16(b.lenCrcBuf[10:12])
 
 		// Read the expected block length bytes
 		n, err = io.ReadFull(b.br, b.buf[:blockLen])
@@ -173,4 +187,8 @@ func (b *segmentIterator) Verify() (int, error) {
 		}
 		blocks++
 	}
+}
+
+func (b *segmentIterator) Metadata() (SampleType, uint16) {
+	return SampleType(b.sampleType), b.sampleCount
 }
