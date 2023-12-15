@@ -128,10 +128,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := writeReqPool.Get(2500).(prompb.WriteRequest)
-	defer writeReqPool.Put(req)
-	req.Reset()
-
+	// Note: this cause allocations, but holding onto them in a pool causes a lot of memory to be used over time.
+	var req prompb.WriteRequest
 	if err := req.Unmarshal(reqBuf); err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)
