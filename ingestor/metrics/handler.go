@@ -14,18 +14,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/golang/snappy"
-	pool2 "github.com/libp2p/go-buffer-pool"
+	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
-)
-
-var (
-	bytesPool = pool.NewBytes(1000)
-
-	writeReqPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return prompb.WriteRequest{
-			Timeseries: make([]prompb.TimeSeries, 0, sz),
-		}
-	})
 )
 
 type SeriesCounter interface {
@@ -105,7 +95,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBuf := pool.BytesBufferPool.Get(64 * 1024).(*pool2.Buffer)
+	bodyBuf := pool.BytesBufferPool.Get(64 * 1024).(*gbp.Buffer)
 	defer pool.BytesBufferPool.Put(bodyBuf)
 	bodyBuf.Reset()
 
@@ -117,8 +107,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	compressed := bodyBuf.Bytes()
-	buf := bytesPool.Get(64 * 1024)
-	defer bytesPool.Put(buf)
+	buf := gbp.Get(64 * 1024)
+	defer gbp.Put(buf)
 	buf = buf[:0]
 
 	reqBuf, err := snappy.Decode(buf, compressed)
