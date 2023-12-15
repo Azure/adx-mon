@@ -5,5 +5,5 @@ import (
 )
 
 var BytesBufferPool = NewGeneric(1000, func(sz int) interface{} {
-	return &gbp.Buffer{Pool: sharedPool}
+	return &gbp.Buffer{Pool: gbp.GlobalPool}
 })
