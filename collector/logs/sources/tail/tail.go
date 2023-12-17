@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -47,8 +46,6 @@ type TailSource struct {
 	closeFn context.CancelFunc
 	group   *errgroup.Group
 	tailers []*tail.Tail
-
-	ackMtx sync.Mutex
 }
 
 func NewTailSource(config TailSourceConfig) (*TailSource, error) {
@@ -78,21 +75,21 @@ func (s *TailSource) Open(ctx context.Context) error {
 		}
 	}
 
-	batchQueue := make(chan *types.Log, 512)
-	batchConfig := types.BatchConfig{
-		MaxBatchSize: 1000,
-		MaxBatchWait: 1 * time.Second,
-		InputQueue:   batchQueue,
-		OutputQueue:  s.outputQueue,
-		AckGenerator: ackGenerator,
-	}
-	group.Go(func() error {
-		return types.BatchLogs(ctx, batchConfig)
-	})
-
 	s.tailers = make([]*tail.Tail, 0, len(s.staticTargets))
 	for _, target := range s.staticTargets {
 		target := target
+
+		batchQueue := make(chan *types.Log, 512)
+		batchConfig := types.BatchConfig{
+			MaxBatchSize: 1000,
+			MaxBatchWait: 1 * time.Second,
+			InputQueue:   batchQueue,
+			OutputQueue:  s.outputQueue,
+			AckGenerator: ackGenerator,
+		}
+		group.Go(func() error {
+			return types.BatchLogs(ctx, batchConfig)
+		})
 
 		tailConfig := tail.Config{Follow: true, ReOpen: true}
 		existingCursorPath := cursorPath(s.cursorDirectory, target.FilePath)
@@ -186,9 +183,6 @@ func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, ou
 }
 
 func (s *TailSource) ackBatch(cursor_file_name, cursor_file_id string, cursor_position int64) {
-	s.ackMtx.Lock()
-	defer s.ackMtx.Unlock()
-	//cursorPath := cursorPath(s.cursorDirectory, log.Attributes[cursor_file_name].(string))
 	cursorPath := cursorPath(s.cursorDirectory, cursor_file_name)
 
 	err := writeCursor(cursorPath, cursor_file_id, cursor_position)

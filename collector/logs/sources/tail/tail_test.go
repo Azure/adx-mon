@@ -17,8 +17,10 @@ func TestTailSource(t *testing.T) {
 	numLogs := 1000
 
 	testDir := t.TempDir()
+	// consistent date so we know how many bytes are generated in the file.
+	generatedLogStartTime := time.Unix(0, 0)
 	testFile := filepath.Join(testDir, "test.log")
-	generateLogs(t, testFile, numLogs, time.Now(), time.Millisecond*10)
+	generateLogs(t, testFile, numLogs, generatedLogStartTime, time.Millisecond*10)
 
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets: []FileTailTarget{
@@ -41,6 +43,56 @@ func TestTailSource(t *testing.T) {
 	service.Open(context)
 	<-sink.DoneChan()
 	service.Close()
+
+	_, testOffset, err := readCursor(cursorPath(testDir, testFile))
+	require.NoError(t, err)
+	require.Equal(t, int64(74770), testOffset)
+}
+
+func TestTailSourceMultipleSources(t *testing.T) {
+	numLogs := 1000
+
+	testDir := t.TempDir()
+	// consistent date so we know how many bytes are generated in the file.
+	generatedLogStartTime := time.Unix(0, 0)
+	testFileOne := filepath.Join(testDir, "test.log")
+	generateLogs(t, testFileOne, numLogs, generatedLogStartTime, time.Millisecond*10)
+	testFileTwo := filepath.Join(testDir, "test2.log")
+	generateLogs(t, testFileTwo, numLogs, generatedLogStartTime, time.Millisecond*10)
+
+	tailSource, err := NewTailSource(TailSourceConfig{
+		StaticTargets: []FileTailTarget{
+			{
+				FilePath: testFileOne,
+				LogType:  LogTypeDocker,
+			},
+			{
+				FilePath: testFileTwo,
+				LogType:  LogTypeDocker,
+			},
+		},
+		CursorDirectory: testDir,
+	})
+	require.NoError(t, err)
+	// Expect 2x numLogs, for both files
+	sink := sinks.NewCountingSink(int64(numLogs * 2))
+
+	service := &logs.Service{
+		Source: tailSource,
+		Sink:   sink,
+	}
+	context := context.Background()
+
+	service.Open(context)
+	<-sink.DoneChan()
+	service.Close()
+
+	_, testOffsetOne, err := readCursor(cursorPath(testDir, testFileOne))
+	require.NoError(t, err)
+	require.Equal(t, int64(74770), testOffsetOne)
+	_, testOffsetTwo, err := readCursor(cursorPath(testDir, testFileTwo))
+	require.NoError(t, err)
+	require.Equal(t, testOffsetOne, testOffsetTwo)
 }
 
 func BenchmarkTailSource(b *testing.B) {
@@ -63,6 +115,46 @@ func BenchmarkTailSource(b *testing.B) {
 		})
 		require.NoError(b, err)
 		sink := sinks.NewCountingSink(int64(numLogs))
+
+		service := &logs.Service{
+			Source: tailSource,
+			Sink:   sink,
+		}
+		context := context.Background()
+
+		service.Open(context)
+		<-sink.DoneChan()
+		service.Close()
+	}
+}
+
+func BenchmarkTailSourceMultipleSources(b *testing.B) {
+	numLogs := 1000
+
+	testDir := b.TempDir()
+	testFileOne := filepath.Join(testDir, "test.log")
+	generateLogs(b, testFileOne, numLogs, time.Now(), time.Millisecond*10)
+	testFileTwo := filepath.Join(testDir, "test2.log")
+	generateLogs(b, testFileTwo, numLogs, time.Now(), time.Millisecond*10)
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		tailSource, err := NewTailSource(TailSourceConfig{
+			StaticTargets: []FileTailTarget{
+				{
+					FilePath: testFileOne,
+					LogType:  LogTypeDocker,
+				},
+				{
+					FilePath: testFileTwo,
+					LogType:  LogTypeDocker,
+				},
+			},
+			CursorDirectory: b.TempDir(),
+		})
+		require.NoError(b, err)
+		// Expect 2x numLogs, for both files
+		sink := sinks.NewCountingSink(int64(numLogs * 2))
 
 		service := &logs.Service{
 			Source: tailSource,
