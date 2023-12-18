@@ -10,6 +10,7 @@ import (
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,6 +23,7 @@ func TestTailSource(t *testing.T) {
 	testFile := filepath.Join(testDir, "test.log")
 	generateLogs(t, testFile, numLogs, generatedLogStartTime, time.Millisecond*10)
 
+	sink := sinks.NewCountingSink(int64(numLogs))
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets: []FileTailTarget{
 			{
@@ -30,9 +32,9 @@ func TestTailSource(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
+		WorkerCreator:   types.WorkerCreator(nil, sink),
 	})
 	require.NoError(t, err)
-	sink := sinks.NewCountingSink(int64(numLogs))
 
 	service := &logs.Service{
 		Source: tailSource,
@@ -60,6 +62,8 @@ func TestTailSourceMultipleSources(t *testing.T) {
 	testFileTwo := filepath.Join(testDir, "test2.log")
 	generateLogs(t, testFileTwo, numLogs, generatedLogStartTime, time.Millisecond*10)
 
+	// Expect 2x numLogs, for both files
+	sink := sinks.NewCountingSink(int64(numLogs * 2))
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets: []FileTailTarget{
 			{
@@ -72,10 +76,9 @@ func TestTailSourceMultipleSources(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
+		WorkerCreator:   types.WorkerCreator(nil, sink),
 	})
 	require.NoError(t, err)
-	// Expect 2x numLogs, for both files
-	sink := sinks.NewCountingSink(int64(numLogs * 2))
 
 	service := &logs.Service{
 		Source: tailSource,
@@ -104,6 +107,7 @@ func BenchmarkTailSource(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
+		sink := sinks.NewCountingSink(int64(numLogs))
 		tailSource, err := NewTailSource(TailSourceConfig{
 			StaticTargets: []FileTailTarget{
 				{
@@ -112,9 +116,9 @@ func BenchmarkTailSource(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
+			WorkerCreator:   types.WorkerCreator(nil, sink),
 		})
 		require.NoError(b, err)
-		sink := sinks.NewCountingSink(int64(numLogs))
 
 		service := &logs.Service{
 			Source: tailSource,
@@ -139,6 +143,8 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
+		// Expect 2x numLogs, for both files
+		sink := sinks.NewCountingSink(int64(numLogs * 2))
 		tailSource, err := NewTailSource(TailSourceConfig{
 			StaticTargets: []FileTailTarget{
 				{
@@ -151,10 +157,9 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
+			WorkerCreator:   types.WorkerCreator(nil, sink),
 		})
 		require.NoError(b, err)
-		// Expect 2x numLogs, for both files
-		sink := sinks.NewCountingSink(int64(numLogs * 2))
 
 		service := &logs.Service{
 			Source: tailSource,

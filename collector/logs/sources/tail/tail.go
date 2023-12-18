@@ -36,12 +36,13 @@ type FileTailTarget struct {
 type TailSourceConfig struct {
 	StaticTargets   []FileTailTarget
 	CursorDirectory string
+	WorkerCreator   types.WorkerCreatorFunc
 }
 
 type TailSource struct {
 	staticTargets   []FileTailTarget
 	cursorDirectory string
-	outputQueue     chan *types.LogBatch
+	workerCreator   types.WorkerCreatorFunc
 
 	closeFn context.CancelFunc
 	group   *errgroup.Group
@@ -51,8 +52,8 @@ type TailSource struct {
 func NewTailSource(config TailSourceConfig) (*TailSource, error) {
 	return &TailSource{
 		staticTargets:   config.StaticTargets,
-		outputQueue:     make(chan *types.LogBatch, 1),
 		cursorDirectory: config.CursorDirectory,
+		workerCreator:   config.WorkerCreator,
 	}, nil
 }
 
@@ -80,16 +81,20 @@ func (s *TailSource) Open(ctx context.Context) error {
 		target := target
 
 		batchQueue := make(chan *types.Log, 512)
+		outputQueue := make(chan *types.LogBatch, 1)
 		batchConfig := types.BatchConfig{
 			MaxBatchSize: 1000,
 			MaxBatchWait: 1 * time.Second,
 			InputQueue:   batchQueue,
-			OutputQueue:  s.outputQueue,
+			OutputQueue:  outputQueue,
 			AckGenerator: ackGenerator,
 		}
 		group.Go(func() error {
 			return types.BatchLogs(ctx, batchConfig)
 		})
+
+		worker := s.workerCreator(s.Name(), outputQueue)
+		group.Go(worker.Run)
 
 		tailConfig := tail.Config{Follow: true, ReOpen: true}
 		existingCursorPath := cursorPath(s.cursorDirectory, target.FilePath)
@@ -133,10 +138,6 @@ func (s *TailSource) Close() error {
 
 func (s *TailSource) Name() string {
 	return "tailsource"
-}
-
-func (s *TailSource) Queue() <-chan *types.LogBatch {
-	return s.outputQueue
 }
 
 func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, outputQueue chan<- *types.Log) error {
