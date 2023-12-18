@@ -32,7 +32,7 @@ const (
 	DefaultIOBufSize = 128 * 1024
 
 	// DefaultRingSize is the default size of the ring buffer.
-	DefaultRingSize = 1024
+	DefaultRingSize = 64
 )
 
 var (
@@ -73,6 +73,7 @@ func SetEncoderPoolSize(sz int) {
 	for i := 0; i < len(encoders); i++ {
 		encoder, err := zstd.NewWriter(nil,
 			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
 			zstd.WithLowerEncoderMem(true),
 			zstd.WithWindowSize(64*1024))
 		if err != nil {
@@ -86,7 +87,10 @@ func SetEncoderPoolSize(sz int) {
 func SetDecoderPoolSize(sz int) {
 	decoders = make([]*zstd.Decoder, sz)
 	for i := 0; i < len(decoders); i++ {
-		decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+		decoder, err := zstd.NewReader(nil,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderLowmem(true),
+		)
 		if err != nil {
 			panic(err)
 		}

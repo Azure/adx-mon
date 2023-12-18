@@ -185,8 +185,8 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	buf := bytesBufPool.Get(8 * 1024).(*bytes.Buffer)
-	defer bytesBufPool.Put(buf)
+	buf := pool.BytesBufferPool.Get(512 * 1024).(*gbp.Buffer)
+	defer pool.BytesBufferPool.Put(buf)
 	buf.Reset()
 
 	n, err := io.Copy(buf, body)
