@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/Azure/adx-mon/pkg/pool"
+	gbp "github.com/libp2p/go-buffer-pool"
 )
 
 type TLV struct {
@@ -17,7 +17,6 @@ type TLV struct {
 type Tag uint16
 
 var (
-	buf    = pool.NewBytes(1024)
 	marker = Tag(0xFEDA)
 )
 
@@ -58,8 +57,8 @@ func Encode(tlvs ...*TLV) []byte {
 	// T is a magic number 0x1
 	// L is the number of TLVs
 	// V is the size in bytes of all the TLVs
-	v := buf.Get(sizeOfHeader)
-	defer buf.Put(v)
+	v := gbp.Get(sizeOfHeader)
+	defer gbp.Put(v)
 	binary.BigEndian.PutUint16(v, uint16(marker))
 	binary.BigEndian.PutUint32(v[binary.MaxVarintLen16:], uint32(b.Len()))                         // L
 	binary.BigEndian.PutUint32(v[binary.MaxVarintLen16+binary.MaxVarintLen32:], uint32(len(tlvs))) // V
@@ -116,7 +115,7 @@ func NewReader(r io.Reader, opts ...ReaderOption) *Reader {
 	for _, opt := range opts {
 		opt(tlvr)
 	}
-	tlvr.buf = buf.Get(tlvr.bufferSize)
+	tlvr.buf = gbp.Get(tlvr.bufferSize)
 	return tlvr
 }
 
@@ -128,7 +127,7 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 	// Upon return, if we're at EOF, we'll return our buffer to the pool.
 	defer func() {
 		if err == io.EOF {
-			buf.Put(r.buf)
+			gbp.Put(r.buf)
 		}
 	}()
 

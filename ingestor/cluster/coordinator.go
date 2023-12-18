@@ -10,7 +10,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -19,13 +18,6 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	v12 "k8s.io/client-go/listers/core/v1"
-)
-
-var (
-	tsPool = pool.NewGeneric(1024, func(sz int) interface{} {
-		return &prompb.TimeSeries{}
-	})
-	bytesPool = pool.NewBytes(1024)
 )
 
 type TimeSeriesWriter func(ctx context.Context, ts []prompb.TimeSeries) error

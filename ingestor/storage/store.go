@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
+	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -25,7 +26,6 @@ var (
 	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
-	bytesPool = pool.NewBytes(1000)
 
 	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return bytes.NewBuffer(make([]byte, 0, sz))
@@ -99,8 +99,8 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries
 	defer csvWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedColumns)
 
-	b := bytesPool.Get(256)
-	defer bytesPool.Put(b)
+	b := gbp.Get(256)
+	defer gbp.Put(b)
 
 	for _, v := range ts {
 		key, err := SegmentKey(b[:0], v.Labels)
@@ -131,8 +131,8 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
-	key := bytesPool.Get(256)
-	defer bytesPool.Put(key)
+	key := gbp.Get(256)
+	defer gbp.Put(key)
 
 	if logger.IsDebug() {
 		logger.Debugf("Store received %d logs for %s.%s", len(logs.Logs), database, table)
@@ -175,8 +175,8 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	key := bytesPool.Get(256)
-	defer bytesPool.Put(key)
+	key := gbp.Get(256)
+	defer gbp.Put(key)
 
 	key = fmt.Appendf(key[:0], "%s_%s", db, table)
 
@@ -185,8 +185,8 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	buf := bytesBufPool.Get(8 * 1024).(*bytes.Buffer)
-	defer bytesBufPool.Put(buf)
+	buf := pool.BytesBufferPool.Get(512 * 1024).(*gbp.Buffer)
+	defer pool.BytesBufferPool.Put(buf)
 	buf.Reset()
 
 	n, err := io.Copy(buf, body)

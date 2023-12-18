@@ -14,13 +14,11 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/wal"
 	connect_go "github.com/bufbuild/connect-go"
+	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 )
-
-var bytesPool = pool.NewBytes(1024)
 
 type logsServiceHandler struct {
 	w         cluster.OTLPLogsWriter
@@ -126,8 +124,8 @@ var sep = []byte("_")
 // specification as applying to all the contained logs.
 // See https://opentelemetry.io/docs/specs/otel/schemas/#otlp-support
 func groupByKustoTable(req *v1.ExportLogsServiceRequest) map[string]*otlp.Logs {
-	b := bytesPool.Get(1024)
-	defer bytesPool.Put(b)
+	b := gbp.Get(1024)
+	defer gbp.Put(b)
 
 	var (
 		d, t string
