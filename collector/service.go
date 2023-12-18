@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
@@ -276,9 +277,11 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		if err := os.MkdirAll(cursorDirectory, 0755); err != nil {
 			return nil, fmt.Errorf("log-cursors mkdir: %w", err)
 		}
+		sink := sinks.NewStdoutSink()
 		source, err := tail.NewTailSource(tail.TailSourceConfig{
 			StaticTargets:   targets,
 			CursorDirectory: cursorDirectory,
+			WorkerCreator:   types.WorkerCreator(nil, sink),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create tail source: %w", err)
@@ -286,7 +289,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 		logsSvc := &logs.Service{
 			Source: source,
-			Sink:   sinks.NewStdoutSink(),
+			Sink:   sink,
 		}
 		svc.logsSvc = logsSvc
 	}

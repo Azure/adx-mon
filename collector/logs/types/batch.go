@@ -25,6 +25,7 @@ func BatchLogs(ctx context.Context, config BatchConfig) error {
 			if len(currentBatch.Logs) != 0 {
 				flush(config, currentBatch)
 			}
+			close(config.OutputQueue)
 			return nil
 		case <-ticker.C:
 			if len(currentBatch.Logs) != 0 {
