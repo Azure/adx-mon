@@ -104,6 +104,10 @@ func TestFromPath(t *testing.T) {
 	err = os.WriteFile(multiTestfile, []byte(multiRule), 0644)
 	require.NoError(t, err)
 
+	owners := filepath.Join(validFileDirectory, "owners.txt")
+	err = os.WriteFile(owners, []byte("eljefe"), 0644)
+	require.NoError(t, err)
+
 	invalidFileDirectory := t.TempDir()
 	invalidTestfile := filepath.Join(invalidFileDirectory, "invalid.yaml")
 	err = os.WriteFile(invalidTestfile, []byte(invalidRuleExample), 0644)

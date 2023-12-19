@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
@@ -17,6 +18,9 @@ type fileStore struct {
 	rules []*Rule
 }
 
+// should we read this out of a .adxmonignore file?
+var ignores = []string{"owners.txt"}
+
 func FromPath(path, region string) (*fileStore, error) {
 	s := &fileStore{}
 	// walk files in directory
@@ -27,6 +31,10 @@ func FromPath(path, region string) (*fileStore, error) {
 		if info.IsDir() {
 			return nil
 		}
+		if slices.Contains(ignores, info.Name()) {
+			return nil
+		}
+
 		f, err := os.Open(path)
 		if err != nil {
 			return fmt.Errorf("failed to open file '%s': %w", path, err)
