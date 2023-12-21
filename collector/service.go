@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
-	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
@@ -281,7 +281,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		source, err := tail.NewTailSource(tail.TailSourceConfig{
 			StaticTargets:   targets,
 			CursorDirectory: cursorDirectory,
-			WorkerCreator:   types.WorkerCreator(nil, sink),
+			WorkerCreator:   engine.WorkerCreator(nil, sink),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create tail source: %w", err)
