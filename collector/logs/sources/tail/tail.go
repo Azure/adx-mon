@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/tenebris-tech/tail"
@@ -36,13 +37,13 @@ type FileTailTarget struct {
 type TailSourceConfig struct {
 	StaticTargets   []FileTailTarget
 	CursorDirectory string
-	WorkerCreator   types.WorkerCreatorFunc
+	WorkerCreator   engine.WorkerCreatorFunc
 }
 
 type TailSource struct {
 	staticTargets   []FileTailTarget
 	cursorDirectory string
-	workerCreator   types.WorkerCreatorFunc
+	workerCreator   engine.WorkerCreatorFunc
 
 	closeFn context.CancelFunc
 	group   *errgroup.Group
@@ -82,7 +83,7 @@ func (s *TailSource) Open(ctx context.Context) error {
 
 		batchQueue := make(chan *types.Log, 512)
 		outputQueue := make(chan *types.LogBatch, 1)
-		batchConfig := types.BatchConfig{
+		batchConfig := engine.BatchConfig{
 			MaxBatchSize: 1000,
 			MaxBatchWait: 1 * time.Second,
 			InputQueue:   batchQueue,
@@ -90,7 +91,7 @@ func (s *TailSource) Open(ctx context.Context) error {
 			AckGenerator: ackGenerator,
 		}
 		group.Go(func() error {
-			return types.BatchLogs(ctx, batchConfig)
+			return engine.BatchLogs(ctx, batchConfig)
 		})
 
 		worker := s.workerCreator(s.Name(), outputQueue)

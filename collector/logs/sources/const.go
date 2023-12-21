@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"golang.org/x/sync/errgroup"
 )
@@ -15,14 +16,14 @@ type ConstSource struct {
 
 	outputQueue     chan *types.LogBatch
 	internalQueue   chan *types.Log
-	workerGenerator types.WorkerCreatorFunc
+	workerGenerator engine.WorkerCreatorFunc
 	closeFn         context.CancelFunc
 
 	errGroup *errgroup.Group
 }
 
 // TODO more variety of source values
-func NewConstSource(value string, flushDuration time.Duration, maxBatchSize int, workerGenerator types.WorkerCreatorFunc) *ConstSource {
+func NewConstSource(value string, flushDuration time.Duration, maxBatchSize int, workerGenerator engine.WorkerCreatorFunc) *ConstSource {
 	return &ConstSource{
 		Value:           value,
 		FlushDuration:   flushDuration,
@@ -42,7 +43,7 @@ func (s *ConstSource) Open(ctx context.Context) error {
 	group.Go(func() error {
 		return s.generate(groupCtx)
 	})
-	config := types.BatchConfig{
+	config := engine.BatchConfig{
 		MaxBatchSize: s.MaxBatchSize,
 		MaxBatchWait: s.FlushDuration,
 		InputQueue:   s.internalQueue,
@@ -53,7 +54,7 @@ func (s *ConstSource) Open(ctx context.Context) error {
 		},
 	}
 	group.Go(func() error {
-		return types.BatchLogs(groupCtx, config)
+		return engine.BatchLogs(groupCtx, config)
 	})
 
 	worker := s.workerGenerator("ConstSource", s.outputQueue)

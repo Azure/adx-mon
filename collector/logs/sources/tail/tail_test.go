@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
-	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +32,7 @@ func TestTailSource(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
-		WorkerCreator:   types.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, sink),
 	})
 	require.NoError(t, err)
 
@@ -76,7 +76,7 @@ func TestTailSourceMultipleSources(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
-		WorkerCreator:   types.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, sink),
 	})
 	require.NoError(t, err)
 
@@ -116,7 +116,7 @@ func BenchmarkTailSource(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
-			WorkerCreator:   types.WorkerCreator(nil, sink),
+			WorkerCreator:   engine.WorkerCreator(nil, sink),
 		})
 		require.NoError(b, err)
 
@@ -157,7 +157,7 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
-			WorkerCreator:   types.WorkerCreator(nil, sink),
+			WorkerCreator:   engine.WorkerCreator(nil, sink),
 		})
 		require.NoError(b, err)
 

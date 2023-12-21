@@ -1,22 +1,23 @@
-package types
+package engine
 
 import (
 	"context"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
 )
 
 type worker struct {
 	SourceName string
-	Input      <-chan *LogBatch
-	Transforms []Transformer
-	Sink       Sink
+	Input      <-chan *types.LogBatch
+	Transforms []types.Transformer
+	Sink       types.Sink
 }
 
-type WorkerCreatorFunc func(string, <-chan *LogBatch) *worker
+type WorkerCreatorFunc func(string, <-chan *types.LogBatch) *worker
 
-func WorkerCreator(transforms []Transformer, sink Sink) func(string, <-chan *LogBatch) *worker {
-	return func(sourceName string, input <-chan *LogBatch) *worker {
+func WorkerCreator(transforms []types.Transformer, sink types.Sink) func(string, <-chan *types.LogBatch) *worker {
+	return func(sourceName string, input <-chan *types.LogBatch) *worker {
 		return &worker{
 			SourceName: sourceName,
 			Input:      input,
@@ -33,7 +34,7 @@ func (w *worker) Run() error {
 	return nil
 }
 
-func (w *worker) processBatch(ctx context.Context, batch *LogBatch) {
+func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 	var err error
 	for _, transform := range w.Transforms {
 		batch, err = transform.Transform(ctx, batch)
@@ -57,9 +58,9 @@ func (w *worker) processBatch(ctx context.Context, batch *LogBatch) {
 	disposeBatch(batch)
 }
 
-func disposeBatch(batch *LogBatch) {
+func disposeBatch(batch *types.LogBatch) {
 	for _, log := range batch.Logs {
-		LogPool.Put(log)
+		types.LogPool.Put(log)
 	}
-	LogBatchPool.Put(batch)
+	types.LogBatchPool.Put(batch)
 }

@@ -2,7 +2,7 @@ package types
 
 import "context"
 
-// Source is a component that produces *LogBatch instances into the channel provided by Queue.
+// Source is a component that produces *LogBatch instances.
 type Source interface {
 	Open(context.Context) error
 	Close() error
