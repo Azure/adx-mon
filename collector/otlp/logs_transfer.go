@@ -1,7 +1,6 @@
 package otlp
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,20 +12,12 @@ import (
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/pool"
+	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
-)
-
-var (
-	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
-	})
-	bufs = pool.NewBytes(1024)
 )
 
 type LogsServiceOpts struct {
@@ -83,8 +74,8 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 	case "application/x-protobuf":
 
 		// Consume the request body and marshal into a protobuf
-		b := bufs.Get(int(r.ContentLength))
-		defer bufs.Put(b)
+		b := gbp.Get(int(r.ContentLength))
+		defer gbp.Put(b)
 
 		n, err := io.ReadFull(r.Body, b)
 		if err != nil {

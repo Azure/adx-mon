@@ -252,6 +252,9 @@ github.com/klauspost/pgzip
 ## explicit; go 1.11
 github.com/kylelemons/godebug/diff
 github.com/kylelemons/godebug/pretty
+# github.com/libp2p/go-buffer-pool v0.1.0
+## explicit; go 1.17
+github.com/libp2p/go-buffer-pool
 # github.com/lmittmann/tint v1.0.3
 ## explicit; go 1.21
 github.com/lmittmann/tint
@@ -296,6 +299,7 @@ github.com/pkg/errors
 github.com/pmezard/go-difflib/difflib
 # github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 ## explicit
+github.com/pquerna/ffjson/ffjson
 github.com/pquerna/ffjson/fflib/v1
 github.com/pquerna/ffjson/fflib/v1/internal
 # github.com/prometheus/client_golang v1.17.0
@@ -333,7 +337,7 @@ github.com/spf13/pflag
 ## explicit; go 1.20
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
-# github.com/tenebris-tech/tail v1.0.5
+# github.com/tenebris-tech/tail v1.0.5 => github.com/mkeesey/tail v1.1.0
 ## explicit; go 1.19
 github.com/tenebris-tech/tail
 github.com/tenebris-tech/tail/ratelimiter
@@ -890,4 +894,5 @@ sigs.k8s.io/structured-merge-diff/v4/value
 ## explicit; go 1.12
 sigs.k8s.io/yaml
 # github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.0.0-20230918190252-4817e5d12832
+# github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.0
 # google.golang.org/grpc => github.com/grpc/grpc-go v1.56.2
