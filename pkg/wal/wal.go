@@ -158,7 +158,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, options ...WriteOption) err
 		seg = w.segment
 		w.mu.RUnlock()
 
-		return seg.Write(ctx, buf, options...)
+		return seg.Write(ctx, buf)
 
 	}
 	w.mu.RUnlock()
@@ -166,7 +166,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, options ...WriteOption) err
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, options...)
 		if err != nil {
 			w.mu.Unlock()
 			return err
@@ -176,7 +176,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, options ...WriteOption) err
 	seg = w.segment
 	w.mu.Unlock()
 
-	return seg.Write(ctx, buf, options...)
+	return seg.Write(ctx, buf)
 }
 
 func (w *WAL) validateLimits(buf []byte) error {

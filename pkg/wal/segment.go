@@ -100,7 +100,7 @@ func SetDecoderPoolSize(sz int) {
 
 type Segment interface {
 	Append(ctx context.Context, buf []byte) error
-	Write(ctx context.Context, buf []byte, opts ...WriteOption) error
+	Write(ctx context.Context, buf []byte) error
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
@@ -160,7 +160,7 @@ type segment struct {
 	flushCh  chan chan error
 }
 
-func NewSegment(dir, prefix string) (Segment, error) {
+func NewSegment(dir, prefix string, options ...WriteOption) (Segment, error) {
 	flakeId := idgen.NextId()
 
 	createdAt, err := flakeutil.ParseFlakeID(flakeId.String())
@@ -197,6 +197,9 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
+	}
+	for _, opt := range options {
+		opt(f)
 	}
 
 	f.wg.Add(1)
@@ -369,13 +372,7 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 }
 
 // Write writes buf to the segment.
-func (s *segment) Write(ctx context.Context, buf []byte, options ...WriteOption) error {
-	s.mu.Lock()
-	for _, opt := range options {
-		opt(s)
-	}
-	s.mu.Unlock()
-
+func (s *segment) Write(ctx context.Context, buf []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -620,10 +617,8 @@ func (s *segment) blockWrite(w io.Writer, buf []byte) error {
 
 	binary.BigEndian.PutUint32(s.lenBuf[:4], uint32(len(buf)))
 	binary.BigEndian.PutUint32(s.lenBuf[4:8], crc32.ChecksumIEEE(buf))
-	s.mu.RLock()
 	binary.BigEndian.PutUint16(s.lenBuf[8:10], s.sampleType)
 	binary.BigEndian.PutUint16(s.lenBuf[10:12], s.sampleCount)
-	s.mu.RUnlock()
 	n, err := w.Write(s.lenBuf[:12])
 	if err != nil {
 		return err
