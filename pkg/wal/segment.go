@@ -620,8 +620,10 @@ func (s *segment) blockWrite(w io.Writer, buf []byte) error {
 
 	binary.BigEndian.PutUint32(s.lenBuf[:4], uint32(len(buf)))
 	binary.BigEndian.PutUint32(s.lenBuf[4:8], crc32.ChecksumIEEE(buf))
+	s.mu.RLock()
 	binary.BigEndian.PutUint16(s.lenBuf[8:10], s.sampleType)
 	binary.BigEndian.PutUint16(s.lenBuf[10:12], s.sampleCount)
+	s.mu.RUnlock()
 	n, err := w.Write(s.lenBuf[:12])
 	if err != nil {
 		return err
