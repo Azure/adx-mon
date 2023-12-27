@@ -54,7 +54,7 @@ type Config struct {
 	MaxSegmentSize       int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
 	MaxDiskUsage         int64 `toml:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
 
-	StorageDir  string `toml:"storage-dir" comment:"Storage directory for the WAL."`
+	StorageDir  string `toml:"storage-dir" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
 
 	// These are global config options that apply to all endpoints.

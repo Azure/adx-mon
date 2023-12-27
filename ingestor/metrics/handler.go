@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -15,21 +14,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/golang/snappy"
+	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
-)
-
-var (
-	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
-
-	bytesPool = pool.NewBytes(1000)
-
-	writeReqPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return prompb.WriteRequest{
-			Timeseries: make([]prompb.TimeSeries, 0, sz),
-		}
-	})
 )
 
 type SeriesCounter interface {
@@ -109,8 +95,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBuf := bytesBufPool.Get(64 * 1024).(*bytes.Buffer)
-	defer bytesBufPool.Put(bodyBuf)
+	bodyBuf := pool.BytesBufferPool.Get(512 * 1024).(*gbp.Buffer)
+	defer pool.BytesBufferPool.Put(bodyBuf)
 	bodyBuf.Reset()
 
 	_, err := io.Copy(bodyBuf, r.Body)
@@ -121,8 +107,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	compressed := bodyBuf.Bytes()
-	buf := bytesPool.Get(64 * 1024)
-	defer bytesPool.Put(buf)
+	buf := gbp.Get(512 * 1024)
+	defer gbp.Put(buf)
 	buf = buf[:0]
 
 	reqBuf, err := snappy.Decode(buf, compressed)
@@ -132,10 +118,8 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := writeReqPool.Get(2500).(prompb.WriteRequest)
-	defer writeReqPool.Put(req)
-	req.Reset()
-
+	// Note: this cause allocations, but holding onto them in a pool causes a lot of memory to be used over time.
+	var req prompb.WriteRequest
 	if err := req.Unmarshal(reqBuf); err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)

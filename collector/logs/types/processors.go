@@ -6,7 +6,6 @@ import "context"
 type Source interface {
 	Open(context.Context) error
 	Close() error
-	Queue() <-chan *LogBatch
 	Name() string
 }
 

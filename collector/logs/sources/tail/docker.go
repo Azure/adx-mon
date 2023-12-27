@@ -1,11 +1,11 @@
 package tail
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/pquerna/ffjson/ffjson"
 )
 
 // DockerLog is the format from docker json logs
@@ -17,7 +17,7 @@ type DockerLog struct {
 
 func parseDockerLog(line string, log *types.Log) error {
 	parsed := DockerLog{}
-	err := json.Unmarshal([]byte(line), &parsed)
+	err := ffjson.Unmarshal([]byte(line), &parsed)
 	if err != nil {
 		return fmt.Errorf("parseDockerLog: %w", err)
 	}
