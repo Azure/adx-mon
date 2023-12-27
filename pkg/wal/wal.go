@@ -87,10 +87,8 @@ type WriteOption func(*segment)
 
 func WithSampleMetadata(t SampleType, count uint16) WriteOption {
 	return func(s *segment) {
-		s.mu.Lock()
 		s.sampleCount = count
 		s.sampleType = uint16(t)
-		s.mu.Unlock()
 	}
 }
 

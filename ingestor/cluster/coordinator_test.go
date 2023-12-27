@@ -91,7 +91,9 @@ func TestCoordinator_NewPeer(t *testing.T) {
 	coord.mu.RUnlock()
 
 	// Swap in fake pod lister to simulate a new peer
+	coord.mu.Lock()
 	coord.pl = &fakePodLister{pods: []*v1.Pod{self, newPeer}}
+	coord.mu.Unlock()
 
 	coord.OnAdd(newPeer)
 	coord.mu.RLock()

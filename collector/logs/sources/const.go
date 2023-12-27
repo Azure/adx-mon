@@ -13,21 +13,23 @@ type ConstSource struct {
 	FlushDuration time.Duration
 	MaxBatchSize  int
 
-	outputQueue   chan *types.LogBatch
-	internalQueue chan *types.Log
-	closeFn       context.CancelFunc
+	outputQueue     chan *types.LogBatch
+	internalQueue   chan *types.Log
+	workerGenerator types.WorkerCreatorFunc
+	closeFn         context.CancelFunc
 
 	errGroup *errgroup.Group
 }
 
 // TODO more variety of source values
-func NewConstSource(value string, flushDuration time.Duration, maxBatchSize int) *ConstSource {
+func NewConstSource(value string, flushDuration time.Duration, maxBatchSize int, workerGenerator types.WorkerCreatorFunc) *ConstSource {
 	return &ConstSource{
-		Value:         value,
-		FlushDuration: flushDuration,
-		MaxBatchSize:  maxBatchSize,
-		outputQueue:   make(chan *types.LogBatch, 1),
-		internalQueue: make(chan *types.Log, 1000),
+		Value:           value,
+		FlushDuration:   flushDuration,
+		MaxBatchSize:    maxBatchSize,
+		workerGenerator: workerGenerator,
+		outputQueue:     make(chan *types.LogBatch, 1),
+		internalQueue:   make(chan *types.Log, 1000),
 	}
 }
 
@@ -54,6 +56,9 @@ func (s *ConstSource) Open(ctx context.Context) error {
 		return types.BatchLogs(groupCtx, config)
 	})
 
+	worker := s.workerGenerator("ConstSource", s.outputQueue)
+	group.Go(worker.Run)
+
 	return nil
 }
 
@@ -65,10 +70,6 @@ func (s *ConstSource) Close() error {
 
 func (s *ConstSource) Name() string {
 	return "ConstSource"
-}
-
-func (s *ConstSource) Queue() <-chan *types.LogBatch {
-	return s.outputQueue
 }
 
 func (s *ConstSource) generate(ctx context.Context) error {

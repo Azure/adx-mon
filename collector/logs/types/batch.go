@@ -22,23 +22,31 @@ func BatchLogs(ctx context.Context, config BatchConfig) error {
 	for {
 		select {
 		case <-ctx.Done():
-			config.OutputQueue <- currentBatch
+			if len(currentBatch.Logs) != 0 {
+				flush(config, currentBatch)
+			}
+			close(config.OutputQueue)
 			return nil
 		case <-ticker.C:
 			if len(currentBatch.Logs) != 0 {
-				config.OutputQueue <- currentBatch
+				flush(config, currentBatch)
 				currentBatch = LogBatchPool.Get(1024).(*LogBatch)
 				currentBatch.Reset()
 			}
 		case msg := <-config.InputQueue:
 			currentBatch.Logs = append(currentBatch.Logs, msg)
-			currentBatch.Ack = config.AckGenerator(msg)
 			if len(currentBatch.Logs) >= config.MaxBatchSize {
-				config.OutputQueue <- currentBatch
+				flush(config, currentBatch)
 				currentBatch = LogBatchPool.Get(1024).(*LogBatch)
 				currentBatch.Reset()
 				ticker.Reset(config.MaxBatchWait)
 			}
 		}
 	}
+}
+
+func flush(config BatchConfig, currentBatch *LogBatch) {
+	lastMsg := currentBatch.Logs[len(currentBatch.Logs)-1]
+	currentBatch.Ack = config.AckGenerator(lastMsg)
+	config.OutputQueue <- currentBatch
 }

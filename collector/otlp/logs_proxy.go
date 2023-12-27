@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	connect_go "github.com/bufbuild/connect-go"
+	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/net/http2"
 	"golang.org/x/sync/errgroup"
@@ -122,8 +123,8 @@ func (s *LogsProxyService) Handler(w http.ResponseWriter, r *http.Request) {
 		// use gRPC to send the OTLP protobuf to the OTLP endpoint
 
 		// Consume the request body and marshal into a protobuf
-		b := bufs.Get(int(r.ContentLength))
-		defer bufs.Put(b)
+		b := gbp.Get(int(r.ContentLength))
+		defer gbp.Put(b)
 
 		n, err := io.ReadFull(r.Body, b)
 		if err != nil {
