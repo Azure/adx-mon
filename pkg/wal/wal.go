@@ -61,6 +61,37 @@ type WALOpts struct {
 	Index *Index
 }
 
+type SampleType uint16
+
+const (
+	SampleTypeNone SampleType = iota
+	MetricSampleType
+	TraceSampleType
+	LogSampleType
+)
+
+func (s SampleType) String() string {
+	switch s {
+	case MetricSampleType:
+		return "metric"
+	case TraceSampleType:
+		return "trace"
+	case LogSampleType:
+		return "log"
+	default:
+		return "none"
+	}
+}
+
+type WriteOption func(*segment)
+
+func WithSampleMetadata(t SampleType, count uint16) WriteOption {
+	return func(s *segment) {
+		s.sampleCount = count
+		s.sampleType = uint16(t)
+	}
+}
+
 func NewWAL(opts WALOpts) (*WAL, error) {
 	if opts.StorageDir == "" {
 		return nil, fmt.Errorf("wal storage dir not defined")
@@ -114,7 +145,7 @@ func (w *WAL) Close() error {
 	return nil
 }
 
-func (w *WAL) Write(ctx context.Context, buf []byte) error {
+func (w *WAL) Write(ctx context.Context, buf []byte, options ...WriteOption) error {
 	var seg Segment
 
 	if err := w.validateLimits(buf); err != nil {
@@ -135,7 +166,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, options...)
 		if err != nil {
 			w.mu.Unlock()
 			return err

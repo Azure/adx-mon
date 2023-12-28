@@ -117,6 +117,7 @@ type Segment interface {
 type Iterator interface {
 	Next() (bool, error)
 	Value() []byte
+	Metadata() (SampleType, uint16)
 	Close() error
 	Verify() (int, error)
 }
@@ -141,8 +142,12 @@ type segment struct {
 
 	// encodeBuf is a buffer used for compressing blocks before writing to file.
 	encodeBuf []byte
-	lenBuf    [8]byte
+	lenBuf    [12]byte
 	encoder   *zstd.Encoder
+
+	// metadata about the segment contents
+	sampleType  uint16
+	sampleCount uint16
 
 	closing chan struct{}
 	closed  bool
@@ -155,7 +160,7 @@ type segment struct {
 	flushCh  chan chan error
 }
 
-func NewSegment(dir, prefix string) (Segment, error) {
+func NewSegment(dir, prefix string, options ...WriteOption) (Segment, error) {
 	flakeId := idgen.NextId()
 
 	createdAt, err := flakeutil.ParseFlakeID(flakeId.String())
@@ -192,6 +197,9 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
+	}
+	for _, opt := range options {
+		opt(f)
 	}
 
 	f.wg.Add(1)
@@ -456,18 +464,18 @@ func (s *segment) repair() error {
 
 	var (
 		lastGoodIdx, idx int
-		lenCrcBuf        [8]byte
+		lenCrcBuf        [12]byte
 	)
 	for {
 		// Read the block length
-		n, err := s.w.Read(lenCrcBuf[:8])
+		n, err := s.w.Read(lenCrcBuf[:12])
 		idx += n
 
 		if err == io.EOF {
 			return nil
 		}
 
-		if err != nil || n != 8 {
+		if err != nil || n != 12 {
 			logger.Warnf("Repairing segment %s, missing block header, truncating at %d", s.path, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
@@ -478,6 +486,8 @@ func (s *segment) repair() error {
 		}
 
 		crc := binary.BigEndian.Uint32(lenCrcBuf[4:8])
+		s.sampleType = binary.BigEndian.Uint16(lenCrcBuf[8:10])
+		s.sampleCount += binary.BigEndian.Uint16(lenCrcBuf[10:12])
 
 		n, err = s.w.Read(buf[:blockLen])
 		idx += n
@@ -607,10 +617,12 @@ func (s *segment) blockWrite(w io.Writer, buf []byte) error {
 
 	binary.BigEndian.PutUint32(s.lenBuf[:4], uint32(len(buf)))
 	binary.BigEndian.PutUint32(s.lenBuf[4:8], crc32.ChecksumIEEE(buf))
-	n, err := w.Write(s.lenBuf[:8])
+	binary.BigEndian.PutUint16(s.lenBuf[8:10], s.sampleType)
+	binary.BigEndian.PutUint16(s.lenBuf[10:12], s.sampleCount)
+	n, err := w.Write(s.lenBuf[:12])
 	if err != nil {
 		return err
-	} else if n != 8 {
+	} else if n != 12 {
 		return io.ErrShortWrite
 	}
 

@@ -9,10 +9,9 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
@@ -160,12 +159,9 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Count the number of samples we are uploading.
-	tlvr := tlv.NewReader(reader)
-
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, tlvr, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
 		return err
 	}
@@ -174,10 +170,6 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	err = <-res.Wait(ctx)
 	if err != nil {
 		return err
-	}
-
-	if n.opts.SampleType == OTLPLogs {
-		otlp.EmitMetricsForTLV(tlvr.Header(), database, table)
 	}
 
 	// return os.Remove(file)
@@ -202,11 +194,12 @@ func (n *uploader) upload(ctx context.Context) error {
 				defer batch.Release()
 
 				var (
-					readers  = make([]io.Reader, 0, len(segments))
-					files    = make([]io.Closer, 0, len(segments))
-					database string
-					table    string
-					err      error
+					readers        = make([]io.Reader, 0, len(segments))
+					files          = make([]io.Closer, 0, len(segments))
+					segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
+					database       string
+					table          string
+					err            error
 				)
 
 				for _, si := range segments {
@@ -227,6 +220,7 @@ func (n *uploader) upload(ctx context.Context) error {
 
 					readers = append(readers, f)
 					files = append(files, f)
+					segmentReaders = append(segmentReaders, f)
 				}
 
 				defer func(paths []wal.SegmentInfo, files []io.Closer) {
@@ -245,6 +239,11 @@ func (n *uploader) upload(ctx context.Context) error {
 				if err := n.uploadReader(mr, database, table); err != nil {
 					logger.Errorf("Failed to upload file: %s", err.Error())
 					return
+				}
+
+				for _, sr := range segmentReaders {
+					r, t := sr.Metadata()
+					metrics.SamplesUploaded.WithLabelValues(database, table, r.String()).Add(float64(t))
 				}
 
 				if logger.IsDebug() {
