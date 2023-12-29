@@ -1,13 +1,13 @@
 service:
   flush: 1
-  log_level: debug
+  log_level: error
 
 pipeline:
 
   inputs:
     - name: dummy
       tag: dummy
-      dummy: '{"message": "hello world", "kusto.database": "FakeDatabase", "kusto.table": "FakeTable"}'
+      dummy: '{"message": "hello world", "kusto.database": "FakeLogs", "kusto.table": "FakeTable"}'
 
   outputs:
     - Name: opentelemetry
