@@ -2,6 +2,7 @@ package wal_test
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -30,6 +31,35 @@ func TestNewWAL(t *testing.T) {
 			require.Equal(t, 1, w.Size())
 		})
 	}
+}
+
+func TestWALSegmentMetadata(t *testing.T) {
+	ctx := context.Background()
+	prefix := "ADatabase_BTable"
+	w, err := wal.NewWAL(wal.WALOpts{
+		StorageDir: t.TempDir(),
+		Index:      wal.NewIndex(),
+		Prefix:     prefix,
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(ctx))
+
+	require.NoError(t, w.Write(ctx, []byte("1970-01-01T00:00:00.001Z,-414304664621325809,{},1.000000000\n"), wal.WithSampleMetadata(wal.MetricSampleType, 1)))
+	require.NoError(t, w.Write(ctx, []byte("1970-01-01T00:00:00.002Z,-414304664621325809,{},2.000000000\n"), wal.WithSampleMetadata(wal.MetricSampleType, 1)))
+
+	wpth := w.Path()
+	require.NoError(t, w.Flush())
+	require.NoError(t, w.Close())
+
+	seg, err := wal.NewSegmentReader(wpth)
+	require.NoError(t, err)
+
+	_, err = io.Copy(io.Discard, seg)
+	require.NoError(t, err)
+
+	st, sc := seg.Metadata()
+	require.Equal(t, wal.MetricSampleType, st)
+	require.Equal(t, uint16(2), sc)
 }
 
 func TestWAL_Segment(t *testing.T) {

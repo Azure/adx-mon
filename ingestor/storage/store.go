@@ -118,7 +118,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries
 			return err
 		}
 
-		opts := wal.WithSampleMetadata(wal.LogSampleType, uint16(len(v.Samples)))
+		opts := wal.WithSampleMetadata(wal.MetricSampleType, uint16(len(v.Samples)))
 		if err := w.Write(ctx, enc.Bytes(), opts); err != nil {
 			return err
 		}

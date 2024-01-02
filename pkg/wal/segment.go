@@ -361,6 +361,11 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 		return nil
 	}
 
+	if logger.IsDebug() {
+		st, sc := iter.Metadata()
+		logger.Debugf("Appending %d samples of type %s to segment %s", sc, st.String(), s.path)
+	}
+
 	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}
 	s.appendCh <- entry
 	select {

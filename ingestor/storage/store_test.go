@@ -59,6 +59,7 @@ func TestStore_Open(t *testing.T) {
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
 	key, err := storage.SegmentKey(b[:0], ts.Labels)
+	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -66,6 +67,7 @@ func TestStore_Open(t *testing.T) {
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
 	key1, err := storage.SegmentKey(b[:0], ts.Labels)
+	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -73,6 +75,7 @@ func TestStore_Open(t *testing.T) {
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
 	key2, err := storage.SegmentKey(b[:0], ts.Labels)
+	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -88,6 +91,12 @@ func TestStore_Open(t *testing.T) {
 	_, err = io.ReadAll(r)
 	require.NoError(t, err)
 
+	// there are 2 WALs, one has 2 series, the other has 1, we're
+	// inspecting the WAL with 1 series.
+	st, sc := r.Metadata()
+	require.Equal(t, wal.MetricSampleType, st)
+	require.Equal(t, uint16(1), sc)
+
 	s = storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
@@ -97,6 +106,72 @@ func TestStore_Open(t *testing.T) {
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 	require.Equal(t, 2, s.WALCount())
+}
+
+func Test_Import(t *testing.T) {
+	// This test verifies lifecycle for a segment as it is received from Collector,
+	// written to disk as a WAL, then uploaded to Ingestor via the /transfer handler.
+	// We then ensure that the WAL as imported by Ingestor contains our metadata bits
+	// for the type and number of samples contained therein.
+	var (
+		ctx      = context.Background()
+		database = "adxmetrics"
+		b        = make([]byte, 256)
+	)
+	// Create a store, think of this as the Collector's store.
+	ws := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir: t.TempDir(),
+	})
+	require.NoError(t, ws.Open(ctx))
+
+	// Write a timeseries to "Collector's" store.
+	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
+	key, err := storage.SegmentKey(b[:0], ts.Labels)
+	require.NoError(t, err)
+
+	w, err := ws.GetWAL(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+
+	require.NoError(t, ws.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+
+	path := w.Path()
+	require.NoError(t, ws.Close())
+
+	// Create another store, think of this as Ingestor's store.
+	dir := t.TempDir()
+	rs := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir: dir,
+	})
+	require.NoError(t, rs.Open(ctx))
+
+	// Import the WAL. We're reading the raw bytes from Collector's store and
+	// importing them to Ingestor's. This simulates the code path taken when
+	// Collector transfers the WAL to Ingestor.
+	sh, err := os.Open(path)
+	require.NoError(t, err)
+
+	_, err = rs.Import(filepath.Base(path), sh)
+	require.NoError(t, err)
+	require.NoError(t, sh.Close())
+
+	// Now we'll verify that the imported WAL contains the metadata we expect.
+	w, err = rs.GetWAL(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+
+	fp := w.Path()
+	require.NoError(t, w.Close())
+
+	r, err := wal.NewSegmentReader(fp)
+	require.NoError(t, err)
+
+	_, err = io.Copy(io.Discard, r)
+	require.NoError(t, err)
+
+	st, sc := r.Metadata()
+	require.Equal(t, wal.MetricSampleType, st)
+	require.Equal(t, uint16(1), sc)
 }
 
 func TestStore_WriteTimeSeries(t *testing.T) {
