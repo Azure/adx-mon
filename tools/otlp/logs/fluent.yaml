@@ -5,25 +5,25 @@ service:
 pipeline:
 
   inputs:
-    # - name: dummy
-    #   tag: dummy
-    #   Dummy: '{"message": "hello world", "kusto.database": "FakeLogs", "kusto.table": "FakeTable"}'
+    - name: dummy
+      tag: dummy
+      Dummy: '{"message": "hello world", "kusto.database": "FakeLogs", "kusto.table": "FakeTable"}'
     - name: dummy
       tag: docker
       Dummy: '{"log": "{\"message\": \"hello world\", \"kusto.database\": \"FakeLogs\", \"kusto.table\": \"FakeTable\"}"}'
 
   outputs:
-    # - Name: opentelemetry
-    #   Match: "dummy"
-    #   Host: collector
-    #   Port: 8080
-    #   Logs_uri: /v1/logs
-    #   Log_response_payload: true
-    #   TLS: false
-    #   TLS.verify: false
+    - Name: opentelemetry
+      Match: "dummy"
+      Host: collector
+      Port: 8080
+      Logs_uri: /v1/logs
+      Log_response_payload: true
+      TLS: false
+      TLS.verify: false
 
     - Name: File
-      Match: "*"
+      Match: "docker"
       File: /var/log/containers/fluent.log
       Mkdir: true
       Format: plain
