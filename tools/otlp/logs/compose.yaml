@@ -5,6 +5,7 @@ services:
     command: -c /etc/fluent-bit/config.yaml
     volumes:
       - ./fluent.yaml:/etc/fluent-bit/config.yaml
+      - logs:/var/log/containers
     depends_on:
       - collector
 
@@ -26,13 +27,15 @@ services:
       context: ../../..
     volumes:
       - ~/.kube/config:/root/.kube/config
+      - ./collector.toml:/var/lib/adx-mon/collector.toml
+      - logs:/var/log/containers
     ports:
       - 8080:8080
-    # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
-    # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
-    # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
-    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --insecure-skip-verify --target=.*=http://localhost:8080/metrics:adx-mon/collector/collector --add-attributes Environment=dev --lift-attributes kusto.database --lift-attributes kusto.table --storage-dir /tmp
+    command: --config=/var/lib/adx-mon/collector.toml --experimental-log-collection=true
     depends_on:
       - ingestor
     environment:
       - LOG_LEVEL=DEBUG
+
+volumes:
+  logs:

@@ -1,29 +1,29 @@
 service:
   flush: 1
-  log_level: debug
+  log_level: warn
 
 pipeline:
 
   inputs:
+    # - name: dummy
+    #   tag: dummy
+    #   Dummy: '{"message": "hello world", "kusto.database": "FakeLogs", "kusto.table": "FakeTable"}'
     - name: dummy
-      tag: dummy
-      dummy: '{"message": "hello world", "kusto.database": "FakeDatabase", "kusto.table": "FakeTable"}'
+      tag: docker
+      Dummy: '{"log": "{\"message\": \"hello world\", \"kusto.database\": \"FakeLogs\", \"kusto.table\": \"FakeTable\"}"}'
 
   outputs:
-    - Name: opentelemetry
-      Match: "*"
-      Host: collector
-      Port: 8080
-      # Logs_uri: /logs
-      Logs_uri: /v1/logs
-      Log_response_payload: true
-      TLS: false
-      TLS.verify: false
     # - Name: opentelemetry
-    #   Match: "*"
-    #   Host: otel
-    #   Port: 4318
+    #   Match: "dummy"
+    #   Host: collector
+    #   Port: 8080
     #   Logs_uri: /v1/logs
     #   Log_response_payload: true
     #   TLS: false
     #   TLS.verify: false
+
+    - Name: File
+      Match: "*"
+      File: /var/log/containers/fluent.log
+      Mkdir: true
+      Format: plain

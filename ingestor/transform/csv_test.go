@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/stretchr/testify/require"
@@ -396,6 +397,35 @@ func TestMarshalCSV_OTLPLog(t *testing.T) {
 			require.Equal(t, tt.Expect, b.String())
 		})
 	}
+}
+
+func TestCollectorLogs(t *testing.T) {
+	b := &types.LogBatch{
+		Logs: []*types.Log{
+			{
+				Timestamp:         1,
+				ObservedTimestamp: 2,
+				Body: map[string]any{
+					"key": "value",
+					"complicated": map[string]any{
+						"hello": "world",
+					},
+				},
+				Attributes: map[string]any{
+					"destination": "first_destination",
+					"k8s.pod.labels": map[string]string{
+						"app": "myapp",
+					},
+				},
+			},
+		},
+	}
+	expect := `1970-01-01T00:00:00.001Z,1970-01-01T00:00:00.002Z,,,,,"{""complicated"":{""hello"":""world""},""key"":""value""}",{},"{""destination"":""first_destination"",""k8s.pod.labels"":{""app"":""myapp""}}"
+`
+	var buf bytes.Buffer
+	w := NewCSVWriter(&buf, nil)
+	require.NoError(t, w.MarshalCSV(b))
+	require.Equal(t, expect, buf.String())
 }
 
 func BenchmarkMarshalCSV_OTLPLog(b *testing.B) {

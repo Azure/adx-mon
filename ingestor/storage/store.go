@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -40,6 +41,10 @@ type Store interface {
 
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
+
+	// WriteLogs writes a batch of logs to the Store. These are logs that come from Collector's
+	// own log pipeline.
+	WriteLogs(ctx context.Context, database, table string, batch *types.LogBatch) error
 
 	// Import imports a file into the LocalStore and returns the number of bytes stored.
 	Import(filename string, body io.ReadCloser) (int, error)
@@ -157,6 +162,38 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	tPayloadSize := tlv.New(tlv.PayloadTag, []byte(strconv.Itoa(len(b))))
 
 	if err := wal.Write(ctx, append(tlv.Encode(tNumLogs, tPayloadSize), b...)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *LocalStore) WriteLogs(ctx context.Context, database, table string, batch *types.LogBatch) error {
+	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	defer csvWriterPool.Put(enc)
+
+	key := gbp.Get(256)
+	defer gbp.Put(key)
+
+	if logger.IsDebug() {
+		logger.Debugf("Store received %d logs for %s.%s", len(batch.Logs), database, table)
+	}
+
+	key = fmt.Appendf(key[:0], "%s_%s", database, table)
+
+	wal, err := s.GetWAL(ctx, key)
+	if err != nil {
+		return err
+	}
+
+	metrics.SamplesStored.WithLabelValues(table).Add(float64(len(batch.Logs)))
+
+	enc.Reset()
+	if err := enc.MarshalCSV(batch); err != nil {
+		return err
+	}
+
+	if err := wal.Write(ctx, enc.Bytes()); err != nil {
 		return err
 	}
 

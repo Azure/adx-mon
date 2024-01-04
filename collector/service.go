@@ -277,7 +277,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		if err := os.MkdirAll(cursorDirectory, 0755); err != nil {
 			return nil, fmt.Errorf("log-cursors mkdir: %w", err)
 		}
-		sink := sinks.NewStdoutSink()
+		sink := sinks.NewStore(store)
 		source, err := tail.NewTailSource(tail.TailSourceConfig{
 			StaticTargets:   targets,
 			CursorDirectory: cursorDirectory,

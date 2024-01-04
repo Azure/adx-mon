@@ -3,13 +3,16 @@ package transform
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
@@ -54,7 +57,9 @@ func (w *CSVWriter) MarshalCSV(t interface{}) error {
 	case prompb.TimeSeries:
 		return w.marshalTS(t)
 	case *otlp.Logs:
-		return w.marshalLog(t)
+		return w.marshalOTLPLog(t)
+	case *types.LogBatch:
+		return w.marshalADXLog(t)
 	default:
 		return errors.New("unknown type")
 	}
@@ -175,7 +180,54 @@ func otlpTSToUTC(ts int64) string {
 	return time.Unix(0, ts).UTC().Format(time.RFC3339Nano)
 }
 
-func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
+func (w *CSVWriter) marshalADXLog(batch *types.LogBatch) error {
+	// see collector/logs/types::Log
+	// we're writing a Collector []Log as a CSV
+
+	replacer := strings.NewReplacer("\n", "")
+	// There are 9 fields defined in an OTLP log schema
+	fields := make([]string, 0, 9)
+	for _, log := range batch.Logs {
+		// Reset fields
+		fields = fields[:0]
+		// 1: Timestamp
+		fields = append(fields, otlpTSToUTC(int64(log.Timestamp)))
+		// 2: ObservedTimestamp
+		fields = append(fields, otlpTSToUTC(int64(log.ObservedTimestamp)))
+		// 3. TraceId
+		fields = append(fields, "")
+		// 4. SpanId
+		fields = append(fields, "")
+		// 5. SeverityText
+		fields = append(fields, "")
+		// 6. SeverityNumber
+		fields = append(fields, "")
+		// 7. Body
+		buf := w.buf
+		buf.Reset()
+		enc := json.NewEncoder(buf)
+		if err := enc.Encode(log.Body); err != nil {
+			return fmt.Errorf("failed to encode log body: %w", err)
+		}
+		fields = append(fields, replacer.Replace(buf.String()))
+		// 8. Resource
+		fields = append(fields, "{}")
+		// 9. Attributes
+		buf.Reset()
+		if err := enc.Encode(log.Attributes); err != nil {
+			return fmt.Errorf("failed to encode log attributes: %w", err)
+		}
+		fields = append(fields, replacer.Replace(buf.String()))
+		// Serialize
+		if err := w.enc.Write(fields); err != nil {
+			return fmt.Errorf("failed to serialize log: %w", err)
+		}
+	}
+	w.enc.Flush()
+	return w.enc.Error()
+}
+
+func (w *CSVWriter) marshalOTLPLog(logs *otlp.Logs) error {
 	// See ingestor/storage/schema::NewLogsSchema
 	// we're writing a ExportLogsServiceRequest as a CSV
 
