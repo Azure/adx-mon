@@ -203,21 +203,22 @@ func (w *CSVWriter) marshalADXLog(batch *types.LogBatch) error {
 		// 6. SeverityNumber
 		fields = append(fields, "")
 		// 7. Body
-		buf := w.buf
-		buf.Reset()
-		enc := json.NewEncoder(buf)
-		if err := enc.Encode(log.Body); err != nil {
-			return fmt.Errorf("failed to encode log body: %w", err)
+		if v, ok := log.Body["message"].(string); ok {
+			fields = append(fields, replacer.Replace(v))
+		} else {
+			buf := w.buf
+			buf.Reset()
+
+			enc := json.NewEncoder(buf)
+			if err := enc.Encode(log.Body); err != nil {
+				return fmt.Errorf("failed to encode log body: %w", err)
+			}
+			fields = append(fields, replacer.Replace(buf.String()))
 		}
-		fields = append(fields, replacer.Replace(buf.String()))
 		// 8. Resource
 		fields = append(fields, "{}")
 		// 9. Attributes
-		buf.Reset()
-		if err := enc.Encode(log.Attributes); err != nil {
-			return fmt.Errorf("failed to encode log attributes: %w", err)
-		}
-		fields = append(fields, replacer.Replace(buf.String()))
+		fields = append(fields, "{}")
 		// Serialize
 		if err := w.enc.Write(fields); err != nil {
 			return fmt.Errorf("failed to serialize log: %w", err)

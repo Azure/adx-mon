@@ -411,16 +411,10 @@ func TestCollectorLogs(t *testing.T) {
 						"hello": "world",
 					},
 				},
-				Attributes: map[string]any{
-					"destination": "first_destination",
-					"k8s.pod.labels": map[string]string{
-						"app": "myapp",
-					},
-				},
 			},
 		},
 	}
-	expect := `1970-01-01T00:00:00.001Z,1970-01-01T00:00:00.002Z,,,,,"{""complicated"":{""hello"":""world""},""key"":""value""}",{},"{""destination"":""first_destination"",""k8s.pod.labels"":{""app"":""myapp""}}"
+	expect := `1970-01-01T00:00:00.001Z,1970-01-01T00:00:00.002Z,,,,,"{""complicated"":{""hello"":""world""},""key"":""value""}",{},{}
 `
 	var buf bytes.Buffer
 	w := NewCSVWriter(&buf, nil)
