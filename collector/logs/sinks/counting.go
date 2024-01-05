@@ -32,12 +32,12 @@ func (s *CountingSink) Open(ctx context.Context) error {
 func (s *CountingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 	s.lock.Lock()
 	s.currentCount += int64(len(batch.Logs))
+	batch.Ack()
 	if !s.done && s.currentCount >= s.expectedCount {
 		s.done = true
 		close(s.doneChannel)
 	}
 	s.lock.Unlock()
-	batch.Ack()
 	return nil
 }
 

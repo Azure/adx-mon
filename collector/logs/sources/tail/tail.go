@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
@@ -29,6 +30,7 @@ var (
 	noopAckGenerator = func(*types.Log) func() { return func() {} }
 )
 
+// FileTailTarget describes a file to tail, how to parse it, and the destination for the parsed logs.
 type FileTailTarget struct {
 	FilePath string
 	LogType  string
@@ -36,20 +38,37 @@ type FileTailTarget struct {
 	Table    string
 }
 
+// TailSourceConfig configures TailSource.
 type TailSourceConfig struct {
 	StaticTargets   []FileTailTarget
 	CursorDirectory string
 	WorkerCreator   engine.WorkerCreatorFunc
 }
 
+// Tailer is a specific instance of a file being tailed.
+type Tailer struct {
+	tail     *tail.Tail
+	shutdown context.CancelFunc
+}
+
+func (t *Tailer) Stop() {
+	t.tail.Cleanup()
+	t.tail.Stop()
+	t.shutdown()
+}
+
+// TailSource implements the types.Source interface for tailing files.
 type TailSource struct {
 	staticTargets   []FileTailTarget
 	cursorDirectory string
 	workerCreator   engine.WorkerCreatorFunc
 
-	closeFn context.CancelFunc
-	group   *errgroup.Group
-	tailers []*tail.Tail
+	mu           sync.RWMutex
+	closeFn      context.CancelFunc
+	groupCtx     context.Context
+	group        *errgroup.Group
+	ackGenerator func(*types.Log) func()
+	tailers      map[string]*Tailer
 }
 
 func NewTailSource(config TailSourceConfig) (*TailSource, error) {
@@ -66,10 +85,11 @@ func (s *TailSource) Open(ctx context.Context) error {
 
 	group, ctx := errgroup.WithContext(ctx)
 	s.group = group
+	s.groupCtx = ctx
 
-	ackGenerator := noopAckGenerator
+	s.ackGenerator = noopAckGenerator
 	if s.cursorDirectory != "" {
-		ackGenerator = func(log *types.Log) func() {
+		s.ackGenerator = func(log *types.Log) func() {
 			cursorFileName := log.Attributes[cursor_file_name].(string)
 			cursorFileId := log.Attributes[cursor_file_id].(string)
 			cursorPosition := log.Attributes[cursor_position].(int64)
@@ -79,61 +99,31 @@ func (s *TailSource) Open(ctx context.Context) error {
 		}
 	}
 
-	s.tailers = make([]*tail.Tail, 0, len(s.staticTargets))
+	s.tailers = map[string]*Tailer{}
 	for _, target := range s.staticTargets {
 		target := target
 
-		batchQueue := make(chan *types.Log, 512)
-		outputQueue := make(chan *types.LogBatch, 1)
-		batchConfig := engine.BatchConfig{
-			MaxBatchSize: 1000,
-			MaxBatchWait: 1 * time.Second,
-			InputQueue:   batchQueue,
-			OutputQueue:  outputQueue,
-			AckGenerator: ackGenerator,
-		}
-		group.Go(func() error {
-			return engine.BatchLogs(ctx, batchConfig)
-		})
-
-		worker := s.workerCreator(s.Name(), outputQueue)
-		group.Go(worker.Run)
-
-		tailConfig := tail.Config{Follow: true, ReOpen: true}
-		existingCursorPath := cursorPath(s.cursorDirectory, target.FilePath)
-		fileId, position, err := readCursor(existingCursorPath)
-		if err == nil {
-			logger.Debugf("TailSource: found existing cursor for file %q: %s %d", target.FilePath, fileId, position)
-			tailConfig.Location = &tail.SeekInfo{
-				Offset:         position,
-				Whence:         io.SeekStart,
-				FileIdentifier: fileId,
-			}
-		}
-
-		tailer, err := tail.TailFile(target.FilePath, tailConfig)
+		err := s.AddTarget(target)
 		if err != nil {
+			// On startup, if we fail to add a target, we should close all the tailers we've opened so far and return.
 			for _, t := range s.tailers {
-				t.Cleanup()
 				t.Stop()
 			}
 			return fmt.Errorf("TailSource open: %w", err)
 		}
-		s.tailers = append(s.tailers, tailer)
-
-		group.Go(func() error {
-			return readLines(ctx, target, tailer, batchQueue)
-		})
 	}
 
 	return nil
 }
 
 func (s *TailSource) Close() error {
+	s.mu.Lock()
 	for _, t := range s.tailers {
-		t.Cleanup()
 		t.Stop()
 	}
+	clear(s.tailers)
+	s.mu.Unlock()
+
 	s.closeFn()
 	s.group.Wait()
 	return nil
@@ -141,6 +131,78 @@ func (s *TailSource) Close() error {
 
 func (s *TailSource) Name() string {
 	return "tailsource"
+}
+
+// AddTarget adds a new file to tail.
+func (s *TailSource) AddTarget(target FileTailTarget) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.tailers[target.FilePath]; ok {
+		return nil // already exists
+	}
+
+	tailerCtx, shutdown := context.WithCancel(s.groupCtx)
+	batchQueue := make(chan *types.Log, 512)
+	outputQueue := make(chan *types.LogBatch, 1)
+	tailConfig := tail.Config{Follow: true, ReOpen: true}
+	existingCursorPath := cursorPath(s.cursorDirectory, target.FilePath)
+	fileId, position, err := readCursor(existingCursorPath)
+	if err == nil {
+		if logger.IsDebug() {
+			logger.Debugf("TailSource: found existing cursor for file %q: %s %d", target.FilePath, fileId, position)
+		}
+		tailConfig.Location = &tail.SeekInfo{
+			Offset:         position,
+			Whence:         io.SeekStart,
+			FileIdentifier: fileId,
+		}
+	}
+
+	tailFile, err := tail.TailFile(target.FilePath, tailConfig)
+	if err != nil {
+		shutdown()
+		return fmt.Errorf("addTarget create tailfile: %w", err)
+	}
+	s.group.Go(func() error {
+		return readLines(tailerCtx, target, tailFile, batchQueue)
+	})
+
+	batchConfig := engine.BatchConfig{
+		MaxBatchSize: 1000,
+		MaxBatchWait: 1 * time.Second,
+		InputQueue:   batchQueue,
+		OutputQueue:  outputQueue,
+		AckGenerator: s.ackGenerator,
+	}
+	s.group.Go(func() error {
+		return engine.BatchLogs(tailerCtx, batchConfig)
+	})
+
+	worker := s.workerCreator(s.Name(), outputQueue)
+	s.group.Go(worker.Run)
+
+	tailer := &Tailer{
+		tail:     tailFile,
+		shutdown: shutdown,
+	}
+	s.tailers[target.FilePath] = tailer
+
+	return nil
+}
+
+// RemoveTarget removes a file from being tailed.
+// This also removes the cursor file, so this should only be called when the file is not longer expected to be tailed in the future.
+func (s *TailSource) RemoveTarget(filePath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tailer, ok := s.tailers[filePath]
+	if ok {
+		tailer.Stop()
+		delete(s.tailers, filePath)
+		cleanCursor(cursorPath(s.cursorDirectory, filePath))
+	}
 }
 
 func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, outputQueue chan<- *types.Log) error {
@@ -250,4 +312,11 @@ func readCursor(cursorPath string) (string, int64, error) {
 	}
 
 	return tailcursor.FID, tailcursor.Cursor, nil
+}
+
+func cleanCursor(cursorPath string) {
+	err := os.Remove(cursorPath)
+	if err != nil {
+		logger.Errorf("cleanCursor: failed to remove cursor file %q: %v", cursorPath, err)
+	}
 }
