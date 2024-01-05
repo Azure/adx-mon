@@ -32,6 +32,8 @@ var (
 type FileTailTarget struct {
 	FilePath string
 	LogType  string
+	Database string
+	Table    string
 }
 
 type TailSourceConfig struct {
@@ -177,6 +179,8 @@ func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, ou
 			log.Attributes[cursor_position] = position
 			log.Attributes[cursor_file_id] = currentFileId
 			log.Attributes[cursor_file_name] = tailer.Filename
+			log.Attributes[types.AttributeDatabaseName] = target.Database
+			log.Attributes[types.AttributeTableName] = target.Table
 
 			// TODO combine partial lines. Docker separates lines with newlines in the log message.
 			outputQueue <- log
@@ -196,7 +200,7 @@ func (s *TailSource) ackBatch(cursor_file_name, cursor_file_id string, cursor_po
 func parsePlaintextLog(line string, log *types.Log) error {
 	log.Timestamp = uint64(time.Now().UnixNano())
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body["message"] = line
+	log.Body[types.BodyKeyMessage] = line
 
 	return nil
 }

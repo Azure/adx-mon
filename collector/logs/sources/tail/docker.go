@@ -28,7 +28,7 @@ func parseDockerLog(line string, log *types.Log) error {
 	}
 	log.Timestamp = uint64(parsedTime.UnixNano())
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body["message"] = parsed.Log
+	log.Body[types.BodyKeyMessage] = parsed.Log
 	log.Body["stream"] = parsed.Stream
 
 	return nil
