@@ -270,6 +270,8 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			targets = append(targets, tail.FileTailTarget{
 				FilePath: file,
 				LogType:  tail.LogTypeDocker,
+				Database: "AKSinfra",
+				Table:    "ContainerLog",
 			})
 		}
 

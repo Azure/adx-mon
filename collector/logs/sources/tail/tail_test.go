@@ -29,6 +29,8 @@ func TestTailSource(t *testing.T) {
 			{
 				FilePath: testFile,
 				LogType:  LogTypeDocker,
+				Database: "Logs",
+				Table:    "TestService",
 			},
 		},
 		CursorDirectory: testDir,
@@ -69,10 +71,14 @@ func TestTailSourceMultipleSources(t *testing.T) {
 			{
 				FilePath: testFileOne,
 				LogType:  LogTypeDocker,
+				Database: "Logs",
+				Table:    "TestService",
 			},
 			{
 				FilePath: testFileTwo,
 				LogType:  LogTypeDocker,
+				Database: "Logs",
+				Table:    "TestServiceTwo",
 			},
 		},
 		CursorDirectory: testDir,
@@ -113,6 +119,8 @@ func BenchmarkTailSource(b *testing.B) {
 				{
 					FilePath: testFile,
 					LogType:  LogTypeDocker,
+					Database: "Logs",
+					Table:    "TestService",
 				},
 			},
 			CursorDirectory: b.TempDir(),
@@ -150,10 +158,14 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 				{
 					FilePath: testFileOne,
 					LogType:  LogTypeDocker,
+					Database: "Logs",
+					Table:    "TestService",
 				},
 				{
 					FilePath: testFileTwo,
 					LogType:  LogTypeDocker,
+					Database: "Logs",
+					Table:    "TestServiceTwo",
 				},
 			},
 			CursorDirectory: b.TempDir(),
