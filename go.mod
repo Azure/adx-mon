@@ -25,6 +25,7 @@ require (
 	github.com/prometheus/common v0.45.0
 	github.com/stretchr/testify v1.8.4
 	github.com/tenebris-tech/tail v1.0.5
+	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.25.7
 	golang.org/x/net v0.19.0
 	golang.org/x/sync v0.5.0
@@ -87,10 +88,9 @@ require (
 	github.com/samber/lo v1.37.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/traefik/yaegi v0.15.1 // indirect
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
 	go.uber.org/atomic v1.10.0 // indirect
-	golang.org/x/crypto v0.16.0 // indirect
+	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/exp v0.0.0-20220827204233-334a2380cb91 // indirect
 	golang.org/x/oauth2 v0.12.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
