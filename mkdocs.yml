@@ -30,7 +30,11 @@ markdown_extensions:
       generic: true
   - footnotes
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.mark
   - attr_list
   - pymdownx.emoji:
@@ -44,3 +48,5 @@ nav:
   - 'cookbook.md'
   - Reference:
       - 'ingestor.md'
+  - Design Docs:
+      - 'designs/log-integration-with-kubernetes.md'
