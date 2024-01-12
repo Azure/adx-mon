@@ -166,9 +166,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	remoteClient, err := promremote.NewClient(
 		promremote.ClientOpts{
-			Timeout:            20 * time.Second,
-			InsecureSkipVerify: opts.InsecureSkipVerify,
-			Close:              true,
+			Timeout:               30 * time.Second,
+			InsecureSkipVerify:    opts.InsecureSkipVerify,
+			Close:                 false,
+			MaxIdleConnsPerHost:   2,
+			MaxConnsPerHost:       5,
+			MaxIdleConns:          2,
+			ResponseHeaderTimeout: 30 * time.Second,
 		})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)

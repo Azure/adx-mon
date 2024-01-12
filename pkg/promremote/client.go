@@ -44,6 +44,10 @@ type ClientOpts struct {
 
 	// MaxConnsPerHost, if non-zero, controls the maximum connections per host.
 	MaxConnsPerHost int
+
+	// TLSHandshakeTimeout specifies the maximum amount of time to
+	// wait for a TLS handshake. Zero means no timeout.
+	TLSHandshakeTimeout time.Duration
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -68,6 +72,11 @@ func (c ClientOpts) WithDefaults() ClientOpts {
 	if c.MaxConnsPerHost == 0 {
 		c.MaxConnsPerHost = 5
 	}
+
+	if c.TLSHandshakeTimeout == 0 {
+		c.TLSHandshakeTimeout = 10 * time.Second
+	}
+
 	return c
 }
 
@@ -80,6 +89,7 @@ func NewClient(opts ClientOpts) (*Client, error) {
 	t.ResponseHeaderTimeout = opts.ResponseHeaderTimeout
 	t.IdleConnTimeout = opts.IdleConnTimeout
 	t.TLSClientConfig.InsecureSkipVerify = opts.InsecureSkipVerify
+	t.TLSHandshakeTimeout = opts.TLSHandshakeTimeout
 
 	httpClient := &http.Client{
 		Timeout:   opts.Timeout,
