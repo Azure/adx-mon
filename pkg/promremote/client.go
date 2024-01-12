@@ -3,6 +3,7 @@ package promremote
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,6 +49,12 @@ type ClientOpts struct {
 	// TLSHandshakeTimeout specifies the maximum amount of time to
 	// wait for a TLS handshake. Zero means no timeout.
 	TLSHandshakeTimeout time.Duration
+
+	// DisableHTTP2 controls whether the client disables HTTP/2 support.
+	DisableHTTP2 bool
+
+	// DisableKeepAlives controls whether the client disables HTTP keep-alives.
+	DisableKeepAlives bool
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -90,6 +97,14 @@ func NewClient(opts ClientOpts) (*Client, error) {
 	t.IdleConnTimeout = opts.IdleConnTimeout
 	t.TLSClientConfig.InsecureSkipVerify = opts.InsecureSkipVerify
 	t.TLSHandshakeTimeout = opts.TLSHandshakeTimeout
+	t.DisableKeepAlives = opts.DisableKeepAlives
+
+	if opts.DisableHTTP2 {
+		t.ForceAttemptHTTP2 = false
+		t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
+		t.TLSClientConfig = &tls.Config{}
+		t.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	}
 
 	httpClient := &http.Client{
 		Timeout:   opts.Timeout,
