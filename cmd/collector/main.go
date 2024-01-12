@@ -338,14 +338,20 @@ func realMain(ctx *cli.Context) error {
 			defaultDropMetrics = *v.DefaultDropMetrics
 		}
 
+		var disableMetricsForwarding bool
+		if v.DisableMetricsForwarding != nil {
+			disableMetricsForwarding = *v.DisableMetricsForwarding
+		}
+
 		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
-			Path:                   v.Path,
-			DefaultDropMetrics:     defaultDropMetrics,
-			AddLabels:              addLabels,
-			DropMetrics:            dropMetrics,
-			DropLabels:             dropLabels,
-			KeepMetrics:            keepMetrics,
-			KeepMetricsLabelValues: keepMetricLabelValues,
+			Path:                     v.Path,
+			DefaultDropMetrics:       defaultDropMetrics,
+			AddLabels:                addLabels,
+			DropMetrics:              dropMetrics,
+			DropLabels:               dropLabels,
+			KeepMetrics:              keepMetrics,
+			KeepMetricsLabelValues:   keepMetricLabelValues,
+			DisableMetricsForwarding: disableMetricsForwarding,
 		})
 	}
 
