@@ -3,6 +3,7 @@ package promremote
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -50,8 +51,12 @@ func (r *RemoteWriteProxy) Write(ctx context.Context, wr prompb.WriteRequest) er
 			}
 
 			endpoint := r.Endpoints[i]
-			logger.Infof("Sending %d timeseries to %s", len(batch.Timeseries), endpoint)
 			g.Go(func() error {
+				start := time.Now()
+				defer func() {
+					logger.Infof("Sending %d timeseries duration=%s", len((&batch).Timeseries), time.Since(start))
+				}()
+
 				return r.Client.Write(gCtx, endpoint, &batch)
 			})
 		}

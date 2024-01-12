@@ -393,7 +393,11 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		}
 	}
 
-	logger.Infof("Sending %d timeseries to %d endpoints", len(wr.Timeseries), len(s.opts.Endpoints))
+	start := time.Now()
+	defer func() {
+		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.opts.Endpoints), time.Since(start))
+	}()
+
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, endpoint := range s.opts.Endpoints {
 		endpoint := endpoint
