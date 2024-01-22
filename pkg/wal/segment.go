@@ -54,6 +54,9 @@ var (
 	})
 
 	ErrSegmentClosed = errors.New("segment closed")
+
+	sampleMetadataMagicNumber = []byte{0xC0, 0xDE, 0xC0, 0xDE}
+	sampleMetadataVersion     = []byte{0x0, 0x0, 0x0, 0x1} // If you update this value, also update Iterator
 )
 
 func init() {
@@ -100,7 +103,7 @@ func SetDecoderPoolSize(sz int) {
 
 type Segment interface {
 	Append(ctx context.Context, buf []byte) error
-	Write(ctx context.Context, buf []byte) error
+	Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
@@ -119,6 +122,7 @@ type Iterator interface {
 	Value() []byte
 	Close() error
 	Verify() (int, error)
+	Metadata() (SampleType, uint16)
 }
 
 type segment struct {
@@ -364,7 +368,7 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 }
 
 // Write writes buf to the segment.
-func (s *segment) Write(ctx context.Context, buf []byte) error {
+func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -382,10 +386,20 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 	default:
 	}
 
-	b := gbp.Get(len(buf))
+	sampleMetadataBytes := 4 /* sampleMetadataMagicNumber */ + 4 /* sampleMetadataVersion */ + 2 /* sampleType */ + 2 /* sampleCount */
+	b := gbp.Get(len(buf) + sampleMetadataBytes)
 	defer gbp.Put(b)
 
-	entry.Value = append(b[:0], buf...)
+	for _, opt := range opts {
+		opt(b)
+	}
+
+	offset := 0
+	if HasSampleMetadata(b) {
+		offset = sampleMetadataBytes
+	}
+
+	entry.Value = append(b[:offset], buf...)
 
 	s.ringBuf.Enqueue(entry)
 

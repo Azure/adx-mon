@@ -1,7 +1,9 @@
 package wal
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"sync"
@@ -22,6 +24,8 @@ type WAL struct {
 
 	// index is the index of closed wal segments.  The active segment is not part of the index.
 	index *Index
+
+	sampleMetadataBuffer [12]byte
 
 	closeFn context.CancelFunc
 
@@ -59,6 +63,53 @@ type WALOpts struct {
 
 	// Index is the index of the WAL segments.
 	Index *Index
+}
+
+type SampleType uint16
+
+const (
+	UnknownSampleType SampleType = iota
+	MetricSampleType
+	TraceSampleType
+	LogSampleType
+)
+
+type WriteOptions func([]byte)
+
+func WithSampleMetadata(t SampleType, count uint16) WriteOptions {
+	return func(b []byte) {
+		if len(b) < len(sampleMetadataMagicNumber)+len(sampleMetadataVersion)+4 {
+			return
+		}
+		copy(b[0:4], sampleMetadataMagicNumber[:])
+		copy(b[4:8], sampleMetadataVersion[:])
+
+		binary.BigEndian.PutUint16(b[8:10], uint16(t))
+		binary.BigEndian.PutUint16(b[10:12], count)
+	}
+}
+
+func SampleMetadata(b []byte) (t SampleType, count uint16) {
+	if len(b) < len(sampleMetadataMagicNumber)+len(sampleMetadataVersion)+4+4 {
+		return
+	}
+	if !bytes.Equal(b[0:4], sampleMetadataMagicNumber[:]) {
+		// Sample contains no metadata
+		return
+	}
+	if !bytes.Equal(b[4:8], sampleMetadataVersion[:]) {
+		// We don't know how to decode this version
+		return
+	}
+
+	t = SampleType(binary.BigEndian.Uint16(b[8:10]))
+	count = binary.BigEndian.Uint16(b[10:12])
+
+	return
+}
+
+func HasSampleMetadata(b []byte) bool {
+	return bytes.Equal(b[0:4], sampleMetadataMagicNumber[:])
 }
 
 func NewWAL(opts WALOpts) (*WAL, error) {
@@ -114,7 +165,7 @@ func (w *WAL) Close() error {
 	return nil
 }
 
-func (w *WAL) Write(ctx context.Context, buf []byte) error {
+func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
 	var seg Segment
 
 	if err := w.validateLimits(buf); err != nil {
@@ -127,7 +178,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 		seg = w.segment
 		w.mu.RUnlock()
 
-		return seg.Write(ctx, buf)
+		return seg.Write(ctx, buf, opts...)
 
 	}
 	w.mu.RUnlock()
@@ -145,7 +196,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	seg = w.segment
 	w.mu.Unlock()
 
-	return seg.Write(ctx, buf)
+	return seg.Write(ctx, buf, opts...)
 }
 
 func (w *WAL) validateLimits(buf []byte) error {
