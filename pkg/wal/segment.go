@@ -54,6 +54,9 @@ var (
 	})
 
 	ErrSegmentClosed = errors.New("segment closed")
+
+	sampleMetadataMagicNumber = []byte{0x0, 0x0, 0xC0, 0xDE}
+	sampleMetadataVersion     = []byte{0x0, 0x0, 0x0, 0x1} // If you update this value, also update Iterator
 )
 
 func init() {
@@ -119,6 +122,7 @@ type Iterator interface {
 	Value() []byte
 	Close() error
 	Verify() (int, error)
+	Metadata() (SampleType, uint16)
 }
 
 type segment struct {
@@ -147,6 +151,10 @@ type segment struct {
 	closing chan struct{}
 	closed  bool
 
+	// sample metadata
+	sampleType  uint16
+	sampleCount uint16
+
 	// ringBuf is a circular buffer that queues writes to allow for large IO batches to file.
 	ringBuf *ring.Buffer
 
@@ -155,7 +163,7 @@ type segment struct {
 	flushCh  chan chan error
 }
 
-func NewSegment(dir, prefix string) (Segment, error) {
+func NewSegment(dir, prefix string, opts ...WriteOption) (Segment, error) {
 	flakeId := idgen.NextId()
 
 	createdAt, err := flakeutil.ParseFlakeID(flakeId.String())
@@ -192,6 +200,9 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
+	}
+	for _, opt := range opts {
+		opt(f)
 	}
 
 	f.wg.Add(1)
@@ -382,10 +393,16 @@ func (s *segment) Write(ctx context.Context, buf []byte) error {
 	default:
 	}
 
-	b := gbp.Get(len(buf))
+	sampleMetadataBytes := 4 /* sampleMetadataMagicNumber */ + 4 /* sampleMetadataVersion */ + 2 /* sampleType */ + 4 /* sampleCount */
+	b := gbp.Get(len(buf) + sampleMetadataBytes)
 	defer gbp.Put(b)
 
-	entry.Value = append(b[:0], buf...)
+	copy(b[0:4], sampleMetadataMagicNumber[:])
+	copy(b[4:8], sampleMetadataVersion[:])
+	binary.BigEndian.PutUint16(b[8:10], uint16(s.sampleType))
+	binary.BigEndian.PutUint16(b[10:12], s.sampleCount)
+
+	entry.Value = append(b[:12], buf...)
 
 	s.ringBuf.Enqueue(entry)
 

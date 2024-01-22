@@ -23,6 +23,8 @@ type WAL struct {
 	// index is the index of closed wal segments.  The active segment is not part of the index.
 	index *Index
 
+	sampleMetadataBuffer [12]byte
+
 	closeFn context.CancelFunc
 
 	wg      sync.WaitGroup
@@ -59,6 +61,26 @@ type WALOpts struct {
 
 	// Index is the index of the WAL segments.
 	Index *Index
+}
+
+type SampleType uint16
+
+const (
+	UnknownSampleType SampleType = iota
+	MetricSampleType
+	TraceSampleType
+	LogSampleType
+)
+
+type WriteOption func(*segment)
+
+func WithSampleMetadata(t SampleType, count uint16) WriteOption {
+	return func(s *segment) {
+		s.mu.Lock()
+		s.sampleType = uint16(t)
+		s.sampleCount = count
+		s.mu.Unlock()
+	}
 }
 
 func NewWAL(opts WALOpts) (*WAL, error) {
@@ -114,7 +136,7 @@ func (w *WAL) Close() error {
 	return nil
 }
 
-func (w *WAL) Write(ctx context.Context, buf []byte) error {
+func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOption) error {
 	var seg Segment
 
 	if err := w.validateLimits(buf); err != nil {
@@ -135,7 +157,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte) error {
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, opts...)
 		if err != nil {
 			w.mu.Unlock()
 			return err
@@ -249,7 +271,7 @@ func (w *WAL) Remove(path string) error {
 	return err
 }
 
-func (w *WAL) Append(ctx context.Context, buf []byte) error {
+func (w *WAL) Append(ctx context.Context, buf []byte, opts ...WriteOption) error {
 	var seg Segment
 
 	if err := w.validateLimits(buf); err != nil {
@@ -270,7 +292,7 @@ func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, opts...)
 		if err != nil {
 			w.mu.Unlock()
 			return err

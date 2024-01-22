@@ -22,7 +22,6 @@ import (
 	iotlp "github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -91,7 +90,7 @@ func TestOTLPLogsE2E(t *testing.T) {
 			<-done // Wait for the store to finish flushing
 
 			// Now verify the content of our segments.
-			VerifyStore(t, ingestorDir, true)
+			VerifyStore(t, ingestorDir)
 
 			// Ensure our internal Prometheus metrics state is as expected.
 			VerifyMetrics(t, &log)
@@ -116,7 +115,7 @@ func VerifyResponse(t *testing.T, resp *http.Response) {
 	}
 }
 
-func VerifyStore(t *testing.T, dir string, expectTLV bool) {
+func VerifyStore(t *testing.T, dir string) {
 	t.Helper()
 
 	entries, err := os.ReadDir(dir)
@@ -145,8 +144,7 @@ func VerifyStore(t *testing.T, dir string, expectTLV bool) {
 
 		s, err := wal.NewSegmentReader(filepath.Join(dir, entry.Name()))
 		require.NoError(t, err)
-		tlvr := tlv.NewReader(s)
-		b, err := io.ReadAll(tlvr)
+		b, err := io.ReadAll(s)
 		require.NoError(t, err)
 
 		r := csv.NewReader(bytes.NewReader(b))
@@ -158,24 +156,13 @@ func VerifyStore(t *testing.T, dir string, expectTLV bool) {
 		}
 		verified = true
 
-		header := tlvr.Header()
-		if !expectTLV {
-			require.Equal(t, 0, len(header))
-			continue
+		sampleType, sampleCount := s.SampleMetadata()
+		require.Equal(t, wal.LogSampleType, sampleType)
+
+		if ss[1] == "ATable" {
+			require.Equal(t, uint16(2), sampleCount)
 		} else {
-			require.Equal(t, 2, len(header))
-		}
-		for _, h := range header {
-			if h.Tag == otlp.LogsTotalTag {
-				switch ss[1] {
-				case "ATable":
-					require.Equal(t, "2", string(h.Value))
-				case "BTable":
-					require.Equal(t, "1", string(h.Value))
-				default:
-					require.Fail(t, "unexpected table name")
-				}
-			}
+			require.Equal(t, uint16(1), sampleCount)
 		}
 	}
 	require.Equal(t, true, verified)

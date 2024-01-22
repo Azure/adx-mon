@@ -9,10 +9,9 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/pkg/tlv"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
@@ -160,12 +159,9 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Count the number of samples we are uploading.
-	tlvr := tlv.NewReader(reader)
-
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, tlvr, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
 		return err
 	}
@@ -174,10 +170,6 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	err = <-res.Wait(ctx)
 	if err != nil {
 		return err
-	}
-
-	if n.opts.SampleType == OTLPLogs {
-		otlp.EmitMetricsForTLV(tlvr.Header(), database, table)
 	}
 
 	// return os.Remove(file)
@@ -202,11 +194,11 @@ func (n *uploader) upload(ctx context.Context) error {
 				defer batch.Release()
 
 				var (
-					readers  = make([]io.Reader, 0, len(segments))
-					files    = make([]io.Closer, 0, len(segments))
-					database string
-					table    string
-					err      error
+					readers        = make([]io.Reader, 0, len(segments))
+					segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
+					database       string
+					table          string
+					err            error
 				)
 
 				for _, si := range segments {
@@ -225,17 +217,17 @@ func (n *uploader) upload(ctx context.Context) error {
 						continue
 					}
 
+					segmentReaders = append(segmentReaders, f)
 					readers = append(readers, f)
-					files = append(files, f)
 				}
 
-				defer func(paths []wal.SegmentInfo, files []io.Closer) {
-					for _, f := range files {
-						f.Close()
+				defer func(segmentReaders []*wal.SegmentReader) {
+					for _, sr := range segmentReaders {
+						sr.Close()
 					}
-				}(segments, files)
+				}(segmentReaders)
 
-				if len(readers) == 0 {
+				if len(segmentReaders) == 0 {
 					return
 				}
 
@@ -253,6 +245,17 @@ func (n *uploader) upload(ctx context.Context) error {
 
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to remove batch: %s", err.Error())
+				}
+
+				for _, sr := range segmentReaders {
+					sampleType, sampleCount := sr.SampleMetadata()
+
+					switch sampleType {
+					case wal.MetricSampleType:
+						metrics.MetricsUploaded.WithLabelValues(database, table).Add(float64(sampleCount))
+					case wal.LogSampleType:
+						metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(sampleCount))
+					}
 				}
 			}()
 
