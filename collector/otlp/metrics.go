@@ -28,7 +28,7 @@ var (
 // Example situation is sending unsupported metric types.
 type ErrRejectedMetric struct {
 	Msg   string
-	Count int
+	Count int64
 }
 
 func (e *ErrRejectedMetric) Error() string {
@@ -90,9 +90,6 @@ type OltpMetricWriterOpts struct {
 
 	KeepMetrics []*regexp.Regexp
 
-	// Database is the name of the database to write metrics to.
-	Database string
-
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
@@ -128,7 +125,7 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 	// Causes allocation. Like in prom remote receiver, create rather than using a bunch of space in pool.
 	wr := &prompb.WriteRequest{}
 
-	rejectedRecordsExpHist := 0
+	var rejectedRecordsExpHist int64 = 0
 	for _, resourceMetrics := range msg.ResourceMetrics {
 		for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
 			for _, metric := range scopeMetrics.Metrics {
@@ -147,7 +144,7 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 					err = t.addOltpSummaryPoints(ctx, metric.Name, data.Summary.DataPoints, wr)
 				case *metricsv1.Metric_ExponentialHistogram:
 					// No widespread support for this complicated protocol. Reject for now.
-					rejectedRecordsExpHist += len(data.ExponentialHistogram.DataPoints)
+					rejectedRecordsExpHist += int64(len(data.ExponentialHistogram.DataPoints))
 					// TODO metric
 				default:
 					// Return this as a non-retryable error. Since we don't know about this type,
