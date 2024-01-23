@@ -42,6 +42,12 @@ var DefaultConfig = Config{
 	OtelLog: &OtelLog{
 		AddAttributes: make(map[string]string),
 	},
+	OtelMetric: []*OtelMetric{
+		{
+			Path:      "/v1/metrics",
+			AddLabels: make(map[string]string),
+		},
+	},
 }
 
 type Config struct {
@@ -74,6 +80,7 @@ type Config struct {
 	PrometheusScrape      *PrometheusScrape        `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
 	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
 	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint."`
+	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint."`
 }
 
 type PrometheusScrape struct {
@@ -149,8 +156,8 @@ type PrometheusRemoteWrite struct {
 	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
 	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
-	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
 }
 
 func (w *PrometheusRemoteWrite) Validate() error {
@@ -211,6 +218,59 @@ func (w *OtelLog) Validate() error {
 	return nil
 }
 
+type OtelMetric struct {
+	Database                 string `toml:"database" comment:"Database to store metrics in."`
+	Path                     string `toml:"path" comment:"The path to listen on for otlp/http requests.  Defaults to /v1/metrics."`
+	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
+
+	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
+	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+}
+
+func (w *OtelMetric) Validate() error {
+	if w.Path == "" {
+		return errors.New("otel-metric.path must be set")
+	}
+
+	if w.Database == "" {
+		return errors.New("otel-metric.database must be set")
+	}
+
+	for k, v := range w.AddLabels {
+		if k == "" {
+			return errors.New("otel-metric.add-labels key must be set")
+		}
+		if v == "" {
+			return errors.New("otel-metric.add-labels value must be set")
+		}
+	}
+
+	for k, v := range w.DropLabels {
+		if k == "" {
+			return errors.New("otel-metric.drop-labels key must be set")
+		}
+		if v == "" {
+			return errors.New("otel-metric.drop-labels value must be set")
+		}
+	}
+
+	for _, v := range w.KeepMetricsWithLabelValue {
+		if v.LabelRegex == "" {
+			return errors.New("otel-metric.keep-metrics-with-label-value key must be set")
+		}
+
+		if v.ValueRegex == "" {
+			return errors.New("otel-metric.keep-metrics-with-label-value value must be set")
+		}
+	}
+
+	return nil
+}
+
 func (c *Config) Validate() error {
 	existingPaths := make(map[string]struct{})
 	for _, v := range c.PrometheusRemoteWrite {
@@ -228,6 +288,17 @@ func (c *Config) Validate() error {
 		if err := c.OtelLog.Validate(); err != nil {
 			return err
 		}
+	}
+
+	for _, v := range c.OtelMetric {
+		if err := v.Validate(); err != nil {
+			return err
+		}
+
+		if _, ok := existingPaths[v.Path]; ok {
+			return fmt.Errorf("otel-metric.path %s is already defined", v.Path)
+		}
+		existingPaths[v.Path] = struct{}{}
 	}
 
 	if c.PrometheusScrape != nil {

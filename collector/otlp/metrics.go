@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"strings"
 	"time"
 
@@ -54,6 +53,10 @@ func writeErr(err error) error {
 	}
 }
 
+type MetricWriter interface {
+	Write(ctx context.Context, msg *v1.ExportMetricsServiceRequest) error
+}
+
 /*
   ExportMetricsServiceRequest
    -> ResourceMetrics
@@ -76,47 +79,33 @@ func writeErr(err error) error {
 */
 
 type OltpMetricWriterOpts struct {
-	// AddLabels is a map of key/value pairs that will be added to all metrics.
-	AddLabels map[string]string
+	RequestTransformer *transform.RequestTransformer
 
-	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
-	DropLabels map[*regexp.Regexp]*regexp.Regexp
-
-	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
-	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
-	DropMetrics []*regexp.Regexp
-
-	KeepMetricsWithLabelValue map[*regexp.Regexp]*regexp.Regexp
-
-	KeepMetrics []*regexp.Regexp
+	DisableMetricsForwarding bool
 
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
 	Endpoints []string
 
-	RemoteClient *promremote.Client
+	Client *promremote.Client
 }
 
 type OltpMetricWriter struct {
-	requestTransformer *transform.RequestTransformer
-	endpoints          []string
-	remoteClient       *promremote.Client
-	maxBatchSize       int
+	requestTransformer       *transform.RequestTransformer
+	endpoints                []string
+	remoteClient             *promremote.Client
+	maxBatchSize             int
+	disableMetricsForwarding bool
 }
 
 func NewOltpMetricWriter(opts OltpMetricWriterOpts) *OltpMetricWriter {
 	return &OltpMetricWriter{
-		requestTransformer: &transform.RequestTransformer{
-			AddLabels:                 opts.AddLabels,
-			DropLabels:                opts.DropLabels,
-			DropMetrics:               opts.DropMetrics,
-			KeepMetrics:               opts.KeepMetrics,
-			KeepMetricsWithLabelValue: opts.KeepMetricsWithLabelValue,
-		},
-		endpoints:    opts.Endpoints,
-		remoteClient: opts.RemoteClient,
-		maxBatchSize: opts.MaxBatchSize,
+		requestTransformer:       opts.RequestTransformer,
+		endpoints:                opts.Endpoints,
+		remoteClient:             opts.Client,
+		maxBatchSize:             opts.MaxBatchSize,
+		disableMetricsForwarding: opts.DisableMetricsForwarding,
 	}
 }
 
@@ -210,6 +199,10 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 				logger.Debugf("%s %d %f", sb.String(), s.Timestamp, s.Value)
 			}
 		}
+	}
+
+	if t.disableMetricsForwarding {
+		return nil
 	}
 
 	start := time.Now()
