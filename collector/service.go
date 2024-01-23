@@ -56,8 +56,8 @@ type Service struct {
 	// otelProxySvc is the OpenTelemetry logs proxy service that forwards logs to the ingestor.
 	otelProxySvc *otlp.LogsProxyService
 
-	// metricsProxySvcs are the prometheus remote write endpoints that receive metrics from Prometheus clients.
-	metricsProxySvcs []*metricsHandler.Handler
+	// proxySvcs are the write endpoints that receive metrics from Prometheus and Otel clients.
+	proxySvcs []*http.HttpHandler
 
 	// batcher is the component that batches metrics and logs for transferring to ingestor.
 	batcher cluster.Batcher
@@ -71,8 +71,12 @@ type ServiceOpts struct {
 	NodeName   string
 	Endpoints  []string
 
-	MetricsHandlers []MetricsHandlerOpts
-	Scraper         *ScraperOpts
+	// PromMetricsHandlers is the list of prom-remote handlers
+	PromMetricsHandlers []MetricsHandlerOpts
+	// OtlpMetricsHandlers is the list of oltp metrics handlers
+	OtlpMetricsHandlers []MetricsHandlerOpts
+	// Scraper is the options for the prom scraper
+	Scraper *ScraperOpts
 
 	AddAttributes  map[string]string
 	LiftAttributes []string
@@ -180,8 +184,8 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
 
-	var metricsHandlers []*metricsHandler.Handler
-	for _, handlerOpts := range opts.MetricsHandlers {
+	var metricsHandlers []*http.HttpHandler
+	for _, handlerOpts := range opts.PromMetricsHandlers {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.RequestTransformer(),
@@ -193,7 +197,25 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			},
 			HealthChecker: fakeHealthChecker{},
 		})
-		metricsHandlers = append(metricsHandlers, metricsProxySvc)
+		metricsHandlers = append(metricsHandlers, &http.HttpHandler{
+			Path:    handlerOpts.Path,
+			Handler: metricsProxySvc.HandleReceive,
+		})
+	}
+
+	for _, handlerOpts := range opts.OtlpMetricsHandlers {
+		writer := otlp.NewOltpMetricWriter(otlp.OltpMetricWriterOpts{
+			RequestTransformer:       handlerOpts.RequestTransformer(),
+			Client:                   remoteClient,
+			Endpoints:                opts.Endpoints,
+			MaxBatchSize:             opts.MaxBatchSize,
+			DisableMetricsForwarding: handlerOpts.DisableMetricsForwarding,
+		})
+		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path)
+		metricsHandlers = append(metricsHandlers, &http.HttpHandler{
+			Path:    handlerOpts.Path,
+			Handler: oltpMetricsService.Handler,
+		})
 	}
 
 	var (
@@ -256,14 +278,14 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
 			PeerHealthReport: fakeHealthChecker{},
 		}),
-		store:            store,
-		scraper:          scraper,
-		otelLogsSvc:      logsSvc,
-		otelProxySvc:     logsProxySvc,
-		metricsProxySvcs: metricsHandlers,
-		batcher:          batcher,
-		replicator:       replicator,
-		remoteClient:     remoteClient,
+		store:        store,
+		scraper:      scraper,
+		otelLogsSvc:  logsSvc,
+		otelProxySvc: logsProxySvc,
+		proxySvcs:    metricsHandlers,
+		batcher:      batcher,
+		replicator:   replicator,
+		remoteClient: remoteClient,
 	}
 
 	if opts.CollectLogs {
@@ -359,8 +381,8 @@ func (s *Service) Open(ctx context.Context) error {
 	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
 	s.http.RegisterHandler("/logs", s.otelProxySvc.Handler)
 
-	for _, handler := range s.metricsProxySvcs {
-		s.http.RegisterHandler(handler.Path, handler.HandleReceive)
+	for _, handler := range s.proxySvcs {
+		s.http.RegisterHandler(handler.Path, handler.Handler)
 	}
 
 	logger.Infof("Listening at %s", s.opts.ListenAddr)

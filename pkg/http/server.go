@@ -9,6 +9,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+type HttpHandler struct {
+	Path    string
+	Handler http.HandlerFunc
+}
+
 type ServerOpts struct {
 	ListenAddr string
 }

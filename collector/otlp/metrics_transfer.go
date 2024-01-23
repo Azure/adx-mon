@@ -17,11 +17,12 @@ import (
 )
 
 type MetricsService struct {
-	writer *OltpMetricWriter
-	logger *slog.Logger
+	writer      MetricWriter
+	logger      *slog.Logger
+	reqReceived *prometheus.CounterVec
 }
 
-func NewMetricsService(writer *OltpMetricWriter) *MetricsService {
+func NewMetricsService(writer MetricWriter, path string) *MetricsService {
 	return &MetricsService{
 		writer: writer,
 		logger: slog.Default().With(
@@ -30,13 +31,14 @@ func NewMetricsService(writer *OltpMetricWriter) *MetricsService {
 				slog.String("protocol", "otlp-metrics"),
 			),
 		),
+		reqReceived: metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": path}),
 	}
 }
 
 // Handler handles OTLP/HTTP metrics requests
 // See https://opentelemetry.io/docs/specs/otlp/#otlphttp
 func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
-	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/v1/metrics"})
+	m := s.reqReceived
 	defer r.Body.Close()
 
 	ctx := r.Context()
