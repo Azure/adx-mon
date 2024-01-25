@@ -172,14 +172,16 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 		return err
 	}
 
+	// TODO: temporarily disable writing sample metadata until the reader components
+	// are released everywhere. At which point modify seg.Write to include opts.
+
 	// fast path
 	w.mu.RLock()
 	if w.segment != nil {
 		seg = w.segment
 		w.mu.RUnlock()
 
-		return seg.Write(ctx, buf, opts...)
-
+		return seg.Write(ctx, buf)
 	}
 	w.mu.RUnlock()
 
@@ -196,7 +198,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 	seg = w.segment
 	w.mu.Unlock()
 
-	return seg.Write(ctx, buf, opts...)
+	return seg.Write(ctx, buf)
 }
 
 func (w *WAL) validateLimits(buf []byte) error {

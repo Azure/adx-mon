@@ -390,7 +390,9 @@ func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) e
 	default:
 	}
 
-	sampleMetadataBytes := 4 /* sampleMetadataMagicNumber */ + 4 /* sampleMetadataVersion */ + 2 /* sampleType */ + 2 /* sampleCount */
+	// temporarily disable writing sample metadata until all the reader pieces have been released everywhere
+	// sampleMetadataBytes := 4 /* sampleMetadataMagicNumber */ + 4 /* sampleMetadataVersion */ + 2 /* sampleType */ + 2 /* sampleCount */
+	sampleMetadataBytes := 0
 	b := gbp.Get(len(buf) + sampleMetadataBytes)
 	defer gbp.Put(b)
 
