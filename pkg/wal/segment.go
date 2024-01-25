@@ -151,6 +151,10 @@ type segment struct {
 	closing chan struct{}
 	closed  bool
 
+	// sample metadata
+	sampleType  uint16
+	sampleCount uint16
+
 	// ringBuf is a circular buffer that queues writes to allow for large IO batches to file.
 	ringBuf *ring.Buffer
 
