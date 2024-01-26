@@ -37,7 +37,7 @@ func TestTailSourceStaticTargets(t *testing.T) {
 			},
 			{
 				FilePath: testFileTwo,
-				LogType:  LogTypeDocker,
+				LogType:  LogTypePlain,
 				Database: "Logs",
 				Table:    "TestServiceTwo",
 			},
@@ -103,7 +103,6 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	tailSource.AddTarget(
 		FileTailTarget{
 			FilePath: testFileOne,
-			LogType:  LogTypeDocker,
 			Database: "Logs",
 			Table:    "TestService",
 		},
@@ -111,7 +110,6 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	tailSource.AddTarget(
 		FileTailTarget{
 			FilePath: testFileTwo,
-			LogType:  LogTypeDocker,
 			Database: "Logs",
 			Table:    "TestServiceTwo",
 		},
@@ -120,7 +118,6 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	tailSource.AddTarget(
 		FileTailTarget{
 			FilePath: testFileOne,
-			LogType:  LogTypeDocker,
 			Database: "Logs",
 			Table:    "TestService",
 		},
