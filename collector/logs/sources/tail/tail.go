@@ -17,13 +17,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type Type string
+
 const (
 	cursor_position  = "cursor_position"
 	cursor_file_id   = "cursor_file_id"
 	cursor_file_name = "cursor_file_name"
 
-	// Log types for parsing
-	LogTypeDocker = "docker"
+	// Log types for extracting the timestamp and message
+	LogTypeDocker Type = "docker"
+	LogTypePlain  Type = "plain"
 )
 
 var (
@@ -33,7 +36,7 @@ var (
 // FileTailTarget describes a file to tail, how to parse it, and the destination for the parsed logs.
 type FileTailTarget struct {
 	FilePath string
-	LogType  string
+	LogType  Type
 	Database string
 	Table    string
 }
@@ -227,6 +230,8 @@ func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, ou
 			switch target.LogType {
 			case LogTypeDocker:
 				err = parseDockerLog(line.Text, log)
+			case LogTypePlain:
+				err = parsePlaintextLog(line.Text, log)
 			default:
 				err = parsePlaintextLog(line.Text, log)
 			}
