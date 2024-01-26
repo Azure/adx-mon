@@ -50,8 +50,11 @@ type TailSourceConfig struct {
 
 // Tailer is a specific instance of a file being tailed.
 type Tailer struct {
-	tail     *tail.Tail
-	shutdown context.CancelFunc
+	tail          *tail.Tail
+	shutdown      context.CancelFunc
+	database      string
+	table         string
+	logTypeParser LogTypeParser
 }
 
 func (t *Tailer) Stop() {
@@ -167,8 +170,15 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 		shutdown()
 		return fmt.Errorf("addTarget create tailfile: %w", err)
 	}
+	tailer := &Tailer{
+		tail:          tailFile,
+		shutdown:      shutdown,
+		database:      target.Database,
+		table:         target.Table,
+		logTypeParser: getLogTypeParser(target.LogType),
+	}
 	s.group.Go(func() error {
-		return readLines(tailerCtx, target, tailFile, batchQueue)
+		return readLines(tailerCtx, tailer, batchQueue)
 	})
 
 	batchConfig := engine.BatchConfig{
@@ -185,10 +195,6 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 	worker := s.workerCreator(s.Name(), outputQueue)
 	s.group.Go(worker.Run)
 
-	tailer := &Tailer{
-		tail:     tailFile,
-		shutdown: shutdown,
-	}
 	s.tailers[target.FilePath] = tailer
 
 	return nil
@@ -208,17 +214,17 @@ func (s *TailSource) RemoveTarget(filePath string) {
 	}
 }
 
-func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, outputQueue chan<- *types.Log) error {
+func readLines(ctx context.Context, tailer *Tailer, outputQueue chan<- *types.Log) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case line, ok := <-tailer.Lines:
+		case line, ok := <-tailer.tail.Lines:
 			if !ok {
-				return fmt.Errorf("readLines: tailer closed the channel for filename %q", tailer.Filename)
+				return fmt.Errorf("readLines: tailer closed the channel for filename %q", tailer.tail.Filename)
 			}
 			if line.Err != nil {
-				logger.Errorf("readLines: tailer error for filename %q: %v", tailer.Filename, line.Err)
+				logger.Errorf("readLines: tailer error for filename %q: %v", tailer.tail.Filename, line.Err)
 				//skip
 				continue
 			}
@@ -226,17 +232,9 @@ func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, ou
 			log := types.LogPool.Get(1).(*types.Log)
 			log.Reset()
 
-			var err error
-			switch target.LogType {
-			case LogTypeDocker:
-				err = parseDockerLog(line.Text, log)
-			case LogTypePlain:
-				err = parsePlaintextLog(line.Text, log)
-			default:
-				err = parsePlaintextLog(line.Text, log)
-			}
+			err := tailer.logTypeParser(line.Text, log)
 			if err != nil {
-				logger.Errorf("readLines: parselog error for filename %q: %v", tailer.Filename, err)
+				logger.Errorf("readLines: parselog error for filename %q: %v", tailer.tail.Filename, err)
 				//skip
 				continue
 			}
@@ -245,9 +243,9 @@ func readLines(ctx context.Context, target FileTailTarget, tailer *tail.Tail, ou
 			currentFileId := line.FileIdentifier
 			log.Attributes[cursor_position] = position
 			log.Attributes[cursor_file_id] = currentFileId
-			log.Attributes[cursor_file_name] = tailer.Filename
-			log.Attributes[types.AttributeDatabaseName] = target.Database
-			log.Attributes[types.AttributeTableName] = target.Table
+			log.Attributes[cursor_file_name] = tailer.tail.Filename
+			log.Attributes[types.AttributeDatabaseName] = tailer.database
+			log.Attributes[types.AttributeTableName] = tailer.table
 
 			// TODO combine partial lines. Docker separates lines with newlines in the log message.
 			outputQueue <- log
@@ -261,6 +259,21 @@ func (s *TailSource) ackBatch(cursor_file_name, cursor_file_id string, cursor_po
 	err := writeCursor(cursorPath, cursor_file_id, cursor_position)
 	if err != nil {
 		logger.Errorf("ackBatches: %s", err)
+	}
+}
+
+// LogTypeParser is a function that parses a line of text from a file based on its format.
+// Must assign log.Timestamp, log.ObservedTimestamp, and the types.BodyKeyMessage property of log.Body.
+type LogTypeParser func(string, *types.Log) error
+
+func getLogTypeParser(logType Type) LogTypeParser {
+	switch logType {
+	case LogTypeDocker:
+		return parseDockerLog
+	case LogTypePlain:
+		return parsePlaintextLog
+	default:
+		return parsePlaintextLog
 	}
 }
 
