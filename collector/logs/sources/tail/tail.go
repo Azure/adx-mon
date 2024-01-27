@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
+	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/tenebris-tech/tail"
@@ -34,11 +35,25 @@ var (
 )
 
 // FileTailTarget describes a file to tail, how to parse it, and the destination for the parsed logs.
+// It is used int he list of StaticTargets in TailSourceConfig, or used in AddTarget.
 type FileTailTarget struct {
+	// FilePath is the file to tail.
 	FilePath string
-	LogType  Type
+
+	// LogType is the format of the log file. e.g. docker for logs written by the docker json driver.
+	// This provides a mechanism to combine split lines, parse timestamps (if present), and extract a message field.
+	// Defaults to plain.
+	LogType Type
+
+	// The destination database name. Populated into the databasename attribute of the log that can be overwritten by transforms.
 	Database string
-	Table    string
+
+	// The destination table name. Populated into the tablename attribute of the log that can be overwritten by transforms.
+	Table string
+
+	// LogLineParsers is a list of parsers to apply to each line of the log file to attempt to extract fields from the message body.
+	// These are run sequentially until one succeeds, or until all have been tried.
+	Parsers []parser.ParserConfig
 }
 
 // TailSourceConfig configures TailSource.
@@ -50,11 +65,12 @@ type TailSourceConfig struct {
 
 // Tailer is a specific instance of a file being tailed.
 type Tailer struct {
-	tail          *tail.Tail
-	shutdown      context.CancelFunc
-	database      string
-	table         string
-	logTypeParser LogTypeParser
+	tail           *tail.Tail
+	shutdown       context.CancelFunc
+	database       string
+	table          string
+	logTypeParser  LogTypeParser
+	logLineParsers []parser.Parser
 }
 
 func (t *Tailer) Stop() {
@@ -165,17 +181,29 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 		}
 	}
 
+	tailParsers := make([]parser.Parser, 0, len(target.Parsers))
+	for i, parserConfig := range target.Parsers {
+		instance, err := parser.NewParser(parserConfig)
+		if err != nil {
+			shutdown()
+			return fmt.Errorf("addTarget create parser %d: %w", i, err)
+		}
+		tailParsers = append(tailParsers, instance)
+	}
+
 	tailFile, err := tail.TailFile(target.FilePath, tailConfig)
 	if err != nil {
 		shutdown()
 		return fmt.Errorf("addTarget create tailfile: %w", err)
 	}
+
 	tailer := &Tailer{
-		tail:          tailFile,
-		shutdown:      shutdown,
-		database:      target.Database,
-		table:         target.Table,
-		logTypeParser: getLogTypeParser(target.LogType),
+		tail:           tailFile,
+		shutdown:       shutdown,
+		database:       target.Database,
+		table:          target.Table,
+		logTypeParser:  getLogTypeParser(target.LogType),
+		logLineParsers: tailParsers,
 	}
 	s.group.Go(func() error {
 		return readLines(tailerCtx, tailer, batchQueue)
@@ -248,6 +276,16 @@ func readLines(ctx context.Context, tailer *Tailer, outputQueue chan<- *types.Lo
 			log.Attributes[types.AttributeTableName] = tailer.table
 
 			// TODO combine partial lines. Docker separates lines with newlines in the log message.
+
+			for _, parser := range tailer.logLineParsers {
+				err := parser.Parse(log)
+				if err == nil {
+					break // successful parse
+				} else if logger.IsDebug() {
+					logger.Debugf("readLines: parser error for filename %q: %v", tailer.tail.Filename, err)
+				}
+			}
+
 			outputQueue <- log
 		}
 	}
