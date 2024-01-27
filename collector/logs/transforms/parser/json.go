@@ -12,6 +12,8 @@ var (
 	ErrNotJson   = errors.New("no json object in log body")
 )
 
+const ParserTypeJson ParserType = "json"
+
 type JsonParserConfig struct {
 }
 
