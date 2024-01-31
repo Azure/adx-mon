@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -38,6 +39,9 @@ type Store interface {
 
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
+
+	// WriteNativeLogs writes a batch of logs to the Store.
+	WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error
 
 	// Import imports a file into the LocalStore and returns the number of bytes stored.
 	Import(filename string, body io.ReadCloser) (int, error)
@@ -153,6 +157,64 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
 	if err := w.Write(ctx, enc.Bytes(), wo); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
+	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	defer csvWriterPool.Put(enc)
+
+	key := gbp.Get(256)
+	defer gbp.Put(key)
+
+	if logger.IsDebug() {
+		logger.Debugf("Store received %d native logs", len(logs.Logs))
+	}
+
+	noDestinationCount := 0
+
+	// Each log can potentially have a different destination.
+	// Instead of splitting ahead of time and allocating n slices, just encode and write to the wal on
+	// a per-log basis.
+	for _, log := range logs.Logs {
+		// If we don't have a destination, we can't do anything with the log.
+		// Skip instead of trying again, which will just repeat the same error.
+		database, ok := log.Attributes[types.AttributeDatabaseName].(string)
+		if !ok || database == "" {
+			noDestinationCount++
+			continue
+		}
+
+		table, ok := log.Attributes[types.AttributeTableName].(string)
+		if !ok || table == "" {
+			noDestinationCount++
+			continue
+		}
+
+		key = fmt.Appendf(key[:0], "%s_%s", database, table)
+
+		wal, err := s.GetWAL(ctx, key)
+		if err != nil {
+			return err
+		}
+
+		metrics.SamplesStored.WithLabelValues(table).Inc()
+
+		enc.Reset()
+		if err := enc.MarshalCSV(log); err != nil {
+			return err
+		}
+
+		if err := wal.Write(ctx, enc.Bytes()); err != nil {
+			return err
+		}
+	}
+
+	if noDestinationCount > 0 {
+		logger.Warnf("Got %d logs without ADX destinations - dropped", noDestinationCount)
+		metrics.InvalidLogsDropped.WithLabelValues("no_destination").Add(float64(noDestinationCount))
 	}
 
 	return nil

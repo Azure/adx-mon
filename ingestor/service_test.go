@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/stretchr/testify/require"
@@ -97,6 +98,10 @@ func (f fakeStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) 
 }
 
 func (f fakeStore) WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error {
+	panic("implement me")
+}
+
+func (f fakeStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
 	panic("implement me")
 }
 

@@ -3,6 +3,7 @@ package transform
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
@@ -55,6 +57,8 @@ func (w *CSVWriter) MarshalCSV(t interface{}) error {
 		return w.marshalTS(t)
 	case *otlp.Logs:
 		return w.marshalLog(t)
+	case *types.Log:
+		return w.marshalNativeLog(t)
 	default:
 		return errors.New("unknown type")
 	}
@@ -255,6 +259,93 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 		if err := w.enc.Write(fields); err != nil {
 			return err
 		}
+	}
+
+	w.enc.Flush()
+	return w.enc.Error()
+}
+
+func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
+	// See ingestor/storage/schema::NewLogsSchema
+	// we're writing a ExportLogsServiceRequest as a CSV
+
+	// Logs often contain unespcaped newlines, particularly at the end of a log line
+	// but also in case of stacktraces.
+	replacer := strings.NewReplacer("\r\n", "%0D%0A", "\n", "%0A")
+
+	// There are 9 fields defined in an OTLP log schema
+	fields := make([]string, 0, 9)
+	// Convert log records to CSV
+	// see samples at https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
+	// Reset fields
+	fields = fields[:0]
+	// Timestamp
+	fields = append(fields, otlpTSToUTC(int64(log.Timestamp)))
+	// ObservedTimestamp
+	if v := log.ObservedTimestamp; v > 0 {
+		// Some clients don't set this value.
+		fields = append(fields, otlpTSToUTC(int64(log.ObservedTimestamp)))
+	} else {
+		fields = append(fields, time.Now().UTC().Format(time.RFC3339Nano))
+	}
+	// TraceId - we don't have this
+	fields = append(fields, "")
+	// SpanId - we don't have this
+	fields = append(fields, "")
+	// SeverityText - we don't have this
+	fields = append(fields, "")
+	// SeverityNumber - we don't have this
+	fields = append(fields, "")
+	// Body
+	buf := w.buf
+	buf.Reset()
+	buf.WriteByte('{')
+	hasPrevField := false
+	for k, v := range log.Body {
+		val, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+
+		if hasPrevField {
+			buf.WriteByte(',')
+		} else {
+			hasPrevField = true
+		}
+		fflib.WriteJson(buf, []byte(k))
+		buf.WriteByte(':')
+		fflib.WriteJson(buf, val)
+	}
+	buf.WriteByte('}')
+	fields = append(fields, replacer.Replace(buf.String()))
+
+	// Resource - we don't have this
+	fields = append(fields, "{}")
+	// Attributes
+	buf.Reset()
+	buf.WriteByte('{')
+	hasPrevField = false
+	for k, v := range log.Attributes {
+		// TODO skip adxmon attributes
+		val, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+
+		if hasPrevField {
+			buf.WriteByte(',')
+		} else {
+			hasPrevField = true
+		}
+		fflib.WriteJson(buf, []byte(k))
+		buf.WriteByte(':')
+		fflib.WriteJson(buf, val)
+	}
+	buf.WriteByte('}')
+	fields = append(fields, buf.String())
+	// Serialize
+	if err := w.enc.Write(fields); err != nil {
+		return err
 	}
 
 	w.enc.Flush()
