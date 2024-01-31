@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -32,6 +33,9 @@ type segmentIterator struct {
 	// lenCrcBuf is a temp buffer to re-use for extracting the 8 byte (4 len, 4 crc) values
 	// when iterating.
 	lenCrcBuf [8]byte
+
+	sampleType  SampleType
+	sampleCount uint16
 
 	// decodeBuf is a temp buffer to re-use for decoding the block.
 	decodeBuf []byte
@@ -119,7 +123,18 @@ func (b *segmentIterator) nextValue() (bool, error) {
 		return false, fmt.Errorf("block checksum verification failed")
 	}
 
-	b.value = value
+	if bytes.Equal(value[0:4], sampleMetadataMagicNumber) {
+
+		if bytes.Equal(value[4:8], sampleMetadataVersion) {
+			b.sampleType = SampleType(binary.BigEndian.Uint16(value[8:10]))
+			b.sampleCount += binary.BigEndian.Uint16(value[10:12])
+
+			b.value = value[12:]
+		}
+	} else {
+		b.value = value
+	}
+
 	b.n += 8 + int(blockLen)
 
 	return true, nil
@@ -173,4 +188,8 @@ func (b *segmentIterator) Verify() (int, error) {
 		}
 		blocks++
 	}
+}
+
+func (b *segmentIterator) Metadata() (t SampleType, sampleCount uint16) {
+	return b.sampleType, b.sampleCount
 }

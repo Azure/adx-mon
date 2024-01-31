@@ -1,6 +1,7 @@
 package wal_test
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -8,6 +9,16 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWriteOptions(t *testing.T) {
+	b := bytes.Repeat([]byte("a"), 100)
+	wo := wal.WithSampleMetadata(wal.LogSampleType, 42)
+	wo(b)
+
+	st, sc := wal.SampleMetadata(b)
+	require.Equal(t, wal.LogSampleType, st)
+	require.Equal(t, uint16(42), sc)
+}
 
 func TestNewWAL(t *testing.T) {
 	tests := []struct {
