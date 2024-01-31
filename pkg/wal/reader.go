@@ -52,6 +52,6 @@ func (s *SegmentReader) Close() error {
 	return s.f.Close()
 }
 
-func (s *SegmentReader) SampleMetadata() (t SampleType, sampleCount uint16) {
+func (s *SegmentReader) SampleMetadata() (t SampleType, sampleCount uint32) {
 	return s.iter.Metadata()
 }

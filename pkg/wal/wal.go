@@ -1,21 +1,40 @@
 package wal
 
 import (
-	"bytes"
+	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/pool"
+	"github.com/davidnarayan/go-flake"
 )
+
+// DefaultIOBufSize is the default buffer size for bufio.Writer.
+const DefaultIOBufSize = 4 * 1024
 
 var (
 	ErrMaxDiskUsageExceeded = fmt.Errorf("max disk usage exceeded")
 	ErrMaxSegmentsExceeded  = fmt.Errorf("max segments exceeded")
+	ErrSegmentClosed        = fmt.Errorf("segment closed")
+
+	idgen *flake.Flake
+
+	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
+		return bufio.NewWriterSize(nil, 4*1024)
+	})
 )
+
+func init() {
+	var err error
+	idgen, err = flake.New()
+	if err != nil {
+		panic(err)
+	}
+}
 
 type WAL struct {
 	opts WALOpts
@@ -76,42 +95,6 @@ const (
 
 type WriteOptions func([]byte)
 
-func WithSampleMetadata(t SampleType, count uint16) WriteOptions {
-	return func(b []byte) {
-		if len(b) < len(sampleMetadataMagicNumber)+len(sampleMetadataVersion)+4 {
-			return
-		}
-		copy(b[0:4], sampleMetadataMagicNumber[:])
-		copy(b[4:8], sampleMetadataVersion[:])
-
-		binary.BigEndian.PutUint16(b[8:10], uint16(t))
-		binary.BigEndian.PutUint16(b[10:12], count)
-	}
-}
-
-func SampleMetadata(b []byte) (t SampleType, count uint16) {
-	if len(b) < len(sampleMetadataMagicNumber)+len(sampleMetadataVersion)+4+4 {
-		return
-	}
-	if !bytes.Equal(b[0:4], sampleMetadataMagicNumber[:]) {
-		// Sample contains no metadata
-		return
-	}
-	if !bytes.Equal(b[4:8], sampleMetadataVersion[:]) {
-		// We don't know how to decode this version
-		return
-	}
-
-	t = SampleType(binary.BigEndian.Uint16(b[8:10]))
-	count = binary.BigEndian.Uint16(b[10:12])
-
-	return
-}
-
-func HasSampleMetadata(b []byte) bool {
-	return bytes.Equal(b[0:4], sampleMetadataMagicNumber[:])
-}
-
 func NewWAL(opts WALOpts) (*WAL, error) {
 	if opts.StorageDir == "" {
 		return nil, fmt.Errorf("wal storage dir not defined")
@@ -171,9 +154,6 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 	if err := w.validateLimits(buf); err != nil {
 		return err
 	}
-
-	// TODO: temporarily disable writing sample metadata until the reader components
-	// are released everywhere. At which point modify seg.Write to include opts.
 
 	// fast path
 	w.mu.RLock()

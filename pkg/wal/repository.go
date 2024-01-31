@@ -77,6 +77,17 @@ func (s *Repository) Open(ctx context.Context) error {
 				continue
 			}
 
+			// This block was added when we had an non-backwards compatible segment file change in the segment
+			// file format.  To simplify the migration, we just remove any segment files that are not in the
+			// expected format.  In the future, we will have a versioned segment file format to avoid this.
+			if !IsSegment(path) {
+				logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
+				if err := os.Remove(path); err != nil {
+					logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
+				}
+				continue
+			}
+
 			fileName := filepath.Base(path)
 			fields := strings.Split(fileName, "_")
 			if len(fields) != 3 || fields[0] == "" {

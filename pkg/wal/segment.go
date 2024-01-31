@@ -10,96 +10,30 @@ import (
 	"hash/crc32"
 	"io"
 	"io/fs"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	pkgfile "github.com/Azure/adx-mon/pkg/file"
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/ring"
-	"github.com/davidnarayan/go-flake"
-	"github.com/klauspost/compress/zstd"
+	"github.com/klauspost/compress/s2"
 	gbp "github.com/libp2p/go-buffer-pool"
 )
 
-const (
-	// DefaultIOBufSize is the default buffer size for bufio.Writer.
-	DefaultIOBufSize = 128 * 1024
-
-	// DefaultRingSize is the default size of the ring buffer.
-	DefaultRingSize = 64
-)
-
 var (
-	idgen *flake.Flake
+	// blockHdrMagic is the magic number for the block header.  If this is not present as the first 2 bytes of a block,
+	// then extra meta data is not present.
+	blockHdrMagic = [2]byte{0xAA, 0xAA} // 10101010 10101010 in binary
 
-	// encoder and decoder pools are used for compressing and decompressing blocks
-	encoders []*zstd.Encoder
-	decoders []*zstd.Decoder
-
-	// ringPool is a pool of ring buffers used for queuing writes to segments.  This allows these to be
-	// re-used across segments.  We allow up to 10000 ring buffers to be allocated to match the max number of
-	// tables allowed in Kusto.
-	ringPool = pool.NewGeneric(10000, func(sz int) interface{} {
-		return ring.NewBuffer(sz)
-	})
-
-	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
-		return bufio.NewWriterSize(nil, 4*1024)
-	})
-
-	ErrSegmentClosed = errors.New("segment closed")
-
-	sampleMetadataMagicNumber = []byte{0xC0, 0xDE, 0xC0, 0xDE}
-	sampleMetadataVersion     = []byte{0x0, 0x0, 0x0, 0x1} // If you update this value, also update Iterator
+	// segmentMagic is the magic number for the segment file.  If this is not present as the first 6 bytes of a segment
+	// then the file is not a valid segment file.
+	segmentMagic   = [8]byte{'A', 'D', 'X', 'W', 'A', 'L'}
+	segmentVersion = byte(1)
 )
-
-func init() {
-	var err error
-	idgen, err = flake.New()
-	if err != nil {
-		panic(err)
-	}
-
-	SetEncoderPoolSize(16)
-	SetDecoderPoolSize(16)
-}
-
-// SetEncoderPoolSize sets the size of the encoder pool.
-func SetEncoderPoolSize(sz int) {
-	encoders = make([]*zstd.Encoder, sz)
-	for i := 0; i < len(encoders); i++ {
-		encoder, err := zstd.NewWriter(nil,
-			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderConcurrency(1),
-			zstd.WithLowerEncoderMem(true),
-			zstd.WithWindowSize(64*1024))
-		if err != nil {
-			panic(err)
-		}
-		encoders[i] = encoder
-	}
-}
-
-// SetDecoderPoolSize sets the size of the decoder pool.
-func SetDecoderPoolSize(sz int) {
-	decoders = make([]*zstd.Decoder, sz)
-	for i := 0; i < len(decoders); i++ {
-		decoder, err := zstd.NewReader(nil,
-			zstd.WithDecoderConcurrency(1),
-			zstd.WithDecoderLowmem(true),
-		)
-		if err != nil {
-			panic(err)
-		}
-		decoders[i] = decoder
-	}
-}
 
 type Segment interface {
 	Append(ctx context.Context, buf []byte) error
@@ -122,7 +56,7 @@ type Iterator interface {
 	Value() []byte
 	Close() error
 	Verify() (int, error)
-	Metadata() (SampleType, uint16)
+	Metadata() (SampleType, uint32)
 }
 
 type segment struct {
@@ -132,6 +66,7 @@ type segment struct {
 	createdAt time.Time
 	path      string
 	prefix    string
+	filePos   uint64
 
 	wg sync.WaitGroup
 	mu sync.RWMutex
@@ -141,12 +76,6 @@ type segment struct {
 
 	// bw is a buffered writer for w that if flushed to disk in batches.
 	bw *bufio.Writer
-	cw *pkgfile.CountingWriter
-
-	// encodeBuf is a buffer used for compressing blocks before writing to file.
-	encodeBuf []byte
-	lenBuf    [8]byte
-	encoder   *zstd.Encoder
 
 	closing chan struct{}
 	closed  bool
@@ -154,9 +83,6 @@ type segment struct {
 	// sample metadata
 	sampleType  uint16
 	sampleCount uint16
-
-	// ringBuf is a circular buffer that queues writes to allow for large IO batches to file.
-	ringBuf *ring.Buffer
 
 	// appendCh is channel used to append raw blocks to the segment.
 	appendCh chan ring.Entry
@@ -181,10 +107,14 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		return nil, err
 	}
 
-	cw := pkgfile.NewCountingWriter(fw)
+	if n, err := fw.Write(segmentMagic[:]); err != nil {
+		return nil, err
+	} else if n != 8 {
+		return nil, io.ErrShortWrite
+	}
 
 	bf := bwPool.Get(DefaultIOBufSize).(*bufio.Writer)
-	bf.Reset(cw)
+	bf.Reset(fw)
 
 	f := &segment{
 		id:        flakeId.String(),
@@ -193,11 +123,9 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		path:      path,
 		w:         fw,
 		bw:        bf,
-		cw:        cw,
+		filePos:   8,
 
 		closing:  make(chan struct{}),
-		ringBuf:  ringPool.Get(DefaultRingSize).(*ring.Buffer),
-		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
 	}
@@ -207,10 +135,34 @@ func NewSegment(dir, prefix string) (Segment, error) {
 	return f, nil
 }
 
-func Open(path string) (Segment, error) {
+// IsSegment returns true if the file is a valid segment file.
+func IsSegment(path string) bool {
 	ext := filepath.Ext(path)
 	if ext != ".wal" {
-		return nil, fmt.Errorf("invalid segment filename: %s", path)
+		return false
+	}
+
+	ff, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer ff.Close()
+
+	// First 8 bytes are the header and 6 bytes is the segmentMagic number.  The remaining two bytes are not used
+	// yet but can indicate version or other information in the future.
+	var magicBuf [8]byte
+	if n, err := ff.Read(magicBuf[:]); err != nil && !errors.Is(err, io.EOF) {
+		return false
+	} else if n != 8 || !bytes.Equal(magicBuf[:6], segmentMagic[:6]) {
+		return false
+	}
+
+	return true
+}
+
+func Open(path string) (Segment, error) {
+	if !IsSegment(path) {
+		return nil, fmt.Errorf("invalid segment file: %s", path)
 	}
 
 	fileName := filepath.Base(path)
@@ -235,24 +187,19 @@ func Open(path string) (Segment, error) {
 		return nil, err
 	}
 
-	cw := pkgfile.NewCountingWriter(fd)
-	cw.SetWritten(stat.Size())
-
 	bf := bwPool.Get(DefaultIOBufSize).(*bufio.Writer)
-	bf.Reset(cw)
+	bf.Reset(fd)
 
 	f := &segment{
 		id:        id,
 		prefix:    prefix,
 		createdAt: createdAt,
 		path:      path,
+		filePos:   uint64(stat.Size()),
 
 		w:        fd,
 		bw:       bf,
-		cw:       cw,
 		closing:  make(chan struct{}),
-		ringBuf:  ring.NewBuffer(DefaultRingSize),
-		encoder:  encoders[rand.Intn(len(encoders))],
 		appendCh: make(chan ring.Entry, 64),
 		flushCh:  make(chan chan error),
 	}
@@ -292,7 +239,7 @@ func (s *segment) CreatedAt() time.Time {
 
 // Size returns the current size of the segment file on file.
 func (s *segment) Size() (int64, error) {
-	return s.cw.BytesWritten(), nil
+	return int64(atomic.LoadUint64(&s.filePos)), nil
 }
 
 // ID returns the ID of the segment.
@@ -336,6 +283,7 @@ func (s *segment) Iterator() (Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return NewSegmentIterator(f)
 }
 
@@ -343,11 +291,11 @@ func (s *segment) Iterator() (Iterator, error) {
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
 func (s *segment) Append(ctx context.Context, buf []byte) error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.closed {
+		s.mu.RUnlock()
 		return ErrSegmentClosed
 	}
+	s.mu.RUnlock()
 
 	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
 	if err != nil {
@@ -361,60 +309,31 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 		return nil
 	}
 
-	entry := ring.Entry{Value: buf, ErrCh: make(chan error, 1)}
-	s.appendCh <- entry
-	select {
-	case err := <-entry.ErrCh:
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Strip off the header and append the block to the segment
+	n, err := s.appendBlocks(buf[8:])
+	if err != nil {
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	atomic.AddUint64(&s.filePos, uint64(n))
+	return nil
 }
 
 // Write writes buf to the segment.
 func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.closed {
+		s.mu.RUnlock()
 		return ErrSegmentClosed
 	}
+	s.mu.RUnlock()
 
-	entry := s.ringBuf.Reserve()
-	defer s.ringBuf.Release(entry)
+	written, err := s.blockWrite(s.bw, buf, opts...)
 
-	// Entries are re-used, so we need to reset the error channel before enqueuing the entry to prevent exiting
-	// this func and adding the entry back to the ringbuffer before it's actually be flushed.
-	select {
-	case <-entry.ErrCh:
-	default:
-	}
-
-	// temporarily disable writing sample metadata until all the reader pieces have been released everywhere
-	// sampleMetadataBytes := 4 /* sampleMetadataMagicNumber */ + 4 /* sampleMetadataVersion */ + 2 /* sampleType */ + 2 /* sampleCount */
-	sampleMetadataBytes := 0
-	b := gbp.Get(len(buf) + sampleMetadataBytes)
-	defer gbp.Put(b)
-
-	for _, opt := range opts {
-		opt(b)
-	}
-
-	offset := 0
-	if HasSampleMetadata(b) {
-		offset = sampleMetadataBytes
-	}
-
-	entry.Value = append(b[:offset], buf...)
-
-	s.ringBuf.Enqueue(entry)
-
-	select {
-	case err := <-entry.ErrCh:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	atomic.AddUint64(&s.filePos, uint64(written))
+	return err
 }
 
 // Bytes returns full segment file as byte slice.
@@ -450,11 +369,8 @@ func (s *segment) Close() error {
 	// Wait for flusher goroutine to flush any in-flight writes
 	s.wg.Wait()
 
-	s.encoder = nil
 	bwPool.Put(s.bw)
 	s.bw = nil
-	ringPool.Put(s.ringBuf)
-	s.ringBuf = nil
 
 	if err := s.w.Sync(); errors.Is(err, os.ErrClosed) {
 		return nil
@@ -470,12 +386,12 @@ func (s *segment) Close() error {
 func (s *segment) repair() error {
 	buf := make([]byte, 0, 4096)
 
-	if _, err := s.w.Seek(0, io.SeekStart); err != nil {
+	if _, err := s.w.Seek(8, io.SeekStart); err != nil {
 		return err
 	}
 
 	var (
-		lastGoodIdx, idx int
+		lastGoodIdx, idx = 8, 8
 		lenCrcBuf        [8]byte
 	)
 	for {
@@ -525,122 +441,114 @@ func (s *segment) flusher() {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
 
-	blockBuf := bytes.NewBuffer(make([]byte, 0, 4*1024))
 	for {
 		select {
-		case req := <-s.ringBuf.Queue():
-			blockBuf.Reset()
-			err := s.blockWrite(blockBuf, req.Value)
-			select {
-			case req.ErrCh <- err:
-			default:
-			}
-
-			s.flushQueue(blockBuf)
-
-			s.flushBlock(blockBuf, req)
-		case req := <-s.appendCh:
-			err := s.appendBlocks(req.Value)
-			select {
-			case req.ErrCh <- err:
-			default:
-			}
-
 		case doneCh := <-s.flushCh:
+			s.mu.Lock()
 			err := s.bw.Flush()
+			s.mu.Unlock()
 			if err != nil {
 				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 			doneCh <- err
-		case <-t.C:
-			if err := s.bw.Flush(); err != nil {
-				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
-			}
 		case <-s.closing:
-			blockBuf.Reset()
-			s.flushQueue(blockBuf)
-
-			req := &ring.Entry{ErrCh: make(chan error, 1)}
-			s.flushBlock(blockBuf, req)
-
 			if err := s.bw.Flush(); err != nil {
 				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
-
-			select {
-			case err := <-req.ErrCh:
-				if err != nil {
-					logger.Errorf("Failed to flush block when closing segment: %s", err)
-				}
-			default:
-			}
-
 			return
+		case <-t.C:
+			s.mu.Lock()
+			if err := s.bw.Flush(); err != nil {
+				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
+			}
+			s.mu.Unlock()
 		}
 	}
 }
 
-func (s *segment) appendBlocks(val []byte) error {
+func (s *segment) appendBlocks(val []byte) (int, error) {
 	n, err := s.bw.Write(val)
 	if err != nil {
-		return err
+		return 0, err
 	} else if n != len(val) {
-		return io.ErrShortWrite
+		return n, io.ErrShortWrite
 	}
-	return nil
-}
-
-func (s *segment) flushBlock(blockBuf *bytes.Buffer, req *ring.Entry) {
-	if blockBuf.Len() == 0 {
-		req.ErrCh <- nil
-		return
-	}
-
-	s.encodeBuf = s.encoder.EncodeAll(blockBuf.Bytes(), s.encodeBuf[:0])
-
-	err := s.blockWrite(s.bw, s.encodeBuf)
-
-	select {
-	case req.ErrCh <- err:
-	default:
-	}
-}
-
-func (s *segment) flushQueue(w io.Writer) {
-	for len(s.ringBuf.Queue()) > 0 {
-		req := <-s.ringBuf.Queue()
-
-		err := s.blockWrite(w, req.Value)
-		select {
-		case req.ErrCh <- err:
-		default:
-		}
-	}
-
+	return n, nil
 }
 
 // blockWrite writes length and CRC32 prefixed block to w
-func (s *segment) blockWrite(w io.Writer, buf []byte) error {
+func (s *segment) blockWrite(w io.Writer, buf []byte, opts ...WriteOptions) (int, error) {
 	if len(buf) == 0 {
-		return nil
+		return 0, nil
 	}
 
-	binary.BigEndian.PutUint32(s.lenBuf[:4], uint32(len(buf)))
-	binary.BigEndian.PutUint32(s.lenBuf[4:8], crc32.ChecksumIEEE(buf))
-	n, err := w.Write(s.lenBuf[:8])
-	if err != nil {
-		return err
-	} else if n != 8 {
-		return io.ErrShortWrite
+	// Each block is constructed as follows:
+	//
+	// The block is prefixed with a 4 byte length and 4 byte CRC32 checksum which is used
+	// to verify the block's integrity.
+	//
+	// The block body is a snappy encoded byte array consisting of a 2 byte magic number,
+	// 1 byte version, 1 byte type, 4 byte count, and N bytes of value. The magic number is used to identify the
+	// block as a valid block.  The version is used to identify the version of the block.  The type is used to
+	// identify the type of the block.  The count is used to identify the number of
+	// samples in the block.  The value is the actual data of the block uncompressed.
+	//
+
+	// ┌───────────┬─────────┬───────────┬───────────┬───────────┬───────────┬───────────┐
+	// │    Len    │   CRC   │   Magic   │  Version  │   Type    │   Count   │   Value   │
+	// │  4 bytes  │ 4 bytes │  2 bytes  │  1 byte   │  1 byte   │  4 bytes  │  N bytes  │
+	// └───────────┴─────────┴───────────┴───────────┴───────────┴───────────┴───────────┘
+	// ┌─────────────────────┬───────────────────────────────────────────────────────────┐
+	// │       Header        │                           Block                           │
+	// └─────────────────────┴───────────────────────────────────────────────────────────┘
+
+	// The block header is 8 bytes long and consists of the length and CRC32 checksum of the block.
+	// The other 8 bytes are for the magic number, version, type, and count of the block.
+	// We use one slice from the buffer pool that is large enough to store the metadata headers
+	// and the compressed value.
+
+	blockBuf := gbp.Get(8 + len(buf))
+	defer gbp.Put(blockBuf)
+
+	// Copy the magic number and version to the buffer
+	copy(blockBuf[0:2], blockHdrMagic[:])
+	blockBuf[2] = segmentVersion
+
+	// Default to unknown, no count data for the block
+	blockBuf[3] = byte(UnknownSampleType)
+	binary.BigEndian.PutUint32(blockBuf[4:8], 0)
+
+	// Apply the WriteOptions to set sample type and count
+	for _, opt := range opts {
+		opt(blockBuf[3:8])
 	}
 
-	n, err = w.Write(buf)
+	// Append the block value to the buffer
+	copy(blockBuf[8:], buf)
+
+	// We need a separate buffer build the block header and value
+	b := gbp.Get(8 + s2.MaxEncodedLen(len(blockBuf)))
+	defer gbp.Put(b)
+
+	// Encode the block header and value
+	compressedBytes := s2.EncodeBetter(b[8:], blockBuf)
+
+	binary.BigEndian.PutUint32(b[0:4], uint32(len(compressedBytes)))
+	binary.BigEndian.PutUint32(b[4:8], crc32.ChecksumIEEE(compressedBytes))
+
+	b = b[:8+len(compressedBytes)]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n, err := w.Write(b)
 	if err != nil {
-		return err
-	} else if n != len(buf) {
-		return io.ErrShortWrite
+		return 0, err
+	} else if n != len(b) {
+		return 0, io.ErrShortWrite
 	}
-	return nil
+
+	return n, nil
 }
 
 func (s *segment) truncate(ofs int64) error {
@@ -650,7 +558,31 @@ func (s *segment) truncate(ofs int64) error {
 	if err := s.w.Sync(); err != nil {
 		return err
 	}
-	s.cw.SetWritten(ofs)
+	atomic.StoreUint64(&s.filePos, uint64(ofs))
 
 	return nil
+}
+
+func WithSampleMetadata(t SampleType, count uint32) WriteOptions {
+	return func(b []byte) {
+		if len(b) < 5 {
+			return
+		}
+		b[0] = byte(t)
+		binary.BigEndian.PutUint32(b[1:5], count)
+	}
+}
+
+func SampleMetadata(b []byte) (t SampleType, count uint32) {
+	if len(b) < 5 {
+		return
+	}
+	t = SampleType(b[0])
+	count = binary.BigEndian.Uint32(b[1:5])
+
+	return
+}
+
+func HasSampleMetadata(b []byte) bool {
+	return bytes.Equal(b[0:2], blockHdrMagic[:])
 }

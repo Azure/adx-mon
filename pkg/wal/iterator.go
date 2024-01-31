@@ -7,9 +7,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math/rand"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/klauspost/compress/s2"
 )
 
 // segmentIterator is an iterator for a segment file.  It allows reading back values written to the segment in the
@@ -35,30 +34,30 @@ type segmentIterator struct {
 	lenCrcBuf [8]byte
 
 	sampleType  SampleType
-	sampleCount uint16
+	sampleCount uint32
 
 	// decodeBuf is a temp buffer to re-use for decoding the block.
 	decodeBuf []byte
-	decoder   *zstd.Decoder
 }
 
 func NewSegmentIterator(r io.ReadCloser) (Iterator, error) {
+	var magicBuf [8]byte
+	if _, err := io.ReadFull(r, magicBuf[:]); err != nil {
+		return nil, err
+	} else if !bytes.Equal(magicBuf[:6], segmentMagic[:6]) {
+		return nil, ErrInvalidWALSegment
+	}
+
 	return &segmentIterator{
 		f:         r,
 		br:        bufio.NewReader(r),
 		n:         0,
 		buf:       make([]byte, 0, 4096),
 		decodeBuf: make([]byte, 0, 4096),
-		decoder:   decoders[rand.Intn(len(decoders))],
 		value:     nil,
 	}, nil
 }
 func (b *segmentIterator) Next() (bool, error) {
-	// Each block may have multiple entries corresponding to each call to Write
-	if b.n < len(b.buf) {
-		return b.nextValue()
-	}
-
 	// Read the block length and CRC
 	n, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
 	if err == io.EOF {
@@ -92,52 +91,19 @@ func (b *segmentIterator) Next() (bool, error) {
 		return false, fmt.Errorf("block checksum verification failed")
 	}
 
-	b.decodeBuf, err = b.decoder.DecodeAll(b.buf[:blockLen], b.decodeBuf[:0])
+	b.decodeBuf, err = s2.Decode(b.decodeBuf[:0], b.buf[:blockLen])
 	if err != nil {
 		return false, err
 	}
 
-	// Setup internal iterator indexing on this block.
-	b.buf = append(b.buf[:0], b.decodeBuf...)
-	b.n = 0
-	b.value = nil
-
-	// Unwrap the first value in this block.
-	return b.nextValue()
-}
-
-func (b *segmentIterator) nextValue() (bool, error) {
-	if b.n >= len(b.buf) {
-		return false, io.EOF
-	}
-	blockLen := binary.BigEndian.Uint32(b.buf[b.n : b.n+4])
-	crc := binary.BigEndian.Uint32(b.buf[b.n+4 : b.n+8])
-
-	if int(blockLen) > len(b.buf[b.n+8:]) {
-		return false, fmt.Errorf("short block read: expected %d, got %d", blockLen, len(b.buf[b.n+8:]))
-	}
-
-	value := b.buf[b.n+8 : b.n+8+int(blockLen)]
-
-	if crc32.ChecksumIEEE(value) != crc {
-		return false, fmt.Errorf("block checksum verification failed")
-	}
-
-	if bytes.Equal(value[0:4], sampleMetadataMagicNumber) {
-
-		if bytes.Equal(value[4:8], sampleMetadataVersion) {
-			b.sampleType = SampleType(binary.BigEndian.Uint16(value[8:10]))
-			b.sampleCount += binary.BigEndian.Uint16(value[10:12])
-
-			b.value = value[12:]
-		}
+	if HasSampleMetadata(b.decodeBuf) {
+		b.sampleType, b.sampleCount = SampleMetadata(b.decodeBuf[3:8])
+		b.value = b.decodeBuf[8:]
 	} else {
-		b.value = value
+		b.value = b.decodeBuf
 	}
 
-	b.n += 8 + int(blockLen)
-
-	return true, nil
+	return len(b.value) > 0, nil
 }
 
 func (b *segmentIterator) Value() []byte {
@@ -145,7 +111,6 @@ func (b *segmentIterator) Value() []byte {
 }
 
 func (b *segmentIterator) Close() error {
-	b.decoder = nil
 	return b.f.Close()
 }
 
@@ -190,6 +155,6 @@ func (b *segmentIterator) Verify() (int, error) {
 	}
 }
 
-func (b *segmentIterator) Metadata() (t SampleType, sampleCount uint16) {
+func (b *segmentIterator) Metadata() (t SampleType, sampleCount uint32) {
 	return b.sampleType, b.sampleCount
 }

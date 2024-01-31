@@ -17,7 +17,7 @@ func TestWriteOptions(t *testing.T) {
 
 	st, sc := wal.SampleMetadata(b)
 	require.Equal(t, wal.LogSampleType, st)
-	require.Equal(t, uint16(42), sc)
+	require.Equal(t, uint32(42), sc)
 }
 
 func TestNewWAL(t *testing.T) {

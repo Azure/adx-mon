@@ -23,7 +23,7 @@ func TestSegmentIterator_Verify(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
 
-			iter, err := wal.NewSegmentIterator(io.NopCloser(bytes.NewBuffer([]byte("testtest1"))))
+			iter, err := wal.NewSegmentIterator(io.NopCloser(bytes.NewBuffer([]byte("ADXWAL  testtest1"))))
 			require.NoError(t, err)
 			defer iter.Close()
 
