@@ -5,15 +5,10 @@ import (
 	"fmt"
 	"net/http/pprof"
 	_ "net/http/pprof"
-	"os"
-	"path/filepath"
 	"regexp"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
-	"github.com/Azure/adx-mon/collector/logs/engine"
-	"github.com/Azure/adx-mon/collector/logs/sinks"
-	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
@@ -96,9 +91,6 @@ type ServiceOpts struct {
 	// MaxDiskUsage is the max size in bytes to use for segment store.  If this value is exceeded, writes
 	// will be rejected until space is freed.  A value of 0 means no max usage.
 	MaxDiskUsage int64
-
-	// Log Service options
-	CollectLogs bool
 
 	// StorageDir is the directory where the WAL will be stored
 	StorageDir string
@@ -290,41 +282,41 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		remoteClient: remoteClient,
 	}
 
-	if opts.CollectLogs {
-		files, err := filepath.Glob("/var/log/containers/*.log")
-		if err != nil {
-			return nil, fmt.Errorf("glob: %w", err)
-		}
-		targets := make([]tail.FileTailTarget, 0, len(files))
-		for _, file := range files {
-			targets = append(targets, tail.FileTailTarget{
-				FilePath: file,
-				LogType:  tail.LogTypeDocker,
-				Database: "AKSinfra",
-				Table:    "ContainerLog",
-			})
-		}
+	// if opts.CollectLogs {
+	// 	files, err := filepath.Glob("/var/log/containers/*.log")
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("glob: %w", err)
+	// 	}
+	// 	targets := make([]tail.FileTailTarget, 0, len(files))
+	// 	for _, file := range files {
+	// 		targets = append(targets, tail.FileTailTarget{
+	// 			FilePath: file,
+	// 			LogType:  tail.LogTypeDocker,
+	// 			Database: "AKSinfra",
+	// 			Table:    "ContainerLog",
+	// 		})
+	// 	}
 
-		cursorDirectory := filepath.Join(opts.StorageDir, "log-cursors")
-		if err := os.MkdirAll(cursorDirectory, 0755); err != nil {
-			return nil, fmt.Errorf("log-cursors mkdir: %w", err)
-		}
-		sink := sinks.NewStdoutSink()
-		source, err := tail.NewTailSource(tail.TailSourceConfig{
-			StaticTargets:   targets,
-			CursorDirectory: cursorDirectory,
-			WorkerCreator:   engine.WorkerCreator(nil, sink),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create tail source: %w", err)
-		}
+	// 	cursorDirectory := filepath.Join(opts.StorageDir, "log-cursors")
+	// 	if err := os.MkdirAll(cursorDirectory, 0755); err != nil {
+	// 		return nil, fmt.Errorf("log-cursors mkdir: %w", err)
+	// 	}
+	// 	sink := sinks.NewStdoutSink()
+	// 	source, err := tail.NewTailSource(tail.TailSourceConfig{
+	// 		StaticTargets:   targets,
+	// 		CursorDirectory: cursorDirectory,
+	// 		WorkerCreator:   engine.WorkerCreator(nil, sink),
+	// 	})
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("create tail source: %w", err)
+	// 	}
 
-		logsSvc := &logs.Service{
-			Source: source,
-			Sink:   sink,
-		}
-		svc.logsSvc = logsSvc
-	}
+	// 	logsSvc := &logs.Service{
+	// 		Source: source,
+	// 		Sink:   sink,
+	// 	}
+	// 	svc.logsSvc = logsSvc
+	// }
 
 	return svc, nil
 }

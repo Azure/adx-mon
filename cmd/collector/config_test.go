@@ -353,6 +353,197 @@ func TestConfig_Validate_PrometheusRemoteWrite(t *testing.T) {
 	}
 }
 
+func TestConfig_Validate_TailLog(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *TailLog
+		wantErr bool
+	}{
+		{
+			name: "Success_valid_static_targets",
+			config: &TailLog{
+				AddAttributes:  map[string]string{"key": "value"},
+				LiftAttributes: []string{"foo"},
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						LogType:  "docker",
+						Database: "db",
+						Table:    "table",
+						Parsers: []string{
+							"json",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Success_empty_log_type_default",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+						Parsers: []string{
+							"json",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Success_no_log_type_no_parsers",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Failure_empty_path",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						LogType:  "docker",
+						Database: "db",
+						Table:    "table",
+						Parsers: []string{
+							"json",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_db",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						LogType:  "docker",
+						Table:    "table",
+						Parsers: []string{
+							"json",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_table",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						LogType:  "docker",
+						Database: "db",
+						Parsers: []string{
+							"json",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure invalid parser",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						LogType:  "docker",
+						Database: "db",
+						Table:    "table",
+						Parsers: []string{
+							"json",
+							"invalid",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_invalid_log_type",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						LogType:  "foo",
+						Database: "db",
+						Table:    "table",
+						Parsers: []string{
+							"json",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_lift_attributes",
+			config: &TailLog{
+				LiftAttributes: []string{"foo", ""},
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_attribute_key",
+			config: &TailLog{
+				AddAttributes: map[string]string{"": "value"},
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_attribute_value",
+			config: &TailLog{
+				AddAttributes: map[string]string{"key": ""},
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestConfig_ReplaceVariables(t *testing.T) {
 	c := &Config{
 		AddLabels: map[string]string{

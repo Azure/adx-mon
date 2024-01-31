@@ -6,6 +6,9 @@ import (
 	"os"
 	"reflect"
 	"strings"
+
+	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 )
 
 var homedir string
@@ -48,6 +51,12 @@ var DefaultConfig = Config{
 			AddLabels: make(map[string]string),
 		},
 	},
+	TailLog: []*TailLog{
+		{
+			StaticTailTarget: []*TailTarget{},
+			AddAttributes:    make(map[string]string),
+		},
+	},
 }
 
 type Config struct {
@@ -82,6 +91,7 @@ type Config struct {
 	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
 	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint."`
 	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint."`
+	TailLog               []*TailLog               `toml:"tail-log" comment:"Defines a tail log scraper."`
 }
 
 type PrometheusScrape struct {
@@ -272,6 +282,70 @@ func (w *OtelMetric) Validate() error {
 	return nil
 }
 
+type TailLog struct {
+	AddAttributes    map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	LiftAttributes   []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	StaticTailTarget []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
+}
+
+type TailTarget struct {
+	FilePath string    `toml:"file-path" comment:"The path to the file to tail."`
+	LogType  tail.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files.  Options are: docker, plain."`
+	Database string    `toml:"database" comment:"Database to store logs in."`
+	Table    string    `toml:"table" comment:"Table to store logs in."`
+	Parsers  []string  `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+}
+
+func (w *TailLog) Validate() error {
+	for k, v := range w.AddAttributes {
+		if k == "" {
+			return errors.New("tail-log.add-attributes key must be set")
+		}
+		if v == "" {
+			return errors.New("tail-log.add-attributes value must be set")
+		}
+	}
+	for _, v := range w.LiftAttributes {
+		if v == "" {
+			return errors.New("tail-log.add-attributes value cannot be empty")
+		}
+	}
+
+	// Empty is ok - defaults to plain
+	validLogTypes := []tail.Type{tail.LogTypeDocker, tail.LogTypePlain, ""}
+
+	for _, v := range w.StaticTailTarget {
+		if v.FilePath == "" {
+			return errors.New("tail-log.static-target.file-path must be set")
+		}
+		if v.Database == "" {
+			return errors.New("tail-log.static-target.database must be set")
+		}
+		if v.Table == "" {
+			return errors.New("tail-log.static-target.table must be set")
+		}
+
+		foundValidType := false
+		for _, validType := range validLogTypes {
+			if v.LogType == validType {
+				foundValidType = true
+				break
+			}
+		}
+		if !foundValidType {
+			return fmt.Errorf("tail-log.static-target.log-type %s is not a valid log type", v.LogType)
+		}
+
+		for _, parserName := range v.Parsers {
+			if !parser.IsValidParser(parserName) {
+				return fmt.Errorf("tail-log.static-target.parsers %s is not a valid parser", parserName)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (c *Config) Validate() error {
 	existingPaths := make(map[string]struct{})
 	for _, v := range c.PrometheusRemoteWrite {
@@ -287,6 +361,12 @@ func (c *Config) Validate() error {
 
 	if c.OtelLog != nil {
 		if err := c.OtelLog.Validate(); err != nil {
+			return err
+		}
+	}
+
+	for _, v := range c.TailLog {
+		if err := v.Validate(); err != nil {
 			return err
 		}
 	}

@@ -27,3 +27,12 @@ func NewParser(config ParserConfig) (Parser, error) {
 		return nil, fmt.Errorf("unknown parser type: %s", config.Type)
 	}
 }
+
+func IsValidParser(parserType string) bool {
+	switch parserType {
+	case string(ParserTypeJson):
+		return true
+	default:
+		return false
+	}
+}

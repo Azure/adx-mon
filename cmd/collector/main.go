@@ -36,7 +36,6 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
-			&cli.BoolFlag{Name: "experimental-log-collection", Usage: "Enable experimental log collection.", Hidden: true},
 		},
 
 		Commands: []*cli.Command{
@@ -262,7 +261,6 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
 		MaxSegmentSize:     cfg.MaxSegmentSize,
 		MaxDiskUsage:       cfg.MaxDiskUsage,
-		CollectLogs:        ctx.Bool("experimental-log-collection"),
 		StorageDir:         cfg.StorageDir,
 	}
 
