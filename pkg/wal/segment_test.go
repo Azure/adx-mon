@@ -1,21 +1,24 @@
 package wal_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/davidnarayan/go-flake"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestNewSegment(t *testing.T) {
@@ -66,6 +69,10 @@ func TestSegment_CreatedAt(t *testing.T) {
 			path := filepath.Join(dir, fmt.Sprintf("Foo_%s.wal", id.String()))
 			f, err := os.Create(path)
 			require.NoError(t, err)
+
+			// Fake a segment file
+			_, err = f.Write([]byte{'A', 'D', 'X', 'W', 'A', 'L', 0, 0})
+			require.NoError(t, err)
 			require.NoError(t, f.Close())
 
 			seg, err := wal.Open(path)
@@ -94,10 +101,12 @@ func TestSegment_Corrupted(t *testing.T) {
 
 			f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
 			require.NoError(t, err)
+			defer f.Close()
 			_, err = f.Write([]byte("a,"))
 			require.NoError(t, err)
 
 			s, err = wal.Open(s.Path())
+			require.NoError(t, err)
 
 			b, err := s.Bytes()
 			require.NoError(t, err)
@@ -397,8 +406,7 @@ func TestSegment_Write(t *testing.T) {
 
 			b, err := s.Bytes()
 			require.NoError(t, err)
-			spew.Dump(b)
-			println(s.Path())
+			require.Equal(t, "testtest1", string(b))
 
 			f, err := os.Open(s.Path())
 			require.NoError(t, err)
@@ -420,6 +428,73 @@ func TestSegment_Write(t *testing.T) {
 			require.ErrorIs(t, err, io.EOF)
 			require.False(t, next)
 		})
+	}
+}
+
+func TestSegmentIterator_Metadata(t *testing.T) {
+
+	dir := t.TempDir()
+	s, err := wal.NewSegment(dir, "Foo")
+	require.NoError(t, err)
+	require.NoError(t, s.Write(context.Background(), []byte("test"), wal.WithSampleMetadata(wal.MetricSampleType, 1)))
+	require.NoError(t, s.Write(context.Background(), []byte("test1"), wal.WithSampleMetadata(wal.MetricSampleType, 1)))
+	require.NoError(t, s.Flush())
+	require.NoError(t, s.Close())
+
+	s, err = wal.Open(s.Path())
+	require.NoError(t, err)
+	iter, err := s.Iterator()
+	require.NoError(t, err)
+	defer iter.Close()
+
+	ok, err := iter.Next()
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	typ, count := iter.Metadata()
+	require.Equal(t, wal.MetricSampleType, typ)
+	require.Equal(t, uint32(1), count)
+}
+
+func TestSegment_Write_Concurrent(t *testing.T) {
+	dir := t.TempDir()
+	s, err := wal.NewSegment(dir, "Foo")
+	require.NoError(t, err)
+	g, ctx := errgroup.WithContext(context.Background())
+	for i := 0; i < 1000; i++ {
+		x := i
+		g.Go(func() error {
+			y := x
+			for j := 0; j < 100; j++ {
+				val := strconv.Itoa(y*j) + "," +
+					strings.Repeat("a", rand.Intn(1024)) + "," +
+					strings.Repeat("b", rand.Intn(1024)) + "," +
+					strings.Repeat("c", rand.Intn(1024)) + "\n"
+
+				require.NoError(t, s.Write(ctx, []byte(val)))
+			}
+			return nil
+		})
+	}
+	require.NoError(t, g.Wait())
+	path := s.Path()
+	require.NoError(t, s.Close())
+
+	r, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	defer r.Close()
+
+	// b, err := io.ReadAll(r)
+	// require.NoError(t, err)
+	// require.Equal(t, 1000000, bytes.Count(b, []byte("\n")))
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		require.Equal(t, 3, strings.Count(scanner.Text(), ","), scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
 	}
 }
 

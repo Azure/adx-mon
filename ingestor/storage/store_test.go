@@ -127,6 +127,8 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 1, s.WALCount())
 	require.NoError(t, s.Close())
 
+	b, _ = os.ReadFile(path)
+
 	r, err := wal.NewSegmentReader(path)
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)

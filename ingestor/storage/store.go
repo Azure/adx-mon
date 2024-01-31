@@ -150,7 +150,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 		return err
 	}
 
-	wo := wal.WithSampleMetadata(wal.LogSampleType, uint16(len(logs.Logs)))
+	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
 	if err := w.Write(ctx, enc.Bytes(), wo); err != nil {
 		return err
 	}
