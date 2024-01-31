@@ -343,7 +343,92 @@ func realMain(ctx *cli.Context) error {
 			disableMetricsForwarding = *v.DisableMetricsForwarding
 		}
 
-		opts.MetricsHandlers = append(opts.MetricsHandlers, collector.MetricsHandlerOpts{
+		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.MetricsHandlerOpts{
+			Path:                     v.Path,
+			DefaultDropMetrics:       defaultDropMetrics,
+			AddLabels:                addLabels,
+			DropMetrics:              dropMetrics,
+			DropLabels:               dropLabels,
+			KeepMetrics:              keepMetrics,
+			KeepMetricsLabelValues:   keepMetricLabelValues,
+			DisableMetricsForwarding: disableMetricsForwarding,
+		})
+	}
+
+	for _, v := range cfg.OtelMetric {
+		// Add this pods identity for all metrics received
+		addLabels := mergeMaps(cfg.AddLabels, v.AddLabels, map[string]string{
+			"adxmon_namespace": k8s.Instance.Namespace,
+			"adxmon_pod":       k8s.Instance.Pod,
+			"adxmon_container": k8s.Instance.Container,
+			"adxmon_database":  v.Database,
+		})
+
+		dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
+		for k, v := range mergeMaps(cfg.DropLabels, v.DropLabels) {
+			metricRegex, err := regexp.Compile(k)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			labelRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid label regex: %s", err)
+			}
+
+			dropLabels[metricRegex] = labelRegex
+		}
+
+		dropMetrics := []*regexp.Regexp{}
+		for _, v := range unionSlice(cfg.DropMetrics, v.DropMetrics) {
+			metricRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			dropMetrics = append(dropMetrics, metricRegex)
+		}
+
+		keepMetrics := []*regexp.Regexp{}
+		for _, v := range unionSlice(cfg.KeepMetrics, v.KeepMetrics) {
+			metricRegex, err := regexp.Compile(v)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			keepMetrics = append(keepMetrics, metricRegex)
+		}
+
+		keepMetricLabelValues := make(map[*regexp.Regexp]*regexp.Regexp)
+		for _, v := range append(cfg.KeepMetricsWithLabelValue, v.KeepMetricsWithLabelValue...) {
+			labelRe, err := regexp.Compile(v.LabelRegex)
+			if err != nil {
+				logger.Fatalf("invalid metric regex: %s", err)
+			}
+
+			valueRe, err := regexp.Compile(v.ValueRegex)
+			if err != nil {
+				logger.Fatalf("invalid label regex: %s", err)
+			}
+
+			keepMetricLabelValues[labelRe] = valueRe
+		}
+
+		var defaultDropMetrics bool
+		if cfg.DefaultDropMetrics != nil {
+			defaultDropMetrics = *cfg.DefaultDropMetrics
+		}
+
+		if v.DefaultDropMetrics != nil {
+			defaultDropMetrics = *v.DefaultDropMetrics
+		}
+
+		var disableMetricsForwarding bool
+		if v.DisableMetricsForwarding != nil {
+			disableMetricsForwarding = *v.DisableMetricsForwarding
+		}
+
+		opts.OtlpMetricsHandlers = append(opts.OtlpMetricsHandlers, collector.MetricsHandlerOpts{
 			Path:                     v.Path,
 			DefaultDropMetrics:       defaultDropMetrics,
 			AddLabels:                addLabels,

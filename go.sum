@@ -1,7 +1,7 @@
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1 h1:tbyc3PoLe7/RdH35/kDA21SDkSGabrJ4XHLKVSFZkUY=
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1/go.mod h1:02AC7VOf5pRbaN4v5+e296QHni3/tswFOOcbkwZDCbE=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20231108222406-3341592ed9fd.2 h1:77T8k937OIytHMvOEIrXjyZKh6gYow6OQEG3topmKQI=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20231108222406-3341592ed9fd.2/go.mod h1:Z8vHgcMy12BQ89FTPKtYuX6U8UgU5/LMlV6MVq7BBlE=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20231108222406-3341592ed9fd.1 h1:jDiA6QyjP36VX7WiDS8A5hUk0R6FPhXpEyUYs2tHLhQ=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20231108222406-3341592ed9fd.1/go.mod h1:ZuV/JuB0Cs/7Zz67qNf12qPVFNteWzueS3dkLAJc4O0=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1 h1:x37q5buInrZ2+ThuDF6C9RHgBdNz39vk6dMxXw8aBbw=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1/go.mod h1:8SZ3nquD60/vLVKUgUolwLb9ajnw2UALKpabtaYK6aY=
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.38.0/go.mod h1:990N+gfupTy94rShfmMCWGDn0LpTmnzTp2qbd1dvSRU=
 cloud.google.com/go v0.44.1/go.mod h1:iSa0KzasP4Uvy3f1mN/7PiObzGgflwredwwASm/v6AU=
@@ -1588,6 +1588,8 @@ google.golang.org/genproto v0.0.0-20230323212658-478b75c54725/go.mod h1:UUQDJDOl
 google.golang.org/genproto v0.0.0-20230330154414-c0448cd141ea/go.mod h1:UUQDJDOlWu4KYeJZffbWgBkS1YFobzKbLVfK69pe0Ak=
 google.golang.org/genproto v0.0.0-20230331144136-dcfb400f0633/go.mod h1:UUQDJDOlWu4KYeJZffbWgBkS1YFobzKbLVfK69pe0Ak=
 google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1/go.mod h1:nKE/iIaLqn2bQwXBg8f1g2Ylh6r5MN5CmZvuzZCgsCU=
+google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 h1:AjyfHzEPEFp/NpvfN5g+KDla3EMojjhRVZc1i7cj+oM=
+google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80/go.mod h1:PAREbraiVEVGVdTZsVWjSbbTtSyGbAgIIvni8a8CD5s=
 google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.1.0/go.mod h1:6Kw0yEErY5E/yWrBtf03jp27GLLJujG4z/JK95pnjjw=
 google.golang.org/protobuf v0.0.0-20200109180630-ec00e32a8dfd/go.mod h1:DFci5gLYBciE7Vtevhsrf46CRTquxDuWsQurQQe4oz8=
 google.golang.org/protobuf v0.0.0-20200221191635-4d8936d0db64/go.mod h1:kwYJMbMJ01Woi6D6+Kah6886xMZcty6N08ah7+eCXa0=
@@ -1606,8 +1608,8 @@ google.golang.org/protobuf v1.28.0/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqw
 google.golang.org/protobuf v1.28.1/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
 google.golang.org/protobuf v1.29.1/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
 google.golang.org/protobuf v1.30.0/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
-google.golang.org/protobuf v1.31.0 h1:g0LDEJHgrBl9N9r17Ru3sqWhkIx2NB67okBHPwC7hs8=
-google.golang.org/protobuf v1.31.0/go.mod h1:HV8QOd/L58Z+nl8r43ehVNZIU/HEI6OcFqwMG9pJV4I=
+google.golang.org/protobuf v1.32.0 h1:pPC6BG5ex8PDFnkbrGU3EixyhKcQ2aDuBS36lqK/C7I=
+google.golang.org/protobuf v1.32.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=

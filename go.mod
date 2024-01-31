@@ -3,8 +3,8 @@ module github.com/Azure/adx-mon
 go 1.21
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20230914171856-c5370fbbc768.1
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.31.0-20231108222406-3341592ed9fd.2
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20231108222406-3341592ed9fd.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1
 	github.com/Azure/azure-kusto-go v0.14.0
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
@@ -29,7 +29,8 @@ require (
 	github.com/urfave/cli/v2 v2.25.7
 	golang.org/x/net v0.19.0
 	golang.org/x/sync v0.5.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80
+	google.golang.org/protobuf v1.32.0
 	k8s.io/api v0.26.1
 	k8s.io/apimachinery v0.26.1
 	k8s.io/client-go v0.26.1
