@@ -19,13 +19,25 @@ type ParserConfig struct {
 }
 
 // NewParser creates a new parser instance.
-func NewParser(config ParserConfig) (Parser, error) {
-	switch config.Type {
+func NewParser(parserType ParserType) (Parser, error) {
+	switch parserType {
 	case ParserTypeJson:
 		return NewJsonParser(JsonParserConfig{})
 	default:
-		return nil, fmt.Errorf("unknown parser type: %s", config.Type)
+		return nil, fmt.Errorf("unknown parser type: %s", parserType)
 	}
+}
+
+func NewParsers(parserTypes []string) ([]Parser, error) {
+	parsers := make([]Parser, len(parserTypes))
+	for i, parserType := range parserTypes {
+		parser, err := NewParser(ParserType(parserType))
+		if err != nil {
+			return nil, err
+		}
+		parsers[i] = parser
+	}
+	return parsers, nil
 }
 
 func IsValidParser(parserType string) bool {

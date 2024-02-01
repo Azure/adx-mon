@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
@@ -32,8 +31,8 @@ type Service struct {
 	// metricsSvc is the internal metrics component for collector specific metrics.
 	metricsSvc metrics.Service
 
-	// logsSvc is the http service that receives logs from fluentbit.
-	logsSvc *logs.Service
+	// workerSvcs are the collection services that can be opened and closed.
+	workerSvcs []service.Component
 
 	// http is the shared HTTP server for the collector.  The logs and metrics services are registered with this server.
 	http *http.HttpServer
@@ -66,6 +65,8 @@ type ServiceOpts struct {
 	NodeName   string
 	Endpoints  []string
 
+	// LogCollectionHandlers is the list of log collection handlers
+	LogCollectionHandlers []LogCollectorOpts
 	// PromMetricsHandlers is the list of prom-remote handlers
 	PromMetricsHandlers []MetricsHandlerOpts
 	// OtlpMetricsHandlers is the list of oltp metrics handlers
@@ -267,6 +268,16 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		scraper = NewScraper(opts.Scraper)
 	}
 
+	workerSvcs := []service.Component{}
+	for _, handlerOpts := range opts.LogCollectionHandlers {
+		svc, err := handlerOpts.Create(store)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create log collection service: %w", err)
+		}
+
+		workerSvcs = append(workerSvcs, svc)
+	}
+
 	svc := &Service{
 		opts: opts,
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
@@ -274,6 +285,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}),
 		store:        store,
 		scraper:      scraper,
+		workerSvcs:   workerSvcs,
 		otelLogsSvc:  logsSvc,
 		otelProxySvc: logsProxySvc,
 		proxySvcs:    metricsHandlers,
@@ -281,42 +293,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		replicator:   replicator,
 		remoteClient: remoteClient,
 	}
-
-	// if opts.CollectLogs {
-	// 	files, err := filepath.Glob("/var/log/containers/*.log")
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("glob: %w", err)
-	// 	}
-	// 	targets := make([]tail.FileTailTarget, 0, len(files))
-	// 	for _, file := range files {
-	// 		targets = append(targets, tail.FileTailTarget{
-	// 			FilePath: file,
-	// 			LogType:  tail.LogTypeDocker,
-	// 			Database: "AKSinfra",
-	// 			Table:    "ContainerLog",
-	// 		})
-	// 	}
-
-	// 	cursorDirectory := filepath.Join(opts.StorageDir, "log-cursors")
-	// 	if err := os.MkdirAll(cursorDirectory, 0755); err != nil {
-	// 		return nil, fmt.Errorf("log-cursors mkdir: %w", err)
-	// 	}
-	// 	sink := sinks.NewStdoutSink()
-	// 	source, err := tail.NewTailSource(tail.TailSourceConfig{
-	// 		StaticTargets:   targets,
-	// 		CursorDirectory: cursorDirectory,
-	// 		WorkerCreator:   engine.WorkerCreator(nil, sink),
-	// 	})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("create tail source: %w", err)
-	// 	}
-
-	// 	logsSvc := &logs.Service{
-	// 		Source: source,
-	// 		Sink:   sink,
-	// 	}
-	// 	svc.logsSvc = logsSvc
-	// }
 
 	return svc, nil
 }
@@ -332,9 +308,9 @@ func (s *Service) Open(ctx context.Context) error {
 		return fmt.Errorf("failed to open metrics service: %w", err)
 	}
 
-	if s.logsSvc != nil {
-		if err := s.logsSvc.Open(ctx); err != nil {
-			return fmt.Errorf("failed to open logs service: %w", err)
+	for _, workerSvc := range s.workerSvcs {
+		if err := workerSvc.Open(ctx); err != nil {
+			return fmt.Errorf("failed to open worker service: %w", err)
 		}
 	}
 
@@ -394,8 +370,8 @@ func (s *Service) Close() error {
 	}
 
 	s.metricsSvc.Close()
-	if s.logsSvc != nil {
-		s.logsSvc.Close()
+	for _, workerSvc := range s.workerSvcs {
+		workerSvc.Close()
 	}
 	if s.otelProxySvc != nil {
 		s.otelProxySvc.Close()

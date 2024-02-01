@@ -53,7 +53,7 @@ type FileTailTarget struct {
 
 	// LogLineParsers is a list of parsers to apply to each line of the log file to attempt to extract fields from the message body.
 	// These are run sequentially until one succeeds, or until all have been tried.
-	Parsers []parser.ParserConfig
+	Parsers []parser.Parser
 }
 
 // TailSourceConfig configures TailSource.
@@ -181,16 +181,6 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 		}
 	}
 
-	tailParsers := make([]parser.Parser, 0, len(target.Parsers))
-	for i, parserConfig := range target.Parsers {
-		instance, err := parser.NewParser(parserConfig)
-		if err != nil {
-			shutdown()
-			return fmt.Errorf("addTarget create parser %d: %w", i, err)
-		}
-		tailParsers = append(tailParsers, instance)
-	}
-
 	tailFile, err := tail.TailFile(target.FilePath, tailConfig)
 	if err != nil {
 		shutdown()
@@ -203,7 +193,7 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 		database:       target.Database,
 		table:          target.Table,
 		logTypeParser:  getLogTypeParser(target.LogType),
-		logLineParsers: tailParsers,
+		logLineParsers: target.Parsers,
 	}
 	s.group.Go(func() error {
 		return readLines(tailerCtx, tailer, batchQueue)

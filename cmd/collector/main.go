@@ -15,6 +15,12 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector"
+	"github.com/Azure/adx-mon/collector/logs"
+	"github.com/Azure/adx-mon/collector/logs/engine"
+	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/pelletier/go-toml/v2"
@@ -431,6 +437,58 @@ func realMain(ctx *cli.Context) error {
 			KeepMetrics:              keepMetrics,
 			KeepMetricsLabelValues:   keepMetricLabelValues,
 			DisableMetricsForwarding: disableMetricsForwarding,
+		})
+	}
+
+	for _, v := range cfg.TailLog {
+		createFunc := func(store storage.Store) (*logs.Service, error) {
+			addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes, map[string]string{
+				"adxmon_namespace": k8s.Instance.Namespace,
+				"adxmon_pod":       k8s.Instance.Pod,
+				"adxmon_container": k8s.Instance.Container,
+			})
+
+			staticTargets := []tail.FileTailTarget{}
+			for _, target := range v.StaticTailTarget {
+				parsers, err := parser.NewParsers(target.Parsers)
+				if err != nil {
+					return nil, fmt.Errorf("create parser for tailsource: %w", err)
+				}
+
+				staticTargets = append(staticTargets, tail.FileTailTarget{
+					FilePath: target.FilePath,
+					LogType:  target.LogType,
+					Database: target.Database,
+					Table:    target.Table,
+					Parsers:  parsers,
+				})
+			}
+
+			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
+				Store:         store,
+				AddAttributes: addAttributes,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create sink for tailsource: %w", err)
+			}
+
+			source, err := tail.NewTailSource(tail.TailSourceConfig{
+				StaticTargets:   staticTargets,
+				CursorDirectory: cfg.StorageDir,
+				WorkerCreator:   engine.WorkerCreator(nil, sink), //TODO,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("create tailsource: %w", err)
+			}
+
+			return &logs.Service{
+				Source: source,
+				Sink:   sink,
+			}, nil
+		}
+
+		opts.LogCollectionHandlers = append(opts.LogCollectionHandlers, collector.LogCollectorOpts{
+			Create: createFunc,
 		})
 	}
 

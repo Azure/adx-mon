@@ -7,7 +7,7 @@ const (
 
 	// Attributes map keys
 	// AttributeDatabaseName is the name of the ADX database that the log should be sent to.
-	AttributeDatabaseName = "adxmon.destination_database"
+	AttributeDatabaseName = "adxmon_destination_database"
 	// AttributeTableName is the name of the ADX table that the log should be sent to.
-	AttributeTableName = "adxmon.destination_table"
+	AttributeTableName = "adxmon_destination_table"
 )
