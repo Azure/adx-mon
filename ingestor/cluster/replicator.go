@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	pkgfile "github.com/Azure/adx-mon/pkg/file"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -106,7 +105,7 @@ func (r *replicator) transfer(ctx context.Context) {
 				for i, seg := range segments {
 					paths[i] = seg.Path
 				}
-				mr, err := pkgfile.NewMultiReader(paths...)
+				mr, err := wal.NewSegmentMerger(paths...)
 				if err != nil && os.IsNotExist(err) {
 					return nil
 				} else if err != nil {
