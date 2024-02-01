@@ -3,7 +3,6 @@ package transform
 import (
 	"bytes"
 	"encoding/csv"
-	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -15,9 +14,16 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/cespare/xxhash"
+	"github.com/pquerna/ffjson/ffjson"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
 
 	adxcsv "github.com/Azure/adx-mon/pkg/csv"
+)
+
+var (
+	// Logs often contain unespcaped newlines, particularly at the end of a log line
+	// but also in case of stacktraces.
+	newlineReplacer = strings.NewReplacer("\r\n", "%0D%0A", "\n", "%0A")
 )
 
 type CSVWriter struct {
@@ -183,10 +189,6 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 	// See ingestor/storage/schema::NewLogsSchema
 	// we're writing a ExportLogsServiceRequest as a CSV
 
-	// Logs often contain unespcaped newlines, particularly at the end of a log line
-	// but also in case of stacktraces.
-	replacer := strings.NewReplacer("\r\n", "%0D%0A", "\n", "%0A")
-
 	// There are 9 fields defined in an OTLP log schema
 	fields := make([]string, 0, 9)
 	// Convert log records to CSV
@@ -225,9 +227,9 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 				fflib.WriteJson(buf, []byte(kv.GetValue().GetStringValue()))
 			}
 			buf.WriteByte('}')
-			fields = append(fields, replacer.Replace(buf.String()))
+			fields = append(fields, newlineReplacer.Replace(buf.String()))
 		} else {
-			fields = append(fields, replacer.Replace(l.GetBody().GetStringValue()))
+			fields = append(fields, newlineReplacer.Replace(l.GetBody().GetStringValue()))
 		}
 		// Resource
 		buf.Reset()
@@ -266,13 +268,6 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 }
 
 func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
-	// See ingestor/storage/schema::NewLogsSchema
-	// we're writing a ExportLogsServiceRequest as a CSV
-
-	// Logs often contain unespcaped newlines, particularly at the end of a log line
-	// but also in case of stacktraces.
-	replacer := strings.NewReplacer("\r\n", "%0D%0A", "\n", "%0A")
-
 	// There are 9 fields defined in an OTLP log schema
 	fields := make([]string, 0, 9)
 	// Convert log records to CSV
@@ -302,7 +297,7 @@ func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
 	buf.WriteByte('{')
 	hasPrevField := false
 	for k, v := range log.Body {
-		val, err := json.Marshal(v)
+		val, err := ffjson.Marshal(v)
 		if err != nil {
 			continue
 		}
@@ -314,10 +309,11 @@ func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
 		}
 		fflib.WriteJson(buf, []byte(k))
 		buf.WriteByte(':')
-		fflib.WriteJson(buf, val)
+		buf.Write(val) // Already marshalled into json. Don't escape it again.
+		ffjson.Pool(val)
 	}
 	buf.WriteByte('}')
-	fields = append(fields, replacer.Replace(buf.String()))
+	fields = append(fields, newlineReplacer.Replace(buf.String()))
 
 	// Resource - we don't have this
 	fields = append(fields, "{}")
@@ -326,8 +322,11 @@ func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
 	buf.WriteByte('{')
 	hasPrevField = false
 	for k, v := range log.Attributes {
-		// TODO skip adxmon attributes
-		val, err := json.Marshal(v)
+		if strings.HasPrefix(k, "adxmon_") {
+			continue
+		}
+
+		val, err := ffjson.Marshal(v)
 		if err != nil {
 			continue
 		}
@@ -339,7 +338,8 @@ func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
 		}
 		fflib.WriteJson(buf, []byte(k))
 		buf.WriteByte(':')
-		fflib.WriteJson(buf, val)
+		buf.Write(val) // Already marshalled into json. Don't escape it again.
+		ffjson.Pool(val)
 	}
 	buf.WriteByte('}')
 	fields = append(fields, buf.String())

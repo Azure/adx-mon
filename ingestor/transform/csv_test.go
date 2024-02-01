@@ -2,9 +2,13 @@ package transform
 
 import (
 	"bytes"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/stretchr/testify/require"
@@ -466,11 +470,207 @@ func BenchmarkMarshalCSV_OTLPLog(b *testing.B) {
 	protojson.Unmarshal(rawlog, &log)
 	var buf bytes.Buffer
 	w := NewCSVWriter(&buf, nil)
+	logs := &otlp.Logs{
+		Resources: log.ResourceLogs[0].Resource.Attributes,
+		Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		w.MarshalCSV(log.ResourceLogs[0].ScopeLogs[0].LogRecords)
+		w.MarshalCSV(logs)
 	}
+}
+
+func TestMarshalCSV_NativeLog(t *testing.T) {
+	type testcase struct {
+		Name   string
+		Batch  *types.LogBatch
+		Expect []*logrecord
+	}
+
+	tests := []testcase{
+		{
+			Name: "simple",
+			Batch: &types.LogBatch{
+				Logs: []*types.Log{
+					{
+						Timestamp:         1696983205797489936,
+						ObservedTimestamp: 1696983226797489936, // +21s
+						Body: map[string]interface{}{
+							types.BodyKeyMessage: "something happened",
+						},
+						Attributes: map[string]interface{}{
+							// adx-mon attributes are filtered
+							types.AttributeDatabaseName: "ADatabase",
+							types.AttributeTableName:    "ATable",
+							"hello":                     "world",
+							"other":                     "attribute",
+						},
+					},
+				},
+			},
+			Expect: []*logrecord{
+				{
+					Timestamp:         "2023-10-11T00:13:25.797489936Z",
+					ObservedTimestamp: "2023-10-11T00:13:46.797489936Z",
+					SeverityText:      "",
+					SeverityNumber:    "",
+					TraceId:           "",
+					SpanId:            "",
+					Body: map[string]interface{}{
+						"message": "something happened",
+					},
+					Resource: map[string]interface{}{},
+					Attributes: map[string]interface{}{
+						"hello": "world",
+						"other": "attribute",
+					},
+				},
+			},
+		},
+		{
+			Name: "complex values",
+			Batch: &types.LogBatch{
+				Logs: []*types.Log{
+					{
+						Timestamp:         1696983205797489936,
+						ObservedTimestamp: 1696983226797489936, // +21s
+						Body: map[string]interface{}{
+							types.BodyKeyMessage: "something happened",
+							"complexVal": map[string]interface{}{
+								"nested": "value",
+								"hello":  []string{"world"},
+							},
+						},
+						Attributes: map[string]interface{}{
+							// adx-mon attributes are filtered
+							types.AttributeDatabaseName: "ADatabase",
+							types.AttributeTableName:    "ATable",
+							"hello":                     []string{"world"},
+							"other":                     "attribute",
+						},
+					},
+					{
+						Timestamp:         1696983226797489936, // +21s
+						ObservedTimestamp: 1696983229797489936, // +3s
+						Body: map[string]interface{}{
+							types.BodyKeyMessage: "something happened",
+							"complexVal": map[string]interface{}{
+								"nested": "other value",
+								"hello":  []string{"world"},
+							},
+						},
+						Attributes: map[string]interface{}{
+							// adx-mon attributes are filtered
+							types.AttributeDatabaseName: "ADatabase",
+							types.AttributeTableName:    "ATable",
+							"hello":                     []string{"space"},
+							"other":                     "attribute",
+						},
+					},
+				},
+			},
+			Expect: []*logrecord{
+				{
+					Timestamp:         "2023-10-11T00:13:25.797489936Z",
+					ObservedTimestamp: "2023-10-11T00:13:46.797489936Z",
+					SeverityText:      "",
+					SeverityNumber:    "",
+					TraceId:           "",
+					SpanId:            "",
+					Body: map[string]interface{}{
+						"message": "something happened",
+						"complexVal": map[string]interface{}{
+							"nested": "value",
+							"hello":  []interface{}{"world"},
+						},
+					},
+					Resource: map[string]interface{}{},
+					Attributes: map[string]interface{}{
+						"hello": []interface{}{"world"},
+						"other": "attribute",
+					},
+				},
+				{
+					Timestamp:         "2023-10-11T00:13:46.797489936Z",
+					ObservedTimestamp: "2023-10-11T00:13:49.797489936Z",
+					SeverityText:      "",
+					SeverityNumber:    "",
+					TraceId:           "",
+					SpanId:            "",
+					Body: map[string]interface{}{
+						"message": "something happened",
+						"complexVal": map[string]interface{}{
+							"nested": "other value",
+							"hello":  []interface{}{"world"},
+						},
+					},
+					Resource: map[string]interface{}{},
+					Attributes: map[string]interface{}{
+						"hello": []interface{}{"space"},
+						"other": "attribute",
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			var b bytes.Buffer
+			w := NewCSVWriter(&b, nil)
+
+			for _, log := range tt.Batch.Logs {
+				err := w.MarshalCSV(log)
+				require.NoError(t, err)
+			}
+
+			// Check the format instead of string comparisons
+			// Iterating through maps when writing the CSV is non-deterministic on purpose in Go,
+			// so we can't just do a string comparison.
+			reader := csv.NewReader(&b)
+			records, err := reader.ReadAll()
+			require.NoError(t, err)
+			require.Len(t, records, len(tt.Expect))
+
+			for i, expect := range tt.Expect {
+				record, err := getLogRecord(records[i])
+				require.NoError(t, err)
+				require.Equal(t, expect, record)
+			}
+		})
+	}
+}
+
+func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
+	batch := &types.LogBatch{
+		Logs: []*types.Log{
+			{
+				Timestamp:         1696983205797489936,
+				ObservedTimestamp: 1696983226797489936, // +21s
+				Body: map[string]interface{}{
+					types.BodyKeyMessage: "something happened",
+				},
+				Attributes: map[string]interface{}{
+					// adx-mon attributes are filtered
+					types.AttributeDatabaseName: "ADatabase",
+					types.AttributeTableName:    "ATable",
+				},
+			},
+		},
+	}
+
+	buf := bytes.NewBuffer(make([]byte, 0, 64*1024))
+	enc := NewCSVWriter(buf, nil)
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for _, log := range batch.Logs {
+			enc.MarshalCSV(log)
+		}
+		buf.Reset()
+	}
+
 }
 
 // Benchmark ways of making CSVWriter compatible with Metrics and Logs
@@ -550,3 +750,48 @@ Conclusion, since there's no meaningful difference between these approaches, the
 solution from the caller's perspective, which requires the least amount of upstream changes,
 is to perform the type assertion against the interface{} and call the method directly.
 */
+
+// logrecord represents the fields we output to CSV
+type logrecord struct {
+	Timestamp         string
+	ObservedTimestamp string
+	TraceId           string
+	SpanId            string
+	SeverityText      string
+	SeverityNumber    string
+	Body              map[string]interface{}
+	Resource          map[string]interface{}
+	Attributes        map[string]interface{}
+}
+
+func getLogRecord(fields []string) (*logrecord, error) {
+	if len(fields) != 9 {
+		return nil, fmt.Errorf("expected 9 fields, got %d", len(fields))
+	}
+
+	body := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(fields[6]), &body); err != nil {
+		return nil, err
+	}
+
+	resource := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(fields[7]), &resource); err != nil {
+		return nil, err
+	}
+
+	attributes := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(fields[8]), &attributes); err != nil {
+		return nil, err
+	}
+	return &logrecord{
+		Timestamp:         fields[0],
+		ObservedTimestamp: fields[1],
+		TraceId:           fields[2],
+		SpanId:            fields[3],
+		SeverityText:      fields[4],
+		SeverityNumber:    fields[5],
+		Body:              body,
+		Resource:          resource,
+		Attributes:        attributes,
+	}, nil
+}
