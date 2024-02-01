@@ -312,6 +312,10 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.closed {
+		return ErrSegmentClosed
+	}
+
 	// Strip off the header and append the block to the segment
 	n, err := s.appendBlocks(buf[8:])
 	if err != nil {
@@ -356,18 +360,22 @@ func (s *segment) Flush() error {
 // Close closes the segment for writing.
 func (s *segment) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 
 	// Close the channel without holding the lock so goroutines can exit cleanly
 	close(s.closing)
 	s.closed = true
+	s.mu.Unlock()
 
 	// Wait for flusher goroutine to flush any in-flight writes
 	s.wg.Wait()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	bwPool.Put(s.bw)
 	s.bw = nil
@@ -540,6 +548,10 @@ func (s *segment) blockWrite(w io.Writer, buf []byte, opts ...WriteOptions) (int
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.closed {
+		return 0, ErrSegmentClosed
+	}
 
 	n, err := w.Write(b)
 	if err != nil {
