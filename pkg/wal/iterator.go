@@ -97,7 +97,9 @@ func (b *segmentIterator) Next() (bool, error) {
 	}
 
 	if HasSampleMetadata(b.decodeBuf) {
-		b.sampleType, b.sampleCount = SampleMetadata(b.decodeBuf[3:8])
+		st, sc := SampleMetadata(b.decodeBuf[3:8])
+		b.sampleType = st
+		b.sampleCount += sc
 		b.value = b.decodeBuf[8:]
 	} else {
 		b.value = b.decodeBuf

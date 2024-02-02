@@ -456,6 +456,29 @@ func TestSegmentIterator_Metadata(t *testing.T) {
 	require.Equal(t, uint32(1), count)
 }
 
+func TestSegment_Metadata(t *testing.T) {
+
+	dir := t.TempDir()
+	s, err := wal.NewSegment(dir, "Foo")
+	require.NoError(t, err)
+	require.NoError(t, s.Write(context.Background(), bytes.Repeat([]byte("test"), 100), wal.WithSampleMetadata(wal.LogSampleType, 100)))
+	require.NoError(t, s.Write(context.Background(), bytes.Repeat([]byte("test1"), 200), wal.WithSampleMetadata(wal.LogSampleType, 200)))
+	require.NoError(t, s.Flush())
+	require.NoError(t, s.Close())
+
+	f, err := wal.NewSegmentReader(s.Path())
+	require.NoError(t, err)
+
+	_, err = io.Copy(io.Discard, f)
+	require.NoError(t, err)
+
+	st, sc := f.SampleMetadata()
+	require.Equal(t, wal.LogSampleType, st)
+	require.Equal(t, uint32(300), sc)
+
+	require.NoError(t, f.Close())
+}
+
 func TestSegment_Write_Concurrent(t *testing.T) {
 	dir := t.TempDir()
 	s, err := wal.NewSegment(dir, "Foo")
