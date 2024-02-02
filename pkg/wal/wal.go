@@ -3,6 +3,7 @@ package wal
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -149,8 +150,17 @@ func (w *WAL) Close() error {
 }
 
 func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
-	var seg Segment
+	// Optimistically try to write, but the segment might rotate in the meantime.
+	// If it does, retry the write one more time.
+	err := w.tryWrite(ctx, buf, opts...)
+	if errors.Is(err, ErrSegmentClosed) {
+		return w.tryWrite(ctx, buf, opts...)
+	}
+	return err
+}
 
+func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) error {
+	var seg Segment
 	if err := w.validateLimits(buf); err != nil {
 		return err
 	}
@@ -161,7 +171,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 		seg = w.segment
 		w.mu.RUnlock()
 
-		return seg.Write(ctx, buf)
+		return seg.Write(ctx, buf, opts...)
 	}
 	w.mu.RUnlock()
 
@@ -178,7 +188,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 	seg = w.segment
 	w.mu.Unlock()
 
-	return seg.Write(ctx, buf)
+	return seg.Write(ctx, buf, opts...)
 }
 
 func (w *WAL) validateLimits(buf []byte) error {
@@ -283,8 +293,15 @@ func (w *WAL) Remove(path string) error {
 }
 
 func (w *WAL) Append(ctx context.Context, buf []byte) error {
-	var seg Segment
+	err := w.tryAppend(ctx, buf)
+	if errors.Is(err, ErrSegmentClosed) {
+		return w.tryAppend(ctx, buf)
+	}
+	return err
+}
 
+func (w *WAL) tryAppend(ctx context.Context, buf []byte) error {
+	var seg Segment
 	if err := w.validateLimits(buf); err != nil {
 		return err
 	}

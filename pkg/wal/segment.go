@@ -19,14 +19,13 @@ import (
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/ring"
 	"github.com/klauspost/compress/s2"
 	gbp "github.com/libp2p/go-buffer-pool"
 )
 
 var (
 	// blockHdrMagic is the magic number for the block header.  If this is not present as the first 2 bytes of a block,
-	// then extra meta data is not present.
+	// then extra metadata is not present.
 	blockHdrMagic = [2]byte{0xAA, 0xAA} // 10101010 10101010 in binary
 
 	// segmentMagic is the magic number for the segment file.  If this is not present as the first 6 bytes of a segment
@@ -84,9 +83,7 @@ type segment struct {
 	sampleType  uint16
 	sampleCount uint16
 
-	// appendCh is channel used to append raw blocks to the segment.
-	appendCh chan ring.Entry
-	flushCh  chan chan error
+	flushCh chan chan error
 }
 
 func NewSegment(dir, prefix string) (Segment, error) {
@@ -125,9 +122,8 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		bw:        bf,
 		filePos:   8,
 
-		closing:  make(chan struct{}),
-		appendCh: make(chan ring.Entry, 64),
-		flushCh:  make(chan chan error),
+		closing: make(chan struct{}),
+		flushCh: make(chan chan error),
 	}
 
 	f.wg.Add(1)
@@ -197,11 +193,10 @@ func Open(path string) (Segment, error) {
 		path:      path,
 		filePos:   uint64(stat.Size()),
 
-		w:        fd,
-		bw:       bf,
-		closing:  make(chan struct{}),
-		appendCh: make(chan ring.Entry, 64),
-		flushCh:  make(chan chan error),
+		w:       fd,
+		bw:      bf,
+		closing: make(chan struct{}),
+		flushCh: make(chan chan error),
 	}
 
 	if err := f.repair(); err != nil {
@@ -335,6 +330,9 @@ func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) e
 	s.mu.RUnlock()
 
 	written, err := s.blockWrite(s.bw, buf, opts...)
+	if err != nil {
+		return err
+	}
 
 	atomic.AddUint64(&s.filePos, uint64(written))
 	return err
@@ -360,22 +358,22 @@ func (s *segment) Flush() error {
 // Close closes the segment for writing.
 func (s *segment) Close() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if s.closed {
-		s.mu.Unlock()
 		return nil
 	}
 
 	// Close the channel without holding the lock so goroutines can exit cleanly
 	close(s.closing)
 	s.closed = true
-	s.mu.Unlock()
 
 	// Wait for flusher goroutine to flush any in-flight writes
 	s.wg.Wait()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.bw.Flush(); err != nil {
+		return err
+	}
 
 	bwPool.Put(s.bw)
 	s.bw = nil
@@ -452,24 +450,26 @@ func (s *segment) flusher() {
 	for {
 		select {
 		case doneCh := <-s.flushCh:
-			s.mu.Lock()
-			err := s.bw.Flush()
-			s.mu.Unlock()
+			var err error
+			if s.mu.TryLock() {
+				err = s.bw.Flush()
+				s.mu.Unlock()
+			} else {
+				err = fmt.Errorf("segment locked")
+			}
 			if err != nil {
 				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
 			}
 			doneCh <- err
 		case <-s.closing:
-			if err := s.bw.Flush(); err != nil {
-				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
-			}
 			return
 		case <-t.C:
-			s.mu.Lock()
-			if err := s.bw.Flush(); err != nil {
-				logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
+			if s.mu.TryLock() {
+				if err := s.bw.Flush(); err != nil {
+					logger.Errorf("Failed to flush writer for segment: %s: %s", s.path, err)
+				}
+				s.mu.Unlock()
 			}
-			s.mu.Unlock()
 		}
 	}
 }
