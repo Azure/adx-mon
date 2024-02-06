@@ -54,7 +54,7 @@ func TestMarshalCSV(t *testing.T) {
 
 	var b bytes.Buffer
 	w := NewCSVWriter(&b, nil)
-	err := w.MarshalCSV(ts)
+	err := w.MarshalTS(ts)
 	require.NoError(t, err)
 	require.Equal(t, `2022-11-22T10:22:04.001Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",0.000000000
 2022-11-22T10:22:05.002Z,-9070404444212865161,"{""measurement"":""used_cpu_user_children"",""hostname"":""host_1"",""region"":""eastus""}",1.000000000
@@ -105,7 +105,7 @@ func BenchmarkMarshalCSV(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		w.MarshalCSV(ts)
+		w.MarshalTS(ts)
 		buf.Reset()
 	}
 }
@@ -142,7 +142,7 @@ func TestMarshalCSV_LiftLabel(t *testing.T) {
 	var b bytes.Buffer
 	w := NewCSVWriter(&b, []string{"zip", "zap", "region", "Hostname", "bar"})
 
-	err := w.MarshalCSV(ts)
+	err := w.MarshalTS(ts)
 	require.NoError(t, err)
 	require.Equal(t, `2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,,,"{""measurement"":""used_cpu_user_children""}",0.000000000
 `, b.String())
@@ -395,7 +395,7 @@ func TestMarshalCSV_OTLPLog(t *testing.T) {
 				Logs:      log.ResourceLogs[0].ScopeLogs[0].LogRecords,
 			}
 
-			err := w.MarshalCSV(logs)
+			err := w.MarshalLog(logs)
 			require.NoError(t, err)
 			require.Equal(t, tt.Expect, b.String())
 		})
@@ -477,7 +477,7 @@ func BenchmarkMarshalCSV_OTLPLog(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		w.MarshalCSV(logs)
+		w.MarshalLog(logs)
 	}
 }
 
@@ -621,7 +621,7 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 			w := NewCSVWriter(&b, nil)
 
 			for _, log := range tt.Batch.Logs {
-				err := w.MarshalCSV(log)
+				err := w.MarshalNativeLog(log)
 				require.NoError(t, err)
 			}
 
@@ -666,71 +666,11 @@ func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		for _, log := range batch.Logs {
-			enc.MarshalCSV(log)
+			enc.MarshalNativeLog(log)
 		}
 		buf.Reset()
 	}
 
-}
-
-// Benchmark ways of making CSVWriter compatible with Metrics and Logs
-
-type writerType int
-
-const (
-	metricWriter writerType = iota
-	logWriter
-)
-
-type writer struct {
-	wType writerType
-}
-
-func (w writer) WriteInterface(t interface{}) {
-	switch t := t.(type) {
-	case prompb.TimeSeries:
-		w.writeMetric(t)
-	case *v1.ExportLogsServiceRequest:
-		w.writeLog(t)
-	}
-}
-
-func (w writer) WriteType(t interface{}) {
-	switch w.wType {
-	case metricWriter:
-		w.writeMetric(t.(prompb.TimeSeries))
-	case logWriter:
-		w.writeLog(t.(*v1.ExportLogsServiceRequest))
-	}
-}
-
-func (w writer) writeMetric(t prompb.TimeSeries) {
-	// do nothing
-}
-
-func (w writer) writeLog(t *v1.ExportLogsServiceRequest) {
-	// do nothing
-}
-
-func BenchmarkMethod(b *testing.B) {
-	w := writer{}
-	for i := 0; i < b.N; i++ {
-		w.writeMetric(prompb.TimeSeries{})
-	}
-}
-
-func BenchmarkInterface(b *testing.B) {
-	w := writer{}
-	for i := 0; i < b.N; i++ {
-		w.WriteInterface(prompb.TimeSeries{})
-	}
-}
-
-func BenchmarkType(b *testing.B) {
-	w := writer{wType: metricWriter}
-	for i := 0; i < b.N; i++ {
-		w.WriteType(prompb.TimeSeries{})
-	}
 }
 
 /*
