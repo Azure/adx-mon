@@ -56,21 +56,7 @@ func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 	return writer
 }
 
-func (w *CSVWriter) MarshalCSV(t interface{}) error {
-	// Note the Benchmark for this function in csv_test.go
-	switch t := t.(type) {
-	case prompb.TimeSeries:
-		return w.marshalTS(t)
-	case *otlp.Logs:
-		return w.marshalLog(t)
-	case *types.Log:
-		return w.marshalNativeLog(t)
-	default:
-		return errors.New("unknown type")
-	}
-}
-
-func (w *CSVWriter) marshalTS(ts prompb.TimeSeries) error {
+func (w *CSVWriter) MarshalTS(ts prompb.TimeSeries) error {
 	buf := w.labelsBuf
 	buf.Reset()
 
@@ -185,7 +171,7 @@ func otlpTSToUTC(ts int64) string {
 	return time.Unix(0, ts).UTC().Format(time.RFC3339Nano)
 }
 
-func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
+func (w *CSVWriter) MarshalLog(logs *otlp.Logs) error {
 	// See ingestor/storage/schema::NewLogsSchema
 	// we're writing a ExportLogsServiceRequest as a CSV
 
@@ -267,7 +253,7 @@ func (w *CSVWriter) marshalLog(logs *otlp.Logs) error {
 	return w.enc.Error()
 }
 
-func (w *CSVWriter) marshalNativeLog(log *types.Log) error {
+func (w *CSVWriter) MarshalNativeLog(log *types.Log) error {
 	// There are 9 fields defined in an OTLP log schema
 	fields := make([]string, 0, 9)
 	// Convert log records to CSV

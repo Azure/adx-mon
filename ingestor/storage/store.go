@@ -118,7 +118,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries
 		s.incMetrics(v.Labels[0].Value, len(v.Samples))
 
 		enc.Reset()
-		if err := enc.MarshalCSV(v); err != nil {
+		if err := enc.MarshalTS(v); err != nil {
 			return err
 		}
 
@@ -150,7 +150,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	metrics.SamplesStored.WithLabelValues(table).Add(float64(len(logs.Logs)))
 
 	enc.Reset()
-	if err := enc.MarshalCSV(logs); err != nil {
+	if err := enc.MarshalLog(logs); err != nil {
 		return err
 	}
 
@@ -203,7 +203,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		metrics.SamplesStored.WithLabelValues(table).Inc()
 
 		enc.Reset()
-		if err := enc.MarshalCSV(log); err != nil {
+		if err := enc.MarshalNativeLog(log); err != nil {
 			return err
 		}
 
