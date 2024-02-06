@@ -105,6 +105,8 @@ type ServiceOpts struct {
 
 	// EnablePprof enables pprof endpoints.
 	EnablePprof bool
+
+	MaxConnections int
 }
 
 type MetricsHandlerOpts struct {
@@ -368,6 +370,7 @@ func (s *Service) Open(ctx context.Context) error {
 
 	s.http = http.NewServer(&http.ServerOpts{
 		ListenAddr: s.opts.ListenAddr,
+		MaxConns:   s.opts.MaxConnections,
 	})
 
 	if s.opts.EnablePprof {

@@ -55,6 +55,7 @@ type Config struct {
 	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
 
+	MaxConnections       int   `toml:"max-connections" comment:"Maximum number of connections to accept."`
 	MaxBatchSize         int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
 	MaxSegmentAgeSeconds int   `toml:"max-segment-age-seconds" comment:"Max segment agent in seconds."`
 	MaxSegmentSize       int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
