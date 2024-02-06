@@ -67,7 +67,7 @@ type ScraperOpts struct {
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
 	return &transform.RequestTransformer{
-
+		DefaultDropMetrics:        s.DefaultDropMetrics,
 		AddLabels:                 s.AddLabels,
 		DropLabels:                s.DropLabels,
 		DropMetrics:               s.DropMetrics,
