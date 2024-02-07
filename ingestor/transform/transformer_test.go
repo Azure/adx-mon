@@ -334,8 +334,11 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetrics(t *testing.T) {
 func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.T) {
 	f := &transform.RequestTransformer{
 		DefaultDropMetrics: true,
-		KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
-		DropMetrics:        []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
+		KeepMetrics: []*regexp.Regexp{
+			regexp.MustCompile("^cpu"),
+			regexp.MustCompile("^mem"),
+		},
+		DropMetrics: []*regexp.Regexp{regexp.MustCompile("^mem_load")},
 	}
 
 	req := prompb.WriteRequest{
@@ -361,6 +364,14 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
+					},
+				},
+			},
+			{
+				Labels: []prompb.Label{
+					{
+						Name:  []byte("__name__"),
+						Value: []byte("mem_load"),
 					},
 				},
 			},
@@ -433,7 +444,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t
 			regexp.MustCompile("__name__"): regexp.MustCompile("cpu"),
 			regexp.MustCompile("region"):   regexp.MustCompile("eastus"),
 		},
-		DropMetrics: []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
+		DropMetrics: []*regexp.Regexp{regexp.MustCompile("mem")},
 	}
 
 	req := prompb.WriteRequest{
