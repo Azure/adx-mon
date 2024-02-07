@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/adx-mon/pkg/promremote"
 	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
@@ -62,7 +61,12 @@ type ScraperOpts struct {
 
 	Endpoints []string
 
-	RemoteClient *promremote.Client
+	RemoteClient RemoteWriteClient
+}
+
+type RemoteWriteClient interface {
+	Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error
+	CloseIdleConnections()
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -100,7 +104,7 @@ type Scraper struct {
 	opts   ScraperOpts
 
 	requestTransformer *transform.RequestTransformer
-	remoteClient       *promremote.Client
+	remoteClient       RemoteWriteClient
 	scrapeClient       *MetricsClient
 	watcher            watch.Interface
 	seriesCreator      *seriesCreator
@@ -369,13 +373,15 @@ func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteReq
 }
 
 func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error {
-	if len(wr.Timeseries) == 0 {
+	filtered := s.requestTransformer.TransformWriteRequest(*wr)
+
+	if len(filtered.Timeseries) == 0 {
 		return nil
 	}
 
 	if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
 		var sb strings.Builder
-		for _, ts := range wr.Timeseries {
+		for _, ts := range filtered.Timeseries {
 			sb.Reset()
 			for i, l := range ts.Labels {
 				sb.Write(l.Name)
@@ -395,14 +401,14 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 
 	start := time.Now()
 	defer func() {
-		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.opts.Endpoints), time.Since(start))
+		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(filtered.Timeseries), len(s.opts.Endpoints), time.Since(start))
 	}()
 
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, endpoint := range s.opts.Endpoints {
 		endpoint := endpoint
 		g.Go(func() error {
-			return s.remoteClient.Write(gCtx, endpoint, wr)
+			return s.remoteClient.Write(gCtx, endpoint, &filtered)
 		})
 	}
 	return g.Wait()
