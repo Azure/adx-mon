@@ -190,11 +190,9 @@ func (f *RequestTransformer) ShouldKeepTimeSeries(v prompb.TimeSeries) bool {
 }
 
 func (f *RequestTransformer) ShouldDropMetric(name []byte) bool {
-	if !f.DefaultDropMetrics {
-		for _, r := range f.DropMetrics {
-			if r.Match(name) {
-				return true
-			}
+	for _, r := range f.DropMetrics {
+		if r.Match(name) {
+			return true
 		}
 	}
 	return false
