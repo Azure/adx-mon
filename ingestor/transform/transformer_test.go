@@ -454,7 +454,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t
 				Labels: []prompb.Label{
 					{
 						Name:  []byte("__name__"),
-						Value: []byte("cpu"),
+						Value: []byte("mem"),
 					},
 					{
 						Name:  []byte("region"),
@@ -466,7 +466,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t
 				Labels: []prompb.Label{
 					{
 						Name:  []byte("__name__"),
-						Value: []byte("mem"),
+						Value: []byte("disk"),
 					},
 				},
 			},
