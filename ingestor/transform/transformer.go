@@ -174,17 +174,16 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 
 func (f *RequestTransformer) ShouldKeepTimeSeries(v prompb.TimeSeries) bool {
 	if len(f.KeepMetricsWithLabelValue) > 0 {
-		var matchCount int
 		for _, label := range v.Labels {
 			// Keep metrics that have a certain label
 			for lableRe, valueRe := range f.KeepMetricsWithLabelValue {
 				if lableRe.Match(label.Name) && valueRe.Match(label.Value) {
-					matchCount++
+					return true
 				}
 			}
 		}
 
-		return matchCount == len(f.KeepMetricsWithLabelValue)
+		return false
 	}
 
 	return !f.DefaultDropMetrics
