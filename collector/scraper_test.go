@@ -76,7 +76,8 @@ func TestScraper_sendBatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewScraper(tt.opts)
-			err := s.sendBatch(context.Background(), tt.writeRequest)
+			wr := s.flushBatchIfNecessary(context.Background(), tt.writeRequest)
+			err := s.sendBatch(context.Background(), wr)
 			require.NoError(t, err)
 			if tt.opts.RemoteClient.(*fakeClient).expectedSamples > 0 {
 				require.True(t, tt.opts.RemoteClient.(*fakeClient).called)
