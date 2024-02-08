@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	cotlp "github.com/Azure/adx-mon/collector/otlp"
 	isvc "github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	iotlp "github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/otlp"
@@ -328,4 +330,173 @@ func VerifyMetrics(t *testing.T, log *v1.ExportLogsServiceRequest) {
 			// that would be an opportunity to verify adxmon_ingestor_logs_uploaded_total
 		}
 	}
+}
+
+func TestSampleMetadata(t *testing.T) {
+	// The intent of this test is to ensure the path taken from storage
+	// write on Collector all the way to Ingestor read to upload, correctly
+	// conveys sample metadata.
+
+	var (
+		ctx            = context.Background()
+		key            = []byte("Database_Table")
+		ingestorDir    = t.TempDir()
+		collectorDir   = t.TempDir()
+		segmentCount   = 100
+		samplesWritten = 0
+		transferChan   = make(chan struct{})
+	)
+
+	// The following components are owned by the Ingestor's code paths
+	ingestorStore := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     ingestorDir,
+		SegmentMaxSize: 1024 * 1024,
+		SegmentMaxAge:  time.Second,
+	})
+	require.NoError(t, ingestorStore.Open(ctx))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/transfer", func(w http.ResponseWriter, r *http.Request) {
+		filename := r.URL.Query().Get("filename")
+		_, err := ingestorStore.Import(filename, r.Body)
+		require.NoError(t, err)
+
+		w.WriteHeader(http.StatusAccepted)
+		require.NoError(t, r.Body.Close())
+
+		// inform our main thread that the transfer has completed
+		transferChan <- struct{}{}
+
+	})
+
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+
+	// The follow components are owned by the Collector's code paths
+	collectorStore := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     collectorDir,
+		SegmentMaxSize: 1024 * 1024,
+		SegmentMaxAge:  time.Second,
+	})
+	require.NoError(t, collectorStore.Open(ctx))
+
+	partitioner := remotePartitioner{
+		host: "remote",
+		addr: srv.URL,
+	}
+
+	replicator, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+		Hostname:           "fake",
+		Partitioner:        partitioner,
+		Health:             fakeHealthChecker{},
+		SegmentRemover:     collectorStore,
+		InsecureSkipVerify: true,
+	})
+	require.NoError(t, err)
+
+	batcher := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:         collectorDir,
+		MaxSegmentAge:      time.Second,
+		MinUploadSize:      1,
+		Partitioner:        partitioner,
+		Segmenter:          collectorStore.Index(),
+		UploadQueue:        replicator.TransferQueue(),
+		TransferQueue:      replicator.TransferQueue(),
+		PeerHealthReporter: fakeHealthChecker{},
+	})
+
+	// We'll use the code path taken by logs_transfer, but keep the payload generic.
+	// In our scenario, WriteOTLPLogs is the entrypoint, so we're going to use that
+	// as our kicking off point.
+
+	// We want to create several segments, since that's the most realistic usecase.
+	for i := 0; i < segmentCount; i++ {
+		w, err := collectorStore.GetWAL(ctx, key)
+		require.NoError(t, err)
+
+		wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(i+1))
+		require.NoError(t, w.Write(ctx, bytes.Repeat([]byte(strconv.Itoa(i)), 1024), wo))
+		samplesWritten += i + 1
+
+		// TODO: Write* in Store never actually invokes flush or close, should it?
+		require.NoError(t, w.Flush())
+		require.NoError(t, w.Close())
+	}
+	require.Equal(t, 1, collectorStore.WALCount())
+
+	// We don't want to start batcher or replicator until all our bytes have been
+	// flushed to disk so we have a known starting point.
+	require.NoError(t, replicator.Open(ctx))
+	require.NoError(t, batcher.Open(ctx))
+
+	// Now we wait for Collector to transfer to Ingestor
+	// Segments are sent by Batcher to Replicator one at a time
+	require.NoError(t, batcher.BatchSegments())
+	for i := 0; i < segmentCount; i++ {
+		<-transferChan
+	}
+	// Have to wait for everything to flush...
+	time.Sleep(time.Second)
+
+	// Now shut down the Collector side, we don't want any interference with the test
+	require.NoError(t, batcher.Close())
+	require.NoError(t, replicator.Close())
+	require.NoError(t, collectorStore.Close())
+
+	// Collector is shut down, let's make sure its storage is empty since we
+	// expect everything was transferred to Ingestor.
+	entries, err := os.ReadDir(collectorDir)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(entries))
+
+	// From this point on we're inspecting Ingestor's code path from
+	// the perspective of adx/uploader.
+	var (
+		readers        []io.Reader
+		segmentReaders []*wal.SegmentReader
+	)
+	entries, err = os.ReadDir(ingestorDir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		f, err := wal.NewSegmentReader(filepath.Join(ingestorDir, entry.Name()))
+		require.NoError(t, err)
+		readers = append(readers, f)
+		segmentReaders = append(segmentReaders, f)
+	}
+
+	mr := io.MultiReader(readers...)
+	_, err = io.Copy(io.Discard, mr)
+	require.NoError(t, err)
+
+	var samplesRead int
+	for _, sr := range segmentReaders {
+		sampleType, sampleCount := sr.SampleMetadata()
+		require.Equal(t, wal.LogSampleType, sampleType)
+		samplesRead += int(sampleCount)
+	}
+	require.Equal(t, samplesWritten, samplesRead)
+}
+
+type fakeHealthChecker struct{}
+
+func (f fakeHealthChecker) IsPeerHealthy(peer string) bool { return true }
+func (f fakeHealthChecker) SetPeerUnhealthy(peer string)   {}
+func (f fakeHealthChecker) SetPeerHealthy(peer string)     {}
+func (f fakeHealthChecker) TransferQueueSize() int         { return 0 }
+func (f fakeHealthChecker) UploadQueueSize() int           { return 0 }
+func (f fakeHealthChecker) SegmentsTotal() int64           { return 0 }
+func (f fakeHealthChecker) SegmentsSize() int64            { return 0 }
+func (f fakeHealthChecker) IsHealthy() bool                { return true }
+
+// remotePartitioner is a Partitioner that always returns the same owner that forces a remove transfer.
+type remotePartitioner struct {
+	host, addr string
+}
+
+func (f remotePartitioner) Owner(bytes []byte) (string, string) {
+	return f.host, f.addr
 }
