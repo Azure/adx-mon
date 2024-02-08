@@ -363,25 +363,28 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 }
 
 func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteRequest) *prompb.WriteRequest {
-	if len(wr.Timeseries) >= s.opts.MaxBatchSize {
-		if err := s.sendBatch(ctx, wr); err != nil {
+	filtered := *wr
+	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
+		filtered = s.requestTransformer.TransformWriteRequest(filtered)
+	}
+
+	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
+		if err := s.sendBatch(ctx, &filtered); err != nil {
 			logger.Errorf(err.Error())
 		}
-		wr.Timeseries = wr.Timeseries[:0]
+		filtered.Timeseries = filtered.Timeseries[:0]
 	}
-	return wr
+	return &filtered
 }
 
 func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error {
-	filtered := s.requestTransformer.TransformWriteRequest(*wr)
-
-	if len(filtered.Timeseries) == 0 {
+	if len(wr.Timeseries) == 0 {
 		return nil
 	}
 
 	if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
 		var sb strings.Builder
-		for _, ts := range filtered.Timeseries {
+		for _, ts := range wr.Timeseries {
 			sb.Reset()
 			for i, l := range ts.Labels {
 				sb.Write(l.Name)
@@ -401,14 +404,14 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 
 	start := time.Now()
 	defer func() {
-		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(filtered.Timeseries), len(s.opts.Endpoints), time.Since(start))
+		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.opts.Endpoints), time.Since(start))
 	}()
 
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, endpoint := range s.opts.Endpoints {
 		endpoint := endpoint
 		g.Go(func() error {
-			return s.remoteClient.Write(gCtx, endpoint, &filtered)
+			return s.remoteClient.Write(gCtx, endpoint, wr)
 		})
 	}
 	return g.Wait()
