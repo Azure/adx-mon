@@ -2,8 +2,10 @@ package adx
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -163,18 +165,22 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string) error 
 	// When completed, delete the file on local storage we are uploading.
 	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
-		return err
+		return sanitizeErrorString(err)
 	}
 
-	// time.Sleep(time.Minute)
 	err = <-res.Wait(ctx)
 	if err != nil {
 		return err
 	}
 
-	// return os.Remove(file)
 	return nil
+}
 
+func sanitizeErrorString(err error) error {
+	errString := err.Error()
+	r := regexp.MustCompile(`sig=[a-zA-Z0-9]+`)
+	errString = r.ReplaceAllString(errString, "sig=REDACTED")
+	return fmt.Errorf(errString)
 }
 
 func (n *uploader) upload(ctx context.Context) error {
