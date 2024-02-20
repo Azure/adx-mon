@@ -82,7 +82,7 @@ func NewHandler(opts HandlerOpts) *Handler {
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
-	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/receive"})
+	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": s.Path})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Errorf("close http body: %s", err.Error())
