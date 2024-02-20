@@ -8,13 +8,20 @@ import (
 	"os"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"golang.org/x/net/netutil"
 )
 
 type HttpHandler struct {
 	Path    string
 	Handler http.HandlerFunc
+}
+
+type GRPCHandler struct {
+	Path    string
+	Handler http.Handler
+	Port    int
 }
 
 type ServerOpts struct {
@@ -53,12 +60,10 @@ type HttpServer struct {
 	srv  *http.Server
 
 	listener net.Listener
-	cancelFn context.CancelFunc
 }
 
 func NewServer(opts *ServerOpts) *HttpServer {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
 	return &HttpServer{
 		opts: opts,
 		mux:  mux,
@@ -106,7 +111,10 @@ func (s *HttpServer) Open(ctx context.Context) error {
 		IdleTimeout:    idleTimeout,
 		MaxHeaderBytes: maxHeaderBytes,
 		Addr:           s.opts.ListenAddr,
-		Handler:        s.mux}
+
+		// Support unencrypted HTTP/2 for unencrypted GRPC
+		Handler: h2c.NewHandler(s.mux, &http2.Server{}),
+	}
 
 	go func() {
 		if err := s.srv.Serve(s.listener); err != nil && err != http.ErrServerClosed {
@@ -122,7 +130,19 @@ func (s *HttpServer) Close() error {
 	return s.srv.Shutdown(context.Background())
 }
 
-// RegisterHandler registers a new handler at the given path.  The handler must be registered before Open is called.
-func (s *HttpServer) RegisterHandler(path string, handlerFunc http.HandlerFunc) {
+// RegisterHandlerFunc registers a new handler at the given path.  The handler must be registered before Open is called.
+func (s *HttpServer) RegisterHandlerFunc(path string, handlerFunc http.HandlerFunc) {
 	s.mux.Handle(path, handlerFunc)
+}
+
+// RegisterHandler registers a new handler at the given path.  The handler must be registered before Open is called.
+func (s *HttpServer) RegisterHandler(path string, handler http.Handler) {
+	s.mux.Handle(path, handler)
+}
+
+func (s *HttpServer) String() string {
+	if s.listener == nil {
+		return "unstarted http server"
+	}
+	return fmt.Sprintf("http server on %s", s.listener.Addr().String())
 }
