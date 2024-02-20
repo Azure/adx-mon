@@ -171,4 +171,11 @@ var (
 		Name:      "logs_dropped",
 		Help:      "Counter of the number of logs dropped due to errors",
 	}, []string{"source", "stage"})
+
+	MetricsRequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "metrics_requests_received_total",
+		Help:      "Counter of the number of metrics requests received",
+	}, []string{"protocol", "code", "endpoint"})
 )

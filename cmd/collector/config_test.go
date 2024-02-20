@@ -116,6 +116,194 @@ func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	require.Equal(t, "otel-log.add-attributes key must be set", c.Validate().Error())
 }
 
+func TestConfig_OtelMetrics(t *testing.T) {
+	type testcase struct {
+		name   string
+		target *OtelMetric
+		err    string
+	}
+
+	trueVal := true
+	overlappingPath := "/metrics"
+	testcases := []testcase{
+		{
+			name: "valid db and config",
+			target: &OtelMetric{
+				Database:                 "foo",
+				Path:                     "/v1/metrics",
+				GrpcPort:                 1234,
+				DisableMetricsForwarding: &trueVal,
+				DefaultDropMetrics:       &trueVal,
+				AddLabels: map[string]string{
+					"foo": "bar",
+				},
+				DropLabels: map[string]string{
+					"bar": "foo",
+				},
+				DropMetrics: []string{"badMetric"},
+				KeepMetrics: []string{"goodMetric"},
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "foo", ValueRegex: "bar"},
+				},
+			},
+			err: "",
+		},
+		{
+			name: "Only Path, no GRPC",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+			},
+			err: "",
+		},
+		{
+			name: "Only GRPC, no Path",
+			target: &OtelMetric{
+				Database: "foo",
+				GrpcPort: 1234,
+			},
+			err: "",
+		},
+		{
+			name: "No GRPC and no Path",
+			target: &OtelMetric{
+				Database: "foo",
+			},
+			err: "otel-metric.path or otel-metric.grpc-port must be set",
+		},
+		{
+			name: "overlapping path",
+			target: &OtelMetric{
+				Database:                 "foo",
+				Path:                     overlappingPath,
+				GrpcPort:                 1234,
+				DisableMetricsForwarding: &trueVal,
+				DefaultDropMetrics:       &trueVal,
+				AddLabels: map[string]string{
+					"foo": "bar",
+				},
+				DropLabels: map[string]string{
+					"bar": "foo",
+				},
+				DropMetrics: []string{"badMetric"},
+				KeepMetrics: []string{"goodMetric"},
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "foo", ValueRegex: "bar"},
+				},
+			},
+			err: "otel-metric.path /metrics is already defined",
+		},
+		{
+			name:   "empty db",
+			target: &OtelMetric{},
+			err:    "otel-metric.database must be set",
+		},
+		{
+			name: "negative grpc port",
+			target: &OtelMetric{
+				Database: "foo",
+				GrpcPort: -1,
+			},
+			err: "otel-metric.grpc-port must be between 1 and 65535",
+		},
+		{
+			name: "too big grpc port",
+			target: &OtelMetric{
+				Database: "foo",
+				GrpcPort: 65536,
+			},
+			err: "otel-metric.grpc-port must be between 1 and 65535",
+		},
+		{
+			name: "bad add labels keys",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+				AddLabels: map[string]string{
+					"": "bar",
+				},
+			},
+			err: "otel-metric.add-labels key must be set",
+		},
+		{
+			name: "bad add labels values",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+				AddLabels: map[string]string{
+					"foo": "",
+				},
+			},
+			err: "otel-metric.add-labels value must be set",
+		},
+		{
+			name: "bad drop labels keys",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+				DropLabels: map[string]string{
+					"": "bar",
+				},
+			},
+			err: "otel-metric.drop-labels key must be set",
+		},
+		{
+			name: "bad drop labels values",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+				DropLabels: map[string]string{
+					"foo": "",
+				},
+			},
+			err: "otel-metric.drop-labels value must be set",
+		},
+		{
+			name: "bad keep metrics with label value keys",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "", ValueRegex: "bar"},
+				},
+			},
+			err: "otel-metric.keep-metrics-with-label-value label-regex must be set",
+		},
+		{
+			name: "bad keep metrics with label value value",
+			target: &OtelMetric{
+				Database: "foo",
+				Path:     "/v1/metrics",
+				KeepMetricsWithLabelValue: []LabelMatcher{
+					{LabelRegex: "foo", ValueRegex: ""},
+				},
+			},
+			err: "otel-metric.keep-metrics-with-label-value value-regex must be set",
+		},
+	}
+
+	for _, tt := range testcases {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{
+				PrometheusRemoteWrite: []*PrometheusRemoteWrite{
+					{
+						Path:     overlappingPath,
+						Database: "foo",
+					},
+				},
+				OtelMetric: []*OtelMetric{tt.target},
+			}
+			if tt.err != "" {
+				require.Error(t, c.Validate())
+				require.Equal(t, tt.err, c.Validate().Error())
+			} else {
+				require.NoError(t, c.Validate())
+			}
+		})
+	}
+
+}
+
 func TestConfig_PromScrape_StaticTargets(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

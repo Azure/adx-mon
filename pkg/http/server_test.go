@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,6 +15,7 @@ func TestNewHttpServer_Endpoints(t *testing.T) {
 	h := NewServer(&ServerOpts{
 		ListenAddr: "localhost:0",
 	})
+	h.RegisterHandler("/metrics", promhttp.Handler())
 	require.NoError(t, h.Open(context.Background()))
 	defer h.Close()
 

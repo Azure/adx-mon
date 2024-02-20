@@ -1,7 +1,9 @@
 package otlp
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	connect "github.com/bufbuild/connect-go"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/status"
@@ -17,12 +20,13 @@ import (
 )
 
 type MetricsService struct {
-	writer      MetricWriter
-	logger      *slog.Logger
-	reqReceived *prometheus.CounterVec
+	writer          MetricWriter
+	logger          *slog.Logger
+	httpReqReceived *prometheus.CounterVec
+	grpcReqReceived *prometheus.CounterVec
 }
 
-func NewMetricsService(writer MetricWriter, path string) *MetricsService {
+func NewMetricsService(writer MetricWriter, path string, grpcPort int) *MetricsService {
 	return &MetricsService{
 		writer: writer,
 		logger: slog.Default().With(
@@ -31,14 +35,37 @@ func NewMetricsService(writer MetricWriter, path string) *MetricsService {
 				slog.String("protocol", "otlp-metrics"),
 			),
 		),
-		reqReceived: metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": path}),
+		httpReqReceived: metrics.MetricsRequestsReceived.MustCurryWith(prometheus.Labels{"protocol": "oltp/http", "endpoint": path}),
+		grpcReqReceived: metrics.MetricsRequestsReceived.MustCurryWith(prometheus.Labels{"protocol": "oltp/grpc", "endpoint": fmt.Sprintf(":%d", grpcPort)}),
 	}
+}
+
+// Export implements metricsv1connect.MetricsServiceHandler to handle OLTP/GRPC metrics requests
+func (s *MetricsService) Export(ctx context.Context, req *connect.Request[v1.ExportMetricsServiceRequest]) (*connect.Response[v1.ExportMetricsServiceResponse], error) {
+	resp, status, code := s.writeMessage(ctx, req.Msg)
+	if status != nil {
+		var c connect.Code = connect.CodeUnavailable
+		if code >= 400 && code < 500 {
+			c = connect.CodeInvalidArgument
+		}
+
+		err := connect.NewError(c, nil)
+		if detail, detailErr := connect.NewErrorDetail(status); detailErr == nil {
+			err.AddDetail(detail)
+		}
+		s.grpcReqReceived.WithLabelValues(c.String()).Inc()
+
+		return nil, err
+	}
+
+	s.grpcReqReceived.WithLabelValues("ok").Inc()
+	return connect.NewResponse(resp), nil
 }
 
 // Handler handles OTLP/HTTP metrics requests
 // See https://opentelemetry.io/docs/specs/otlp/#otlphttp
 func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
-	m := s.reqReceived
+	m := s.httpReqReceived
 	defer r.Body.Close()
 
 	ctx := r.Context()
@@ -74,51 +101,57 @@ func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err = s.writer.Write(ctx, msg)
-
-		if err != nil {
-			if errors.Is(err, ErrUnknownMetricType) {
-				s.logger.Warn("Received unknown metric type", "Error", err)
-				status := newErrorStatus("Unknown metric type")
-				writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
-				return
-			}
-
-			// Rejected metrics are not an error - return OK with the count of rejected metrics and the error.
-			var rejectedMetricsErr *ErrRejectedMetric
-			if errors.As(err, &rejectedMetricsErr) {
-				s.logger.Warn("Rejecting some metrics", "Error", err)
-				resp := &v1.ExportMetricsServiceResponse{
-					PartialSuccess: &v1.ExportMetricsPartialSuccess{
-						RejectedDataPoints: rejectedMetricsErr.Count,
-						ErrorMessage:       rejectedMetricsErr.Msg,
-					},
-				}
-				writeExportMetricsServiceResponse(w, resp, m)
-				return
-			}
-
-			var writeErr *ErrWriteError
-			if errors.As(err, &writeErr) {
-				s.logger.Error("Failed to write metrics", "Error", err)
-				status := newErrorStatus("Failed to write metrics. Please try again.")
-				writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
-				return
-			} else {
-				// Unknown error
-				s.logger.Error("Failed to forward metrics with unknown error", "Error", err)
-				status := newErrorStatus("Internal Server Error. Please try again.")
-				writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
-				return
-			}
+		resp, status, code := s.writeMessage(ctx, msg)
+		if status != nil {
+			writeErrorStatusResponse(w, code, status, m)
+		} else {
+			writeExportMetricsServiceResponse(w, resp, m)
 		}
-
-		writeExportMetricsServiceResponse(w, &v1.ExportMetricsServiceResponse{}, m)
 	default:
 		logger.Errorf("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
 		w.WriteHeader(http.StatusUnsupportedMediaType)
 		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
 	}
+}
+
+// writeMessage writes the metrics to the writer and returns the response, status message (for errors), and HTTP status code
+func (s *MetricsService) writeMessage(ctx context.Context, msg *v1.ExportMetricsServiceRequest) (*v1.ExportMetricsServiceResponse, *status.Status, int) {
+	err := s.writer.Write(ctx, msg)
+
+	if err != nil {
+		if errors.Is(err, ErrUnknownMetricType) {
+			s.logger.Warn("Received unknown metric type", "Error", err)
+			status := newErrorStatus("Unknown metric type")
+			return nil, status, http.StatusBadRequest
+		}
+
+		// Rejected metrics are not an error - return OK with the count of rejected metrics and the error.
+		var rejectedMetricsErr *ErrRejectedMetric
+		if errors.As(err, &rejectedMetricsErr) {
+			s.logger.Warn("Rejecting some metrics", "Error", err)
+			resp := &v1.ExportMetricsServiceResponse{
+				PartialSuccess: &v1.ExportMetricsPartialSuccess{
+					RejectedDataPoints: rejectedMetricsErr.Count,
+					ErrorMessage:       rejectedMetricsErr.Msg,
+				},
+			}
+			return resp, nil, http.StatusOK
+		}
+
+		var writeErr *ErrWriteError
+		if errors.As(err, &writeErr) {
+			s.logger.Error("Failed to write metrics", "Error", err)
+			status := newErrorStatus("Failed to write metrics. Please try again.")
+			return nil, status, http.StatusInternalServerError
+		} else {
+			// Unknown error
+			s.logger.Error("Failed to forward metrics with unknown error", "Error", err)
+			status := newErrorStatus("Internal Server Error. Please try again.")
+			return nil, status, http.StatusInternalServerError
+		}
+	}
+
+	return &v1.ExportMetricsServiceResponse{}, nil, http.StatusOK
 }
 
 func writeExportMetricsServiceResponse(w http.ResponseWriter, resp *v1.ExportMetricsServiceResponse, m *prometheus.CounterVec) {

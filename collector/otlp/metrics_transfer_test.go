@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	metricsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/metrics/v1"
+	"github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
@@ -74,7 +76,7 @@ func TestMetricsService_OLTP_protobuf(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewMetricsService(tc.writer, "/fake/path")
+			s := NewMetricsService(tc.writer, "/fake/path", 0)
 			resp := httptest.NewRecorder()
 
 			req := httptest.NewRequest("POST", "/fake/path", bytes.NewReader(tc.input))
@@ -103,6 +105,69 @@ func TestMetricsService_OLTP_protobuf(t *testing.T) {
 	}
 }
 
+func TestMetricsService_OLTP_GRPC(t *testing.T) {
+	type testcase struct {
+		name         string
+		writer       MetricWriter
+		input        *v1.ExportMetricsServiceRequest
+		expectedCode connect.Code
+	}
+
+	testcases := []testcase{
+		{
+			name:   "valid request",
+			writer: metricWriterWithError(nil),
+			input:  newServiceRequest(),
+		},
+		{
+			name:         "writer got unknown metric",
+			writer:       metricWriterWithError(ErrUnknownMetricType),
+			input:        newServiceRequest(),
+			expectedCode: connect.CodeInvalidArgument,
+		},
+		{
+			name:   "writer got rejected error",
+			writer: metricWriterWithError(&ErrRejectedMetric{Msg: "do not support this metric", Count: 10}),
+			input:  newServiceRequest(),
+			// per spec, must still accept the message.
+		},
+		{
+			name:         "writer had write error",
+			writer:       metricWriterWithError(&ErrWriteError{Err: fs.ErrPermission}),
+			input:        newServiceRequest(),
+			expectedCode: connect.CodeUnavailable,
+		},
+		{
+			name:         "writer returned unknown error",
+			writer:       metricWriterWithError(fs.ErrPermission),
+			input:        newServiceRequest(),
+			expectedCode: connect.CodeUnavailable,
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewMetricsService(tc.writer, "/fake/path", 0)
+			mux := http.NewServeMux()
+			mux.Handle(metricsv1connect.NewMetricsServiceHandler(s))
+
+			srv := httptest.NewUnstartedServer(mux)
+			srv.EnableHTTP2 = true
+			srv.StartTLS()
+			defer srv.Close()
+
+			client := metricsv1connect.NewMetricsServiceClient(srv.Client(), srv.URL, connect.WithGRPC())
+			_, err := client.Export(context.Background(), connect.NewRequest(tc.input))
+			if tc.expectedCode != 0 {
+				require.Error(t, err)
+				require.Equal(t, tc.expectedCode, connect.CodeOf(err))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestMetricsService_OLTP_ContentTypes(t *testing.T) {
 	type testcase struct {
 		contentType string
@@ -119,7 +184,7 @@ func TestMetricsService_OLTP_ContentTypes(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.contentType, func(t *testing.T) {
-			s := NewMetricsService(metricWriterWithError(nil), "/fake/path")
+			s := NewMetricsService(metricWriterWithError(nil), "/fake/path", 0)
 			resp := httptest.NewRecorder()
 
 			req := httptest.NewRequest("POST", "/fake/path", bytes.NewReader(serializedMSR(t, newServiceRequest())))
