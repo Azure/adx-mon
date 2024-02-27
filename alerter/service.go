@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/multikustoclient"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus"
@@ -216,6 +217,19 @@ func (l *Alerter) Open(ctx context.Context) error {
 		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-l.ctx.Done():
+				return
+			case <-ticker.C:
+				metrics.AlerterHealthCheck.WithLabelValues(l.opts.Region).Set(1)
+			}
 		}
 	}()
 

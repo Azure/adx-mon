@@ -9,6 +9,13 @@ var (
 	Namespace = "adxmon"
 
 	// Ingestor metrics
+	IngestorHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "health_check",
+		Help:      "Gauge indicating if Ingestor is healthy or not",
+	}, []string{"region"})
+
 	RequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -94,6 +101,13 @@ var (
 	}, []string{})
 
 	// Alerting metrics
+	AlerterHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "health_check",
+		Help:      "Gauge indicating if Alerter is healthy or not",
+	}, []string{"location"})
+
 	QueryHealth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",
@@ -109,6 +123,13 @@ var (
 	}, []string{"namespace", "name"})
 
 	// Collector metrics
+	CollectorHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "health_check",
+		Help:      "Gauge indicating if Collector is healthy or not",
+	}, []string{"region"})
+
 	LogsProxyReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "collector",

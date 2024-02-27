@@ -57,6 +57,7 @@ func main() {
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
+			&cli.StringFlag{Name: "region", Usage: "Current region"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
 			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
@@ -127,6 +128,7 @@ func realMain(ctx *cli.Context) error {
 	insecureSkipVerify = ctx.Bool("insecure-skip-verify")
 	namespace := ctx.String("namespace")
 	hostname := ctx.String("hostname")
+	region := ctx.String("region")
 	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
 
 	if namespace == "" {
@@ -315,6 +317,7 @@ func realMain(ctx *cli.Context) error {
 		LogsDatabases:       logsDatabases,
 		Namespace:           namespace,
 		Hostname:            hostname,
+		Region:              region,
 		StorageDir:          storageDir,
 		Uploader:            uploadDispatcher,
 		DisablePeerTransfer: disablePeerTransfer,

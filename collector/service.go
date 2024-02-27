@@ -105,6 +105,9 @@ type ServiceOpts struct {
 	// EnablePprof enables pprof endpoints.
 	EnablePprof bool
 
+	// Region is a location identifier
+	Region string
+
 	MaxConnections int
 }
 
@@ -392,8 +395,8 @@ func (s *Service) Open(ctx context.Context) error {
 		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
 	}
 	s.httpServers = append(s.httpServers, primaryHttp)
-
-	for _, handler := range s.grpcHandlers {
+  
+  for _, handler := range s.grpcHandlers {
 		server := http.NewServer(&http.ServerOpts{
 			ListenAddr: fmt.Sprintf(":%d", handler.Port),
 			MaxConns:   s.opts.MaxConnections,
@@ -408,6 +411,19 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 		logger.Infof("Started %s", httpServer)
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metrics.CollectorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
+			}
+		}
+	}()
 
 	return nil
 }
