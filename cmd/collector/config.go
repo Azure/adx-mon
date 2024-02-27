@@ -63,6 +63,8 @@ type Config struct {
 	Endpoint           string `toml:"endpoint" comment:"Ingestor URL to send collected telemetry."`
 	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
+	TLSKeyFile         string `toml:"tls-key-file" comment:"Optional path to the TLS key file."`
+	TLSCertFile        string `toml:"tls-cert-file" comment:"Optional path to the TLS cert bundle file."`
 
 	MaxConnections       int   `toml:"max-connections" comment:"Maximum number of connections to accept."`
 	MaxBatchSize         int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
@@ -354,6 +356,12 @@ func (w *TailLog) Validate() error {
 }
 
 func (c *Config) Validate() error {
+	tlsCertEmpty := c.TLSCertFile == ""
+	tlsKeyEmpty := c.TLSKeyFile == ""
+	if tlsCertEmpty != tlsKeyEmpty {
+		return errors.New("tls-cert-file and tls-key-file must both be set or both be empty")
+	}
+
 	existingPaths := make(map[string]struct{})
 	for _, v := range c.PrometheusRemoteWrite {
 		if err := v.Validate(); err != nil {

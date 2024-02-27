@@ -262,6 +262,8 @@ func realMain(ctx *cli.Context) error {
 		AddAttributes:      addAttributes,
 		LiftAttributes:     liftAttributes,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		TLSCertFile:        cfg.TLSCertFile,
+		TLSKeyFile:         cfg.TLSKeyFile,
 		MaxConnections:     cfg.MaxConnections,
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
