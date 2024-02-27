@@ -269,6 +269,7 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentAge:      time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
 		MaxSegmentSize:     cfg.MaxSegmentSize,
 		MaxDiskUsage:       cfg.MaxDiskUsage,
+		Region:             cfg.Region,
 		StorageDir:         cfg.StorageDir,
 	}
 

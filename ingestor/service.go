@@ -86,6 +86,9 @@ type ServiceOpts struct {
 	// Hostname is the hostname of the current node.
 	Hostname string
 
+	// Region is a location identifier
+	Region string
+
 	// DisablePeerTransfer disables peer discovery and prevents transfers of small segments to an owner.
 	// Each instance of ingestor will upload received segments directly.
 	DisablePeerTransfer bool
@@ -247,6 +250,19 @@ func (s *Service) Open(ctx context.Context) error {
 	if err := s.metrics.Open(svcCtx); err != nil {
 		return err
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-svcCtx.Done():
+				return
+			case <-ticker.C:
+				metrics.IngestorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
+			}
+		}
+	}()
 
 	return nil
 }

@@ -110,6 +110,9 @@ type ServiceOpts struct {
 	// EnablePprof enables pprof endpoints.
 	EnablePprof bool
 
+	// Region is a location identifier
+	Region string
+
 	MaxConnections int
 }
 
@@ -433,6 +436,19 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 		logger.Infof("Started %s", httpServer)
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metrics.CollectorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
+			}
+		}
+	}()
 
 	return nil
 }

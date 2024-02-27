@@ -63,6 +63,7 @@ type Config struct {
 	Endpoint           string `toml:"endpoint" comment:"Ingestor URL to send collected telemetry."`
 	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
+	Region             string `toml:"region" comment:"Region is a location identifier."`
 	TLSKeyFile         string `toml:"tls-key-file" comment:"Optional path to the TLS key file."`
 	TLSCertFile        string `toml:"tls-cert-file" comment:"Optional path to the TLS cert bundle file."`
 
