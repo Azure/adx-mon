@@ -99,6 +99,9 @@ type ServiceOpts struct {
 	// EnablePprof enables pprof endpoints.
 	EnablePprof bool
 
+	// Region is a location identifier
+	Region string
+
 	MaxConnections int
 }
 
@@ -355,6 +358,19 @@ func (s *Service) Open(ctx context.Context) error {
 	for _, handler := range s.proxySvcs {
 		s.http.RegisterHandler(handler.Path, handler.Handler)
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metrics.CollectorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
+			}
+		}
+	}()
 
 	logger.Infof("Listening at %s", s.opts.ListenAddr)
 	if err := s.http.Open(ctx); err != nil {
