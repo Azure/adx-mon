@@ -344,15 +344,17 @@ func realMain(ctx *cli.Context) error {
 			disableMetricsForwarding = *v.DisableMetricsForwarding
 		}
 
-		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.MetricsHandlerOpts{
-			Path:                     v.Path,
-			DefaultDropMetrics:       defaultDropMetrics,
-			AddLabels:                addLabels,
-			DropMetrics:              dropMetrics,
-			DropLabels:               dropLabels,
-			KeepMetrics:              keepMetrics,
-			KeepMetricsLabelValues:   keepMetricLabelValues,
-			DisableMetricsForwarding: disableMetricsForwarding,
+		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.PrometheusRemoteWriteHandlerOpts{
+			Path: v.Path,
+			MetricOpts: collector.MetricsHandlerOpts{
+				DefaultDropMetrics:       defaultDropMetrics,
+				AddLabels:                addLabels,
+				DropMetrics:              dropMetrics,
+				DropLabels:               dropLabels,
+				KeepMetrics:              keepMetrics,
+				KeepMetricsLabelValues:   keepMetricLabelValues,
+				DisableMetricsForwarding: disableMetricsForwarding,
+			},
 		})
 	}
 
@@ -429,15 +431,18 @@ func realMain(ctx *cli.Context) error {
 			disableMetricsForwarding = *v.DisableMetricsForwarding
 		}
 
-		opts.OtlpMetricsHandlers = append(opts.OtlpMetricsHandlers, collector.MetricsHandlerOpts{
-			Path:                     v.Path,
-			DefaultDropMetrics:       defaultDropMetrics,
-			AddLabels:                addLabels,
-			DropMetrics:              dropMetrics,
-			DropLabels:               dropLabels,
-			KeepMetrics:              keepMetrics,
-			KeepMetricsLabelValues:   keepMetricLabelValues,
-			DisableMetricsForwarding: disableMetricsForwarding,
+		opts.OtlpMetricsHandlers = append(opts.OtlpMetricsHandlers, collector.OtlpMetricsHandlerOpts{
+			Path:     v.Path,
+			GrpcPort: v.GrpcPort,
+			MetricOpts: collector.MetricsHandlerOpts{
+				DefaultDropMetrics:       defaultDropMetrics,
+				AddLabels:                addLabels,
+				DropMetrics:              dropMetrics,
+				DropLabels:               dropLabels,
+				KeepMetrics:              keepMetrics,
+				KeepMetricsLabelValues:   keepMetricLabelValues,
+				DisableMetricsForwarding: disableMetricsForwarding,
+			},
 		})
 	}
 

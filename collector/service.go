@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"time"
 
+	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
@@ -18,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Service struct {
@@ -34,8 +36,8 @@ type Service struct {
 	// workerSvcs are the collection services that can be opened and closed.
 	workerSvcs []service.Component
 
-	// http is the shared HTTP server for the collector.  The logs and metrics services are registered with this server.
-	http *http.HttpServer
+	// httpServers is the shared HTTP servers for the collector.  The logs and metrics services are registered with these servers.
+	httpServers []*http.HttpServer
 
 	// store is the local WAL store.
 	store storage.Store
@@ -43,15 +45,19 @@ type Service struct {
 	// scraper is the metrics scraper that scrapes metrics from the local node.
 	scraper *Scraper
 
-	// otelLogsSvc is the OpenTelemetry logs service that receives logs from OpenTelemetry clients and stores them
+	// otelLogsSvc is the OpenTelemetry logs service that receives OTLP/HTTP Logs requests and stores
 	// in the local WAL.
 	otelLogsSvc *otlp.LogsService
 
-	// otelProxySvc is the OpenTelemetry logs proxy service that forwards logs to the ingestor.
+	// otelProxySvc is the OpenTelemetry logs proxy service that receives OTLP/HTTP Logs requests and
+	// forwards them via OTLP/GRPC to ingestor.
 	otelProxySvc *otlp.LogsProxyService
 
-	// proxySvcs are the write endpoints that receive metrics from Prometheus and Otel clients.
-	proxySvcs []*http.HttpHandler
+	// httpHandlers are the write endpoints that receive metrics from Prometheus and Otel clients over HTTP.
+	httpHandlers []*http.HttpHandler
+
+	// grpcHandlers are the write endpoints that receive calls over GRPC
+	grpcHandlers []*http.GRPCHandler
 
 	// batcher is the component that batches metrics and logs for transferring to ingestor.
 	batcher cluster.Batcher
@@ -68,9 +74,9 @@ type ServiceOpts struct {
 	// LogCollectionHandlers is the list of log collection handlers
 	LogCollectionHandlers []LogCollectorOpts
 	// PromMetricsHandlers is the list of prom-remote handlers
-	PromMetricsHandlers []MetricsHandlerOpts
+	PromMetricsHandlers []PrometheusRemoteWriteHandlerOpts
 	// OtlpMetricsHandlers is the list of oltp metrics handlers
-	OtlpMetricsHandlers []MetricsHandlerOpts
+	OtlpMetricsHandlers []OtlpMetricsHandlerOpts
 	// Scraper is the options for the prom scraper
 	Scraper *ScraperOpts
 
@@ -105,10 +111,23 @@ type ServiceOpts struct {
 	MaxConnections int
 }
 
-type MetricsHandlerOpts struct {
+type OtlpMetricsHandlerOpts struct {
+	// Optional. Path is the path where the OTLP/HTTP handler will be registered.
+	Path string
+	// Optional. GrpcPort is the port where the metrics OTLP/GRPC handler will listen.
+	GrpcPort int
+
+	MetricOpts MetricsHandlerOpts
+}
+
+type PrometheusRemoteWriteHandlerOpts struct {
 	// Path is the path where the handler will be registered.
 	Path string
 
+	MetricOpts MetricsHandlerOpts
+}
+
+type MetricsHandlerOpts struct {
 	AddLabels map[string]string
 
 	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
@@ -182,20 +201,21 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
 
-	var metricsHandlers []*http.HttpHandler
+	var metricHttpHandlers []*http.HttpHandler
+	var grpcHandlers []*http.GRPCHandler
 	for _, handlerOpts := range opts.PromMetricsHandlers {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
-			RequestTransformer: handlerOpts.RequestTransformer(),
+			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
 			RequestWriter: &promremote.RemoteWriteProxy{
 				Client:                   remoteClient,
 				Endpoints:                opts.Endpoints,
 				MaxBatchSize:             opts.MaxBatchSize,
-				DisableMetricsForwarding: handlerOpts.DisableMetricsForwarding,
+				DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
 			},
 			HealthChecker: fakeHealthChecker{},
 		})
-		metricsHandlers = append(metricsHandlers, &http.HttpHandler{
+		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
@@ -203,17 +223,29 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
 		writer := otlp.NewOltpMetricWriter(otlp.OltpMetricWriterOpts{
-			RequestTransformer:       handlerOpts.RequestTransformer(),
+			RequestTransformer:       handlerOpts.MetricOpts.RequestTransformer(),
 			Client:                   remoteClient,
 			Endpoints:                opts.Endpoints,
 			MaxBatchSize:             opts.MaxBatchSize,
-			DisableMetricsForwarding: handlerOpts.DisableMetricsForwarding,
+			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
 		})
-		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path)
-		metricsHandlers = append(metricsHandlers, &http.HttpHandler{
-			Path:    handlerOpts.Path,
-			Handler: oltpMetricsService.Handler,
-		})
+		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path, handlerOpts.GrpcPort)
+		if handlerOpts.Path != "" {
+			metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
+				Path:    handlerOpts.Path,
+				Handler: oltpMetricsService.Handler,
+			})
+		}
+
+		if handlerOpts.GrpcPort > 0 {
+			path, handler := metricsv1connect.NewMetricsServiceHandler(oltpMetricsService)
+
+			grpcHandlers = append(grpcHandlers, &http.GRPCHandler{
+				Port:    handlerOpts.GrpcPort,
+				Path:    path,
+				Handler: handler,
+			})
+		}
 	}
 
 	var (
@@ -291,7 +323,8 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		workerSvcs:   workerSvcs,
 		otelLogsSvc:  logsSvc,
 		otelProxySvc: logsProxySvc,
-		proxySvcs:    metricsHandlers,
+		httpHandlers: metricHttpHandlers,
+		grpcHandlers: grpcHandlers,
 		batcher:      batcher,
 		replicator:   replicator,
 		remoteClient: remoteClient,
@@ -339,24 +372,44 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 	}
 
-	s.http = http.NewServer(&http.ServerOpts{
+	s.httpServers = []*http.HttpServer{}
+
+	primaryHttp := http.NewServer(&http.ServerOpts{
 		ListenAddr: s.opts.ListenAddr,
 		MaxConns:   s.opts.MaxConnections,
 	})
 
+	primaryHttp.RegisterHandler("/metrics", promhttp.Handler())
 	if s.opts.EnablePprof {
-		s.http.RegisterHandler("/debug/pprof/", pprof.Index)
-		s.http.RegisterHandler("/debug/pprof/cmdline", pprof.Cmdline)
-		s.http.RegisterHandler("/debug/pprof/profile", pprof.Profile)
-		s.http.RegisterHandler("/debug/pprof/symbol", pprof.Symbol)
-		s.http.RegisterHandler("/debug/pprof/trace", pprof.Trace)
+		primaryHttp.RegisterHandlerFunc("/debug/pprof/", pprof.Index)
+		primaryHttp.RegisterHandlerFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		primaryHttp.RegisterHandlerFunc("/debug/pprof/profile", pprof.Profile)
+		primaryHttp.RegisterHandlerFunc("/debug/pprof/symbol", pprof.Symbol)
+		primaryHttp.RegisterHandlerFunc("/debug/pprof/trace", pprof.Trace)
 	}
 
-	s.http.RegisterHandler("/v1/logs", s.otelLogsSvc.Handler)
-	s.http.RegisterHandler("/logs", s.otelProxySvc.Handler)
+	primaryHttp.RegisterHandlerFunc("/v1/logs", s.otelLogsSvc.Handler)
+	primaryHttp.RegisterHandlerFunc("/logs", s.otelProxySvc.Handler)
 
-	for _, handler := range s.proxySvcs {
-		s.http.RegisterHandler(handler.Path, handler.Handler)
+	for _, handler := range s.httpHandlers {
+		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
+	}
+	s.httpServers = append(s.httpServers, primaryHttp)
+  
+  for _, handler := range s.grpcHandlers {
+		server := http.NewServer(&http.ServerOpts{
+			ListenAddr: fmt.Sprintf(":%d", handler.Port),
+			MaxConns:   s.opts.MaxConnections,
+		})
+		server.RegisterHandler(handler.Path, handler.Handler)
+		s.httpServers = append(s.httpServers, server)
+	}
+
+	for _, httpServer := range s.httpServers {
+		if err := httpServer.Open(ctx); err != nil {
+			return err
+		}
+		logger.Infof("Started %s", httpServer)
 	}
 
 	go func() {
@@ -371,11 +424,6 @@ func (s *Service) Open(ctx context.Context) error {
 			}
 		}
 	}()
-
-	logger.Infof("Listening at %s", s.opts.ListenAddr)
-	if err := s.http.Open(ctx); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -393,7 +441,9 @@ func (s *Service) Close() error {
 		s.otelProxySvc.Close()
 	}
 	s.cancel()
-	s.http.Close()
+	for _, httpServer := range s.httpServers {
+		httpServer.Close()
+	}
 	s.batcher.Close()
 	s.replicator.Close()
 	s.store.Close()

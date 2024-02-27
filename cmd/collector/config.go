@@ -90,8 +90,8 @@ type Config struct {
 
 	PrometheusScrape      *PrometheusScrape        `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
 	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
-	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint."`
-	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint."`
+	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
+	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint. Optionally accepts OTLP/HTTP and/or OTLP/gRPC."`
 	TailLog               []*TailLog               `toml:"tail-log" comment:"Defines a tail log scraper."`
 }
 
@@ -232,7 +232,8 @@ func (w *OtelLog) Validate() error {
 
 type OtelMetric struct {
 	Database                 string `toml:"database" comment:"Database to store metrics in."`
-	Path                     string `toml:"path" comment:"The path to listen on for otlp/http requests.  Defaults to /v1/metrics."`
+	Path                     string `toml:"path" comment:"The path to listen on for OTLP/HTTP requests."`
+	GrpcPort                 int    `toml:"grpc-port" comment:"The port to listen on for OTLP/gRPC requests."`
 	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
@@ -244,12 +245,18 @@ type OtelMetric struct {
 }
 
 func (w *OtelMetric) Validate() error {
-	if w.Path == "" {
-		return errors.New("otel-metric.path must be set")
-	}
-
 	if w.Database == "" {
 		return errors.New("otel-metric.database must be set")
+	}
+
+	if w.Path == "" && w.GrpcPort == 0 {
+		return errors.New("otel-metric.path or otel-metric.grpc-port must be set")
+	}
+
+	if w.GrpcPort != 0 {
+		if w.GrpcPort < 1 || w.GrpcPort > 65535 {
+			return errors.New("otel-metric.grpc-port must be between 1 and 65535")
+		}
 	}
 
 	for k, v := range w.AddLabels {
@@ -272,11 +279,11 @@ func (w *OtelMetric) Validate() error {
 
 	for _, v := range w.KeepMetricsWithLabelValue {
 		if v.LabelRegex == "" {
-			return errors.New("otel-metric.keep-metrics-with-label-value key must be set")
+			return errors.New("otel-metric.keep-metrics-with-label-value label-regex must be set")
 		}
 
 		if v.ValueRegex == "" {
-			return errors.New("otel-metric.keep-metrics-with-label-value value must be set")
+			return errors.New("otel-metric.keep-metrics-with-label-value value-regex must be set")
 		}
 	}
 
@@ -377,10 +384,12 @@ func (c *Config) Validate() error {
 			return err
 		}
 
-		if _, ok := existingPaths[v.Path]; ok {
-			return fmt.Errorf("otel-metric.path %s is already defined", v.Path)
+		if v.Path != "" {
+			if _, ok := existingPaths[v.Path]; ok {
+				return fmt.Errorf("otel-metric.path %s is already defined", v.Path)
+			}
+			existingPaths[v.Path] = struct{}{}
 		}
-		existingPaths[v.Path] = struct{}{}
 	}
 
 	if c.PrometheusScrape != nil {
