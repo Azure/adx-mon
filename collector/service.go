@@ -2,7 +2,9 @@ package collector
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http/pprof"
 	_ "net/http/pprof"
 	"regexp"
@@ -85,6 +87,9 @@ type ServiceOpts struct {
 
 	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
 	InsecureSkipVerify bool
+
+	TLSCertFile string
+	TLSKeyFile  string
 
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
@@ -372,12 +377,28 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 	}
 
+	listenerFunc := plaintextListenerFunc()
+	if s.opts.TLSCertFile != "" && s.opts.TLSKeyFile != "" {
+		logger.Infof("TLS enabled for listeners")
+		cert, err := tls.LoadX509KeyPair(s.opts.TLSCertFile, s.opts.TLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to load cert and key: %w", err)
+		}
+		listenerFunc = tlsListenerFunc(cert)
+	}
+
 	s.httpServers = []*http.HttpServer{}
 
-	primaryHttp := http.NewServer(&http.ServerOpts{
-		ListenAddr: s.opts.ListenAddr,
-		MaxConns:   s.opts.MaxConnections,
-	})
+	listener, err := listenerFunc(s.opts.ListenAddr)
+	if err != nil {
+		return err
+	}
+	opts := &http.ServerOpts{
+		MaxConns: s.opts.MaxConnections,
+		Listener: listener,
+	}
+
+	primaryHttp := http.NewServer(opts)
 
 	primaryHttp.RegisterHandler("/metrics", promhttp.Handler())
 	if s.opts.EnablePprof {
@@ -395,11 +416,15 @@ func (s *Service) Open(ctx context.Context) error {
 		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
 	}
 	s.httpServers = append(s.httpServers, primaryHttp)
-  
-  for _, handler := range s.grpcHandlers {
+
+	for _, handler := range s.grpcHandlers {
+		listener, err := listenerFunc(fmt.Sprintf(":%d", handler.Port))
+		if err != nil {
+			return err
+		}
 		server := http.NewServer(&http.ServerOpts{
-			ListenAddr: fmt.Sprintf(":%d", handler.Port),
-			MaxConns:   s.opts.MaxConnections,
+			MaxConns: s.opts.MaxConnections,
+			Listener: listener,
 		})
 		server.RegisterHandler(handler.Path, handler.Handler)
 		s.httpServers = append(s.httpServers, server)
@@ -448,6 +473,30 @@ func (s *Service) Close() error {
 	s.replicator.Close()
 	s.store.Close()
 	return nil
+}
+
+func tlsListenerFunc(cert tls.Certificate) func(addr string) (net.Listener, error) {
+	return func(addr string) (net.Listener, error) {
+		listener, err := tls.Listen("tcp", addr, &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		})
+		if err != nil {
+			return listener, fmt.Errorf("failed to create listener: %w", err)
+		}
+
+		return listener, nil
+	}
+}
+
+func plaintextListenerFunc() func(addr string) (net.Listener, error) {
+	return func(addr string) (net.Listener, error) {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return listener, fmt.Errorf("failed to create listener: %w", err)
+		}
+
+		return listener, nil
+	}
 }
 
 type fakeHealthChecker struct{}

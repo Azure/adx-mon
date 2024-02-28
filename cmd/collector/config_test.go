@@ -760,3 +760,52 @@ func TestConfig_ReplaceVariables(t *testing.T) {
 	require.Equal(t, "http://FOO:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
 	require.Equal(t, "FOO_bar", c.AddLabels["foo"])
 }
+
+func TestConfig_TLS(t *testing.T) {
+	type testcase struct {
+		name    string
+		config  Config
+		wantErr bool
+	}
+
+	testcases := []testcase{
+		{
+			name: "Both TLS fields set",
+			config: Config{
+				TLSCertFile: "cert",
+				TLSKeyFile:  "key",
+			},
+			wantErr: false,
+		},
+		{
+			name:    "No TLS fields set",
+			config:  Config{},
+			wantErr: false,
+		},
+		{
+			name: "Cert Only",
+			config: Config{
+				TLSCertFile: "cert",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Key Only",
+			config: Config{
+				TLSKeyFile: "key",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range testcases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
