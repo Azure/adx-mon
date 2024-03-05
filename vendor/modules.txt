@@ -252,7 +252,7 @@ github.com/kylelemons/godebug/pretty
 # github.com/libp2p/go-buffer-pool v0.1.0
 ## explicit; go 1.17
 github.com/libp2p/go-buffer-pool
-# github.com/lmittmann/tint v1.0.3
+# github.com/lmittmann/tint v1.0.4
 ## explicit; go 1.21
 github.com/lmittmann/tint
 # github.com/mailru/easyjson v0.7.7
