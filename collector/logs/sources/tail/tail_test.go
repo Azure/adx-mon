@@ -34,6 +34,7 @@ func TestTailSourceStaticTargets(t *testing.T) {
 				LogType:  LogTypeDocker,
 				Database: "Logs",
 				Table:    "TestService",
+				Parsers:  []string{"json"},
 			},
 			{
 				FilePath: testFileTwo,
