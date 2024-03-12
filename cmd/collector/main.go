@@ -19,7 +19,6 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
-	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -458,17 +457,12 @@ func realMain(ctx *cli.Context) error {
 
 			staticTargets := []tail.FileTailTarget{}
 			for _, target := range v.StaticTailTarget {
-				parsers, err := parser.NewParsers(target.Parsers)
-				if err != nil {
-					return nil, fmt.Errorf("create parser for tailsource: %w", err)
-				}
-
 				staticTargets = append(staticTargets, tail.FileTailTarget{
 					FilePath: target.FilePath,
 					LogType:  target.LogType,
 					Database: target.Database,
 					Table:    target.Table,
-					Parsers:  parsers,
+					Parsers:  target.Parsers,
 				})
 			}
 

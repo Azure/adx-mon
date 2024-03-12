@@ -51,9 +51,10 @@ type FileTailTarget struct {
 	// The destination table name. Populated into the tablename attribute of the log that can be overwritten by transforms.
 	Table string
 
-	// LogLineParsers is a list of parsers to apply to each line of the log file to attempt to extract fields from the message body.
+	// Parsers is a list of parsers names to apply to each line of the log file to attempt to extract fields from the message body.
 	// These are run sequentially until one succeeds, or until all have been tried.
-	Parsers []parser.Parser
+	// These are converted into parser.ParserType.
+	Parsers []string
 }
 
 // TailSourceConfig configures TailSource.
@@ -187,13 +188,19 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 		return fmt.Errorf("addTarget create tailfile: %w", err)
 	}
 
+	parsers, err := parser.NewParsers(target.Parsers)
+	if err != nil {
+		shutdown()
+		return fmt.Errorf("addTarget create parsers: %w", err)
+	}
+
 	tailer := &Tailer{
 		tail:           tailFile,
 		shutdown:       shutdown,
 		database:       target.Database,
 		table:          target.Table,
 		logTypeParser:  getLogTypeParser(target.LogType),
-		logLineParsers: target.Parsers,
+		logLineParsers: parsers,
 	}
 	s.group.Go(func() error {
 		return readLines(tailerCtx, tailer, batchQueue)
