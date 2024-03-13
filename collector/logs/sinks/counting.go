@@ -13,7 +13,7 @@ type CountingSink struct {
 
 	lock        sync.Mutex
 	done        bool
-	doneChannel chan struct{}
+	doneChannel chan int64
 }
 
 func NewCountingSink(expectedCount int64) *CountingSink {
@@ -21,7 +21,7 @@ func NewCountingSink(expectedCount int64) *CountingSink {
 		expectedCount: expectedCount,
 		currentCount:  0,
 		done:          false,
-		doneChannel:   make(chan struct{}),
+		doneChannel:   make(chan int64, 1),
 	}
 }
 
@@ -35,6 +35,7 @@ func (s *CountingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 	batch.Ack()
 	if !s.done && s.currentCount >= s.expectedCount {
 		s.done = true
+		s.doneChannel <- s.currentCount
 		close(s.doneChannel)
 	}
 	s.lock.Unlock()
@@ -49,6 +50,6 @@ func (s *CountingSink) Name() string {
 	return "CountingSink"
 }
 
-func (s *CountingSink) DoneChan() chan struct{} {
+func (s *CountingSink) DoneChan() chan int64 {
 	return s.doneChannel
 }
