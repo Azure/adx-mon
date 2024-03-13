@@ -448,6 +448,7 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	for _, v := range cfg.TailLog {
+		v := v
 		createFunc := func(store storage.Store) (*logs.Service, error) {
 			addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes, map[string]string{
 				"adxmon_namespace": k8s.Instance.Namespace,
@@ -474,11 +475,25 @@ func realMain(ctx *cli.Context) error {
 				return nil, fmt.Errorf("create sink for tailsource: %w", err)
 			}
 
-			source, err := tail.NewTailSource(tail.TailSourceConfig{
+			tailSourceConfig := tail.TailSourceConfig{
 				StaticTargets:   staticTargets,
 				CursorDirectory: cfg.StorageDir,
 				WorkerCreator:   engine.WorkerCreator(nil, sink), //TODO,
-			})
+			}
+
+			if v.Kubeconfig != "" {
+				_, k8scli, _, err := newKubeClient(v.Kubeconfig)
+				if err != nil {
+					return nil, fmt.Errorf("create kubeclient for tailsource discovery: %w", err)
+				}
+
+				tailSourceConfig.PodDiscoveryOpts = &tail.PodDiscoveryOpts{
+					K8sCli:   k8scli,
+					NodeName: hostname,
+				}
+			}
+
+			source, err := tail.NewTailSource(tailSourceConfig)
 			if err != nil {
 				return nil, fmt.Errorf("create tailsource: %w", err)
 			}

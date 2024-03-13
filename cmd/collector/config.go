@@ -293,6 +293,7 @@ func (w *OtelMetric) Validate() error {
 }
 
 type TailLog struct {
+	Kubeconfig       string            `toml:"kube-config" comment:"Optional path to kubernetes client config"`
 	AddAttributes    map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes   []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 	StaticTailTarget []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
@@ -381,9 +382,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	tailScrapingFromKube := false
 	for _, v := range c.TailLog {
 		if err := v.Validate(); err != nil {
 			return err
+		}
+		if v.Kubeconfig != "" {
+			if tailScrapingFromKube {
+				return errors.New("only one tail-log can have kube-config set")
+			}
+			tailScrapingFromKube = true
 		}
 	}
 

@@ -107,6 +107,7 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 			Database: "Logs",
 			Table:    "TestService",
 		},
+		nil,
 	)
 	tailSource.AddTarget(
 		FileTailTarget{
@@ -114,6 +115,7 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 			Database: "Logs",
 			Table:    "TestServiceTwo",
 		},
+		nil,
 	)
 	// Same source as first, so NOOP
 	tailSource.AddTarget(
@@ -122,6 +124,7 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 			Database: "Logs",
 			Table:    "TestService",
 		},
+		nil,
 	)
 
 	<-sink.DoneChan()
@@ -146,6 +149,85 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, _, err = readCursor(cursorPath(testDir, testFileTwo))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
+	numLogs := 1000
+
+	testDir := t.TempDir()
+	// consistent date so we know how many bytes are generated in the file.
+	generatedLogStartTime := time.Unix(0, 0)
+	testFileOne := filepath.Join(testDir, "test.log")
+	generateLogs(t, testFileOne, numLogs, generatedLogStartTime, time.Millisecond*10)
+
+	// -------- Setup first run, reading the first half of the logs --------
+	sink := sinks.NewCountingSink(int64(numLogs))
+	tailSource, err := NewTailSource(TailSourceConfig{
+		StaticTargets:   []FileTailTarget{},
+		CursorDirectory: testDir,
+		WorkerCreator:   engine.WorkerCreator(nil, sink),
+	})
+	require.NoError(t, err)
+
+	service := &logs.Service{
+		Source: tailSource,
+		Sink:   sink,
+	}
+	ctx := context.Background()
+
+	err = service.Open(ctx)
+	require.NoError(t, err)
+	//defer service.Close()
+
+	tailSource.AddTarget(
+		FileTailTarget{
+			FilePath: testFileOne,
+			Database: "Logs",
+			Table:    "TestService",
+		},
+		nil,
+	)
+
+	read := <-sink.DoneChan() // read first batch
+	require.Equal(t, int64(numLogs), read)
+	service.Close() // Shutdown all.
+
+	// -------- Setup second run, reading the second batch of the logs --------
+	numLogsTwo := 650
+	f, err := os.OpenFile(testFileOne, os.O_APPEND|os.O_WRONLY, 0640)
+	require.NoError(t, err)
+	defer f.Close()
+	writeLogs(t, f, numLogsTwo, generatedLogStartTime, time.Millisecond*10)
+	sink = sinks.NewCountingSink(int64(numLogsTwo))
+	tailSource, err = NewTailSource(TailSourceConfig{
+		StaticTargets:   []FileTailTarget{},
+		CursorDirectory: testDir,
+		WorkerCreator:   engine.WorkerCreator(nil, sink),
+	})
+	require.NoError(t, err)
+
+	service = &logs.Service{
+		Source: tailSource,
+		Sink:   sink,
+	}
+	ctx = context.Background()
+
+	err = service.Open(ctx)
+	require.NoError(t, err)
+
+	tailSource.AddTarget(
+		FileTailTarget{
+			FilePath: testFileOne,
+			Database: "Logs",
+			Table:    "TestService",
+		},
+		nil,
+	)
+
+	read = <-sink.DoneChan() // read second batch
+	// Does not start from the beginning, but only reads the new logs.
+	require.Equal(t, int64(numLogsTwo), read)
+	service.Close()
 }
 
 func BenchmarkTailSource(b *testing.B) {
@@ -271,6 +353,11 @@ func generateLogs(t testing.TB, fileName string, count int, startTime time.Time,
 	require.NoError(t, err)
 	defer file.Close()
 
+	writeLogs(t, file, count, startTime, interval)
+}
+
+func writeLogs(t testing.TB, file *os.File, count int, startTime time.Time, interval time.Duration) {
+	t.Helper()
 	currentTime := startTime.UTC()
 	for i := 0; i < count; i++ {
 		timestamp := currentTime.Format(time.RFC3339Nano)
@@ -281,6 +368,6 @@ func generateLogs(t testing.TB, fileName string, count int, startTime time.Time,
 		currentTime = currentTime.Add(interval)
 	}
 
-	err = file.Sync()
+	err := file.Sync()
 	require.NoError(t, err)
 }

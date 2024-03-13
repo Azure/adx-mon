@@ -36,6 +36,8 @@ var (
 
 // FileTailTarget describes a file to tail, how to parse it, and the destination for the parsed logs.
 // It is used int he list of StaticTargets in TailSourceConfig, or used in AddTarget.
+// NOTE: If new fields are added that change during runtime (e.g. from pod metadata changing) that are sent
+// via UpdateChan, update isTargetChanged to take this new field into account.
 type FileTailTarget struct {
 	// FilePath is the file to tail.
 	FilePath string
@@ -62,6 +64,10 @@ type TailSourceConfig struct {
 	StaticTargets   []FileTailTarget
 	CursorDirectory string
 	WorkerCreator   engine.WorkerCreatorFunc
+	// TODO mkeesey - TailSource should not need to manage poddiscovery service lifecycle.
+	// However, creation of TailSource happens with a create method to access store, making this
+	// wiring difficult.
+	PodDiscoveryOpts *PodDiscoveryOpts
 }
 
 // Tailer is a specific instance of a file being tailed.
@@ -92,14 +98,22 @@ type TailSource struct {
 	group        *errgroup.Group
 	ackGenerator func(*types.Log) func()
 	tailers      map[string]*Tailer
+
+	podDiscovery *PodDiscovery
 }
 
 func NewTailSource(config TailSourceConfig) (*TailSource, error) {
-	return &TailSource{
+	ts := &TailSource{
 		staticTargets:   config.StaticTargets,
 		cursorDirectory: config.CursorDirectory,
 		workerCreator:   config.WorkerCreator,
-	}, nil
+	}
+
+	if config.PodDiscoveryOpts != nil {
+		ts.podDiscovery = NewPodDiscovery(*config.PodDiscoveryOpts, ts)
+	}
+
+	return ts, nil
 }
 
 func (s *TailSource) Open(ctx context.Context) error {
@@ -126,9 +140,20 @@ func (s *TailSource) Open(ctx context.Context) error {
 	for _, target := range s.staticTargets {
 		target := target
 
-		err := s.AddTarget(target)
+		err := s.AddTarget(target, nil)
 		if err != nil {
 			// On startup, if we fail to add a target, we should close all the tailers we've opened so far and return.
+			for _, t := range s.tailers {
+				t.Stop()
+			}
+			return fmt.Errorf("TailSource open: %w", err)
+		}
+	}
+
+	if s.podDiscovery != nil {
+		err := s.podDiscovery.Open(ctx)
+		if err != nil {
+			// On startup, if we fail to open the pod discovery, we should close all the tailers we've opened so far and return.
 			for _, t := range s.tailers {
 				t.Stop()
 			}
@@ -140,6 +165,10 @@ func (s *TailSource) Open(ctx context.Context) error {
 }
 
 func (s *TailSource) Close() error {
+	if s.podDiscovery != nil {
+		s.podDiscovery.Close()
+	}
+
 	s.mu.Lock()
 	for _, t := range s.tailers {
 		t.Stop()
@@ -157,7 +186,9 @@ func (s *TailSource) Name() string {
 }
 
 // AddTarget adds a new file to tail.
-func (s *TailSource) AddTarget(target FileTailTarget) error {
+// updateChan is an optional channel to provide updated FileTailTarget metadata during runtime.
+// Does not support updating FilePath or LogType.
+func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTailTarget) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -203,7 +234,7 @@ func (s *TailSource) AddTarget(target FileTailTarget) error {
 		logLineParsers: parsers,
 	}
 	s.group.Go(func() error {
-		return readLines(tailerCtx, tailer, batchQueue)
+		return readLines(tailerCtx, tailer, updateChan, batchQueue)
 	})
 
 	batchConfig := engine.BatchConfig{
@@ -239,11 +270,23 @@ func (s *TailSource) RemoveTarget(filePath string) {
 	}
 }
 
-func readLines(ctx context.Context, tailer *Tailer, outputQueue chan<- *types.Log) error {
+func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue chan<- *types.Log) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		// Receive updates from the optional updateChannel.
+		case newTarget, ok := <-updateChannel:
+			if ok {
+				newParsers, err := parser.NewParsers(newTarget.Parsers)
+				if err != nil {
+					logger.Errorf("readLines: parser error for filename %q: %v", tailer.tail.Filename, err)
+					continue
+				}
+				tailer.logLineParsers = newParsers
+				tailer.database = newTarget.Database
+				tailer.table = newTarget.Table
+			}
 		case line, ok := <-tailer.tail.Lines:
 			if !ok {
 				return fmt.Errorf("readLines: tailer closed the channel for filename %q", tailer.tail.Filename)
