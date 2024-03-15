@@ -109,6 +109,8 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 					return fmt.Errorf("failed to write to store: %w", err)
 				}
 				metrics.LogsProxyReceived.WithLabelValues(g.Database, g.Table).Add(float64(len(g.Logs)))
+				metrics.LogKeys.WithLabelValues(g.Database, g.Table).Add(float64(len(g.Logs)))
+				metrics.LogSize.WithLabelValues(g.Database, g.Table).Add(float64(sizeofLogsInGroup(g)))
 				return nil
 			}(group)
 
@@ -183,4 +185,15 @@ func isUserError(err error) bool {
 	}
 
 	return false
+}
+
+func sizeofLogsInGroup(group *otlp.Logs) int {
+	var size int
+	for _, log := range group.Logs {
+		if log == nil {
+			continue
+		}
+		size += proto.Size(log.GetBody())
+	}
+	return size
 }
