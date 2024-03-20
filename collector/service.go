@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
+	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/trace/v1/tracev1connect"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
@@ -79,6 +80,8 @@ type ServiceOpts struct {
 	PromMetricsHandlers []PrometheusRemoteWriteHandlerOpts
 	// OtlpMetricsHandlers is the list of oltp metrics handlers
 	OtlpMetricsHandlers []OtlpMetricsHandlerOpts
+	// OtlpTraceHandlers is the list of oltp trace handlers
+	OtlpTraceHandlers []OtlpTraceHandlerOpts
 	// Scraper is the options for the prom scraper
 	Scraper *ScraperOpts
 
@@ -123,6 +126,12 @@ type OtlpMetricsHandlerOpts struct {
 	GrpcPort int
 
 	MetricOpts MetricsHandlerOpts
+}
+
+type OtlpTraceHandlerOpts struct {
+	Path     string
+	GrpcPort int
+	HttpPort int
 }
 
 type PrometheusRemoteWriteHandlerOpts struct {
@@ -206,7 +215,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
 	}
 
-	var metricHttpHandlers []*http.HttpHandler
+	var httpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	for _, handlerOpts := range opts.PromMetricsHandlers {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
@@ -220,7 +229,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			},
 			HealthChecker: fakeHealthChecker{},
 		})
-		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
+		httpHandlers = append(httpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
@@ -236,7 +245,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		})
 		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path, handlerOpts.GrpcPort)
 		if handlerOpts.Path != "" {
-			metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
+			httpHandlers = append(httpHandlers, &http.HttpHandler{
 				Path:    handlerOpts.Path,
 				Handler: oltpMetricsService.Handler,
 			})
@@ -250,7 +259,29 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 				Path:    path,
 				Handler: handler,
 			})
+
 		}
+	}
+
+	for _, handlerOpts := range opts.OtlpTraceHandlers {
+		traceSvc := otlp.NewTraceService(otlp.TraceServiceOpts{
+			Path:          handlerOpts.Path,
+			Store:         store,
+			AddAttributes: opts.AddAttributes,
+		})
+		path, handler := tracev1connect.NewTraceServiceHandler(traceSvc)
+
+		if handlerOpts.GrpcPort != 0 {
+			grpcHandlers = append(grpcHandlers, &http.GRPCHandler{
+				Port:    handlerOpts.GrpcPort,
+				Path:    path,
+				Handler: handler,
+			})
+		}
+		httpHandlers = append(httpHandlers, &http.HttpHandler{
+			Path:    handlerOpts.Path,
+			Handler: traceSvc.Handler,
+		})
 	}
 
 	var (
@@ -328,7 +359,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		workerSvcs:   workerSvcs,
 		otelLogsSvc:  logsSvc,
 		otelProxySvc: logsProxySvc,
-		httpHandlers: metricHttpHandlers,
+		httpHandlers: httpHandlers,
 		grpcHandlers: grpcHandlers,
 		batcher:      batcher,
 		replicator:   replicator,
@@ -465,6 +496,7 @@ func (s *Service) Close() error {
 	if s.otelProxySvc != nil {
 		s.otelProxySvc.Close()
 	}
+
 	s.cancel()
 	for _, httpServer := range s.httpServers {
 		httpServer.Close()

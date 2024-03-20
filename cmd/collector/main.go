@@ -448,6 +448,13 @@ func realMain(ctx *cli.Context) error {
 		})
 	}
 
+	for _, v := range cfg.OtelTrace {
+		opts.OtlpTraceHandlers = append(opts.OtlpTraceHandlers, collector.OtlpTraceHandlerOpts{
+			Path:     v.Path,
+			GrpcPort: v.GrpcPort,
+		})
+	}
+
 	for _, v := range cfg.TailLog {
 		createFunc := func(store storage.Store) (*logs.Service, error) {
 			addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes, map[string]string{

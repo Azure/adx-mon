@@ -52,6 +52,7 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 			slog.Group(
 				"handler",
 				slog.String("protocol", "otlp"),
+				slog.String("type", "logs"),
 			),
 		),
 		staticAttributes: add,

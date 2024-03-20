@@ -51,6 +51,12 @@ var DefaultConfig = Config{
 			AddLabels: make(map[string]string),
 		},
 	},
+	// TODO:
+	OtelTrace: []*OtelTrace{
+		{
+			Path: "/v1/traces",
+		},
+	},
 	TailLog: []*TailLog{
 		{
 			StaticTailTarget: []*TailTarget{},
@@ -94,6 +100,7 @@ type Config struct {
 	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
 	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
 	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint. Optionally accepts OTLP/HTTP and/or OTLP/gRPC."`
+	OtelTrace             []*OtelTrace             `toml:"otel-trace" comment:"Defines an OpenTelemetry trace endpoint. Optionally accepts OTLP/HTTP and/or OTLP/gRPC."`
 	TailLog               []*TailLog               `toml:"tail-log" comment:"Defines a tail log scraper."`
 }
 
@@ -286,6 +293,30 @@ func (w *OtelMetric) Validate() error {
 
 		if v.ValueRegex == "" {
 			return errors.New("otel-metric.keep-metrics-with-label-value value-regex must be set")
+		}
+	}
+
+	return nil
+}
+
+type OtelTrace struct {
+	Database string `toml:"database" comment:"Database to store traces in."`
+	Path     string `toml:"path" comment:"The path to listen on for OTLP/trace requests."`
+	GrpcPort int    `toml:"grpc-port" comment:"The port to listen on for OTLP/trace/gRPC requests."`
+}
+
+func (w *OtelTrace) Validate() error {
+	if w.Database == "" {
+		return errors.New("otel-trace.database must be set")
+	}
+
+	if w.Path == "" && w.GrpcPort == 0 {
+		return errors.New("otel-trace.path or otel-trace.grpc-port must be set")
+	}
+
+	if w.GrpcPort != 0 {
+		if w.GrpcPort < 1 || w.GrpcPort > 65535 {
+			return errors.New("otel-trace.grpc-port must be between 1 and 65535")
 		}
 	}
 

@@ -1,5 +1,12 @@
 version: "3"
 services:
+  kustainer:
+    image: mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest
+    ports:
+      - 8080:8080
+    environment:
+      - ACCEPT_EULA=Y
+
   fluentbit:
     image: cr.fluentbit.io/fluent/fluent-bit
     command: -c /etc/fluent-bit/config.yaml
@@ -7,6 +14,11 @@ services:
       - ./fluent.yaml:/etc/fluent-bit/config.yaml
     depends_on:
       - collector
+
+  tracer:
+    build:
+      dockerfile: tools/otlp/logs/Dockerfile.trace
+      context: ../../..
 
   ingestor:
     build:
@@ -26,12 +38,14 @@ services:
       context: ../../..
     volumes:
       - ~/.kube/config:/root/.kube/config
+      - ./collector.toml:/var/lib/adx-mon/collector.toml
     ports:
       - 8080:8080
+      - 4317:4317
     # While the _endpoints_ URI doesn't match the expected OTLP syntax, keep in
     # mind that _Collector_ is currently configured to connect to _Ingestor_, so we
     # just modify the _endpoints_ in pkg/otlp/proxy to be OTLP compliant.
-    command: --kubeconfig /root/.kube/config --endpoints https://ingestor:9090 --insecure-skip-verify --target=.*=http://localhost:8080/metrics:adx-mon/collector/collector --add-attributes Environment=dev --lift-attributes kusto.database --lift-attributes kusto.table --storage-dir /tmp
+    command: --config /var/lib/adx-mon/collector.toml
     depends_on:
       - ingestor
     environment:
