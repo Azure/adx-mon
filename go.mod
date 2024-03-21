@@ -17,12 +17,12 @@ require (
 	github.com/libp2p/go-buffer-pool v0.1.0
 	github.com/lmittmann/tint v1.0.4
 	github.com/mattn/go-isatty v0.0.20
-	github.com/pelletier/go-toml/v2 v2.1.0
+	github.com/pelletier/go-toml/v2 v2.2.0
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/client_model v0.5.0
 	github.com/prometheus/common v0.45.0
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.9.0
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.25.7
