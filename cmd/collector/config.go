@@ -51,7 +51,6 @@ var DefaultConfig = Config{
 			AddLabels: make(map[string]string),
 		},
 	},
-	// TODO:
 	OtelTrace: []*OtelTrace{
 		{
 			Path: "/v1/traces",

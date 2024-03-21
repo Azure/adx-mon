@@ -45,7 +45,28 @@ func NewTraceService(opts TraceServiceOpts) *TraceService {
 func (s *TraceService) Export(ctx context.Context, req *connect_go.Request[v1.ExportTraceServiceRequest]) (*connect_go.Response[v1.ExportTraceServiceResponse], error) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": tracev1connect.TraceServiceExportProcedure})
 
-	// TODO: things
+	// TODO: 
+	// - Add any attributes
+	// - Store to WAL
+	// - Emit metrics for number of traces stored
+	// There should be no need for collating Spans into Traces, that can all be done
+	// in Kusto via the trace-id in the query.
+	//
+	// Our Kusto schema will be something like:
+	// .create table Spans (
+	// 		TraceID: string,
+	// 		SpanID: string,
+	// 		OperationName: string,
+	// 		References: dynamic,
+	// 		Flags: int,
+	// 		StartTime: datetime,
+	// 		Duration: timespan,
+	// 		Tags: dynamic,
+	// 		Logs: dynamic,
+	// 		ProcessServiceName: string,
+	// 		ProcessTags: dynamic,
+	// 		ProcessID: string
+	// 	)
 	if logger.IsDebug() {
 		s.logger.Debug("Received trace over gRPC")
 	}
@@ -58,7 +79,8 @@ func (s *TraceService) Handler(w http.ResponseWriter, r *http.Request) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": s.path})
 	defer r.Body.Close()
 
-	// TODO: things
+	// TODO: Same as above. Unmarshal both results into an ExportTraceServiceRequest
+	// and invoke the same function so we're not duplicating work.
 	if logger.IsDebug() {
 		s.logger.Debug("Received trace over http")
 	}
