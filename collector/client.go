@@ -56,6 +56,10 @@ func NewMetricsClient() (*MetricsClient, error) {
 		// Setup HTTPS client
 		tlsConfig := &tls.Config{
 			RootCAs: caCertPool,
+
+			// Match how K8s handles probing with self-signed certs
+			// https://github.com/kubernetes/kubernetes/blob/master/pkg/probe/http/http.go#L41
+			InsecureSkipVerify: true,
 		}
 		transport.TLSClientConfig = tlsConfig
 	}
