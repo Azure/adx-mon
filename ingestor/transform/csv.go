@@ -301,8 +301,29 @@ func (w *CSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.WriteByte('}')
 	fields = append(fields, newlineReplacer.Replace(buf.String()))
 
-	// Resource - we don't have this
-	fields = append(fields, "{}")
+	// Resource
+	buf.Reset()
+	buf.WriteByte('{')
+	hasPrevField = false
+	for k, v := range log.Resource {
+		val, err := ffjson.Marshal(v)
+		if err != nil {
+			continue
+		}
+
+		if hasPrevField {
+			buf.WriteByte(',')
+		} else {
+			hasPrevField = true
+		}
+		fflib.WriteJson(buf, []byte(k))
+		buf.WriteByte(':')
+		buf.Write(val) // Already marshalled into json. Don't escape it again.
+		ffjson.Pool(val)
+	}
+	buf.WriteByte('}')
+	fields = append(fields, newlineReplacer.Replace(buf.String()))
+
 	// Attributes
 	buf.Reset()
 	buf.WriteByte('{')

@@ -22,6 +22,9 @@ func TestCopy(t *testing.T) {
 				"app": "myapp",
 			},
 		},
+		Resource: map[string]any{
+			"resource.key": "resource.value",
+		},
 	}
 
 	copy := log.Copy()
@@ -33,4 +36,5 @@ func TestCopy(t *testing.T) {
 	require.Equal(t, "myapp", copy.Attributes["k8s.pod.labels"].(map[string]string)["app"])
 	require.Equal(t, "value", copy.Body["key"].(string))
 	require.Equal(t, "world", copy.Body["complicated"].(map[string]any)["hello"])
+	require.Equal(t, "resource.value", copy.Resource["resource.key"].(string))
 }
