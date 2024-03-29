@@ -21,9 +21,9 @@ import (
 type Type string
 
 const (
-	cursor_position  = "cursor_position"
-	cursor_file_id   = "cursor_file_id"
-	cursor_file_name = "cursor_file_name"
+	cursor_position  = "adxmon_cursor_position"
+	cursor_file_id   = "adxmon_cursor_file_id"
+	cursor_file_name = "adxmon_cursor_file_name"
 
 	// Log types for extracting the timestamp and message
 	LogTypeDocker Type = "docker"

@@ -501,10 +501,14 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 						},
 						Attributes: map[string]interface{}{
 							// adx-mon attributes are filtered
+							"adxmon_cursor_position":    "abcdef",
 							types.AttributeDatabaseName: "ADatabase",
 							types.AttributeTableName:    "ATable",
 							"hello":                     "world",
 							"other":                     "attribute",
+						},
+						Resource: map[string]interface{}{
+							"RPTenant": "eastus",
 						},
 					},
 				},
@@ -520,7 +524,9 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 					Body: map[string]interface{}{
 						"message": "something happened",
 					},
-					Resource: map[string]interface{}{},
+					Resource: map[string]interface{}{
+						"RPTenant": "eastus",
+					},
 					Attributes: map[string]interface{}{
 						"hello": "world",
 						"other": "attribute",
@@ -549,6 +555,10 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 							"hello":                     []string{"world"},
 							"other":                     "attribute",
 						},
+						Resource: map[string]interface{}{
+							"RPTenant": "eastus",
+							"goodbye":  []string{"space"},
+						},
 					},
 					{
 						Timestamp:         1696983226797489936, // +21s
@@ -566,6 +576,9 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 							types.AttributeTableName:    "ATable",
 							"hello":                     []string{"space"},
 							"other":                     "attribute",
+						},
+						Resource: map[string]interface{}{
+							"RPTenant": "eastus",
 						},
 					},
 				},
@@ -585,7 +598,10 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 							"hello":  []interface{}{"world"},
 						},
 					},
-					Resource: map[string]interface{}{},
+					Resource: map[string]interface{}{
+						"RPTenant": "eastus",
+						"goodbye":  []interface{}{"space"},
+					},
 					Attributes: map[string]interface{}{
 						"hello": []interface{}{"world"},
 						"other": "attribute",
@@ -605,7 +621,9 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 							"hello":  []interface{}{"world"},
 						},
 					},
-					Resource: map[string]interface{}{},
+					Resource: map[string]interface{}{
+						"RPTenant": "eastus",
+					},
 					Attributes: map[string]interface{}{
 						"hello": []interface{}{"space"},
 						"other": "attribute",
@@ -655,6 +673,10 @@ func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
 					// adx-mon attributes are filtered
 					types.AttributeDatabaseName: "ADatabase",
 					types.AttributeTableName:    "ATable",
+				},
+				Resource: map[string]interface{}{
+					"RPTenant":     "eastus",
+					"UnderlayName": "hcp-underlay-eastus-cx-test",
 				},
 			},
 		},
