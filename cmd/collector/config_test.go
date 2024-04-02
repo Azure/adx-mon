@@ -550,8 +550,7 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		{
 			name: "Success_valid_static_targets",
 			config: &TailLog{
-				AddAttributes:  map[string]string{"key": "value"},
-				LiftAttributes: []string{"foo"},
+				AddAttributes: map[string]string{"key": "value"},
 				StaticTailTarget: []*TailTarget{
 					{
 						FilePath: "/path",
@@ -673,20 +672,6 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 						Parsers: []string{
 							"json",
 						},
-					},
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "Failure_empty_lift_attributes",
-			config: &TailLog{
-				LiftAttributes: []string{"foo", ""},
-				StaticTailTarget: []*TailTarget{
-					{
-						FilePath: "/path",
-						Database: "db",
-						Table:    "table",
 					},
 				},
 			},

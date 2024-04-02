@@ -295,7 +295,6 @@ func (w *OtelMetric) Validate() error {
 type TailLog struct {
 	Kubeconfig       string            `toml:"kube-config" comment:"Optional path to kubernetes client config"`
 	AddAttributes    map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	LiftAttributes   []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
 	StaticTailTarget []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
 }
 
@@ -314,11 +313,6 @@ func (w *TailLog) Validate() error {
 		}
 		if v == "" {
 			return errors.New("tail-log.add-attributes value must be set")
-		}
-	}
-	for _, v := range w.LiftAttributes {
-		if v == "" {
-			return errors.New("tail-log.add-attributes value cannot be empty")
 		}
 	}
 
