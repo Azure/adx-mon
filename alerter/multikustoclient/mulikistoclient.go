@@ -46,7 +46,7 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err), 0
 		}
 	} else {
-		iter, err = client.Query(ctx, qc.Rule.Database, qc.Stmt, kusto.ResultsProgressiveDisable())
+		iter, err = client.Query(ctx, qc.Rule.Database, qc.Stmt)
 		if err != nil {
 			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt), 0
 		}

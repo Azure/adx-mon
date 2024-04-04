@@ -31,25 +31,19 @@ type mgmter interface {
 	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
-var objectTypes = map[string]bool{
-	"queue": true,
-	"blob":  true,
-	"table": true,
-}
-
 // URI represents a resource URI for an ingestion command.
 type URI struct {
-	u                               *url.URL
-	account, objectType, objectName string
-	sas                             url.Values
+	u                   *url.URL
+	account, objectName string
+	sas                 url.Values
 }
 
 // Parse parses a string representing a Kutso resource URI.
-func Parse(uri string) (*URI, error) {
+func Parse(resourceUri string) (*URI, error) {
 	// Example for a valid url:
 	// https://fkjsalfdks.blob.core.windows.com/sdsadsadsa?sas=asdasdasd
 
-	u, err := url.Parse(uri)
+	u, err := url.Parse(resourceUri)
 	if err != nil {
 		return nil, err
 	}
@@ -58,28 +52,11 @@ func Parse(uri string) (*URI, error) {
 		return nil, fmt.Errorf("URI scheme must be 'https', was '%s'", u.Scheme)
 	}
 
-	hostSplit := strings.Split(u.Hostname(), ".")
-	if len(hostSplit) < 5 {
-		return nil, fmt.Errorf("error: Storage URI (%s) is invalid'", uri)
-	}
-
-	var v *URI
-	if len(hostSplit) == 5 {
-		v = &URI{
-			u:          u,
-			account:    hostSplit[0],
-			objectType: hostSplit[1],
-			objectName: strings.TrimLeft(u.EscapedPath(), "/"),
-			sas:        u.Query(),
-		}
-	} else {
-		v = &URI{
-			u:          u,
-			account:    hostSplit[0] + "." + hostSplit[1],
-			objectType: hostSplit[2],
-			objectName: strings.TrimLeft(u.EscapedPath(), "/"),
-			sas:        u.Query(),
-		}
+	v := &URI{
+		u:          u,
+		account:    u.Hostname(),
+		objectName: strings.TrimLeft(u.EscapedPath(), "/"),
+		sas:        u.Query(),
 	}
 
 	if err := v.validate(); err != nil {
@@ -89,31 +66,16 @@ func Parse(uri string) (*URI, error) {
 	return v, nil
 }
 
-// validate validates that the URI was valid.
-// TODO(Daniel): You could add deep validation of each value we have split to give better diagnostic info on an error.
-// I put in the most basic evalutation, but you might want to put checks for the account format or objectName foramt.
 func (u *URI) validate() error {
-	if u.account == "" {
-		return fmt.Errorf("account name was not provided")
-	}
-	if !objectTypes[u.objectType] {
-		return fmt.Errorf("object type was not valid(queue|blob|table), was: %q", u.objectType)
-	}
 	if u.objectName == "" {
 		return fmt.Errorf("object name was not provided")
 	}
-
 	return nil
 }
 
 // Account is the Azure storage account that will be used.
 func (u *URI) Account() string {
 	return u.account
-}
-
-// ObjectType returns the type of object that will be ingested: queue, blob or table.
-func (u *URI) ObjectType() string {
-	return u.objectType
 }
 
 // ObjectName returns the object name of the resource, i.e container name.
@@ -152,11 +114,12 @@ type Manager struct {
 	authTokenCacheExpiration time.Time
 	authLock                 sync.Mutex
 	fetchLock                sync.Mutex
+	rankedStorageAccount     *RankedStorageAccountSet
 }
 
 // New is the constructor for Manager.
 func New(client mgmter) (*Manager, error) {
-	m := &Manager{client: client, done: make(chan struct{})}
+	m := &Manager{client: client, done: make(chan struct{}), rankedStorageAccount: newDefaultRankedStorageAccountSet()}
 	m.authLock = sync.Mutex{}
 	m.fetchLock = sync.Mutex{}
 
@@ -210,7 +173,7 @@ func (m *Manager) AuthContext(ctx context.Context) (string, error) {
 	}
 
 	var rows *kusto.RowIterator
-	retryCtx := backoff.WithContext(InitBackoff(), ctx)
+	retryCtx := backoff.WithContext(initBackoff(), ctx)
 	err := backoff.Retry(func() error {
 		var err error
 		rows, err = m.client.Mgmt(ctx, "NetDefaultDB", kql.New(".get kusto identity token"), kusto.IngestionEndpoint())
@@ -269,11 +232,12 @@ type Ingestion struct {
 	Containers []*URI
 	// Tables contains URIs for table resources.
 	Tables []*URI
+	//
 }
 
 var errDoNotCare = errors.New("don't care about this")
 
-func (i *Ingestion) importRec(rec ingestResc) error {
+func (i *Ingestion) importRec(rec ingestResc, rankedStorageAccounts *RankedStorageAccountSet) error {
 	u, err := Parse(rec.Root)
 	if err != nil {
 		return fmt.Errorf("the StorageRoot URI received(%s) has an error: %s", rec.Root, err)
@@ -282,8 +246,10 @@ func (i *Ingestion) importRec(rec ingestResc) error {
 	switch rec.Type {
 	case "TempStorage":
 		i.Containers = append(i.Containers, u)
+		rankedStorageAccounts.registerStorageAccount(u.Account())
 	case "SecuredReadyForAggregationQueue":
 		i.Queues = append(i.Queues, u)
+		rankedStorageAccounts.registerStorageAccount(u.Account())
 	case "IngestionsStatusTable":
 		i.Tables = append(i.Tables, u)
 	default:
@@ -292,13 +258,46 @@ func (i *Ingestion) importRec(rec ingestResc) error {
 	return nil
 }
 
+// Returns a list of ranked storage account resources distributed by round robin.
+func groupResourcesByStorageAccount(resources []*URI, rankedStorageAccount []RankedStorageAccount) []*URI {
+	// Group the resources by storage account.
+	storageAccounts := make(map[string][]*URI)
+	for _, resource := range resources {
+		storageAccounts[resource.Account()] = append(storageAccounts[resource.Account()], resource)
+	}
+
+	// Rank the resources by storage account.
+	var rankedResources []*URI
+	for _, account := range rankedStorageAccount {
+		if resources, ok := storageAccounts[account.getAccountName()]; ok {
+			rankedResources = append(rankedResources, resources...)
+		}
+	}
+
+	//Distribute the resources by round robin.
+	var distributedResources []*URI
+	for i := 0; i < len(rankedResources); i++ {
+		distributedResources = append(distributedResources, rankedResources[i%len(rankedResources)])
+	}
+
+	return distributedResources
+}
+
+func (i *Ingestion) getRankedStorageContainers(rankedStorageAccounts []RankedStorageAccount) []*URI {
+	return groupResourcesByStorageAccount(i.Containers, rankedStorageAccounts)
+}
+
+func (i *Ingestion) getRankedStorageQueues(rankedStorageAccounts []RankedStorageAccount) []*URI {
+	return groupResourcesByStorageAccount(i.Queues, rankedStorageAccounts)
+}
+
 // fetch makes a kusto.Client.Mgmt() call to retrieve the resources used for Ingestion.
 func (m *Manager) fetch(ctx context.Context) error {
 	m.fetchLock.Lock()
 	defer m.fetchLock.Unlock()
 
 	var rows *kusto.RowIterator
-	retryCtx := backoff.WithContext(InitBackoff(), ctx)
+	retryCtx := backoff.WithContext(initBackoff(), ctx)
 	err := backoff.Retry(func() error {
 		var err error
 		rows, err = m.client.Mgmt(ctx, "NetDefaultDB", kql.New(".get ingestion resources"), kusto.IngestionEndpoint())
@@ -328,7 +327,7 @@ func (m *Manager) fetch(ctx context.Context) error {
 			if err := r.ToStruct(&rec); err != nil {
 				return err
 			}
-			if err := ingest.importRec(rec); err != nil && err != errDoNotCare {
+			if err := ingest.importRec(rec, m.rankedStorageAccount); err != nil && err != errDoNotCare {
 				return err
 			}
 			return nil
@@ -361,7 +360,7 @@ func (m *Manager) fetchRetry(ctx context.Context) error {
 		if err != nil {
 			attempts++
 			if attempts > retryCount {
-				return fmt.Errorf("failed to fetch ingestion resources")
+				return fmt.Errorf("failed to fetch ingestion resources: %w", err)
 			}
 			time.Sleep(10 * time.Second)
 			continue
@@ -370,9 +369,16 @@ func (m *Manager) fetchRetry(ctx context.Context) error {
 	}
 }
 
+func initBackoff() backoff.BackOff {
+	exp := backoff.NewExponentialBackOff()
+	exp.InitialInterval = defaultInitialInterval
+	exp.Multiplier = defaultMultiplier
+	return backoff.WithMaxRetries(exp, retryCount)
+}
+
 // Resources returns information about the ingestion resources. This will used cached information instead
 // of fetching from source.
-func (m *Manager) Resources() (Ingestion, error) {
+func (m *Manager) getResources() (Ingestion, error) {
 	lastFetchTime, ok := m.lastFetchTime.Load().(time.Time)
 	if !ok || lastFetchTime.Add(2*fetchInterval).Before(time.Now().UTC()) {
 		err := m.fetchRetry(context.Background())
@@ -388,9 +394,33 @@ func (m *Manager) Resources() (Ingestion, error) {
 	return i, nil
 }
 
-func InitBackoff() backoff.BackOff {
-	exp := backoff.NewExponentialBackOff()
-	exp.InitialInterval = defaultInitialInterval
-	exp.Multiplier = defaultMultiplier
-	return backoff.WithMaxRetries(exp, retryCount)
+// Report storage account resource usage results.
+func (m *Manager) ReportStorageResourceResult(accountName string, success bool) {
+	m.rankedStorageAccount.addAccountResult(accountName, success)
+}
+
+// Get ranked containers
+func (m *Manager) GetRankedStorageContainers() ([]*URI, error) {
+	ingestionResources, err := m.getResources()
+	if err != nil {
+		return nil, err
+	}
+	return ingestionResources.getRankedStorageContainers(m.rankedStorageAccount.getRankedShuffledAccounts()), nil
+}
+
+// get ranked queues
+func (m *Manager) GetRankedStorageQueues() ([]*URI, error) {
+	ingestionResources, err := m.getResources()
+	if err != nil {
+		return nil, err
+	}
+	return ingestionResources.getRankedStorageQueues(m.rankedStorageAccount.getRankedShuffledAccounts()), nil
+}
+
+func (m *Manager) GetTables() ([]*URI, error) {
+	ingestionResources, err := m.getResources()
+	if err != nil {
+		return nil, err
+	}
+	return ingestionResources.Tables, nil
 }
