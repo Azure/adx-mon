@@ -15,6 +15,9 @@ import (
 )
 
 func TestTailSourceStaticTargets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
 	numLogs := 1000
 
 	testDir := t.TempDir()
@@ -71,7 +74,63 @@ func TestTailSourceStaticTargets(t *testing.T) {
 	require.NotEqual(t, fidone, fidtwo)
 }
 
+func TestTailSourcePartialLogs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+	testDir := t.TempDir()
+	// consistent date so we know how many bytes are generated in the file.
+	// generatedLogStartTime := time.Unix(0, 0)
+	testFileOne := filepath.Join(testDir, "test.log")
+	file, err := os.OpenFile(testFileOne, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0640)
+	require.NoError(t, err)
+	currentTime := time.Now()
+	writeLogLine(t, file, currentTime, `line one\n`)
+	currentTime = currentTime.Add(1 * time.Second)
+	writeLogLine(t, file, currentTime, `line two `)
+	writeLogLine(t, file, currentTime, `finished\n`)
+	currentTime = currentTime.Add(1 * time.Second)
+	writeLogLine(t, file, currentTime, `line three\n`)
+	currentTime = currentTime.Add(1 * time.Second)
+	writeLogLine(t, file, currentTime, `line four`)
+	writeLogLine(t, file, currentTime, ` continued `)
+	writeLogLine(t, file, currentTime, ` again\n`)
+	currentTime = currentTime.Add(1 * time.Second)
+	writeLogLine(t, file, currentTime, `line five\n`)
+	file.Close()
+
+	sink := sinks.NewCountingSink(int64(5))
+	tailSource, err := NewTailSource(TailSourceConfig{
+		StaticTargets: []FileTailTarget{
+			{
+				FilePath: testFileOne,
+				LogType:  LogTypeDocker,
+				Database: "Logs",
+				Table:    "TestService",
+				Parsers:  []string{"json"},
+			},
+		},
+		CursorDirectory: testDir,
+		WorkerCreator:   engine.WorkerCreator(nil, sink),
+	})
+	require.NoError(t, err)
+
+	service := &logs.Service{
+		Source: tailSource,
+		Sink:   sink,
+	}
+	context := context.Background()
+
+	err = service.Open(context)
+	require.NoError(t, err)
+	defer service.Close()
+	<-sink.DoneChan()
+}
+
 func TestTailSourceDynamicTargets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
 	numLogs := 1000
 
 	testDir := t.TempDir()
@@ -152,6 +211,9 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 }
 
 func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
 	numLogs := 1000
 
 	testDir := t.TempDir()
@@ -360,14 +422,19 @@ func writeLogs(t testing.TB, file *os.File, count int, startTime time.Time, inte
 	t.Helper()
 	currentTime := startTime.UTC()
 	for i := 0; i < count; i++ {
-		timestamp := currentTime.Format(time.RFC3339Nano)
-		_, err := file.WriteString(fmt.Sprintf(`{"time": "%s", "stream": "stdout", "log": "line %d"}`, timestamp, i))
-		require.NoError(t, err)
-		_, err = file.WriteString("\n")
-		require.NoError(t, err)
+		writeLogLine(t, file, currentTime, fmt.Sprintf(`li %d\n`, i))
 		currentTime = currentTime.Add(interval)
 	}
 
 	err := file.Sync()
+	require.NoError(t, err)
+}
+
+func writeLogLine(t testing.TB, file *os.File, currentTime time.Time, log string) {
+	t.Helper()
+	timestamp := currentTime.Format(time.RFC3339Nano)
+	_, err := file.WriteString(fmt.Sprintf(`{"time": "%s", "stream": "stdout", "log": "%s"}`, timestamp, log))
+	require.NoError(t, err)
+	_, err = file.WriteString("\n")
 	require.NoError(t, err)
 }

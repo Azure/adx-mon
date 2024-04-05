@@ -300,10 +300,15 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 			log := types.LogPool.Get(1).(*types.Log)
 			log.Reset()
 
-			err := tailer.logTypeParser(line.Text, log)
+			isPartial, err := tailer.logTypeParser.Parse(line.Text, log)
 			if err != nil {
 				logger.Errorf("readLines: parselog error for filename %q: %v", tailer.tail.Filename, err)
 				//skip
+				types.LogPool.Put(log)
+				continue
+			}
+			if isPartial {
+				types.LogPool.Put(log)
 				continue
 			}
 
@@ -314,8 +319,6 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 			log.Attributes[cursor_file_name] = tailer.tail.Filename
 			log.Attributes[types.AttributeDatabaseName] = tailer.database
 			log.Attributes[types.AttributeTableName] = tailer.table
-
-			// TODO combine partial lines. Docker separates lines with newlines in the log message.
 
 			for _, parser := range tailer.logLineParsers {
 				err := parser.Parse(log)
@@ -342,25 +345,30 @@ func (s *TailSource) ackBatch(cursor_file_name, cursor_file_id string, cursor_po
 
 // LogTypeParser is a function that parses a line of text from a file based on its format.
 // Must assign log.Timestamp, log.ObservedTimestamp, and the types.BodyKeyMessage property of log.Body.
-type LogTypeParser func(string, *types.Log) error
+type LogTypeParser interface {
+	// Parse parses a line of text from a file into a log.
+	Parse(line string, log *types.Log) (isPartial bool, err error)
+}
 
 func getLogTypeParser(logType Type) LogTypeParser {
 	switch logType {
 	case LogTypeDocker:
-		return parseDockerLog
+		return NewDockerParser()
 	case LogTypePlain:
-		return parsePlaintextLog
+		return &PlaintextParser{}
 	default:
-		return parsePlaintextLog
+		return &PlaintextParser{}
 	}
 }
 
-func parsePlaintextLog(line string, log *types.Log) error {
+type PlaintextParser struct{}
+
+func (p *PlaintextParser) Parse(line string, log *types.Log) (bool, error) {
 	log.Timestamp = uint64(time.Now().UnixNano())
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
 	log.Body[types.BodyKeyMessage] = line
 
-	return nil
+	return false, nil
 }
 
 type tailcursor struct {
