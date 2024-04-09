@@ -53,11 +53,6 @@ func (f *RequestTransformer) init() {
 			f.KeepMetricsWithLabelValue = make(map[*regexp.Regexp]*regexp.Regexp)
 		}
 
-		// Translate KeepMetrics rules into KeepMetricsWithLabelValue rules so we only have set of rules to check.
-		for _, v := range f.KeepMetrics {
-			f.KeepMetricsWithLabelValue[regexp.MustCompile("^__name__\\b")] = v
-		}
-
 		for k, v := range f.AddLabels {
 			addLabelsSlice = append(addLabelsSlice, prompb.Label{
 				Name:  []byte(k),
@@ -78,7 +73,7 @@ func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prom
 		// First skip any metrics that should be dropped.
 		name := prompb.MetricName(v)
 
-		if !f.ShouldKeepTimeSeries(v) {
+		if !f.ShouldKeepTimeSeries(v, name) {
 			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			continue
 		}
@@ -172,7 +167,15 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 	return v
 }
 
-func (f *RequestTransformer) ShouldKeepTimeSeries(v prompb.TimeSeries) bool {
+func (f *RequestTransformer) ShouldKeepTimeSeries(v prompb.TimeSeries, name []byte) bool {
+	if len(f.KeepMetrics) > 0 {
+		for _, r := range f.KeepMetrics {
+			if r.Match(name) {
+				return true
+			}
+		}
+	}
+
 	if len(f.KeepMetricsWithLabelValue) > 0 {
 		for _, label := range v.Labels {
 			// Keep metrics that have a certain label
