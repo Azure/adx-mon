@@ -550,9 +550,23 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropL
 	require.Equal(t, []byte("3"), res.Timeseries[0].Labels[1].Value)
 }
 
-func BenchmarkRequestTransformer_TransformTimeSeries(b *testing.B) {
+func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 	b.ReportAllocs()
 	f := &transform.RequestTransformer{
+		// Worst case - no matches
+		KeepMetrics: []*regexp.Regexp{
+			regexp.MustCompile("^adxmon.*"),
+			regexp.MustCompile("^mem.*"),
+			regexp.MustCompile("^disk.*"),
+			regexp.MustCompile("^net.*"),
+			regexp.MustCompile("^system.*"),
+			regexp.MustCompile("^process.*"),
+			regexp.MustCompile("^k8s.*"),
+			regexp.MustCompile("^container.*"),
+			regexp.MustCompile("^azure.*"),
+			regexp.MustCompile("^azuremonitor.*"),
+			regexp.MustCompile("^tacos.*"),
+		},
 		AddLabels: map[string]string{
 			"adxmon_namespace": "default",
 			"adxmon_pod":       "pod",
@@ -568,8 +582,12 @@ func BenchmarkRequestTransformer_TransformTimeSeries(b *testing.B) {
 		},
 	}
 
+	wr := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{ts},
+	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		f.TransformTimeSeries(ts)
+		f.TransformWriteRequest(wr)
 	}
 }
