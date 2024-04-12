@@ -481,7 +481,7 @@ func realMain(ctx *cli.Context) error {
 				WorkerCreator:   engine.WorkerCreator(nil, sink), //TODO,
 			}
 
-			if v.Kubeconfig != "" {
+			if !v.DisableKubeDiscovery {
 				_, k8scli, _, err := newKubeClient(v.Kubeconfig)
 				if err != nil {
 					return nil, fmt.Errorf("create kubeclient for tailsource discovery: %w", err)
