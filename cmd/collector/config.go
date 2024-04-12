@@ -293,9 +293,10 @@ func (w *OtelMetric) Validate() error {
 }
 
 type TailLog struct {
-	Kubeconfig       string            `toml:"kube-config" comment:"Optional path to kubernetes client config"`
-	AddAttributes    map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	StaticTailTarget []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
+	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of kubernetes pod targets. Only one TailLog configuration can use kubernetes discovery."`
+	Kubeconfig           string            `toml:"kube-config" comment:"Optional path to kubernetes client config"`
+	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	StaticTailTarget     []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
 }
 
 type TailTarget struct {
@@ -381,9 +382,9 @@ func (c *Config) Validate() error {
 		if err := v.Validate(); err != nil {
 			return err
 		}
-		if v.Kubeconfig != "" {
+		if !v.DisableKubeDiscovery {
 			if tailScrapingFromKube {
-				return errors.New("only one tail-log can have kube-config set")
+				return errors.New("tail-log.disable-kube-discovery not set for more than one TailLog configuration")
 			}
 			tailScrapingFromKube = true
 		}

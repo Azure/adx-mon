@@ -116,6 +116,29 @@ func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	require.Equal(t, "otel-log.add-attributes key must be set", c.Validate().Error())
 }
 
+func TestConfig_ValidateConfig_TailLog(t *testing.T) {
+	c := Config{
+		TailLog: []*TailLog{
+			&TailLog{
+				DisableKubeDiscovery: true,
+			},
+			&TailLog{},
+		},
+	}
+
+	require.NoError(t, c.Validate())
+
+	// Both taillog configs will try to discover Kubernetes pods.
+	c = Config{
+		TailLog: []*TailLog{
+			&TailLog{},
+			&TailLog{},
+		},
+	}
+
+	require.Equal(t, "tail-log.disable-kube-discovery not set for more than one TailLog configuration", c.Validate().Error())
+}
+
 func TestConfig_OtelMetrics(t *testing.T) {
 	type testcase struct {
 		name   string
@@ -550,7 +573,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		{
 			name: "Success_valid_static_targets",
 			config: &TailLog{
-				AddAttributes: map[string]string{"key": "value"},
+				DisableKubeDiscovery: true,
+				AddAttributes:        map[string]string{"key": "value"},
 				StaticTailTarget: []*TailTarget{
 					{
 						FilePath: "/path",
