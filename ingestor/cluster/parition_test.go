@@ -10,7 +10,7 @@ import (
 func TestPartitioner(t *testing.T) {
 	hostname, err := os.Hostname()
 	require.NoError(t, err)
-	p, err := NewPartition(map[string]string{"node": "http://127.0.0.1:9090/receive"}, hostname, 1)
+	p, err := NewPartition(map[string]string{"node": "http://127.0.0.1:9090/receive"})
 	require.NoError(t, err)
 	owner, _ := p.Owner([]byte("kube_node_status_condition"))
 	require.NotEqual(t, hostname, owner)
@@ -19,10 +19,7 @@ func TestPartitioner(t *testing.T) {
 }
 
 func TestOwner_Empty(t *testing.T) {
-	hostname, err := os.Hostname()
-	require.NoError(t, err)
-
-	p, err := NewPartition(map[string]string{"node": "http://172.31.63.27:9090/receive"}, hostname, 1)
+	p, err := NewPartition(map[string]string{"node": "http://172.31.63.27:9090/receive"})
 	require.NoError(t, err)
 
 	for i := 0; i < 10; i++ {
