@@ -1,10 +1,7 @@
 package cluster
 
 import (
-	"os"
 	"sort"
-
-	"github.com/cespare/xxhash"
 )
 
 type MetricPartitioner interface {
@@ -21,39 +18,11 @@ type Partitioner struct {
 	addrs map[string]string
 }
 
-func NewPartition(nodes map[string]string, hostname string, groupSize int) (*Partitioner, error) {
-	if groupSize < 1 {
-		groupSize = 1
-	}
-
-	// Calculate a rough group size.  This may not be ideal if number of nodes is not evenly divisible by groupSize
-	// which could lead to imbalanced partitions.
-	totalGroups := uint64(len(nodes) / groupSize)
-	if totalGroups < 1 {
-		totalGroups = 1
-	}
-
-	// See if we can find a more optimal group size that balances the partitions better.
-	for i := 1; i <= len(nodes)/2; i++ {
-		if len(nodes)%i == 0 && len(nodes)/i <= groupSize {
-			totalGroups = uint64(i)
-		}
-	}
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		return nil, err
-	}
-
-	myHash := xxhash.Sum64String(hostname)
-	groups := make(map[uint64][]string)
-
+func NewPartition(nodes map[string]string) (*Partitioner, error) {
+	owners := make([]string, 0, len(nodes))
 	for k := range nodes {
-		x := xxhash.Sum64String(k) % totalGroups
-		groups[x] = append(groups[x], k)
+		owners = append(owners, k)
 	}
-
-	owners := groups[myHash%totalGroups]
 	sort.Strings(owners)
 	rv := NewRendezvous(owners...)
 	return &Partitioner{rv: rv, nodes: owners, addrs: nodes}, nil
