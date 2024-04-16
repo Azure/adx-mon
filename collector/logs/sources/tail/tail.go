@@ -57,6 +57,9 @@ type FileTailTarget struct {
 	// These are run sequentially until one succeeds, or until all have been tried.
 	// These are converted into parser.ParserType.
 	Parsers []string
+
+	// Attributes is a map of additional attributes to add to each log.
+	Attributes map[string]interface{}
 }
 
 // TailSourceConfig configures TailSource.
@@ -78,6 +81,7 @@ type Tailer struct {
 	table          string
 	logTypeParser  LogTypeParser
 	logLineParsers []parser.Parser
+	attributes     map[string]interface{}
 }
 
 func (t *Tailer) Stop() {
@@ -225,6 +229,11 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 		return fmt.Errorf("addTarget create parsers: %w", err)
 	}
 
+	attributes := make(map[string]interface{})
+	for k, v := range target.Attributes {
+		attributes[k] = v
+	}
+
 	tailer := &Tailer{
 		tail:           tailFile,
 		shutdown:       shutdown,
@@ -232,6 +241,7 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 		table:          target.Table,
 		logTypeParser:  getLogTypeParser(target.LogType),
 		logLineParsers: parsers,
+		attributes:     attributes,
 	}
 	s.group.Go(func() error {
 		return readLines(tailerCtx, tailer, updateChan, batchQueue)
@@ -286,6 +296,10 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 				tailer.logLineParsers = newParsers
 				tailer.database = newTarget.Database
 				tailer.table = newTarget.Table
+				tailer.attributes = make(map[string]interface{})
+				for k, v := range newTarget.Attributes {
+					tailer.attributes[k] = v
+				}
 			}
 		case line, ok := <-tailer.tail.Lines:
 			if !ok {
@@ -319,6 +333,10 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 			log.Attributes[cursor_file_name] = tailer.tail.Filename
 			log.Attributes[types.AttributeDatabaseName] = tailer.database
 			log.Attributes[types.AttributeTableName] = tailer.table
+
+			for k, v := range tailer.attributes {
+				log.Attributes[k] = v
+			}
 
 			for _, parser := range tailer.logLineParsers {
 				err := parser.Parse(log)
