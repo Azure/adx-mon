@@ -80,6 +80,7 @@ type CoordinatorOpts struct {
 
 	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
 	// keys are distributed.
+	// NOTE: This is not used in the current implementation.
 	PartitionSize int
 }
 
@@ -282,7 +283,7 @@ func (c *coordinator) setPartitioner(set map[string]string) error {
 		c.peers[peer] = addr
 	}
 
-	part, err := NewPartition(set, c.hostname, c.opts.PartitionSize)
+	part, err := NewPartition(set)
 	if err != nil {
 		return err
 	}
