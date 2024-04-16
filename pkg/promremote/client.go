@@ -102,7 +102,7 @@ func NewClient(opts ClientOpts) (*Client, error) {
 	if opts.DisableHTTP2 {
 		t.ForceAttemptHTTP2 = false
 		t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
-		t.TLSClientConfig = &tls.Config{}
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify}
 		t.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	}
 
