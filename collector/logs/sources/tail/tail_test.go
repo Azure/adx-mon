@@ -239,7 +239,6 @@ func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
 
 	err = service.Open(ctx)
 	require.NoError(t, err)
-	//defer service.Close()
 
 	tailSource.AddTarget(
 		FileTailTarget{

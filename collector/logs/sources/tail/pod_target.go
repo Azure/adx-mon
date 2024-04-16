@@ -84,6 +84,11 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 			Database: podDB,
 			Table:    podTable,
 			Parsers:  parserList,
+			Attributes: map[string]interface{}{
+				"pod":       podName,
+				"namespace": namespaceName,
+				"container": container.Name,
+			},
 		})
 	}
 	return targets
@@ -103,6 +108,15 @@ func isTargetChanged(old, new FileTailTarget) bool {
 
 	for i := range old.Parsers {
 		if old.Parsers[i] != new.Parsers[i] {
+			return true
+		}
+	}
+
+	if len(old.Attributes) != len(new.Attributes) {
+		return true
+	}
+	for k, v := range old.Attributes {
+		if new.Attributes[k] != v {
 			return true
 		}
 	}
