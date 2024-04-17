@@ -34,7 +34,12 @@ func (s *StoreSink) Send(ctx context.Context, batch *types.LogBatch) error {
 			l.Resource[k] = v
 		}
 	}
-	return s.store.WriteNativeLogs(ctx, batch)
+	err := s.store.WriteNativeLogs(ctx, batch)
+	if err != nil {
+		return err
+	}
+	batch.Ack()
+	return nil
 }
 
 func (s *StoreSink) Close() error {
