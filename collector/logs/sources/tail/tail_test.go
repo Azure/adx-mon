@@ -406,6 +406,13 @@ func TestCursorFile(t *testing.T) {
 		_, _, err = readCursor(cursorPath)
 		require.Error(t, err)
 	})
+
+	t.Run("cursorPath creates unique paths for different files", func(t *testing.T) {
+		storageDir := t.TempDir()
+		cursorPathOne := cursorPath(storageDir, "/var/log/pods/podone/0.log")
+		cursorPathTwo := cursorPath(storageDir, "/var/log/pods/podtwo/0.log")
+		require.NotEqual(t, cursorPathOne, cursorPathTwo)
+	})
 }
 
 func generateLogs(t testing.TB, fileName string, count int, startTime time.Time, interval time.Duration) {
