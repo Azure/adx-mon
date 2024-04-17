@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -395,8 +396,9 @@ type tailcursor struct {
 }
 
 func cursorPath(cursorDirectory string, filename string) string {
-	baseName := filepath.Base(filename)
-	return fmt.Sprintf("%s/%s.cursor", cursorDirectory, baseName)
+	baseName := strings.ReplaceAll(filename, string(filepath.Separator), "_")
+	cursorFileName := fmt.Sprintf("%s.cursor", baseName)
+	return filepath.Join(cursorDirectory, cursorFileName)
 }
 
 func writeCursor(cursorPath string, file_id string, cursor int64) error {
