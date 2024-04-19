@@ -4,9 +4,9 @@
 package watch
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tenebris-tech/tail/util"
 
@@ -26,40 +26,20 @@ func NewInotifyFileWatcher(filename string) *InotifyFileWatcher {
 }
 
 func (fw *InotifyFileWatcher) BlockUntilExists(t *tomb.Tomb) error {
-	err := WatchCreate(fw.Filename)
-	if err != nil {
-		return err
-	}
-	defer func(fname string) {
-		_ = RemoveWatchCreate(fname)
-	}(fw.Filename)
+	// We cannot use inotify on files that do not exist. We also cannot just watch the parent
+	// directory in file-rotation cases because the symlink we are "watching" does not change,
+	// but the results of os.Stat and ionotify do change because they both follow links.
 
-	// Do a real check now as the file might have been created before
-	// calling `WatchFlags` above.
-	if _, err = os.Stat(fw.Filename); !os.IsNotExist(err) {
-		// file exists, or stat returned an error.
-		return err
-	}
-
-	events := Events(fw.Filename)
-
+	// Instead, just do a blocking check every POLL_DURATION until the file exists.
 	for {
+		if _, err := os.Stat(fw.Filename); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 		select {
-		case evt, ok := <-events:
-			if !ok {
-				return fmt.Errorf("inotify watcher has been closed")
-			}
-			evtName, err := filepath.Abs(evt.Name)
-			if err != nil {
-				return err
-			}
-			fwFilename, err := filepath.Abs(fw.Filename)
-			if err != nil {
-				return err
-			}
-			if evtName == fwFilename {
-				return nil
-			}
+		case <-time.After(POLL_DURATION):
+			continue
 		case <-t.Dying():
 			return tomb.ErrDying
 		}
@@ -127,7 +107,6 @@ func (fw *InotifyFileWatcher) ChangeEvents(t *tomb.Tomb, pos int64) (*FileChange
 				} else {
 					changes.NotifyModified()
 				}
-				prevSize = fw.Size
 			}
 		}
 	}()
