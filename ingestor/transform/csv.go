@@ -299,7 +299,7 @@ func (w *CSVWriter) MarshalNativeLog(log *types.Log) error {
 		ffjson.Pool(val)
 	}
 	buf.WriteByte('}')
-	fields = append(fields, newlineReplacer.Replace(buf.String()))
+	fields = append(fields, buf.String())
 
 	// Resource
 	buf.Reset()
@@ -322,7 +322,7 @@ func (w *CSVWriter) MarshalNativeLog(log *types.Log) error {
 		ffjson.Pool(val)
 	}
 	buf.WriteByte('}')
-	fields = append(fields, newlineReplacer.Replace(buf.String()))
+	fields = append(fields, buf.String())
 
 	// Attributes
 	buf.Reset()
