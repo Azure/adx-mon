@@ -497,14 +497,15 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 						Timestamp:         1696983205797489936,
 						ObservedTimestamp: 1696983226797489936, // +21s
 						Body: map[string]interface{}{
-							types.BodyKeyMessage: "something happened",
+							types.BodyKeyMessage: "something\n happened",
+							"key\nwithnewline":   "value",
 						},
 						Attributes: map[string]interface{}{
 							// adx-mon attributes are filtered
 							"adxmon_cursor_position":    "abcdef",
 							types.AttributeDatabaseName: "ADatabase",
 							types.AttributeTableName:    "ATable",
-							"hello":                     "world",
+							"hello\nkey":                "world\ntraveler",
 							"other":                     "attribute",
 						},
 						Resource: map[string]interface{}{
@@ -522,14 +523,15 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 					TraceId:           "",
 					SpanId:            "",
 					Body: map[string]interface{}{
-						"message": "something happened",
+						"message":          "something\n happened",
+						"key\nwithnewline": "value",
 					},
 					Resource: map[string]interface{}{
 						"RPTenant": "eastus",
 					},
 					Attributes: map[string]interface{}{
-						"hello": "world",
-						"other": "attribute",
+						"hello\nkey": "world\ntraveler",
+						"other":      "attribute",
 					},
 				},
 			},
