@@ -204,7 +204,7 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 	tailerCtx, shutdown := context.WithCancel(s.groupCtx)
 	batchQueue := make(chan *types.Log, 512)
 	outputQueue := make(chan *types.LogBatch, 1)
-	tailConfig := tail.Config{Follow: true, ReOpen: true, Poll: true}
+	tailConfig := tail.Config{Follow: true, ReOpen: true}
 	existingCursorPath := cursorPath(s.cursorDirectory, target.FilePath)
 	fileId, position, err := readCursor(existingCursorPath)
 	if err == nil {
