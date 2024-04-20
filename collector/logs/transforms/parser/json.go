@@ -18,12 +18,15 @@ type JsonParserConfig struct {
 }
 
 type JsonParser struct {
+	parsed map[string]interface{}
 }
 
 func NewJsonParser(config JsonParserConfig) (*JsonParser, error) {
-	return &JsonParser{}, nil
+	return &JsonParser{parsed: make(map[string]interface{})}, nil
 }
 
+// Attempts to parse the message as JSON and adds the parsed fields to the log body.
+// Not safe for concurrent use.
 func (p *JsonParser) Parse(log *types.Log) error {
 	msg, ok := log.Body[types.BodyKeyMessage].(string)
 	if !ok {
@@ -34,12 +37,12 @@ func (p *JsonParser) Parse(log *types.Log) error {
 		return nil
 	}
 
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(msg), &parsed); err != nil {
+	clear(p.parsed)
+	if err := json.Unmarshal([]byte(msg), &p.parsed); err != nil {
 		return ErrNotJson
 	}
 
-	for k, v := range parsed {
+	for k, v := range p.parsed {
 		log.Body[k] = v
 	}
 
