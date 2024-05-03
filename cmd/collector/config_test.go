@@ -729,6 +729,54 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "Success_valid_transform",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+					},
+				},
+				Transforms: []*TailTransform{
+					{
+						Name: "plugin",
+						Config: map[string]interface{}{
+							"GoPath":     "path",
+							"ImportName": "import",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Failure_invalid_transform",
+			config: &TailLog{
+				StaticTailTarget: []*TailTarget{
+					{
+						FilePath: "/path",
+						Database: "db",
+						Table:    "table",
+					},
+				},
+				Transforms: []*TailTransform{
+					{
+						Name: "plugin",
+						Config: map[string]interface{}{
+							"GoPath":     "path",
+							"ImportName": "import",
+						},
+					},
+					{
+						Name:   "shootlasers",
+						Config: map[string]interface{}{},
+					},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
