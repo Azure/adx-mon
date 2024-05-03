@@ -19,6 +19,8 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/logs/transforms"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -28,9 +30,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-
-	// Trigger initial identity load
-	_ "github.com/Azure/adx-mon/pkg/k8s"
 )
 
 func main() {
@@ -467,6 +466,15 @@ func realMain(ctx *cli.Context) error {
 				})
 			}
 
+			transformers := []types.Transformer{}
+			for _, t := range v.Transforms {
+				transform, err := transforms.NewTransform(t.Name, t.Config)
+				if err != nil {
+					return nil, fmt.Errorf("create transform: %w", err)
+				}
+				transformers = append(transformers, transform)
+			}
+
 			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
 				Store:         store,
 				AddAttributes: addAttributes,
@@ -478,7 +486,7 @@ func realMain(ctx *cli.Context) error {
 			tailSourceConfig := tail.TailSourceConfig{
 				StaticTargets:   staticTargets,
 				CursorDirectory: cfg.StorageDir,
-				WorkerCreator:   engine.WorkerCreator(nil, sink), //TODO,
+				WorkerCreator:   engine.WorkerCreator(transformers, sink), //TODO,
 			}
 
 			if !v.DisableKubeDiscovery {

@@ -37,6 +37,25 @@ import (
                                             └── logs.go
 */
 
+func FromConfigMap(config map[string]interface{}) (types.Transformer, error) {
+	goPath, ok := config["GoPath"].(string)
+	if !ok {
+		return nil, fmt.Errorf("GoPath is required")
+	}
+
+	importName, ok := config["ImportName"].(string)
+	if !ok {
+		return nil, fmt.Errorf("ImportName is required")
+	}
+
+	transformConfig := TransformConfig{
+		GoPath:     goPath,
+		ImportName: importName,
+	}
+
+	return NewTransform(transformConfig)
+}
+
 type TransformConfig struct {
 	// Path on disk that contains the plugin.
 	// This expects a directory with a src directory at the base.

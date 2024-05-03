@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 )
 
@@ -297,6 +298,7 @@ type TailLog struct {
 	Kubeconfig           string            `toml:"kube-config" comment:"Optional path to kubernetes client config"`
 	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	StaticTailTarget     []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
+	Transforms           []*TailTransform  `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
 }
 
 type TailTarget struct {
@@ -305,6 +307,11 @@ type TailTarget struct {
 	Database string    `toml:"database" comment:"Database to store logs in."`
 	Table    string    `toml:"table" comment:"Table to store logs in."`
 	Parsers  []string  `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+}
+
+type TailTransform struct {
+	Name   string         `toml:"name" comment:"The name of the transform to apply to the log line."`
+	Config map[string]any `toml:"config" comment:"The configuration for the transform."`
 }
 
 func (w *TailLog) Validate() error {
@@ -346,6 +353,12 @@ func (w *TailLog) Validate() error {
 			if !parser.IsValidParser(parserName) {
 				return fmt.Errorf("tail-log.static-target.parsers %s is not a valid parser", parserName)
 			}
+		}
+	}
+
+	for _, v := range w.Transforms {
+		if !transforms.IsValidTransformType(v.Name) {
+			return fmt.Errorf("tail-log.transforms %s is not a valid transform", v.Name)
 		}
 	}
 
