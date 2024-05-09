@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -201,22 +202,8 @@ func (w *CSVWriter) MarshalLog(logs *otlp.Logs) error {
 		fields = append(fields, l.GetSeverityNumber().String())
 		// Body
 		buf := w.buf
-		if v := l.GetBody().GetKvlistValue(); v != nil {
-			buf.Reset()
-			buf.WriteByte('{')
-			for _, kv := range v.GetValues() {
-				if buf.String()[buf.Len()-1] != '{' {
-					buf.WriteByte(',')
-				}
-				fflib.WriteJson(buf, []byte(kv.GetKey()))
-				buf.WriteByte(':')
-				fflib.WriteJson(buf, []byte(kv.GetValue().GetStringValue()))
-			}
-			buf.WriteByte('}')
-			fields = append(fields, newlineReplacer.Replace(buf.String()))
-		} else {
-			fields = append(fields, newlineReplacer.Replace(l.GetBody().GetStringValue()))
-		}
+		serializeAnyValue(buf, l.GetBody(), 0)
+		fields = append(fields, buf.String())
 		// Resource
 		buf.Reset()
 		buf.WriteByte('{')
@@ -383,6 +370,61 @@ func (w *CSVWriter) InitColumns(columns []string) {
 		return bytes.Compare(sortLower[i], sortLower[j]) < 0
 	})
 	w.columns = sortLower
+}
+
+const maxNestedDepth = 100
+
+func serializeAnyValue(buf *strings.Builder, v *commonv1.AnyValue, depth int) {
+	if depth == 0 {
+		buf.Reset()
+	}
+	if depth > maxNestedDepth {
+		buf.WriteString("...")
+		return
+	}
+
+	switch v.GetValue().(type) {
+
+	case *commonv1.AnyValue_StringValue:
+		// In the case of unstructured text, the top-level Body object
+		// is just a simple string, so there is no need to WriteJson
+		if depth == 0 {
+			buf.WriteString(v.GetStringValue())
+			return
+		}
+		fflib.WriteJson(buf, []byte(v.GetStringValue()))
+	case *commonv1.AnyValue_BoolValue:
+		fflib.WriteJson(buf, []byte(strconv.FormatBool(v.GetBoolValue())))
+	case *commonv1.AnyValue_IntValue:
+		fflib.WriteJson(buf, []byte(strconv.FormatInt(v.GetIntValue(), 10)))
+	case *commonv1.AnyValue_DoubleValue:
+		fflib.WriteJson(buf, []byte(strconv.FormatFloat(v.GetDoubleValue(), 'f', -1, 64)))
+
+	case *commonv1.AnyValue_KvlistValue:
+		buf.WriteByte('{')
+		for i, kv := range v.GetKvlistValue().GetValues() {
+			if i != 0 {
+				buf.WriteByte(',')
+			}
+			fflib.WriteJson(buf, []byte(kv.GetKey()))
+			buf.WriteByte(':')
+			serializeAnyValue(buf, kv.GetValue(), depth+1)
+		}
+		buf.WriteByte('}')
+
+	case *commonv1.AnyValue_ArrayValue:
+		buf.WriteByte('[')
+		for i, v := range v.GetArrayValue().GetValues() {
+			if i != 0 {
+				buf.WriteByte(',')
+			}
+			serializeAnyValue(buf, v, depth+1)
+		}
+		buf.WriteByte(']')
+
+	default:
+		fflib.WriteJson(buf, []byte(v.GetStringValue()))
+	}
 }
 
 // Normalize converts a metrics name to a ProperCase table name

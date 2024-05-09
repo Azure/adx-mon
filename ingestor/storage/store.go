@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 var (
@@ -138,6 +139,11 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	if logger.IsDebug() {
 		logger.Debugf("Store received %d logs for %s.%s", len(logs.Logs), database, table)
+		for _, log := range logs.Logs {
+			if l, err := protojson.Marshal(log); err == nil {
+				logger.Debugf("Log: %s", l)
+			}
+		}
 	}
 
 	key = fmt.Appendf(key[:0], "%s_%s", database, table)
@@ -152,6 +158,10 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	enc.Reset()
 	if err := enc.MarshalLog(logs); err != nil {
 		return err
+	}
+
+	if logger.IsDebug() {
+		logger.Debugf("Marshaled logs: %s", enc.Bytes())
 	}
 
 	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
