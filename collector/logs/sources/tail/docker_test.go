@@ -82,3 +82,12 @@ func TestDockerParse(t *testing.T) {
 		require.Equal(t, "stderrlog1 stderrlog2", log.Body[types.BodyKeyMessage])
 	})
 }
+
+func BenchmarkDockerParser(b *testing.B) {
+	parser := NewDockerParser()
+	log := types.NewLog()
+
+	for i := 0; i < b.N; i++ {
+		parser.Parse(`{"log":"log1\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+	}
+}

@@ -24,47 +24,57 @@ type DockerLog struct {
 	Time   string `json:"time"`
 }
 
+func (d *DockerLog) Reset() {
+	d.Log = ""
+	d.Stream = ""
+	d.Time = ""
+}
+
 type DockerParser struct {
 	streamPartials map[string]string
+	parsed         *DockerLog
 }
 
 func NewDockerParser() *DockerParser {
 	return &DockerParser{
 		streamPartials: make(map[string]string),
+		parsed:         &DockerLog{},
 	}
 }
 
+// Parse parses logs in the Docker json log format and combines partial logs.
+// Not safe for concurrent use.
 func (p *DockerParser) Parse(line string, log *types.Log) (isPartial bool, err error) {
-	parsed := DockerLog{}
-	err = ffjson.Unmarshal([]byte(line), &parsed)
+	p.parsed.Reset()
+	err = ffjson.Unmarshal([]byte(line), p.parsed)
 	if err != nil {
 		return false, fmt.Errorf("parseDockerLog: %w", err)
 	}
 
 	// Docker json logs are always terminated by a newline.
 	// If they are not, the log is a partial one within that given stream. Docker splits logs at 16k.
-	isPartial = !strings.HasSuffix(parsed.Log, dockerCompleteLogSuffix)
-	currentLogMsg := parsed.Log
+	isPartial = !strings.HasSuffix(p.parsed.Log, dockerCompleteLogSuffix)
+	currentLogMsg := p.parsed.Log
 
-	previousLog, hasPreviousLog := p.streamPartials[parsed.Stream]
+	previousLog, hasPreviousLog := p.streamPartials[p.parsed.Stream]
 	if hasPreviousLog { //combine
 		currentLogMsg = previousLog + currentLogMsg
 	}
 
 	if isPartial {
-		p.streamPartials[parsed.Stream] = currentLogMsg
+		p.streamPartials[p.parsed.Stream] = currentLogMsg
 		return true, nil
 	} else if hasPreviousLog {
-		delete(p.streamPartials, parsed.Stream)
+		delete(p.streamPartials, p.parsed.Stream)
 	}
 
-	parsedTime, err := time.Parse(time.RFC3339Nano, parsed.Time)
+	parsedTime, err := time.Parse(time.RFC3339Nano, p.parsed.Time)
 	if err != nil {
 		parsedTime = time.Now()
 	}
 	log.Timestamp = uint64(parsedTime.UnixNano())
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body["stream"] = parsed.Stream
+	log.Body["stream"] = p.parsed.Stream
 	// Strip trailing newline
 	log.Body[types.BodyKeyMessage] = currentLogMsg[:len(currentLogMsg)-dockerCompleteLogSuffixLength]
 
