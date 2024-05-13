@@ -272,20 +272,18 @@ func modifyAttributes(msg *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue
 
 				// Now lift attributes from the body of the log message
 				if len(lift) > 0 {
-					var deleted int
-					for idx, v := range msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().GetValues() {
-						_, ok = lift[v.GetKey()]
-						if ok {
-							msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Attributes = append(
-								msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Attributes,
-								v,
-							)
-							msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().Values = slices.Delete(
-								msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k].Body.GetKvlistValue().Values,
-								idx-deleted, idx-deleted+1,
-							)
-							deleted++
-						}
+					logRecord := msg.ResourceLogs[i].ScopeLogs[j].LogRecords[k]
+					if logRecord.Body.GetKvlistValue() != nil {
+						logRecord.Body.GetKvlistValue().Values = slices.DeleteFunc(logRecord.Body.GetKvlistValue().GetValues(), func(val *commonv1.KeyValue) bool {
+							_, ok = lift[val.GetKey()]
+							if ok {
+								logRecord.Attributes = append(
+									logRecord.Attributes,
+									val,
+								)
+							}
+							return ok
+						})
 					}
 				}
 
