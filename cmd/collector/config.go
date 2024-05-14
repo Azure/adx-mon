@@ -62,6 +62,7 @@ var DefaultConfig = Config{
 
 type Config struct {
 	Endpoint           string `toml:"endpoint" comment:"Ingestor URL to send collected telemetry."`
+	Kubeconfig         string `toml:"kube-config" comment:"Path to kubernetes client config"`
 	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
 	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
 	Region             string `toml:"region" comment:"Region is a location identifier."`
@@ -99,7 +100,6 @@ type Config struct {
 }
 
 type PrometheusScrape struct {
-	Kubeconfig               string          `toml:"kube-config" comment:"Path to kubernetes client config"`
 	Database                 string          `toml:"database" comment:"Database to store metrics in."`
 	StaticScrapeTarget       []*ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
@@ -295,7 +295,6 @@ func (w *OtelMetric) Validate() error {
 
 type TailLog struct {
 	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of kubernetes pod targets. Only one TailLog configuration can use kubernetes discovery."`
-	Kubeconfig           string            `toml:"kube-config" comment:"Optional path to kubernetes client config"`
 	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	StaticTailTarget     []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
 	Transforms           []*TailTransform  `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`

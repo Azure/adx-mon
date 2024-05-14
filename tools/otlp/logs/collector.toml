@@ -1,5 +1,7 @@
 # Ingestor URL to send collected telemetry.
 endpoint = 'https://ingestor:9090'
+# Path to kubernetes client config
+kube-config = '/root/.kube/config'
 # Skip TLS verification.
 insecure-skip-verify = true
 # Address to listen on for endpoints.
@@ -29,8 +31,6 @@ lift-attributes = ['kusto.database', 'kusto.table']
 
 # Defines a prometheus scrape endpoint.
 [prometheus-scrape]
-  # Path to kubernetes client config
-  kube-config = '/root/.kube/config'
   # Database to store metrics in.
   database = 'TestMetrics'
   # Defines a static scrape target.

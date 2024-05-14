@@ -142,7 +142,7 @@ func realMain(ctx *cli.Context) error {
 
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
-		_, k8scli, _, err := newKubeClient(cfg.PrometheusScrape.Kubeconfig)
+		_, k8scli, _, err := newKubeClient(cfg.Kubeconfig)
 		if err != nil {
 			return err
 		}
@@ -490,7 +490,7 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			if !v.DisableKubeDiscovery {
-				_, k8scli, _, err := newKubeClient(v.Kubeconfig)
+				_, k8scli, _, err := newKubeClient(cfg.Kubeconfig)
 				if err != nil {
 					return nil, fmt.Errorf("create kubeclient for tailsource discovery: %w", err)
 				}
