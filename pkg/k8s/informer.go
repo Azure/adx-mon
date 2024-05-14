@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -12,6 +13,7 @@ import (
 
 type PodInformer struct {
 	K8sClient kubernetes.Interface
+	NodeName  string
 
 	mu                sync.Mutex
 	informerFactory   informers.SharedInformerFactory
@@ -19,9 +21,10 @@ type PodInformer struct {
 	eventHandlerCount int
 }
 
-func NewPodInformer(k8sClient kubernetes.Interface) *PodInformer {
+func NewPodInformer(k8sClient kubernetes.Interface, nodeName string) *PodInformer {
 	return &PodInformer{
 		K8sClient: k8sClient,
+		NodeName:  nodeName,
 
 		eventHandlerCount: 0,
 	}
@@ -34,7 +37,10 @@ func (p *PodInformer) Add(ctx context.Context, handler cache.ResourceEventHandle
 	defer p.mu.Unlock()
 
 	if p.informerFactory == nil {
-		p.informerFactory = informers.NewSharedInformerFactory(p.K8sClient, time.Minute)
+		tweakOptions := informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
+			lo.FieldSelector = "spec.nodeName=" + p.NodeName
+		})
+		p.informerFactory = informers.NewSharedInformerFactoryWithOptions(p.K8sClient, time.Minute, tweakOptions)
 		p.informer = p.informerFactory.Core().V1().Pods().Informer()
 
 		p.informerFactory.Start(ctx.Done())

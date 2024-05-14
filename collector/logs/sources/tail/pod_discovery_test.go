@@ -219,7 +219,7 @@ func create() (*fakeNow, *fakeTailSource, *PodDiscovery) {
 	fakeNow := newFakeNow()
 	k8sCli := fake.NewSimpleClientset()
 	tailSource := newFakeTailSource()
-	podInformer := k8s.NewPodInformer(k8sCli)
+	podInformer := k8s.NewPodInformer(k8sCli, "node1")
 	podDiscovery := NewPodDiscovery(PodDiscoveryOpts{
 		NodeName:    "node1",
 		PodInformer: podInformer,
