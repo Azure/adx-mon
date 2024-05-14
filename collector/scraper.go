@@ -15,10 +15,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	v12 "k8s.io/client-go/listers/core/v1"
 
 	v1 "k8s.io/api/core/v1"
 )
@@ -106,7 +104,6 @@ type Scraper struct {
 	requestTransformer *transform.RequestTransformer
 	remoteClient       RemoteWriteClient
 	scrapeClient       *MetricsClient
-	watcher            watch.Interface
 	seriesCreator      *seriesCreator
 
 	wg     sync.WaitGroup
@@ -115,7 +112,6 @@ type Scraper struct {
 	mu      sync.RWMutex
 	targets []ScrapeTarget
 	factory informers.SharedInformerFactory
-	pl      v12.PodLister
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -170,9 +166,6 @@ func (s *Scraper) Open(ctx context.Context) error {
 	factory.Start(ctx.Done()) // Start processing these informers.
 	factory.WaitForCacheSync(ctx.Done())
 	s.factory = factory
-
-	pl := factory.Core().V1().Pods().Lister()
-	s.pl = pl
 
 	if _, err := podsInformer.AddEventHandler(s); err != nil {
 		return err
