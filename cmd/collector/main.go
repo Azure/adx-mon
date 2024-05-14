@@ -141,7 +141,7 @@ func realMain(ctx *cli.Context) error {
 	var informer *k8s.PodInformer
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
-		informer, err = getInformer(cfg.Kubeconfig, informer)
+		informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
 		if err != nil {
 			return fmt.Errorf("failed to get informer for prometheus scrape: %w", err)
 		}
@@ -448,7 +448,7 @@ func realMain(ctx *cli.Context) error {
 	for _, v := range cfg.TailLog {
 		tailSourceConfig := tail.TailSourceConfig{}
 		if !v.DisableKubeDiscovery {
-			informer, err = getInformer(cfg.Kubeconfig, informer)
+			informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
 			if err != nil {
 				return fmt.Errorf("failed to get informer for tail: %w", err)
 			}
@@ -571,7 +571,7 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func getInformer(kubeConfig string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
+func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
 	if informer != nil {
 		return informer, nil
 	}
@@ -587,7 +587,7 @@ func getInformer(kubeConfig string, informer *k8s.PodInformer) (*k8s.PodInformer
 		return nil, fmt.Errorf("unable to build kube config: %w", err)
 	}
 
-	return k8s.NewPodInformer(client), nil
+	return k8s.NewPodInformer(client, nodeName), nil
 }
 
 // parseKeyPairs parses a list of key pairs in the form of key=value,key=value
