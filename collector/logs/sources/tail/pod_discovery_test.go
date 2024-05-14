@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -218,9 +219,10 @@ func create() (*fakeNow, *fakeTailSource, *PodDiscovery) {
 	fakeNow := newFakeNow()
 	k8sCli := fake.NewSimpleClientset()
 	tailSource := newFakeTailSource()
+	podInformer := k8s.NewPodInformer(k8sCli)
 	podDiscovery := NewPodDiscovery(PodDiscoveryOpts{
-		NodeName: "node1",
-		K8sCli:   k8sCli,
+		NodeName:    "node1",
+		PodInformer: podInformer,
 	}, tailSource)
 	podDiscovery.nowFunc = fakeNow.Now
 	return fakeNow, tailSource, podDiscovery

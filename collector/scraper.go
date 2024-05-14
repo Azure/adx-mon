@@ -11,14 +11,13 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"golang.org/x/sync/errgroup"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
 )
 
 type ScraperOpts struct {
@@ -49,7 +48,7 @@ type ScraperOpts struct {
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
 
-	K8sCli kubernetes.Interface
+	PodInformer *k8s.PodInformer
 
 	// Targets is a list of static scrape targets.
 	Targets []ScrapeTarget
@@ -98,8 +97,9 @@ func (t ScrapeTarget) String() string {
 }
 
 type Scraper struct {
-	K8sCli kubernetes.Interface
-	opts   ScraperOpts
+	opts                 ScraperOpts
+	podInformer          *k8s.PodInformer
+	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
 	remoteClient       RemoteWriteClient
@@ -111,12 +111,11 @@ type Scraper struct {
 
 	mu      sync.RWMutex
 	targets []ScrapeTarget
-	factory informers.SharedInformerFactory
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
 	return &Scraper{
-		K8sCli:             opts.K8sCli,
+		podInformer:        opts.PodInformer,
 		opts:               *opts,
 		seriesCreator:      &seriesCreator{},
 		requestTransformer: opts.RequestTransformer(),
@@ -141,36 +140,12 @@ func (s *Scraper) Open(ctx context.Context) error {
 		s.targets = append(s.targets, target)
 	}
 
-	// Discover the initial targets running on the node
-	pods, err := s.K8sCli.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("spec.nodeName=" + s.opts.NodeName),
-	})
+	s.informerRegistration, err = s.podInformer.Add(ctx, s)
 	if err != nil {
-		return fmt.Errorf("failed to list pods: %w", err)
-	}
-	for _, pod := range pods.Items {
-		if pod.Spec.NodeName != s.opts.NodeName {
-			continue
-		}
-
-		targets := makeTargets(&pod)
-		for _, target := range targets {
-			logger.Infof("Adding target %s %s", target.path(), target)
-			s.targets = append(s.targets, target)
-		}
+		return fmt.Errorf("failed to add pod informer: %w", err)
 	}
 
-	factory := informers.NewSharedInformerFactory(s.K8sCli, time.Minute)
-	podsInformer := factory.Core().V1().Pods().Informer()
-
-	factory.Start(ctx.Done()) // Start processing these informers.
-	factory.WaitForCacheSync(ctx.Done())
-	s.factory = factory
-
-	if _, err := podsInformer.AddEventHandler(s); err != nil {
-		return err
-	}
-
+	// Discover the initial targets running on the node
 	s.wg.Add(1)
 	go s.scrape(ctx)
 
@@ -180,7 +155,8 @@ func (s *Scraper) Open(ctx context.Context) error {
 func (s *Scraper) Close() error {
 	s.scrapeClient.Close()
 	s.cancel()
-	s.factory.Shutdown()
+	s.podInformer.Remove(s.informerRegistration)
+	s.informerRegistration = nil
 	s.wg.Wait()
 
 	return nil

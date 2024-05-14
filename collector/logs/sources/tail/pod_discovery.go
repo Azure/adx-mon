@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 )
 
 type currenttarget struct {
@@ -24,13 +24,12 @@ type TailerSourceInterface interface {
 }
 
 type PodDiscoveryOpts struct {
-	NodeName string
-	K8sCli   kubernetes.Interface
+	NodeName    string
+	PodInformer *k8s.PodInformer
 }
 
 type PodDiscovery struct {
 	NodeName string
-	K8sCli   kubernetes.Interface
 
 	nowFunc func() time.Time
 
@@ -39,15 +38,16 @@ type PodDiscovery struct {
 	podidToTargets map[string]map[string]*currenttarget
 	mut            sync.Mutex // protect podidToTargets
 
-	cancel  context.CancelFunc
-	factory informers.SharedInformerFactory
+	cancel               context.CancelFunc
+	podInformer          *k8s.PodInformer
+	informerRegistration cache.ResourceEventHandlerRegistration
 }
 
 func NewPodDiscovery(opts PodDiscoveryOpts, tailsource TailerSourceInterface) *PodDiscovery {
 	return &PodDiscovery{
 		nowFunc:        time.Now,
 		NodeName:       opts.NodeName,
-		K8sCli:         opts.K8sCli,
+		podInformer:    opts.PodInformer,
 		tailsource:     tailsource,
 		podidToTargets: make(map[string]map[string]*currenttarget),
 	}
@@ -58,14 +58,8 @@ func (i *PodDiscovery) Open(ctx context.Context) error {
 	ctx, cancelFn := context.WithCancel(ctx)
 	i.cancel = cancelFn
 
-	factory := informers.NewSharedInformerFactory(i.K8sCli, time.Minute)
-	podsInformer := factory.Core().V1().Pods().Informer()
-
-	factory.Start(ctx.Done()) // Start processing these informers.
-	factory.WaitForCacheSync(ctx.Done())
-	i.factory = factory
-
-	if _, err := podsInformer.AddEventHandler(i); err != nil {
+	var err error
+	if i.informerRegistration, err = i.podInformer.Add(ctx, i); err != nil {
 		return err
 	}
 
@@ -87,7 +81,8 @@ func (i *PodDiscovery) Open(ctx context.Context) error {
 
 func (i *PodDiscovery) Close() error {
 	i.cancel()
-	i.factory.Shutdown()
+	i.podInformer.Remove(i.informerRegistration)
+	i.informerRegistration = nil
 	return nil
 }
 

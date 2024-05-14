@@ -26,10 +26,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v2"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func main() {
@@ -140,11 +138,12 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 
+	var informer *k8s.PodInformer
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
-		_, k8scli, _, err := newKubeClient(cfg.Kubeconfig)
+		informer, err = getInformer(cfg.Kubeconfig, informer)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get informer for prometheus scrape: %w", err)
 		}
 
 		addLabels := mergeMaps(cfg.AddLabels, cfg.PrometheusScrape.AddLabels)
@@ -227,7 +226,7 @@ func realMain(ctx *cli.Context) error {
 
 		scraperOpts = &collector.ScraperOpts{
 			NodeName:                  hostname,
-			K8sCli:                    k8scli,
+			PodInformer:               informer,
 			Database:                  cfg.PrometheusScrape.Database,
 			AddLabels:                 addLabels,
 			DropLabels:                dropLabels,
@@ -447,7 +446,19 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	for _, v := range cfg.TailLog {
-		v := v
+		tailSourceConfig := tail.TailSourceConfig{}
+		if !v.DisableKubeDiscovery {
+			informer, err = getInformer(cfg.Kubeconfig, informer)
+			if err != nil {
+				return fmt.Errorf("failed to get informer for tail: %w", err)
+			}
+
+			tailSourceConfig.PodDiscoveryOpts = &tail.PodDiscoveryOpts{
+				NodeName:    hostname,
+				PodInformer: informer,
+			}
+		}
+
 		createFunc := func(store storage.Store) (*logs.Service, error) {
 			addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes, map[string]string{
 				"adxmon_namespace": k8s.Instance.Namespace,
@@ -483,23 +494,9 @@ func realMain(ctx *cli.Context) error {
 				return nil, fmt.Errorf("create sink for tailsource: %w", err)
 			}
 
-			tailSourceConfig := tail.TailSourceConfig{
-				StaticTargets:   staticTargets,
-				CursorDirectory: cfg.StorageDir,
-				WorkerCreator:   engine.WorkerCreator(transformers, sink), //TODO,
-			}
-
-			if !v.DisableKubeDiscovery {
-				_, k8scli, _, err := newKubeClient(cfg.Kubeconfig)
-				if err != nil {
-					return nil, fmt.Errorf("create kubeclient for tailsource discovery: %w", err)
-				}
-
-				tailSourceConfig.PodDiscoveryOpts = &tail.PodDiscoveryOpts{
-					K8sCli:   k8scli,
-					NodeName: hostname,
-				}
-			}
+			tailSourceConfig.StaticTargets = staticTargets
+			tailSourceConfig.CursorDirectory = cfg.StorageDir
+			tailSourceConfig.WorkerCreator = engine.WorkerCreator(transformers, sink)
 
 			source, err := tail.NewTailSource(tailSourceConfig)
 			if err != nil {
@@ -574,29 +571,23 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func newKubeClient(kubeconfig string) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+func getInformer(kubeConfig string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
+	if informer != nil {
+		return informer, nil
+	}
+
+	config, err := clientcmd.BuildConfigFromFlags("", kubeConfig)
 	if err != nil {
-		logger.Warnf("No kube config provided, using fake kube client")
-		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", kubeconfig, err)
+		logger.Warnf("No kube-config provided")
+		return nil, fmt.Errorf("unable to find kube config [%s]: %w", kubeConfig, err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to build kube config: %v", err)
+		return nil, fmt.Errorf("unable to build kube config: %w", err)
 	}
 
-	dyCli, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("unable to build dynamic client: %v", err)
-	}
-
-	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	return dyCli, client, ctrlCli, nil
+	return k8s.NewPodInformer(client), nil
 }
 
 // parseKeyPairs parses a list of key pairs in the form of key=value,key=value

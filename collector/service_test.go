@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,11 +18,12 @@ const MetricListenAddr = ":9090"
 func TestService_Open(t *testing.T) {
 	dir := t.TempDir()
 	cli := fake.NewSimpleClientset()
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			ScrapeInterval: 10 * time.Second,
 		},
 	})
@@ -35,11 +37,12 @@ func TestService_Open(t *testing.T) {
 func TestService_Open_Static(t *testing.T) {
 	dir := t.TempDir()
 	cli := fake.NewSimpleClientset()
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			ScrapeInterval: 10 * time.Second,
 			Targets: []ScrapeTarget{
 				{Addr: "http://localhost:8080/metrics"},
@@ -56,11 +59,12 @@ func TestService_Open_Static(t *testing.T) {
 func TestService_Open_NoMatchingHost(t *testing.T) {
 	dir := t.TempDir()
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			NodeName:       "ks8-master-123",
 			ScrapeInterval: 10 * time.Second,
 			Targets: []ScrapeTarget{
@@ -78,11 +82,12 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 	dir := t.TempDir()
 	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			NodeName:       "ks8-master-123",
 			ScrapeInterval: 10 * time.Second,
 			Targets: []ScrapeTarget{
@@ -115,11 +120,12 @@ func TestService_Open_Matching(t *testing.T) {
 		},
 	}
 	cli := fake.NewSimpleClientset(pod)
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			NodeName:       "ks8-master-123",
 			ScrapeInterval: 10 * time.Second,
 			Targets: []ScrapeTarget{
@@ -174,11 +180,12 @@ func TestService_Open_HostPort(t *testing.T) {
 		},
 	}
 	cli := fake.NewSimpleClientset(pod)
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			NodeName:       "ks8-master-123",
 			ScrapeInterval: 10 * time.Second,
 		},
@@ -214,11 +221,12 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	}
 	pod.Status.PodIP = "172.31.1.18"
 	cli := fake.NewSimpleClientset(pod)
+	informer := k8s.NewPodInformer(cli)
 	s, err := NewService(&ServiceOpts{
 		StorageDir: dir,
 		ListenAddr: MetricListenAddr,
 		Scraper: &ScraperOpts{
-			K8sCli:         cli,
+			PodInformer:    informer,
 			NodeName:       "ks8-master-123",
 			ScrapeInterval: 10 * time.Second,
 			Targets: []ScrapeTarget{
