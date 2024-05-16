@@ -78,17 +78,30 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 		if logger.IsDebug() {
 			logger.Debugf("Found target: file:%s database:%s table:%s parsers:%v", logFile, podDB, podTable, parserList)
 		}
+
+		attributes := map[string]interface{}{
+			"pod":       podName,
+			"namespace": namespaceName,
+			"container": container.Name,
+		}
+		for k, v := range pod.GetAnnotations() {
+			if !strings.HasPrefix(k, "adx-mon/") {
+				key := fmt.Sprintf("annotation.%s", k)
+				attributes[key] = v
+			}
+		}
+		for k, v := range pod.GetLabels() {
+			key := fmt.Sprintf("label.%s", k)
+			attributes[key] = v
+		}
+
 		targets = append(targets, FileTailTarget{
-			FilePath: logFile,
-			LogType:  LogTypeDocker,
-			Database: podDB,
-			Table:    podTable,
-			Parsers:  parserList,
-			Attributes: map[string]interface{}{
-				"pod":       podName,
-				"namespace": namespaceName,
-				"container": container.Name,
-			},
+			FilePath:   logFile,
+			LogType:    LogTypeDocker,
+			Database:   podDB,
+			Table:      podTable,
+			Parsers:    parserList,
+			Attributes: attributes,
 		})
 	}
 	return targets
