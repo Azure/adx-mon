@@ -40,6 +40,7 @@ func (p *PodInformer) Add(ctx context.Context, handler cache.ResourceEventHandle
 		tweakOptions := informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 			lo.FieldSelector = "spec.nodeName=" + p.NodeName
 		})
+
 		p.informerFactory = informers.NewSharedInformerFactoryWithOptions(p.K8sClient, time.Minute, tweakOptions)
 		p.informer = p.informerFactory.Core().V1().Pods().Informer()
 

@@ -113,10 +113,13 @@ func TestGetFileTargets(t *testing.T) {
 		},
 		{
 			name: "Pod has log destination and parser and multiple containers",
-			pod: genPod("pod1", "namespace1", ourNode, []string{"container1", "container2"}, map[string]string{
-				"adx-mon/scrape":          "true",
-				"adx-mon/log-destination": "db1:table1",
-				"adx-mon/log-parsers":     "json",
+			pod: genPodWithLabels("pod1", "namespace1", ourNode, []string{"container1", "container2"}, map[string]string{
+				"adx-mon/scrape":              "true",
+				"adx-mon/log-destination":     "db1:table1",
+				"adx-mon/log-parsers":         "json",
+				"cni.projectcalico.org/podIP": "10.10.10.10",
+			}, map[string]string{
+				"app": "myapp",
 			}),
 			expected: []FileTailTarget{
 				{
@@ -126,9 +129,11 @@ func TestGetFileTargets(t *testing.T) {
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
 					Attributes: map[string]interface{}{
-						"pod":       "pod1",
-						"namespace": "namespace1",
-						"container": "container1",
+						"pod":                                    "pod1",
+						"namespace":                              "namespace1",
+						"container":                              "container1",
+						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
+						"label.app":                              "myapp",
 					},
 				},
 				{
@@ -138,9 +143,11 @@ func TestGetFileTargets(t *testing.T) {
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
 					Attributes: map[string]interface{}{
-						"pod":       "pod1",
-						"namespace": "namespace1",
-						"container": "container2",
+						"pod":                                    "pod1",
+						"namespace":                              "namespace1",
+						"container":                              "container2",
+						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
+						"label.app":                              "myapp",
 					},
 				},
 			},
@@ -406,6 +413,29 @@ func genPod(name, namespace, nodeName string, containerNames []string, annotatio
 			Name:        name,
 			Namespace:   namespace,
 			Annotations: annotations,
+			UID:         uid,
+		},
+		Spec: v1.PodSpec{
+			NodeName:   nodeName,
+			Containers: containers,
+		},
+	}
+}
+
+func genPodWithLabels(name, namespace, nodeName string, containerNames []string, annotations map[string]string, labels map[string]string) *v1.Pod {
+	containers := make([]v1.Container, 0, len(containerNames))
+	for _, containerName := range containerNames {
+		containers = append(containers, v1.Container{
+			Name:  containerName,
+			Image: fmt.Sprintf("image-%s", containerName),
+		})
+	}
+	return &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   namespace,
+			Annotations: annotations,
+			Labels:      labels,
 			UID:         uid,
 		},
 		Spec: v1.PodSpec{
