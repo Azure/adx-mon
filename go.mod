@@ -28,7 +28,7 @@ require (
 	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.25.7
 	golang.org/x/net v0.24.0
-	golang.org/x/sync v0.6.0
+	golang.org/x/sync v0.7.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80
 	google.golang.org/protobuf v1.33.0
 	k8s.io/api v0.26.1
