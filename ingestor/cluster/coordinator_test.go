@@ -95,7 +95,7 @@ func TestCoordinator_NewPeer(t *testing.T) {
 	coord.pl = &fakePodLister{pods: []*v1.Pod{self, newPeer}}
 	coord.mu.Unlock()
 
-	coord.OnAdd(newPeer)
+	coord.OnAdd(newPeer, false)
 	coord.mu.RLock()
 	require.Equal(t, 2, len(coord.peers))
 	coord.mu.RUnlock()

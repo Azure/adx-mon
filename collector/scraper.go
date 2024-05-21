@@ -386,7 +386,7 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 	return g.Wait()
 }
 
-func (s *Scraper) OnAdd(obj interface{}) {
+func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 	p, ok := obj.(*v1.Pod)
 	if !ok || p == nil {
 		return
@@ -422,7 +422,7 @@ func (s *Scraper) OnUpdate(oldObj, newObj interface{}) {
 	if p.DeletionTimestamp != nil {
 		s.OnDelete(p)
 	} else {
-		s.OnAdd(p)
+		s.OnAdd(p, false)
 	}
 }
 
