@@ -109,7 +109,7 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	}, nil
 }
 
-func (c *coordinator) OnAdd(obj interface{}) {
+func (c *coordinator) OnAdd(obj interface{}, isInitialList bool) {
 	if p, ok := obj.(*v1.Pod); !ok || !c.isPeer(p) {
 		return
 	}

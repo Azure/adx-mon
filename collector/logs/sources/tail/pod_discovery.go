@@ -87,7 +87,7 @@ func (i *PodDiscovery) Close() error {
 }
 
 // OnAdd is called when an object is added. Expects a pod.
-func (i *PodDiscovery) OnAdd(obj interface{}) {
+func (i *PodDiscovery) OnAdd(obj interface{}, isInitialList bool) {
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		return
@@ -151,7 +151,7 @@ func (i *PodDiscovery) OnUpdate(oldObj, newObj interface{}) {
 	if p.DeletionTimestamp != nil {
 		i.OnDelete(p)
 	} else {
-		i.OnAdd(p)
+		i.OnAdd(p, false)
 	}
 }
 

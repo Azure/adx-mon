@@ -29,8 +29,8 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		err := podDiscovery.Open(context.Background())
 		require.NoError(t, err)
 
-		podDiscovery.OnAdd(scrapedPod("pod1"))
-		podDiscovery.OnAdd(notScrapedPod("pod2"))
+		podDiscovery.OnAdd(scrapedPod("pod1"), false)
+		podDiscovery.OnAdd(notScrapedPod("pod2"), false)
 
 		cleanTombstonedTargets(podDiscovery)
 		err = podDiscovery.Close()
@@ -58,7 +58,7 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 			Name:  "container2",
 			Image: "image2",
 		})
-		podDiscovery.OnAdd(pod)
+		podDiscovery.OnAdd(pod, false)
 
 		cleanTombstonedTargets(podDiscovery)
 		err = podDiscovery.Close()
@@ -77,7 +77,7 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		require.NoError(t, err)
 
 		pod := scrapedPod("pod1")
-		podDiscovery.OnAdd(pod)
+		podDiscovery.OnAdd(pod, false)
 		require.Equal(t, 1, len(tailSource.targetAdds))
 		podDiscovery.OnUpdate(nil, pod)
 		require.Equal(t, 1, len(tailSource.targetAdds)) // no change
@@ -112,7 +112,7 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		podDiscovery.OnDelete(scrapedPod("unknownpod"))
 
 		pod := scrapedPod("pod1")
-		podDiscovery.OnAdd(pod)
+		podDiscovery.OnAdd(pod, false)
 		require.Equal(t, 1, len(tailSource.targetAdds))
 
 		pod.DeletionTimestamp = &metav1.Time{Time: fakeNow.Now()}
