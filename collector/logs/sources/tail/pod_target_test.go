@@ -152,6 +152,69 @@ func TestGetFileTargets(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Pod has log destination and parser and multiple types of containers",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pod1",
+					Namespace: "namespace1",
+					Annotations: map[string]string{
+						"adx-mon/scrape":              "true",
+						"adx-mon/log-destination":     "db1:table1",
+						"adx-mon/log-parsers":         "json",
+						"cni.projectcalico.org/podIP": "10.10.10.10",
+					},
+					UID: uid,
+				},
+				Spec: v1.PodSpec{
+					NodeName:            ourNode,
+					Containers:          []v1.Container{{Name: "container1", Image: "image-container1"}},
+					InitContainers:      []v1.Container{{Name: "init-container1", Image: "image-container2"}},
+					EphemeralContainers: []v1.EphemeralContainer{{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "ephemeral-container1", Image: "image-container3"}}},
+				},
+			},
+			expected: []FileTailTarget{
+				{
+					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
+					Database: "db1",
+					Table:    "table1",
+					LogType:  LogTypeDocker,
+					Parsers:  []string{"json"},
+					Attributes: map[string]interface{}{
+						"pod":                                    "pod1",
+						"namespace":                              "namespace1",
+						"container":                              "container1",
+						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
+					},
+				},
+				{
+					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/init-container1/0.log"),
+					Database: "db1",
+					Table:    "table1",
+					LogType:  LogTypeDocker,
+					Parsers:  []string{"json"},
+					Attributes: map[string]interface{}{
+						"pod":                                    "pod1",
+						"namespace":                              "namespace1",
+						"container":                              "init-container1",
+						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
+					},
+				},
+				{
+					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/ephemeral-container1/0.log"),
+					Database: "db1",
+					Table:    "table1",
+					LogType:  LogTypeDocker,
+					Parsers:  []string{"json"},
+					Attributes: map[string]interface{}{
+						"pod":                                    "pod1",
+						"namespace":                              "namespace1",
+						"container":                              "ephemeral-container1",
+						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
+					},
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {

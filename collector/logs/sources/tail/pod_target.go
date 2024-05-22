@@ -70,41 +70,54 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 	podUid := pod.ObjectMeta.UID
 	namespaceName := pod.Namespace
 
-	targets := make([]FileTailTarget, 0, len(pod.Spec.Containers))
+	containerCount := len(pod.Spec.Containers) + len(pod.Spec.InitContainers) + len(pod.Spec.EphemeralContainers)
+	targets := make([]FileTailTarget, 0, containerCount)
 	baseDir := fmt.Sprintf("/var/log/pods/%s_%s_%s", namespaceName, podName, podUid)
-	// TODO - other fields as well contain containers
+	for _, container := range pod.Spec.InitContainers {
+		target := targetForContainer(pod, parserList, container.Name, baseDir, podDB, podTable)
+		targets = append(targets, target)
+	}
 	for _, container := range pod.Spec.Containers {
-		logFile := filepath.Join(baseDir, container.Name, "0.log")
-		if logger.IsDebug() {
-			logger.Debugf("Found target: file:%s database:%s table:%s parsers:%v", logFile, podDB, podTable, parserList)
-		}
-
-		attributes := map[string]interface{}{
-			"pod":       podName,
-			"namespace": namespaceName,
-			"container": container.Name,
-		}
-		for k, v := range pod.GetAnnotations() {
-			if !strings.HasPrefix(k, "adx-mon/") {
-				key := fmt.Sprintf("annotation.%s", k)
-				attributes[key] = v
-			}
-		}
-		for k, v := range pod.GetLabels() {
-			key := fmt.Sprintf("label.%s", k)
-			attributes[key] = v
-		}
-
-		targets = append(targets, FileTailTarget{
-			FilePath:   logFile,
-			LogType:    LogTypeDocker,
-			Database:   podDB,
-			Table:      podTable,
-			Parsers:    parserList,
-			Attributes: attributes,
-		})
+		target := targetForContainer(pod, parserList, container.Name, baseDir, podDB, podTable)
+		targets = append(targets, target)
+	}
+	for _, container := range pod.Spec.EphemeralContainers {
+		target := targetForContainer(pod, parserList, container.Name, baseDir, podDB, podTable)
+		targets = append(targets, target)
 	}
 	return targets
+}
+
+func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir, podDB, podTable string) FileTailTarget {
+	logFile := filepath.Join(baseDir, containerName, "0.log")
+	if logger.IsDebug() {
+		logger.Debugf("Found target: file:%s database:%s table:%s parsers:%v", logFile, podDB, podTable, parserList)
+	}
+
+	attributes := map[string]interface{}{
+		"pod":       pod.Name,
+		"namespace": pod.Namespace,
+		"container": containerName,
+	}
+	for k, v := range pod.GetAnnotations() {
+		if !strings.HasPrefix(k, "adx-mon/") {
+			key := fmt.Sprintf("annotation.%s", k)
+			attributes[key] = v
+		}
+	}
+	for k, v := range pod.GetLabels() {
+		key := fmt.Sprintf("label.%s", k)
+		attributes[key] = v
+	}
+	target := FileTailTarget{
+		FilePath:   logFile,
+		LogType:    LogTypeDocker,
+		Database:   podDB,
+		Table:      podTable,
+		Parsers:    parserList,
+		Attributes: attributes,
+	}
+	return target
 }
 
 func getAnnotationOrDefault(p *v1.Pod, key, def string) string {
