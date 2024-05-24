@@ -28,7 +28,7 @@ func (t *AddEmoji) Transform(ctx context.Context, batch *types.LogBatch) (*types
 		if !ok {
 			continue
 		}
-		log.Body["message"] = mapping.Map(messageStr)
+		log.Body[types.BodyKeyMessage] = mapping.Map(messageStr)
 	}
 	return batch, nil
 }

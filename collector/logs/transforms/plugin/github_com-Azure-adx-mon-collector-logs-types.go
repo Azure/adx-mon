@@ -5,15 +5,20 @@ package plugin
 import (
 	"context"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"go/constant"
+	"go/token"
 	"reflect"
 )
 
 func init() {
 	Symbols["github.com/Azure/adx-mon/collector/logs/types/types"] = map[string]reflect.Value{
 		// function, constant and variable definitions
-		"LogBatchPool": reflect.ValueOf(&types.LogBatchPool).Elem(),
-		"LogPool":      reflect.ValueOf(&types.LogPool).Elem(),
-		"NewLog":       reflect.ValueOf(types.NewLog),
+		"AttributeDatabaseName": reflect.ValueOf(constant.MakeFromLiteral("\"adxmon_destination_database\"", token.STRING, 0)),
+		"AttributeTableName":    reflect.ValueOf(constant.MakeFromLiteral("\"adxmon_destination_table\"", token.STRING, 0)),
+		"BodyKeyMessage":        reflect.ValueOf(constant.MakeFromLiteral("\"message\"", token.STRING, 0)),
+		"LogBatchPool":          reflect.ValueOf(&types.LogBatchPool).Elem(),
+		"LogPool":               reflect.ValueOf(&types.LogPool).Elem(),
+		"NewLog":                reflect.ValueOf(types.NewLog),
 
 		// type definitions
 		"Log":         reflect.ValueOf((*types.Log)(nil)),
