@@ -12,18 +12,23 @@ type Log struct {
 
 	// Attributes of the log entry, not included in the log body.
 	Attributes map[string]any
+
+	// Resource that has collected the log
+	Resource map[string]any
 }
 
 func NewLog() *Log {
 	return &Log{
 		Body:       map[string]any{},
 		Attributes: map[string]any{},
+		Resource:   map[string]any{},
 	}
 }
 
 func (l *Log) Reset() {
 	clear(l.Body)
 	clear(l.Attributes)
+	clear(l.Resource)
 }
 
 // Copy returns a distinct copy of the log. This is useful for splitting logs.
@@ -37,6 +42,9 @@ func (l *Log) Copy() *Log {
 	}
 	for k, v := range l.Body {
 		copy.Body[k] = v
+	}
+	for k, v := range l.Resource {
+		copy.Resource[k] = v
 	}
 	return copy
 }
