@@ -339,13 +339,20 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 				log.Attributes[k] = v
 			}
 
+			successfulParse := false
 			for _, parser := range tailer.logLineParsers {
 				err := parser.Parse(log)
 				if err == nil {
+					successfulParse = true
 					break // successful parse
 				} else if logger.IsDebug() {
 					logger.Debugf("readLines: parser error for filename %q: %v", tailer.tail.Filename, err)
 				}
+			}
+
+			if successfulParse {
+				// Successful parse, remove the raw message
+				delete(log.Body, types.BodyKeyMessage)
 			}
 
 			outputQueue <- log
