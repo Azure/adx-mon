@@ -72,7 +72,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":       "pod1",
 						"namespace": "namespace1",
 						"container": "container1",
@@ -94,7 +94,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json", "json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":       "pod1",
 						"namespace": "namespace1",
 						"container": "container1",
@@ -128,7 +128,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
@@ -142,7 +142,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container2",
@@ -180,7 +180,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
@@ -193,7 +193,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "init-container1",
@@ -206,7 +206,7 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "ephemeral-container1",
@@ -242,7 +242,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -254,7 +254,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -378,7 +378,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -390,7 +390,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod2",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -406,7 +406,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -418,7 +418,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -435,7 +435,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -447,7 +447,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 				},
