@@ -59,8 +59,8 @@ type FileTailTarget struct {
 	// These are converted into parser.ParserType.
 	Parsers []string
 
-	// Attributes is a map of additional attributes to add to each log.
-	Attributes map[string]interface{}
+	// Resources is a map of additional resource k/v pairs to add to each log.
+	Resources map[string]interface{}
 }
 
 // TailSourceConfig configures TailSource.
@@ -82,7 +82,7 @@ type Tailer struct {
 	table          string
 	logTypeParser  LogTypeParser
 	logLineParsers []parser.Parser
-	attributes     map[string]interface{}
+	resources      map[string]interface{}
 }
 
 func (t *Tailer) Stop() {
@@ -231,7 +231,7 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 	}
 
 	attributes := make(map[string]interface{})
-	for k, v := range target.Attributes {
+	for k, v := range target.Resources {
 		attributes[k] = v
 	}
 
@@ -242,7 +242,7 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 		table:          target.Table,
 		logTypeParser:  getLogTypeParser(target.LogType),
 		logLineParsers: parsers,
-		attributes:     attributes,
+		resources:      attributes,
 	}
 	s.group.Go(func() error {
 		return readLines(tailerCtx, tailer, updateChan, batchQueue)
@@ -297,9 +297,9 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 				tailer.logLineParsers = newParsers
 				tailer.database = newTarget.Database
 				tailer.table = newTarget.Table
-				tailer.attributes = make(map[string]interface{})
-				for k, v := range newTarget.Attributes {
-					tailer.attributes[k] = v
+				tailer.resources = make(map[string]interface{})
+				for k, v := range newTarget.Resources {
+					tailer.resources[k] = v
 				}
 			}
 		case line, ok := <-tailer.tail.Lines:
@@ -335,8 +335,8 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 			log.Attributes[types.AttributeDatabaseName] = tailer.database
 			log.Attributes[types.AttributeTableName] = tailer.table
 
-			for k, v := range tailer.attributes {
-				log.Attributes[k] = v
+			for k, v := range tailer.resources {
+				log.Resource[k] = v
 			}
 
 			successfulParse := false

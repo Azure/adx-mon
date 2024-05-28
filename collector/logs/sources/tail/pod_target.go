@@ -94,7 +94,7 @@ func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir
 		logger.Debugf("Found target: file:%s database:%s table:%s parsers:%v", logFile, podDB, podTable, parserList)
 	}
 
-	attributes := map[string]interface{}{
+	resourceValues := map[string]interface{}{
 		"pod":       pod.Name,
 		"namespace": pod.Namespace,
 		"container": containerName,
@@ -102,20 +102,20 @@ func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir
 	for k, v := range pod.GetAnnotations() {
 		if !strings.HasPrefix(k, "adx-mon/") {
 			key := fmt.Sprintf("annotation.%s", k)
-			attributes[key] = v
+			resourceValues[key] = v
 		}
 	}
 	for k, v := range pod.GetLabels() {
 		key := fmt.Sprintf("label.%s", k)
-		attributes[key] = v
+		resourceValues[key] = v
 	}
 	target := FileTailTarget{
-		FilePath:   logFile,
-		LogType:    LogTypeDocker,
-		Database:   podDB,
-		Table:      podTable,
-		Parsers:    parserList,
-		Attributes: attributes,
+		FilePath:  logFile,
+		LogType:   LogTypeDocker,
+		Database:  podDB,
+		Table:     podTable,
+		Parsers:   parserList,
+		Resources: resourceValues,
 	}
 	return target
 }
@@ -138,11 +138,11 @@ func isTargetChanged(old, new FileTailTarget) bool {
 		}
 	}
 
-	if len(old.Attributes) != len(new.Attributes) {
+	if len(old.Resources) != len(new.Resources) {
 		return true
 	}
-	for k, v := range old.Attributes {
-		if new.Attributes[k] != v {
+	for k, v := range old.Resources {
+		if new.Resources[k] != v {
 			return true
 		}
 	}
