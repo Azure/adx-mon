@@ -5,7 +5,7 @@ go 1.22.0
 toolchain go1.22.3
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240209200904-3b1a4532819a.1
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240514201103-f81222fd2e5e.1
 	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1
 	github.com/Azure/azure-kusto-go v0.15.2
 	github.com/bufbuild/connect-go v1.10.0

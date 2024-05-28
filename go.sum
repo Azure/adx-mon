@@ -1,5 +1,5 @@
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240209200904-3b1a4532819a.1 h1:yVyeSZ0RnO6hMorqI2/jFIqPBGHWZcRXJruhn4UJWBc=
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240209200904-3b1a4532819a.1/go.mod h1:qV0NIMZqjw8K3fa18pgd/iWM3Ib/941zG37B2LKRj8c=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240514201103-f81222fd2e5e.1 h1:XvJm3EeHB0N1i9BsNzjHfB+g+cff/kFBpP9pNeqTq4E=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240514201103-f81222fd2e5e.1/go.mod h1:wSV+bU+Nao4PseGts1LV4NpQaM/YtAHD84+Yyo1ghG4=
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1 h1:x37q5buInrZ2+ThuDF6C9RHgBdNz39vk6dMxXw8aBbw=
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1/go.mod h1:8SZ3nquD60/vLVKUgUolwLb9ajnw2UALKpabtaYK6aY=
 github.com/Azure/azure-pipeline-go v0.1.8/go.mod h1:XA1kFWRVhSK+KNFiOhfv83Fv8L9achrP7OxIzeTn1Yg=
