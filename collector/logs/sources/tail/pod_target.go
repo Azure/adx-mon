@@ -99,6 +99,11 @@ func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir
 		"namespace": pod.Namespace,
 		"container": containerName,
 	}
+	containerID, ok := getContainerID(pod, containerName)
+	if ok {
+		resourceValues["containerID"] = containerID
+	}
+
 	for k, v := range pod.GetAnnotations() {
 		if !strings.HasPrefix(k, "adx-mon/") {
 			key := fmt.Sprintf("annotation.%s", k)
@@ -148,4 +153,13 @@ func isTargetChanged(old, new FileTailTarget) bool {
 	}
 
 	return old.Database != new.Database || old.Table != new.Table
+}
+
+func getContainerID(pod *v1.Pod, containerName string) (string, bool) {
+	for _, container := range pod.Status.ContainerStatuses {
+		if container.Name == containerName {
+			return container.ContainerID, true
+		}
+	}
+	return "", false
 }
