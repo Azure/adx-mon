@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,14 +35,14 @@ func TestTailSourceStaticTargets(t *testing.T) {
 		StaticTargets: []FileTailTarget{
 			{
 				FilePath: testFileOne,
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeDocker,
 				Database: "Logs",
 				Table:    "TestService",
 				Parsers:  []string{"json"},
 			},
 			{
 				FilePath: testFileTwo,
-				LogType:  LogTypePlain,
+				LogType:  sourceparse.LogTypePlain,
 				Database: "Logs",
 				Table:    "TestServiceTwo",
 			},
@@ -104,7 +105,7 @@ func TestTailSourcePartialLogs(t *testing.T) {
 		StaticTargets: []FileTailTarget{
 			{
 				FilePath: testFileOne,
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeDocker,
 				Database: "Logs",
 				Table:    "TestService",
 				Parsers:  []string{"json"},
@@ -305,7 +306,7 @@ func BenchmarkTailSource(b *testing.B) {
 			StaticTargets: []FileTailTarget{
 				{
 					FilePath: testFile,
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeDocker,
 					Database: "Logs",
 					Table:    "TestService",
 				},
@@ -344,13 +345,13 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 			StaticTargets: []FileTailTarget{
 				{
 					FilePath: testFileOne,
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeDocker,
 					Database: "Logs",
 					Table:    "TestService",
 				},
 				{
 					FilePath: testFileTwo,
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeDocker,
 					Database: "Logs",
 					Table:    "TestServiceTwo",
 				},
