@@ -324,7 +324,7 @@ func (w *TailLog) Validate() error {
 	}
 
 	// Empty is ok - defaults to plain
-	validLogTypes := []sourceparse.Type{sourceparse.LogTypeDocker, sourceparse.LogTypePlain, ""}
+	validLogTypes := []sourceparse.Type{sourceparse.LogTypeDocker, sourceparse.LogTypeCri, sourceparse.LogTypeKubernetes, sourceparse.LogTypePlain, ""}
 
 	for _, v := range w.StaticTailTarget {
 		if v.FilePath == "" {

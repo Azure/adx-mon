@@ -117,7 +117,7 @@ func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir
 	}
 	target := FileTailTarget{
 		FilePath:  logFile,
-		LogType:   sourceparse.LogTypeDocker,
+		LogType:   sourceparse.LogTypeKubernetes,
 		Database:  podDB,
 		Table:     podTable,
 		Parsers:   parserList,
