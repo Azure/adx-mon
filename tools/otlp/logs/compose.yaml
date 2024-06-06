@@ -7,6 +7,7 @@ services:
       - ./fluent.yaml:/etc/fluent-bit/config.yaml
     depends_on:
       - collector
+      # - otel
 
   ingestor:
     build:
@@ -34,3 +35,11 @@ services:
       - ingestor
     environment:
       - LOG_LEVEL=DEBUG
+
+  # otel:
+  #   image: otel/opentelemetry-collector
+  #   volumes:
+  #     - ./otlp.yaml:/root/otlp.yaml
+  #   command: --config /root/otlp.yaml
+  #   ports:
+  #     - 4317:4317

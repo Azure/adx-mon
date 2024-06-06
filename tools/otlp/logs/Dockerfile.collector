@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/go:1.21-bullseye as builder
+FROM mcr.microsoft.com/devcontainers/go:1.22-bullseye as builder
 
 ADD . /code
 WORKDIR /code

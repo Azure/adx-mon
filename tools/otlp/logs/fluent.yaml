@@ -7,7 +7,7 @@ pipeline:
   inputs:
     - name: dummy
       tag: dummy
-      dummy: '{"message": "hello world", "kusto.database": "FakeDatabase", "kusto.table": "FakeTable"}'
+      dummy: '{"message": {"log": "hello world", "kusto.database": "FakeDatabase", "kusto.table": "FakeTable"}}'
 
   outputs:
     - Name: opentelemetry
@@ -22,7 +22,7 @@ pipeline:
     # - Name: opentelemetry
     #   Match: "*"
     #   Host: otel
-    #   Port: 4318
+    #   Port: 4317
     #   Logs_uri: /v1/logs
     #   Log_response_payload: true
     #   TLS: false

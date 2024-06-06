@@ -1,7 +1,5 @@
 # Ingestor URL to send collected telemetry.
 endpoint = 'https://ingestor:9090'
-# Path to kubernetes client config
-kube-config = '/root/.kube/config'
 # Skip TLS verification.
 insecure-skip-verify = true
 # Address to listen on for endpoints.
@@ -29,23 +27,6 @@ disable-metrics-forwarding = true
 # Attributes lifted from the Body and added to Attributes.
 lift-attributes = ['kusto.database', 'kusto.table']
 
-# Defines a prometheus scrape endpoint.
-[prometheus-scrape]
-  # Database to store metrics in.
-  database = 'TestMetrics'
-  # Defines a static scrape target.
-  static-scrape-target = []
-  # Scrape interval in seconds.
-  scrape-interval = 30
-  # Disable metrics forwarding to endpoints.
-  disable-metrics-forwarding = true
-  # Regexes of metrics to drop.
-  drop-metrics = []
-  # Global Regexes of metrics to keep.
-  keep-metrics = []
-  # Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent
-  keep-metrics-with-label-value = []
-
 # Defines a prometheus remote write endpoint.
 [[prometheus-remote-write]]
   # Database to store metrics in.
@@ -67,5 +48,3 @@ lift-attributes = ['kusto.database', 'kusto.table']
   # Attributes lifted from the Body and added to Attributes.
   lift-attributes = ['kusto.database', 'kusto.table']
 
-  # Key/value pairs of attributes to add to all logs.
-  [otel-log.add-attributes]
