@@ -72,10 +72,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{},
-					Attributes: map[string]interface{}{
-						"pod":       "pod1",
-						"namespace": "namespace1",
-						"container": "container1",
+					Resources: map[string]interface{}{
+						"pod":         "pod1",
+						"namespace":   "namespace1",
+						"container":   "container1",
+						"containerID": "docker://container1",
 					},
 				},
 			},
@@ -94,10 +95,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json", "json"},
-					Attributes: map[string]interface{}{
-						"pod":       "pod1",
-						"namespace": "namespace1",
-						"container": "container1",
+					Resources: map[string]interface{}{
+						"pod":         "pod1",
+						"namespace":   "namespace1",
+						"container":   "container1",
+						"containerID": "docker://container1",
 					},
 				},
 			},
@@ -128,10 +130,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
+						"containerID":                            "docker://container1",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 						"label.app":                              "myapp",
 					},
@@ -142,10 +145,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container2",
+						"containerID":                            "docker://container2",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 						"label.app":                              "myapp",
 					},
@@ -172,6 +176,34 @@ func TestGetFileTargets(t *testing.T) {
 					InitContainers:      []v1.Container{{Name: "init-container1", Image: "image-container2"}},
 					EphemeralContainers: []v1.EphemeralContainer{{EphemeralContainerCommon: v1.EphemeralContainerCommon{Name: "ephemeral-container1", Image: "image-container3"}}},
 				},
+				Status: v1.PodStatus{
+					ContainerStatuses: []v1.ContainerStatus{
+						{
+							Name: "container1",
+							// Not a real id format
+							ContainerID: "docker://container1",
+							State: v1.ContainerState{
+								Running: &v1.ContainerStateRunning{},
+							},
+						},
+						{
+							Name: "init-container1",
+							// Not a real id format
+							ContainerID: "docker://init-container1",
+							State: v1.ContainerState{
+								Running: &v1.ContainerStateRunning{},
+							},
+						},
+						{
+							Name: "ephemeral-container1",
+							// Not a real id format
+							ContainerID: "docker://ephemeral-container1",
+							State: v1.ContainerState{
+								Running: &v1.ContainerStateRunning{},
+							},
+						},
+					},
+				},
 			},
 			expected: []FileTailTarget{
 				{
@@ -180,10 +212,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
+						"containerID":                            "docker://container1",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 					},
 				},
@@ -193,10 +226,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "init-container1",
+						"containerID":                            "docker://init-container1",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 					},
 				},
@@ -206,10 +240,11 @@ func TestGetFileTargets(t *testing.T) {
 					Table:    "table1",
 					LogType:  LogTypeDocker,
 					Parsers:  []string{"json"},
-					Attributes: map[string]interface{}{
+					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "ephemeral-container1",
+						"containerID":                            "docker://ephemeral-container1",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 					},
 				},
@@ -242,7 +277,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -254,7 +289,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -378,7 +413,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -390,7 +425,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod2",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -406,7 +441,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -418,7 +453,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -435,7 +470,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 					"container": "container1",
@@ -447,7 +482,7 @@ func TestIsTargetChanged(t *testing.T) {
 				Table:    "table",
 				LogType:  LogTypeDocker,
 				Parsers:  []string{"json"},
-				Attributes: map[string]interface{}{
+				Resources: map[string]interface{}{
 					"pod":       "pod1",
 					"namespace": "namespace1",
 				},
@@ -471,6 +506,17 @@ func genPod(name, namespace, nodeName string, containerNames []string, annotatio
 			Image: fmt.Sprintf("image-%s", containerName),
 		})
 	}
+	statuses := make([]v1.ContainerStatus, 0, len(containerNames))
+	for _, containerName := range containerNames {
+		statuses = append(statuses, v1.ContainerStatus{
+			Name: containerName,
+			// Not a real id format
+			ContainerID: fmt.Sprintf("docker://%s", containerName),
+			State: v1.ContainerState{
+				Running: &v1.ContainerStateRunning{},
+			},
+		})
+	}
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -482,6 +528,9 @@ func genPod(name, namespace, nodeName string, containerNames []string, annotatio
 			NodeName:   nodeName,
 			Containers: containers,
 		},
+		Status: v1.PodStatus{
+			ContainerStatuses: statuses,
+		},
 	}
 }
 
@@ -491,6 +540,17 @@ func genPodWithLabels(name, namespace, nodeName string, containerNames []string,
 		containers = append(containers, v1.Container{
 			Name:  containerName,
 			Image: fmt.Sprintf("image-%s", containerName),
+		})
+	}
+	statuses := make([]v1.ContainerStatus, 0, len(containerNames))
+	for _, containerName := range containerNames {
+		statuses = append(statuses, v1.ContainerStatus{
+			Name: containerName,
+			// Not a real id format
+			ContainerID: fmt.Sprintf("docker://%s", containerName),
+			State: v1.ContainerState{
+				Running: &v1.ContainerStateRunning{},
+			},
 		})
 	}
 	return &v1.Pod{
@@ -504,6 +564,9 @@ func genPodWithLabels(name, namespace, nodeName string, containerNames []string,
 		Spec: v1.PodSpec{
 			NodeName:   nodeName,
 			Containers: containers,
+		},
+		Status: v1.PodStatus{
+			ContainerStatuses: statuses,
 		},
 	}
 }

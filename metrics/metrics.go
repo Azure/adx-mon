@@ -115,6 +115,13 @@ var (
 		Help:      "Gauge indicating if a query is healthy or not",
 	}, []string{"namespace", "name"})
 
+	QueriesRunTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "alerter",
+		Name:      "queries_run_total",
+		Help:      "Counter of the number of queries run",
+	}, []string{})
+
 	NotificationUnhealthy = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "alerter",

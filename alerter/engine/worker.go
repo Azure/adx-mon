@@ -17,6 +17,10 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 
+const (
+	maxQueryTime = 5 * time.Minute
+)
+
 type worker struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -89,6 +93,9 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	// Release the worker slot
 	defer func() { <-queue.Workers }()
 
+	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
+	defer cancel()
+
 	start := time.Now().UTC()
 	queryContext, err := NewQueryContext(e.rule, start, e.Region)
 	if err != nil {
@@ -149,6 +156,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	}
 
 	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+	metrics.QueriesRunTotal.WithLabelValues().Inc()
 	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(start))
 	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
 }
