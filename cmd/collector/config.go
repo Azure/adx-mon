@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/Azure/adx-mon/collector/logs/sources/tail"
+	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 )
@@ -301,11 +301,11 @@ type TailLog struct {
 }
 
 type TailTarget struct {
-	FilePath string    `toml:"file-path" comment:"The path to the file to tail."`
-	LogType  tail.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files.  Options are: docker, plain."`
-	Database string    `toml:"database" comment:"Database to store logs in."`
-	Table    string    `toml:"table" comment:"Table to store logs in."`
-	Parsers  []string  `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+	FilePath string           `toml:"file-path" comment:"The path to the file to tail."`
+	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files.  Options are: docker, plain."`
+	Database string           `toml:"database" comment:"Database to store logs in."`
+	Table    string           `toml:"table" comment:"Table to store logs in."`
+	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
 }
 
 type TailTransform struct {
@@ -324,7 +324,7 @@ func (w *TailLog) Validate() error {
 	}
 
 	// Empty is ok - defaults to plain
-	validLogTypes := []tail.Type{tail.LogTypeDocker, tail.LogTypePlain, ""}
+	validLogTypes := []sourceparse.Type{sourceparse.LogTypeDocker, sourceparse.LogTypeCri, sourceparse.LogTypeKubernetes, sourceparse.LogTypePlain, ""}
 
 	for _, v := range w.StaticTailTarget {
 		if v.FilePath == "" {
