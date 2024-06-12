@@ -6,7 +6,7 @@ toolchain go1.22.3
 
 require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240606200852-c7d908a3f6e4.1
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.32.0-20231108222406-3341592ed9fd.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.34.2-20240606200852-c7d908a3f6e4.1
 	github.com/Azure/azure-kusto-go v0.15.2
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
@@ -32,7 +32,7 @@ require (
 	golang.org/x/net v0.25.0
 	golang.org/x/sync v0.7.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80
-	google.golang.org/protobuf v1.34.1
+	google.golang.org/protobuf v1.34.2
 	k8s.io/api v0.30.1
 	k8s.io/apimachinery v0.30.1
 	k8s.io/client-go v0.30.1
