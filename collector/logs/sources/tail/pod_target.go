@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/pkg/logger"
 	v1 "k8s.io/api/core/v1"
@@ -116,7 +117,7 @@ func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir
 	}
 	target := FileTailTarget{
 		FilePath:  logFile,
-		LogType:   LogTypeDocker,
+		LogType:   sourceparse.LogTypeKubernetes,
 		Database:  podDB,
 		Table:     podTable,
 		Parsers:   parserList,

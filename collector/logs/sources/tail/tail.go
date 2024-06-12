@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
+	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -19,16 +20,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type Type string
-
 const (
 	cursor_position  = "adxmon_cursor_position"
 	cursor_file_id   = "adxmon_cursor_file_id"
 	cursor_file_name = "adxmon_cursor_file_name"
-
-	// Log types for extracting the timestamp and message
-	LogTypeDocker Type = "docker"
-	LogTypePlain  Type = "plain"
 )
 
 var (
@@ -46,7 +41,7 @@ type FileTailTarget struct {
 	// LogType is the format of the log file. e.g. docker for logs written by the docker json driver.
 	// This provides a mechanism to combine split lines, parse timestamps (if present), and extract a message field.
 	// Defaults to plain.
-	LogType Type
+	LogType sourceparse.Type
 
 	// The destination database name. Populated into the databasename attribute of the log that can be overwritten by transforms.
 	Database string
@@ -80,7 +75,7 @@ type Tailer struct {
 	shutdown       context.CancelFunc
 	database       string
 	table          string
-	logTypeParser  LogTypeParser
+	logTypeParser  sourceparse.LogTypeParser
 	logLineParsers []parser.Parser
 	resources      map[string]interface{}
 }
@@ -240,7 +235,7 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 		shutdown:       shutdown,
 		database:       target.Database,
 		table:          target.Table,
-		logTypeParser:  getLogTypeParser(target.LogType),
+		logTypeParser:  sourceparse.GetLogTypeParser(target.LogType),
 		logLineParsers: parsers,
 		resources:      attributes,
 	}
@@ -367,34 +362,6 @@ func (s *TailSource) ackBatch(cursor_file_name, cursor_file_id string, cursor_po
 	if err != nil {
 		logger.Errorf("ackBatches: %s", err)
 	}
-}
-
-// LogTypeParser is a function that parses a line of text from a file based on its format.
-// Must assign log.Timestamp, log.ObservedTimestamp, and the types.BodyKeyMessage property of log.Body.
-type LogTypeParser interface {
-	// Parse parses a line of text from a file into a log.
-	Parse(line string, log *types.Log) (isPartial bool, err error)
-}
-
-func getLogTypeParser(logType Type) LogTypeParser {
-	switch logType {
-	case LogTypeDocker:
-		return NewDockerParser()
-	case LogTypePlain:
-		return &PlaintextParser{}
-	default:
-		return &PlaintextParser{}
-	}
-}
-
-type PlaintextParser struct{}
-
-func (p *PlaintextParser) Parse(line string, log *types.Log) (bool, error) {
-	log.Timestamp = uint64(time.Now().UnixNano())
-	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body[types.BodyKeyMessage] = line
-
-	return false, nil
 }
 
 type tailcursor struct {
