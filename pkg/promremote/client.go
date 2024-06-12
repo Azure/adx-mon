@@ -95,6 +95,9 @@ func NewClient(opts ClientOpts) (*Client, error) {
 	t.MaxIdleConnsPerHost = opts.MaxIdleConnsPerHost
 	t.ResponseHeaderTimeout = opts.ResponseHeaderTimeout
 	t.IdleConnTimeout = opts.IdleConnTimeout
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
 	t.TLSClientConfig.InsecureSkipVerify = opts.InsecureSkipVerify
 	t.TLSHandshakeTimeout = opts.TLSHandshakeTimeout
 	t.DisableKeepAlives = opts.DisableKeepAlives
