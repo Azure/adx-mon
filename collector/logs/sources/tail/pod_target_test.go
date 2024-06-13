@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
@@ -70,7 +71,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{},
 					Resources: map[string]interface{}{
 						"pod":         "pod1",
@@ -93,7 +94,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json", "json"},
 					Resources: map[string]interface{}{
 						"pod":         "pod1",
@@ -128,7 +129,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
 					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
@@ -143,7 +144,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container2/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
 					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
@@ -210,7 +211,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
 					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
@@ -224,7 +225,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/init-container1/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
 					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
@@ -238,7 +239,7 @@ func TestGetFileTargets(t *testing.T) {
 					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/ephemeral-container1/0.log"),
 					Database: "db1",
 					Table:    "table1",
-					LogType:  LogTypeDocker,
+					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{"json"},
 					Resources: map[string]interface{}{
 						"pod":                                    "pod1",
@@ -275,7 +276,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
@@ -287,7 +288,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
@@ -303,14 +304,14 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			new: &FileTailTarget{
 				FilePath: "/path/to/other/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			expected: false, // This is explicitly not allowed to be updated. Must remove the target.
@@ -321,14 +322,14 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			new: &FileTailTarget{
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypePlain,
+				LogType:  sourceparse.LogTypePlain,
 				Parsers:  []string{"json"},
 			},
 			expected: false, // This is explicitly not allowed to be updated. Must remove the target.
@@ -339,14 +340,14 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			new: &FileTailTarget{
 				FilePath: "/path/to/file",
 				Database: "otherdb",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			expected: true,
@@ -357,14 +358,14 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			new: &FileTailTarget{
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "othertable",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			expected: true,
@@ -375,14 +376,14 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{},
 			},
 			new: &FileTailTarget{
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 			},
 			expected: true,
@@ -393,14 +394,14 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"otherparser", "json"},
 			},
 			new: &FileTailTarget{
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json", "otherparser"},
 			},
 			expected: true,
@@ -411,7 +412,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
@@ -423,7 +424,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod2",
@@ -439,7 +440,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
@@ -451,7 +452,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
@@ -468,7 +469,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
@@ -480,7 +481,7 @@ func TestIsTargetChanged(t *testing.T) {
 				FilePath: "/path/to/file",
 				Database: "db",
 				Table:    "table",
-				LogType:  LogTypeDocker,
+				LogType:  sourceparse.LogTypeKubernetes,
 				Parsers:  []string{"json"},
 				Resources: map[string]interface{}{
 					"pod":       "pod1",
