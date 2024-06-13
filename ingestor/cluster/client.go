@@ -3,6 +3,7 @@ package cluster
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,9 @@ func NewClient(timeout time.Duration, insecureSkipVerify bool) (*Client, error) 
 	t.MaxIdleConnsPerHost = 100
 	t.ResponseHeaderTimeout = timeout
 	t.IdleConnTimeout = time.Minute
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
 	t.TLSClientConfig.InsecureSkipVerify = insecureSkipVerify
 
 	httpClient := &http.Client{
