@@ -481,7 +481,7 @@ func TestWorker_AlertsThrottled(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 
 	require.Equal(t, createdAlert.Destination, rule.Destination)
-	require.Contains(t, createdAlert.Title, "has too many notifications")
+	require.Contains(t, createdAlert.Title, "has too many notifications in eastus")
 }
 
 func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
