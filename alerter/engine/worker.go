@@ -110,7 +110,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		if errors.Is(err, alert.ErrTooManyRequests) {
 			err := e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
 				Destination:   e.rule.Destination,
-				Title:         fmt.Sprintf("Alert %s/%s has too many notifications", e.rule.Namespace, e.rule.Name),
+				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.Region),
 				Summary:       "This alert has been throttled by ICM due to too many notifications.  Please reduce the number of notifications for this alert.",
 				Severity:      3,
 				Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
