@@ -41,7 +41,9 @@ func KustoQueryLinks(preText, query, endpoint, database string) (string, error) 
 	// Setup the Kusto query deep links
 	link := "Execute in "
 	link += fmt.Sprintf(`<a href="%s%s?query=%s">[Web]</a> `, endpoint, database, url)
-	link += fmt.Sprintf(`<a href="%s%s?query=%s&web=0">[Desktop]</a>`, endpoint, database, url)
+	link += fmt.Sprintf(`<a href="%s%s?query=%s&web=0">[Desktop]</a> `, endpoint, database, url)
+	link += fmt.Sprintf(`<a href="%s%s?query=%s&saw=1">[Desktop (SAW)]</a>`, endpoint, database, url)
+
 
 	summary := fmt.Sprintf("%s<br/><br/>%s</br><pre>%s</pre>", preText, link, query)
 	summary = strings.TrimSpace(summary)
