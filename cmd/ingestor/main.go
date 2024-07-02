@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
+	"github.com/Azure/adx-mon/tools/otlp/logs/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -491,17 +492,25 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 		if err != nil {
 			return nil, nil, err
 		}
-		client, err := newKustoClient(addr)
-		if err != nil {
-			return nil, nil, err
+		if strings.HasPrefix(addr, "http://") {
+
+			logger.Warnf("Using Kustainer for endpoint %s", endpoint)
+			uploaders = append(uploaders, kustainer.New(database, addr))
+		} else {
+
+			client, err := newKustoClient(addr)
+			if err != nil {
+				return nil, nil, err
+			}
+			uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
+				StorageDir:        storageDir,
+				Database:          database,
+				ConcurrentUploads: concurrentUploads,
+				DefaultMapping:    defaultMapping,
+				SampleType:        sampleType,
+			}))
 		}
-		uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
-			StorageDir:        storageDir,
-			Database:          database,
-			ConcurrentUploads: concurrentUploads,
-			DefaultMapping:    defaultMapping,
-			SampleType:        sampleType,
-		}))
+
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
 	}
 	return uploaders, uploadDatabaseNames, nil
