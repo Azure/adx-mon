@@ -17,9 +17,12 @@ services:
       - ~/.kube/config:/root/.kube/config
     ports:
       - 9090:9090
-    command: --kubeconfig /root/.kube/config --namespace adx-mon --storage-dir /tmp
+    command: --kubeconfig /root/.kube/config --namespace adx-mon --storage-dir /tmp --logs-kusto-endpoints OTLPLogs=http://kustainer:8080 --disable-peer-transfer --max-segment-size 1024 --kustainer
     environment:
       - LOG_LEVEL=DEBUG
+    depends_on:
+      - kustainer
+    restart: on-failure
 
   collector:
     build:
@@ -34,12 +37,11 @@ services:
     depends_on:
       - ingestor
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=ERROR
 
-  # otel:
-  #   image: otel/opentelemetry-collector
-  #   volumes:
-  #     - ./otlp.yaml:/root/otlp.yaml
-  #   command: --config /root/otlp.yaml
-  #   ports:
-  #     - 4317:4317
+  kustainer:
+    image: mcr.microsoft.com/azuredataexplorer/kustainer-linux
+    environment:
+      - ACCEPT_EULA=Y
+    ports:
+      - 8081:8080

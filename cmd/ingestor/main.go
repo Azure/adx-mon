@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
+	"github.com/Azure/adx-mon/tools/otlp/logs/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -79,6 +80,8 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
+
+			&cli.BoolFlag{Name: "kustainer", Usage: "Place Ingestor into volatile mode for testing"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -280,8 +283,21 @@ func realMain(ctx *cli.Context) error {
 		metricsDatabases = append(metricsDatabases, uploader.Database())
 	}
 
+	isVolatile := ctx.Bool("kustainer")
 	logsKusto := ctx.StringSlice("logs-kusto-endpoints")
-	if len(logsKusto) > 0 {
+	if isVolatile {
+
+		logger.Warnf("Kustainer is enabled, running in volatile mode")
+		for _, endpoint := range logsKusto {
+			addr, database, err := parseKustoEndpoint(endpoint)
+			if err != nil {
+				logger.Fatalf("Failed to parse kusto endpoint %s: %s", endpoint, err)
+			}
+			logsUploaders = append(logsUploaders, kustainer.New(database, addr))
+			logsDatabases = append(logsDatabases, database)
+		}
+	} else if len(logsKusto) > 0 {
+
 		logsUploaders, logsDatabases, err = newUploaders(
 			logsKusto, storageDir, concurrentUploads,
 			storage.DefaultLogsMapping, adx.OTLPLogs)
@@ -289,6 +305,7 @@ func realMain(ctx *cli.Context) error {
 			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 		}
 	} else {
+
 		logger.Warnf("No kusto endpoint provided, using fake logs uploader")
 		uploader := adx.NewFakeUploader("FakeLogs")
 		logsUploaders = append(logsUploaders, uploader)

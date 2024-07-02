@@ -1,29 +1,28 @@
 service:
   flush: 1
-  log_level: debug
+  log_level: error
 
 pipeline:
 
   inputs:
     - name: dummy
-      tag: dummy
-      dummy: '{"message": {"log": "hello world", "nested": "{\"objectone\": {\"key\": \"value\"}}\"", "kusto.database": "FakeDatabase", "kusto.table": "FakeTable"}}'
+      tag: nested
+      dummy: '{ "log": { "message": "hello world", "nested": "{\"objectone\": {\"key\": \"value\"}}" }, "kusto.database": "OTLPLogs", "kusto.table": "Nested" }'
+
+    - name: dummy
+      tag: formatted
+      dummy: '{ "log": { "foo": "bar" }, "kusto.database": "OTLPLogs", "kusto.table": "Formatted" }'
+
+    - name: dummy
+      tag: unformatted
+      dummy: '{ "log": "beep boop", "kusto.database": "OTLPLogs", "kusto.table": "unformatted" }'
 
   outputs:
     - Name: opentelemetry
       Match: "*"
       Host: collector
       Port: 8080
-      # Logs_uri: /logs
       Logs_uri: /v1/logs
       Log_response_payload: true
       TLS: false
       TLS.verify: false
-    # - Name: opentelemetry
-    #   Match: "*"
-    #   Host: otel
-    #   Port: 4317
-    #   Logs_uri: /v1/logs
-    #   Log_response_payload: true
-    #   TLS: false
-    #   TLS.verify: false
