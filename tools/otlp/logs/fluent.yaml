@@ -5,17 +5,14 @@ service:
 pipeline:
 
   inputs:
-    - name: dummy
-      tag: nested
-      dummy: '{ "log": { "message": "hello world", "nested": "{\"objectone\": {\"key\": \"value\"}}" }, "kusto.database": "OTLPLogs", "kusto.table": "Nested" }'
 
     - name: dummy
-      tag: formatted
-      dummy: '{ "log": { "foo": "bar" }, "kusto.database": "OTLPLogs", "kusto.table": "Formatted" }'
+      tag: TestNested
+      dummy: '{ "log": { "message": "hello world", "nested": {"objectone": {"key": "value"}} }, "kusto.database": "OTLPLogs", "kusto.table": "TestNested" }'
 
     - name: dummy
-      tag: unformatted
-      dummy: '{ "log": "beep boop", "kusto.database": "OTLPLogs", "kusto.table": "unformatted" }'
+      tag: TestTypes
+      dummy: '{ "Log": { "Str": "string", "Int": 4, "Bool": true, "Nested": {"A": "b"} }, "kusto.database": "OTLPLogs", "kusto.table": "TestTypes" }'
 
   outputs:
     - Name: opentelemetry
