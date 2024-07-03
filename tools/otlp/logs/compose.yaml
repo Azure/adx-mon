@@ -7,7 +7,6 @@ services:
       - ./fluent.yaml:/etc/fluent-bit/config.yaml
     depends_on:
       - collector
-      # - otel
 
   ingestor:
     build:
@@ -19,7 +18,7 @@ services:
       - 9090:9090
     command: --kubeconfig /root/.kube/config --namespace adx-mon --storage-dir /tmp  --logs-kusto-endpoints OTLPLogs=http://kustainer:8080 --disable-peer-transfer --max-segment-size 1024
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
     depends_on:
       - kustainer
     restart: on-failure
@@ -37,7 +36,7 @@ services:
     depends_on:
       - ingestor
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
 
   kustainer:
     image: mcr.microsoft.com/azuredataexplorer/kustainer-linux
