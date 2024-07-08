@@ -161,7 +161,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 				if err == nil {
 					break
 				}
-				logger.Warnf("write failed: %s.  Retrying...", err)
+				logger.Warnf("write failed: %s %s.  Retrying...", endpoint, err)
 				time.Sleep(1 * time.Second)
 			}
 			// println(time.Since(ts).String(), len(batch.Timeseries))
