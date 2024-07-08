@@ -208,22 +208,20 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	var metricHttpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
+	workerSvcs := []service.Component{}
 	for _, handlerOpts := range opts.PromMetricsHandlers {
+		proxy := promremote.NewRemoteWriteProxy(remoteClient, opts.Endpoints, opts.MaxBatchSize, handlerOpts.MetricOpts.DisableMetricsForwarding)
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
-			RequestWriter: &promremote.RemoteWriteProxy{
-				Client:                   remoteClient,
-				Endpoints:                opts.Endpoints,
-				MaxBatchSize:             opts.MaxBatchSize,
-				DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
-			},
-			HealthChecker: fakeHealthChecker{},
+			RequestWriter:      proxy,
+			HealthChecker:      fakeHealthChecker{},
 		})
 		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
+		workerSvcs = append(workerSvcs, proxy)
 	}
 
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
@@ -308,7 +306,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		scraper = NewScraper(opts.Scraper)
 	}
 
-	workerSvcs := []service.Component{}
 	for _, handlerOpts := range opts.LogCollectionHandlers {
 		svc, err := handlerOpts.Create(store)
 		if err != nil {
