@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -82,10 +83,11 @@ func NewHandler(opts HandlerOpts) *Handler {
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": s.Path})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
-			logger.Errorf("close http body: %s", err.Error())
+			logger.Errorf("close http body: %s, duration=%s", err.Error(), time.Since(start).String())
 		}
 	}()
 	r.Close = true
