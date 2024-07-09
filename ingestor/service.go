@@ -305,10 +305,11 @@ func (s *Service) HandleLogs(w http.ResponseWriter, r *http.Request) {
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
 	defer func() {
 		if err := r.Body.Close(); err != nil {
-			logger.Errorf("close http body: %s", err.Error())
+			logger.Errorf("close http body: %s, path=/transfer duration=%s", err.Error(), time.Since(start).String())
 		}
 	}()
 

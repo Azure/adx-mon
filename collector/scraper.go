@@ -1,9 +1,11 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -350,6 +352,10 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 	if len(wr.Timeseries) == 0 {
 		return nil
 	}
+
+	sort.Slice(wr.Timeseries, func(i, j int) bool {
+		return bytes.Compare(wr.Timeseries[i].Labels[0].Value, wr.Timeseries[j].Labels[0].Value) < 0
+	})
 
 	if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
 		var sb strings.Builder
