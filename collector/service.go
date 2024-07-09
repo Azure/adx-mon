@@ -192,13 +192,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	remoteClient, err := promremote.NewClient(
 		promremote.ClientOpts{
-			Timeout:               10 * time.Second,
+			Timeout:               20 * time.Second,
 			InsecureSkipVerify:    opts.InsecureSkipVerify,
 			Close:                 false,
 			MaxIdleConnsPerHost:   1,
 			MaxConnsPerHost:       5,
 			MaxIdleConns:          1,
-			ResponseHeaderTimeout: 10 * time.Second,
+			ResponseHeaderTimeout: 20 * time.Second,
 			DisableHTTP2:          true,
 			DisableKeepAlives:     true,
 		})
