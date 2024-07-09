@@ -307,9 +307,20 @@ func (s *Service) HandleLogs(w http.ResponseWriter, r *http.Request) {
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
+	filename := r.URL.Query().Get("filename")
+	if filename == "" {
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		http.Error(w, "missing filename", http.StatusBadRequest)
+		return
+	}
+
 	defer func() {
+		dur := time.Since(start)
+		if dur.Seconds() > 10 {
+			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), r.RemoteAddr, r.ContentLength, filename)
+		}
 		if err := r.Body.Close(); err != nil {
-			logger.Errorf("close http body: %s, path=/transfer duration=%s", err.Error(), time.Since(start).String())
+			logger.Errorf("close http body: %s, path=/transfer duration=%s", err.Error(), dur.String())
 		}
 	}()
 
@@ -319,12 +330,6 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := r.URL.Query().Get("filename")
-	if filename == "" {
-		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		http.Error(w, "missing filename", http.StatusBadRequest)
-		return
-	}
 	// https://pkg.go.dev/io/fs#ValidPath
 	// Check for possible traversal attacks.
 	f := s.validateFileName(filename)
