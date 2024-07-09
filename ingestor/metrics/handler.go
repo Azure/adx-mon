@@ -85,6 +85,17 @@ func NewHandler(opts HandlerOpts) *Handler {
 func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": s.Path})
+
+	defer func() {
+		dur := time.Since(start)
+		if dur.Seconds() > 10 {
+			logger.Warnf("slow request: path=%s duration=%s from=%s size=%d", s.Path, dur.String(), r.RemoteAddr, r.ContentLength)
+		}
+		if err := r.Body.Close(); err != nil {
+			logger.Errorf("close http body: %s, path=/transfer duration=%s", err.Error(), dur.String())
+		}
+	}()
+
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			logger.Errorf("close http body: %s, path=%s duration=%s", err.Error(), s.Path, time.Since(start).String())
