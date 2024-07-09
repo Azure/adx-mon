@@ -1,8 +1,10 @@
 package promremote
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -130,6 +132,10 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case wr := <-p.ready:
+			sort.Slice(wr.Timeseries, func(i, j int) bool {
+				return bytes.Compare(wr.Timeseries[i].Labels[0].Value, wr.Timeseries[j].Labels[0].Value) < 0
+			})
+
 			if len(p.endpoints) == 0 || logger.IsDebug() {
 				var sb strings.Builder
 				for _, ts := range wr.Timeseries {
