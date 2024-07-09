@@ -193,6 +193,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		},
 		RequestWriter: coord,
 		HealthChecker: health,
+		Path:          "/receive",
 	})
 
 	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServiceHandler(coord.WriteOTLPLogs, opts.LogsDatabases))
