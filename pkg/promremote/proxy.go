@@ -17,7 +17,11 @@ type RemoteWriteProxy struct {
 	maxBatchSize             int
 	disableMetricsForwarding bool
 
-	batches  chan prompb.WriteRequest
+	// queue is the channel where incoming writes are queued.  These are arbitrary sized writes.
+	queue chan prompb.WriteRequest
+	// ready is the channel where writes are batched up to maxBatchSize and ready to be sent to the remote write endpoint.
+	ready chan prompb.WriteRequest
+
 	cancelFn context.CancelFunc
 }
 
@@ -27,7 +31,8 @@ func NewRemoteWriteProxy(client *Client, endpoints []string, maxBatchSize int, d
 		endpoints:                endpoints,
 		maxBatchSize:             maxBatchSize,
 		disableMetricsForwarding: disableMetricsForwarding,
-		batches:                  make(chan prompb.WriteRequest, 100),
+		queue:                    make(chan prompb.WriteRequest, 100),
+		ready:                    make(chan prompb.WriteRequest, 5),
 	}
 	return p
 }
@@ -36,6 +41,9 @@ func (r *RemoteWriteProxy) Open(ctx context.Context) error {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	r.cancelFn = cancelFn
 	go r.flush(ctx)
+	for i := 0; i < cap(r.ready); i++ {
+		go r.sendBatch(ctx)
+	}
 	return nil
 }
 
@@ -71,9 +79,9 @@ func (r *RemoteWriteProxy) Write(ctx context.Context, wr prompb.WriteRequest) er
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case r.batches <- wr:
+	case r.queue <- wr:
 		return nil
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		// If the channel is full, we will try to flush the batch
 		return fmt.Errorf("writes are throttled")
 	}
@@ -86,18 +94,16 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case b := <-c.batches:
+		case b := <-c.queue:
 			var nextBatch prompb.WriteRequest
 			pendingBatch.Timeseries = append(pendingBatch.Timeseries, b.Timeseries...)
 
-			// Flush as many full batches as we can
+			// Flush as many full queue as we can
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
 				nextBatch.Timeseries = nextBatch.Timeseries[:0]
 				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[c.maxBatchSize:]...)
 				pendingBatch.Timeseries = pendingBatch.Timeseries[:c.maxBatchSize]
-				if err := c.sendBatch(ctx, &pendingBatch); err != nil {
-					logger.Errorf(err.Error())
-				}
+				c.ready <- pendingBatch
 				pendingBatch = nextBatch
 			}
 		case <-time.After(10 * time.Second):
@@ -106,56 +112,57 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 				nextBatch.Timeseries = nextBatch.Timeseries[:0]
 				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[c.maxBatchSize:]...)
 				pendingBatch.Timeseries = pendingBatch.Timeseries[:c.maxBatchSize]
-				if err := c.sendBatch(ctx, &pendingBatch); err != nil {
-					logger.Errorf(err.Error())
-				}
+				c.ready <- pendingBatch
 				pendingBatch = nextBatch
 			}
-
-			if err := c.sendBatch(ctx, &pendingBatch); err != nil {
-				logger.Errorf(err.Error())
+			if len(pendingBatch.Timeseries) == 0 {
+				continue
 			}
+			c.ready <- pendingBatch
 			pendingBatch.Timeseries = pendingBatch.Timeseries[:0]
 		}
 	}
 }
 
-func (p *RemoteWriteProxy) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error {
-	if len(wr.Timeseries) == 0 {
-		return nil
-	}
+func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case wr := <-p.ready:
+			if len(p.endpoints) == 0 || logger.IsDebug() {
+				var sb strings.Builder
+				for _, ts := range wr.Timeseries {
+					sb.Reset()
+					for i, l := range ts.Labels {
+						sb.Write(l.Name)
+						sb.WriteString("=")
+						sb.Write(l.Value)
+						if i < len(ts.Labels)-1 {
+							sb.Write([]byte(","))
+						}
+					}
+					sb.Write([]byte(" "))
+					for _, s := range ts.Samples {
+						logger.Debugf("%s %d %f", sb.String(), s.Timestamp, s.Value)
+					}
 
-	if len(p.endpoints) == 0 || logger.IsDebug() {
-		var sb strings.Builder
-		for _, ts := range wr.Timeseries {
-			sb.Reset()
-			for i, l := range ts.Labels {
-				sb.Write(l.Name)
-				sb.WriteString("=")
-				sb.Write(l.Value)
-				if i < len(ts.Labels)-1 {
-					sb.Write([]byte(","))
 				}
 			}
-			sb.Write([]byte(" "))
-			for _, s := range ts.Samples {
-				logger.Debugf("%s %d %f", sb.String(), s.Timestamp, s.Value)
-			}
 
+			start := time.Now()
+			g, gCtx := errgroup.WithContext(ctx)
+			for _, endpoint := range p.endpoints {
+				endpoint := endpoint
+				g.Go(func() error {
+					return p.client.Write(gCtx, endpoint, &wr)
+				})
+			}
+			logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(p.endpoints), time.Since(start))
+			if err := g.Wait(); err != nil {
+				logger.Errorf("Error sending batch: %v", err)
+			}
 		}
 	}
 
-	start := time.Now()
-	defer func() {
-		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(p.endpoints), time.Since(start))
-	}()
-
-	g, gCtx := errgroup.WithContext(ctx)
-	for _, endpoint := range p.endpoints {
-		endpoint := endpoint
-		g.Go(func() error {
-			return p.client.Write(gCtx, endpoint, wr)
-		})
-	}
-	return g.Wait()
 }
