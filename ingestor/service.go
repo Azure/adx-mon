@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
@@ -46,6 +47,8 @@ type Service struct {
 
 	store   storage.Store
 	metrics metrics.Service
+
+	scheduler *scheduler.Periodic
 
 	handler       *metricsHandler.Handler
 	logsHandler   http.Handler
@@ -206,6 +209,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		databases[db] = struct{}{}
 	}
 
+	sched := scheduler.NewScheduler(coord)
+
 	return &Service{
 		opts:        opts,
 		databases:   databases,
@@ -217,6 +222,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		metrics:     metricsSvc,
 		handler:     handler,
 		health:      health,
+		scheduler:   sched,
 		logsHandler: l,
 		requestFilter: &transform.RequestTransformer{
 			DropMetrics: opts.DropMetrics,
@@ -228,9 +234,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 func (s *Service) Open(ctx context.Context) error {
 	var svcCtx context.Context
 	svcCtx, s.closeFn = context.WithCancel(ctx)
-	if err := s.uploader.Open(svcCtx); err != nil {
-		return err
-	}
 
 	if err := s.store.Open(svcCtx); err != nil {
 		return err
@@ -252,24 +255,31 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-svcCtx.Done():
-				return
-			case <-ticker.C:
-				metrics.IngestorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
-			}
-		}
-	}()
+	if err := s.scheduler.Open(svcCtx); err != nil {
+		return err
+	}
+
+	s.scheduler.ScheduleEvery(time.Minute, "ingestor-health-check", func(ctx context.Context) error {
+		metrics.IngestorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
+		return nil
+	})
+
+	for _, v := range s.opts.MetricsKustoCli {
+		t := adx.NewDropUnusedTablesTask(v)
+		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
+			return t.Run(ctx)
+		})
+	}
 
 	return nil
 }
 
 func (s *Service) Close() error {
 	s.closeFn()
+
+	if err := s.scheduler.Close(); err != nil {
+		return err
+	}
 
 	if err := s.metrics.Close(); err != nil {
 		return err
@@ -284,10 +294,6 @@ func (s *Service) Close() error {
 	}
 
 	if err := s.coordinator.Close(); err != nil {
-		return err
-	}
-
-	if err := s.uploader.Close(); err != nil {
 		return err
 	}
 
