@@ -45,6 +45,7 @@ type Syncer struct {
 	tables map[string]struct{}
 
 	defaultMapping storage.SchemaMapping
+	cancelFn       context.CancelFunc
 }
 
 type IngestionMapping struct {
@@ -54,6 +55,10 @@ type IngestionMapping struct {
 	LastUpdatedOn time.Time `kusto:"LastUpdatedOn"`
 	Database      string    `kusto:"Database"`
 	Table         string    `kusto:"Table"`
+}
+
+type Table struct {
+	TableName string `kusto:"TableName"`
 }
 
 func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping, st SampleType) *Syncer {
@@ -80,12 +85,21 @@ func (s *Syncer) Open(ctx context.Context) error {
 		return err
 	}
 
-	return nil
+	ctx, s.cancelFn = context.WithCancel(ctx)
 
+	go s.reconcileMappings(ctx)
+
+	return nil
+}
+
+func (s *Syncer) Close() error {
+	s.cancelFn()
+	return nil
 }
 
 func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
-	stmt := kusto.NewStmt(".show ingestion mappings")
+	query := fmt.Sprintf(".show database %s ingestion mappings", s.database)
+	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(query)
 	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return err
@@ -111,7 +125,7 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 			return err
 		}
 
-		logger.Infof("Loaded ingestion mapping %s", v.Name)
+		logger.Infof("Loaded %s ingestion mapping %s", s.database, v.Name)
 
 		s.mappings[v.Name] = sm
 	}
@@ -360,14 +374,86 @@ func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
 		return err
 	}
 
-	logger.Infof("Creating ingestion batching policy: MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
-		p.MaximumBatchingTimeSpan, p.MaximumNumberOfItems, p.MaximumRawDataSizeMB)
+	logger.Infof("Creating ingestion batching policy: Database=%s MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
+		s.database, p.MaximumBatchingTimeSpan, p.MaximumNumberOfItems, p.MaximumRawDataSizeMB)
 
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-		fmt.Sprintf(".alter database %s policy ingestionbatching\n```%s\n```", s.database, string(b)))
+		fmt.Sprintf(".alter-merge database %s policy ingestionbatching\n```%s\n```", s.database, string(b)))
 	_, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Syncer) reconcileMappings(ctx context.Context) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+
+			if err := func() error {
+				tables, err := s.loadTables(ctx)
+				if err != nil {
+					return fmt.Errorf("error loading table details: %s", err)
+				}
+
+				if len(tables) == 0 {
+					logger.Warnf("No tables found in database %s. Skipping ingestion mapping cleanup.", s.database)
+					return nil
+				}
+
+				tableExists := make(map[string]struct{})
+				for _, v := range tables {
+					tableExists[v.TableName] = struct{}{}
+				}
+
+				s.mu.Lock()
+				defer s.mu.Unlock()
+
+				for k := range s.mappings {
+					tableName := strings.Split(k, "_")[0]
+
+					if _, ok := tableExists[tableName]; !ok {
+						logger.Debugf("Removing cached ingestion mapping %s from %s", k, s.database)
+						delete(s.mappings, k)
+					}
+				}
+				return nil
+			}(); err != nil {
+				logger.Errorf("Error removing unused ingestion mappings: %s", err)
+			}
+		}
+	}
+}
+
+func (s *Syncer) loadTables(ctx context.Context) ([]Table, error) {
+	stmt := kusto.NewStmt(".show tables | project TableName")
+	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	var tables []Table
+	for {
+		row, err1, err2 := rows.NextRowOrError()
+		if err2 == io.EOF {
+			return tables, nil
+		} else if err1 != nil {
+			return tables, err1
+		} else if err2 != nil {
+			return tables, err2
+		}
+
+		var v Table
+		if err := row.ToStruct(&v); err != nil {
+			return tables, err
+		}
+		tables = append(tables, v)
+	}
+	return tables, nil
 }

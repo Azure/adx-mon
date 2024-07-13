@@ -100,8 +100,7 @@ func (n *uploader) Close() error {
 	}
 
 	n.ingestors = nil
-
-	return nil
+	return n.syncer.Close()
 }
 
 func (n *uploader) UploadQueue() chan *cluster.Batch {
