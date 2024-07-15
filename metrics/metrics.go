@@ -100,6 +100,13 @@ var (
 		Help:      "Counter of the number of logs dropped due to ingestor errors",
 	}, []string{})
 
+	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "sample_latency",
+		Help:      "Latency of a sample in seconds as determined by epoch in the filename vs the time the sample was uploaded.",
+	}, []string{"database", "table"})
+
 	// Alerting metrics
 	AlerterHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
@@ -179,12 +186,12 @@ var (
 		Help:      "Size of logs in bytes",
 	}, []string{"database", "table"})
 
-	LogsCollectorLogsCollected = promauto.NewCounterVec(prometheus.CounterOpts{
+	LogLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "collector",
-		Name:      "logs_collected",
-		Help:      "Counter of the number of logs collected by the collector",
-	}, []string{"source"})
+		Name:      "logs_latency",
+		Help:      "Latency of logs in seconds as determined by the timestamp in a log vs the time the log was recieved.",
+	}, []string{"database", "table"})
 
 	LogsCollectorLogsSent = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,

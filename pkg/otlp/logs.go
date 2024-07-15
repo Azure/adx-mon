@@ -3,6 +3,7 @@ package otlp
 import (
 	"log/slog"
 	"strconv"
+	"time"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
@@ -84,10 +85,14 @@ func Group(req *v1.ExportLogsServiceRequest, add []*commonv1.KeyValue, log *slog
 					idx = len(grouped) - 1
 				}
 
+				// Set the log latency metric in seconds since the time when the log was generated to the time when it was received
+				metrics.LogLatency.WithLabelValues(database, table).Set(float64(l.GetTimeUnixNano()-uint64(time.Now().UnixNano())) / 1e9)
+
 				grouped[idx].Logs = append(grouped[idx].Logs, l)
 			}
 		}
 	}
+
 	return grouped
 }
 

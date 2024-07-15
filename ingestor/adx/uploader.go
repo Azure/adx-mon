@@ -213,6 +213,7 @@ func (n *uploader) upload(ctx context.Context) error {
 						logger.Errorf("Failed to parse file: %s", err.Error())
 						continue
 					}
+					metrics.SampleLatency.WithLabelValues(database, table).Set(time.Since(si.CreatedAt).Seconds())
 
 					f, err := wal.NewSegmentReader(si.Path)
 					if os.IsNotExist(err) {
