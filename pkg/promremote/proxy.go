@@ -97,25 +97,21 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case b := <-c.queue:
-			var nextBatch prompb.WriteRequest
 			pendingBatch.Timeseries = append(pendingBatch.Timeseries, b.Timeseries...)
 
 			// Flush as many full queue as we can
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
-				nextBatch.Timeseries = nextBatch.Timeseries[:0]
-				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[c.maxBatchSize:]...)
-				pendingBatch.Timeseries = pendingBatch.Timeseries[:c.maxBatchSize]
-				c.ready <- pendingBatch
-				pendingBatch = nextBatch
+				var nextBatch prompb.WriteRequest
+				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[:c.maxBatchSize]...)
+				pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0], pendingBatch.Timeseries[c.maxBatchSize:]...)
+				c.ready <- nextBatch
 			}
 		case <-time.After(10 * time.Second):
-			var nextBatch prompb.WriteRequest
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
-				nextBatch.Timeseries = nextBatch.Timeseries[:0]
-				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[c.maxBatchSize:]...)
-				pendingBatch.Timeseries = pendingBatch.Timeseries[:c.maxBatchSize]
-				c.ready <- pendingBatch
-				pendingBatch = nextBatch
+				var nextBatch prompb.WriteRequest
+				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[:c.maxBatchSize]...)
+				pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0], pendingBatch.Timeseries[c.maxBatchSize:]...)
+				c.ready <- nextBatch
 			}
 			if len(pendingBatch.Timeseries) == 0 {
 				continue
