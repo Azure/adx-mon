@@ -151,16 +151,7 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 		i++
 	}
 	v.Labels = v.Labels[:i]
-
-	// The RemoteWriteRequest protobuf unmarshalling uses a pool of labels setup as one contiguous array.  Each
-	// TimeSeries is assigned a slice of the pool.  If we need to grow this slice, we need to allocate a new slice
-	// as growing it implicitly will overwrite the labels of other TimeSeries.
-	if len(f.AddLabels) > 0 {
-		a := make([]prompb.Label, 0, len(v.Labels)+len(f.AddLabels))
-		a = append(a, v.Labels...)
-		a = append(a, f.addLabels...)
-		v.Labels = a
-	}
+	v.Labels = append(v.Labels, f.addLabels...)
 
 	sort.Sort(prompb.Labels(v.Labels))
 

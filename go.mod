@@ -8,6 +8,7 @@ require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240701200714-7fa05f4b0c8d.1
 	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.34.2-20240701200714-7fa05f4b0c8d.2
 	github.com/Azure/azure-kusto-go v0.15.2
+	github.com/VictoriaMetrics/easyproto v0.1.4
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/davecgh/go-spew v1.1.1

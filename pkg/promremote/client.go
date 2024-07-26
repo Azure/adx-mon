@@ -11,6 +11,7 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/golang/snappy"
+	pool "github.com/libp2p/go-buffer-pool"
 )
 
 // Client is a client for the prometheus remote write API.  It is safe to be shared between goroutines.
@@ -121,7 +122,10 @@ func NewClient(opts ClientOpts) (*Client, error) {
 }
 
 func (c *Client) Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error {
-	b, err := wr.Marshal()
+	b := pool.Get(wr.Size())
+	defer pool.Put(b)
+
+	b, err := wr.MarshalTo(b[:0])
 	if err != nil {
 		return fmt.Errorf("marshal proto: %w", err)
 	}
