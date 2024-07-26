@@ -116,8 +116,11 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 			if len(pendingBatch.Timeseries) == 0 {
 				continue
 			}
-			c.ready <- pendingBatch
-			pendingBatch.Timeseries = pendingBatch.Timeseries[:0]
+			var nextBatch prompb.WriteRequest
+			nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries...)
+
+			c.ready <- nextBatch
+			pendingBatch.Reset()
 		}
 	}
 }
@@ -164,6 +167,8 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 			if err := g.Wait(); err != nil {
 				logger.Errorf("Error sending batch: %v", err)
 			}
+			// wr.Unref()
+			// prompb.WriteRequestPool.Put(wr)
 		}
 	}
 
