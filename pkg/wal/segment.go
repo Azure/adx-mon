@@ -48,12 +48,17 @@ type Segment interface {
 	Iterator() (Iterator, error)
 	Info() (SegmentInfo, error)
 	Flush() error
+	// Repair truncates the last bytes in the segment if they are missing, corrupted or have extra data.  This
+	// repairs any corrupted segment that may not have fully flushed to disk safely.  The segment is truncated
+	// from the first block that is found to be corrupt.
+	Repair() error
 }
 
 type Iterator interface {
 	Next() (bool, error)
 	Value() []byte
 	Close() error
+	// Verify ensures the Iterator can iterate over a continuous series of blocks without error.
 	Verify() (int, error)
 	Metadata() (SampleType, uint32)
 }
@@ -199,7 +204,7 @@ func Open(path string) (Segment, error) {
 		flushCh: make(chan chan error),
 	}
 
-	if err := f.repair(); err != nil {
+	if err := f.Repair(); err != nil {
 		return nil, err
 	}
 
@@ -387,9 +392,9 @@ func (s *segment) Close() error {
 	return s.w.Close()
 }
 
-// repair truncates the last bytes in the segment if they are missing, corrupted or have extra data.  This
+// Repair truncates the last bytes in the segment if they are missing, corrupted or have extra data.  This
 // repairs any corrupted segment that may not have fully flushed to disk safely.
-func (s *segment) repair() error {
+func (s *segment) Repair() error {
 	buf := make([]byte, 0, 4096)
 
 	if _, err := s.w.Seek(8, io.SeekStart); err != nil {
