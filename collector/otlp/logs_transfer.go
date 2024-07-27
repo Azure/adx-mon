@@ -90,6 +90,8 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 			return
 		}
+		b = b[:n]
+
 		if logger.IsDebug() {
 			s.logger.Debug("Received request body", "Bytes", n)
 		}

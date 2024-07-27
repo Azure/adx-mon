@@ -167,9 +167,6 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 			if err := g.Wait(); err != nil {
 				logger.Errorf("Error sending batch: %v", err)
 			}
-			// wr.Unref()
-			// prompb.WriteRequestPool.Put(wr)
 		}
 	}
-
 }

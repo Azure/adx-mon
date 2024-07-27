@@ -139,6 +139,7 @@ func (s *LogsProxyService) Handler(w http.ResponseWriter, r *http.Request) {
 			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 			return
 		}
+		b = b[:n]
 
 		msg := &v1.ExportLogsServiceRequest{}
 		if err := proto.Unmarshal(b, msg); err != nil {
