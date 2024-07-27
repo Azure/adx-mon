@@ -63,13 +63,20 @@ func (b *segmentIterator) Next() (bool, error) {
 	if err == io.EOF {
 		return false, err
 	} else if err != nil || n != 8 {
-		return false, fmt.Errorf("short read: expected 8, got %d", n)
+		return false, nil
 	}
 
 	// Extract the block length and expand the read buffer if it is too small.
 	blockLen := binary.BigEndian.Uint32(b.lenCrcBuf[:4])
 	if uint32(cap(b.buf)) < blockLen {
 		b.buf = make([]byte, 0, blockLen)
+	}
+
+	// If the block length is 0, then we may have some trailing 0 bytes that we can ignore.
+	// This segment could be repaired, but a Repair would just truncate this data, so we ignore
+	// it anyway.
+	if blockLen == 0 {
+		return false, nil
 	}
 
 	// Extract the CRC value for the block
@@ -116,7 +123,9 @@ func (b *segmentIterator) Close() error {
 	return b.f.Close()
 }
 
-// Verify iterates through the entire segment and verifies the checksums for each block.  The iterator must be
+// Verify iterates through the entire segment and verifies the checksums for each block.  It stops iterating
+// when it reaches the end of the file or encounters a block that could be repaired/dropped.  If this does
+// not return an error, then the segment can be safely read continuously to walk valid blocks.  The iterator must be
 // re-created after calling this method.
 func (b *segmentIterator) Verify() (int, error) {
 	var blocks int
@@ -126,13 +135,21 @@ func (b *segmentIterator) Verify() (int, error) {
 		if err == io.EOF {
 			return blocks, nil
 		} else if err != nil || n != 8 {
-			return 0, fmt.Errorf("short read: expected 8, got %d", n)
+			// We don't have a full block, if this segment was repaired, we would not see this.  Instead of returning
+			// an error, just stop iteration and assume we've reached the end of the segment.
+			return blocks, nil
 		}
 
 		// Extract the block length and expand the read buffer if it is too small.
 		blockLen := binary.BigEndian.Uint32(b.lenCrcBuf[:4])
 		if uint32(cap(b.buf)) < blockLen {
 			b.buf = make([]byte, 0, blockLen)
+		}
+
+		// Special case where trailing zeros may exist at the end of the file.  We dont' have a valid block, so just
+		// stop iteration and assume we've reached the end of the segment.
+		if blockLen == 0 {
+			return blocks, nil
 		}
 
 		// Extract the CRC value for the block

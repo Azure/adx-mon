@@ -5,15 +5,21 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 	"time"
 
+	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,6 +140,113 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, "1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n", string(data))
+}
+
+func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
+	b := make([]byte, 256)
+	logger.SetLevel(slog.LevelDebug)
+	database := "adxlogs"
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
+	})
+
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+	require.Equal(t, 0, s.WALCount())
+
+	require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{
+		Logs: make([]*logsv1.LogRecord, 1),
+	}))
+	time.Sleep(200 * time.Millisecond)
+	require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{}))
+
+	key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
+	w, err := s.GetWAL(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+
+	path := w.Path()
+
+	require.Equal(t, 1, s.WALCount())
+	require.NoError(t, s.Close())
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close()
+	b, _ = os.ReadFile(path)
+
+	iter, err := wal.NewSegmentIterator(f)
+	require.NoError(t, err)
+	n, err := iter.Verify()
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	r, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	spew.Dump(data)
+}
+
+func TestStore_WriteNativeLogs_Empty(t *testing.T) {
+	b := make([]byte, 256)
+	logger.SetLevel(slog.LevelDebug)
+	database := "adxlogs"
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
+	})
+
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+	require.Equal(t, 0, s.WALCount())
+
+	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
+		Logs: []*types.Log{
+			{
+				Attributes: map[string]any{
+					types.AttributeDatabaseName: database,
+					types.AttributeTableName:    "foo",
+				},
+			},
+		},
+	}))
+	time.Sleep(200 * time.Millisecond)
+	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
+
+	key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
+	w, err := s.GetWAL(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+
+	path := w.Path()
+
+	require.Equal(t, 1, s.WALCount())
+	require.NoError(t, s.Close())
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close()
+	b, _ = os.ReadFile(path)
+
+	iter, err := wal.NewSegmentIterator(f)
+	require.NoError(t, err)
+	n, err := iter.Verify()
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	r, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	spew.Dump(data)
 }
 
 func TestStore_SkipNonCSV(t *testing.T) {
