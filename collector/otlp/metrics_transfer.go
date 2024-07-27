@@ -89,6 +89,8 @@ func (s *MetricsService) Handler(w http.ResponseWriter, r *http.Request) {
 			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
 			return
 		}
+		b = b[:n]
+
 		if logger.IsDebug() {
 			s.logger.Debug("Received request body", "Bytes", n)
 		}

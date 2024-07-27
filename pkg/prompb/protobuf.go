@@ -1,5 +1,3 @@
-// Code generated from remote.proto
-
 package prompb
 
 import (
