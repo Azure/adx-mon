@@ -88,6 +88,15 @@ func (s *Repository) Open(ctx context.Context) error {
 				continue
 			}
 
+			// Walk each segment on disk and Open it to trigger a repair if necessary.
+			var seg Segment
+			seg, err = Open(path)
+			if err != nil {
+				logger.Warnf("Failed to open segment file: %s %s", path, err.Error())
+			} else if err := seg.Close(); err != nil {
+				logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
+			}
+
 			fileName := filepath.Base(path)
 			fields := strings.Split(fileName, "_")
 			if len(fields) != 3 || fields[0] == "" {
