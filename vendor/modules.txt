@@ -353,11 +353,11 @@ github.com/tenebris-tech/tail/winfile
 github.com/traefik/yaegi/internal/unsafe2
 github.com/traefik/yaegi/interp
 github.com/traefik/yaegi/stdlib
-# github.com/urfave/cli/v2 v2.27.2
+# github.com/urfave/cli/v2 v2.27.3
 ## explicit; go 1.18
 github.com/urfave/cli/v2
-# github.com/xrash/smetrics v0.0.0-20240312152122-5f08fbb34913
-## explicit; go 1.15.0
+# github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1
+## explicit; go 1.15
 github.com/xrash/smetrics
 # golang.org/x/crypto v0.25.0
 ## explicit; go 1.20
