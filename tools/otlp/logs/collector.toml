@@ -48,3 +48,11 @@ lift-attributes = ['kusto.database', 'kusto.table']
   # Attributes lifted from the Body and added to Attributes.
   lift-attributes = ['kusto.database', 'kusto.table']
 
+[[tail-log]]
+disable-kube-discovery = true
+
+  [[tail-log.static-target]]
+    file-path = "/shared/collector.Plain.log"
+    log-type = "plain"
+    database = "OTLPLogs"
+    table = "Collector"

@@ -1,10 +1,11 @@
 version: "3"
 services:
   fluentbit:
-    image: cr.fluentbit.io/fluent/fluent-bit
+    image: cr.fluentbit.io/fluent/fluent-bit:2.1.4
     command: -c /etc/fluent-bit/config.yaml
     volumes:
       - ./fluent.yaml:/etc/fluent-bit/config.yaml
+      - fluentbit-collector-shared:/shared
     depends_on:
       - collector
 
@@ -30,6 +31,7 @@ services:
     volumes:
       - ~/.kube/config:/root/.kube/config
       - ./collector.toml:/var/lib/adx-mon/collector.toml
+      - fluentbit-collector-shared:/shared
     ports:
       - 8080:8080
     command: --config /var/lib/adx-mon/collector.toml
@@ -44,3 +46,6 @@ services:
       - ACCEPT_EULA=Y
     ports:
       - 8081:8080
+
+volumes:
+  fluentbit-collector-shared:
