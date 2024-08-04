@@ -379,7 +379,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 	}
 
 	res := f.TransformWriteRequest(req)
-	require.Equal(t, 2, len(res.Timeseries))
+	require.Equal(t, 3, len(res.Timeseries))
 	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
 	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
 	require.Equal(t, []byte("__name__"), res.Timeseries[1].Labels[0].Name)
@@ -589,5 +589,92 @@ func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		f.TransformWriteRequest(wr)
+	}
+}
+
+func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
+	type args struct {
+		v    prompb.TimeSeries
+		name []byte
+	}
+	tests := []struct {
+		name string
+		f    *transform.RequestTransformer
+		args args
+		want bool
+	}{
+		{
+			name: "Drop Metric When DefaultDropMetrics and Match KeepMetrics",
+			f: &transform.RequestTransformer{
+				DefaultDropMetrics: true,
+				KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
+				DropMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
+			},
+			args: args{
+				name: []byte("metric"),
+				v:    prompb.TimeSeries{},
+			},
+			want: false,
+		},
+		{
+			name: "Drop Metric with KeepMetricsWithLabelValue",
+			f: &transform.RequestTransformer{
+				DefaultDropMetrics: true,
+				KeepMetricsWithLabelValue: map[*regexp.Regexp]*regexp.Regexp{
+					regexp.MustCompile("labelname"): regexp.MustCompile("value"),
+				},
+			},
+			args: args{
+				name: []byte("metric"),
+				v: prompb.TimeSeries{Labels: []prompb.Label{
+					{Name: []byte("labelname"), Value: []byte("value")},
+				}},
+			},
+			want: false,
+		},
+		{
+			name: "Not Drop Metric on absence of KeepMetricsWithLabelValue",
+			f: &transform.RequestTransformer{
+				DefaultDropMetrics: true,
+			},
+			args: args{
+				name: []byte("metric"),
+				v: prompb.TimeSeries{Labels: []prompb.Label{
+					{Name: []byte("labelname"), Value: []byte("value")},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "Drop Metric When Not DefaultDropMetrics and Match DropMetrics",
+			f: &transform.RequestTransformer{
+				DefaultDropMetrics: false,
+				DropMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
+			},
+			args: args{
+				name: []byte("metric"),
+				v:    prompb.TimeSeries{},
+			},
+			want: true,
+		},
+		{
+			name: "Not Drop Metric When Not DefaultDropMetrics and Not Match DropMetrics",
+			f: &transform.RequestTransformer{
+				DefaultDropMetrics: false,
+				DropMetrics:        []*regexp.Regexp{regexp.MustCompile("nomatch")},
+			},
+			args: args{
+				name: []byte("metric"),
+				v:    prompb.TimeSeries{},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.f.ShouldDropMetric(tt.args.v, tt.args.name); got != tt.want {
+				t.Errorf("RequestTransformer.ShouldDropMetric() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
