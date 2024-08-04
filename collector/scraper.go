@@ -195,15 +195,14 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 		}
 
 		for name, val := range fams {
-			// Drop metrics that are in the drop list
-			if s.requestTransformer.ShouldDropMetric([]byte(name)) {
-				metrics.MetricsDroppedTotal.WithLabelValues(name).Add(float64(len(val.Metric)))
-				continue
-
-			}
-
 			for _, m := range val.Metric {
 				ts := s.seriesCreator.newSeries(name, target, m)
+
+				// Drop metrics that are in the drop list
+				if s.requestTransformer.ShouldDropMetric(ts, []byte(name)) {
+					metrics.MetricsDroppedTotal.WithLabelValues(name).Add(float64(len(val.Metric)))
+					continue
+				}
 
 				timestamp := m.GetTimestampMs()
 				if timestamp == 0 {

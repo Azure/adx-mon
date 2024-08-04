@@ -73,12 +73,7 @@ func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prom
 		// First skip any metrics that should be dropped.
 		name := prompb.MetricName(v)
 
-		if !f.ShouldKeepTimeSeries(v, name) {
-			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
-			continue
-		}
-
-		if f.ShouldDropMetric(name) {
+		if f.ShouldDropMetric(v, name) {
 			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			continue
 		}
@@ -158,32 +153,28 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 	return v
 }
 
-func (f *RequestTransformer) ShouldKeepTimeSeries(v prompb.TimeSeries, name []byte) bool {
-	if len(f.KeepMetrics) > 0 {
+func (f *RequestTransformer) ShouldDropMetric(v prompb.TimeSeries, name []byte) bool {
+	if f.DefaultDropMetrics {
 		for _, r := range f.KeepMetrics {
 			if r.Match(name) {
-				return true
+				return false
 			}
 		}
-	}
 
-	if len(f.KeepMetricsWithLabelValue) > 0 {
-		for _, label := range v.Labels {
-			// Keep metrics that have a certain label
-			for lableRe, valueRe := range f.KeepMetricsWithLabelValue {
-				if lableRe.Match(label.Name) && valueRe.Match(label.Value) {
-					return true
+		if len(f.KeepMetricsWithLabelValue) > 0 {
+			for _, label := range v.Labels {
+				// Keep metrics that have a certain label
+				for lableRe, valueRe := range f.KeepMetricsWithLabelValue {
+					if lableRe.Match(label.Name) && valueRe.Match(label.Value) {
+						return false
+					}
 				}
 			}
 		}
 
-		return false
+		return true
 	}
 
-	return !f.DefaultDropMetrics
-}
-
-func (f *RequestTransformer) ShouldDropMetric(name []byte) bool {
 	for _, r := range f.DropMetrics {
 		if r.Match(name) {
 			return true
