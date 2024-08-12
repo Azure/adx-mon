@@ -20,9 +20,9 @@ collection and analysis of observability data.
 
 ## Learn More
 
-* [Getting Started](https://azure.github.io/getting-started.md)
-* [Concepts](https://azure.github.io/concepts.md)
-* [Cook Book](https://azure.github.io/cookbook.md)
+* [Getting Started](https://azure.github.io/adx-mon/quick-start/)
+* [Concepts](https://azure.github.io/adx-mon/concepts/)
+* [Cook Book](https://azure.github.io/adx-mon/cookbook/)
 
 
 ## Development
