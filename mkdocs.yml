@@ -42,11 +42,10 @@ markdown_extensions:
       emoji_generator: !!python/name:materialx.emoji.to_svg
 
 nav:
-  - 'introduction.md'
+  - 'quick-start.md'
   - 'concepts.md'
-  - 'guides.md'
   - 'cookbook.md'
   - Reference:
+      - 'installation.md'
+      - 'architecture.md'
       - 'ingestor.md'
-  - Design Docs:
-      - 'designs/log-integration-with-kubernetes.md'
