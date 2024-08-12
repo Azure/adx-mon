@@ -1,20 +1,42 @@
-# Project
+# ADX-Mon
 
-> This repo has been populated by an initial template to help get you started. Please
-> make sure to update the content to build a great experience for community-building.
 
-As the maintainer of this project, please make a few updates:
+ADX-Mon is a comprehensive observability platform that seamlessly integrates metrics, logs, traces, continuous profile
+and any telemetry into a unified platform. It addresses the traditional challenges of data being siloed and difficult
+to correlate, as well as the cardinality and scale issues found in existing metrics solutions, streamlining the
+collection and analysis of observability data.
 
-- Improving this README.MD file to provide a great experience
-- Updating SUPPORT.MD with content about this project's support experience
-- Understanding the security reporting process in SECURITY.MD
-- Remove this section from the README
+## Features
+
+* **Unlimited Cardinality, Retention, and Granularity**: No restrictions on data dimensions, storage duration, or detail level.
+* **Low Latency Ingestion and Lightweight Collection**: Ensures rapid data processing with minimal resource overhead.
+* **Unified Alerting**: Simplified alerting mechanisms for metrics, logs, and traces.
+* **Powered by Azure Data Explorer (ADX)**: Built on the robust and scalable [ADX](https://azure.microsoft.com/en-us/products/data-explorer) platform with the powerful [Kusto Query Language (KQL)](https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/) unifying access to all telemetry.
+* **Flexible and Standards-Based Interfaces**: Supports OTEL, Prometheus, and other industry standards ingestion protocols.
+* **Optimized for Kubernetes and Cloud-Native Environments**: Designed to thrive in modern, dynamic infrastructures.
+* **Pluggable Alerting Provider API**: Customizable alerting integrations.
+* **Broad Compatibility**: Works seamlessly with Grafana, ADX Dashboards, PowerBI, and any ADX-compatible products.
+* **Turnkey, Scalable, and Reliable**: A ready-to-use observability platform that scales from hobby projects to enterprise-level deployments.
+
+## Learn More
+
+* [Getting Started](https://azure.github.io/getting-started.md)
+* [Concepts](https://azure.github.io/concepts.md)
+* [Cook Book](https://azure.github.io/cookbook.md)
+
+
+## Development
+
+
 
 ## Contributing
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+This project is currently under heavy development and is changing frequently.  _We are currently only
+accepting contributions for bug fixes, test coverage and documentation_.  Feature requests will be
+considered after the project has reached a stable state.
+
+Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to,
+and actually do, grant us the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
 
 When you submit a pull request, a CLA bot will automatically determine whether you need to provide
 a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions

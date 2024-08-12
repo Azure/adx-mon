@@ -9,9 +9,6 @@ their own metrics, logs and traces.  The ingestor aggregates these data sources 
 instead of each pod or node sending data individually.  This reduces the number of small files that ADX must later 
 merge into larger files which can impact query latency and increase resource requirements.
 
-In addition, ADX is 2x to 3x more efficient at ingesting CSV vs JSON data.  The ingestor converts metrics, logs and
-traces into CSV format before sending them to ADX which reduces the processing time and improves ingestion latency.
-
 # Design
 
 The ingestor is designed to be deployed as a Kubernetes StatefulSet with multiple replicas.  It exposes several

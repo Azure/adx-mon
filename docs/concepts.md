@@ -15,7 +15,18 @@ commonly used labels and attributes up to top level columns.
 These tables are all queried with [KQL](https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/).  KQL
 queries are used for analysis, alerting and visualization.
 
-## Metrics
+## Components
+
+### Collector
+### Ingestor
+### Alerter
+### Azure Data Explorer
+### Grafana
+
+
+## Telemetry
+
+### Metrics
 
 Metrics track a numeric value over time with associated labels to identify series.  Metrics are collected from
 Kubernetes via the [Prometheus](https://prometheus.io/) scrape protocol as well as received via prometheus
@@ -31,11 +42,13 @@ Metrics are translated to a distinct table per metric.  Each metric table has th
 Labels may have common identifying attributes that can be pulled up to top level columns via update policies.  For
 example, the `pod` label may be common to all metrics and can be pulled up to a top level `Pod` column.
 
-## Logs
+### Logs
 
-## Traces
+### Traces
 
-## Alerts
+### Continuous Profiling
+
+### Alerts
 
 Alerts are defined through a Kubernetes CRD called `AlertRule`.  This CRD defines the alerting criteria and the
 notification channels that should be used when the alert is triggered.
