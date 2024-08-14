@@ -1,0 +1,14 @@
+FROM golang:1.22 as builder
+
+ADD .. /code
+WORKDIR /code
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/ingestor ./cmd/ingestor
+
+FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
+
+LABEL org.opencontainers.image.source https://github.com/Azure/adx-mon
+
+COPY --from=builder /code/bin /
+
+ENTRYPOINT ["/ingestor"]
