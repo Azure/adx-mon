@@ -2,6 +2,7 @@ package adx
 
 import (
 	"context"
+	"flag"
 	"io"
 	"os"
 	"testing"
@@ -20,6 +21,10 @@ type fakeUploader struct {
 }
 
 func (f *fakeUploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	if !isTest() {
+		flag.String("test.v", "true", "fake")
+	}
+
 	rows, err := kusto.NewMockRows(table.Columns{
 		{Name: "Name", Type: "string"},
 	})
@@ -100,4 +105,7 @@ func (f *fakeKustoMgmt) Verify(t *testing.T) {
 	if f.expectedQuery != "" && f.actualQuery != f.expectedQuery {
 		t.Errorf("Expected query %s, got %s", f.expectedQuery, f.actualQuery)
 	}
+}
+func isTest() bool {
+	return flag.Lookup("test.v") != nil
 }
