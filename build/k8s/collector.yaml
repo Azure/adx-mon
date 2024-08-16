@@ -59,7 +59,7 @@ data:
     endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
 
     # Region is a location identifier
-    region = 'region'
+    region = '$REGION'
 
     # Skip TLS verification.
     insecure-skip-verify = true
@@ -85,12 +85,13 @@ data:
     # Key/value pairs of labels to add to all metrics.
     [add-labels]
       host = '$(HOSTNAME)'
+      cluster = '$CLUSTER'
 
     # Defines a prometheus scrape endpoint.
     [prometheus-scrape]
 
       # Database to store metrics in.
-      database = '<DB Name>'
+      database = '$DATABASE_NAME'
 
       default-drop-metrics = false
 
@@ -107,9 +108,6 @@ data:
 
         # Scrape cadvisor metrics
         { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/resource', namespace = 'kube-system', pod = 'kubelet', container = 'resource' },
-
-        # Scrape api-server metrics
-        { host-regex = '.+-master-.+', url = 'https://$(HOSTNAME):6443/metrics', namespace = 'kube-system', pod = 'kube-apiserver', container = 'kube-apiserver' },
       ]
 
       # Scrape interval in seconds.
@@ -128,7 +126,7 @@ data:
     [[prometheus-remote-write]]
 
       # Database to store metrics in.
-      database = '<DB Name>'
+      database = '$DATABASE_NAME'
 
       # The path to listen on for prometheus remote write requests.  Defaults to /receive.
       path = '/receive'
@@ -179,6 +177,8 @@ spec:
         adxmon: collector
     spec:
       tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule

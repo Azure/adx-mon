@@ -1,8 +1,8 @@
 # Quick Start
 
-This guide will walk you through the steps needed to deploy ADX-Mon on an Azure Kubernetes Service (AKS) cluster.  It
-will deploy all components within the cluster and demonstrate how to enable telemetry collection on a pod and 
-query it from Azure Data Explorer.
+This guide will deploy ADX-Mon on an Azure Kubernetes Service (AKS) cluster and send collected telemetry
+to an Azure Data Explorer cluster.  It will deploy all components within the cluster and demonstrate 
+how to enable telemetry collection on a pod and query it from Azure Data Explorer.
 
 ## Pre-Requisites
 
@@ -10,30 +10,20 @@ You will need the following to complete this guide.
 
 * An AKS cluster
 * An Azure Data Explorer cluster
-* An MSI with admin permissions to the ADX cluster
+* A Linux environment with Azure CLI installed
 
-## Setup Azure Data Explorer
+These clusters should be in the same region for this guid.  You should have full admin access to both clusters.
+
+## Deploy ADX-Mon
 
 ```sh
-# TODO: Add instructions for setting up ADX
+$ git clone https://github.com/Azure/adx-mon.git
+$ cd adx-mon
+$ ./build/k8s/install.sh
 ```
 
-## Setup AKS Cluster
-
-```sh
-````
-
-
-## Deploy Collector
-
-```sh
-
-```
-
-## Deploy Ingestor
-```sh
-# TODO: Add instructions for deploying the ingestor
-```
+This script will prompt you for the name or you AKS and ADX cluster and configure them to accept telemetry from ADX-Mon
+components. 
 
 ## Annotate Your Pods
 
@@ -66,11 +56,6 @@ adx-mon/path: "/metrics"
 # TODO: Add instructions for querying data
 ```
 
-### Deploy Alerter
-
-```sh
-# TODO: Add instructions for deploying the alerter
-```
 
 ### Setup Dashboards
 

@@ -91,10 +91,10 @@ spec:
               value: INFO
             - name: "GODEBUG"
               value: "http2client=0"
-#            - name: "AZURE_RESOURCE"
-#              value: "https://<cluster>.<region>.kusto.windows.net"
-#            - name:  "AZURE_CLIENT_ID"
-#              value: "<MSI ID With ADX Access>"
+            - name: "AZURE_RESOURCE"
+              value: "$ADX_URL"
+            - name:  "AZURE_CLIENT_ID"
+              value: "$CLIENT_ID"
           command:
             - /ingestor
           args:
@@ -105,11 +105,12 @@ spec:
             - "--max-connections=1000"
             - "--insecure-skip-verify"
             - "--lift-label=host"
+            - "--lift-label=cluster"
             - "--lift-label=adxmon_namespace=Namespace"
             - "--lift-label=adxmon_pod=Pod"
             - "--lift-label=adxmon_container=Container"
-#            - "--metrics-kusto-endpoints=<DBName>=https://<cluster>.<region>.kusto.windows.net"
-#            - "--logs-kusto-endpoints=<DBName>=https://<cluster>.<region>.kusto.windows.net"
+            - "--metrics-kusto-endpoints=$DATABASE_NAME=$ADX_URL"
+            - "--logs-kusto-endpoints=$DATABASE_NAME=$ADX_URL"
           volumeMounts:
             - name: metrics
               mountPath: /mnt/data
