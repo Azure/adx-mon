@@ -379,7 +379,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 	}
 
 	res := f.TransformWriteRequest(req)
-	require.Equal(t, 3, len(res.Timeseries))
+	require.Equal(t, 2, len(res.Timeseries))
 	require.Equal(t, []byte("__name__"), res.Timeseries[0].Labels[0].Name)
 	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
 	require.Equal(t, []byte("__name__"), res.Timeseries[1].Labels[0].Name)
@@ -608,13 +608,25 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			f: &transform.RequestTransformer{
 				DefaultDropMetrics: true,
 				KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
-				DropMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
 			},
 			args: args{
 				name: []byte("metric"),
 				v:    prompb.TimeSeries{},
 			},
 			want: false,
+		},
+		{
+			name: "Drop Metric When DefaultDropMetrics and Match KeepMetrics",
+			f: &transform.RequestTransformer{
+				DefaultDropMetrics: true,
+				KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
+				DropMetrics:        []*regexp.Regexp{regexp.MustCompile("metric")},
+			},
+			args: args{
+				name: []byte("metric"),
+				v:    prompb.TimeSeries{},
+			},
+			want: true,
 		},
 		{
 			name: "Drop Metric with KeepMetricsWithLabelValue",
