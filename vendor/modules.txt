@@ -249,10 +249,17 @@ github.com/josharian/intern
 github.com/json-iterator/go
 # github.com/klauspost/compress v1.17.9
 ## explicit; go 1.20
+github.com/klauspost/compress
 github.com/klauspost/compress/flate
+github.com/klauspost/compress/fse
 github.com/klauspost/compress/gzip
+github.com/klauspost/compress/huff0
+github.com/klauspost/compress/internal/cpuinfo
 github.com/klauspost/compress/internal/race
+github.com/klauspost/compress/internal/snapref
 github.com/klauspost/compress/s2
+github.com/klauspost/compress/zstd
+github.com/klauspost/compress/zstd/internal/xxhash
 # github.com/klauspost/pgzip v1.2.6
 ## explicit
 github.com/klauspost/pgzip
@@ -307,8 +314,10 @@ github.com/pmezard/go-difflib/difflib
 github.com/pquerna/ffjson/ffjson
 github.com/pquerna/ffjson/fflib/v1
 github.com/pquerna/ffjson/fflib/v1/internal
-# github.com/prometheus/client_golang v1.19.1
+# github.com/prometheus/client_golang v1.20.0
 ## explicit; go 1.20
+github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil
+github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil/header
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
 github.com/prometheus/client_golang/prometheus/promauto
