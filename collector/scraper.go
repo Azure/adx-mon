@@ -47,6 +47,9 @@ type ScraperOpts struct {
 	// ScrapeInterval is the interval at which to scrape metrics from the targets.
 	ScrapeInterval time.Duration
 
+	// ScrapeTimeout is the timeout for scraping metrics from a target.
+	ScrapeTimeout time.Duration
+
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
 
@@ -131,7 +134,9 @@ func (s *Scraper) Open(ctx context.Context) error {
 	s.cancel = cancelFn
 
 	var err error
-	s.scrapeClient, err = NewMetricsClient()
+	s.scrapeClient, err = NewMetricsClient(ClientOpts{
+		ScrapeTimeOut: s.opts.ScrapeTimeout,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create metrics client: %w", err)
 	}
