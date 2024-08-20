@@ -31,14 +31,33 @@ type MetricsClient struct {
 	token string
 }
 
-func NewMetricsClient() (*MetricsClient, error) {
+type ClientOpts struct {
+	DialTimeout         time.Duration
+	TLSHandshakeTimeout time.Duration
+	ScrapeTimeOut       time.Duration
+}
+
+func (c ClientOpts) WithDefaults() ClientOpts {
+	opts := ClientOpts{
+		DialTimeout:         5 * time.Second,
+		TLSHandshakeTimeout: 5 * time.Second,
+		ScrapeTimeOut:       10 * time.Second,
+	}
+	opts.ScrapeTimeOut = c.ScrapeTimeOut
+	opts.DialTimeout = c.DialTimeout
+	opts.TLSHandshakeTimeout = c.TLSHandshakeTimeout
+	return opts
+}
+
+func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
+	opts = opts.WithDefaults()
 	dialer := &net.Dialer{
-		Timeout: 5 * time.Second,
+		Timeout: opts.DialTimeout,
 	}
 
 	transport := &http.Transport{
 		DialContext:         dialer.DialContext,
-		TLSHandshakeTimeout: 5 * time.Second,
+		TLSHandshakeTimeout: opts.TLSHandshakeTimeout,
 	}
 
 	if _, err := os.Stat(caPath); err == nil {
@@ -74,7 +93,7 @@ func NewMetricsClient() (*MetricsClient, error) {
 	}
 
 	httpClient := &http.Client{
-		Timeout:   time.Second * 10,
+		Timeout:   opts.ScrapeTimeOut,
 		Transport: transport,
 	}
 

@@ -103,6 +103,7 @@ type PrometheusScrape struct {
 	Database                 string          `toml:"database" comment:"Database to store metrics in."`
 	StaticScrapeTarget       []*ScrapeTarget `toml:"static-scrape-target" comment:"Defines a static scrape target."`
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
+	ScrapeTimeout            int             `toml:"scrape-timeout" comment:"Scrape timeout in seconds."`
 	DisableMetricsForwarding bool            `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`

@@ -35,7 +35,7 @@ go_gc_duration_seconds_count 8452
 	}))
 	defer svr.Close()
 
-	client, err := collector.NewMetricsClient()
+	client, err := collector.NewMetricsClient(collector.ClientOpts{})
 	require.NoError(t, err)
 	defer client.Close()
 
@@ -75,7 +75,7 @@ go_gc_duration_seconds_count 8452
 	}))
 	defer svr.Close()
 
-	client, err := collector.NewMetricsClient()
+	client, err := collector.NewMetricsClient(collector.ClientOpts{})
 	require.NoError(t, err)
 	defer client.Close()
 
