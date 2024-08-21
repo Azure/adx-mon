@@ -11,7 +11,7 @@ require (
 	github.com/VictoriaMetrics/easyproto v0.1.4
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
-	github.com/davecgh/go-spew v1.1.1
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/golang/protobuf v1.5.4
@@ -36,7 +36,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80
 	google.golang.org/protobuf v1.34.2
 	k8s.io/api v0.30.3
-	k8s.io/apimachinery v0.30.3
+	k8s.io/apimachinery v0.31.0
 	k8s.io/client-go v0.30.3
 	sigs.k8s.io/controller-runtime v0.18.4
 )
@@ -64,7 +64,8 @@ require (
 	github.com/evanphx/json-patch v4.12.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/go-logr/logr v1.4.1 // indirect
+	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
+	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
@@ -85,12 +86,13 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/samber/lo v1.38.1 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
@@ -103,9 +105,9 @@ require (
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/klog/v2 v2.120.1 // indirect
+	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20240430033511-f0e62f92d13f // indirect
-	k8s.io/utils v0.0.0-20240502163921-fe8a2dddb1d0 // indirect
+	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
