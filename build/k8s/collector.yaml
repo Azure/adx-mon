@@ -113,6 +113,9 @@ data:
       # Scrape interval in seconds.
       scrape-interval = 30
 
+      # Scrape timeout in seconds.
+      scrape-timeout = 25
+
       # Disable metrics forwarding to endpoints.
       disable-metrics-forwarding = false
 
@@ -148,14 +151,12 @@ data:
       # Key/value pairs of attributes to add to all logs.
       [otel-log.add-attributes]
         Host = '$(HOSTNAME)'
+        cluster = '$CLUSTER'
 
-#    [[tail-log]]
-#      transforms = [
-#        { name = 'plugin', config = { GoPath = '/pluginpath', ImportName = 'go.goms.io/aks/aks-adx-mon/logtransform' }}
-#      ]
-#
-#      [tail-log.add-attributes]
-#        Host = '$(HOSTNAME)'
+    [[tail-log]]
+      [tail-log.add-attributes]
+        Host = '$(HOSTNAME)'
+        cluster = '$CLUSTER'
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -175,6 +176,11 @@ spec:
     metadata:
       labels:
         adxmon: collector
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "9091"
+        adx-mon/path: "/metrics"
+        adx-mon/log-destination: "ADXMon:Collector"
     spec:
       tolerations:
         - key: CriticalAddonsOnly
@@ -226,11 +232,11 @@ spec:
               readOnly: true
           resources:
             requests:
-              cpu: 10m
+              cpu: 50m
               memory: 100Mi
             limits:
-              cpu: 50m
-              memory: 200Mi
+              cpu: 500m
+              memory: 2000Mi
       volumes:
         - name: ssl-certs
           hostPath:

@@ -128,6 +128,7 @@ export CLIENT_ID=$NODE_POOL_IDENTITY
 export ADX_URL=$ADX_FQDN
 envsubst < $SCRIPT_DIR/collector.yaml | kubectl apply -f -
 envsubst < $SCRIPT_DIR/ingestor.yaml | kubectl apply -f -
+kubectl apply -f $SCRIPT_DIR/ksm.yaml
 
 echo
 echo -e "\e[97mSuccessfully deployed ADX-Mon components to AKS cluster $CLUSTER.\e[0m"
