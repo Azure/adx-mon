@@ -17,9 +17,7 @@ These clusters should be in the same region for this guid.  You should have full
 ## Deploy ADX-Mon
 
 ```sh
-$ git clone https://github.com/Azure/adx-mon.git
-$ cd adx-mon
-$ ./build/k8s/install.sh
+bash <(curl -s  https://raw.githubusercontent.com/Azure/adx-mon/main/build/k8s/bundle.sh)
 ```
 
 This script will prompt you for the name or you AKS and ADX cluster and configure them to accept telemetry from ADX-Mon
