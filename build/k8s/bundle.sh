@@ -3,11 +3,11 @@
 # To extract the files from this archive, save it to some FILE, remove
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
-lock_dir=_sh00161
-# Made on 2024-08-23 21:15 UTC by <root@5c191f2801f6>.
+lock_dir=_sh00221
+# Made on 2024-08-23 22:24 UTC by <root@b4120bcbbccc>.
 # Source directory was '/build'.
 #
-# Existing files will *not* be overwritten, unless '-c' is specified.
+# Existing files WILL be overwritten.
 #
 # This shar contains:
 # length mode       name
@@ -70,12 +70,6 @@ then
   fi
 fi
 IFS="$save_IFS"
-if (echo "testing\c"; echo 1,2,3) | grep c >/dev/null
-then if (echo -n test; echo 1,2,3) | grep n >/dev/null
-     then shar_n= shar_c='
-'
-     else shar_n=-n shar_c= ; fi
-else shar_n= shar_c='\c' ; fi
 f=shar-touch.$$
 st1=200112312359.59
 st2=123123592001.59
@@ -113,12 +107,6 @@ else ${echo} "x - failed to create lock directory ${lock_dir}."
      exit 1
 fi
 # ============= setup.sh ==============
-if test -n "${keep_file}" && test -f 'setup.sh'
-then
-${echo} "x - SKIPPING setup.sh (file already exists)"
-
-else
-${echo} "x - extracting setup.sh (text)"
   sed 's/^X//' << 'SHAR_EOF' | uudecode &&
 begin 600 setup.sh
 M(R$O8FEN+V)A<V@*<V5T("UE=6\@<&EP969A:6P*4T-225!47T1)4CTB)"AD
@@ -253,7 +241,7 @@ M=&5L96UE=')Y(&-A;B!B92!F;W5N9"!T:&4@)$1!5$%"05-%7TY!344@9&%T
 `
 end
 SHAR_EOF
-  (set 20 24 08 23 19 49 29 'setup.sh'
+  (set 20 24 08 23 21 19 42 'setup.sh'
    eval "${shar_touch}") && \
   chmod 0755 'setup.sh'
 if test $? -ne 0
@@ -270,14 +258,7 @@ else
 test `LC_ALL=C wc -c < 'setup.sh'` -ne 5781 && \
   ${echo} "restoration warning:  size of 'setup.sh' is not 5781"
   fi
-fi
 # ============= ingestor.yaml ==============
-if test -n "${keep_file}" && test -f 'ingestor.yaml'
-then
-${echo} "x - SKIPPING ingestor.yaml (file already exists)"
-
-else
-${echo} "x - extracting ingestor.yaml (text)"
   sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
 ---
 apiVersion: v1
@@ -462,14 +443,7 @@ else
 test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4396 && \
   ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4396"
   fi
-fi
 # ============= ksm.yaml ==============
-if test -n "${keep_file}" && test -f 'ksm.yaml'
-then
-${echo} "x - SKIPPING ksm.yaml (file already exists)"
-
-else
-${echo} "x - extracting ksm.yaml (text)"
   sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
 ---
 apiVersion: v1
@@ -800,14 +774,7 @@ else
 test `LC_ALL=C wc -c < 'ksm.yaml'` -ne 5804 && \
   ${echo} "restoration warning:  size of 'ksm.yaml' is not 5804"
   fi
-fi
 # ============= collector.yaml ==============
-if test -n "${keep_file}" && test -f 'collector.yaml'
-then
-${echo} "x - SKIPPING collector.yaml (file already exists)"
-
-else
-${echo} "x - extracting collector.yaml (text)"
   sed 's/^X//' << 'SHAR_EOF' > 'collector.yaml' &&
 ---
 apiVersion: v1
@@ -1089,10 +1056,9 @@ else
 test `LC_ALL=C wc -c < 'collector.yaml'` -ne 6985 && \
   ${echo} "restoration warning:  size of 'collector.yaml' is not 6985"
   fi
-fi
 if rm -fr ${lock_dir}
 then ${echo} "x - removed lock directory ${lock_dir}."
 else ${echo} "x - failed to remove lock directory ${lock_dir}."
      exit 1
 fi
-exit 0
+./setup.sh
