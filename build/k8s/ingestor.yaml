@@ -76,6 +76,7 @@ spec:
         adx-mon/scrape: "true"
         adx-mon/port: "9091"
         adx-mon/path: "/metrics"
+        adx-mon/log-destination: "ADXMon:Ingestor"
     spec:
       serviceAccountName: ingestor
       containers:
@@ -130,6 +131,15 @@ spec:
                     values:
                       - ingestor
               topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: agentpool
+                    operator: In
+                    values:
+                      - aks-system
       volumes:
         - name: ca-certs
           hostPath:
@@ -143,6 +153,8 @@ spec:
           hostPath:
             path: /mnt/ingestor
       tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
         - effect: NoExecute
           key: node.kubernetes.io/not-ready
           operator: Exists
