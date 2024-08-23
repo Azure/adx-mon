@@ -17,7 +17,7 @@ To bundle the quick start guide into a single script, run:
 
 ```bash
 $ docker run -it -v $(pwd)/build/k8s:/build ubuntu bash 
-$ apt update && apt install -y sharutils && cd /build && rm -f ./bundle.sh && shar -M . > /tmp/bundle.sh && cp /tmp/bundle.sh .
+$ apt update && apt install -y sharutils && cd /build && rm -f ./bundle.sh && shar -M -x -Q . > /tmp/bundle.sh && cp /tmp/bundle.sh . && sed -i '/^exit 0/d' bundle.sh && echo "./setup.sh" >> bundle.sh
 ```
 
 This will create a `bundle.sh` script in the `build/k8s` directory that can be run to deploy the quick start guide.
