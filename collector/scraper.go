@@ -191,6 +191,7 @@ func (s *Scraper) scrape(ctx context.Context) {
 func (s *Scraper) scrapeTargets(ctx context.Context) {
 	targets := s.Targets()
 
+	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := &prompb.WriteRequest{}
 	for _, target := range targets {
 		fams, err := s.scrapeClient.FetchMetrics(target.Addr)
@@ -211,7 +212,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 
 				timestamp := m.GetTimestampMs()
 				if timestamp == 0 {
-					timestamp = time.Now().UnixNano() / 1e6
+					timestamp = scrapeTime
 				}
 				sample := prompb.Sample{
 					Timestamp: timestamp,
