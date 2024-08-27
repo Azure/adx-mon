@@ -3,8 +3,8 @@
 # To extract the files from this archive, save it to some FILE, remove
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
-lock_dir=_sh00445
-# Made on 2024-08-27 05:06 UTC by <root@d8985da8c53e>.
+lock_dir=_sh00873
+# Made on 2024-08-27 15:01 UTC by <root@d8985da8c53e>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -13,9 +13,9 @@ lock_dir=_sh00445
 # length mode       name
 # ------ ---------- ------------------------------------------
 #   5941 -rwxr-xr-x setup.sh
-#   4377 -rw-r--r-- ingestor.yaml
+#   4411 -rw-r--r-- ingestor.yaml
 #   5804 -rw-r--r-- ksm.yaml
-#   6999 -rw-r--r-- collector.yaml
+#   7061 -rw-r--r-- collector.yaml
 #
 MD5SUM=${MD5SUM-md5sum}
 f=`${MD5SUM} --version | egrep '^md5sum .*(core|text)utils'`
@@ -245,7 +245,7 @@ M;F0@=&AE("1$051!0D%315].04U%(&1A=&%B87-E(&%T("1!1%A?1E%$3BXB
 `
 end
 SHAR_EOF
-  (set 20 24 08 27 03 55 59 'setup.sh'
+  (set 20 24 08 27 14 55 19 'setup.sh'
    eval "${shar_touch}") && \
   chmod 0755 'setup.sh'
 if test $? -ne 0
@@ -343,6 +343,7 @@ X        adx-mon/scrape: "true"
 X        adx-mon/port: "9091"
 X        adx-mon/path: "/metrics"
 X        adx-mon/log-destination: "Logs:Ingestor"
+X        adx-mon/log-parsers: json
 X    spec:
 X      serviceAccountName: ingestor
 X      containers:
@@ -430,7 +431,7 @@ X          key: node.kubernetes.io/unreachable
 X          operator: Exists
 X          tolerationSeconds: 300
 SHAR_EOF
-  (set 20 24 08 27 03 28 37 'ingestor.yaml'
+  (set 20 24 08 27 14 56 17 'ingestor.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ingestor.yaml'
 if test $? -ne 0
@@ -440,12 +441,12 @@ fi
   then (
        ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-2b29f28487e092c3e1aa9f9d1cecbb7c  ingestor.yaml
+bc7e16695c1fd9f9a81162a55092635e  ingestor.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4377 && \
-  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4377"
+test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4411 && \
+  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4411"
   fi
 # ============= ksm.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
@@ -936,10 +937,14 @@ X        Host = '$(HOSTNAME)'
 X        cluster = '$CLUSTER'
 X
 X    [[tail-log]]
+X
+X      parsers = ['json']
+X
 X      log-type = 'kubernetes'
+X
 X      [tail-log.add-attributes]
 X        Host = '$(HOSTNAME)'
-X        cluster = '$CLUSTER'
+X        Cluster = '$CLUSTER'
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -964,6 +969,7 @@ X        adx-mon/scrape: "true"
 X        adx-mon/port: "9091"
 X        adx-mon/path: "/metrics"
 X        adx-mon/log-destination: "Logs:Collector"
+X        adx-mon/log-parsers: json
 X    spec:
 X      tolerations:
 X        - key: CriticalAddonsOnly
@@ -1044,7 +1050,7 @@ X        - name: varlibdockercontainers
 X          hostPath:
 X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 08 27 03 28 37 'collector.yaml'
+  (set 20 24 08 27 15 00 52 'collector.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'collector.yaml'
 if test $? -ne 0
@@ -1054,12 +1060,12 @@ fi
   then (
        ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'collector.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-a69cea51ec1a92d03b51c3b71c1d1795  collector.yaml
+4c7dbe3adc5cbc125d3a5e7deacbd75b  collector.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'collector.yaml'` -ne 6999 && \
-  ${echo} "restoration warning:  size of 'collector.yaml' is not 6999"
+test `LC_ALL=C wc -c < 'collector.yaml'` -ne 7061 && \
+  ${echo} "restoration warning:  size of 'collector.yaml' is not 7061"
   fi
 if rm -fr ${lock_dir}
 then ${echo} "x - removed lock directory ${lock_dir}."

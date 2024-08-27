@@ -154,10 +154,14 @@ data:
         cluster = '$CLUSTER'
 
     [[tail-log]]
+
+      parsers = ['json']
+
       log-type = 'kubernetes'
+
       [tail-log.add-attributes]
         Host = '$(HOSTNAME)'
-        cluster = '$CLUSTER'
+        Cluster = '$CLUSTER'
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -182,6 +186,7 @@ spec:
         adx-mon/port: "9091"
         adx-mon/path: "/metrics"
         adx-mon/log-destination: "Logs:Collector"
+        adx-mon/log-parsers: json
     spec:
       tolerations:
         - key: CriticalAddonsOnly

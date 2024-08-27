@@ -77,6 +77,7 @@ spec:
         adx-mon/port: "9091"
         adx-mon/path: "/metrics"
         adx-mon/log-destination: "Logs:Ingestor"
+        adx-mon/log-parsers: json
     spec:
       serviceAccountName: ingestor
       containers:
