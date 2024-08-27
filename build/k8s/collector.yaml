@@ -91,7 +91,7 @@ data:
     [prometheus-scrape]
 
       # Database to store metrics in.
-      database = '$DATABASE_NAME'
+      database = 'Metrics'
 
       default-drop-metrics = false
 
@@ -129,7 +129,7 @@ data:
     [[prometheus-remote-write]]
 
       # Database to store metrics in.
-      database = '$DATABASE_NAME'
+      database = 'Metrics'
 
       # The path to listen on for prometheus remote write requests.  Defaults to /receive.
       path = '/receive'
@@ -154,6 +154,7 @@ data:
         cluster = '$CLUSTER'
 
     [[tail-log]]
+      log-type = 'kubernetes'
       [tail-log.add-attributes]
         Host = '$(HOSTNAME)'
         cluster = '$CLUSTER'
@@ -180,7 +181,7 @@ spec:
         adx-mon/scrape: "true"
         adx-mon/port: "9091"
         adx-mon/path: "/metrics"
-        adx-mon/log-destination: "ADXMon:Collector"
+        adx-mon/log-destination: "Logs:Collector"
     spec:
       tolerations:
         - key: CriticalAddonsOnly

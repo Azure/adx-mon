@@ -76,7 +76,7 @@ spec:
         adx-mon/scrape: "true"
         adx-mon/port: "9091"
         adx-mon/path: "/metrics"
-        adx-mon/log-destination: "ADXMon:Ingestor"
+        adx-mon/log-destination: "Logs:Ingestor"
     spec:
       serviceAccountName: ingestor
       containers:
@@ -110,8 +110,8 @@ spec:
             - "--lift-label=adxmon_namespace=Namespace"
             - "--lift-label=adxmon_pod=Pod"
             - "--lift-label=adxmon_container=Container"
-            - "--metrics-kusto-endpoints=$DATABASE_NAME=$ADX_URL"
-            - "--logs-kusto-endpoints=$DATABASE_NAME=$ADX_URL"
+            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
+            - "--logs-kusto-endpoints=Logs=$ADX_URL"
           volumeMounts:
             - name: metrics
               mountPath: /mnt/data
