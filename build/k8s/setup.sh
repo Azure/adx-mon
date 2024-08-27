@@ -101,29 +101,28 @@ if [[ "$CONFIRM" != "y" ]]; then
     exit 1
 fi
 
-DATABASE_NAME=ADXMon
-# Check if the ADXMon database exists
-DATABASE_EXISTS=$(az kusto database show --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --query "name" -o tsv)
-if [[ -z "$DATABASE_EXISTS" ]]; then
-    echo "The ADXMon database does not exist. Creating it now."
-    az kusto database create --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --read-write-database
-else
-    echo "The ADXMon database already exists."
-fi
+for DATABASE_NAME in Metrics Logs; do
+    # Check if the $DATABASE_NAME database exists
+    DATABASE_EXISTS=$(az kusto database show --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --query "name" -o tsv 2>/dev/null || echo "")
+    if [[ -z "$DATABASE_EXISTS" ]]; then
+        echo "The $DATABASE_NAME database does not exist. Creating it now."
+        az kusto database create --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --read-write-database  soft-delete-period=P30D hot-cache-period=P7D location=$REGION
+    else
+        echo "The $DATABASE_NAME database already exists."
+    fi
 
-# Check if the NODE_POOL_IDENTITY is an admin on the DATABASE_NAME database
-ADMIN_CHECK=$(az kusto database list-principal --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --query "[?type=='App' && appId=='$NODE_POOL_IDENTITY' && role=='Admin']" -o tsv)
-if [[ -z "$ADMIN_CHECK" ]]; then
-    echo "The Managed Identity Client ID is not configured to use database $DATABASE_NAME. Adding it as an admin."
-    az kusto database add-principal --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --value role=Admin name=ADXMon type=app app-id=$NODE_POOL_IDENTITY
-else
-    echo "The Managed Identity Client ID is already configured to use database $DATABASE_NAME."
-fi
-
+    # Check if the NODE_POOL_IDENTITY is an admin on the $DATABASE_NAME database
+    ADMIN_CHECK=$(az kusto database list-principal --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --query "[?type=='App' && appId=='$NODE_POOL_IDENTITY' && role=='Admin']" -o tsv)
+    if [[ -z "$ADMIN_CHECK" ]]; then
+        echo "The Managed Identity Client ID is not configured to use database $DATABASE_NAME. Adding it as an admin."
+        az kusto database add-principal --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --value role=Admin name=ADXMon type=app app-id=$NODE_POOL_IDENTITY
+    else
+        echo "The Managed Identity Client ID is already configured to use database $DATABASE_NAME."
+    fi
+done
 
 export CLUSTER=$CLUSTER
 export REGION=$REGION
-export DATABASE_NAME=$DATABASE_NAME
 export CLIENT_ID=$NODE_POOL_IDENTITY
 export ADX_URL=$ADX_FQDN
 envsubst < $SCRIPT_DIR/collector.yaml | kubectl apply -f -
