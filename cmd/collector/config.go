@@ -105,6 +105,7 @@ type PrometheusScrape struct {
 	ScrapeIntervalSeconds    int             `toml:"scrape-interval" comment:"Scrape interval in seconds."`
 	ScrapeTimeout            int             `toml:"scrape-timeout" comment:"Scrape timeout in seconds."`
 	DisableMetricsForwarding bool            `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
+	DisableDiscovery         bool            `toml:"disable-discovery" comment:"Disable discovery of kubernetes pod targets."`
 
 	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
 	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
