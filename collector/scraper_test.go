@@ -7,6 +7,7 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/stretchr/testify/require"
+	v1 "k8s.io/api/core/v1"
 )
 
 func TestScraperOpts_RequestTransformer(t *testing.T) {
@@ -84,6 +85,60 @@ func TestScraper_sendBatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScraper_isScrapeable_PodIpReused(t *testing.T) {
+	s := &Scraper{
+		opts: ScraperOpts{
+			NodeName: "node",
+		},
+	}
+	p := fakePod("foo", "bar", nil, "node")
+	p.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+	}
+
+	p.Status.PodIP = "1.2.3.4"
+	p.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+			},
+		},
+	}
+
+	targets, existing := s.isScrapeable(p)
+	require.False(t, existing)
+
+	s.targets = make(map[string]ScrapeTarget)
+	for _, target := range targets {
+		s.targets[target.path()] = target
+	}
+
+	// Add a new pod with the same IP and port but different pod name
+	p = fakePod("blah", "baz", nil, "node")
+	p.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+	}
+
+	p.Status.PodIP = "1.2.3.4"
+	p.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					ContainerPort: 8080,
+				},
+			},
+		},
+	}
+
+	targets, existing = s.isScrapeable(p)
+	require.False(t, existing)
+
 }
 
 type fakeClient struct {

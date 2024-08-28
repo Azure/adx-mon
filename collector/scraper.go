@@ -115,7 +115,7 @@ type Scraper struct {
 	cancel context.CancelFunc
 
 	mu      sync.RWMutex
-	targets []ScrapeTarget
+	targets map[string]ScrapeTarget
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -125,6 +125,7 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		seriesCreator:      &seriesCreator{},
 		requestTransformer: opts.RequestTransformer(),
 		remoteClient:       opts.RemoteClient,
+		targets:            make(map[string]ScrapeTarget),
 	}
 }
 
@@ -144,7 +145,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 	// Add static targets
 	for _, target := range s.opts.Targets {
 		logger.Infof("Adding static target %s", target)
-		s.targets = append(s.targets, target)
+		s.targets[target.path()] = target
 	}
 
 	s.informerRegistration, err = s.podInformer.Add(ctx, s)
@@ -419,8 +420,13 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 	}
 
 	for _, target := range targets {
-		logger.Infof("Adding target %s %s", target.path(), target)
-		s.targets = append(s.targets, target)
+		_, ok := s.targets[target.path()]
+		if ok {
+			logger.Infof("Updating target %s %s", target.path(), target)
+		} else {
+			logger.Infof("Adding target %s %s", target.path(), target)
+		}
+		s.targets[target.path()] = target
 	}
 }
 
@@ -458,14 +464,14 @@ func (s *Scraper) OnDelete(obj interface{}) {
 		return
 	}
 
-	var remainingTargets []ScrapeTarget
+	remainingTargets := make(map[string]ScrapeTarget)
 	for _, target := range targets {
 		logger.Infof("Removing target %s %s", target.path(), target)
 		for _, v := range s.targets {
 			if v.Addr == target.Addr {
 				continue
 			}
-			remainingTargets = append(remainingTargets, v)
+			remainingTargets[v.path()] = v
 		}
 	}
 	s.targets = remainingTargets
@@ -486,7 +492,7 @@ func (s *Scraper) isScrapeable(p *v1.Pod) ([]ScrapeTarget, bool) {
 	// See if any of the pods targets are already being scraped
 	for _, v := range s.targets {
 		for _, target := range targets {
-			if v.Addr == target.Addr {
+			if v.path() == target.path() && v.Addr == target.Addr {
 				return targets, true
 			}
 		}
@@ -500,10 +506,13 @@ func (s *Scraper) Targets() []ScrapeTarget {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	a := make([]ScrapeTarget, len(s.targets))
-	for i, v := range s.targets {
-		a[i] = v
+	a := make([]ScrapeTarget, 0, len(s.targets))
+	for _, v := range s.targets {
+		a = append(a, v)
 	}
+	sort.Slice(a, func(i, j int) bool {
+		return a[i].path() < a[j].path()
+	})
 	return a
 }
 

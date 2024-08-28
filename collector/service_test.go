@@ -31,6 +31,9 @@ func TestService_Open(t *testing.T) {
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
+
 	require.Equal(t, 0, len(s.scraper.Targets()))
 }
 
@@ -52,6 +55,9 @@ func TestService_Open_Static(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
+
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
 
 	require.Equal(t, 1, len(s.scraper.Targets()))
 }
@@ -76,6 +82,9 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
+
 	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
@@ -98,6 +107,9 @@ func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
+
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
 
 	require.Equal(t, 1, len(s.scraper.Targets()))
 }
@@ -142,16 +154,20 @@ func TestService_Open_Matching(t *testing.T) {
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
+
 	targets := s.scraper.Targets()
 	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
-	require.Equal(t, "namespace", targets[0].Namespace)
-	require.Equal(t, "pod", targets[0].Pod)
+	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[0].Addr)
 	require.Equal(t, "container", targets[0].Container)
+	require.Equal(t, "default", targets[0].Namespace)
 
-	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[1].Addr)
+	require.Equal(t, "http://localhost:8080/metrics", targets[1].Addr)
+	require.Equal(t, "namespace", targets[1].Namespace)
+	require.Equal(t, "pod", targets[1].Pod)
 	require.Equal(t, "container", targets[1].Container)
-	require.Equal(t, "default", targets[1].Namespace)
+
 }
 
 func TestService_Open_HostPort(t *testing.T) {
@@ -193,6 +209,9 @@ func TestService_Open_HostPort(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
+
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
 
 	targets := s.scraper.Targets()
 	require.Equal(t, 1, len(targets))
@@ -237,6 +256,9 @@ func TestService_Open_MatchingPort(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
+
+	// wait for the scraper to pick up the new target
+	time.Sleep(100 * time.Millisecond)
 
 	targets := s.scraper.Targets()
 	require.Equal(t, 2, len(targets))
