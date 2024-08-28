@@ -53,6 +53,9 @@ type ScraperOpts struct {
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
 
+	// DisableDiscovery disables the discovery of scrape targets.
+	DisableDiscovery bool
+
 	PodInformer *k8s.PodInformer
 
 	// Targets is a list of static scrape targets.
@@ -148,9 +151,11 @@ func (s *Scraper) Open(ctx context.Context) error {
 		s.targets[target.path()] = target
 	}
 
-	s.informerRegistration, err = s.podInformer.Add(ctx, s)
-	if err != nil {
-		return fmt.Errorf("failed to add pod informer: %w", err)
+	if !s.opts.DisableDiscovery {
+		s.informerRegistration, err = s.podInformer.Add(ctx, s)
+		if err != nil {
+			return fmt.Errorf("failed to add pod informer: %w", err)
+		}
 	}
 
 	// Discover the initial targets running on the node
@@ -163,7 +168,9 @@ func (s *Scraper) Open(ctx context.Context) error {
 func (s *Scraper) Close() error {
 	s.scrapeClient.Close()
 	s.cancel()
-	s.podInformer.Remove(s.informerRegistration)
+	if !s.opts.DisableDiscovery {
+		s.podInformer.Remove(s.informerRegistration)
+	}
 	s.informerRegistration = nil
 	s.wg.Wait()
 

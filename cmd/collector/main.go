@@ -235,6 +235,7 @@ func realMain(ctx *cli.Context) error {
 			KeepMetricsWithLabelValue: keepMetricLabelValues,
 			DefaultDropMetrics:        defaultDropMetrics,
 			DisableMetricsForwarding:  cfg.PrometheusScrape.DisableMetricsForwarding,
+			DisableDiscovery:          cfg.PrometheusScrape.DisableDiscovery,
 			ScrapeInterval:            time.Duration(cfg.PrometheusScrape.ScrapeIntervalSeconds) * time.Second,
 			ScrapeTimeout:             time.Duration(cfg.PrometheusScrape.ScrapeTimeout) * time.Second,
 			Targets:                   staticTargets,
