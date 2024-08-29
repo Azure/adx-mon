@@ -161,13 +161,6 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 
 }
 
-type serialized struct {
-	Path     string
-	Database string
-	Table    string
-	Logs     int
-}
-
 var (
 	ErrMissingKustoMetadata = errors.New("missing kusto metadata")
 	ErrMalformedLogs        = errors.New("malformed log records")

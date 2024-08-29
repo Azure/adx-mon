@@ -304,6 +304,8 @@ func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name stri
 // After building this, I discovered that there is not wide support yet for implementations creating ExponentialHistograms.
 // There is also a lack of widespread documented examples on how the data looks for these histograms except for trivial cases,
 // making testing difficult for negative buckets, etc.
+//
+//lint:ignore U1000 This is not used, but is kept for future reference.
 func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name string, points []*metricsv1.ExponentialHistogramDataPoint, wr *prompb.WriteRequest) error {
 	for _, point := range points {
 		timestamp := unixNanoToUnixMillis(point.TimeUnixNano)
