@@ -33,7 +33,7 @@ func TestAttributes(t *testing.T) {
 	modified, err := modifyAttributes(&log, add, lift)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values))
+	require.Equal(t, 2, len(modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values))
 	require.Equal(t, "message", modified.ResourceLogs[0].ScopeLogs[0].LogRecords[0].Body.GetKvlistValue().Values[0].Key)
 
 	require.Equal(t, 2, len(modified.ResourceLogs[0].Resource.Attributes))
@@ -112,6 +112,12 @@ var rawlog = []byte(`{
 										"key": "message",
 										"value": {
 										  "stringValue": "something worth logging"
+										}
+									  },
+									  {
+										"key": "utf8message",
+										"value": {
+										  "stringValue": "🔥 parse please"
 										}
 									  },
 									  {
