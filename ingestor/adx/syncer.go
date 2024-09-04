@@ -345,6 +345,16 @@ func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
 		MaximumNumberOfItems:    500,
 		MaximumRawDataSizeMB:    1000,
 	}
+
+	// Optimize logs for throughput instead of latency
+	if s.st == OTLPLogs {
+		p = &ingestionPolicy{
+			MaximumBatchingTimeSpan: "00:05:00",
+			MaximumNumberOfItems:    500,
+			MaximumRawDataSizeMB:    4096,
+		}
+	}
+
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err
