@@ -314,7 +314,7 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 	}
 
 	// CountCardinality needs at least 1 table to exists before it can be created due to the union * statement.
-	if err := s.EnsureTable("AdxmonIngestorMetricsCardinalityCount"); err != nil {
+	if err := s.EnsureTable("AdxmonIngestorTableCardinalityCount"); err != nil {
 		return err
 	}
 
