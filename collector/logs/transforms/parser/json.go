@@ -33,7 +33,7 @@ func (p *JsonParser) Parse(log *types.Log) error {
 		return ErrNotString
 	}
 
-	if msg[0] != '{' {
+	if len(msg) == 0 || msg[0] != '{' {
 		return nil
 	}
 

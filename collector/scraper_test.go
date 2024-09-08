@@ -110,8 +110,7 @@ func TestScraper_isScrapeable_PodIpReused(t *testing.T) {
 		},
 	}
 
-	targets, existing := s.isScrapeable(p)
-	require.False(t, existing)
+	targets := s.isScrapeable(p)
 
 	s.targets = make(map[string]ScrapeTarget)
 	for _, target := range targets {
@@ -136,9 +135,7 @@ func TestScraper_isScrapeable_PodIpReused(t *testing.T) {
 		},
 	}
 
-	targets, existing = s.isScrapeable(p)
-	require.False(t, existing)
-
+	targets = s.isScrapeable(p)
 }
 
 type fakeClient struct {

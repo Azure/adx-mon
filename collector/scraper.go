@@ -17,7 +17,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"golang.org/x/sync/errgroup"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -86,6 +85,7 @@ func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
 }
 
 type ScrapeTarget struct {
+	Static    bool
 	Addr      string
 	Namespace string
 	Pod       string
@@ -102,6 +102,10 @@ func (t ScrapeTarget) path() string {
 
 func (t ScrapeTarget) String() string {
 	return fmt.Sprintf("%s => %s/%s/%s", t.Addr, t.Namespace, t.Pod, t.Container)
+}
+
+func (t ScrapeTarget) Equals(other ScrapeTarget) bool {
+	return t.Addr == other.Addr && t.Namespace == other.Namespace && t.Pod == other.Pod && t.Container == other.Container && t.Static == other.Static
 }
 
 type Scraper struct {
@@ -140,6 +144,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 	var err error
 	s.scrapeClient, err = NewMetricsClient(ClientOpts{
 		ScrapeTimeOut: s.opts.ScrapeTimeout,
+		NodeName:      s.opts.NodeName,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create metrics client: %w", err)
@@ -161,6 +166,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 	// Discover the initial targets running on the node
 	s.wg.Add(1)
 	go s.scrape(ctx)
+	go s.resync(ctx)
 
 	return nil
 }
@@ -411,29 +417,27 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	targets, exists := s.isScrapeable(p)
+	targets := s.isScrapeable(p)
 
 	// Not a scrape-able pod
 	if len(targets) == 0 {
 		return
 	}
 
-	// We're already scraping this pod, nothing to do
-	if exists {
-		return
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	for _, target := range targets {
-		_, ok := s.targets[target.path()]
+		existing, ok := s.targets[string(p.UID)]
 		if ok {
+			if target.Equals(existing) {
+				return
+			}
 			logger.Infof("Updating target %s %s", target.path(), target)
 		} else {
 			logger.Infof("Adding target %s %s", target.path(), target)
 		}
-		s.targets[target.path()] = target
+		s.targets[string(p.UID)] = target
 	}
 }
 
@@ -445,9 +449,9 @@ func (s *Scraper) OnUpdate(oldObj, newObj interface{}) {
 
 	if p.DeletionTimestamp != nil {
 		s.OnDelete(p)
-	} else {
-		s.OnAdd(p, false)
+		return
 	}
+	s.OnAdd(p, false)
 }
 
 func (s *Scraper) OnDelete(obj interface{}) {
@@ -459,54 +463,17 @@ func (s *Scraper) OnDelete(obj interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	targets, exists := s.isScrapeable(p)
-
-	// Not a scrapeable pod
-	if len(targets) == 0 {
+	target, ok := s.targets[string(p.UID)]
+	if !ok {
 		return
 	}
-
-	// We're not currently scraping this pod, nothing to do
-	if !exists {
-		return
-	}
-
-	remainingTargets := make(map[string]ScrapeTarget)
-	for _, target := range targets {
-		logger.Infof("Removing target %s %s", target.path(), target)
-		for _, v := range s.targets {
-			if v.Addr == target.Addr {
-				continue
-			}
-			remainingTargets[v.path()] = v
-		}
-	}
-	s.targets = remainingTargets
+	logger.Infof("Removing target %s %s", target.path(), target)
+	delete(s.targets, string(p.UID))
 }
 
 // isScrapeable returns the scrape target endpoints and true if the pod is currently a target, false otherwise
-func (s *Scraper) isScrapeable(p *v1.Pod) ([]ScrapeTarget, bool) {
-	// If this pod is not schedule to this node, skip it
-	if strings.ToLower(p.Spec.NodeName) != strings.ToLower(s.opts.NodeName) {
-		return nil, false
-	}
-
-	targets := makeTargets(p)
-	if len(targets) == 0 {
-		return nil, false
-	}
-
-	// See if any of the pods targets are already being scraped
-	for _, v := range s.targets {
-		for _, target := range targets {
-			if v.path() == target.path() && v.Addr == target.Addr {
-				return targets, true
-			}
-		}
-	}
-
-	// Not scraping this pod, return all the targets
-	return targets, false
+func (s *Scraper) isScrapeable(p *v1.Pod) []ScrapeTarget {
+	return makeTargets(p)
 }
 
 func (s *Scraper) Targets() []ScrapeTarget {
@@ -521,6 +488,60 @@ func (s *Scraper) Targets() []ScrapeTarget {
 		return a[i].path() < a[j].path()
 	})
 	return a
+}
+
+func (s *Scraper) resync(ctx context.Context) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			pods, err := s.scrapeClient.Pods()
+			if err != nil {
+				logger.Errorf("Failed to list pods: %s", err.Error())
+				continue
+			}
+
+			podsOnNode := make(map[string]struct{})
+			s.mu.Lock()
+			for _, p := range pods.Items {
+				podsOnNode[string(p.UID)] = struct{}{}
+
+				targets := s.isScrapeable(&p)
+				if len(targets) == 0 {
+					continue
+				}
+
+				for _, target := range targets {
+					existing, ok := s.targets[string(p.UID)]
+					if ok {
+						if target.Equals(existing) {
+							continue
+						}
+						logger.Infof("Updating target %s %s", target.path(), target)
+					} else {
+						logger.Infof("Adding target %s %s", target.path(), target)
+					}
+					s.targets[string(p.UID)] = target
+				}
+			}
+
+			for k, target := range s.targets {
+				if target.Static {
+					continue
+				}
+				if _, ok := podsOnNode[k]; !ok {
+					logger.Infof("Removing target %s", k)
+					delete(s.targets, k)
+				}
+			}
+
+			s.mu.Unlock()
+		}
+	}
 }
 
 func makeTargets(p *v1.Pod) []ScrapeTarget {
