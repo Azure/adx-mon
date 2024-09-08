@@ -158,6 +158,7 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			staticTargets = append(staticTargets, collector.ScrapeTarget{
+				Static:    true,
 				Addr:      target.URL,
 				Namespace: target.Namespace,
 				Pod:       target.Pod,

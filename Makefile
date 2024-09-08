@@ -22,13 +22,13 @@ image: image-ingestor image-alerter image-collector
 .PHONY: image
 
 image-ingestor:
-	docker build -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
+	docker build --no-cache -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
 
 image-alerter:
-	docker build -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
+	docker build --no-cache -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
 
 image-collector:
-	docker build -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
+	docker build --no-cache -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
 
 push:
 	docker push ghcr.io/azure/adx-mon/alerter:latest

@@ -1,9 +1,11 @@
 package collector
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	prom_model "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -27,14 +30,16 @@ type MetricsClient struct {
 
 	closing chan struct{}
 
-	mu    sync.RWMutex
-	token string
+	mu       sync.RWMutex
+	token    string
+	NodeName string
 }
 
 type ClientOpts struct {
 	DialTimeout         time.Duration
 	TLSHandshakeTimeout time.Duration
 	ScrapeTimeOut       time.Duration
+	NodeName            string
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -46,6 +51,7 @@ func (c ClientOpts) WithDefaults() ClientOpts {
 	opts.ScrapeTimeOut = c.ScrapeTimeOut
 	opts.DialTimeout = c.DialTimeout
 	opts.TLSHandshakeTimeout = c.TLSHandshakeTimeout
+	opts.NodeName = c.NodeName
 	return opts
 }
 
@@ -98,6 +104,7 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 	}
 
 	c := &MetricsClient{
+		NodeName:  opts.NodeName,
 		transport: transport,
 		client:    httpClient,
 		token:     token,
@@ -152,6 +159,42 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 		return nil, fmt.Errorf("decode metrics for %s: %w", target, err)
 	}
 	return fams, err
+}
+
+// Pods returns a list of pods running on the node. This uses the kubelet API instead of the kubernetes API server.
+func (c *MetricsClient) Pods() (corev1.PodList, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s:10250/pods", c.NodeName), nil)
+	if err != nil {
+		return corev1.PodList{}, err
+	}
+
+	c.mu.RLock()
+	token := c.token
+	c.mu.RUnlock()
+
+	if token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return corev1.PodList{}, err
+	}
+	defer resp.Body.Close()
+
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(resp.Body)
+	if err != nil {
+		return corev1.PodList{}, err
+	}
+
+	var pl corev1.PodList
+	err = json.Unmarshal(buf.Bytes(), &pl)
+	if err != nil {
+		return corev1.PodList{}, err
+	}
+
+	return pl, nil
 }
 
 func (c *MetricsClient) Close() error {
