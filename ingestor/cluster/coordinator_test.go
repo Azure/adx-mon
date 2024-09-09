@@ -118,6 +118,9 @@ func TestCoordinator_LostPeer(t *testing.T) {
 					Name: "ingestor",
 				},
 			},
+			Labels: map[string]string{
+				"app": "ingestor",
+			},
 		},
 		Status: v1.PodStatus{
 			PodIP: "10.200.0.1",
@@ -147,6 +150,9 @@ func TestCoordinator_LostPeer(t *testing.T) {
 					Kind: "StatefulSet",
 					Name: "ingestor",
 				},
+			},
+			Labels: map[string]string{
+				"app": "ingestor",
 			},
 		},
 		Status: v1.PodStatus{

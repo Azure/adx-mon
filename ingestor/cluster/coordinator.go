@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -158,7 +159,12 @@ func (c *coordinator) Open(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	factory := informers.NewSharedInformerFactory(c.kcli, time.Minute)
+	tweakOptions := informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
+		lo.LabelSelector = "app=ingestor"
+	})
+
+	factory := informers.NewSharedInformerFactoryWithOptions(c.kcli, time.Minute,
+		tweakOptions, informers.WithNamespace(c.namespace))
 	podsInformer := factory.Core().V1().Pods().Informer()
 
 	factory.Start(ctx.Done()) // Start processing these informers.
