@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const (
+	ReasonLargeUploadQueue     = "LargeUploadQueue"
+	ReasonLargeTransferQueue   = "LargeTransferQueue"
+	ReasonMaxSegmentsExceeded  = "MaxSegmentsExceeded"
+	ReasonMaxDiskUsageExceeded = "MaxDiskUsageExceeded"
+)
+
 // Health tracks the health of peers in the cluster.  If a peer is overloaded, it will be marked as unhealthy
 // which will cause the service to stop sending writes to that peer for timeout period.  Similarly, the
 // of the current peer is tracked here and if it is unhealthy, the service will stop accepting writes.
@@ -66,16 +73,33 @@ func (h *Health) Close() error {
 }
 
 func (h *Health) IsHealthy() bool {
+	return h.UnhealthyReason() == ""
+}
+
+func (h *Health) UnhealthyReason() string {
 	uploadQueue := h.QueueSizer.UploadQueueSize()
 	transferQueue := h.QueueSizer.TransferQueueSize()
 
 	segmentsTotal := h.QueueSizer.SegmentsTotal()
 	segmentsSize := h.QueueSizer.SegmentsSize()
 
-	return uploadQueue < 5000 &&
-		transferQueue < 5000 &&
-		segmentsTotal < h.opts.MaxSegmentCount &&
-		segmentsSize < h.opts.MaxDiskUsage
+	if uploadQueue >= 5000 {
+		return ReasonLargeUploadQueue
+	}
+
+	if transferQueue >= 5000 {
+		return ReasonLargeTransferQueue
+	}
+
+	if segmentsTotal >= h.opts.MaxSegmentCount {
+		return ReasonMaxSegmentsExceeded
+	}
+
+	if segmentsSize >= h.opts.MaxDiskUsage {
+		return ReasonMaxDiskUsageExceeded
+	}
+
+	return ""
 }
 
 func (h *Health) IsPeerHealthy(peer string) bool {
