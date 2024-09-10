@@ -506,6 +506,7 @@ func (f fakeHealthChecker) UploadQueueSize() int           { return 0 }
 func (f fakeHealthChecker) SegmentsTotal() int64           { return 0 }
 func (f fakeHealthChecker) SegmentsSize() int64            { return 0 }
 func (f fakeHealthChecker) IsHealthy() bool                { return true }
+func (f fakeHealthChecker) UnhealthyReason() string        { return "" }
 
 // remotePartitioner is a Partitioner that always returns the same owner that forces a remove transfer.
 type remotePartitioner struct {
