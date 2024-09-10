@@ -327,8 +327,12 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 		}`},
 	}
 
-	// CountCardinality needs at least 1 table to exists before it can be created due to the union * statement.
-	if err := s.EnsureTable("AdxmonIngestorTableCardinalityCount"); err != nil {
+	// This table is used to store the cardinality of all series in the database.  It's updated by the CountCardinality function
+	// but we can't create the function unless a table exists.
+	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+		".create table AdxmonIngestorTableCardinalityCount (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real)")
+	_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	if err != nil {
 		return err
 	}
 
