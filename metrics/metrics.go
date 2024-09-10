@@ -30,6 +30,20 @@ var (
 		Help:      "Counter of samples stored for an ingestor instance",
 	}, []string{"metric"})
 
+	IngestorActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "active_connections",
+		Help:      "Gauge indicating the number of active connections for an ingestor instance",
+	})
+
+	IngestorDroppedConnectionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "dropped_connections_total",
+		Help:      "Counter of dropped connections for an ingestor instance",
+	})
+
 	IngestorQueueSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",

@@ -30,7 +30,6 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
-	"golang.org/x/net/netutil"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -347,7 +346,7 @@ func realMain(ctx *cli.Context) error {
 	}
 	if maxConns > 0 {
 		logger.Infof("Limiting connections to %d", maxConns)
-		l = netutil.LimitListener(l, maxConns)
+		l = ingestor.LimitListener(l, maxConns)
 	}
 	defer l.Close()
 

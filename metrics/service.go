@@ -111,9 +111,19 @@ func (s *service) collect(ctx context.Context) {
 				continue
 			}
 
-			currentTotal := 0.0
+			var currentTotal, activeConns, droppedConns float64
 			for _, v := range mets {
 				switch *v.Type {
+				case io_prometheus_client.MetricType_GAUGE:
+					for _, vv := range v.Metric {
+						if !strings.HasPrefix(v.GetName(), Namespace) {
+							continue
+						}
+
+						if strings.Contains(v.GetName(), "ingestor_active_connections") {
+							activeConns += vv.Gauge.GetValue()
+						}
+					}
 				case io_prometheus_client.MetricType_COUNTER:
 					for _, vv := range v.Metric {
 						if !strings.HasPrefix(v.GetName(), Namespace) {
@@ -122,19 +132,24 @@ func (s *service) collect(ctx context.Context) {
 
 						if strings.Contains(v.GetName(), "samples_stored_total") {
 							currentTotal += vv.Counter.GetValue()
+						} else if strings.Contains(v.GetName(), "ingestor_dropped_connections_total") {
+							droppedConns += vv.Counter.GetValue()
 						}
 					}
 				}
 			}
 
 			logger.Infof("Ingestion rate %0.2f samples/sec, samples ingested=%d, health=%v, "+
-				"upload queue size=%d, transfer queue size=%d, segments total=%d, segments size=%d",
+				"upload queue size=%d, transfer queue size=%d, segments total=%d, segments size=%d "+
+				"active connections=%d dropped connections=%d",
 				(currentTotal-lastCount)/60, uint64(currentTotal),
 				s.health.IsHealthy(),
 				s.health.UploadQueueSize(),
 				s.health.TransferQueueSize(),
 				s.health.SegmentsTotal(),
-				s.health.SegmentsSize())
+				s.health.SegmentsSize(),
+				int(activeConns),
+				int(droppedConns))
 
 			lastCount = currentTotal
 
