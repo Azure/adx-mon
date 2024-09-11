@@ -47,15 +47,21 @@ type Batch struct {
 	Table    string
 	Prefix   string
 
-	batcher *batcher
+	batcher  Batcher
+	released bool
+	removed  bool
 }
 
+// Release releases the segments in the batch so they can be processed again.
 func (b *Batch) Release() {
-	b.batcher.release(b)
+	b.batcher.Release(b)
+	b.released = true
 }
 
+// Remove removes the segments in the batch from disk.
 func (b *Batch) Remove() error {
-	return b.batcher.remove(b)
+	b.removed = true
+	return b.batcher.Remove(b)
 }
 
 func (b *Batch) Paths() []string {
@@ -66,6 +72,14 @@ func (b *Batch) Paths() []string {
 	return paths
 }
 
+func (b *Batch) IsReleased() bool {
+	return b.released
+}
+
+func (b *Batch) IsRemoved() bool {
+	return b.removed
+}
+
 type Batcher interface {
 	service.Component
 	BatchSegments() error
@@ -73,6 +87,9 @@ type Batcher interface {
 	TransferQueueSize() int
 	SegmentsTotal() int64
 	SegmentsSize() int64
+
+	Release(batch *Batch)
+	Remove(batch *Batch) error
 }
 
 // Batcher manages WAL segments that are ready for upload to kusto or that need
@@ -381,7 +398,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	return owned, notOwned, nil
 }
 
-func (b *batcher) release(batch *Batch) {
+func (b *batcher) Release(batch *Batch) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -391,7 +408,7 @@ func (b *batcher) release(batch *Batch) {
 	}
 }
 
-func (b *batcher) remove(batch *Batch) error {
+func (b *batcher) Remove(batch *Batch) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 

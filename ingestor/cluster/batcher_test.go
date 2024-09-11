@@ -407,10 +407,11 @@ func requireValidBatch(t *testing.T, batch []*Batch) {
 
 type fakePartitioner struct {
 	owner string
+	addr  string
 }
 
 func (f *fakePartitioner) Owner(b []byte) (string, string) {
-	return f.owner, ""
+	return f.owner, f.addr
 }
 
 type fakeSegmenter struct {

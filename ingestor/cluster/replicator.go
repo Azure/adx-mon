@@ -141,21 +141,40 @@ func (r *replicator) transfer(ctx context.Context) {
 				}
 
 				start := time.Now()
-				err = r.cli.Write(ctx, addr, filename, mr)
-				if err != nil && !errors.Is(err, ErrSegmentExists) {
-					r.Health.SetPeerUnhealthy(owner)
-					return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
-				} else {
-					for _, seg := range segments {
-						if logger.IsDebug() {
-							logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
-						}
-
+				if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
+					if errors.Is(err, ErrBadRequest{}) {
+						// If ingestor returns a bad request, we should drop the segments as it means we're sending something
+						// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
+						// and log the error.
+						logger.Errorf("Failed to transfer segment %s to %s: %s.  Dropping segments.", filename, addr, err)
 						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove segment %s: %s", seg.Path, err)
+							logger.Errorf("Failed to remove segment: %s", err)
 						}
+						return nil
+					} else if errors.Is(err, ErrSegmentExists) {
+						// Segment already exists, remove our side so we don't keep retrying.
+						if err := batch.Remove(); err != nil {
+							logger.Errorf("Failed to remove segment: %s", err)
+						}
+						return nil
+					} else if errors.Is(err, ErrPeerOverloaded) {
+						// Ingestor is overloaded, mark the peer as unhealthy and retry later.
+						r.Health.SetPeerUnhealthy(owner)
+						return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
+					}
+					// Unknown error, assume it's transient and retry.
+					return err
+				}
+
+				for _, seg := range segments {
+					if logger.IsDebug() {
+						logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
 					}
 				}
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to batch segment: %s", err)
+				}
+
 				return nil
 			}(); err != nil {
 				logger.Errorf("Failed to transfer batch: %v", err)
