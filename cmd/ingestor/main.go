@@ -405,11 +405,6 @@ func realMain(ctx *cli.Context) error {
 
 		logger.Infof("Received signal %s, uploading pending segments...", sig.String())
 
-		// Upload pending segments
-		if err := svc.UploadSegments(); err != nil {
-			logger.Errorf("Failed to upload segments: %s", err)
-		}
-
 		// Trigger shutdown of any pending background processes
 		cancel()
 
