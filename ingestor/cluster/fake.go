@@ -53,3 +53,22 @@ func (f *FakeReplicator) replicate(ctx context.Context) {
 func (f *FakeReplicator) TransferQueue() chan *Batch {
 	return f.queue
 }
+
+type fakeSegmentRemover struct {
+}
+
+func (f fakeSegmentRemover) Remove(path string) error {
+	return nil
+}
+
+type fakeBatcher struct{}
+
+func (f fakeBatcher) Open(ctx context.Context) error { return nil }
+func (f fakeBatcher) Close() error                   { return nil }
+func (f fakeBatcher) BatchSegments() error           { return nil }
+func (f fakeBatcher) UploadQueueSize() int           { return 0 }
+func (f fakeBatcher) TransferQueueSize() int         { return 0 }
+func (f fakeBatcher) SegmentsTotal() int64           { return 0 }
+func (f fakeBatcher) SegmentsSize() int64            { return 0 }
+func (f fakeBatcher) Release(batch *Batch)           {}
+func (f fakeBatcher) Remove(batch *Batch) error      { return nil }

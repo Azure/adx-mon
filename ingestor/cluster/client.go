@@ -15,6 +15,17 @@ var (
 	ErrSegmentExists  = fmt.Errorf("segment already exists")
 )
 
+type ErrBadRequest struct {
+	Msg string
+}
+
+func (e ErrBadRequest) Error() string {
+	return fmt.Sprintf("bad request: %s", e.Msg)
+}
+func (e ErrBadRequest) Is(target error) bool {
+	return target == ErrBadRequest{}
+}
+
 type Client struct {
 	httpClient *http.Client
 }
@@ -80,6 +91,10 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 		if resp.StatusCode == http.StatusConflict {
 			return ErrSegmentExists
+		}
+
+		if resp.StatusCode == http.StatusBadRequest {
+			return &ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", string(body))}
 		}
 
 		return fmt.Errorf("write failed: %s", string(body))
