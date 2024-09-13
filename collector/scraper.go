@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -208,144 +207,63 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := &prompb.WriteRequest{}
 	for _, target := range targets {
-		fams, err := s.scrapeClient.FetchMetrics(target.Addr)
+		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
-			logger.Errorf("Failed to scrape metrics for %s: %s", target, err.Error())
+			logger.Errorf("Failed to scrape %s: %s", target.Addr, err.Error())
 			continue
 		}
-
-		for name, val := range fams {
-			for _, m := range val.Metric {
-				ts := s.seriesCreator.newSeries(name, target, m)
-
-				// Drop metrics that are in the drop list
-				if s.requestTransformer.ShouldDropMetric(ts, []byte(name)) {
-					metrics.MetricsDroppedTotal.WithLabelValues(name).Add(float64(len(val.Metric)))
-					continue
-				}
-
-				timestamp := m.GetTimestampMs()
-				if timestamp == 0 {
-					timestamp = scrapeTime
-				}
-				sample := prompb.Sample{
-					Timestamp: timestamp,
-				}
-
-				if m.GetCounter() != nil {
-					sample.Value = m.GetCounter().GetValue()
-				} else if m.GetGauge() != nil {
-					sample.Value = m.GetGauge().GetValue()
-				} else if m.GetUntyped() != nil {
-					sample.Value = m.GetUntyped().GetValue()
-				} else if m.GetSummary() != nil {
-					sum := m.GetSummary()
-
-					// Add the quantile series
-					for _, q := range sum.GetQuantile() {
-						ts = s.seriesCreator.newSeries(name, target, m)
-						ts.Labels = append(ts.Labels, prompb.Label{
-							Name:  []byte("quantile"),
-							Value: []byte(fmt.Sprintf("%f", q.GetQuantile())),
-						})
-						ts.Samples = []prompb.Sample{
-							{
-								Timestamp: timestamp,
-								Value:     q.GetValue(),
-							},
-						}
-
-						ts = s.requestTransformer.TransformTimeSeries(ts)
-						wr.Timeseries = append(wr.Timeseries, ts)
-						wr = s.flushBatchIfNecessary(ctx, wr)
-					}
-
-					// Add sum series
-					ts := s.seriesCreator.newSeries(fmt.Sprintf("%s_sum", name), target, m)
-					ts.Samples = []prompb.Sample{
-						{
-							Timestamp: timestamp,
-							Value:     sum.GetSampleSum(),
-						},
-					}
-
-					ts = s.requestTransformer.TransformTimeSeries(ts)
-					wr.Timeseries = append(wr.Timeseries, ts)
-					wr = s.flushBatchIfNecessary(ctx, wr)
-
-					// Add sum series
-					ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_count", name), target, m)
-					ts.Samples = []prompb.Sample{
-						{
-							Timestamp: timestamp,
-							Value:     float64(sum.GetSampleCount()),
-						},
-					}
-
-					ts = s.requestTransformer.TransformTimeSeries(ts)
-					wr.Timeseries = append(wr.Timeseries, ts)
-					wr = s.flushBatchIfNecessary(ctx, wr)
-				} else if m.GetHistogram() != nil {
-					hist := m.GetHistogram()
-
-					// Add the quantile series
-					for _, q := range hist.GetBucket() {
-						ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_bucket", name), target, m)
-						ts.Labels = append(ts.Labels, prompb.Label{
-							Name:  []byte("le"),
-							Value: []byte(fmt.Sprintf("%f", q.GetUpperBound())),
-						})
-
-						ts.Samples = []prompb.Sample{
-							{
-								Timestamp: timestamp,
-								Value:     float64(q.GetCumulativeCount()),
-							},
-						}
-						ts = s.requestTransformer.TransformTimeSeries(ts)
-						wr.Timeseries = append(wr.Timeseries, ts)
-
-						wr = s.flushBatchIfNecessary(ctx, wr)
-					}
-
-					// Add sum series
-					ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_sum", name), target, m)
-					ts.Samples = []prompb.Sample{
-						{
-							Timestamp: timestamp,
-							Value:     hist.GetSampleSum(),
-						},
-					}
-
-					ts = s.requestTransformer.TransformTimeSeries(ts)
-					wr.Timeseries = append(wr.Timeseries, ts)
-					wr = s.flushBatchIfNecessary(ctx, wr)
-
-					// Add sum series
-					ts = s.seriesCreator.newSeries(fmt.Sprintf("%s_count", name), target, m)
-					ts.Samples = []prompb.Sample{
-						{
-							Timestamp: timestamp,
-							Value:     float64(hist.GetSampleCount()),
-						},
-					}
-					ts = s.requestTransformer.TransformTimeSeries(ts)
-					wr.Timeseries = append(wr.Timeseries, ts)
-
-					wr = s.flushBatchIfNecessary(ctx, wr)
-				}
-
-				ts.Samples = append(ts.Samples, sample)
-
-				ts = s.requestTransformer.TransformTimeSeries(ts)
-				wr.Timeseries = append(wr.Timeseries, ts)
-
-				wr = s.flushBatchIfNecessary(ctx, wr)
+		for iter.Next() {
+			ts, err := iter.TimeSeries()
+			if err != nil {
+				logger.Errorf("Failed to get value: %s", err.Error())
+				continue
 			}
+
+			name := prompb.MetricName(ts)
+			if s.requestTransformer.ShouldDropMetric(ts, name) {
+				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
+				continue
+			}
+			for i, s := range ts.Samples {
+				if s.Timestamp == 0 {
+					s.Timestamp = scrapeTime
+				}
+				ts.Samples[i] = s
+			}
+
+			if target.Namespace != "" {
+				ts.Labels = append(ts.Labels, prompb.Label{
+					Name:  []byte("adxmon_namespace"),
+					Value: []byte(target.Namespace),
+				})
+			}
+
+			if target.Pod != "" {
+				ts.Labels = append(ts.Labels, prompb.Label{
+					Name:  []byte("adxmon_pod"),
+					Value: []byte(target.Pod),
+				})
+			}
+
+			if target.Container != "" {
+				ts.Labels = append(ts.Labels, prompb.Label{
+					Name:  []byte("adxmon_container"),
+					Value: []byte(target.Container),
+				})
+			}
+			prompb.Sort(ts.Labels)
+
+			ts = s.requestTransformer.TransformTimeSeries(ts)
+			wr.Timeseries = append(wr.Timeseries, ts)
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
+		if err := iter.Close(); err != nil {
+			logger.Errorf("Failed to close iterator: %s", err.Error())
+		}
+
 		wr = s.flushBatchIfNecessary(ctx, wr)
 	}
+
 	if err := s.sendBatch(ctx, wr); err != nil {
 		logger.Errorf(err.Error())
 	}
@@ -371,10 +289,6 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 	if len(wr.Timeseries) == 0 {
 		return nil
 	}
-
-	sort.Slice(wr.Timeseries, func(i, j int) bool {
-		return bytes.Compare(wr.Timeseries[i].Labels[0].Value, wr.Timeseries[j].Labels[0].Value) < 0
-	})
 
 	if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
 		var sb strings.Builder

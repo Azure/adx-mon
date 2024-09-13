@@ -7,7 +7,9 @@ import (
 	"github.com/VictoriaMetrics/easyproto"
 )
 
-var mp = &easyproto.MarshalerPool{}
+var (
+	mp = &easyproto.MarshalerPool{}
+)
 
 // WriteRequest represents Prometheus remote write API request
 type WriteRequest struct {

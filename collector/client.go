@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
 	prom_model "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	corev1 "k8s.io/api/core/v1"
@@ -159,6 +160,40 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 		return nil, fmt.Errorf("decode metrics for %s: %w", target, err)
 	}
 	return fams, err
+}
+
+func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, error) {
+	req, err := http.NewRequest("GET", target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request for %s: %w", target, err)
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	c.mu.RLock()
+	token := c.token
+	c.mu.RUnlock()
+
+	if token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("collect node metrics for %s: %s", target, resp.Status)
+	}
+
+	br := resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		br, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
+		}
+	}
+	return prompb.NewIterator(br), nil
 }
 
 // Pods returns a list of pods running on the node. This uses the kubelet API instead of the kubernetes API server.
