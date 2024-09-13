@@ -391,8 +391,9 @@ func (s *Service) Open(ctx context.Context) error {
 		return err
 	}
 	opts := &http.ServerOpts{
-		MaxConns: s.opts.MaxConnections,
-		Listener: listener,
+		MaxConns:     s.opts.MaxConnections,
+		WriteTimeout: 30 * time.Second,
+		Listener:     listener,
 	}
 
 	primaryHttp := http.NewServer(opts)
