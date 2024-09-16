@@ -26,7 +26,7 @@ import (
 func TestSeriesKey(t *testing.T) {
 	tests := []struct {
 		Database []byte
-		Labels   []prompb.Label
+		Labels   []*prompb.Label
 		Expect   []byte
 	}{
 		{
@@ -68,21 +68,21 @@ func TestStore_Open(t *testing.T) {
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
 	key1, err := storage.SegmentKey(b[:0], ts.Labels)
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
 	key2, err := storage.SegmentKey(b[:0], ts.Labels)
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	path := w.Path()
 
@@ -126,7 +126,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	path := w.Path()
 
@@ -364,7 +364,7 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 	defer s.Close()
 	require.Equal(b, 0, s.WALCount())
 
-	batch := make([]prompb.TimeSeries, 2500)
+	batch := make([]*prompb.TimeSeries, 2500)
 	for i := 0; i < 2500; i++ {
 		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), nil, 0, 0)
 	}
@@ -373,24 +373,24 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 	}
 }
 
-func newTimeSeries(name string, labels map[string]string, ts int64, val float64) prompb.TimeSeries {
-	l := []prompb.Label{
+func newTimeSeries(name string, labels map[string]string, ts int64, val float64) *prompb.TimeSeries {
+	l := []*prompb.Label{
 		{
 			Name:  []byte("__name__"),
 			Value: []byte(name),
 		},
 	}
 	for k, v := range labels {
-		l = append(l, prompb.Label{Name: []byte(k), Value: []byte(v)})
+		l = append(l, &prompb.Label{Name: []byte(k), Value: []byte(v)})
 	}
 	sort.Slice(l, func(i, j int) bool {
 		return bytes.Compare(l[i].Name, l[j].Name) < 0
 	})
 
-	return prompb.TimeSeries{
+	return &prompb.TimeSeries{
 		Labels: l,
 
-		Samples: []prompb.Sample{
+		Samples: []*prompb.Sample{
 			{
 				Timestamp: ts,
 				Value:     val,

@@ -14,17 +14,17 @@ import (
 )
 
 type fakeRequestWriter struct {
-	fn func(ctx context.Context, wr prompb.WriteRequest) error
+	fn func(ctx context.Context, wr *prompb.WriteRequest) error
 }
 
-func (f *fakeRequestWriter) Write(ctx context.Context, wr prompb.WriteRequest) error {
+func (f *fakeRequestWriter) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	return f.fn(ctx, wr)
 }
 
 func TestHandler_HandleReceive(t *testing.T) {
 	var called bool
 	writer := &fakeRequestWriter{
-		fn: func(ctx context.Context, wr prompb.WriteRequest) error {
+		fn: func(ctx context.Context, wr *prompb.WriteRequest) error {
 			require.Equal(t, 1, len(wr.Timeseries))
 			called = true
 			return nil
@@ -38,16 +38,16 @@ func TestHandler_HandleReceive(t *testing.T) {
 		Database:           "adxmetrics",
 	})
 
-	wr := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	wr := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("foo"),
 						Value: []byte("bar"),
 					},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{
 						Value:     1,
 						Timestamp: 1,
@@ -76,7 +76,7 @@ func TestHandler_HandleReceive(t *testing.T) {
 func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 	var called bool
 	writer := &fakeRequestWriter{
-		fn: func(ctx context.Context, wr prompb.WriteRequest) error {
+		fn: func(ctx context.Context, wr *prompb.WriteRequest) error {
 			require.Equal(t, 1, len(wr.Timeseries))
 			called = true
 			return nil
@@ -93,15 +93,15 @@ func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 	})
 
 	wr := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("foo"),
 						Value: []byte("bar"),
 					},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{
 						Value:     1,
 						Timestamp: 1,
@@ -130,7 +130,7 @@ func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 func TestHandler_HandleReceive_AllowedDBs(t *testing.T) {
 	var called bool
 	writer := &fakeRequestWriter{
-		fn: func(ctx context.Context, wr prompb.WriteRequest) error {
+		fn: func(ctx context.Context, wr *prompb.WriteRequest) error {
 			require.Equal(t, 0, len(wr.Timeseries))
 			called = true
 			return nil
@@ -147,15 +147,15 @@ func TestHandler_HandleReceive_AllowedDBs(t *testing.T) {
 	})
 
 	wr := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("foo"),
 						Value: []byte("bar"),
 					},
 				},
-				Samples: []prompb.Sample{
+				Samples: []*prompb.Sample{
 					{
 						Value:     1,
 						Timestamp: 1,

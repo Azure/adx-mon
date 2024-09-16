@@ -25,7 +25,7 @@ type SeriesCounter interface {
 
 type RequestWriter interface {
 	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr prompb.WriteRequest) error
+	Write(ctx context.Context, wr *prompb.WriteRequest) error
 }
 
 type HealthChecker interface {
@@ -37,7 +37,7 @@ type HandlerOpts struct {
 	Path string
 
 	RequestTransformer interface {
-		TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest
+		TransformWriteRequest(req *prompb.WriteRequest) *prompb.WriteRequest
 	}
 
 	// RequestWriter is the interface that writes the time series to a destination.
@@ -61,7 +61,7 @@ type Handler struct {
 	DropMetrics []*regexp.Regexp
 
 	requestTransformer interface {
-		TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest
+		TransformWriteRequest(req *prompb.WriteRequest) *prompb.WriteRequest
 	}
 
 	requestWriter RequestWriter
@@ -134,7 +134,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Note: this cause allocations, but holding onto them in a pool causes a lot of memory to be used over time.
-	var req prompb.WriteRequest
+	req := &prompb.WriteRequest{}
 	if err := req.Unmarshal(reqBuf); err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)

@@ -136,278 +136,278 @@ func TestIterator_TimeSeries_Malformed(t *testing.T) {
 func TestIterator_TimeSeries(t *testing.T) {
 	for _, c := range []struct {
 		input string
-		want  TimeSeries
+		want  *TimeSeries
 	}{
 		{
 			input: `http_requests_total{method="post",code="200"} 1027 1395066363000`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_requests_total")},
 					{Name: []byte("method"), Value: []byte("post")},
 					{Name: []byte("code"), Value: []byte("200")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 1027, Timestamp: 1395066363000},
 				},
 			},
 		},
 		{
 			input: `http_requests_total{method="post",code="400"} 3 1395066363000`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_requests_total")},
 					{Name: []byte("method"), Value: []byte("post")},
 					{Name: []byte("code"), Value: []byte("400")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 3, Timestamp: 1395066363000},
 				},
 			},
 		},
 		{
 			input: `msdos_file_access_time_seconds{path="C:\\DIR\\FILE.TXT",error="Cannot find file:\n\"FILE.TXT\""} 1.458255915e9`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("msdos_file_access_time_seconds")},
 					{Name: []byte("path"), Value: []byte("C:\\DIR\\FILE.TXT")},
 					{Name: []byte("error"), Value: []byte("Cannot find file:\n\"FILE.TXT\"")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 1.458255915e9, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `metric_without_timestamp_and_labels 12.47`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("metric_without_timestamp_and_labels")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 12.47, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `something_weird{problem="division by zero"} +Inf -3982045`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("something_weird")},
 					{Name: []byte("problem"), Value: []byte("division by zero")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: math.Inf(1), Timestamp: -3982045},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_bucket{le="0.05"} 24054`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_bucket")},
 					{Name: []byte("le"), Value: []byte("0.05")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 24054, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_bucket{le="0.1"} 33444`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_bucket")},
 					{Name: []byte("le"), Value: []byte("0.1")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 33444, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_bucket{le="0.2"} 100392`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_bucket")},
 					{Name: []byte("le"), Value: []byte("0.2")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 100392, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_bucket{le="0.5"} 129389`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_bucket")},
 					{Name: []byte("le"), Value: []byte("0.5")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 129389, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_bucket{le="1"} 133988`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_bucket")},
 					{Name: []byte("le"), Value: []byte("1")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 133988, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_bucket{le="+Inf"} 144320`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_bucket")},
 					{Name: []byte("le"), Value: []byte("+Inf")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 144320, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_sum 53423`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_sum")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 53423, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `http_request_duration_seconds_count 144320`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("http_request_duration_seconds_count")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 144320, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds{quantile="0.01"} 3102`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds")},
 					{Name: []byte("quantile"), Value: []byte("0.01")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 3102, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds{quantile="0.05"} 3272`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds")},
 					{Name: []byte("quantile"), Value: []byte("0.05")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 3272, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds{quantile="0.5"} 4773`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds")},
 					{Name: []byte("quantile"), Value: []byte("0.5")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 4773, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds{quantile="0.9"} 9001`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds")},
 					{Name: []byte("quantile"), Value: []byte("0.9")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 9001, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds{quantile="0.99"} 76656`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds")},
 					{Name: []byte("quantile"), Value: []byte("0.99")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 76656, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds_sum 1.7560473e+07`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds_sum")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 1.7560473e+07, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds_count 2693`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds_count")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 2693, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `rpc_duration_seconds_count{} 2693`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("rpc_duration_seconds_count")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 2693, Timestamp: 0},
 				},
 			},
 		},
 		{
 			input: `container_cpu_usage {container="liveness-probe",id="/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod14e7c01a_0774_45f2_bb6a_b10e8e7f439e.slice/cri-containerd-51fa77b79a00e161e839762b7e4cbb6abfbaec68d3d7f56bd9665b9d48816894.scope",image="mcr.microsoft.com/oss/kubernetes-csi/livenessprobe:v2."} 0 1726114705191`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("container_cpu_usage")},
 					{Name: []byte("container"), Value: []byte("liveness-probe")},
 					{Name: []byte("id"), Value: []byte("/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod14e7c01a_0774_45f2_bb6a_b10e8e7f439e.slice/cri-containerd-51fa77b79a00e161e839762b7e4cbb6abfbaec68d3d7f56bd9665b9d48816894.scope")},
 					{Name: []byte("image"), Value: []byte("mcr.microsoft.com/oss/kubernetes-csi/livenessprobe:v2.")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 0, Timestamp: 1726114705191},
 				},
 			},
 		},
 		{
 			input: `node_cpu_usage_seconds_total 157399.56 1726236687470`,
-			want: TimeSeries{
-				Labels: []Label{
+			want: &TimeSeries{
+				Labels: []*Label{
 					{Name: []byte("__name__"), Value: []byte("node_cpu_usage_seconds_total")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{Value: 157399.56, Timestamp: 1726236687470},
 				},
 			},
@@ -429,12 +429,12 @@ func BenchmarkIterator_TimeSeries(b *testing.B) {
 	sampleInput := `http_requests_total{method="post",code="200"} 1027 1395066363000`
 	iter := NewIterator(io.NopCloser(strings.NewReader(sampleInput)))
 	require.True(b, iter.Next())
+	ts := &TimeSeries{}
 	for i := 0; i < b.N; i++ {
-
-		_, err := iter.TimeSeries()
+		ts.Reset()
+		_, err := iter.TimeSeriesInto(ts)
 		if err != nil {
 			b.Fatalf("unexpected error: %v", err)
 		}
-		iter.Close()
 	}
 }

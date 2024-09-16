@@ -17,8 +17,8 @@ import (
 )
 
 func TestMarshalCSV(t *testing.T) {
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
 			{
 				Name:  []byte("__name__"),
 				Value: []byte("__redis__"),
@@ -37,7 +37,7 @@ func TestMarshalCSV(t *testing.T) {
 			},
 		},
 
-		Samples: []prompb.Sample{
+		Samples: []*prompb.Sample{
 			{
 				Timestamp: 1669112524001,
 				Value:     0,
@@ -65,8 +65,8 @@ func TestMarshalCSV(t *testing.T) {
 }
 
 func BenchmarkMarshalCSV(b *testing.B) {
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
 			{
 				Name:  []byte("__name__"),
 				Value: []byte("__redis__"),
@@ -85,7 +85,7 @@ func BenchmarkMarshalCSV(b *testing.B) {
 			},
 		},
 
-		Samples: []prompb.Sample{
+		Samples: []*prompb.Sample{
 			{
 				Timestamp: 1669112524001,
 				Value:     0,
@@ -112,8 +112,8 @@ func BenchmarkMarshalCSV(b *testing.B) {
 }
 
 func TestMarshalCSV_LiftLabel(t *testing.T) {
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
 			{
 				Name:  []byte("__name__"),
 				Value: []byte("__redis__"),
@@ -132,7 +132,7 @@ func TestMarshalCSV_LiftLabel(t *testing.T) {
 			},
 		},
 
-		Samples: []prompb.Sample{
+		Samples: []*prompb.Sample{
 			{
 				Timestamp: 1669112524001,
 				Value:     0,

@@ -20,9 +20,9 @@ type RemoteWriteProxy struct {
 	disableMetricsForwarding bool
 
 	// queue is the channel where incoming writes are queued.  These are arbitrary sized writes.
-	queue chan prompb.WriteRequest
+	queue chan *prompb.WriteRequest
 	// ready is the channel where writes are batched up to maxBatchSize and ready to be sent to the remote write endpoint.
-	ready chan prompb.WriteRequest
+	ready chan *prompb.WriteRequest
 
 	cancelFn context.CancelFunc
 }
@@ -33,8 +33,8 @@ func NewRemoteWriteProxy(client *Client, endpoints []string, maxBatchSize int, d
 		endpoints:                endpoints,
 		maxBatchSize:             maxBatchSize,
 		disableMetricsForwarding: disableMetricsForwarding,
-		queue:                    make(chan prompb.WriteRequest, 100),
-		ready:                    make(chan prompb.WriteRequest, 5),
+		queue:                    make(chan *prompb.WriteRequest, 100),
+		ready:                    make(chan *prompb.WriteRequest, 5),
 	}
 	return p
 }
@@ -54,7 +54,7 @@ func (r *RemoteWriteProxy) Close() error {
 	return nil
 }
 
-func (r *RemoteWriteProxy) Write(ctx context.Context, wr prompb.WriteRequest) error {
+func (r *RemoteWriteProxy) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	if logger.IsDebug() {
 		var sb strings.Builder
 		for _, ts := range wr.Timeseries {
@@ -90,7 +90,7 @@ func (r *RemoteWriteProxy) Write(ctx context.Context, wr prompb.WriteRequest) er
 }
 
 func (c *RemoteWriteProxy) flush(ctx context.Context) {
-	var pendingBatch prompb.WriteRequest
+	pendingBatch := &prompb.WriteRequest{}
 	for {
 
 		select {
@@ -101,14 +101,14 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 
 			// Flush as many full queue as we can
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
-				var nextBatch prompb.WriteRequest
+				nextBatch := &prompb.WriteRequest{}
 				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[:c.maxBatchSize]...)
 				pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0], pendingBatch.Timeseries[c.maxBatchSize:]...)
 				c.ready <- nextBatch
 			}
 		case <-time.After(10 * time.Second):
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
-				var nextBatch prompb.WriteRequest
+				nextBatch := &prompb.WriteRequest{}
 				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[:c.maxBatchSize]...)
 				pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0], pendingBatch.Timeseries[c.maxBatchSize:]...)
 				c.ready <- nextBatch
@@ -116,7 +116,7 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 			if len(pendingBatch.Timeseries) == 0 {
 				continue
 			}
-			var nextBatch prompb.WriteRequest
+			nextBatch := &prompb.WriteRequest{}
 			nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries...)
 
 			c.ready <- nextBatch
@@ -160,7 +160,7 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 			for _, endpoint := range p.endpoints {
 				endpoint := endpoint
 				g.Go(func() error {
-					return p.client.Write(gCtx, endpoint, &wr)
+					return p.client.Write(gCtx, endpoint, wr)
 				})
 			}
 			logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(p.endpoints), time.Since(start))

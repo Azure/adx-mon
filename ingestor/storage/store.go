@@ -36,7 +36,7 @@ type Store interface {
 	service.Component
 
 	// WriteTimeSeries writes a batch of time series to the Store.
-	WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error
+	WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error
 
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
@@ -97,7 +97,7 @@ func (s *LocalStore) WALCount() int {
 	return s.repository.Count()
 }
 
-func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []prompb.TimeSeries) error {
+func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
 	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
 	defer csvWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedColumns)
@@ -303,7 +303,7 @@ func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
 }
 
-func SegmentKey(dst []byte, labels []prompb.Label) ([]byte, error) {
+func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
 	var name, database []byte
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("adxmon_database")) {

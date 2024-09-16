@@ -6,19 +6,23 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"unicode"
+
+	"github.com/valyala/fastjson/fastfloat"
 )
 
 type Iterator struct {
 	r       io.ReadCloser
 	scanner *bufio.Scanner
 	current string
+
+	buf []byte
 }
 
 func NewIterator(r io.ReadCloser) *Iterator {
 	return &Iterator{
 		r:       r,
 		scanner: bufio.NewScanner(r),
+		buf:     make([]byte, 0, 1024),
 	}
 }
 
@@ -34,6 +38,7 @@ func (i *Iterator) Next() bool {
 		}
 		return true
 	}
+
 	return false
 }
 
@@ -41,11 +46,22 @@ func (i *Iterator) Value() string {
 	return i.current
 }
 
-func (i *Iterator) TimeSeries() (TimeSeries, error) {
+func (i *Iterator) TimeSeries() (*TimeSeries, error) {
 	if len(i.current) == 0 {
-		return TimeSeries{}, fmt.Errorf("no current value")
+		return nil, fmt.Errorf("no current value")
 	}
-	return ParseTimeSeries(i.current)
+	return i.ParseTimeSeries(i.current)
+}
+
+func (i *Iterator) TimeSeriesInto(ts *TimeSeries) (*TimeSeries, error) {
+	if len(i.current) == 0 {
+		return nil, fmt.Errorf("no current value")
+	}
+	ts, err := i.ParseTimeSeriesInto(ts, i.current)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing time series: %w: %s", err, i.current)
+	}
+	return ts, err
 }
 
 func (i *Iterator) Close() error {
@@ -64,7 +80,7 @@ func (i *Iterator) Reset(r io.ReadCloser) {
 
 func (i *Iterator) isComment(s string) bool {
 	for j := 0; j < len(s); j++ {
-		if unicode.IsSpace(rune(s[j])) {
+		if isSpace(s[j]) {
 			continue
 		}
 
@@ -79,57 +95,87 @@ func (i *Iterator) isComment(s string) bool {
 
 func (i *Iterator) isSpace(s string) bool {
 	for j := 0; j < len(s); j++ {
-		if !unicode.IsSpace(rune(s[j])) {
+		if !isSpace(s[j]) {
 			return false
 		}
 	}
 	return true
 }
 
-func ParseTimeSeries(line string) (TimeSeries, error) {
+func (i *Iterator) ParseTimeSeriesInto(ts *TimeSeries, line string) (*TimeSeries, error) {
 	var (
 		name string
 		err  error
 	)
 	name, line = parseName(line)
-	n := strings.Count(line, ",")
-	labels := make([]Label, 0, n+1)
-	labels = append(labels, Label{
-		Name:  []byte("__name__"),
-		Value: []byte(name),
-	})
 
-	labels, line, err = parseLabels(labels, line)
+	ts.AppendLabelString(lableName, name)
+
+	ts, line, err = i.parseLabels(ts, line)
 	if err != nil {
-		return TimeSeries{}, err
+		return nil, err
 	}
 
 	v, line := parseValue(line)
 
-	ts, line := parseTimestamp(line)
+	t, line := parseTimestamp(line)
 
-	value, err := strconv.ParseFloat(string(v), 64)
+	value, err := fastfloat.Parse(v)
 	if err != nil {
-		return TimeSeries{}, fmt.Errorf("invalid value: %v", err)
+		return nil, fmt.Errorf("invalid value: %v", err)
 	}
 
 	var timestamp int64
-	if len(ts) > 0 {
-		timestamp, err = strconv.ParseInt(string(ts), 10, 64)
+	if len(t) > 0 {
+		timestamp = fastfloat.ParseInt64BestEffort(t)
+	}
+
+	ts.AppendSample(timestamp, value)
+
+	return ts, nil
+}
+
+func (i *Iterator) ParseTimeSeries(line string) (*TimeSeries, error) {
+	var (
+		name string
+		err  error
+	)
+	ts := &TimeSeries{}
+
+	name, line = parseName(line)
+	n := strings.Count(line, ",")
+	labels := make([]*Label, 0, n+1)
+	labels = append(labels, &Label{
+		Name:  []byte("__name__"),
+		Value: []byte(name),
+	})
+	ts.Labels = labels
+
+	ts, line, err = i.parseLabels(ts, line)
+	if err != nil {
+		return nil, err
+	}
+
+	v, line := parseValue(line)
+
+	tsStr, line := parseTimestamp(line)
+
+	value, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid value: %v", err)
+	}
+
+	var timestamp int64
+	if len(tsStr) > 0 {
+		timestamp, err = strconv.ParseInt(tsStr, 10, 64)
 		if err != nil {
-			return TimeSeries{}, fmt.Errorf("invalid timestamp: %v", err)
+			return nil, fmt.Errorf("invalid timestamp: %v", err)
 		}
 	}
 
-	return TimeSeries{
-		Labels: labels,
-		Samples: []Sample{
-			{
-				Value:     value,
-				Timestamp: timestamp,
-			},
-		},
-	}, nil
+	ts.AppendSample(timestamp, value)
+
+	return ts, nil
 }
 
 func parseTimestamp(line string) (string, string) {
@@ -152,21 +198,27 @@ func parseValue(line string) (string, string) {
 	return line, ""
 }
 
-func parseLabels(labels Labels, line string) (Labels, string, error) {
+func (i *Iterator) parseLabels(ts *TimeSeries, line string) (*TimeSeries, string, error) {
 	orig := line
 	line = trimSpacePrefix(line)
 	if len(line) == 0 {
-		return labels, "", nil
+		return nil, "", nil
 	}
 
 	if line[0] == '{' {
 		line = line[1:]
 		for len(line) > 0 {
 			if line[0] == '}' {
-				return labels, line[1:], nil
+				return ts, line[1:], nil
 			}
 
-			idx := strings.Index(line, "=")
+			var idx = -1
+			for i := 0; i < len(line); i++ {
+				if line[i] == '=' {
+					idx = i
+					break
+				}
+			}
 			if idx == -1 {
 				return nil, "", fmt.Errorf("invalid label: no =: %s", orig)
 			}
@@ -177,7 +229,6 @@ func parseLabels(labels Labels, line string) (Labels, string, error) {
 			}
 
 			line = line[idx+1:]
-
 			if len(line) == 0 {
 				return nil, "", fmt.Errorf("invalid label: no opening \": %s", orig)
 			}
@@ -185,7 +236,7 @@ func parseLabels(labels Labels, line string) (Labels, string, error) {
 				line = line[1:]
 			}
 
-			value := make([]byte, 0, 64)
+			value := i.buf[:0]
 			var j int
 			for j < len(line) {
 				if line[j] == '\\' {
@@ -211,17 +262,14 @@ func parseLabels(labels Labels, line string) (Labels, string, error) {
 				j += 1
 			}
 
-			labels = append(labels, Label{
-				Name:  []byte(key),
-				Value: value,
-			})
+			ts.AppendLabel([]byte(key), value)
 
 			if len(line) == 0 {
 				return nil, "", fmt.Errorf("invalid labels: no closing }: %s", orig)
 			}
 
 			if line[0] == '}' {
-				return labels, line[1:], nil
+				return ts, line[1:], nil
 			}
 
 			if line[0] == ',' {
@@ -229,13 +277,13 @@ func parseLabels(labels Labels, line string) (Labels, string, error) {
 			}
 		}
 	}
-	return labels, line, nil
+	return ts, line, nil
 }
 
 func parseName(line string) (string, string) {
 	line = trimSpacePrefix(line)
 	for i := 0; i < len(line); i++ {
-		if line[i] == '{' || unicode.IsSpace(rune(line[i])) {
+		if line[i] == '{' || isSpace(line[i]) {
 			return line[:i], line[i:]
 		}
 	}
@@ -244,7 +292,7 @@ func parseName(line string) (string, string) {
 
 func trimSpacePrefix(s string) string {
 	for i := 0; i < len(s); i++ {
-		if unicode.IsSpace(rune(s[i])) {
+		if s[i] == ' ' || s[i] == '\t' {
 			continue
 		}
 		return s[i:]
@@ -253,5 +301,9 @@ func trimSpacePrefix(s string) string {
 }
 
 func isSpace(c byte) bool {
-	return unicode.IsSpace(rune(c))
+	return c == ' ' || c == '\t'
 }
+
+const lableName = "__name__"
+
+var nameBytes = []byte(lableName)

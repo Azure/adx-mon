@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
-	"sort"
 	"sync"
 
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/davecgh/go-spew/spew"
 )
 
 type RequestTransformer struct {
@@ -34,7 +34,7 @@ type RequestTransformer struct {
 	// AddLabels is a map of label names to label values that will be added to all metrics.
 	AddLabels map[string]string
 
-	addLabels []prompb.Label
+	addLabels []*prompb.Label
 
 	// AllowedDatabase is a map of database names that are allowed to be written to.
 	AllowedDatabase map[string]struct{}
@@ -44,7 +44,7 @@ type RequestTransformer struct {
 
 func (f *RequestTransformer) init() {
 	f.initOnce.Do(func() {
-		addLabelsSlice := make([]prompb.Label, 0, len(f.AddLabels))
+		addLabelsSlice := make([]*prompb.Label, 0, len(f.AddLabels))
 		if f.DropLabels == nil {
 			f.DropLabels = make(map[*regexp.Regexp]*regexp.Regexp)
 		}
@@ -54,7 +54,7 @@ func (f *RequestTransformer) init() {
 		}
 
 		for k, v := range f.AddLabels {
-			addLabelsSlice = append(addLabelsSlice, prompb.Label{
+			addLabelsSlice = append(addLabelsSlice, &prompb.Label{
 				Name:  []byte(k),
 				Value: []byte(v),
 			})
@@ -65,7 +65,7 @@ func (f *RequestTransformer) init() {
 	})
 }
 
-func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prompb.WriteRequest {
+func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *prompb.WriteRequest {
 	f.init()
 	var i int
 	for j := range req.Timeseries {
@@ -101,7 +101,14 @@ func (f *RequestTransformer) TransformWriteRequest(req prompb.WriteRequest) prom
 	return req
 }
 
-func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.TimeSeries {
+func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.TimeSeries {
+	for _, l := range v.Labels {
+		if len(l.Name) == 0 {
+			spew.Dump(v)
+			panic("empty label name transform")
+		}
+	}
+
 	f.init()
 	// If labels are configured to be dropped, filter them next.
 	var (
@@ -146,14 +153,19 @@ func (f *RequestTransformer) TransformTimeSeries(v prompb.TimeSeries) prompb.Tim
 		i++
 	}
 	v.Labels = v.Labels[:i]
-	v.Labels = append(v.Labels, f.addLabels...)
+	for _, ll := range f.addLabels {
+		l := &prompb.Label{}
+		l.Name = append(l.Name[:0], ll.Name...)
+		l.Value = append(l.Value[:0], ll.Value...)
+		v.Labels = append(v.Labels, l)
+	}
 
-	sort.Sort(prompb.Labels(v.Labels))
+	prompb.Sort(v.Labels)
 
 	return v
 }
 
-func (f *RequestTransformer) ShouldDropMetric(v prompb.TimeSeries, name []byte) bool {
+func (f *RequestTransformer) ShouldDropMetric(v *prompb.TimeSeries, name []byte) bool {
 	if f.DefaultDropMetrics {
 		// Explicitly dropped metrics take precedence over explicitly kept metrics.
 		for _, r := range f.DropMetrics {

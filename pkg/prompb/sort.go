@@ -20,7 +20,7 @@ func (l Labels) Swap(i, j int) {
 }
 
 // IsSorted return true if the labels are sorted according to Sort.
-func IsSorted(l []Label) bool {
+func IsSorted(l []*Label) bool {
 	if len(l) == 1 {
 		return true
 	}
@@ -33,7 +33,7 @@ func IsSorted(l []Label) bool {
 }
 
 // Sort sorts labels ensuring the __name__ is first the remaining labels or ordered by name.
-func Sort(l []Label) {
+func Sort(l []*Label) {
 	sort.Slice(l, func(i, j int) bool {
 		return labelLess(l[i].Name, l[j].Name)
 	})

@@ -164,7 +164,7 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 	return nil
 }
 
-func (t *OltpMetricWriter) addSeriesAndFlushIfNecessary(ctx context.Context, wr *prompb.WriteRequest, series prompb.TimeSeries) error {
+func (t *OltpMetricWriter) addSeriesAndFlushIfNecessary(ctx context.Context, wr *prompb.WriteRequest, series *prompb.TimeSeries) error {
 	series = t.requestTransformer.TransformTimeSeries(series)
 	wr.Timeseries = append(wr.Timeseries, series)
 	if len(wr.Timeseries) >= t.maxBatchSize {
@@ -226,7 +226,7 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 func (t *OltpMetricWriter) addOltpNumberPoints(ctx context.Context, name string, points []*metricsv1.NumberDataPoint, wr *prompb.WriteRequest) error {
 	for _, point := range points {
 		series := newSeries(name, point.Attributes)
-		series.Samples = []prompb.Sample{
+		series.Samples = []*prompb.Sample{
 			{
 				Timestamp: unixNanoToUnixMillis(point.TimeUnixNano),
 				Value:     asFloat64(point),
@@ -245,7 +245,7 @@ func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name stri
 
 		// Add count series
 		series := newSeries(fmt.Sprintf("%s_count", name), point.Attributes)
-		series.Samples = []prompb.Sample{
+		series.Samples = []*prompb.Sample{
 			{
 				Timestamp: timestamp,
 				Value:     float64(point.Count),
@@ -258,7 +258,7 @@ func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name stri
 		// Add sum series, if present
 		if point.Sum != nil {
 			series := newSeries(fmt.Sprintf("%s_sum", name), point.Attributes)
-			series.Samples = []prompb.Sample{
+			series.Samples = []*prompb.Sample{
 				{
 					Timestamp: timestamp,
 					Value:     float64(*point.Sum),
@@ -282,11 +282,11 @@ func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name stri
 			}
 
 			series := newSeries(fmt.Sprintf("%s_bucket", name), point.Attributes)
-			series.Labels = append(series.Labels, prompb.Label{
+			series.Labels = append(series.Labels, &prompb.Label{
 				Name:  []byte("le"),
 				Value: []byte(upperBound),
 			})
-			series.Samples = []prompb.Sample{
+			series.Samples = []*prompb.Sample{
 				{
 					Timestamp: timestamp,
 					Value:     float64(point.BucketCounts[i]),
@@ -312,7 +312,7 @@ func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name s
 
 		// Add count series
 		series := newSeries(fmt.Sprintf("%s_count", name), point.Attributes)
-		series.Samples = []prompb.Sample{
+		series.Samples = []*prompb.Sample{
 			{
 				Timestamp: timestamp,
 				Value:     float64(point.Count),
@@ -325,7 +325,7 @@ func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name s
 		// Add sum series, if present
 		if point.Sum != nil {
 			series := newSeries(fmt.Sprintf("%s_sum", name), point.Attributes)
-			series.Samples = []prompb.Sample{
+			series.Samples = []*prompb.Sample{
 				{
 					Timestamp: timestamp,
 					Value:     float64(*point.Sum),
@@ -349,11 +349,11 @@ func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name s
 				upperBound := fmt.Sprintf("%f", math.Pow(-base, float64(bucketIdx)))
 
 				series := newSeries(fmt.Sprintf("%s_bucket", name), point.Attributes)
-				series.Labels = append(series.Labels, prompb.Label{
+				series.Labels = append(series.Labels, &prompb.Label{
 					Name:  []byte("le"),
 					Value: []byte(upperBound),
 				})
-				series.Samples = []prompb.Sample{
+				series.Samples = []*prompb.Sample{
 					{
 						Timestamp: timestamp,
 						Value:     float64(buckets.BucketCounts[i]),
@@ -376,11 +376,11 @@ func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name s
 				upperBound := fmt.Sprintf("%f", math.Pow(base, float64(bucketIdx+1)))
 
 				series := newSeries(fmt.Sprintf("%s_bucket", name), point.Attributes)
-				series.Labels = append(series.Labels, prompb.Label{
+				series.Labels = append(series.Labels, &prompb.Label{
 					Name:  []byte("le"),
 					Value: []byte(upperBound),
 				})
-				series.Samples = []prompb.Sample{
+				series.Samples = []*prompb.Sample{
 					{
 						Timestamp: timestamp,
 						Value:     float64(buckets.BucketCounts[i]),
@@ -401,7 +401,7 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 
 		// Add count series
 		series := newSeries(fmt.Sprintf("%s_count", name), point.Attributes)
-		series.Samples = []prompb.Sample{
+		series.Samples = []*prompb.Sample{
 			{
 				Timestamp: timestamp,
 				Value:     float64(point.Count),
@@ -412,7 +412,7 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 		}
 
 		series = newSeries(fmt.Sprintf("%s_sum", name), point.Attributes)
-		series.Samples = []prompb.Sample{
+		series.Samples = []*prompb.Sample{
 			{
 				Timestamp: timestamp,
 				Value:     point.Sum,
@@ -425,11 +425,11 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 		// Add quantile series
 		for _, quantile := range point.QuantileValues {
 			series := newSeries(name, point.Attributes)
-			series.Labels = append(series.Labels, prompb.Label{
+			series.Labels = append(series.Labels, &prompb.Label{
 				Name:  []byte("quantile"),
 				Value: []byte(fmt.Sprintf("%f", quantile.Quantile)),
 			})
-			series.Samples = []prompb.Sample{
+			series.Samples = []*prompb.Sample{
 				{
 					Timestamp: timestamp,
 					Value:     quantile.Value,
@@ -443,18 +443,18 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 	return nil
 }
 
-func newSeries(name string, attributes []*commonv1.KeyValue) prompb.TimeSeries {
-	ts := prompb.TimeSeries{
-		Labels: make([]prompb.Label, 0, len(attributes)+1),
+func newSeries(name string, attributes []*commonv1.KeyValue) *prompb.TimeSeries {
+	ts := &prompb.TimeSeries{
+		Labels: make([]*prompb.Label, 0, len(attributes)+1),
 	}
 
-	ts.Labels = append(ts.Labels, prompb.Label{
+	ts.Labels = append(ts.Labels, &prompb.Label{
 		Name:  []byte("__name__"),
 		Value: []byte(name),
 	})
 
 	for _, l := range attributes {
-		ts.Labels = append(ts.Labels, prompb.Label{
+		ts.Labels = append(ts.Labels, &prompb.Label{
 			Name:  []byte(l.Key),
 			Value: []byte(l.Value.String()),
 		})
