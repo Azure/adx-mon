@@ -247,17 +247,29 @@ func (w *WAL) rotate(ctx context.Context) {
 			// Rotate the segment once it's past the max segment size
 			if (w.opts.SegmentMaxSize != 0 && sz >= w.opts.SegmentMaxSize) ||
 				(w.opts.SegmentMaxAge.Seconds() != 0 && time.Since(seg.CreatedAt()).Seconds() > w.opts.SegmentMaxAge.Seconds()) {
+
 				toClose = seg
-				w.segment = nil
+				var err error
+				w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix)
+				if err != nil {
+					logger.Errorf("Failed to create new segment: %s", err.Error())
+					w.segment = nil
+				}
 			}
 			w.mu.Unlock()
 
 			if toClose != nil {
-				info, err := toClose.Info()
-				if err != nil {
-					logger.Errorf("Failed to get segment info: %s %s", toClose.Path(), err.Error())
+				// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
+				// delete it so that we don't end up uploading empty segments to Kusto.
+				if sz > 8 {
+					info, err := toClose.Info()
+					if err != nil {
+						logger.Errorf("Failed to get segment info: %s %s", toClose.Path(), err.Error())
+					} else {
+						w.index.Add(info)
+					}
 				} else {
-					w.index.Add(info)
+					_ = os.Remove(toClose.Path())
 				}
 
 				if err := toClose.Close(); err != nil {
