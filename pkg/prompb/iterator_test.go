@@ -428,12 +428,12 @@ func BenchmarkIterator_TimeSeries(b *testing.B) {
 	sampleInput := `http_requests_total{method="post",code="200"} 1027 1395066363000`
 	iter := NewIterator(io.NopCloser(strings.NewReader(sampleInput)))
 	require.True(b, iter.Next())
+	ts := &TimeSeries{}
 	for i := 0; i < b.N; i++ {
-
-		_, err := iter.TimeSeries()
+		ts.Reset()
+		_, err := iter.TimeSeriesInto(ts)
 		if err != nil {
 			b.Fatalf("unexpected error: %v", err)
 		}
-		iter.Close()
 	}
 }

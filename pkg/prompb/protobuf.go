@@ -3,12 +3,18 @@ package prompb
 import (
 	"fmt"
 	mathbits "math/bits"
+	"sync"
 
 	"github.com/VictoriaMetrics/easyproto"
 )
 
 var (
-	mp = &easyproto.MarshalerPool{}
+	mp             = &easyproto.MarshalerPool{}
+	TimeSeriesPool = sync.Pool{
+		New: func() interface{} {
+			return &TimeSeries{}
+		},
+	}
 )
 
 // WriteRequest represents Prometheus remote write API request

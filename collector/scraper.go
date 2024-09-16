@@ -122,6 +122,8 @@ type Scraper struct {
 
 	mu      sync.RWMutex
 	targets map[string]ScrapeTarget
+
+	wr *prompb.WriteRequest
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -213,14 +215,16 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			continue
 		}
 		for iter.Next() {
-			ts, err := iter.TimeSeries()
+			pt := prompb.TimeSeriesPool.Get().(*prompb.TimeSeries)
+			pt.Reset()
+			ts, err := iter.TimeSeriesInto(pt)
 			if err != nil {
 				logger.Errorf("Failed to get value: %s", err.Error())
 				continue
 			}
 
-			name := prompb.MetricName(ts)
-			if s.requestTransformer.ShouldDropMetric(ts, name) {
+			name := prompb.MetricName(*ts)
+			if s.requestTransformer.ShouldDropMetric(*ts, name) {
 				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
 				continue
 			}
@@ -253,8 +257,8 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			}
 			prompb.Sort(ts.Labels)
 
-			ts = s.requestTransformer.TransformTimeSeries(ts)
-			wr.Timeseries = append(wr.Timeseries, ts)
+			tts := s.requestTransformer.TransformTimeSeries(*ts)
+			wr.Timeseries = append(wr.Timeseries, tts)
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
 		if err := iter.Close(); err != nil {
@@ -279,6 +283,10 @@ func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteReq
 	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
 		if err := s.sendBatch(ctx, &filtered); err != nil {
 			logger.Errorf(err.Error())
+		}
+		for i := range filtered.Timeseries {
+			ts := &filtered.Timeseries[i]
+			prompb.TimeSeriesPool.Put(ts)
 		}
 		filtered.Timeseries = filtered.Timeseries[:0]
 	}
