@@ -57,7 +57,7 @@ func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 	return writer
 }
 
-func (w *CSVWriter) MarshalTS(ts prompb.TimeSeries) error {
+func (w *CSVWriter) MarshalTS(ts *prompb.TimeSeries) error {
 	buf := w.labelsBuf
 	buf.Reset()
 

@@ -9,14 +9,14 @@ import (
 
 func TestMarshal(t *testing.T) {
 	wr := WriteRequest{
-		Timeseries: []TimeSeries{
+		Timeseries: []*TimeSeries{
 			{
-				Labels: []Label{
+				Labels: []*Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{
 						Timestamp: int64(1),
 						Value:     1.0,
@@ -34,14 +34,14 @@ func TestMarshal(t *testing.T) {
 
 func TestMarshalTo(t *testing.T) {
 	wr := WriteRequest{
-		Timeseries: []TimeSeries{
+		Timeseries: []*TimeSeries{
 			{
-				Labels: []Label{
+				Labels: []*Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu")},
 				},
-				Samples: []Sample{
+				Samples: []*Sample{
 					{
 						Timestamp: int64(1),
 						Value:     1.0,

@@ -14,10 +14,10 @@ func TestRequestTransformer_TransformWriteRequest_DropMetrics(t *testing.T) {
 		regexp.MustCompile("cpu"),
 	}}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -25,7 +25,7 @@ func TestRequestTransformer_TransformWriteRequest_DropMetrics(t *testing.T) {
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -44,10 +44,10 @@ func TestRequestTransformer_TransformWriteRequest_DropMetricsRegex(t *testing.T)
 		regexp.MustCompile("cpu|mem"),
 	}}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -55,7 +55,7 @@ func TestRequestTransformer_TransformWriteRequest_DropMetricsRegex(t *testing.T)
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -63,7 +63,7 @@ func TestRequestTransformer_TransformWriteRequest_DropMetricsRegex(t *testing.T)
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
@@ -84,10 +84,10 @@ func TestRequestTransformer_TransformWriteRequest_DropLabels(t *testing.T) {
 		},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -99,7 +99,7 @@ func TestRequestTransformer_TransformWriteRequest_DropLabels(t *testing.T) {
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -134,10 +134,10 @@ func TestRequestTransformer_TransformWriteRequest_SkipNameLabel(t *testing.T) {
 		},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -149,7 +149,7 @@ func TestRequestTransformer_TransformWriteRequest_SkipNameLabel(t *testing.T) {
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -189,8 +189,8 @@ func TestRequestTransformer_TransformTimeSeries_AddLabels(t *testing.T) {
 		},
 	}
 
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
 			{
 				Name:  []byte("region"),
 				Value: []byte("eastus"),
@@ -223,10 +223,10 @@ func TestRequestTransformer_TransformWriteRequest_AllowedDatabases(t *testing.T)
 		AllowedDatabase: map[string]struct{}{"foo": {}},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -234,7 +234,7 @@ func TestRequestTransformer_TransformWriteRequest_AllowedDatabases(t *testing.T)
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -255,10 +255,10 @@ func TestRequestTransformer_TransformWriteRequest_AllowedDatabases(t *testing.T)
 func TestRequestTransformer_TransformWriteRequest_DefaultDropMetrics(t *testing.T) {
 	f := &transform.RequestTransformer{DefaultDropMetrics: true}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -266,7 +266,7 @@ func TestRequestTransformer_TransformWriteRequest_DefaultDropMetrics(t *testing.
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -274,7 +274,7 @@ func TestRequestTransformer_TransformWriteRequest_DefaultDropMetrics(t *testing.
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
@@ -294,10 +294,10 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetrics(t *testing.T) {
 		KeepMetrics:        []*regexp.Regexp{regexp.MustCompile("cpu|mem")},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -305,7 +305,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetrics(t *testing.T) {
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -313,7 +313,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetrics(t *testing.T) {
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
@@ -341,10 +341,10 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 		DropMetrics: []*regexp.Regexp{regexp.MustCompile("^mem_load")},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -352,7 +352,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -360,7 +360,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
@@ -368,7 +368,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDrop(t *testing.
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem_load"),
@@ -394,10 +394,10 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValue(t *t
 		},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -409,7 +409,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValue(t *t
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -421,7 +421,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValue(t *t
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
@@ -447,10 +447,10 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t
 		DropMetrics: []*regexp.Regexp{regexp.MustCompile("mem")},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -462,7 +462,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -474,7 +474,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsAndDropLabelValue(t
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("disk"),
@@ -501,10 +501,10 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropL
 		},
 	}
 
-	req := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("cpu"),
@@ -520,7 +520,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropL
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("mem"),
@@ -532,7 +532,7 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropL
 				},
 			},
 			{
-				Labels: []prompb.Label{
+				Labels: []*prompb.Label{
 					{
 						Name:  []byte("__name__"),
 						Value: []byte("net"),
@@ -573,8 +573,8 @@ func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 			"adxmon_container": "container",
 		}}
 
-	ts := prompb.TimeSeries{
-		Labels: []prompb.Label{
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
 			{
 				Name:  []byte("__name__"),
 				Value: []byte("cpu"),
@@ -582,8 +582,8 @@ func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 		},
 	}
 
-	wr := prompb.WriteRequest{
-		Timeseries: []prompb.TimeSeries{ts},
+	wr := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{ts},
 	}
 
 	b.ResetTimer()
@@ -594,7 +594,7 @@ func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {
 
 func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 	type args struct {
-		v    prompb.TimeSeries
+		v    *prompb.TimeSeries
 		name []byte
 	}
 	tests := []struct {
@@ -611,7 +611,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			},
 			args: args{
 				name: []byte("metric"),
-				v:    prompb.TimeSeries{},
+				v:    &prompb.TimeSeries{},
 			},
 			want: false,
 		},
@@ -624,7 +624,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			},
 			args: args{
 				name: []byte("metric"),
-				v:    prompb.TimeSeries{},
+				v:    &prompb.TimeSeries{},
 			},
 			want: true,
 		},
@@ -638,7 +638,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			},
 			args: args{
 				name: []byte("metric"),
-				v: prompb.TimeSeries{Labels: []prompb.Label{
+				v: &prompb.TimeSeries{Labels: []*prompb.Label{
 					{Name: []byte("labelname"), Value: []byte("value")},
 				}},
 			},
@@ -651,7 +651,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			},
 			args: args{
 				name: []byte("metric"),
-				v: prompb.TimeSeries{Labels: []prompb.Label{
+				v: &prompb.TimeSeries{Labels: []*prompb.Label{
 					{Name: []byte("labelname"), Value: []byte("value")},
 				}},
 			},
@@ -665,7 +665,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			},
 			args: args{
 				name: []byte("metric"),
-				v:    prompb.TimeSeries{},
+				v:    &prompb.TimeSeries{},
 			},
 			want: true,
 		},
@@ -677,7 +677,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 			},
 			args: args{
 				name: []byte("metric"),
-				v:    prompb.TimeSeries{},
+				v:    &prompb.TimeSeries{},
 			},
 			want: false,
 		},

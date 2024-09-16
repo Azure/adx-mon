@@ -7,7 +7,7 @@ import (
 )
 
 func TestSortedLabels(t *testing.T) {
-	l := []Label{
+	l := []*Label{
 		{
 			Name:  []byte("foo"),
 			Value: []byte("bar"),
@@ -59,7 +59,7 @@ func TestCompareLower(t *testing.T) {
 }
 
 func BenchmarkIsSorted(b *testing.B) {
-	l := []Label{
+	l := []*Label{
 		{
 			Name:  []byte("foo"),
 			Value: []byte("bar"),

@@ -122,6 +122,8 @@ type Scraper struct {
 
 	mu      sync.RWMutex
 	targets map[string]ScrapeTarget
+
+	wr *prompb.WriteRequest
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -214,17 +216,21 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			continue
 		}
 		for iter.Next() {
-			ts, err := iter.TimeSeries()
+			pt := prompb.TimeSeriesPool.Get().(*prompb.TimeSeries)
+			pt.Reset()
+			ts, err := iter.TimeSeriesInto(pt)
 			if err != nil {
-				logger.Errorf("Failed to get value: %s", err.Error())
+				logger.Errorf("Failed to parse series %s: %s", target.Addr, err.Error())
 				continue
 			}
 
 			name := prompb.MetricName(ts)
 			if s.requestTransformer.ShouldDropMetric(ts, name) {
+				prompb.TimeSeriesPool.Put(ts)
 				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
 				continue
 			}
+
 			for i, s := range ts.Samples {
 				if s.Timestamp == 0 {
 					s.Timestamp = scrapeTime
@@ -233,25 +239,17 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			}
 
 			if target.Namespace != "" {
-				ts.Labels = append(ts.Labels, prompb.Label{
-					Name:  []byte("adxmon_namespace"),
-					Value: []byte(target.Namespace),
-				})
+				ts.AppendLabelString("adxmon_namespace", target.Namespace)
 			}
 
 			if target.Pod != "" {
-				ts.Labels = append(ts.Labels, prompb.Label{
-					Name:  []byte("adxmon_pod"),
-					Value: []byte(target.Pod),
-				})
+				ts.AppendLabelString("adxmon_pod", target.Pod)
 			}
 
 			if target.Container != "" {
-				ts.Labels = append(ts.Labels, prompb.Label{
-					Name:  []byte("adxmon_container"),
-					Value: []byte(target.Container),
-				})
+				ts.AppendLabelString("adxmon_container", target.Container)
 			}
+
 			prompb.Sort(ts.Labels)
 
 			ts = s.requestTransformer.TransformTimeSeries(ts)
@@ -276,18 +274,22 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 }
 
 func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteRequest) *prompb.WriteRequest {
-	filtered := *wr
+	filtered := wr
 	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
-		filtered = s.requestTransformer.TransformWriteRequest(filtered)
+		filtered = s.requestTransformer.TransformWriteRequest(wr)
 	}
 
 	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
-		if err := s.sendBatch(ctx, &filtered); err != nil {
+		if err := s.sendBatch(ctx, filtered); err != nil {
 			logger.Errorf(err.Error())
+		}
+		for i := range filtered.Timeseries {
+			ts := filtered.Timeseries[i]
+			prompb.TimeSeriesPool.Put(ts)
 		}
 		filtered.Timeseries = filtered.Timeseries[:0]
 	}
-	return &filtered
+	return filtered
 }
 
 func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error {
@@ -596,3 +598,5 @@ func getTargetAnnotationMapOrDefault(p *v1.Pod, key string, defaultVal map[strin
 	}
 	return parsedMap
 }
+
+var adxmonNamespaceLabel = []byte("adxmon_namespace")

@@ -21,7 +21,7 @@ import (
 	v12 "k8s.io/client-go/listers/core/v1"
 )
 
-type TimeSeriesWriter func(ctx context.Context, ts []prompb.TimeSeries) error
+type TimeSeriesWriter func(ctx context.Context, ts []*prompb.TimeSeries) error
 
 type OTLPLogsWriter func(ctx context.Context, database, table string, logs *otlp.Logs) error
 
@@ -33,7 +33,7 @@ type Coordinator interface {
 	IsLeader() bool
 
 	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr prompb.WriteRequest) error
+	Write(ctx context.Context, wr *prompb.WriteRequest) error
 
 	// WriteOTLPLogs writes the logs to the correct peer.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
@@ -229,7 +229,7 @@ func (c *coordinator) Close() error {
 	return nil
 }
 
-func (c *coordinator) Write(ctx context.Context, wr prompb.WriteRequest) error {
+func (c *coordinator) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	return c.tsw(ctx, wr.Timeseries)
 }
 

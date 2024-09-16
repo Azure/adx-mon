@@ -3,23 +3,29 @@ package prompb
 import (
 	"fmt"
 	mathbits "math/bits"
+	"sync"
 
 	"github.com/VictoriaMetrics/easyproto"
 )
 
 var (
-	mp = &easyproto.MarshalerPool{}
+	mp             = &easyproto.MarshalerPool{}
+	TimeSeriesPool = sync.Pool{
+		New: func() interface{} {
+			return &TimeSeries{}
+		},
+	}
 )
 
 // WriteRequest represents Prometheus remote write API request
 type WriteRequest struct {
-	Timeseries []TimeSeries
+	Timeseries []*TimeSeries
 }
 
 // TimeSeries is a timeseries.
 type TimeSeries struct {
-	Labels  []Label
-	Samples []Sample
+	Labels  []*Label
+	Samples []*Sample
 }
 
 // Label is a timeseries label
@@ -51,10 +57,13 @@ func (wr *WriteRequest) Unmarshal(src []byte) (err error) {
 			}
 			if cap(wr.Timeseries) > len(wr.Timeseries) {
 				wr.Timeseries = wr.Timeseries[:len(wr.Timeseries)+1]
+				if wr.Timeseries[len(wr.Timeseries)-1] == nil {
+					wr.Timeseries[len(wr.Timeseries)-1] = &TimeSeries{}
+				}
 			} else {
-				wr.Timeseries = append(wr.Timeseries, TimeSeries{})
+				wr.Timeseries = append(wr.Timeseries, &TimeSeries{})
 			}
-			ts := &wr.Timeseries[len(wr.Timeseries)-1]
+			ts := wr.Timeseries[len(wr.Timeseries)-1]
 			if err := ts.unmarshalProtobuf(data); err != nil {
 				return fmt.Errorf("cannot unmarshal sample: %w", err)
 			}
@@ -83,8 +92,9 @@ func (wr *WriteRequest) MarshalTo(dst []byte) ([]byte, error) {
 // Reset resets wr.
 func (wr *WriteRequest) Reset() {
 	for i := range wr.Timeseries {
-		ts := &wr.Timeseries[i]
+		ts := wr.Timeseries[i]
 		ts.Reset()
+		wr.Timeseries[i] = ts
 	}
 	wr.Timeseries = wr.Timeseries[:0]
 }
@@ -208,10 +218,13 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			}
 			if cap(m.Labels) > len(m.Labels) {
 				m.Labels = m.Labels[:len(m.Labels)+1]
+				if m.Labels[len(m.Labels)-1] == nil {
+					m.Labels[len(m.Labels)-1] = &Label{}
+				}
 			} else {
-				m.Labels = append(m.Labels, Label{})
+				m.Labels = append(m.Labels, &Label{})
 			}
-			s := &m.Labels[len(m.Labels)-1]
+			s := m.Labels[len(m.Labels)-1]
 			if err := s.unmarshalProtobuf(data); err != nil {
 				return fmt.Errorf("cannot unmarshal sample: %w", err)
 			}
@@ -222,10 +235,13 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			}
 			if cap(m.Samples) > len(m.Samples) {
 				m.Samples = m.Samples[:len(m.Samples)+1]
+				if m.Samples[len(m.Samples)-1] == nil {
+					m.Samples[len(m.Samples)-1] = &Sample{}
+				}
 			} else {
-				m.Samples = append(m.Samples, Sample{})
+				m.Samples = append(m.Samples, &Sample{})
 			}
-			s := &m.Samples[len(m.Samples)-1]
+			s := m.Samples[len(m.Samples)-1]
 			if err := s.unmarshalProtobuf(data); err != nil {
 				return fmt.Errorf("cannot unmarshal sample: %w", err)
 			}
@@ -236,15 +252,62 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 
 func (ts *TimeSeries) Reset() {
 	for i := range ts.Labels {
-		l := &ts.Labels[i]
+		l := ts.Labels[i]
 		l.Reset()
+		ts.Labels[i] = l
 	}
 	for i := range ts.Samples {
-		s := &ts.Samples[i]
+		s := ts.Samples[i]
 		s.Reset()
+		ts.Samples[i] = s
 	}
 	ts.Labels = ts.Labels[:0]
 	ts.Samples = ts.Samples[:0]
+}
+
+func (m *TimeSeries) AppendLabel(key []byte, value []byte) {
+	if cap(m.Labels) > len(m.Labels) {
+		m.Labels = m.Labels[:len(m.Labels)+1]
+		if m.Labels[len(m.Labels)-1] == nil {
+			m.Labels[len(m.Labels)-1] = &Label{}
+		}
+	} else {
+		m.Labels = append(m.Labels, &Label{})
+	}
+	l := m.Labels[len(m.Labels)-1]
+	l.Reset()
+	l.Name = append(l.Name[:0], key...)
+	l.Value = append(l.Value[:0], value...)
+}
+
+func (m *TimeSeries) AppendLabelString(key string, value string) {
+	if cap(m.Labels) > len(m.Labels) {
+		m.Labels = m.Labels[:len(m.Labels)+1]
+		if m.Labels[len(m.Labels)-1] == nil {
+			m.Labels[len(m.Labels)-1] = &Label{}
+		}
+	} else {
+		m.Labels = append(m.Labels, &Label{})
+	}
+	l := m.Labels[len(m.Labels)-1]
+	l.Reset()
+	l.Name = append(l.Name[:0], key...)
+	l.Value = append(l.Value[:0], value...)
+}
+
+func (m *TimeSeries) AppendSample(timestamp int64, value float64) {
+	if cap(m.Samples) > len(m.Samples) {
+		m.Samples = m.Samples[:len(m.Samples)+1]
+		if m.Samples[len(m.Samples)-1] == nil {
+			m.Samples[len(m.Samples)-1] = &Sample{}
+		}
+	} else {
+		m.Samples = append(m.Samples, &Sample{})
+	}
+	s := m.Samples[len(m.Samples)-1]
+	s.Reset()
+	s.Timestamp = timestamp
+	s.Value = value
 }
 
 func (m *Label) Size() (n int) {

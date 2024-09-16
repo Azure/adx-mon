@@ -40,12 +40,12 @@ func TestScraper_sendBatch(t *testing.T) {
 				RemoteClient: &fakeClient{expectedSamples: 1},
 			},
 			writeRequest: &prompb.WriteRequest{
-				Timeseries: []prompb.TimeSeries{
+				Timeseries: []*prompb.TimeSeries{
 					{
-						Labels: []prompb.Label{
+						Labels: []*prompb.Label{
 							{Name: []byte("testLabel"), Value: []byte("testValue")},
 						},
-						Samples: []prompb.Sample{
+						Samples: []*prompb.Sample{
 							{Value: 1, Timestamp: 123456789},
 						},
 					},
@@ -60,12 +60,12 @@ func TestScraper_sendBatch(t *testing.T) {
 				RemoteClient:       &fakeClient{expectedSamples: 0},
 			},
 			writeRequest: &prompb.WriteRequest{
-				Timeseries: []prompb.TimeSeries{
+				Timeseries: []*prompb.TimeSeries{
 					{
-						Labels: []prompb.Label{
+						Labels: []*prompb.Label{
 							{Name: []byte("testLabel"), Value: []byte("testValue")},
 						},
-						Samples: []prompb.Sample{
+						Samples: []*prompb.Sample{
 							{Value: 1, Timestamp: 123456789},
 						},
 					},
