@@ -4,11 +4,13 @@
 package watch
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"runtime"
 	"time"
 
-	"github.com/tenebris-tech/tail/util"
+	"github.com/tenebris-tech/tail/logging"
 	"gopkg.in/tomb.v1"
 )
 
@@ -16,10 +18,11 @@ import (
 type PollingFileWatcher struct {
 	Filename string
 	Size     int64
+	logger   logging.Logger
 }
 
-func NewPollingFileWatcher(filename string) *PollingFileWatcher {
-	fw := &PollingFileWatcher{filename, 0}
+func NewPollingFileWatcher(filename string, logger logging.Logger) *PollingFileWatcher {
+	fw := &PollingFileWatcher{filename, 0, logger}
 	return fw
 }
 
@@ -29,7 +32,7 @@ func (fw *PollingFileWatcher) BlockUntilExists(t *tomb.Tomb) error {
 	for {
 		if _, err := os.Stat(fw.Filename); err == nil {
 			return nil
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 		select {
@@ -41,75 +44,49 @@ func (fw *PollingFileWatcher) BlockUntilExists(t *tomb.Tomb) error {
 	}
 }
 
-func (fw *PollingFileWatcher) ChangeEvents(t *tomb.Tomb, pos int64) (*FileChanges, error) {
-	origFi, err := os.Stat(fw.Filename)
+func (fw *PollingFileWatcher) BlockUntilEvent(t *tomb.Tomb, openedFileInfo fs.FileInfo, pos int64) (ChangeType, error) {
+	for {
+		changeType, err := StatChanges(fw.Filename, openedFileInfo, pos, fw.logger)
+		if err != nil {
+			return None, err
+		}
+		if changeType != None {
+			return changeType, nil
+		}
+
+		select {
+		case <-time.After(POLL_DURATION):
+			continue
+		case <-t.Dying():
+			return None, tomb.ErrDying
+		}
+	}
+}
+
+func StatChanges(filename string, openedFileInfo fs.FileInfo, pos int64, logger logging.Logger) (ChangeType, error) {
+	fi, err := os.Stat(filename)
 	if err != nil {
-		return nil, err
+		// Windows cannot delete a file if a handle is still open (tail keeps one open)
+		// so it gives access denied to anything trying to read it until all handles are released.
+		if errors.Is(err, fs.ErrNotExist) || (runtime.GOOS == "windows" && os.IsPermission(err)) {
+			// logger.Printf("notexist deleted\n")
+			return Deleted, nil
+		}
+		return None, err
 	}
 
-	changes := NewFileChanges()
-	var prevModTime time.Time
+	if !os.SameFile(openedFileInfo, fi) {
+		// logger.Printf("notsamefile deleted\n")
+		return Deleted, nil
+	}
 
-	// XXX: use tomb.Tomb to cleanly manage these goroutines. replace
-	// the fatal (below) with tomb's Kill.
+	if fi.Size() > pos {
+		return Modified, nil
+	} else if fi.Size() < pos {
+		return Truncated, nil
+	}
 
-	fw.Size = pos
-
-	go func() {
-		prevSize := fw.Size
-		for {
-			select {
-			case <-t.Dying():
-				return
-			default:
-			}
-
-			time.Sleep(POLL_DURATION)
-			fi, err := os.Stat(fw.Filename)
-			if err != nil {
-				// Windows cannot delete a file if a handle is still open (tail keeps one open)
-				// so it gives access denied to anything trying to read it until all handles are released.
-				if os.IsNotExist(err) || (runtime.GOOS == "windows" && os.IsPermission(err)) {
-					// File does not exist (has been deleted).
-					changes.NotifyDeleted()
-					return
-				}
-
-				// XXX: report this error back to the user
-				util.Fatal("Failed to stat file %v: %v", fw.Filename, err)
-			}
-
-			// File got moved/renamed?
-			if !os.SameFile(origFi, fi) {
-				changes.NotifyDeleted()
-				return
-			}
-
-			// File got truncated?
-			fw.Size = fi.Size()
-			if prevSize > 0 && prevSize > fw.Size {
-				changes.NotifyTruncated()
-				prevSize = fw.Size
-				continue
-			}
-			// File got bigger?
-			if prevSize > 0 && prevSize < fw.Size {
-				changes.NotifyModified()
-				prevSize = fw.Size
-				continue
-			}
-			prevSize = fw.Size
-
-			// File was appended to (changed)?
-			modTime := fi.ModTime()
-			if modTime != prevModTime {
-				prevModTime = modTime
-				changes.NotifyModified()
-			}
-		}
-	}()
-
-	return changes, nil
+	return None, nil
 }
 
 func init() {

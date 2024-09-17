@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tenebris-tech/tail/logging"
 	"github.com/tenebris-tech/tail/ratelimiter"
 	"github.com/tenebris-tech/tail/util"
 	"github.com/tenebris-tech/tail/watch"
@@ -45,18 +47,6 @@ type SeekInfo struct {
 	FileIdentifier string
 }
 
-type logger interface {
-	Fatal(v ...interface{})
-	Fatalf(format string, v ...interface{})
-	Fatalln(v ...interface{})
-	Panic(v ...interface{})
-	Panicf(format string, v ...interface{})
-	Panicln(v ...interface{})
-	Print(v ...interface{})
-	Printf(format string, v ...interface{})
-	Println(v ...interface{})
-}
-
 // Config is used to specify how a file must be tailed.
 type Config struct {
 	// File-specifc
@@ -73,7 +63,7 @@ type Config struct {
 
 	// Logger, when nil, is set to tail.DefaultLogger
 	// To disable logging: set field to tail.DiscardingLogger
-	Logger logger
+	Logger logging.Logger
 }
 
 type Tail struct {
@@ -83,10 +73,13 @@ type Tail struct {
 
 	file           *os.File
 	reader         *bufio.Reader
+	fileInfo       fs.FileInfo
 	fileIdentifier string // unique identifier for the current file - OS specific
+	offset         int64
 
-	watcher watch.FileWatcher
-	changes *watch.FileChanges
+	watcher     watch.FileWatcher
+	changes     *watch.FileChanges
+	needsReopen bool
 
 	tomb.Tomb // provides: Done, Kill, Dying
 
@@ -121,17 +114,22 @@ func TailFile(filename string, config Config) (*Tail, error) {
 	}
 
 	if t.Poll {
-		t.watcher = watch.NewPollingFileWatcher(filename)
+		t.watcher = watch.NewPollingFileWatcher(filename, t.Logger)
 	} else {
-		t.watcher = watch.NewInotifyFileWatcher(filename)
+		t.watcher = watch.NewInotifyFileWatcher(filename, t.Logger)
 	}
 
 	if t.MustExist {
 		var err error
-		t.file, t.fileIdentifier, err = OpenFile(t.Filename)
+		t.file, t.fileInfo, err = OpenFile(t.Filename)
 		if err != nil {
 			return nil, err
 		}
+		t.fileIdentifier, err = FileIdentifier(t.fileInfo)
+		if err != nil {
+			return nil, err
+		}
+		t.openReader()
 	}
 
 	go t.tailFileSync()
@@ -189,10 +187,11 @@ func (tail *Tail) closeFile() {
 }
 
 func (tail *Tail) reopen() error {
+	tail.Logger.Printf("Attempting to reopen %s ...", tail.Filename)
 	tail.closeFile()
 	for {
 		var err error
-		tail.file, tail.fileIdentifier, err = OpenFile(tail.Filename)
+		tail.file, tail.fileInfo, err = OpenFile(tail.Filename)
 		if err != nil {
 			if os.IsNotExist(err) {
 				tail.Logger.Printf("Waiting for %s to appear...", tail.Filename)
@@ -206,6 +205,13 @@ func (tail *Tail) reopen() error {
 			}
 			return fmt.Errorf("unable to open file %s: %s", tail.Filename, err)
 		}
+
+		tail.Logger.Printf("Successfully reopened %s", tail.Filename)
+		tail.fileIdentifier, err = FileIdentifier(tail.fileInfo)
+		if err != nil {
+			return fmt.Errorf("get FileIdentifier: %w", err)
+		}
+		tail.openReader()
 		break
 	}
 	return nil
@@ -244,33 +250,34 @@ func (tail *Tail) tailFileSync() {
 		}
 	}
 
-	var offset int64 = 0
-
 	// Seek to requested location on first open of the file.
 	if tail.Location != nil {
 		if tail.Location.FileIdentifier == "" || tail.Location.FileIdentifier == tail.fileIdentifier {
-			_, err := tail.file.Seek(tail.Location.Offset, tail.Location.Whence)
+			err := tail.seekTo(*tail.Location)
 			tail.Logger.Printf("Seeked %s - %+v\n", tail.Filename, tail.Location)
 			if err != nil {
 				_ = tail.Killf("Seek error on %s: %s", tail.Filename, err)
 				return
 			}
-			offset = tail.Location.Offset
 		} else {
 			tail.Logger.Printf("Skipping seek because fileIdentifier %q does not match requested FileIdentifier %q", tail.fileIdentifier, tail.Location.FileIdentifier)
 		}
 	}
 
-	tail.openReader()
-
+	partialLine := ""
 	// Read line by line.
 	for {
 		line, numRead, err := tail.readLine()
+		tail.offset += numRead
+
+		if partialLine != "" {
+			line = partialLine + line
+			partialLine = ""
+		}
 
 		// Process `line` even if err is EOF.
 		if err == nil {
-			offset += numRead
-			cooloff := !tail.sendLine(line, offset)
+			cooloff := !tail.sendLine(line, tail.offset)
 			if cooloff {
 				// Wait a second before seeking till the end of
 				// file when rate limit is reached.
@@ -288,29 +295,30 @@ func (tail *Tail) tailFileSync() {
 				}
 			}
 		} else if err == io.EOF {
+			// We have consumed to the end and are not following. Flush this last data and exit.
 			if !tail.Follow {
-				offset += numRead
 				if line != "" {
-					tail.sendLine(line, offset)
+					tail.sendLine(line, tail.offset)
 				}
 				return
 			}
 
-			// Try to rewind back to the end of the last full line if we read a partial line
-			if tail.Follow && line != "" && !tail.Pipe {
-				// this has the potential to never return the last line if
-				// it's not followed by a newline; seems a fair trade here
-				err := tail.seekTo(SeekInfo{Offset: offset, Whence: 0})
-				if err != nil {
-					tail.Kill(err)
-					return
+			if tail.needsReopen {
+				// We have consumed to EOF and no more data is coming. Flush this data.
+				// waitForChanges will then open the new file, if appropriate.
+				if line != "" {
+					tail.sendLine(line, tail.offset)
 				}
+			} else {
+				// We have consumed to EOF and are following. Save this line for the next
+				// iteration, and wait for more data to become available.
+				partialLine = line
 			}
 
 			// When EOF is reached, wait for more data to become
 			// available. Wait strategy is based on the `tail.watcher`
 			// implementation (inotify or polling).
-			err := tail.waitForChanges()
+			err := tail.waitForChanges(tail.offset)
 			if err != nil {
 				if err != ErrStop {
 					tail.Kill(err)
@@ -337,48 +345,44 @@ func (tail *Tail) tailFileSync() {
 // waitForChanges waits until the file has been appended, deleted,
 // moved or truncated. When moved or deleted - the file will be
 // reopened if ReOpen is true. Truncated files are always reopened.
-func (tail *Tail) waitForChanges() error {
-	if tail.changes == nil {
-		pos, err := tail.file.Seek(0, io.SeekCurrent)
-		if err != nil {
+func (tail *Tail) waitForChanges(offset int64) error {
+	if tail.needsReopen {
+		tail.needsReopen = false
+		if err := tail.reopen(); err != nil {
 			return err
 		}
-		tail.changes, err = tail.watcher.ChangeEvents(&tail.Tomb, pos)
-		if err != nil {
-			return err
-		}
+		return nil
 	}
 
-	select {
-	case <-tail.changes.Modified:
+	change, err := tail.watcher.BlockUntilEvent(&tail.Tomb, tail.fileInfo, offset)
+	if err != nil {
+		return err
+	}
+	if change == watch.Modified {
 		return nil
-	case <-tail.changes.Deleted:
+	} else if change == watch.Deleted {
 		tail.changes = nil
 		if tail.ReOpen {
-			// XXX: we must not log from a library.
-			tail.Logger.Printf("Re-opening moved/deleted file %s ...", tail.Filename)
-			if err := tail.reopen(); err != nil {
-				return err
-			}
-			tail.Logger.Printf("Successfully reopened %s", tail.Filename)
-			tail.openReader()
+			// Return now to consume any lines that were written before the file was moved or deleted, but after our last reads.
+			// After we reach EOF again from our existing open file, we'll reopen the file and continue tailing.
+			tail.needsReopen = true
+			tail.Logger.Printf("Deferring reopen for deleted/moved file: %s", tail.Filename)
 			return nil
 		} else {
 			tail.Logger.Printf("Stopping tail as file no longer exists: %s", tail.Filename)
 			return ErrStop
 		}
-	case <-tail.changes.Truncated:
+	} else if change == watch.Truncated {
 		// Always reopen truncated files (Follow is true)
-		tail.Logger.Printf("Re-opening truncated file %s ...", tail.Filename)
-		if err := tail.reopen(); err != nil {
-			return err
-		}
-		tail.Logger.Printf("Successfully reopened truncated %s", tail.Filename)
-		tail.openReader()
+		// Return now to consume any lines that were written before the file was considered truncated, but after our last reads.
+		// fsnotify will sometimes report a file as truncated even though it was actually moved and replaced with a new file.
+		// After we reach EOF again from our existing open file, we'll reopen the file and continue tailing.
+		tail.needsReopen = true
+		tail.Logger.Printf("Deferring reopen for truncated file: %s", tail.Filename)
 		return nil
-	case <-tail.Dying():
-		return ErrStop
 	}
+
+	return nil // default case
 }
 
 func (tail *Tail) openReader() {
@@ -390,6 +394,7 @@ func (tail *Tail) openReader() {
 		tail.reader = bufio.NewReader(tail.file)
 	}
 	tail.lk.Unlock()
+	tail.offset = 0
 }
 
 func (tail *Tail) seekEnd() error {
@@ -403,6 +408,7 @@ func (tail *Tail) seekTo(pos SeekInfo) error {
 	}
 	// Reset the read buffer whenever the file is re-seek'ed
 	tail.reader.Reset(tail.file)
+	tail.offset = pos.Offset
 	return nil
 }
 
@@ -418,8 +424,11 @@ func (tail *Tail) sendLine(line string, offset int64) bool {
 	}
 
 	for _, line := range lines {
-		// TODO offset
-		tail.Lines <- &Line{Text: line, Time: now, Err: nil, FileIdentifier: tail.fileIdentifier, Offset: offset}
+		select {
+		case <-tail.Dying():
+			return true // dying
+		case tail.Lines <- &Line{Text: line, Time: now, Err: nil, FileIdentifier: tail.fileIdentifier, Offset: offset}:
+		}
 	}
 
 	if tail.Config.RateLimiter != nil {
@@ -434,9 +443,6 @@ func (tail *Tail) sendLine(line string, offset int64) bool {
 	return true
 }
 
-// Cleanup removes inotify watches added by the tail package. This function is
-// meant to be invoked from a process's exit handler. Linux kernel may not
-// automatically remove inotify watches after the process exits.
 func (tail *Tail) Cleanup() {
-	_ = watch.Cleanup(tail.Filename)
+	// no-op for now.
 }

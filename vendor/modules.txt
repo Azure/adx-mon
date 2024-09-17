@@ -353,9 +353,10 @@ github.com/spf13/pflag
 ## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
-# github.com/tenebris-tech/tail v1.0.5 => github.com/mkeesey/tail v1.1.1-0.20240418231158-5aff28438c9d
+# github.com/tenebris-tech/tail v1.0.5 => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445
 ## explicit; go 1.19
 github.com/tenebris-tech/tail
+github.com/tenebris-tech/tail/logging
 github.com/tenebris-tech/tail/ratelimiter
 github.com/tenebris-tech/tail/util
 github.com/tenebris-tech/tail/watch
@@ -937,5 +938,5 @@ sigs.k8s.io/structured-merge-diff/v4/value
 sigs.k8s.io/yaml
 sigs.k8s.io/yaml/goyaml.v2
 # github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
-# github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240418231158-5aff28438c9d
+# github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445
 # google.golang.org/grpc => github.com/grpc/grpc-go v1.56.2

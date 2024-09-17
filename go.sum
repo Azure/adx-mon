@@ -142,8 +142,8 @@ github.com/mattn/go-ieproxy v0.0.11 h1:MQ/5BuGSgDAHZOJe6YY80IF2UVCfGkwfo6AeD7HtH
 github.com/mattn/go-ieproxy v0.0.11/go.mod h1:/NsJd+kxZBmjMc5hrJCKMbP57B84rvq9BiDRbtO9AS0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
-github.com/mkeesey/tail v1.1.1-0.20240418231158-5aff28438c9d h1:kgKe2Yj7Qa4d7duIvBbvv0Mjji3jJeo/jW+MbfDdme0=
-github.com/mkeesey/tail v1.1.1-0.20240418231158-5aff28438c9d/go.mod h1:m0u5w2Jq02XaCeiUYJk+u4Pa3DDY9kK4jNcyrsBGMOs=
+github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445 h1:kAwHCQ2tUrUb7+TMRfZL2P19ubFQoPbYAapUVd/bA0s=
+github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445/go.mod h1:m0u5w2Jq02XaCeiUYJk+u4Pa3DDY9kK4jNcyrsBGMOs=
 github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w8PVh93nsPXa1VrQ6jlwL5oN8l14QlcNfg=
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
