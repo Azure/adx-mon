@@ -1,5 +1,14 @@
 package watch
 
+type ChangeType int
+
+const (
+	None ChangeType = iota
+	Modified
+	Truncated
+	Deleted
+)
+
 type FileChanges struct {
 	Modified  chan bool // Channel to get notified of modifications
 	Truncated chan bool // Channel to get notified of truncations
