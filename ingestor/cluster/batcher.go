@@ -230,8 +230,6 @@ func (b *batcher) BatchSegments() error {
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
 func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
-	metrics.IngestorSegmentsTotal.Reset()
-
 	// Groups is b map of metrics name to b list of segments for that metric.
 	groups := make(map[string][]wal.SegmentInfo)
 
