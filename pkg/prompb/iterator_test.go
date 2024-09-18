@@ -120,6 +120,7 @@ func TestIterator_TimeSeries_Malformed(t *testing.T) {
 		`http_requests_total    {key="a",b="c"}     1 a`,
 		`http_requests_total    {}     1 a`,
 		`http_requests_total    {}    `,
+		`http_requests_total    {a="b",=} 1027`,
 	} {
 		t.Run(c, func(t *testing.T) {
 			iter := NewIterator(io.NopCloser(strings.NewReader(c)))
