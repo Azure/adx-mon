@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -189,7 +190,7 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 
 	br := resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
-		br, err = gzip.NewReader(resp.Body)
+		br, err = NewGzipReaderWithClose(resp.Body)
 		if err != nil {
 			defer br.Close()
 			return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
@@ -268,4 +269,31 @@ func (c *MetricsClient) refreshToken() {
 			c.mu.Unlock()
 		}
 	}
+}
+
+// gzipReaderWithClose wraps gzip.Reader and the underlying reader
+type gzipReaderWithClose struct {
+	*gzip.Reader
+	underlying io.ReadCloser
+}
+
+// Close closes both the gzip.Reader and the underlying reader
+func (gr *gzipReaderWithClose) Close() error {
+	err := gr.Reader.Close()
+	if err != nil {
+		return err
+	}
+	return gr.underlying.Close()
+}
+
+// NewGzipReaderWithClose creates a new gzipReaderWithClose
+func NewGzipReaderWithClose(r io.ReadCloser) (*gzipReaderWithClose, error) {
+	gr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, err
+	}
+	return &gzipReaderWithClose{
+		Reader:     gr,
+		underlying: r,
+	}, nil
 }
