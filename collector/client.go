@@ -183,6 +183,7 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
 		return nil, fmt.Errorf("collect node metrics for %s: %s", target, resp.Status)
 	}
 
@@ -190,6 +191,7 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		br, err = gzip.NewReader(resp.Body)
 		if err != nil {
+			defer br.Close()
 			return nil, fmt.Errorf("collect node metrics for %s: %w", target, err)
 		}
 	}

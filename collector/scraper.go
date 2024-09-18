@@ -207,6 +207,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := &prompb.WriteRequest{}
 	for _, target := range targets {
+		logger.Infof("Scraping %s", target.String())
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
 			logger.Errorf("Failed to scrape %s: %s", target.Addr, err.Error())
@@ -257,6 +258,10 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			wr.Timeseries = append(wr.Timeseries, ts)
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
+		if err := iter.Err(); err != nil {
+			logger.Errorf("Failed to scrape %s: %s", target.Addr, err.Error())
+		}
+
 		if err := iter.Close(); err != nil {
 			logger.Errorf("Failed to close iterator: %s", err.Error())
 		}

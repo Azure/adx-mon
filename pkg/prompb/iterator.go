@@ -24,6 +24,10 @@ func NewIterator(r io.ReadCloser) *Iterator {
 
 func (i *Iterator) Next() bool {
 	if i.scanner.Scan() {
+		if i.scanner.Err() != nil {
+			return false
+		}
+
 		i.current = i.scanner.Text()
 		if i.isComment(i.current) || i.isSpace(i.current) {
 			return i.Next()
@@ -168,6 +172,10 @@ func parseLabels(labels Labels, line string) (Labels, string, error) {
 			}
 
 			key := line[:idx]
+			if len(key) == 0 {
+				return nil, "", fmt.Errorf("invalid label: no key: %s", orig)
+			}
+
 			line = line[idx+1:]
 
 			if len(line) == 0 {
