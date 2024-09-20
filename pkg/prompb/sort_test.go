@@ -1,7 +1,9 @@
 package prompb
 
 import (
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -82,4 +84,41 @@ func BenchmarkIsSorted(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		IsSorted(l)
 	}
+}
+
+func BenchmarkSort(b *testing.B) {
+	// Seed the random number generator
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// Generate a slice of random labels
+	labels := make([]*Label, 1000)
+	for i := range labels {
+		labels[i] = &Label{
+			Name:  randomLabelName(rng),
+			Value: randomLabelValue(rng),
+		}
+	}
+	b.ResetTimer()
+
+	// Run the benchmark
+	for n := 0; n < b.N; n++ {
+		// Make a copy of the labels to sort
+		labelsCopy := make([]*Label, len(labels))
+		copy(labelsCopy, labels)
+
+		// Sort the labels
+		Sort(labelsCopy)
+	}
+}
+
+// randomLabelName generates a random Prometheus label name
+func randomLabelName(rng *rand.Rand) []byte {
+	labelNames := []string{"job", "instance", "method", "path", "status", "__name__"}
+	return []byte(labelNames[rng.Intn(len(labelNames))])
+}
+
+// randomLabelValue generates a random Prometheus label value
+func randomLabelValue(rng *rand.Rand) []byte {
+	labelValues := []string{"api-server", "localhost:9090", "GET", "/api/v1/query", "200", "up"}
+	return []byte(labelValues[rng.Intn(len(labelValues))])
 }
