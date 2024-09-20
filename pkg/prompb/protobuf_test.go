@@ -71,6 +71,35 @@ func TestUnmarshal(t *testing.T) {
 	require.Equal(t, 1.0, wr.Timeseries[0].Samples[0].Value)
 }
 
+func BenchmarkWriteRequestMarshalTo(b *testing.B) {
+	wr := WriteRequest{
+		Timeseries: []*TimeSeries{
+			{
+				Labels: []*Label{
+					{Name: []byte("__name__"), Value: []byte("cpu")},
+					{Name: []byte("instance"), Value: []byte("localhost:9090")},
+					{Name: []byte("job"), Value: []byte("prometheus")},
+					{Name: []byte("region"), Value: []byte("us-west")},
+					{Name: []byte("zone"), Value: []byte("us-west-1a")},
+					{Name: []byte("environment"), Value: []byte("production")},
+				},
+				Samples: []*Sample{
+					{Timestamp: int64(1), Value: 1.0},
+				},
+			},
+		},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buf := make([]byte, wr.Size())
+		_, err := wr.MarshalTo(buf[:0])
+		if err != nil {
+			b.Fatalf("MarshalTo failed: %v", err)
+		}
+	}
+}
+
 func formatBytes(b []byte) string {
 	s := ""
 	for i, v := range b {
