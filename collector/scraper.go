@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"sort"
 	"strconv"
@@ -186,6 +187,11 @@ func (s *Scraper) Close() error {
 
 func (s *Scraper) scrape(ctx context.Context) {
 	defer s.wg.Done()
+
+	// Sleep for a random amount of time to avoid thundering herd
+	if s.opts.ScrapeInterval > 0 {
+		time.Sleep(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second)
+	}
 
 	reconnectTimer := time.NewTicker(5 * time.Minute)
 	defer reconnectTimer.Stop()
