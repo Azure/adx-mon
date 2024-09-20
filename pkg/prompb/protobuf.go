@@ -328,8 +328,8 @@ func (m *Label) Size() (n int) {
 }
 
 func (m *Label) marshalProtobuf(mm *easyproto.MessageMarshaler) {
-	mm.AppendString(1, string(m.Name))
-	mm.AppendString(2, string(m.Value))
+	mm.AppendBytes(1, m.Name)
+	mm.AppendBytes(2, m.Value)
 }
 
 func (m *Label) unmarshalProtobuf(src []byte) (err error) {
