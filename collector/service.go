@@ -390,6 +390,7 @@ func (s *Service) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	opts := &http.ServerOpts{
 		MaxConns:     s.opts.MaxConnections,
 		WriteTimeout: 30 * time.Second,
@@ -400,6 +401,7 @@ func (s *Service) Open(ctx context.Context) error {
 
 	primaryHttp.RegisterHandler("/metrics", promhttp.Handler())
 	if s.opts.EnablePprof {
+		opts.WriteTimeout = 60 * time.Second
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/", pprof.Index)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/cmdline", pprof.Cmdline)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/profile", pprof.Profile)
