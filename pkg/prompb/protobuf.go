@@ -3,18 +3,35 @@ package prompb
 import (
 	"fmt"
 	mathbits "math/bits"
-	"sync"
 
 	"github.com/VictoriaMetrics/easyproto"
 )
 
 var (
-	mp             = &easyproto.MarshalerPool{}
-	TimeSeriesPool = sync.Pool{
-		New: func() interface{} {
+	mp = &easyproto.MarshalerPool{}
+
+	WriteRequestPool = NewPool[*WriteRequest](
+		func() *WriteRequest {
+			return &WriteRequest{}
+		},
+	)
+
+	TimeSeriesPool = NewPool[*TimeSeries](
+		func() *TimeSeries {
 			return &TimeSeries{}
 		},
-	}
+	)
+	LabelPool = NewPool[*Label](
+		func() *Label {
+			return &Label{}
+		},
+	)
+
+	SamplePool = NewPool[*Sample](
+		func() *Sample {
+			return &Sample{}
+		},
+	)
 )
 
 // WriteRequest represents Prometheus remote write API request
@@ -57,11 +74,9 @@ func (wr *WriteRequest) Unmarshal(src []byte) (err error) {
 			}
 			if cap(wr.Timeseries) > len(wr.Timeseries) {
 				wr.Timeseries = wr.Timeseries[:len(wr.Timeseries)+1]
-				if wr.Timeseries[len(wr.Timeseries)-1] == nil {
-					wr.Timeseries[len(wr.Timeseries)-1] = &TimeSeries{}
-				}
+				wr.Timeseries[len(wr.Timeseries)-1] = TimeSeriesPool.Get()
 			} else {
-				wr.Timeseries = append(wr.Timeseries, &TimeSeries{})
+				wr.Timeseries = append(wr.Timeseries, TimeSeriesPool.Get())
 			}
 			ts := wr.Timeseries[len(wr.Timeseries)-1]
 			if err := ts.unmarshalProtobuf(data); err != nil {
@@ -93,8 +108,7 @@ func (wr *WriteRequest) MarshalTo(dst []byte) ([]byte, error) {
 func (wr *WriteRequest) Reset() {
 	for i := range wr.Timeseries {
 		ts := wr.Timeseries[i]
-		ts.Reset()
-		wr.Timeseries[i] = ts
+		TimeSeriesPool.Put(ts)
 	}
 	wr.Timeseries = wr.Timeseries[:0]
 }
@@ -218,11 +232,9 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			}
 			if cap(m.Labels) > len(m.Labels) {
 				m.Labels = m.Labels[:len(m.Labels)+1]
-				if m.Labels[len(m.Labels)-1] == nil {
-					m.Labels[len(m.Labels)-1] = &Label{}
-				}
+				m.Labels[len(m.Labels)-1] = LabelPool.Get()
 			} else {
-				m.Labels = append(m.Labels, &Label{})
+				m.Labels = append(m.Labels, LabelPool.Get())
 			}
 			s := m.Labels[len(m.Labels)-1]
 			if err := s.unmarshalProtobuf(data); err != nil {
@@ -235,11 +247,9 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			}
 			if cap(m.Samples) > len(m.Samples) {
 				m.Samples = m.Samples[:len(m.Samples)+1]
-				if m.Samples[len(m.Samples)-1] == nil {
-					m.Samples[len(m.Samples)-1] = &Sample{}
-				}
+				m.Samples[len(m.Samples)-1] = SamplePool.Get()
 			} else {
-				m.Samples = append(m.Samples, &Sample{})
+				m.Samples = append(m.Samples, SamplePool.Get())
 			}
 			s := m.Samples[len(m.Samples)-1]
 			if err := s.unmarshalProtobuf(data); err != nil {
@@ -253,13 +263,11 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 func (ts *TimeSeries) Reset() {
 	for i := range ts.Labels {
 		l := ts.Labels[i]
-		l.Reset()
-		ts.Labels[i] = l
+		LabelPool.Put(l)
 	}
 	for i := range ts.Samples {
 		s := ts.Samples[i]
-		s.Reset()
-		ts.Samples[i] = s
+		SamplePool.Put(s)
 	}
 	ts.Labels = ts.Labels[:0]
 	ts.Samples = ts.Samples[:0]
@@ -268,14 +276,11 @@ func (ts *TimeSeries) Reset() {
 func (m *TimeSeries) AppendLabel(key []byte, value []byte) {
 	if cap(m.Labels) > len(m.Labels) {
 		m.Labels = m.Labels[:len(m.Labels)+1]
-		if m.Labels[len(m.Labels)-1] == nil {
-			m.Labels[len(m.Labels)-1] = &Label{}
-		}
+		m.Labels[len(m.Labels)-1] = LabelPool.Get()
 	} else {
-		m.Labels = append(m.Labels, &Label{})
+		m.Labels = append(m.Labels, LabelPool.Get())
 	}
 	l := m.Labels[len(m.Labels)-1]
-	l.Reset()
 	l.Name = append(l.Name[:0], key...)
 	l.Value = append(l.Value[:0], value...)
 }
@@ -283,14 +288,11 @@ func (m *TimeSeries) AppendLabel(key []byte, value []byte) {
 func (m *TimeSeries) AppendLabelString(key string, value string) {
 	if cap(m.Labels) > len(m.Labels) {
 		m.Labels = m.Labels[:len(m.Labels)+1]
-		if m.Labels[len(m.Labels)-1] == nil {
-			m.Labels[len(m.Labels)-1] = &Label{}
-		}
+		m.Labels[len(m.Labels)-1] = LabelPool.Get()
 	} else {
-		m.Labels = append(m.Labels, &Label{})
+		m.Labels = append(m.Labels, LabelPool.Get())
 	}
 	l := m.Labels[len(m.Labels)-1]
-	l.Reset()
 	l.Name = append(l.Name[:0], key...)
 	l.Value = append(l.Value[:0], value...)
 }
@@ -298,14 +300,11 @@ func (m *TimeSeries) AppendLabelString(key string, value string) {
 func (m *TimeSeries) AppendSample(timestamp int64, value float64) {
 	if cap(m.Samples) > len(m.Samples) {
 		m.Samples = m.Samples[:len(m.Samples)+1]
-		if m.Samples[len(m.Samples)-1] == nil {
-			m.Samples[len(m.Samples)-1] = &Sample{}
-		}
+		m.Samples[len(m.Samples)-1] = SamplePool.Get()
 	} else {
-		m.Samples = append(m.Samples, &Sample{})
+		m.Samples = append(m.Samples, SamplePool.Get())
 	}
 	s := m.Samples[len(m.Samples)-1]
-	s.Reset()
 	s.Timestamp = timestamp
 	s.Value = value
 }

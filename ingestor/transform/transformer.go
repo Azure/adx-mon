@@ -154,7 +154,7 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 	}
 	v.Labels = v.Labels[:i]
 	for _, ll := range f.addLabels {
-		l := &prompb.Label{}
+		l := prompb.LabelPool.Get()
 		l.Name = append(l.Name[:0], ll.Name...)
 		l.Value = append(l.Value[:0], ll.Value...)
 		v.Labels = append(v.Labels, l)

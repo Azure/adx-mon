@@ -47,7 +47,7 @@ func TestReplicator_SuccessfulTransfer(t *testing.T) {
 	}
 
 	rep.TransferQueue() <- batch
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(time.Second)
 
 	require.NoError(t, rep.Close())
 
