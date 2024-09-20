@@ -3,8 +3,6 @@ package prompb
 import (
 	"bytes"
 	"sort"
-	"unicode"
-	"unicode/utf8"
 )
 
 type Labels []Label
@@ -34,44 +32,52 @@ func IsSorted(l []*Label) bool {
 
 // Sort sorts labels ensuring the __name__ is first the remaining labels or ordered by name.
 func Sort(l []*Label) {
-	sort.Slice(l, func(i, j int) bool {
-		return labelLess(l[i].Name, l[j].Name)
-	})
+	sort.Sort(labelSorter(l))
 }
 
+type labelSorter []*Label
+
+func (ls labelSorter) Len() int           { return len(ls) }
+func (ls labelSorter) Less(i, j int) bool { return labelLess(ls[i].Name, ls[j].Name) }
+func (ls labelSorter) Swap(i, j int)      { ls[i], ls[j] = ls[j], ls[i] }
+
 func labelLess(a, b []byte) bool {
-	if bytes.Equal(a, []byte("__name__")) {
+	if bytes.Equal(a, nameBytes) {
 		return true
-	} else if bytes.Equal(b, []byte("__name__")) {
+	} else if bytes.Equal(b, nameBytes) {
 		return false
 	}
 	return CompareLower(a, b) < 0
 }
 
 func CompareLower(sa, sb []byte) int {
-	for {
-		rb, nb := utf8.DecodeRune(sb)
-		ra, na := utf8.DecodeRune(sa)
+	for len(sa) > 0 && len(sb) > 0 {
+		ra := sa[0]
+		rb := sb[0]
 
-		if na == 0 && nb > 0 {
-			return -1
-		} else if na > 0 && nb == 0 {
-			return 1
-		} else if na == 0 && nb == 0 {
-			return 0
+		if ra >= 'A' && ra <= 'Z' {
+			ra += 'a' - 'A'
+		}
+		if rb >= 'A' && rb <= 'Z' {
+			rb += 'a' - 'A'
 		}
 
-		rb = unicode.ToLower(rb)
-		ra = unicode.ToLower(ra)
-
-		if ra < rb {
-			return -1
-		} else if ra > rb {
+		if ra != rb {
+			if ra < rb {
+				return -1
+			}
 			return 1
 		}
 
-		// Trim rune from the beginning of each string.
-		sa = sa[na:]
-		sb = sb[nb:]
+		sa = sa[1:]
+		sb = sb[1:]
 	}
+
+	if len(sa) == len(sb) {
+		return 0
+	}
+	if len(sa) < len(sb) {
+		return -1
+	}
+	return 1
 }
