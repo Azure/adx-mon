@@ -207,7 +207,8 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 	targets := s.Targets()
 
 	scrapeTime := time.Now().UnixNano() / 1e6
-	wr := &prompb.WriteRequest{}
+	wr := prompb.WriteRequestPool.Get()
+	defer prompb.WriteRequestPool.Put(wr)
 	for _, target := range targets {
 		logger.Infof("Scraping %s", target.String())
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
@@ -216,8 +217,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			continue
 		}
 		for iter.Next() {
-			pt := prompb.TimeSeriesPool.Get().(*prompb.TimeSeries)
-			pt.Reset()
+			pt := prompb.TimeSeriesPool.Get()
 			ts, err := iter.TimeSeriesInto(pt)
 			if err != nil {
 				logger.Errorf("Failed to parse series %s: %s", target.Addr, err.Error())

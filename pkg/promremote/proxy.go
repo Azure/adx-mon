@@ -101,14 +101,14 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 
 			// Flush as many full queue as we can
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
-				nextBatch := &prompb.WriteRequest{}
+				nextBatch := prompb.WriteRequestPool.Get()
 				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[:c.maxBatchSize]...)
 				pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0], pendingBatch.Timeseries[c.maxBatchSize:]...)
 				c.ready <- nextBatch
 			}
 		case <-time.After(10 * time.Second):
 			for len(pendingBatch.Timeseries) >= c.maxBatchSize {
-				nextBatch := &prompb.WriteRequest{}
+				nextBatch := prompb.WriteRequestPool.Get()
 				nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries[:c.maxBatchSize]...)
 				pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0], pendingBatch.Timeseries[c.maxBatchSize:]...)
 				c.ready <- nextBatch
@@ -116,7 +116,7 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 			if len(pendingBatch.Timeseries) == 0 {
 				continue
 			}
-			nextBatch := &prompb.WriteRequest{}
+			nextBatch := prompb.WriteRequestPool.Get()
 			nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries...)
 
 			c.ready <- nextBatch
@@ -131,6 +131,9 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case wr := <-p.ready:
+			// This sorts all the series by metric name which has the effect of reducing contention on segments
+			// in ingestor as the locks tend to be acquired in order of series name.  Since there are usually
+			// multiple series with the same name, this can reduce contention.
 			sort.Slice(wr.Timeseries, func(i, j int) bool {
 				return bytes.Compare(wr.Timeseries[i].Labels[0].Value, wr.Timeseries[j].Labels[0].Value) < 0
 			})
@@ -167,6 +170,7 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 			if err := g.Wait(); err != nil {
 				logger.Errorf("Error sending batch: %v", err)
 			}
+			prompb.WriteRequestPool.Put(wr)
 		}
 	}
 }

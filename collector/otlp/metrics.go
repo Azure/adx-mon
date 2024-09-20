@@ -112,7 +112,8 @@ func NewOltpMetricWriter(opts OltpMetricWriterOpts) *OltpMetricWriter {
 // Write takes an OTLP ExportMetricsServiceRequest and writes it to the configured endpoints.
 func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServiceRequest) error {
 	// Causes allocation. Like in prom remote receiver, create rather than using a bunch of space in pool.
-	wr := &prompb.WriteRequest{}
+	wr := prompb.WriteRequestPool.Get()
+	defer prompb.WriteRequestPool.Put(wr)
 
 	var rejectedRecordsExpHist int64 = 0
 	for _, resourceMetrics := range msg.ResourceMetrics {
@@ -171,6 +172,10 @@ func (t *OltpMetricWriter) addSeriesAndFlushIfNecessary(ctx context.Context, wr 
 		if err := t.sendBatch(ctx, wr); err != nil {
 			return fmt.Errorf("addSeriesAndFlushIfNecessary flush failure: %w", err)
 		}
+		for _, ts := range wr.Timeseries {
+			prompb.TimeSeriesPool.Put(ts)
+		}
+
 		wr.Timeseries = wr.Timeseries[:0]
 	}
 

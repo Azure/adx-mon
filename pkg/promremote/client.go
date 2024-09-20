@@ -130,7 +130,10 @@ func (c *Client) Write(ctx context.Context, endpoint string, wr *prompb.WriteReq
 		return fmt.Errorf("marshal proto: %w", err)
 	}
 
-	encoded := snappy.Encode(nil, b)
+	b1 := pool.Get(snappy.MaxEncodedLen(len(b)))
+	defer pool.Put(b1)
+
+	encoded := snappy.Encode(b1[:0], b)
 	body := bytes.NewReader(encoded)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/receive", endpoint), body)

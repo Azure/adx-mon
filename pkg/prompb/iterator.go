@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"strconv"
-	"strings"
 
 	"github.com/valyala/fastjson/fastfloat"
 )
@@ -44,13 +42,6 @@ func (i *Iterator) Next() bool {
 
 func (i *Iterator) Value() string {
 	return i.current
-}
-
-func (i *Iterator) TimeSeries() (*TimeSeries, error) {
-	if len(i.current) == 0 {
-		return nil, fmt.Errorf("no current value")
-	}
-	return i.ParseTimeSeries(i.current)
 }
 
 func (i *Iterator) TimeSeriesInto(ts *TimeSeries) (*TimeSeries, error) {
@@ -127,47 +118,7 @@ func (i *Iterator) ParseTimeSeriesInto(ts *TimeSeries, line string) (*TimeSeries
 
 	var timestamp int64
 	if len(t) > 0 {
-		timestamp = fastfloat.ParseInt64BestEffort(t)
-	}
-
-	ts.AppendSample(timestamp, value)
-
-	return ts, nil
-}
-
-func (i *Iterator) ParseTimeSeries(line string) (*TimeSeries, error) {
-	var (
-		name string
-		err  error
-	)
-	ts := &TimeSeries{}
-
-	name, line = parseName(line)
-	n := strings.Count(line, ",")
-	labels := make([]*Label, 0, n+1)
-	labels = append(labels, &Label{
-		Name:  []byte("__name__"),
-		Value: []byte(name),
-	})
-	ts.Labels = labels
-
-	ts, line, err = i.parseLabels(ts, line)
-	if err != nil {
-		return nil, err
-	}
-
-	v, line := parseValue(line)
-
-	tsStr, line := parseTimestamp(line)
-
-	value, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid value: %v", err)
-	}
-
-	var timestamp int64
-	if len(tsStr) > 0 {
-		timestamp, err = strconv.ParseInt(tsStr, 10, 64)
+		timestamp, err = fastfloat.ParseInt64(t)
 		if err != nil {
 			return nil, fmt.Errorf("invalid timestamp: %v", err)
 		}

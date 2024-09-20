@@ -126,8 +126,9 @@ func TestIterator_TimeSeries_Malformed(t *testing.T) {
 			iter := NewIterator(io.NopCloser(strings.NewReader(c)))
 			defer iter.Close()
 
+			ts := &TimeSeries{}
 			require.True(t, iter.Next())
-			_, err := iter.TimeSeries()
+			_, err := iter.TimeSeriesInto(ts)
 			require.Error(t, err)
 		})
 	}
@@ -417,8 +418,9 @@ func TestIterator_TimeSeries(t *testing.T) {
 			iter := NewIterator(io.NopCloser(strings.NewReader(c.input)))
 			defer iter.Close()
 
+			ts := &TimeSeries{}
 			require.True(t, iter.Next())
-			ts, err := iter.TimeSeries()
+			ts, err := iter.TimeSeriesInto(ts)
 			require.NoError(t, err)
 			require.Equal(t, c.want, ts)
 		})
