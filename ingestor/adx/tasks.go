@@ -8,7 +8,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 )
 
 type TableDetail struct {
@@ -61,11 +60,11 @@ func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
 
 	for table, count := range t.unusedTables {
 		if count > 2 {
-			logger.Infof("Dropping unused table %s.%s", t.kustoCli.Database(), table)
-			stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fmt.Sprintf(".drop table %s", table))
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-				return fmt.Errorf("error dropping table %s: %w", table, err)
-			}
+			logger.Infof("DRYRUN Dropping unused table %s.%s", t.kustoCli.Database(), table)
+			// stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fmt.Sprintf(".drop table %s", table))
+			// if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+			// 	return fmt.Errorf("error dropping table %s: %w", table, err)
+			// }
 			delete(t.unusedTables, table)
 		}
 	}
