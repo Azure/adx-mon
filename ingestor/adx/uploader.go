@@ -207,7 +207,7 @@ func (n *uploader) upload(ctx context.Context) error {
 				)
 
 				for _, si := range segments {
-					database, table, _, err = wal.ParseFilename(si.Path)
+					database, table, _, _, err = wal.ParseFilename(si.Path)
 					if err != nil {
 						logger.Errorf("Failed to parse file: %s", err.Error())
 						continue

@@ -241,7 +241,7 @@ func (s *LocalStore) PrefixesByAge() []string {
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
-	db, table, _, err := wal.ParseFilename(filename)
+	db, table, _, _, err := wal.ParseFilename(filename)
 	if err != nil {
 		return 0, err
 	}
@@ -269,7 +269,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 }
 
 func (s *LocalStore) Remove(path string) error {
-	db, table, _, err := wal.ParseFilename(path)
+	db, table, _, _, err := wal.ParseFilename(path)
 	if err != nil {
 		return err
 	}

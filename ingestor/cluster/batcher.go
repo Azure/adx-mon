@@ -299,7 +299,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			directUpload bool
 		)
 
-		db, table, _, err := wal.ParseFilename(v[0].Path)
+		db, table, _, _, err := wal.ParseFilename(v[0].Path)
 		if err != nil {
 			logger.Errorf("Failed to parse segment filename: %s", err)
 			continue
