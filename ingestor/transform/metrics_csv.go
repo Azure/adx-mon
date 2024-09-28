@@ -26,11 +26,15 @@ type MetricsCSVWriter struct {
 	seriesIdBuf *bytes.Buffer
 	line        []byte
 	columns     [][]byte
+
+	lifted Schema
+
+	headerWritten bool
 }
 
 // NewMetricsCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
 // label keys that will be promoted to columns.
-func NewMetricsCSVWriter(w *bytes.Buffer, columns []string) *MetricsCSVWriter {
+func NewMetricsCSVWriter(w *bytes.Buffer, lifted Schema) *MetricsCSVWriter {
 	writer := &MetricsCSVWriter{
 		w:           w,
 		buf:         &strings.Builder{},
@@ -38,14 +42,52 @@ func NewMetricsCSVWriter(w *bytes.Buffer, columns []string) *MetricsCSVWriter {
 		labelsBuf:   bytes.NewBuffer(make([]byte, 0, 1024)),
 		enc:         csv.NewWriter(w),
 		line:        make([]byte, 0, 4096),
-		columns:     make([][]byte, 0, len(columns)),
+		columns:     make([][]byte, 0, len(lifted)),
+		lifted:      lifted,
 	}
 
+	columns := make([]string, 0, len(lifted))
+	for _, v := range lifted {
+		columns = append(columns, v.Source)
+	}
 	writer.InitColumns(columns)
 	return writer
 }
 
 func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
+	if !w.headerWritten {
+		line := w.line[:0]
+		buf := w.labelsBuf
+		for _, v := range DefaultMetricsSchema {
+			buf.Reset()
+			buf.WriteString(v.Name)
+			buf.Write([]byte(":"))
+			buf.WriteString(v.Type)
+			if len(line) == 0 {
+				line = append(line, buf.Bytes()...)
+			} else {
+				line = adxcsv.Append(line, buf.Bytes())
+			}
+		}
+
+		for _, v := range w.lifted {
+			buf.Reset()
+			buf.WriteString(v.Name)
+			buf.Write([]byte(":"))
+			buf.WriteString(v.Type)
+			line = adxcsv.Append(line, buf.Bytes())
+		}
+
+		line = adxcsv.AppendNewLine(line)
+
+		if n, err := w.w.Write(line); err != nil {
+			return err
+		} else if n != len(line) {
+			return errors.New("short write")
+		}
+		w.headerWritten = true
+	}
+
 	buf := w.labelsBuf
 	buf.Reset()
 
@@ -155,6 +197,7 @@ func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 func (w *MetricsCSVWriter) Reset() {
 	w.w.Reset()
 	w.buf.Reset()
+	w.headerWritten = false
 }
 
 func (w *MetricsCSVWriter) Bytes() []byte {
