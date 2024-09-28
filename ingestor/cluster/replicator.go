@@ -126,7 +126,7 @@ func (r *replicator) transfer(ctx context.Context) {
 				// the full batch atomimcally.
 				filename := filepath.Base(paths[0])
 
-				db, table, _, err := wal.ParseFilename(filename)
+				db, table, _, _, err := wal.ParseFilename(filename)
 				if err != nil {
 					return fmt.Errorf("parse segment filename: %w", err)
 				}
