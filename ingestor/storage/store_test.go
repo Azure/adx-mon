@@ -139,7 +139,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
-	require.Equal(t, "1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n", string(data))
+	require.Equal(t, "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n", string(data))
 }
 
 func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
