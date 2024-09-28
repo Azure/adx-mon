@@ -18,7 +18,7 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 	idx.Add(wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "aaaa",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "aaaa")),
 		Size:      100,
 		CreatedAt: time.Unix(1, 0),
 	})
@@ -26,7 +26,7 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 	idx.Add(wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "bbbb",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "bbbb")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "bbbb")),
 		Size:      100,
 		CreatedAt: time.Unix(0, 0),
 	})
@@ -41,7 +41,7 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "aaaa"))}, owner[0].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "", "aaaa"))}, owner[0].Paths())
 	require.Equal(t, 0, len(notOwned))
 
 	requireValidBatch(t, owner)
@@ -62,7 +62,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      now.String(),
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", now.String())),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", now.String())),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -75,7 +75,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      now.String(),
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", now.String())),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", now.String())),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -111,7 +111,7 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac7d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac7d6f0001")),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -123,7 +123,7 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
 		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -142,10 +142,10 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	require.Equal(t, 2, len(owner))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac7d6f0001"))}, owner[0].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac7d6f0001"))}, owner[0].Paths())
 	require.Equal(t, "db", owner[0].Database)
 	require.Equal(t, "Cpu", owner[0].Table)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owner[1].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owner[1].Paths())
 	require.Equal(t, "db", owner[1].Database)
 	require.Equal(t, "Disk", owner[1].Table)
 
@@ -163,7 +163,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac8d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
 		Size:      100 * 1024, // Meets min transfer size, separate batch
 		CreatedAt: created,
 	}
@@ -175,7 +175,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac9d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
 		Size:      100, // This should be in a new batch
 		CreatedAt: created,
 	}
@@ -187,7 +187,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
 		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -212,7 +212,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 
 	require.Equal(t, []string{f1.Path}, owned[0].Paths())
 	require.Equal(t, []string{f2.Path}, owned[1].Paths())
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owned[2].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)
@@ -228,7 +228,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac8d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
 		Size:      50 * 1024,
 		CreatedAt: created,
 	}
@@ -240,7 +240,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac9d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
 		Size:      50 * 1024,
 		CreatedAt: created,
 	}
@@ -252,7 +252,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdacad6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdacad6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdacad6f0001")),
 		Size:      1024,
 		CreatedAt: created,
 	}
@@ -264,7 +264,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 	f4 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
 		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -289,7 +289,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 
 	require.Equal(t, []string{f1.Path, f2.Path}, owned[0].Paths())
 	require.Equal(t, []string{f3.Path}, owned[1].Paths())
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001"))}, owned[2].Paths())
+	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owned[2].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)
@@ -307,7 +307,7 @@ func TestBatcher_Stats(t *testing.T) {
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac8d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
 		Size:      50 * 1024,
 		CreatedAt: created,
 	}
@@ -320,7 +320,7 @@ func TestBatcher_Stats(t *testing.T) {
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdac9d6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
 		Size:      50 * 1024,
 		CreatedAt: created,
 	}
@@ -333,7 +333,7 @@ func TestBatcher_Stats(t *testing.T) {
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
 		Ulid:      "2359cdacad6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "2359cdacad6f0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdacad6f0001")),
 		Size:      1024,
 		CreatedAt: created,
 	}
@@ -346,7 +346,7 @@ func TestBatcher_Stats(t *testing.T) {
 	f4 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
 		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "2359cd7e3aef0001")),
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
 		Size:      100,
 		CreatedAt: created,
 	}
@@ -368,8 +368,6 @@ func TestBatcher_Stats(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(4), a.SegmentsTotal())
 
-	println(a.UploadQueueSize(), a.TransferQueueSize())
-
 	var sz int64
 	for _, s := range segments {
 		sz += s.Size
@@ -380,7 +378,6 @@ func TestBatcher_Stats(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(4), a.SegmentsTotal())
 	require.Equal(t, sz, a.SegmentsSize())
-	println(a.UploadQueueSize(), a.TransferQueueSize())
 
 	idx.Remove(f1)
 	segments = segments[1:]
