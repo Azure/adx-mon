@@ -107,7 +107,7 @@ func (u *Uploader) run(ctx context.Context) error {
 }
 
 func (u *Uploader) uploadSegment(ctx context.Context, path string) error {
-	_, table, _, err := wal.ParseFilename(path)
+	_, table, _, _, err := wal.ParseFilename(path)
 	if err != nil {
 		return fmt.Errorf("failed to parse file: %w", err)
 	}

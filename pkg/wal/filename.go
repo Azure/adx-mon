@@ -3,7 +3,6 @@ package wal
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -13,7 +12,7 @@ var (
 	ErrInvalidWALSegment = errors.New("invalid WAL segment")
 )
 
-func ParseFilename(path string) (database, table, epoch string, err error) {
+func ParseFilename(path string) (database, table, schema, epoch string, err error) {
 	if filepath.Ext(path) != ".wal" {
 		err = ErrNotWALSegment
 		return
@@ -21,54 +20,40 @@ func ParseFilename(path string) (database, table, epoch string, err error) {
 
 	fileName := filepath.Base(path)
 	fields := strings.Split(fileName, "_")
-	if len(fields) != 3 {
+	if len(fields) < 3 {
 		err = ErrInvalidWALSegment
 		return
 	}
-	database = fields[0]
-	table = fields[1]
-	epoch = fields[2][:len(fields[2])-4]
+
+	if len(fields) == 3 {
+		database = fields[0]
+		table = fields[1]
+		epoch = fields[2][:len(fields[2])-4]
+		schema = ""
+		return
+	} else if len(fields) == 4 {
+		database = fields[0]
+		table = fields[1]
+		schema = fields[2]
+		epoch = fields[3][:len(fields[3])-4]
+		return
+	}
+	err = ErrInvalidWALSegment
 	return
 }
 
-func Filename(database, table, epoch string) string {
-	return fmt.Sprintf("%s_%s_%s.wal", database, table, epoch)
+func Filename(database, table, schema, epoch string) string {
+	if schema == "" {
+		return fmt.Sprintf("%s_%s_%s.wal", database, table, epoch)
+	}
+	return fmt.Sprintf("%s_%s_%s_%s.wal", database, table, schema, epoch)
 }
 
 type File struct {
 	Path     string
 	Database string
 	Table    string
+	Schema   string
 	Epoch    string
 	Key      string
-}
-
-// TODO: make file.File aware
-func ListDir(storageDir string) ([]File, error) {
-	var files []File
-	filepath.WalkDir(storageDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || filepath.Ext(path) != ".wal" {
-			return nil
-		}
-
-		fileName := filepath.Base(path)
-		fields := strings.Split(fileName, "_")
-		if len(fields) != 3 || fields[0] == "" {
-			return nil
-		}
-
-		files = append(files, File{
-			Path:     path,
-			Database: fields[0],
-			Table:    fields[1],
-			Epoch:    fields[2][:len(fields[2])-4],
-			Key:      fmt.Sprintf("%s_%s", fields[0], fields[1]),
-		},
-		)
-		return nil
-	})
-	return files, nil
 }
