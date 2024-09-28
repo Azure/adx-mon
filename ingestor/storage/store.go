@@ -27,6 +27,10 @@ var (
 		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
+	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+		return transform.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+	})
+
 	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return bytes.NewBuffer(make([]byte, 0, sz))
 	})
@@ -98,8 +102,8 @@ func (s *LocalStore) WALCount() int {
 }
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
-	defer csvWriterPool.Put(enc)
+	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform.MetricsCSVWriter)
+	defer metricsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedColumns)
 
 	b := gbp.Get(256)
@@ -119,7 +123,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 		s.incMetrics(v.Labels[0].Value, len(v.Samples))
 
 		enc.Reset()
-		if err := enc.MarshalTS(v); err != nil {
+		if err := enc.MarshalCSV(v); err != nil {
 			return err
 		}
 
