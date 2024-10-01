@@ -3,7 +3,7 @@ package storage
 import (
 	"strconv"
 
-	"github.com/Azure/adx-mon/ingestor/transform"
+	"github.com/Azure/adx-mon/transform"
 )
 
 var (
