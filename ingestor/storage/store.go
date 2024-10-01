@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
@@ -17,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	transform2 "github.com/Azure/adx-mon/transform"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -24,11 +24,11 @@ import (
 
 var (
 	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+		return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
 	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return transform.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
 	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
@@ -102,7 +102,7 @@ func (s *LocalStore) WALCount() int {
 }
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
-	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform.MetricsCSVWriter)
+	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
 	defer metricsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedColumns)
 
@@ -135,7 +135,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 }
 
 func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	enc := csvWriterPool.Get(8 * 1024).(*transform2.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
 	key := gbp.Get(256)
@@ -177,7 +177,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 }
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	enc := csvWriterPool.Get(8 * 1024).(*transform2.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
 	key := gbp.Get(256)
@@ -331,7 +331,7 @@ func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
 
 	dst = append(dst, database...)
 	dst = append(dst, delim...)
-	return transform.AppendNormalize(dst, name), nil
+	return transform2.AppendNormalize(dst, name), nil
 }
 
 var delim = []byte("_")
