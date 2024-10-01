@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/stretchr/testify/require"
 )
