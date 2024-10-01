@@ -14,7 +14,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 )
@@ -53,7 +53,7 @@ type UploaderOpts struct {
 	Database          string
 	ConcurrentUploads int
 	Dimensions        []string
-	DefaultMapping    storage.SchemaMapping
+	DefaultMapping    schema.SchemaMapping
 	SampleType        SampleType
 }
 
