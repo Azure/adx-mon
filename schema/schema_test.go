@@ -1,15 +1,15 @@
-package storage_test
+package schema_test
 
 import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewSchema_NoLabels(t *testing.T) {
-	mapping := storage.NewMetricsSchema()
+	mapping := schema.NewMetricsSchema()
 	_, err := json.Marshal(mapping)
 	require.NoError(t, err)
 
@@ -32,7 +32,7 @@ func TestNewSchema_NoLabels(t *testing.T) {
 }
 
 func TestNewSchema_AddConstMapping(t *testing.T) {
-	mapping := storage.NewMetricsSchema()
+	mapping := schema.NewMetricsSchema()
 	mapping = mapping.AddConstMapping("Region", "eastus")
 
 	_, err := json.Marshal(mapping)
@@ -63,7 +63,7 @@ func TestNewSchema_AddConstMapping(t *testing.T) {
 }
 
 func TestNewSchema_AddLiftedMapping(t *testing.T) {
-	mapping := storage.NewMetricsSchema()
+	mapping := schema.NewMetricsSchema()
 
 	mapping = mapping.AddStringMapping("Region")
 	mapping = mapping.AddStringMapping("Host")
@@ -96,4 +96,14 @@ func TestNewSchema_AddLiftedMapping(t *testing.T) {
 	require.Equal(t, "real", mapping[5].DataType)
 	require.Equal(t, "5", mapping[5].Properties.Ordinal)
 
+}
+
+func TestNormalize(t *testing.T) {
+	require.Equal(t, "Redis", string(schema.Normalize([]byte("__redis__"))))
+	require.Equal(t, "UsedCpuUserChildren", string(schema.Normalize([]byte("used_cpu_user_children"))))
+	require.Equal(t, "Host1", string(schema.Normalize([]byte("host_1"))))
+	require.Equal(t, "Region", string(schema.Normalize([]byte("region"))))
+	require.Equal(t, "JobEtcdRequestLatency75pctlrate5m", string(schema.Normalize([]byte("Job:etcdRequestLatency:75pctlrate5m"))))
+	require.Equal(t, "TestLimit", string(schema.Normalize([]byte("Test$limit"))))
+	require.Equal(t, "TestRateLimit", string(schema.Normalize([]byte("Test::Rate$limit"))))
 }

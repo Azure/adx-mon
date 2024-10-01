@@ -1,9 +1,8 @@
-package storage
+package schema
 
 import (
 	"strconv"
-
-	"github.com/Azure/adx-mon/transform"
+	"unicode"
 )
 
 var (
@@ -206,5 +205,36 @@ func (m SchemaMapping) AddConstMapping(col, value string) SchemaMapping {
 }
 
 func (m SchemaMapping) AddStringMapping(col string) SchemaMapping {
-	return m.AddConstMapping(string(transform.Normalize([]byte(col))), "")
+	return m.AddConstMapping(string(Normalize([]byte(col))), "")
+}
+
+// Normalize converts a metrics name to a ProperCase table name
+func Normalize(s []byte) []byte {
+	return AppendNormalize(make([]byte, 0, len(s)), s)
+}
+
+// AppendNormalize converts a metrics name to a ProperCase table name and appends it to dst.
+func AppendNormalize(dst, s []byte) []byte {
+	for i := 0; i < len(s); i++ {
+		// Skip any non-alphanumeric characters, but capitalize the first letter after it
+		allowedChar := s[i] >= 'a' && s[i] <= 'z' || s[i] >= '0' && s[i] <= '9' || s[i] >= 'A' && s[i] <= 'Z'
+		if !allowedChar {
+			if i+1 < len(s) {
+				if s[i+1] >= 'a' && s[i+1] <= 'z' {
+					dst = append(dst, byte(unicode.ToUpper(rune(s[i+1]))))
+					i += 1
+					continue
+				}
+			}
+			continue
+		}
+
+		// Capitalize the first letter
+		if i == 0 {
+			dst = append(dst, byte(unicode.ToUpper(rune(s[i]))))
+			continue
+		}
+		dst = append(dst, s[i])
+	}
+	return dst
 }
