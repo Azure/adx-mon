@@ -14,11 +14,11 @@ import (
 
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 )
