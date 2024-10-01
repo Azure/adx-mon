@@ -11,8 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/storage"
-	"github.com/Azure/adx-mon/transform"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"
@@ -39,12 +38,12 @@ type Syncer struct {
 	database string
 
 	mu       sync.RWMutex
-	mappings map[string]storage.SchemaMapping
+	mappings map[string]schema.SchemaMapping
 	st       SampleType
 
 	tables map[string]struct{}
 
-	defaultMapping storage.SchemaMapping
+	defaultMapping schema.SchemaMapping
 	cancelFn       context.CancelFunc
 }
 
@@ -61,12 +60,12 @@ type Table struct {
 	TableName string `kusto:"TableName"`
 }
 
-func NewSyncer(kustoCli mgmt, database string, defaultMapping storage.SchemaMapping, st SampleType) *Syncer {
+func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMapping, st SampleType) *Syncer {
 	return &Syncer{
 		KustoCli:       kustoCli,
 		database:       database,
 		defaultMapping: defaultMapping,
-		mappings:       make(map[string]storage.SchemaMapping),
+		mappings:       make(map[string]schema.SchemaMapping),
 		st:             st,
 		tables:         make(map[string]struct{}),
 	}
@@ -120,7 +119,7 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 			return err
 		}
 
-		var sm storage.SchemaMapping
+		var sm schema.SchemaMapping
 		if err := json.Unmarshal([]byte(v.Mapping), &sm); err != nil {
 			return err
 		}
@@ -205,10 +204,10 @@ func (s *Syncer) EnsureMapping(table string) (string, error) {
 	}
 
 	var b bytes.Buffer
-	kind := transform.Normalize([]byte(table))
+	kind := schema.Normalize([]byte(table))
 	b.Write(kind)
 	for _, v := range mapping {
-		b.Write(transform.Normalize([]byte(v.Column)))
+		b.Write(schema.Normalize([]byte(v.Column)))
 	}
 
 	name := fmt.Sprintf("%s_%d", string(kind), xxhash.Sum64(b.Bytes()))
