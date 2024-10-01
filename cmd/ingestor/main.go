@@ -24,7 +24,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
-	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/tools/otlp/logs/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
@@ -197,7 +197,7 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatalf("--storage-dir is required")
 	}
 
-	defaultMapping := storage.NewMetricsSchema()
+	defaultMapping := schema.DefaultMetricsMapping
 	for _, v := range ctx.StringSlice("add-labels") {
 		fields := strings.Split(v, "=")
 		if len(fields) != 2 {
@@ -227,6 +227,8 @@ func realMain(ctx *cli.Context) error {
 
 		defaultMapping = defaultMapping.AddStringMapping(v)
 	}
+	// Update the default mapping so pooled csv encoders can use the lifted columns
+	schema.DefaultMetricsMapping = defaultMapping
 
 	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
 	for _, v := range ctx.StringSlice("drop-labels") {
@@ -284,7 +286,7 @@ func realMain(ctx *cli.Context) error {
 	if len(logsKusto) > 0 {
 		logsUploaders, logsDatabases, err = newUploaders(
 			logsKusto, storageDir, concurrentUploads,
-			storage.DefaultLogsMapping, adx.OTLPLogs)
+			schema.DefaultLogsMapping, adx.OTLPLogs)
 		if err != nil {
 			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 		}
@@ -477,7 +479,7 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
-	defaultMapping storage.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
+	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
 
 	var uploaders []adx.Uploader
 	var uploadDatabaseNames []string

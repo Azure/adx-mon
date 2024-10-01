@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/cespare/xxhash"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
 
@@ -27,14 +27,14 @@ type MetricsCSVWriter struct {
 	line        []byte
 	columns     [][]byte
 
-	lifted Schema
+	lifted Fields
 
 	headerWritten bool
 }
 
 // NewMetricsCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
 // label keys that will be promoted to columns.
-func NewMetricsCSVWriter(w *bytes.Buffer, lifted Schema) *MetricsCSVWriter {
+func NewMetricsCSVWriter(w *bytes.Buffer, lifted Fields) *MetricsCSVWriter {
 	writer := &MetricsCSVWriter{
 		w:           w,
 		buf:         &strings.Builder{},
@@ -58,24 +58,16 @@ func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 	if !w.headerWritten {
 		line := w.line[:0]
 		buf := w.labelsBuf
-		for _, v := range DefaultMetricsSchema {
+		for _, v := range schema.DefaultMetricsMapping {
 			buf.Reset()
-			buf.WriteString(v.Name)
+			buf.WriteString(v.Column)
 			buf.Write([]byte(":"))
-			buf.WriteString(v.Type)
+			buf.WriteString(v.DataType)
 			if len(line) == 0 {
 				line = append(line, buf.Bytes()...)
 			} else {
 				line = adxcsv.Append(line, buf.Bytes())
 			}
-		}
-
-		for _, v := range w.lifted {
-			buf.Reset()
-			buf.WriteString(v.Name)
-			buf.Write([]byte(":"))
-			buf.WriteString(v.Type)
-			line = adxcsv.Append(line, buf.Bytes())
 		}
 
 		line = adxcsv.AppendNewLine(line)
@@ -219,35 +211,4 @@ func (w *MetricsCSVWriter) InitColumns(columns []string) {
 		return bytes.Compare(sortLower[i], sortLower[j]) < 0
 	})
 	w.columns = sortLower
-}
-
-// Normalize converts a metrics name to a ProperCase table name
-func Normalize(s []byte) []byte {
-	return AppendNormalize(make([]byte, 0, len(s)), s)
-}
-
-// AppendNormalize converts a metrics name to a ProperCase table name and appends it to dst.
-func AppendNormalize(dst, s []byte) []byte {
-	for i := 0; i < len(s); i++ {
-		// Skip any non-alphanumeric characters, but capitalize the first letter after it
-		allowedChar := s[i] >= 'a' && s[i] <= 'z' || s[i] >= '0' && s[i] <= '9' || s[i] >= 'A' && s[i] <= 'Z'
-		if !allowedChar {
-			if i+1 < len(s) {
-				if s[i+1] >= 'a' && s[i+1] <= 'z' {
-					dst = append(dst, byte(unicode.ToUpper(rune(s[i+1]))))
-					i += 1
-					continue
-				}
-			}
-			continue
-		}
-
-		// Capitalize the first letter
-		if i == 0 {
-			dst = append(dst, byte(unicode.ToUpper(rune(s[i]))))
-			continue
-		}
-		dst = append(dst, s[i])
-	}
-	return dst
 }

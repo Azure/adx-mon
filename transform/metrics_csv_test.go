@@ -152,13 +152,3 @@ func TestMetricsCSVWriter_MarshalCSV_LiftLabel(t *testing.T) {
 2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,,,"{""measurement"":""used_cpu_user_children""}",0.000000000
 `, b.String())
 }
-
-func TestNormalize(t *testing.T) {
-	require.Equal(t, "Redis", string(Normalize([]byte("__redis__"))))
-	require.Equal(t, "UsedCpuUserChildren", string(Normalize([]byte("used_cpu_user_children"))))
-	require.Equal(t, "Host1", string(Normalize([]byte("host_1"))))
-	require.Equal(t, "Region", string(Normalize([]byte("region"))))
-	require.Equal(t, "JobEtcdRequestLatency75pctlrate5m", string(Normalize([]byte("Job:etcdRequestLatency:75pctlrate5m"))))
-	require.Equal(t, "TestLimit", string(Normalize([]byte("Test$limit"))))
-	require.Equal(t, "TestRateLimit", string(Normalize([]byte("Test::Rate$limit"))))
-}

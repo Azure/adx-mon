@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/schema"
 	transform2 "github.com/Azure/adx-mon/transform"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -331,7 +332,7 @@ func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
 
 	dst = append(dst, database...)
 	dst = append(dst, delim...)
-	return transform2.AppendNormalize(dst, name), nil
+	return schema.AppendNormalize(dst, name), nil
 }
 
 var delim = []byte("_")
