@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/stretchr/testify/require"
 )
 

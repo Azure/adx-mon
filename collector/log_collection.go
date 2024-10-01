@@ -2,7 +2,7 @@ package collector
 
 import (
 	"github.com/Azure/adx-mon/collector/logs"
-	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/storage"
 )
 
 type LogCollectorOpts struct {
