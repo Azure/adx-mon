@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/stretchr/testify/require"
 )
 
