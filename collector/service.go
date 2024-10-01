@@ -15,12 +15,12 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

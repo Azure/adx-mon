@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"

@@ -18,11 +18,11 @@ import (
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 )
