@@ -311,11 +311,13 @@ func (c *coordinator) resyncPeers(ctx context.Context) {
 			if err := c.syncPeers(); err != nil {
 				logger.Errorf("Failed to reconfigure peers: %s", err)
 			}
-			c.mu.RLock()
-			for peer, addr := range c.peers {
-				logger.Infof("Peers updated %s addr=%s ready=%v", peer, addr, "true")
+			if logger.IsDebug() {
+				c.mu.RLock()
+				for peer, addr := range c.peers {
+					logger.Debugf("Peers updated %s addr=%s ready=%v", peer, addr, "true")
+				}
+				c.mu.RUnlock()
 			}
-			c.mu.RUnlock()
 		}
 	}
 }
