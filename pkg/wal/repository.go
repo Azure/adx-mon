@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
@@ -98,15 +97,15 @@ func (s *Repository) Open(ctx context.Context) error {
 			}
 
 			fileName := filepath.Base(path)
-			fields := strings.Split(fileName, "_")
-			if len(fields) != 3 || fields[0] == "" {
+			database, table, schema, epoch, err := ParseFilename(fileName)
+			if err != nil {
 				continue
 			}
 
-			database := fields[0]
-			table := fields[1]
-			epoch := fields[2][:len(fields[2])-4]
 			prefix := fmt.Sprintf("%s_%s", database, table)
+			if schema != "" {
+				prefix = fmt.Sprintf("%s_%s", prefix, schema)
+			}
 
 			createdAt, err := flakeutil.ParseFlakeID(epoch)
 			if err != nil {
