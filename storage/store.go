@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
@@ -111,7 +112,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 	defer gbp.Put(b)
 
 	for _, v := range ts {
-		key, err := SegmentKey(b[:0], v.Labels)
+		key, err := SegmentKey(b[:0], v.Labels, enc.SchemaHash())
 		if err != nil {
 			return err
 		}
@@ -308,7 +309,7 @@ func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
 }
 
-func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
+func SegmentKey(dst []byte, labels []*prompb.Label, hash uint64) ([]byte, error) {
 	var name, database []byte
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("adxmon_database")) {
@@ -332,7 +333,9 @@ func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
 
 	dst = append(dst, database...)
 	dst = append(dst, delim...)
-	return schema.AppendNormalize(dst, name), nil
+	dst = schema.AppendNormalize(dst, name)
+	dst = append(dst, delim...)
+	return strconv.AppendUint(dst, hash, 36), nil
 }
 
 var delim = []byte("_")

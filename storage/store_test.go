@@ -41,7 +41,7 @@ func TestSeriesKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.Expect), func(t *testing.T) {
 			b := make([]byte, 256)
-			key, err := storage.SegmentKey(b[:0], tt.Labels)
+			key, err := storage.SegmentKey(b[:0], tt.Labels, 0)
 			require.NoError(t, err)
 			require.Equal(t, string(tt.Expect), string(key))
 		})
@@ -64,21 +64,21 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, 0)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
-	key1, err := storage.SegmentKey(b[:0], ts.Labels)
+	key1, err := storage.SegmentKey(b[:0], ts.Labels, 0)
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
-	key2, err := storage.SegmentKey(b[:0], ts.Labels)
+	key2, err := storage.SegmentKey(b[:0], ts.Labels, 0)
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -121,7 +121,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, 0)
 	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
@@ -347,7 +347,7 @@ func BenchmarkSegmentKey(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		storage.SegmentKey(buf[:0], labels)
+		storage.SegmentKey(buf[:0], labels, 0)
 	}
 }
 

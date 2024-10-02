@@ -30,11 +30,18 @@ type MetricsCSVWriter struct {
 	lifted Fields
 
 	headerWritten bool
+	schemaHash    uint64
 }
 
 // NewMetricsCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
 // label keys that will be promoted to columns.
 func NewMetricsCSVWriter(w *bytes.Buffer, lifted Fields) *MetricsCSVWriter {
+	x := xxhash.New()
+	for _, v := range schema.DefaultMetricsMapping {
+		x.Write([]byte(v.Column))
+		x.Write([]byte(v.DataType))
+	}
+
 	writer := &MetricsCSVWriter{
 		w:           w,
 		buf:         &strings.Builder{},
@@ -44,6 +51,7 @@ func NewMetricsCSVWriter(w *bytes.Buffer, lifted Fields) *MetricsCSVWriter {
 		line:        make([]byte, 0, 4096),
 		columns:     make([][]byte, 0, len(lifted)),
 		lifted:      lifted,
+		schemaHash:  x.Sum64(),
 	}
 
 	columns := make([]string, 0, len(lifted))
@@ -211,4 +219,8 @@ func (w *MetricsCSVWriter) InitColumns(columns []string) {
 		return bytes.Compare(sortLower[i], sortLower[j]) < 0
 	})
 	w.columns = sortLower
+}
+
+func (w *MetricsCSVWriter) SchemaHash() uint64 {
+	return w.schemaHash
 }
