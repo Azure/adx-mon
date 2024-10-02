@@ -203,18 +203,23 @@ func (n *uploader) upload(ctx context.Context) error {
 					segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
 					database       string
 					table          string
+					schema         string
 					err            error
 				)
 
 				for _, si := range segments {
-					database, table, _, _, err = wal.ParseFilename(si.Path)
+					database, table, schema, _, err = wal.ParseFilename(si.Path)
 					if err != nil {
 						logger.Errorf("Failed to parse file: %s", err.Error())
 						continue
 					}
 					metrics.SampleLatency.WithLabelValues(database, table).Set(time.Since(si.CreatedAt).Seconds())
 
-					f, err := wal.NewSegmentReader(si.Path)
+					var opts []wal.Option
+					if schema != "" {
+						opts = append(opts, wal.WithSkipHeader)
+					}
+					f, err := wal.NewSegmentReader(si.Path, opts...)
 					if os.IsNotExist(err) {
 						// batches are not disjoint, so the same segments could be included in multiple batches.
 						continue
