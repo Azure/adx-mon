@@ -122,7 +122,9 @@ func (s *Repository) Open(ctx context.Context) error {
 			// If the segment is only 8 bytes, that means only the segment magic header has been written and there
 			// is no data in the file.  We don't want to upload these to kusto so they can be removed.
 			if fi.Size() == 8 {
-				logger.Warnf("Removing empty segment: %s", path)
+				if logger.IsDebug() {
+					logger.Debugf("Removing empty segment: %s", path)
+				}
 				if err := os.Remove(path); err != nil {
 					logger.Warnf("Failed to remove empty segment: %s %s", path, err.Error())
 				}

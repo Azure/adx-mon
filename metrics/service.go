@@ -140,9 +140,9 @@ func (s *service) collect(ctx context.Context) {
 				}
 			}
 
-			logger.Infof("Ingestion rate %0.2f samples/sec, samples ingested=%d, health=%v, "+
-				"upload queue size=%d, transfer queue size=%d, segments total=%d, segments size=%d reason=%s "+
-				"active connections=%d dropped connections=%d",
+			logger.Infof("Status IngestionSamplesPerSecond=%0.2f SamplesIngested=%d IsHealthy=%v "+
+				"UploadQueueSize=%d TransferQueueSize=%d SegmentsTotal=%d SegmentsSize=%d UnhealthyReason=%s "+
+				"ActiveConnections=%d DroppedConnections=%d",
 				(currentTotal-lastCount)/60, uint64(currentTotal),
 				s.health.IsHealthy(),
 				s.health.UploadQueueSize(),
