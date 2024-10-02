@@ -1,11 +1,18 @@
 package wal
 
 import (
+	"bytes"
 	"io"
 	"os"
 )
 
-func NewSegmentReader(path string) (*SegmentReader, error) {
+type Option func(*SegmentReader)
+
+func WithSkipHeader(r *SegmentReader) {
+	r.skipHeader = true
+}
+
+func NewSegmentReader(path string, opts ...Option) (*SegmentReader, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -15,14 +22,19 @@ func NewSegmentReader(path string) (*SegmentReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SegmentReader{f: f, iter: iter}, nil
+	r := &SegmentReader{f: f, iter: iter}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r, nil
 }
 
 type SegmentReader struct {
 	f    *os.File
 	iter Iterator
 
-	buf []byte
+	buf        []byte
+	skipHeader bool
 }
 
 func (s *SegmentReader) Read(p []byte) (n int, err error) {
@@ -43,8 +55,13 @@ func (s *SegmentReader) Read(p []byte) (n int, err error) {
 
 	s.buf = s.iter.Value()
 
-	n = copy(p, s.buf)
-	s.buf = s.buf[n:]
+	var idx int
+	if s.skipHeader {
+		idx = bytes.IndexByte(s.buf, '\n') + 1
+	}
+
+	n = copy(p, s.buf[idx:])
+	s.buf = s.buf[idx+n:]
 	return n, nil
 }
 
