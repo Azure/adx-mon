@@ -31,17 +31,18 @@ type MetricsCSVWriter struct {
 
 	headerWritten bool
 	schemaHash    uint64
+	schema        schema.SchemaMapping
 }
 
 // NewMetricsCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
 // label keys that will be promoted to columns.
 func NewMetricsCSVWriter(w *bytes.Buffer, lifted Fields) *MetricsCSVWriter {
-	x := xxhash.New()
-	for _, v := range schema.DefaultMetricsMapping {
-		x.Write([]byte(v.Column))
-		x.Write([]byte(v.DataType))
-	}
+	return NewMetricsCSVWriterWithSchema(w, lifted, schema.DefaultMetricsMapping)
+}
 
+// NewMetricsCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
+// label keys that will be promoted to columns.
+func NewMetricsCSVWriterWithSchema(w *bytes.Buffer, lifted Fields, mapping schema.SchemaMapping) *MetricsCSVWriter {
 	writer := &MetricsCSVWriter{
 		w:           w,
 		buf:         &strings.Builder{},
@@ -51,7 +52,8 @@ func NewMetricsCSVWriter(w *bytes.Buffer, lifted Fields) *MetricsCSVWriter {
 		line:        make([]byte, 0, 4096),
 		columns:     make([][]byte, 0, len(lifted)),
 		lifted:      lifted,
-		schemaHash:  x.Sum64(),
+		schemaHash:  schema.SchemaHash(mapping),
+		schema:      mapping,
 	}
 
 	columns := make([]string, 0, len(lifted))
@@ -65,20 +67,7 @@ func NewMetricsCSVWriter(w *bytes.Buffer, lifted Fields) *MetricsCSVWriter {
 func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 	if !w.headerWritten {
 		line := w.line[:0]
-		buf := w.labelsBuf
-		for _, v := range schema.DefaultMetricsMapping {
-			buf.Reset()
-			buf.WriteString(v.Column)
-			buf.Write([]byte(":"))
-			buf.WriteString(v.DataType)
-			if len(line) == 0 {
-				line = append(line, buf.Bytes()...)
-			} else {
-				line = adxcsv.Append(line, buf.Bytes())
-			}
-		}
-
-		line = adxcsv.AppendNewLine(line)
+		line = schema.AppendCSVHeader(line, w.schema)
 
 		if n, err := w.w.Write(line); err != nil {
 			return err
