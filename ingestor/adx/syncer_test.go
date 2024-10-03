@@ -13,7 +13,7 @@ func TestSyncer_EnsureMapping(t *testing.T) {
 	kcli := kusto.NewMockClient()
 
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
-	name, err := s.EnsureMapping("Test")
+	name, err := s.EnsureDefaultMapping("Test")
 	require.NoError(t, err)
 	require.Equal(t, "Test_15745692345339290292", name)
 }
@@ -24,7 +24,7 @@ func TestSyncer_EnsureTable(t *testing.T) {
 	}
 
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
-	require.NoError(t, s.EnsureTable("Test"))
+	require.NoError(t, s.EnsureDefaultTable("Test"))
 	kcli.Verify(t)
 }
 

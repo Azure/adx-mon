@@ -107,3 +107,97 @@ func TestNormalize(t *testing.T) {
 	require.Equal(t, "TestLimit", string(schema.Normalize([]byte("Test$limit"))))
 	require.Equal(t, "TestRateLimit", string(schema.Normalize([]byte("Test::Rate$limit"))))
 }
+
+func TestAppendCSVHeaderWithValidMapping(t *testing.T) {
+	mapping := schema.NewMetricsSchema()
+	expected := "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n"
+	result := schema.AppendCSVHeader(nil, mapping)
+	require.Equal(t, expected, string(result))
+}
+
+func TestAppendCSVHeaderWithEmptyMapping(t *testing.T) {
+	var mapping schema.SchemaMapping
+	expected := "\n"
+	result := schema.AppendCSVHeader(nil, mapping)
+	require.Equal(t, expected, string(result))
+}
+
+func TestAppendCSVHeaderWithCustomMapping(t *testing.T) {
+	mapping := schema.SchemaMapping{
+		{Column: "CustomColumn1", DataType: "string"},
+		{Column: "CustomColumn2", DataType: "int"},
+	}
+	expected := "CustomColumn1:string,CustomColumn2:int\n"
+	result := schema.AppendCSVHeader(nil, mapping)
+	require.Equal(t, expected, string(result))
+}
+
+func TestUnmarshalSchemaWithValidData(t *testing.T) {
+	data := "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n"
+	expected := schema.SchemaMapping{
+		{Column: "Timestamp", DataType: "datetime", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "0"}},
+		{Column: "SeriesId", DataType: "long", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "1"}},
+		{Column: "Labels", DataType: "dynamic", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "2"}},
+		{Column: "Value", DataType: "real", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "3"}},
+	}
+	result, err := schema.UnmarshalSchema(data)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestUnmarshalSchemaWithEmptyData(t *testing.T) {
+	data := ""
+	expected := schema.SchemaMapping{}
+	result, err := schema.UnmarshalSchema(data)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestUnmarshalSchemaWithInvalidData(t *testing.T) {
+	data := "Timestamp:datetime,SeriesId:long,Labels\n"
+	_, err := schema.UnmarshalSchema(data)
+	require.Error(t, err)
+}
+
+func TestUnmarshalSchemaWithExtraNewline(t *testing.T) {
+	data := "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n\n"
+	expected := schema.SchemaMapping{
+		{Column: "Timestamp", DataType: "datetime", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "0"}},
+		{Column: "SeriesId", DataType: "long", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "1"}},
+		{Column: "Labels", DataType: "dynamic", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "2"}},
+		{Column: "Value", DataType: "real", Properties: struct {
+			Ordinal    string `json:"Ordinal,omitempty"`
+			ConstValue string `json:"ConstValue,omitempty"`
+		}{Ordinal: "3"}},
+	}
+	result, err := schema.UnmarshalSchema(data)
+	require.NoError(t, err)
+	require.Equal(t, expected, result)
+}
+
+func TestUnmarshalSchemaWithMissingDataType(t *testing.T) {
+	data := "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value\n"
+	_, err := schema.UnmarshalSchema(data)
+	require.Error(t, err)
+}

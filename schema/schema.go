@@ -1,8 +1,13 @@
 package schema
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"unicode"
+
+	adxcsv "github.com/Azure/adx-mon/pkg/csv"
+	"github.com/cespare/xxhash/v2"
 )
 
 var (
@@ -237,4 +242,57 @@ func AppendNormalize(dst, s []byte) []byte {
 		dst = append(dst, s[i])
 	}
 	return dst
+}
+
+func AppendCSVHeader(dst []byte, mapping SchemaMapping) []byte {
+	for _, v := range mapping {
+		if len(dst) > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(dst, v.Column...)
+		dst = append(dst, ':')
+		dst = append(dst, v.DataType...)
+	}
+	return adxcsv.AppendNewLine(dst)
+}
+
+func UnmarshalSchema(data string) (SchemaMapping, error) {
+	var mapping SchemaMapping
+	idx := strings.IndexByte(data, '\n')
+	if idx != -1 {
+		data = data[:idx]
+	}
+
+	if len(data) == 0 {
+		return SchemaMapping{}, nil
+	}
+
+	fields := strings.Split(data, ",")
+	for i, v := range fields {
+		nameType := strings.Split(v, ":")
+		if len(nameType) != 2 {
+			return nil, fmt.Errorf("invalid schema field: %s", data)
+		}
+		mapping = append(mapping, CSVMapping{
+			Column:   nameType[0],
+			DataType: nameType[1],
+			Properties: struct {
+				Ordinal    string `json:"Ordinal,omitempty"`
+				ConstValue string `json:"ConstValue,omitempty"`
+			}{
+				Ordinal: strconv.Itoa(i),
+			},
+		})
+	}
+
+	return mapping, nil
+}
+
+func SchemaHash(mapping SchemaMapping) uint64 {
+	x := xxhash.New()
+	for _, v := range mapping {
+		x.Write([]byte(v.Column))
+		x.Write([]byte(v.DataType))
+	}
+	return x.Sum64()
 }
