@@ -866,3 +866,33 @@ func TestConfig_TLS(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_ValidateLiftLabels(t *testing.T) {
+	c := Config{
+		LiftLabels: []*LiftLabel{
+			{
+				Name:       "x",
+				ColumnName: "x:1",
+			},
+		},
+	}
+
+	require.Equal(t, "lift-labels.column-name `x:1` contains invalid characters", c.Validate().Error())
+
+	c = Config{
+		LiftLabels: []*LiftLabel{
+			{
+				Name: "x",
+			},
+		}}
+	require.NoError(t, c.Validate())
+
+	c = Config{
+		LiftLabels: []*LiftLabel{
+			{
+				Name:       "x",
+				ColumnName: "y",
+			},
+		}}
+	require.NoError(t, c.Validate())
+}
