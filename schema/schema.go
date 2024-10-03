@@ -187,9 +187,7 @@ func NewLogsSchema() SchemaMapping {
 }
 
 func (m SchemaMapping) AddConstMapping(col, value string) SchemaMapping {
-	mapping := append([]CSVMapping{}, m[:len(m)-2]...)
-
-	mapping = append(mapping, CSVMapping{
+	return append(m, CSVMapping{
 		Column:   col,
 		DataType: "string",
 		Properties: struct {
@@ -200,13 +198,6 @@ func (m SchemaMapping) AddConstMapping(col, value string) SchemaMapping {
 			ConstValue: value,
 		},
 	})
-
-	mapping = append(mapping, m[len(m)-2:]...)
-	for i := 2; i < len(mapping); i++ {
-		mapping[i].Properties.Ordinal = strconv.Itoa(i)
-	}
-
-	return mapping
 }
 
 func (m SchemaMapping) AddStringMapping(col string) SchemaMapping {

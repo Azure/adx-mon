@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v2"
@@ -137,6 +139,23 @@ func realMain(ctx *cli.Context) error {
 	} else {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
+	sort.Slice(cfg.LiftLabels, func(i, j int) bool {
+		return cfg.LiftLabels[i].Name < cfg.LiftLabels[j].Name
+	})
+
+	defaultMapping := schema.DefaultMetricsMapping
+	var sortedLiftedLabels []string
+	for _, v := range cfg.LiftLabels {
+		sortedLiftedLabels = append(sortedLiftedLabels, v.Name)
+		if v.ColumnName != "" {
+			defaultMapping = defaultMapping.AddStringMapping(v.ColumnName)
+			continue
+		}
+		defaultMapping = defaultMapping.AddStringMapping(v.Name)
+	}
+
+	// Update the default mapping so pooled csv encoders can use the lifted columns
+	schema.DefaultMetricsMapping = defaultMapping
 
 	var informer *k8s.PodInformer
 	var scraperOpts *collector.ScraperOpts
@@ -259,6 +278,7 @@ func realMain(ctx *cli.Context) error {
 		ListenAddr:         cfg.ListenAddr,
 		NodeName:           hostname,
 		Endpoints:          endpoints,
+		LiftLabels:         sortedLiftedLabels,
 		AddAttributes:      addAttributes,
 		LiftAttributes:     liftAttributes,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
