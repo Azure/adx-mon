@@ -47,18 +47,18 @@ func TestNewSchema_AddConstMapping(t *testing.T) {
 	require.Equal(t, "long", mapping[1].DataType)
 	require.Equal(t, "1", mapping[1].Properties.Ordinal)
 
-	require.Equal(t, "Region", mapping[2].Column)
-	require.Equal(t, "string", mapping[2].DataType)
+	require.Equal(t, "Labels", mapping[2].Column)
+	require.Equal(t, "dynamic", mapping[2].DataType)
 	require.Equal(t, "2", mapping[2].Properties.Ordinal)
-	require.Equal(t, "eastus", mapping[2].Properties.ConstValue)
 
-	require.Equal(t, "Labels", mapping[3].Column)
-	require.Equal(t, "dynamic", mapping[3].DataType)
+	require.Equal(t, "Value", mapping[3].Column)
+	require.Equal(t, "real", mapping[3].DataType)
 	require.Equal(t, "3", mapping[3].Properties.Ordinal)
 
-	require.Equal(t, "Value", mapping[4].Column)
-	require.Equal(t, "real", mapping[4].DataType)
+	require.Equal(t, "Region", mapping[4].Column)
+	require.Equal(t, "string", mapping[4].DataType)
 	require.Equal(t, "4", mapping[4].Properties.Ordinal)
+	require.Equal(t, "eastus", mapping[4].Properties.ConstValue)
 
 }
 
@@ -80,22 +80,21 @@ func TestNewSchema_AddLiftedMapping(t *testing.T) {
 	require.Equal(t, "long", mapping[1].DataType)
 	require.Equal(t, "1", mapping[1].Properties.Ordinal)
 
-	require.Equal(t, "Region", mapping[2].Column)
-	require.Equal(t, "string", mapping[2].DataType)
+	require.Equal(t, "Labels", mapping[2].Column)
+	require.Equal(t, "dynamic", mapping[2].DataType)
 	require.Equal(t, "2", mapping[2].Properties.Ordinal)
 
-	require.Equal(t, "Host", mapping[3].Column)
-	require.Equal(t, "string", mapping[3].DataType)
+	require.Equal(t, "Value", mapping[3].Column)
+	require.Equal(t, "real", mapping[3].DataType)
 	require.Equal(t, "3", mapping[3].Properties.Ordinal)
 
-	require.Equal(t, "Labels", mapping[4].Column)
-	require.Equal(t, "dynamic", mapping[4].DataType)
+	require.Equal(t, "Region", mapping[4].Column)
+	require.Equal(t, "string", mapping[4].DataType)
 	require.Equal(t, "4", mapping[4].Properties.Ordinal)
 
-	require.Equal(t, "Value", mapping[5].Column)
-	require.Equal(t, "real", mapping[5].DataType)
+	require.Equal(t, "Host", mapping[5].Column)
+	require.Equal(t, "string", mapping[5].DataType)
 	require.Equal(t, "5", mapping[5].Properties.Ordinal)
-
 }
 
 func TestNormalize(t *testing.T) {

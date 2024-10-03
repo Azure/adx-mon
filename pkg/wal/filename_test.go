@@ -49,3 +49,23 @@ func TestParseFilenameWithInvalidFormat(t *testing.T) {
 	_, _, _, _, err := wal.ParseFilename(path)
 	require.ErrorIs(t, err, wal.ErrInvalidWALSegment)
 }
+
+func TestParseFilenameMissingParts(t *testing.T) {
+	for _, path := range []string{
+		"_table_schema_epoch.wal",
+		"db__schema_epoch.wal",
+		"db_table__epoch.wal",
+		"db_table_schema_.wal",
+		"db_table_.wal",
+		"__.wal",
+		"db__.wal",
+		"db_table_.wal",
+		"db_table_epoch.txt",
+		"db_table_schema_epoch.zip",
+	} {
+		t.Run(path, func(t *testing.T) {
+			_, _, _, _, err := wal.ParseFilename(path)
+			require.NotNil(t, err)
+		})
+	}
+}

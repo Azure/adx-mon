@@ -156,7 +156,7 @@ func TestMetricsCSVWriter_MarshalCSV_LiftLabel(t *testing.T) {
 
 	err := w.MarshalCSV(ts)
 	require.NoError(t, err)
-	require.Equal(t, `Timestamp:datetime,SeriesId:long,Zip:string,Zap:string,Region:string,Hostname:string,Bar:string,Labels:dynamic,Value:real
-2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,,,"{""measurement"":""used_cpu_user_children""}",0.000000000
+	require.Equal(t, `Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real,Zip:string,Zap:string,Region:string,Hostname:string,Bar:string
+2022-11-22T10:22:04.001Z,1265838189064375029,"{""measurement"":""used_cpu_user_children""}",0.000000000,,host_1,eastus,,
 `, b.String())
 }

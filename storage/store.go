@@ -243,7 +243,7 @@ func (s *LocalStore) PrefixesByAge() []string {
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
-	db, table, _, _, err := wal.ParseFilename(filename)
+	db, table, schema, _, err := wal.ParseFilename(filename)
 	if err != nil {
 		return 0, err
 	}
@@ -251,7 +251,11 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	key := gbp.Get(256)
 	defer gbp.Put(key)
 
-	key = fmt.Appendf(key[:0], "%s_%s", db, table)
+	if schema != "" {
+		key = fmt.Appendf(key[:0], "%s_%s_%s", db, table, schema)
+	} else {
+		key = fmt.Appendf(key[:0], "%s_%s", db, table)
+	}
 
 	wal, err := s.GetWAL(context.Background(), key)
 	if err != nil {
@@ -271,12 +275,18 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 }
 
 func (s *LocalStore) Remove(path string) error {
-	db, table, _, _, err := wal.ParseFilename(path)
+	db, table, schema, _, err := wal.ParseFilename(path)
 	if err != nil {
 		return err
 	}
 
-	key := fmt.Sprintf("%s_%s", db, table)
+	var key string
+	if schema != "" {
+		key = fmt.Sprintf("%s_%s_%s", db, table, schema)
+	} else {
+		key = fmt.Sprintf("%s_%s", db, table)
+	}
+
 	wal, err := s.GetWAL(context.Background(), []byte(key))
 	if err != nil {
 		return err

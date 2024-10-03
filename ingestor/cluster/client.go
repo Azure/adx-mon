@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -174,10 +175,10 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 		}
 
 		if resp.StatusCode == http.StatusBadRequest {
-			return &ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", string(body))}
+			return &ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", strings.TrimSpace(string(body)))}
 		}
 
-		return fmt.Errorf("write failed: %s", string(body))
+		return fmt.Errorf("write failed: %s", strings.TrimSpace(string(body)))
 	}
 	return nil
 }
