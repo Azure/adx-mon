@@ -30,12 +30,21 @@ func ParseFilename(path string) (database, table, schema, epoch string, err erro
 		table = fields[1]
 		epoch = fields[2][:len(fields[2])-4]
 		schema = ""
+
+		if database == "" || table == "" || epoch == "" {
+			err = ErrInvalidWALSegment
+		}
 		return
 	} else if len(fields) == 4 {
 		database = fields[0]
 		table = fields[1]
 		schema = fields[2]
 		epoch = fields[3][:len(fields[3])-4]
+
+		if database == "" || table == "" || schema == "" || epoch == "" {
+			err = ErrInvalidWALSegment
+		}
+
 		return
 	}
 	err = ErrInvalidWALSegment

@@ -142,6 +142,13 @@ func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 		line = append(line, ',')
 		line = strconv.AppendInt(line, int64(seriesId), 10)
 
+		// labels
+		line = adxcsv.AppendQuoted(line, buf.Bytes())
+		line = append(line, ',')
+
+		// Values
+		line = strconv.AppendFloat(line, v.Value, 'f', 9, 64)
+
 		if len(w.columns) > 0 {
 			var i, j int
 			for i < len(ts.Labels) && j < len(w.columns) {
@@ -163,13 +170,6 @@ func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 				j++
 			}
 		}
-
-		// labels
-		line = adxcsv.AppendQuoted(line, buf.Bytes())
-		line = append(line, ',')
-
-		// Values
-		line = strconv.AppendFloat(line, v.Value, 'f', 9, 64)
 
 		// End of line
 		line = adxcsv.AppendNewLine(line)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
@@ -12,7 +13,10 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 )
 
-var homedir string
+var (
+	homedir         string
+	validColumnName = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
+)
 
 func init() {
 	homedir = os.Getenv("HOME")
@@ -85,6 +89,7 @@ type Config struct {
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Global Regexes of metrics to drop."`
 	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
 	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+	LiftLabels                []*LiftLabel      `toml:"lift-labels" comment:"Global labels to lift from the metric to top level columns"`
 
 	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
@@ -143,6 +148,11 @@ type ScrapeTarget struct {
 	Namespace string `toml:"namespace" comment:"The namespace label to add for metrics scraped at this URL."`
 	Pod       string `toml:"pod" comment:"The pod label to add for metrics scraped at this URL."`
 	Container string `toml:"container" comment:"The container label to add for metrics scraped at this URL."`
+}
+
+type LiftLabel struct {
+	Name       string `toml:"name" comment:"The name of the label to lift."`
+	ColumnName string `toml:"column" comment:"The name of the column to lift the label to."`
 }
 
 func (t *ScrapeTarget) Validate() error {
@@ -371,6 +381,17 @@ func (c *Config) Validate() error {
 	tlsKeyEmpty := c.TLSKeyFile == ""
 	if tlsCertEmpty != tlsKeyEmpty {
 		return errors.New("tls-cert-file and tls-key-file must both be set or both be empty")
+	}
+
+	for _, v := range c.LiftLabels {
+		if v.Name == "" {
+			return errors.New("lift-labels.name must be set")
+		}
+		if v.ColumnName != "" {
+			if !validColumnName.MatchString(v.ColumnName) {
+				return fmt.Errorf("lift-labels.column-name `%s` contains invalid characters", v.ColumnName)
+			}
+		}
 	}
 
 	existingPaths := make(map[string]struct{})

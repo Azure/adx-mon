@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
@@ -413,26 +411,12 @@ func (s *Service) validateFileName(filename string) string {
 		return ""
 	}
 
-	ext := filepath.Ext(filename)
-	if ext != ".wal" {
+	db, table, schema, epoch, err := wal.ParseFilename(filename)
+	if err != nil {
 		return ""
 	}
 
-	base := strings.Replace(filename, ext, "", 1)
-	parts := strings.Split(base, "_")
-	if len(parts) != 3 {
-		return ""
-	}
-
-	db := parts[0]
-	table := parts[1]
-	epoch := parts[2]
-
-	if db == "" || table == "" || epoch == "" {
-		return ""
-	}
-
-	if invalidEntityCharacters.MatchString(db) || invalidEntityCharacters.MatchString(table) || invalidEntityCharacters.MatchString(epoch) {
+	if invalidEntityCharacters.MatchString(db) || invalidEntityCharacters.MatchString(table) || invalidEntityCharacters.MatchString(epoch) || invalidEntityCharacters.MatchString(schema) {
 		return ""
 	}
 
@@ -440,5 +424,5 @@ func (s *Service) validateFileName(filename string) string {
 		return ""
 	}
 
-	return fmt.Sprintf("%s_%s_%s.wal", db, table, epoch)
+	return wal.Filename(db, table, schema, epoch)
 }
