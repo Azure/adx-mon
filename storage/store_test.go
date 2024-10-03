@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
@@ -31,11 +32,11 @@ func TestSeriesKey(t *testing.T) {
 	}{
 		{
 			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0).Labels,
-			Expect: []byte("adxmetrics_Foo"),
+			Expect: []byte("adxmetrics_Foo_0"),
 		},
 		{
 			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "OverrideDB"}, 0, 0).Labels,
-			Expect: []byte("OverrideDB_Foo"),
+			Expect: []byte("OverrideDB_Foo_0"),
 		},
 	}
 	for _, tt := range tests {
@@ -64,21 +65,21 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels, 0)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
-	key1, err := storage.SegmentKey(b[:0], ts.Labels, 0)
+	key1, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
-	key2, err := storage.SegmentKey(b[:0], ts.Labels, 0)
+	key2, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -121,7 +122,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels, 0)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
