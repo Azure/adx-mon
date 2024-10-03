@@ -130,15 +130,19 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 	}
 }
 
-func (s *Syncer) EnsureTable(table string) error {
+// EnsureDefaultTable creates a table with the default schema mapping if it does not exist.
+func (s *Syncer) EnsureDefaultTable(table string) error {
+	return s.EnsureTable(table, s.defaultMapping)
+}
+
+// EnsureTable creates a table with the specified schema mapping if it does not exist.
+func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 	s.mu.RLock()
 	if _, ok := s.tables[table]; ok {
 		s.mu.RUnlock()
 		return nil
 	}
 	s.mu.RUnlock()
-
-	mapping := s.defaultMapping
 
 	var columns []columnDef
 
@@ -192,10 +196,14 @@ func (s *Syncer) EnsureTable(table string) error {
 }
 
 // EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
-func (s *Syncer) EnsureMapping(table string) (string, error) {
+func (s *Syncer) EnsureDefaultMapping(table string) (string, error) {
+	return s.EnsureMapping(table, s.defaultMapping)
+}
+
+// EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
+func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (string, error) {
 	var columns []columnDef
 
-	mapping := s.defaultMapping
 	for _, v := range mapping {
 		columns = append(columns, columnDef{
 			name: v.Column,

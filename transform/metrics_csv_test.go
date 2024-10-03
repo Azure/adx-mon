@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,18 +138,25 @@ func TestMetricsCSVWriter_MarshalCSV_LiftLabel(t *testing.T) {
 		},
 	}
 
+	mapping := schema.DefaultMetricsMapping
+	mapping = mapping.AddStringMapping("Zip")
+	mapping = mapping.AddStringMapping("Zap")
+	mapping = mapping.AddStringMapping("Region")
+	mapping = mapping.AddStringMapping("Hostname")
+	mapping = mapping.AddStringMapping("Bar")
+
 	var b bytes.Buffer
-	w := NewMetricsCSVWriter(&b, []Field{
+	w := NewMetricsCSVWriterWithSchema(&b, []Field{
 		{Name: "Zip", Source: "zip", Type: "string"},
 		{Name: "Zap", Source: "zap", Type: "string"},
 		{Name: "Region", Source: "region", Type: "string"},
 		{Name: "Hostname", Source: "hostname", Type: "string"},
 		{Name: "Bar", Source: "bar", Type: "string"},
-	})
+	}, mapping)
 
 	err := w.MarshalCSV(ts)
 	require.NoError(t, err)
-	require.Equal(t, `Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real,Zip:string,Zap:string,Region:string,Hostname:string,Bar:string
+	require.Equal(t, `Timestamp:datetime,SeriesId:long,Zip:string,Zap:string,Region:string,Hostname:string,Bar:string,Labels:dynamic,Value:real
 2022-11-22T10:22:04.001Z,1265838189064375029,,host_1,eastus,,,"{""measurement"":""used_cpu_user_children""}",0.000000000
 `, b.String())
 }

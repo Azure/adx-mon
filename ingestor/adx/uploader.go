@@ -1,6 +1,7 @@
 package adx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -14,7 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
-	"github.com/Azure/adx-mon/schema"
+	adxschema "github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 )
@@ -53,7 +54,7 @@ type UploaderOpts struct {
 	Database          string
 	ConcurrentUploads int
 	Dimensions        []string
-	DefaultMapping    schema.SchemaMapping
+	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
 }
 
@@ -115,16 +116,16 @@ func (n *uploader) Mgmt(ctx context.Context, query kusto.Statement, options ...k
 	return n.KustoCli.Mgmt(ctx, n.database, query, options...)
 }
 
-func (n *uploader) uploadReader(reader io.Reader, database, table string) error {
+func (n *uploader) uploadReader(reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error {
 	// Ensure we wait for this upload to finish.
 	n.wg.Add(1)
 	defer n.wg.Done()
 
-	if err := n.syncer.EnsureTable(table); err != nil {
+	if err := n.syncer.EnsureTable(table, mapping); err != nil {
 		return err
 	}
 
-	name, err := n.syncer.EnsureMapping(table)
+	name, err := n.syncer.EnsureMapping(table, mapping)
 	if err != nil {
 		return err
 	}
@@ -204,6 +205,7 @@ func (n *uploader) upload(ctx context.Context) error {
 					database       string
 					table          string
 					schema         string
+					header         string
 					err            error
 				)
 
@@ -242,10 +244,32 @@ func (n *uploader) upload(ctx context.Context) error {
 					return
 				}
 
+				samplePath := segments[0].Path
+				database, table, schema, _, err = wal.ParseFilename(samplePath)
+				if err != nil {
+					logger.Errorf("Failed to parse file: %s", err.Error())
+					return
+				}
+
+				mapping := n.opts.DefaultMapping
+				if schema != "" {
+					header, err = n.extractSchema(samplePath)
+					if err != nil {
+						logger.Errorf("Failed to extract schema: %s", err.Error())
+						return
+					}
+
+					mapping, err = adxschema.UnmarshalSchema(header)
+					if err != nil {
+						logger.Errorf("Failed to unmarshal schema: %s", err.Error())
+						return
+					}
+				}
+
 				mr := io.MultiReader(readers...)
 
 				now := time.Now()
-				if err := n.uploadReader(mr, database, table); err != nil {
+				if err := n.uploadReader(mr, database, table, mapping); err != nil {
 					logger.Errorf("Failed to upload file: %s", err.Error())
 					return
 				}
@@ -272,4 +296,25 @@ func (n *uploader) upload(ctx context.Context) error {
 
 		}
 	}
+}
+
+func (n *uploader) extractSchema(path string) (string, error) {
+	f, err := wal.NewSegmentReader(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	b := make([]byte, 4096)
+	nn, err := f.Read(b)
+	if err != nil {
+		return "", err
+	}
+	b = b[:nn]
+
+	idx := bytes.IndexByte(b, '\n')
+	if idx != -1 {
+		return string(b[:idx]), nil
+	}
+	return string(b), nil
 }
