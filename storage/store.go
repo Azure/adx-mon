@@ -29,6 +29,10 @@ var (
 		return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
+	nativeLogsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+		return transform2.NewCSVNativeLogsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+	})
+
 	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
@@ -179,8 +183,8 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 }
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform2.CSVWriter)
-	defer csvWriterPool.Put(enc)
+	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
+	defer nativeLogsCSVWriterPool.Put(enc)
 
 	key := gbp.Get(256)
 	defer gbp.Put(key)
