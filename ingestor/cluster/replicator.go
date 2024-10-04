@@ -57,7 +57,16 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
-	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify)
+	cli, err := NewClient(ClientOpts{
+		Timeout:               30 * time.Second,
+		InsecureSkipVerify:    opts.InsecureSkipVerify,
+		Close:                 false,
+		MaxIdleConnsPerHost:   1,
+		MaxIdleConns:          5,
+		ResponseHeaderTimeout: 20 * time.Second,
+		DisableHTTP2:          true,
+		DisableKeepAlives:     true,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -23,7 +23,10 @@ func TestClient_Write_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(time.Second, true)
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+	})
 	require.NoError(t, err)
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
@@ -37,7 +40,10 @@ func TestClient_Write_BadRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(time.Second, true)
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+	})
 	require.NoError(t, err)
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
@@ -53,7 +59,10 @@ func TestClient_Write_TooManyRequests(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(time.Second, true)
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+	})
 	require.NoError(t, err)
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
@@ -68,7 +77,10 @@ func TestClient_Write_SegmentExists(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(time.Second, true)
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+	})
 	require.NoError(t, err)
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
@@ -84,7 +96,10 @@ func TestClient_Write_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(time.Second, true)
+	client, err := NewClient(ClientOpts{
+		Timeout:            time.Second,
+		InsecureSkipVerify: true,
+	})
 	require.NoError(t, err)
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
