@@ -51,14 +51,6 @@ func NewCSVWriter(w *bytes.Buffer, columns []string) *CSVWriter {
 	return writer
 }
 
-func otlpTSToUTC(ts int64) string {
-	// check for nanosecond precision
-	if ts&0x1fffffffffffff == ts {
-		return time.Unix(ts/1000, (ts%1000)*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano)
-	}
-	return time.Unix(0, ts).UTC().Format(time.RFC3339Nano)
-}
-
 func (w *CSVWriter) MarshalLog(logs *otlp.Logs) error {
 	// See ingestor/storage/schema::NewLogsSchema
 	// we're writing a ExportLogsServiceRequest as a CSV
