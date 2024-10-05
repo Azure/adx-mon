@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/collector"
 	"github.com/stretchr/testify/require"
@@ -82,4 +83,25 @@ go_gc_duration_seconds_count 8452
 	m, err := client.FetchMetrics(svr.URL)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(m))
+}
+
+func TestService_Timeout(t *testing.T) {
+	shutdownServer := make(chan struct{}, 1)
+	svr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(10 * time.Minute):
+			return
+		case <-shutdownServer:
+			return
+		}
+	}))
+	defer svr.Close()
+
+	client, err := collector.NewMetricsClient(collector.ClientOpts{})
+	require.NoError(t, err)
+	defer client.Close()
+
+	_, err = client.FetchMetrics(svr.URL)
+	shutdownServer <- struct{}{}
+	require.Error(t, err)
 }
