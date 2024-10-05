@@ -3,6 +3,7 @@ package collector
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -27,6 +28,7 @@ const (
 )
 
 type MetricsClient struct {
+	opts      ClientOpts
 	transport *http.Transport
 	client    *http.Client
 
@@ -50,9 +52,17 @@ func (c ClientOpts) WithDefaults() ClientOpts {
 		TLSHandshakeTimeout: 5 * time.Second,
 		ScrapeTimeOut:       10 * time.Second,
 	}
-	opts.ScrapeTimeOut = c.ScrapeTimeOut
-	opts.DialTimeout = c.DialTimeout
-	opts.TLSHandshakeTimeout = c.TLSHandshakeTimeout
+	if c.ScrapeTimeOut.Seconds() > 0 {
+		opts.ScrapeTimeOut = c.ScrapeTimeOut
+	}
+
+	if c.DialTimeout.Seconds() > 0 {
+		opts.DialTimeout = c.DialTimeout
+	}
+
+	if c.TLSHandshakeTimeout.Seconds() > 0 {
+		opts.TLSHandshakeTimeout = c.TLSHandshakeTimeout
+	}
 	opts.NodeName = c.NodeName
 	return opts
 }
@@ -106,6 +116,7 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 	}
 
 	c := &MetricsClient{
+		opts:      opts,
 		NodeName:  opts.NodeName,
 		transport: transport,
 		client:    httpClient,
@@ -123,7 +134,10 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.MetricFamily, error) {
 	parser := &expfmt.TextParser{}
 
-	req, err := http.NewRequest("GET", target, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), c.opts.ScrapeTimeOut)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
 	}
