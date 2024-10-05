@@ -96,6 +96,7 @@ type Config struct {
 	// These are global config options that apply to all endpoints.
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	LiftResources  []*LiftResource   `toml:"lift-resources" comment:"Fields lifted from the Resource and added as top level columns."`
 
 	PrometheusScrape      *PrometheusScrape        `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
 	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
@@ -153,6 +154,11 @@ type ScrapeTarget struct {
 type LiftLabel struct {
 	Name       string `toml:"name" comment:"The name of the label to lift."`
 	ColumnName string `toml:"column" comment:"The name of the column to lift the label to."`
+}
+
+type LiftResource struct {
+	Name       string `toml:"name" comment:"The name of the resource to lift."`
+	ColumnName string `toml:"column" comment:"The name of the column to lift the resource to."`
 }
 
 func (t *ScrapeTarget) Validate() error {
@@ -390,6 +396,17 @@ func (c *Config) Validate() error {
 		if v.ColumnName != "" {
 			if !validColumnName.MatchString(v.ColumnName) {
 				return fmt.Errorf("lift-labels.column-name `%s` contains invalid characters", v.ColumnName)
+			}
+		}
+	}
+
+	for _, v := range c.LiftResources {
+		if v.Name == "" {
+			return errors.New("lift-resources.name must be set")
+		}
+		if v.ColumnName != "" {
+			if !validColumnName.MatchString(v.ColumnName) {
+				return fmt.Errorf("lift-resources.column-name `%s` contains invalid characters", v.ColumnName)
 			}
 		}
 	}
