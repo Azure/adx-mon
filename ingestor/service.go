@@ -127,7 +127,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
-		LiftedColumns:  opts.LiftedColumns,
+		LiftedLabels:   opts.LiftedColumns,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{

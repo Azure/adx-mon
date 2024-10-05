@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -222,7 +223,7 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
 
-	key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
+	key := fmt.Appendf(b[:0], "%s_%s_%s", database, "foo", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)

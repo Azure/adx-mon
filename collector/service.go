@@ -88,6 +88,7 @@ type ServiceOpts struct {
 
 	AddAttributes  map[string]string
 	LiftAttributes []string
+	LiftResources  []string
 
 	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
 	InsecureSkipVerify bool
@@ -176,11 +177,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     opts.StorageDir,
-		SegmentMaxAge:  maxSegmentAge,
-		SegmentMaxSize: maxSegmentSize,
-		MaxDiskUsage:   opts.MaxDiskUsage,
-		LiftedColumns:  opts.LiftLabels,
+		StorageDir:       opts.StorageDir,
+		SegmentMaxAge:    maxSegmentAge,
+		SegmentMaxSize:   maxSegmentSize,
+		MaxDiskUsage:     opts.MaxDiskUsage,
+		LiftedLabels:     opts.LiftLabels,
+		LiftedAttributes: opts.LiftAttributes,
+		LiftedResources:  opts.LiftResources,
 	})
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
