@@ -3,11 +3,13 @@ package transform
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/pquerna/ffjson/ffjson"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
 )
@@ -22,11 +24,22 @@ type NativeLogsCSVWriter struct {
 	line        []byte
 	columns     [][]byte
 	fields      []string
+	fieldLookup map[string]struct{}
+
+	headerWritten bool
+	schema        schema.SchemaMapping
+	schemaHash    uint64
 }
 
 // NewCSVNativeLogsCSVWriter returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
 // label keys that will be promoted to columns.
 func NewCSVNativeLogsCSVWriter(w *bytes.Buffer, columns []string) *NativeLogsCSVWriter {
+	return NewCSVNativeLogsCSVWriterWithSchema(w, columns, schema.DefaultLogsMapping)
+}
+
+// NewCSVNativeLogsCSVWriterWithSchema returns a new CSVWriter that writes to the given buffer.  The columns, if specified, are
+// label keys that will be promoted to columns.
+func NewCSVNativeLogsCSVWriterWithSchema(w *bytes.Buffer, columns []string, mapping schema.SchemaMapping) *NativeLogsCSVWriter {
 	writer := &NativeLogsCSVWriter{
 		w:           w,
 		buf:         &strings.Builder{},
@@ -36,6 +49,9 @@ func NewCSVNativeLogsCSVWriter(w *bytes.Buffer, columns []string) *NativeLogsCSV
 		line:        make([]byte, 0, 4096),
 		columns:     make([][]byte, 0, len(columns)),
 		fields:      make([]string, 0, 4+len(columns)),
+		schemaHash:  schema.SchemaHash(mapping),
+		schema:      mapping,
+		fieldLookup: make(map[string]struct{}, len(columns)),
 	}
 
 	writer.InitColumns(columns)
@@ -51,6 +67,18 @@ func otlpTSToUTC(ts int64) string {
 }
 
 func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
+	if !w.headerWritten {
+		line := w.line[:0]
+		line = schema.AppendCSVHeader(line, w.schema)
+
+		if n, err := w.w.Write(line); err != nil {
+			return err
+		} else if n != len(line) {
+			return errors.New("short write")
+		}
+		w.headerWritten = true
+	}
+
 	// There are 9 fields defined in an OTLP log schema
 	fields := make([]string, 0, 9)
 	// Convert log records to CSV
@@ -103,6 +131,11 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.WriteByte('{')
 	hasPrevField = false
 	for k, v := range log.Resource {
+		_, lifted := w.fieldLookup[k]
+		if strings.HasPrefix(k, "adxmon_") || lifted {
+			continue
+		}
+
 		val, err := ffjson.Marshal(v)
 		if err != nil {
 			continue
@@ -125,6 +158,7 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.Reset()
 	buf.WriteByte('{')
 	hasPrevField = false
+
 	for k, v := range log.Attributes {
 		if strings.HasPrefix(k, "adxmon_") {
 			continue
@@ -147,6 +181,20 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	}
 	buf.WriteByte('}')
 	fields = append(fields, buf.String())
+
+	for _, v := range w.columns {
+		if val, ok := log.Resource[string(v)]; ok {
+			if s, ok := val.(string); ok {
+				fields = append(fields, s)
+			} else {
+				// FIXME: see if we can convert the value to a string
+				fields = append(fields, "")
+			}
+		} else {
+			fields = append(fields, "")
+		}
+	}
+
 	// Serialize
 	if err := w.enc.Write(fields); err != nil {
 		return err
@@ -159,6 +207,7 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 func (w *NativeLogsCSVWriter) Reset() {
 	w.w.Reset()
 	w.buf.Reset()
+	w.headerWritten = false
 }
 
 func (w *NativeLogsCSVWriter) Bytes() []byte {
@@ -180,4 +229,12 @@ func (w *NativeLogsCSVWriter) InitColumns(columns []string) {
 		return bytes.Compare(sortLower[i], sortLower[j]) < 0
 	})
 	w.columns = sortLower
+
+	for _, v := range w.columns {
+		w.fieldLookup[string(v)] = struct{}{}
+	}
+}
+
+func (w *NativeLogsCSVWriter) SchemaHash() uint64 {
+	return w.schemaHash
 }

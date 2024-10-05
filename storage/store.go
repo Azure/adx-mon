@@ -75,7 +75,9 @@ type StoreOpts struct {
 	SegmentMaxAge  time.Duration
 	MaxDiskUsage   int64
 
-	LiftedColumns []string
+	LiftedLabels     []string
+	LiftedAttributes []string
+	LiftedResources  []string
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
@@ -110,7 +112,7 @@ func (s *LocalStore) WALCount() int {
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
 	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
 	defer metricsCSVWriterPool.Put(enc)
-	enc.InitColumns(s.opts.LiftedColumns)
+	enc.InitColumns(s.opts.LiftedLabels)
 
 	b := gbp.Get(256)
 	defer gbp.Put(b)
@@ -185,6 +187,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
 	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
 	defer nativeLogsCSVWriterPool.Put(enc)
+	enc.InitColumns(s.opts.LiftedResources)
 
 	key := gbp.Get(256)
 	defer gbp.Put(key)
@@ -213,7 +216,8 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 			continue
 		}
 
-		key = fmt.Appendf(key[:0], "%s_%s", database, table)
+		key = fmt.Appendf(key[:0], "%s_%s_", database, table)
+		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
 
 		wal, err := s.GetWAL(ctx, key)
 		if err != nil {

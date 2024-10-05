@@ -267,6 +267,24 @@ func realMain(ctx *cli.Context) error {
 	addAttributes := cfg.AddAttributes
 	liftAttributes := cfg.LiftAttributes
 
+	sort.Slice(cfg.LiftResources, func(i, j int) bool {
+		return cfg.LiftResources[i].Name < cfg.LiftResources[j].Name
+	})
+
+	logsMapping := schema.DefaultLogsMapping
+	var sortedLiftedResources []string
+	for _, v := range cfg.LiftResources {
+		sortedLiftedResources = append(sortedLiftedResources, v.Name)
+		if v.ColumnName != "" {
+			logsMapping = logsMapping.AddStringMapping(v.ColumnName)
+			continue
+		}
+		logsMapping = logsMapping.AddStringMapping(v.Name)
+	}
+
+	// Update the default mapping so pooled csv encoders can use the lifted columns
+	schema.DefaultLogsMapping = logsMapping
+
 	if cfg.OtelLog != nil {
 		addAttributes = mergeMaps(addAttributes, cfg.OtelLog.AddAttributes)
 		liftAttributes = unionSlice(liftAttributes, cfg.OtelLog.LiftAttributes)
@@ -281,6 +299,7 @@ func realMain(ctx *cli.Context) error {
 		LiftLabels:         sortedLiftedLabels,
 		AddAttributes:      addAttributes,
 		LiftAttributes:     liftAttributes,
+		LiftResources:      sortedLiftedResources,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		TLSCertFile:        cfg.TLSCertFile,
 		TLSKeyFile:         cfg.TLSKeyFile,
