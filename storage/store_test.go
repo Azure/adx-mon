@@ -9,16 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/schema"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/stretchr/testify/require"
 )
@@ -31,17 +33,17 @@ func TestSeriesKey(t *testing.T) {
 	}{
 		{
 			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0).Labels,
-			Expect: []byte("adxmetrics_Foo"),
+			Expect: []byte("adxmetrics_Foo_0"),
 		},
 		{
 			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "OverrideDB"}, 0, 0).Labels,
-			Expect: []byte("OverrideDB_Foo"),
+			Expect: []byte("OverrideDB_Foo_0"),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.Expect), func(t *testing.T) {
 			b := make([]byte, 256)
-			key, err := storage.SegmentKey(b[:0], tt.Labels)
+			key, err := storage.SegmentKey(b[:0], tt.Labels, 0)
 			require.NoError(t, err)
 			require.Equal(t, string(tt.Expect), string(key))
 		})
@@ -64,21 +66,21 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
-	key1, err := storage.SegmentKey(b[:0], ts.Labels)
+	key1, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
-	key2, err := storage.SegmentKey(b[:0], ts.Labels)
+	key2, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -121,7 +123,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
@@ -139,7 +141,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 	require.NoError(t, err)
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
-	require.Equal(t, "1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n", string(data))
+	require.Equal(t, "Timestamp:datetime,SeriesId:long,Labels:dynamic,Value:real\n1970-01-01T00:00:00Z,-4995763953228126371,\"{}\",0.000000000\n", string(data))
 }
 
 func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
@@ -221,7 +223,7 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
 
-	key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
+	key := fmt.Appendf(b[:0], "%s_%s_%s", database, "foo", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
@@ -347,7 +349,7 @@ func BenchmarkSegmentKey(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		storage.SegmentKey(buf[:0], labels)
+		storage.SegmentKey(buf[:0], labels, 0)
 	}
 }
 

@@ -57,7 +57,16 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
-	cli, err := NewClient(30*time.Second, opts.InsecureSkipVerify)
+	cli, err := NewClient(ClientOpts{
+		Timeout:               30 * time.Second,
+		InsecureSkipVerify:    opts.InsecureSkipVerify,
+		Close:                 false,
+		MaxIdleConnsPerHost:   1,
+		MaxIdleConns:          5,
+		ResponseHeaderTimeout: 20 * time.Second,
+		DisableHTTP2:          true,
+		DisableKeepAlives:     true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -117,12 +126,17 @@ func (r *replicator) transfer(ctx context.Context) {
 				// the full batch atomimcally.
 				filename := filepath.Base(paths[0])
 
-				db, table, _, err := wal.ParseFilename(filename)
+				db, table, schema, _, err := wal.ParseFilename(filename)
 				if err != nil {
 					return fmt.Errorf("parse segment filename: %w", err)
 				}
 
-				key := fmt.Sprintf("%s_%s", db, table)
+				var key string
+				if schema != "" {
+					key = fmt.Sprintf("%s_%s_%s", db, table, schema)
+				} else {
+					key = fmt.Sprintf("%s_%s", db, table)
+				}
 
 				// Each metric is written to a distinct file.  The first part of the filename
 				// is the metric name.  We use the metric name to determine which node owns

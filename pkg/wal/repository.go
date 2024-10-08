@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
@@ -98,15 +97,15 @@ func (s *Repository) Open(ctx context.Context) error {
 			}
 
 			fileName := filepath.Base(path)
-			fields := strings.Split(fileName, "_")
-			if len(fields) != 3 || fields[0] == "" {
+			database, table, schema, epoch, err := ParseFilename(fileName)
+			if err != nil {
 				continue
 			}
 
-			database := fields[0]
-			table := fields[1]
-			epoch := fields[2][:len(fields[2])-4]
 			prefix := fmt.Sprintf("%s_%s", database, table)
+			if schema != "" {
+				prefix = fmt.Sprintf("%s_%s", prefix, schema)
+			}
 
 			createdAt, err := flakeutil.ParseFlakeID(epoch)
 			if err != nil {
@@ -123,7 +122,9 @@ func (s *Repository) Open(ctx context.Context) error {
 			// If the segment is only 8 bytes, that means only the segment magic header has been written and there
 			// is no data in the file.  We don't want to upload these to kusto so they can be removed.
 			if fi.Size() == 8 {
-				logger.Warnf("Removing empty segment: %s", path)
+				if logger.IsDebug() {
+					logger.Debugf("Removing empty segment: %s", path)
+				}
 				if err := os.Remove(path); err != nil {
 					logger.Warnf("Failed to remove empty segment: %s %s", path, err.Error())
 				}
