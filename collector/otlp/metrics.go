@@ -287,16 +287,8 @@ func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name stri
 			}
 
 			series := newSeries(fmt.Sprintf("%s_bucket", name), point.Attributes)
-			series.Labels = append(series.Labels, &prompb.Label{
-				Name:  []byte("le"),
-				Value: []byte(upperBound),
-			})
-			series.Samples = []*prompb.Sample{
-				{
-					Timestamp: timestamp,
-					Value:     float64(point.BucketCounts[i]),
-				},
-			}
+			series.AppendLabelString("le", upperBound)
+			series.AppendSample(timestamp, float64(point.BucketCounts[i]))
 			if err := t.addSeriesAndFlushIfNecessary(ctx, wr, series); err != nil {
 				return err
 			}
@@ -354,16 +346,8 @@ func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name s
 				upperBound := fmt.Sprintf("%f", math.Pow(-base, float64(bucketIdx)))
 
 				series := newSeries(fmt.Sprintf("%s_bucket", name), point.Attributes)
-				series.Labels = append(series.Labels, &prompb.Label{
-					Name:  []byte("le"),
-					Value: []byte(upperBound),
-				})
-				series.Samples = []*prompb.Sample{
-					{
-						Timestamp: timestamp,
-						Value:     float64(buckets.BucketCounts[i]),
-					},
-				}
+				series.AppendLabelString("le", upperBound)
+				series.AppendSample(timestamp, float64(buckets.BucketCounts[i]))
 				if err := t.addSeriesAndFlushIfNecessary(ctx, wr, series); err != nil {
 					return err
 				}
@@ -430,16 +414,8 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 		// Add quantile series
 		for _, quantile := range point.QuantileValues {
 			series := newSeries(name, point.Attributes)
-			series.Labels = append(series.Labels, &prompb.Label{
-				Name:  []byte("quantile"),
-				Value: []byte(fmt.Sprintf("%f", quantile.Quantile)),
-			})
-			series.Samples = []*prompb.Sample{
-				{
-					Timestamp: timestamp,
-					Value:     quantile.Value,
-				},
-			}
+			series.AppendLabelString("quantile", fmt.Sprintf("%f", quantile.Quantile))
+			series.AppendSample(timestamp, quantile.Value)
 			if err := t.addSeriesAndFlushIfNecessary(ctx, wr, series); err != nil {
 				return err
 			}
@@ -449,20 +425,11 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 }
 
 func newSeries(name string, attributes []*commonv1.KeyValue) *prompb.TimeSeries {
-	ts := &prompb.TimeSeries{
-		Labels: make([]*prompb.Label, 0, len(attributes)+1),
-	}
-
-	ts.Labels = append(ts.Labels, &prompb.Label{
-		Name:  []byte("__name__"),
-		Value: []byte(name),
-	})
+	ts := prompb.TimeSeriesPool.Get()
+	ts.AppendLabelString("__name__", name)
 
 	for _, l := range attributes {
-		ts.Labels = append(ts.Labels, &prompb.Label{
-			Name:  []byte(l.Key),
-			Value: []byte(l.Value.String()),
-		})
+		ts.AppendLabelString(l.Key, l.Value.String())
 	}
 
 	return ts

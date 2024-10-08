@@ -8,7 +8,6 @@ import (
 
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/davecgh/go-spew/spew"
 )
 
 type RequestTransformer struct {
@@ -102,13 +101,6 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 }
 
 func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.TimeSeries {
-	for _, l := range v.Labels {
-		if len(l.Name) == 0 {
-			spew.Dump(v)
-			panic("empty label name transform")
-		}
-	}
-
 	f.init()
 	// If labels are configured to be dropped, filter them next.
 	var (

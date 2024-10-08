@@ -7,35 +7,18 @@ import (
 
 type seriesCreator struct{}
 
-func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) prompb.TimeSeries {
-	ts := prompb.TimeSeries{
-		Labels: make([]*prompb.Label, 0, len(m.Label)+3),
-	}
+func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_prometheus_client.Metric) *prompb.TimeSeries {
+	ts := prompb.TimeSeriesPool.Get()
 
-	ts.Labels = append(ts.Labels, &prompb.Label{
-		Name:  []byte("__name__"),
-		Value: []byte(name),
-	})
-
+	ts.AppendLabelString("__name__", name)
 	if scrapeTarget.Namespace != "" {
-		ts.Labels = append(ts.Labels, &prompb.Label{
-			Name:  []byte("adxmon_namespace"),
-			Value: []byte(scrapeTarget.Namespace),
-		})
+		ts.AppendLabelString("adxmon_namespace", scrapeTarget.Namespace)
 	}
-
 	if scrapeTarget.Pod != "" {
-		ts.Labels = append(ts.Labels, &prompb.Label{
-			Name:  []byte("adxmon_pod"),
-			Value: []byte(scrapeTarget.Pod),
-		})
+		ts.AppendLabelString("adxmon_pod", scrapeTarget.Pod)
 	}
-
 	if scrapeTarget.Container != "" {
-		ts.Labels = append(ts.Labels, &prompb.Label{
-			Name:  []byte("adxmon_container"),
-			Value: []byte(scrapeTarget.Container),
-		})
+		ts.AppendLabelString("adxmon_container", scrapeTarget.Container)
 	}
 
 	for _, l := range m.Label {
@@ -43,10 +26,7 @@ func (s *seriesCreator) newSeries(name string, scrapeTarget ScrapeTarget, m *io_
 			continue
 		}
 
-		ts.Labels = append(ts.Labels, &prompb.Label{
-			Name:  []byte(l.GetName()),
-			Value: []byte(l.GetValue()),
-		})
+		ts.AppendLabelString(l.GetName(), l.GetValue())
 	}
 
 	prompb.Sort(ts.Labels)
