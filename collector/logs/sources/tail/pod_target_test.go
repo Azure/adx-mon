@@ -68,7 +68,7 @@ func TestGetFileTargets(t *testing.T) {
 			}),
 			expected: []FileTailTarget{
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -77,7 +77,7 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":         "pod1",
 						"namespace":   "namespace1",
 						"container":   "container1",
-						"containerID": "docker://container1",
+						"containerID": "docker://container1id",
 					},
 				},
 			},
@@ -91,7 +91,7 @@ func TestGetFileTargets(t *testing.T) {
 			}),
 			expected: []FileTailTarget{
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -100,7 +100,7 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":         "pod1",
 						"namespace":   "namespace1",
 						"container":   "container1",
-						"containerID": "docker://container1",
+						"containerID": "docker://container1id",
 					},
 				},
 			},
@@ -126,7 +126,7 @@ func TestGetFileTargets(t *testing.T) {
 			}),
 			expected: []FileTailTarget{
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -135,13 +135,13 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
-						"containerID":                            "docker://container1",
+						"containerID":                            "docker://container1id",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 						"label.app":                              "myapp",
 					},
 				},
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container2/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_container2-container2id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -150,7 +150,7 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container2",
-						"containerID":                            "docker://container2",
+						"containerID":                            "docker://container2id",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 						"label.app":                              "myapp",
 					},
@@ -182,23 +182,27 @@ func TestGetFileTargets(t *testing.T) {
 						{
 							Name: "container1",
 							// Not a real id format
-							ContainerID: "docker://container1",
+							ContainerID: "docker://container1id",
 							State: v1.ContainerState{
 								Running: &v1.ContainerStateRunning{},
 							},
 						},
+					},
+					InitContainerStatuses: []v1.ContainerStatus{
 						{
 							Name: "init-container1",
 							// Not a real id format
-							ContainerID: "docker://init-container1",
+							ContainerID: "docker://init-container1id",
 							State: v1.ContainerState{
 								Running: &v1.ContainerStateRunning{},
 							},
 						},
+					},
+					EphemeralContainerStatuses: []v1.ContainerStatus{
 						{
 							Name: "ephemeral-container1",
 							// Not a real id format
-							ContainerID: "docker://ephemeral-container1",
+							ContainerID: "docker://ephemeral-container1id",
 							State: v1.ContainerState{
 								Running: &v1.ContainerStateRunning{},
 							},
@@ -208,7 +212,7 @@ func TestGetFileTargets(t *testing.T) {
 			},
 			expected: []FileTailTarget{
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/container1/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -217,12 +221,12 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "container1",
-						"containerID":                            "docker://container1",
+						"containerID":                            "docker://container1id",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 					},
 				},
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/init-container1/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_init-container1-init-container1id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -231,12 +235,12 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "init-container1",
-						"containerID":                            "docker://init-container1",
+						"containerID":                            "docker://init-container1id",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 					},
 				},
 				{
-					FilePath: fmt.Sprint("/var/log/pods/namespace1_pod1_", uid, "/ephemeral-container1/0.log"),
+					FilePath: "/var/log/containers/pod1_namespace1_ephemeral-container1-ephemeral-container1id.log",
 					Database: "db1",
 					Table:    "table1",
 					LogType:  sourceparse.LogTypeKubernetes,
@@ -245,7 +249,7 @@ func TestGetFileTargets(t *testing.T) {
 						"pod":                                    "pod1",
 						"namespace":                              "namespace1",
 						"container":                              "ephemeral-container1",
-						"containerID":                            "docker://ephemeral-container1",
+						"containerID":                            "docker://ephemeral-container1id",
 						"annotation.cni.projectcalico.org/podIP": "10.10.10.10",
 					},
 				},
@@ -512,7 +516,7 @@ func genPod(name, namespace, nodeName string, containerNames []string, annotatio
 		statuses = append(statuses, v1.ContainerStatus{
 			Name: containerName,
 			// Not a real id format
-			ContainerID: fmt.Sprintf("docker://%s", containerName),
+			ContainerID: fmt.Sprintf("docker://%sid", containerName),
 			State: v1.ContainerState{
 				Running: &v1.ContainerStateRunning{},
 			},
@@ -548,7 +552,7 @@ func genPodWithLabels(name, namespace, nodeName string, containerNames []string,
 		statuses = append(statuses, v1.ContainerStatus{
 			Name: containerName,
 			// Not a real id format
-			ContainerID: fmt.Sprintf("docker://%s", containerName),
+			ContainerID: fmt.Sprintf("docker://%sid", containerName),
 			State: v1.ContainerState{
 				Running: &v1.ContainerStateRunning{},
 			},
