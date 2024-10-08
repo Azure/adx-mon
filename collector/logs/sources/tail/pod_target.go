@@ -2,7 +2,6 @@ package tail
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
@@ -68,41 +67,55 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 	}
 
 	podName := pod.Name
-	podUid := pod.ObjectMeta.UID
 	namespaceName := pod.Namespace
 
 	containerCount := len(pod.Spec.Containers) + len(pod.Spec.InitContainers) + len(pod.Spec.EphemeralContainers)
 	targets := make([]FileTailTarget, 0, containerCount)
-	baseDir := fmt.Sprintf("/var/log/pods/%s_%s_%s", namespaceName, podName, podUid)
+	// example name /var/log/containers/adx-reconciler-85f865d7b5-j5f49_adx-reconciler_adx-reconciler-ea96bea0582a986c502378aef429a275eb75c1d68e1c912ef93c2b5300990b04.log
+	// podname_namespace_containername-containerid.log
+	logFilePrefix := fmt.Sprintf("/var/log/containers/%s_%s", podName, namespaceName)
 	for _, container := range pod.Spec.InitContainers {
-		target := targetForContainer(pod, parserList, container.Name, baseDir, podDB, podTable)
-		targets = append(targets, target)
+		if target, ok := targetForContainer(pod, pod.Status.InitContainerStatuses, parserList, container.Name, logFilePrefix, podDB, podTable); ok {
+			targets = append(targets, target)
+		}
 	}
 	for _, container := range pod.Spec.Containers {
-		target := targetForContainer(pod, parserList, container.Name, baseDir, podDB, podTable)
-		targets = append(targets, target)
+		if target, ok := targetForContainer(pod, pod.Status.ContainerStatuses, parserList, container.Name, logFilePrefix, podDB, podTable); ok {
+			targets = append(targets, target)
+		}
 	}
 	for _, container := range pod.Spec.EphemeralContainers {
-		target := targetForContainer(pod, parserList, container.Name, baseDir, podDB, podTable)
-		targets = append(targets, target)
+		if target, ok := targetForContainer(pod, pod.Status.EphemeralContainerStatuses, parserList, container.Name, logFilePrefix, podDB, podTable); ok {
+			targets = append(targets, target)
+		}
 	}
 	return targets
 }
 
-func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir, podDB, podTable string) FileTailTarget {
-	logFile := filepath.Join(baseDir, containerName, "0.log")
+func targetForContainer(pod *v1.Pod, containerStatuses []v1.ContainerStatus, parserList []string, containerName, logFilePrefix, podDB, podTable string) (FileTailTarget, bool) {
+	containerId, ok := getContainerID(containerStatuses, containerName)
+	if !ok {
+		logger.Warnf("Failed to get container ID for container %s in pod %s/%s", containerName, pod.Namespace, pod.Name)
+		return FileTailTarget{}, false
+	}
+
+	// containerId is <type>://<containerId>
+	containerIdWithoutType := containerId
+	slashIdx := strings.IndexByte(containerId, '/')
+	if slashIdx != -1 && slashIdx+2 < len(containerId) {
+		containerIdWithoutType = containerId[slashIdx+2:]
+	}
+
+	logFile := fmt.Sprintf("%s_%s-%s.log", logFilePrefix, containerName, containerIdWithoutType)
 	if logger.IsDebug() {
 		logger.Debugf("Found target: file:%s database:%s table:%s parsers:%v", logFile, podDB, podTable, parserList)
 	}
 
 	resourceValues := map[string]interface{}{
-		"pod":       pod.Name,
-		"namespace": pod.Namespace,
-		"container": containerName,
-	}
-	containerID, ok := getContainerID(pod, containerName)
-	if ok {
-		resourceValues["containerID"] = containerID
+		"pod":         pod.Name,
+		"namespace":   pod.Namespace,
+		"container":   containerName,
+		"containerID": containerId,
 	}
 
 	for k, v := range pod.GetAnnotations() {
@@ -123,7 +136,7 @@ func targetForContainer(pod *v1.Pod, parserList []string, containerName, baseDir
 		Parsers:   parserList,
 		Resources: resourceValues,
 	}
-	return target
+	return target, true
 }
 
 func getAnnotationOrDefault(p *v1.Pod, key, def string) string {
@@ -156,8 +169,8 @@ func isTargetChanged(old, new FileTailTarget) bool {
 	return old.Database != new.Database || old.Table != new.Table
 }
 
-func getContainerID(pod *v1.Pod, containerName string) (string, bool) {
-	for _, container := range pod.Status.ContainerStatuses {
+func getContainerID(containerStatuses []v1.ContainerStatus, containerName string) (string, bool) {
+	for _, container := range containerStatuses {
 		if container.Name == containerName {
 			return container.ContainerID, true
 		}

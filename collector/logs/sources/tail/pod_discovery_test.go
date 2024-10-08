@@ -58,6 +58,11 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 			Name:  "container2",
 			Image: "image2",
 		})
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, v1.ContainerStatus{
+			Name:        "container2",
+			Image:       "image2",
+			ContainerID: "docker://container2id",
+		})
 		podDiscovery.OnAdd(pod, false)
 
 		cleanTombstonedTargets(podDiscovery)
@@ -92,6 +97,11 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
 			Name:  "container2",
 			Image: "image2",
+		})
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, v1.ContainerStatus{
+			Name:        "container2",
+			Image:       "image2",
+			ContainerID: "docker://container2id",
 		})
 		podDiscovery.OnUpdate(nil, pod)
 		require.Equal(t, 2, len(tailSource.targetAdds)) // new container to scrape logs from
@@ -144,12 +154,18 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 			Name:  "container2",
 			Image: "image2",
 		})
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, v1.ContainerStatus{
+			Name:        "container2",
+			Image:       "image2",
+			ContainerID: "docker://container2id",
+		})
 		podDiscovery.OnUpdate(nil, pod)
 		// New container added to scrape
 		require.Equal(t, 2, len(tailSource.targetAdds))
 		require.Equal(t, 0, len(tailSource.targetRemoves))
 
 		pod.Spec.Containers = pod.Spec.Containers[:1]
+		pod.Status.ContainerStatuses = pod.Status.ContainerStatuses[:1]
 		podDiscovery.OnUpdate(nil, pod)
 		// Removed container that is tombstoned, but not removed yet
 		cleanTombstonedTargets(podDiscovery)
@@ -176,19 +192,27 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 			Name:  "container2",
 			Image: "image2",
 		})
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, v1.ContainerStatus{
+			Name:        "container2",
+			Image:       "image2",
+			ContainerID: "docker://container2id",
+		})
 		podDiscovery.OnUpdate(nil, pod)
 		// New container added to scrape
 		require.Equal(t, 2, len(tailSource.targetAdds))
 		require.Equal(t, 0, len(tailSource.targetRemoves))
 
 		savedContainerList := pod.Spec.Containers
+		savedContainerStatuses := pod.Status.ContainerStatuses
 		pod.Spec.Containers = pod.Spec.Containers[:1]
+		pod.Status.ContainerStatuses = pod.Status.ContainerStatuses[:1]
 		podDiscovery.OnUpdate(nil, pod)
 		// Removed container that is tombstoned, but not removed yet
 		cleanTombstonedTargets(podDiscovery)
 		require.Equal(t, 0, len(tailSource.targetRemoves))
 
 		pod.Spec.Containers = savedContainerList
+		pod.Status.ContainerStatuses = savedContainerStatuses
 		podDiscovery.OnUpdate(nil, pod)
 		// Nothing new added, nothing removed either.
 		require.Equal(t, 2, len(tailSource.targetAdds))
@@ -248,6 +272,16 @@ func scrapedPod(name string) *v1.Pod {
 				},
 			},
 		},
+		Status: v1.PodStatus{
+			Phase: v1.PodRunning,
+			ContainerStatuses: []v1.ContainerStatus{
+				{
+					Name:        "container1",
+					Image:       "image1",
+					ContainerID: "docker://container1id",
+				},
+			},
+		},
 	}
 }
 
@@ -265,6 +299,16 @@ func notScrapedPod(name string) *v1.Pod {
 				{
 					Name:  "container1",
 					Image: "image1",
+				},
+			},
+		},
+		Status: v1.PodStatus{
+			Phase: v1.PodRunning,
+			ContainerStatuses: []v1.ContainerStatus{
+				{
+					Name:        "container1",
+					Image:       "image1",
+					ContainerID: "docker://container1id",
 				},
 			},
 		},
