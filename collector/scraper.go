@@ -215,6 +215,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := prompb.WriteRequestPool.Get()
 	defer prompb.WriteRequestPool.Put(wr)
+
 	for _, target := range targets {
 		logger.Infof("Scraping %s", target.String())
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)

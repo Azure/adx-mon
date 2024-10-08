@@ -67,6 +67,7 @@ func (i *Iterator) Reset(r io.ReadCloser) {
 	i.r = r
 	i.scanner = bufio.NewScanner(r)
 	i.current = i.current[:0]
+	i.buf = i.buf[:0]
 }
 
 func (i *Iterator) isComment(s string) bool {
