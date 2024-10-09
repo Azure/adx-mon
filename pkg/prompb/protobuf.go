@@ -333,8 +333,8 @@ func (m *Label) marshalProtobuf(mm *easyproto.MessageMarshaler) {
 
 func (m *Label) unmarshalProtobuf(src []byte) (err error) {
 	// Set default Sample values
-	m.Name = nil
-	m.Value = nil
+	m.Name = m.Name[:0]
+	m.Value = m.Value[:0]
 
 	// Parse Sample message at src
 	var fc easyproto.FieldContext
@@ -349,13 +349,13 @@ func (m *Label) unmarshalProtobuf(src []byte) (err error) {
 			if !ok {
 				return fmt.Errorf("cannot read sample value")
 			}
-			m.Name = name
+			m.Name = append(m.Name[:0], name...)
 		case 2:
 			value, ok := fc.Bytes()
 			if !ok {
 				return fmt.Errorf("cannot read sample value")
 			}
-			m.Value = value
+			m.Value = append(m.Value[:0], value...)
 		}
 	}
 	return nil
