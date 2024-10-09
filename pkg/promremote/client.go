@@ -14,6 +14,11 @@ import (
 	pool "github.com/libp2p/go-buffer-pool"
 )
 
+type RemoteWriteClient interface {
+	Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error
+	CloseIdleConnections()
+}
+
 // Client is a client for the prometheus remote write API.  It is safe to be shared between goroutines.
 type Client struct {
 	httpClient *http.Client
