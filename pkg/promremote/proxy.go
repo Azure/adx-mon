@@ -118,9 +118,8 @@ func (c *RemoteWriteProxy) flush(ctx context.Context) {
 			}
 			nextBatch := prompb.WriteRequestPool.Get()
 			nextBatch.Timeseries = append(nextBatch.Timeseries, pendingBatch.Timeseries...)
-
+			pendingBatch.Timeseries = append(pendingBatch.Timeseries[:0])
 			c.ready <- nextBatch
-			pendingBatch.Reset()
 		}
 	}
 }
