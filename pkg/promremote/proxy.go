@@ -14,7 +14,7 @@ import (
 )
 
 type RemoteWriteProxy struct {
-	client                   *Client
+	client                   RemoteWriteClient
 	endpoints                []string
 	maxBatchSize             int
 	disableMetricsForwarding bool
@@ -27,7 +27,7 @@ type RemoteWriteProxy struct {
 	cancelFn context.CancelFunc
 }
 
-func NewRemoteWriteProxy(client *Client, endpoints []string, maxBatchSize int, disableMetricsForwarding bool) *RemoteWriteProxy {
+func NewRemoteWriteProxy(client RemoteWriteClient, endpoints []string, maxBatchSize int, disableMetricsForwarding bool) *RemoteWriteProxy {
 	p := &RemoteWriteProxy{
 		client:                   client,
 		endpoints:                endpoints,
@@ -135,7 +135,7 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 			// in ingestor as the locks tend to be acquired in order of series name.  Since there are usually
 			// multiple series with the same name, this can reduce contention.
 			sort.Slice(wr.Timeseries, func(i, j int) bool {
-				return bytes.Compare(wr.Timeseries[i].Labels[0].Value, wr.Timeseries[j].Labels[0].Value) < 0
+				return bytes.Compare(prompb.MetricName(wr.Timeseries[i]), prompb.MetricName(wr.Timeseries[j])) < 0
 			})
 
 			if len(p.endpoints) == 0 || logger.IsDebug() {
