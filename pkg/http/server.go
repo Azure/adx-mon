@@ -8,9 +8,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/limiter"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"golang.org/x/net/netutil"
 )
 
 type HttpHandler struct {
@@ -82,7 +82,7 @@ func (s *HttpServer) Open(ctx context.Context) error {
 	}
 
 	if s.opts.MaxConns > 0 {
-		s.listener = netutil.LimitListener(s.listener, s.opts.MaxConns)
+		s.listener = limiter.LimitListener(s.listener, s.opts.MaxConns)
 	}
 
 	readTimeout := 5 * time.Second

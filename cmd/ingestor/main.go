@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/tools/otlp/logs/kustainer"
@@ -346,7 +347,7 @@ func realMain(ctx *cli.Context) error {
 	}
 	if maxConns > 0 {
 		logger.Infof("Limiting connections to %d", maxConns)
-		l = ingestor.LimitListener(l, maxConns)
+		l = limiter.LimitListener(l, maxConns)
 	}
 	defer l.Close()
 
