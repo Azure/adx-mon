@@ -1,4 +1,4 @@
-package ingestor
+package limiter
 
 import (
 	"net"
