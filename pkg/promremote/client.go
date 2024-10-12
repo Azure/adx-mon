@@ -7,11 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/golang/snappy"
-	pool "github.com/libp2p/go-buffer-pool"
+)
+
+var (
+	bytesPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 0, 32*1024)
+		},
+	}
 )
 
 type RemoteWriteClient interface {
@@ -127,16 +135,16 @@ func NewClient(opts ClientOpts) (*Client, error) {
 }
 
 func (c *Client) Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error {
-	b := pool.Get(wr.Size())
-	defer pool.Put(b)
+	b := bytesPool.Get().([]byte)
+	defer bytesPool.Put(b)
 
 	b, err := wr.MarshalTo(b[:0])
 	if err != nil {
 		return fmt.Errorf("marshal proto: %w", err)
 	}
 
-	b1 := pool.Get(snappy.MaxEncodedLen(len(b)))
-	defer pool.Put(b1)
+	b1 := bytesPool.Get().([]byte)
+	defer bytesPool.Put(b1)
 
 	encoded := snappy.Encode(b1[:0], b)
 	body := bytes.NewReader(encoded)
