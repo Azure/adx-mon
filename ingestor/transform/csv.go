@@ -234,9 +234,10 @@ func (w *CSVWriter) MarshalLog(logs *otlp.Logs) error {
 		if err := w.enc.Write(fields); err != nil {
 			return err
 		}
+
+		w.enc.Flush()
 	}
 
-	w.enc.Flush()
 	return w.enc.Error()
 }
 
