@@ -480,6 +480,10 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 						},
 						Resource: map[string]interface{}{
 							"RPTenant": "eastus",
+							// Labels, annotations and adxmon_ are filtered since they are only used internally
+							"label.foo":        "labels",
+							"annotation.bar":   "annotations",
+							"adxmon_container": "adxmon prefix",
 						},
 					},
 				},

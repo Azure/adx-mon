@@ -294,6 +294,11 @@ func (w *CSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.WriteByte('{')
 	hasPrevField = false
 	for k, v := range log.Resource {
+		// These are added by collector and used internally.  Don't store them in the final table.
+		if strings.HasPrefix(k, "adxmon_") || strings.HasPrefix(k, "label.") || strings.HasPrefix(k, "annotation.") {
+			continue
+		}
+
 		val, err := ffjson.Marshal(v)
 		if err != nil {
 			continue
