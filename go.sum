@@ -1,7 +1,7 @@
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240701200714-7fa05f4b0c8d.1 h1:ZO8w1vmP/tYbQcyVcDllptwWce0CDy9ZiT4/OKbo2uc=
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240701200714-7fa05f4b0c8d.1/go.mod h1:yMwxskrspCbL7/SDjlMpBGXeEEWynjIcivPN1FaVe4E=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.34.2-20240701200714-7fa05f4b0c8d.2 h1:/3md/f2zL3yXFW5aCaYVmbV+yHZJDmgmzqD+sdyBlxw=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.34.2-20240701200714-7fa05f4b0c8d.2/go.mod h1:ZvB56FaNXs1RRuWbmQCE4Cc1cToRuE+W+oUM4/COfPM=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.1-20240701200714-7fa05f4b0c8d.1 h1:X02QcDb5RRbjVbSfaPSk/bSrDkjb595lDzai3D8M1wY=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.1-20240701200714-7fa05f4b0c8d.1/go.mod h1:mvHSR69lzH0TiYh+X2+oBUWBLSyAqaHTU/Ujs6hdP50=
 github.com/Azure/azure-pipeline-go v0.1.8/go.mod h1:XA1kFWRVhSK+KNFiOhfv83Fv8L9achrP7OxIzeTn1Yg=
 github.com/Azure/azure-pipeline-go v0.2.3 h1:7U9HBg1JFK3jHl5qmo4CTZKFTVgMwdFHMVtCdfBE21U=
 github.com/Azure/azure-pipeline-go v0.2.3/go.mod h1:x841ezTBIMG6O3lAcl8ATHnsOPVl2bqk7S3ta6S6u4k=
@@ -288,8 +288,8 @@ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8T
 golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 h1:AjyfHzEPEFp/NpvfN5g+KDla3EMojjhRVZc1i7cj+oM=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80/go.mod h1:PAREbraiVEVGVdTZsVWjSbbTtSyGbAgIIvni8a8CD5s=
-google.golang.org/protobuf v1.34.2 h1:6xV6lTsCfpGD21XK49h7MhtcApnLqkfYgPcdHftf6hg=
-google.golang.org/protobuf v1.34.2/go.mod h1:qYOHts0dSfpeUzUFpOMr/WGzszTmLH+DiWniOlNbLDw=
+google.golang.org/protobuf v1.35.1 h1:m3LfL6/Ca+fqnjnlqQXNpFPABW1UD7mjh8KO2mKFytA=
+google.golang.org/protobuf v1.35.1/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=
