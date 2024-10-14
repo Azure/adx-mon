@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/storage"
 )
 
 type StoreSinkConfig struct {

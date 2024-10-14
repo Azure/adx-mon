@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/golang/snappy"
 	"github.com/stretchr/testify/require"
 )

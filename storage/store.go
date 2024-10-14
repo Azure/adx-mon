@@ -5,11 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
@@ -17,6 +17,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/schema"
+	transform2 "github.com/Azure/adx-mon/transform"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -24,7 +26,15 @@ import (
 
 var (
 	csvWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return transform.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+		return transform2.NewCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+	})
+
+	nativeLogsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+		return transform2.NewCSVNativeLogsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
+	})
+
+	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
+		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
 
 	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
@@ -65,7 +75,9 @@ type StoreOpts struct {
 	SegmentMaxAge  time.Duration
 	MaxDiskUsage   int64
 
-	LiftedColumns []string
+	LiftedLabels     []string
+	LiftedAttributes []string
+	LiftedResources  []string
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
@@ -98,15 +110,15 @@ func (s *LocalStore) WALCount() int {
 }
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
-	defer csvWriterPool.Put(enc)
-	enc.InitColumns(s.opts.LiftedColumns)
+	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
+	defer metricsCSVWriterPool.Put(enc)
+	enc.InitColumns(s.opts.LiftedLabels)
 
 	b := gbp.Get(256)
 	defer gbp.Put(b)
 
 	for _, v := range ts {
-		key, err := SegmentKey(b[:0], v.Labels)
+		key, err := SegmentKey(b[:0], v.Labels, enc.SchemaHash())
 		if err != nil {
 			return err
 		}
@@ -119,7 +131,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 		s.incMetrics(v.Labels[0].Value, len(v.Samples))
 
 		enc.Reset()
-		if err := enc.MarshalTS(v); err != nil {
+		if err := enc.MarshalCSV(v); err != nil {
 			return err
 		}
 
@@ -131,7 +143,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 }
 
 func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
+	enc := csvWriterPool.Get(8 * 1024).(*transform2.CSVWriter)
 	defer csvWriterPool.Put(enc)
 
 	key := gbp.Get(256)
@@ -173,8 +185,9 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 }
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
-	enc := csvWriterPool.Get(8 * 1024).(*transform.CSVWriter)
-	defer csvWriterPool.Put(enc)
+	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
+	defer nativeLogsCSVWriterPool.Put(enc)
+	enc.InitColumns(s.opts.LiftedResources)
 
 	key := gbp.Get(256)
 	defer gbp.Put(key)
@@ -203,7 +216,8 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 			continue
 		}
 
-		key = fmt.Appendf(key[:0], "%s_%s", database, table)
+		key = fmt.Appendf(key[:0], "%s_%s_", database, table)
+		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
 
 		wal, err := s.GetWAL(ctx, key)
 		if err != nil {
@@ -237,7 +251,7 @@ func (s *LocalStore) PrefixesByAge() []string {
 }
 
 func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
-	db, table, _, err := wal.ParseFilename(filename)
+	db, table, schema, _, err := wal.ParseFilename(filename)
 	if err != nil {
 		return 0, err
 	}
@@ -245,7 +259,11 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	key := gbp.Get(256)
 	defer gbp.Put(key)
 
-	key = fmt.Appendf(key[:0], "%s_%s", db, table)
+	if schema != "" {
+		key = fmt.Appendf(key[:0], "%s_%s_%s", db, table, schema)
+	} else {
+		key = fmt.Appendf(key[:0], "%s_%s", db, table)
+	}
 
 	wal, err := s.GetWAL(context.Background(), key)
 	if err != nil {
@@ -265,12 +283,18 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 }
 
 func (s *LocalStore) Remove(path string) error {
-	db, table, _, err := wal.ParseFilename(path)
+	db, table, schema, _, err := wal.ParseFilename(path)
 	if err != nil {
 		return err
 	}
 
-	key := fmt.Sprintf("%s_%s", db, table)
+	var key string
+	if schema != "" {
+		key = fmt.Sprintf("%s_%s_%s", db, table, schema)
+	} else {
+		key = fmt.Sprintf("%s_%s", db, table)
+	}
+
 	wal, err := s.GetWAL(context.Background(), []byte(key))
 	if err != nil {
 		return err
@@ -303,7 +327,7 @@ func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
 }
 
-func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
+func SegmentKey(dst []byte, labels []*prompb.Label, hash uint64) ([]byte, error) {
 	var name, database []byte
 	for _, v := range labels {
 		if bytes.Equal(v.Name, []byte("adxmon_database")) {
@@ -327,7 +351,9 @@ func SegmentKey(dst []byte, labels []*prompb.Label) ([]byte, error) {
 
 	dst = append(dst, database...)
 	dst = append(dst, delim...)
-	return transform.AppendNormalize(dst, name), nil
+	dst = schema.AppendNormalize(dst, name)
+	dst = append(dst, delim...)
+	return strconv.AppendUint(dst, hash, 36), nil
 }
 
 var delim = []byte("_")

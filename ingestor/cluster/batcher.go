@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/storage"
 )
 
 type Segmenter interface {
@@ -299,7 +299,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			directUpload bool
 		)
 
-		db, table, _, err := wal.ParseFilename(v[0].Path)
+		db, table, _, _, err := wal.ParseFilename(v[0].Path)
 		if err != nil {
 			logger.Errorf("Failed to parse segment filename: %s", err)
 			continue

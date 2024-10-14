@@ -14,13 +14,14 @@ import (
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
-	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/ingestor/transform"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -82,8 +83,12 @@ type ServiceOpts struct {
 	// Scraper is the options for the prom scraper
 	Scraper *ScraperOpts
 
+	// Labels to lift to columns
+	LiftLabels []string
+
 	AddAttributes  map[string]string
 	LiftAttributes []string
+	LiftResources  []string
 
 	// InsecureSkipVerify skips the verification of the remote write endpoint certificate chain and host name.
 	InsecureSkipVerify bool
@@ -172,10 +177,13 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     opts.StorageDir,
-		SegmentMaxAge:  maxSegmentAge,
-		SegmentMaxSize: maxSegmentSize,
-		MaxDiskUsage:   opts.MaxDiskUsage,
+		StorageDir:       opts.StorageDir,
+		SegmentMaxAge:    maxSegmentAge,
+		SegmentMaxSize:   maxSegmentSize,
+		MaxDiskUsage:     opts.MaxDiskUsage,
+		LiftedLabels:     opts.LiftLabels,
+		LiftedAttributes: opts.LiftAttributes,
+		LiftedResources:  opts.LiftResources,
 	})
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
@@ -210,18 +218,18 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
 	for _, handlerOpts := range opts.PromMetricsHandlers {
-		proxy := promremote.NewRemoteWriteProxy(remoteClient, opts.Endpoints, opts.MaxBatchSize, handlerOpts.MetricOpts.DisableMetricsForwarding)
+		// proxy := promremote.NewRemoteWriteProxy(remoteClient, opts.Endpoints, opts.MaxBatchSize, handlerOpts.MetricOpts.DisableMetricsForwarding)
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
-			RequestWriter:      proxy,
+			RequestWriter:      &StoreRequestWriter{store},
 			HealthChecker:      fakeHealthChecker{},
 		})
 		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
-		workerSvcs = append(workerSvcs, proxy)
+		// workerSvcs = append(workerSvcs, proxy)
 	}
 
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
@@ -300,7 +308,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	var scraper *Scraper
 	if opts.Scraper != nil {
 		scraperOpts := opts.Scraper
-		scraperOpts.RemoteClient = remoteClient
+		scraperOpts.RemoteClient = &StoreRemoteClient{store}
 		scraperOpts.Endpoints = opts.Endpoints
 
 		scraper = NewScraper(opts.Scraper)
@@ -518,4 +526,23 @@ type remotePartitioner struct {
 
 func (f remotePartitioner) Owner(bytes []byte) (string, string) {
 	return f.host, f.addr
+}
+
+type StoreRequestWriter struct {
+	store storage.Store
+}
+
+func (s *StoreRequestWriter) Write(ctx context.Context, req *prompb.WriteRequest) error {
+	return s.store.WriteTimeSeries(ctx, req.Timeseries)
+}
+
+type StoreRemoteClient struct {
+	store storage.Store
+}
+
+func (s *StoreRemoteClient) Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error {
+	return s.store.WriteTimeSeries(ctx, wr.Timeseries)
+}
+
+func (s *StoreRemoteClient) CloseIdleConnections() {
 }

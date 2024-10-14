@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -21,9 +22,10 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/schema"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/kubernetes"
@@ -137,6 +139,23 @@ func realMain(ctx *cli.Context) error {
 	} else {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
+	sort.Slice(cfg.LiftLabels, func(i, j int) bool {
+		return cfg.LiftLabels[i].Name < cfg.LiftLabels[j].Name
+	})
+
+	defaultMapping := schema.DefaultMetricsMapping
+	var sortedLiftedLabels []string
+	for _, v := range cfg.LiftLabels {
+		sortedLiftedLabels = append(sortedLiftedLabels, v.Name)
+		if v.ColumnName != "" {
+			defaultMapping = defaultMapping.AddStringMapping(v.ColumnName)
+			continue
+		}
+		defaultMapping = defaultMapping.AddStringMapping(v.Name)
+	}
+
+	// Update the default mapping so pooled csv encoders can use the lifted columns
+	schema.DefaultMetricsMapping = defaultMapping
 
 	var informer *k8s.PodInformer
 	var scraperOpts *collector.ScraperOpts
@@ -248,6 +267,24 @@ func realMain(ctx *cli.Context) error {
 	addAttributes := cfg.AddAttributes
 	liftAttributes := cfg.LiftAttributes
 
+	sort.Slice(cfg.LiftResources, func(i, j int) bool {
+		return cfg.LiftResources[i].Name < cfg.LiftResources[j].Name
+	})
+
+	logsMapping := schema.DefaultLogsMapping
+	var sortedLiftedResources []string
+	for _, v := range cfg.LiftResources {
+		sortedLiftedResources = append(sortedLiftedResources, v.Name)
+		if v.ColumnName != "" {
+			logsMapping = logsMapping.AddStringMapping(v.ColumnName)
+			continue
+		}
+		logsMapping = logsMapping.AddStringMapping(v.Name)
+	}
+
+	// Update the default mapping so pooled csv encoders can use the lifted columns
+	schema.DefaultLogsMapping = logsMapping
+
 	if cfg.OtelLog != nil {
 		addAttributes = mergeMaps(addAttributes, cfg.OtelLog.AddAttributes)
 		liftAttributes = unionSlice(liftAttributes, cfg.OtelLog.LiftAttributes)
@@ -259,8 +296,10 @@ func realMain(ctx *cli.Context) error {
 		ListenAddr:         cfg.ListenAddr,
 		NodeName:           hostname,
 		Endpoints:          endpoints,
+		LiftLabels:         sortedLiftedLabels,
 		AddAttributes:      addAttributes,
 		LiftAttributes:     liftAttributes,
+		LiftResources:      sortedLiftedResources,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		TLSCertFile:        cfg.TLSCertFile,
 		TLSKeyFile:         cfg.TLSKeyFile,

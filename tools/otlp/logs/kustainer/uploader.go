@@ -10,9 +10,9 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 )
@@ -56,7 +56,7 @@ func (u *Uploader) Open(ctx context.Context) error {
 		break
 	}
 
-	u.syncer = adx.NewSyncer(client, u.DatabaseName, storage.DefaultLogsMapping, adx.OTLPLogs)
+	u.syncer = adx.NewSyncer(client, u.DatabaseName, schema.DefaultLogsMapping, adx.OTLPLogs)
 	if err := u.syncer.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open syncer: %w", err)
 	}
@@ -107,7 +107,7 @@ func (u *Uploader) run(ctx context.Context) error {
 }
 
 func (u *Uploader) uploadSegment(ctx context.Context, path string) error {
-	_, table, _, err := wal.ParseFilename(path)
+	_, table, _, _, err := wal.ParseFilename(path)
 	if err != nil {
 		return fmt.Errorf("failed to parse file: %w", err)
 	}
@@ -125,10 +125,10 @@ func (u *Uploader) uploadSegment(ctx context.Context, path string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	if err := u.syncer.EnsureTable(table); err != nil {
+	if err := u.syncer.EnsureDefaultTable(table); err != nil {
 		return fmt.Errorf("failed to ensure table %s: %w", table, err)
 	}
-	if _, err := u.syncer.EnsureMapping(table); err != nil {
+	if _, err := u.syncer.EnsureDefaultMapping(table); err != nil {
 		return fmt.Errorf("failed to ensure mapping for table %s: %w", table, err)
 	}
 
