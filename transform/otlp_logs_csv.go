@@ -9,9 +9,7 @@ import (
 	"time"
 
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
-	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/pquerna/ffjson/ffjson"
 	fflib "github.com/pquerna/ffjson/fflib/v1"
 )
 
@@ -117,117 +115,6 @@ func (w *CSVWriter) MarshalLog(logs *otlp.Logs) error {
 		w.enc.Flush()
 	}
 
-	return w.enc.Error()
-}
-
-func (w *CSVWriter) MarshalNativeLog(log *types.Log) error {
-	// There are 9 fields defined in an OTLP log schema
-	fields := make([]string, 0, 9)
-	// Convert log records to CSV
-	// see samples at https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
-	// Reset fields
-	fields = fields[:0]
-	// Timestamp
-	fields = append(fields, otlpTSToUTC(int64(log.Timestamp)))
-	// ObservedTimestamp
-	if v := log.ObservedTimestamp; v > 0 {
-		// Some clients don't set this value.
-		fields = append(fields, otlpTSToUTC(int64(log.ObservedTimestamp)))
-	} else {
-		fields = append(fields, time.Now().UTC().Format(time.RFC3339Nano))
-	}
-	// TraceId - we don't have this
-	fields = append(fields, "")
-	// SpanId - we don't have this
-	fields = append(fields, "")
-	// SeverityText - we don't have this
-	fields = append(fields, "")
-	// SeverityNumber - we don't have this
-	fields = append(fields, "")
-	// Body
-	buf := w.buf
-	buf.Reset()
-	buf.WriteByte('{')
-	hasPrevField := false
-	for k, v := range log.Body {
-		val, err := ffjson.Marshal(v)
-		if err != nil {
-			continue
-		}
-
-		if hasPrevField {
-			buf.WriteByte(',')
-		} else {
-			hasPrevField = true
-		}
-		fflib.WriteJson(buf, []byte(k))
-		buf.WriteByte(':')
-		buf.Write(val) // Already marshalled into json. Don't escape it again.
-		ffjson.Pool(val)
-	}
-	buf.WriteByte('}')
-	fields = append(fields, buf.String())
-
-	// Resource
-	buf.Reset()
-	buf.WriteByte('{')
-	hasPrevField = false
-	for k, v := range log.Resource {
-		// These are added by collector and used internally.  Don't store them in the final table.
-		if strings.HasPrefix(k, "adxmon_") || strings.HasPrefix(k, "label.") || strings.HasPrefix(k, "annotation.") {
-			continue
-		}
-
-		val, err := ffjson.Marshal(v)
-		if err != nil {
-			continue
-		}
-
-		if hasPrevField {
-			buf.WriteByte(',')
-		} else {
-			hasPrevField = true
-		}
-		fflib.WriteJson(buf, []byte(k))
-		buf.WriteByte(':')
-		buf.Write(val) // Already marshalled into json. Don't escape it again.
-		ffjson.Pool(val)
-	}
-	buf.WriteByte('}')
-	fields = append(fields, buf.String())
-
-	// Attributes
-	buf.Reset()
-	buf.WriteByte('{')
-	hasPrevField = false
-	for k, v := range log.Attributes {
-		if strings.HasPrefix(k, "adxmon_") {
-			continue
-		}
-
-		val, err := ffjson.Marshal(v)
-		if err != nil {
-			continue
-		}
-
-		if hasPrevField {
-			buf.WriteByte(',')
-		} else {
-			hasPrevField = true
-		}
-		fflib.WriteJson(buf, []byte(k))
-		buf.WriteByte(':')
-		buf.Write(val) // Already marshalled into json. Don't escape it again.
-		ffjson.Pool(val)
-	}
-	buf.WriteByte('}')
-	fields = append(fields, buf.String())
-	// Serialize
-	if err := w.enc.Write(fields); err != nil {
-		return err
-	}
-
-	w.enc.Flush()
 	return w.enc.Error()
 }
 

@@ -132,7 +132,9 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	hasPrevField = false
 	for k, v := range log.Resource {
 		_, lifted := w.fieldLookup[k]
-		if strings.HasPrefix(k, "adxmon_") || lifted {
+
+		// These are added by collector and used internally.  Don't store them in the final table.
+		if strings.HasPrefix(k, "adxmon_") || strings.HasPrefix(k, "label.") || strings.HasPrefix(k, "annotation.") || lifted {
 			continue
 		}
 
