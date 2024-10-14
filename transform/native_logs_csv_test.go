@@ -191,7 +191,7 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			var b bytes.Buffer
-			w := NewCSVWriter(&b, nil)
+			w := NewCSVNativeLogsCSVWriter(&b, nil)
 
 			for _, log := range tt.Batch.Logs {
 				err := w.MarshalNativeLog(log)
@@ -204,10 +204,10 @@ func TestMarshalCSV_NativeLog(t *testing.T) {
 			reader := csv.NewReader(&b)
 			records, err := reader.ReadAll()
 			require.NoError(t, err)
-			require.Len(t, records, len(tt.Expect))
+			require.Len(t, records, len(tt.Expect)+1) // +1 for schema
 
 			for i, expect := range tt.Expect {
-				record, err := getLogRecord(records[i])
+				record, err := getLogRecord(records[i+1]) // +1 for schema
 				require.NoError(t, err)
 				require.Equal(t, expect, record)
 			}
@@ -238,7 +238,7 @@ func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
 	}
 
 	buf := bytes.NewBuffer(make([]byte, 0, 64*1024))
-	enc := NewCSVWriter(buf, nil)
+	enc := NewCSVNativeLogsCSVWriter(buf, nil)
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
