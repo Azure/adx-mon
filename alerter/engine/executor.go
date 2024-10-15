@@ -11,15 +11,15 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
-	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/crds"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
 )
 
 type ruleStore interface {
-	Rules() []*rules.Rule
+	Rules() []*crds.Rule
 }
 
 type AlertCli interface {
@@ -75,11 +75,11 @@ func (e *Executor) Open(ctx context.Context) error {
 	return nil
 }
 
-func (e *Executor) workerKey(rule *rules.Rule) string {
+func (e *Executor) workerKey(rule *crds.Rule) string {
 	return fmt.Sprintf("%s/%s", rule.Namespace, rule.Name)
 }
 
-func (e *Executor) newWorker(rule *rules.Rule) *worker {
+func (e *Executor) newWorker(rule *crds.Rule) *worker {
 	lowerTags := make(map[string]string, len(e.tags))
 	for k, v := range e.tags {
 		lowerTags[strings.ToLower(k)] = strings.ToLower(v)

@@ -1,4 +1,4 @@
-package rules
+package crds
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -52,12 +52,11 @@ func (s *Store) Open(ctx context.Context) error {
 		return nil
 	}
 
-	rules, err := s.reloadRules()
+	err := s.reload()
 	if err != nil {
 		return err
 	}
 
-	s.rules = rules
 	go s.reloadPeriodically()
 	return nil
 }
@@ -74,7 +73,7 @@ func (s *Store) Rules() []*Rule {
 	return s.rules
 }
 
-func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
+func toRule(r v1.AlertRule, region string) (*Rule, error) {
 	rule := &Rule{
 		Version:           r.ResourceVersion,
 		Database:          r.Spec.Database,
@@ -99,21 +98,27 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	return rule, nil
 }
 
-func (s *Store) reloadRules() ([]*Rule, error) {
-	ruleList := &alertrulev1.AlertRuleList{}
+func (s *Store) reload() error {
+	// Load all rules
+	ruleList := &v1.AlertRuleList{}
 	if err := s.ctrlCli.List(context.Background(), ruleList); err != nil {
-		return nil, fmt.Errorf("failed to list alert rules: %w", err)
+		return fmt.Errorf("failed to list alert rules: %w", err)
 	}
 
 	var rules = make([]*Rule, 0, len(ruleList.Items))
 	for _, r := range ruleList.Items {
 		rule, err := toRule(r, s.opts.Region)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		rules = append(rules, rule)
 	}
-	return rules, nil
+
+	s.mu.Lock()
+	s.rules = rules
+	s.mu.Unlock()
+
+	return nil
 }
 
 func (s *Store) reloadPeriodically() {
@@ -127,15 +132,11 @@ func (s *Store) reloadPeriodically() {
 		case <-time.After(time.Minute):
 			logger.Infof("Reloading rules...")
 
-			rules, err := s.reloadRules()
+			err := s.reload()
 			if err != nil {
 				logger.Errorf("failed to reload rules: %s", err)
 				continue
 			}
-
-			s.mu.Lock()
-			s.rules = rules
-			s.mu.Unlock()
 		}
 	}
 }

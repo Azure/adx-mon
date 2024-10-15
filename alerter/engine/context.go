@@ -2,16 +2,17 @@ package engine
 
 import (
 	"fmt"
-	"github.com/Azure/adx-mon/alerter/rules"
+	"strings"
+	"time"
+
+	"github.com/Azure/adx-mon/pkg/crds"
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
-	"strings"
-	"time"
 )
 
 type QueryContext struct {
-	Rule      *rules.Rule
+	Rule      *crds.Rule
 	Query     string
 	Stmt      kusto.Stmt
 	Params    kusto.Parameters
@@ -20,7 +21,7 @@ type QueryContext struct {
 	EndTime   time.Time
 }
 
-func NewQueryContext(rule *rules.Rule, endTime time.Time, region string) (*QueryContext, error) {
+func NewQueryContext(rule *crds.Rule, endTime time.Time, region string) (*QueryContext, error) {
 	qc := &QueryContext{
 		Rule:      rule,
 		Region:    region,

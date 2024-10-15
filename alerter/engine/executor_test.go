@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
-	"github.com/Azure/adx-mon/alerter/rules"
+	"github.com/Azure/adx-mon/pkg/crds"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/Azure/azure-kusto-go/kusto/data/types"
@@ -19,7 +19,7 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 		alertCli: &fakeAlertClient{},
 	}
 
-	rule := &rules.Rule{}
+	rule := &crds.Rule{}
 	qc := &QueryContext{
 		Rule: rule,
 	}
@@ -139,7 +139,7 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 				alertCli: client,
 			}
 
-			rule := &rules.Rule{}
+			rule := &crds.Rule{}
 			qc := &QueryContext{
 				Rule: rule,
 			}
@@ -191,7 +191,7 @@ func TestExecutor_syncWorkers_Add(t *testing.T) {
 	e := Executor{
 		closeFn: cancel,
 		ruleStore: &fakeRuleStore{
-			rules: []*rules.Rule{
+			rules: []*crds.Rule{
 				{
 					Name:     "alert",
 					Interval: 10 * time.Second,
@@ -212,7 +212,7 @@ func TestExecutor_syncWorkers_NoChange(t *testing.T) {
 	e := Executor{
 		closeFn: cancel,
 		ruleStore: &fakeRuleStore{
-			rules: []*rules.Rule{
+			rules: []*crds.Rule{
 				{
 					Name:     "alert",
 					Interval: 10 * time.Second,
@@ -233,7 +233,7 @@ func TestExecutor_syncWorkers_NoChange(t *testing.T) {
 func TestExecutor_syncWorkers_Changed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &fakeRuleStore{
-		rules: []*rules.Rule{
+		rules: []*crds.Rule{
 			{
 				Name:      "alert",
 				Namespace: "foo",
@@ -251,7 +251,7 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 	require.Equal(t, 0, len(e.workers))
 	e.syncWorkers(ctx)
 	require.Equal(t, 1, len(e.workers))
-	store.rules[0] = &rules.Rule{
+	store.rules[0] = &crds.Rule{
 		Version:   "changed",
 		Name:      "alert",
 		Namespace: "foo",
@@ -271,9 +271,9 @@ func (f *fakeAlertClient) Create(ctx context.Context, endpoint string, alert ale
 }
 
 type fakeRuleStore struct {
-	rules []*rules.Rule
+	rules []*crds.Rule
 }
 
-func (f *fakeRuleStore) Rules() []*rules.Rule {
+func (f *fakeRuleStore) Rules() []*crds.Rule {
 	return f.rules
 }

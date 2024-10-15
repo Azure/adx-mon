@@ -19,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/Azure/adx-mon/alerter/rules"
+	"github.com/Azure/adx-mon/pkg/crds"
 )
 
 type AlerterOpts struct {
@@ -48,7 +48,7 @@ type AlerterOpts struct {
 
 // share with executor or fine for both to define privately?
 type ruleStore interface {
-	Rules() []*rules.Rule
+	Rules() []*crds.Rule
 	Open(context.Context) error
 	Close() error
 }
@@ -84,7 +84,7 @@ var ruleErrorCounter = promauto.NewCounterVec(
 )
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
-	ruleStore := rules.NewStore(rules.StoreOpts{
+	crdStore := crds.NewStore(crds.StoreOpts{
 		Region:  opts.Region,
 		CtrlCli: opts.CtrlCli,
 	})
@@ -93,7 +93,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		opts:      opts,
 		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
-		ruleStore: ruleStore,
+		ruleStore: crdStore,
 	}
 
 	if opts.MSIID != "" {
@@ -111,7 +111,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 
 	if opts.CtrlCli == nil {
 		logger.Warnf("No kusto endpoints provided, using fake kusto clients")
-		fakeRule := &rules.Rule{
+		fakeRule := &crds.Rule{
 			Namespace: "fake-namespace",
 			Name:      "FakeRule",
 			Database:  "FakeDB",
@@ -119,7 +119,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
 		}
 		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
-		ruleStore.Register(fakeRule)
+		crdStore.Register(fakeRule)
 	}
 
 	if opts.AlertAddr == "" {
@@ -141,7 +141,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Region:      opts.Region,
 			Tags:        opts.Tags,
 			KustoClient: kclient,
-			RuleStore:   ruleStore,
+			RuleStore:   crdStore,
 		})
 
 	l2m.executor = executor
@@ -149,7 +149,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 }
 
 func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
-	ruleStore, err := rules.FromPath(path, opts.Region)
+	crdStore, err := crds.FromPath(path, opts.Region)
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		AlertCli:    alertCli,
 		AlertAddr:   fakeaddr,
 		KustoClient: kclient,
-		RuleStore:   ruleStore,
+		RuleStore:   crdStore,
 		Region:      opts.Region,
 		Tags:        opts.Tags,
 	})

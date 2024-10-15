@@ -10,8 +10,8 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/queue"
-	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/crds"
 	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
@@ -26,7 +26,7 @@ type worker struct {
 	cancel context.CancelFunc
 
 	wg          sync.WaitGroup
-	rule        *rules.Rule
+	rule        *crds.Rule
 	Region      string
 	tags        map[string]string
 	kustoClient Client

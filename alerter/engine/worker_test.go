@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
-	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/crds"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,7 +43,7 @@ func TestWorker_TagsMismatch(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 		Criteria: map[string][]string{
@@ -87,7 +87,7 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 		Criteria: map[string][]string{
@@ -133,7 +133,7 @@ func TestWorker_TagsNoneMatch(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 		Criteria: map[string][]string{
@@ -179,7 +179,7 @@ func TestWorker_TagsMultiple(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 		Criteria: map[string][]string{
@@ -244,7 +244,7 @@ func TestWorker_ServerError(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 	}
@@ -278,7 +278,7 @@ func TestWorker_ConnectionReset(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 	}
@@ -313,7 +313,7 @@ func TestWorker_ContextTimeout(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 	}
@@ -350,7 +350,7 @@ func TestWorker_RequestInvalid(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 	}
@@ -386,7 +386,7 @@ func TestWorker_UnknownDB(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 	}
@@ -422,7 +422,7 @@ func TestWorker_MissingColumnsFromResults(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace: "namespace",
 		Name:      "name",
 	}
@@ -458,7 +458,7 @@ func TestWorker_AlertsThrottled(t *testing.T) {
 		},
 	}
 
-	rule := &rules.Rule{
+	rule := &crds.Rule{
 		Namespace:   "namespace",
 		Name:        "name",
 		Destination: "destination/queue",
