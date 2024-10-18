@@ -39,6 +39,25 @@ func TestPodDiscoveryLifecycle(t *testing.T) {
 		require.Equal(t, 0, len(tailSource.targetRemoves))
 	})
 
+	t.Run("Add Pod Without ContainerId", func(t *testing.T) {
+		_, tailSource, podDiscovery := create()
+		defer tailSource.Close()
+		err := podDiscovery.Open(context.Background())
+		require.NoError(t, err)
+
+		pod := scrapedPod("pod1")
+		pod.Status.ContainerStatuses[0].ContainerID = ""
+
+		podDiscovery.OnAdd(pod, false)
+
+		cleanTombstonedTargets(podDiscovery)
+		err = podDiscovery.Close()
+		require.NoError(t, err)
+		// No containerID yet, so no target added.
+		require.Equal(t, 0, len(tailSource.targetAdds))
+		require.Equal(t, 0, len(tailSource.targetRemoves))
+	})
+
 	t.Run("Add Tolerant of Failure", func(t *testing.T) {
 		// Failure tailing first container, but ok to tail the second container
 		failureFunc := func(target FileTailTarget) error {
