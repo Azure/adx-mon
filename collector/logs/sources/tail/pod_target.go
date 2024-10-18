@@ -172,7 +172,8 @@ func isTargetChanged(old, new FileTailTarget) bool {
 func getContainerID(containerStatuses []v1.ContainerStatus, containerName string) (string, bool) {
 	for _, container := range containerStatuses {
 		if container.Name == containerName {
-			return container.ContainerID, true
+			containerIdPopulated := container.ContainerID != ""
+			return container.ContainerID, containerIdPopulated
 		}
 	}
 	return "", false

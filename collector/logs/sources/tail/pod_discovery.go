@@ -206,8 +206,10 @@ func (i *PodDiscovery) tombstoneTarget(existingCurrentTarget *currenttarget) {
 
 	// We don't want to just tell tailsource to stop tailing when the file reaches EOF because the file
 	// may be written to again in the "future" and perhaps even rotated.
-	logger.Infof("Tombstoning target %s", existingCurrentTarget.CurrentTarget.FilePath)
-	existingCurrentTarget.ExpireTime = i.nowFunc().Add(1 * time.Minute)
+	if existingCurrentTarget.ExpireTime.IsZero() {
+		logger.Infof("Tombstoning target %s", existingCurrentTarget.CurrentTarget.FilePath)
+		existingCurrentTarget.ExpireTime = i.nowFunc().Add(1 * time.Minute)
+	}
 }
 
 func (i *PodDiscovery) cleanTombstonedTargets() {
