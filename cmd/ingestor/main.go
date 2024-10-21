@@ -19,9 +19,12 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
+	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/crd"
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
@@ -34,6 +37,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,7 +100,15 @@ func realMain(ctx *cli.Context) error {
 	svcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, k8scli, _, err := newKubeClient(ctx)
+	scheme := clientgoscheme.Scheme
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := v1.AddToScheme(scheme); err != nil {
+		return err
+	}
+
+	_, k8scli, ctrlCli, err := newKubeClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -262,6 +274,18 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
+	kqlFunctionsStore := &storage.Functions{}
+	kqlCRDOpts := crd.Options{
+		CtrlCli: ctrlCli,
+		List:    &v1.FunctionList{},
+		Store:   kqlFunctionsStore,
+	}
+	kqlFnOperator := crd.New(kqlCRDOpts)
+	if err := kqlFnOperator.Open(svcCtx); err != nil {
+		logger.Fatalf("Failed to start kql function operator: %s", err)
+	}
+	defer kqlFnOperator.Close()
+
 	var (
 		allowedDatabases                []string
 		metricsUploaders, logsUploaders []adx.Uploader
@@ -272,7 +296,7 @@ func realMain(ctx *cli.Context) error {
 	if len(metricsKusto) > 0 {
 		metricsUploaders, metricsDatabases, err = newUploaders(
 			metricsKusto, storageDir, concurrentUploads,
-			defaultMapping, adx.PromMetrics)
+			defaultMapping, adx.PromMetrics, kqlFunctionsStore)
 		if err != nil {
 			logger.Fatalf("Failed to create uploader: %s", err)
 		}
@@ -287,7 +311,7 @@ func realMain(ctx *cli.Context) error {
 	if len(logsKusto) > 0 {
 		logsUploaders, logsDatabases, err = newUploaders(
 			logsKusto, storageDir, concurrentUploads,
-			schema.DefaultLogsMapping, adx.OTLPLogs)
+			schema.DefaultLogsMapping, adx.OTLPLogs, kqlFunctionsStore)
 		if err != nil {
 			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 		}
@@ -480,7 +504,7 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
-	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
+	defaultMapping schema.SchemaMapping, sampleType adx.SampleType, fnStore *storage.Functions) ([]adx.Uploader, []string, error) {
 
 	var uploaders []adx.Uploader
 	var uploadDatabaseNames []string
@@ -505,6 +529,7 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 				ConcurrentUploads: concurrentUploads,
 				DefaultMapping:    defaultMapping,
 				SampleType:        sampleType,
+				ViewStore:         fnStore,
 			}))
 		}
 

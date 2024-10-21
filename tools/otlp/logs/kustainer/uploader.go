@@ -10,6 +10,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/schema"
@@ -56,7 +57,7 @@ func (u *Uploader) Open(ctx context.Context) error {
 		break
 	}
 
-	u.syncer = adx.NewSyncer(client, u.DatabaseName, schema.DefaultLogsMapping, adx.OTLPLogs)
+	u.syncer = adx.NewSyncer(client, u.DatabaseName, schema.DefaultLogsMapping, adx.OTLPLogs, &storage.Functions{})
 	if err := u.syncer.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open syncer: %w", err)
 	}

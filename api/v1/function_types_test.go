@@ -62,7 +62,7 @@ spec:
   | order by h, Timestamp asc
   | extend prevVal=prev(Value)
   | extend diff=Value-prevVal
-  | extend Value=case(h == prev(h), case(diff &lt; 0, next(Value)-Value, diff), real(0))
+  | extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
   | project-away prevVal, diff, h
 )
 
