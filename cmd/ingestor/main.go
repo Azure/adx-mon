@@ -336,8 +336,14 @@ func realMain(ctx *cli.Context) error {
 		metricsKustoCli = append(metricsKustoCli, cli)
 	}
 
+	var logsKustoCli []metrics.StatementExecutor
+	for _, cli := range logsUploaders {
+		logsKustoCli = append(logsKustoCli, cli)
+	}
+
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:              k8scli,
+		LogsKustoCli:        logsKustoCli,
 		MetricsKustoCli:     metricsKustoCli,
 		MetricsDatabases:    metricsDatabases,
 		AllowedDatabase:     metricsDatabases,
@@ -359,6 +365,7 @@ func realMain(ctx *cli.Context) error {
 		LiftedColumns:       sortedLiftedLabels,
 		DropLabels:          dropLabels,
 		DropMetrics:         dropMetrics,
+		FunctionStore:       kqlFunctionsStore,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)

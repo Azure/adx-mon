@@ -285,6 +285,9 @@ func (s *Syncer) EnsureView(ctx context.Context, table string) error {
 		return nil
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	cached, ok := s.views[s.database+table]
 	if ok {
 		// Is our cached version out of date?

@@ -6,8 +6,10 @@ import (
 	"io"
 	"sync"
 
+	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 )
 
 type TableDetail struct {
@@ -95,4 +97,72 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 		}
 		tables = append(tables, v)
 	}
+}
+
+type FunctionStore interface {
+	Functions() []*v1.Function
+}
+
+type SyncFunctionsTask struct {
+	cache map[string]*v1.Function
+	mu    sync.RWMutex
+
+	store    FunctionStore
+	kustoCli StatementExecutor
+}
+
+func NewSyncFunctionsTask(store FunctionStore, kustoCli StatementExecutor) *SyncFunctionsTask {
+	return &SyncFunctionsTask{
+		cache:    make(map[string]*v1.Function),
+		store:    store,
+		kustoCli: kustoCli,
+	}
+}
+
+func (t *SyncFunctionsTask) Run(ctx context.Context) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	functions := t.store.Functions()
+	for _, function := range functions {
+
+		if function.Spec.Database != t.kustoCli.Database() {
+			continue
+		}
+
+		cacheKey := function.Spec.Database + function.Spec.Name
+		if fn, ok := t.cache[cacheKey]; ok {
+			if function.ResourceVersion != fn.ResourceVersion {
+				// invalidate our cache
+				delete(t.cache, cacheKey)
+			} else {
+				// function is up to date
+				continue
+			}
+		}
+
+		stmt, err := function.Spec.MarshalToKQL()
+		if err != nil {
+			logger.Errorf("Failed to marshal function %s.%s to KQL: %v", function.Spec.Database, function.Spec.Name, err)
+			// This is a permanent failure, something is wrong with the function definition
+			t.cache[cacheKey] = function
+			continue
+		}
+
+		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+			if !errors.Retry(err) {
+				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Spec.Name, err)
+				// We want to fall through here so that we can cache this object, there's no need
+				// to retry creating it. If it's updated, we'll detect the change in the cached
+				// object and try again after invalidating the cache.
+				t.cache[cacheKey] = function
+				continue
+			} else {
+				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Spec.Name, err)
+				continue
+			}
+		}
+	}
+
+	return nil
 }

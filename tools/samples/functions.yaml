@@ -1,0 +1,19 @@
+---
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: collector-errors
+  namespace: adx-mon
+spec:
+  database: Logs
+  name: CollectorErrors
+  folder: samples
+  docString: Filters Collector table for errors.
+  parameters:
+    - name: period
+      type: timespan
+      default: 1h
+  body: |
+    Collector
+    | where timestamp > ago(period)
+    | where level == "ERR"

@@ -78,6 +78,9 @@ type ServiceOpts struct {
 	// MetricsKustoCli is the Kusto client connected to the metrics kusto cluster.
 	MetricsKustoCli []metrics.StatementExecutor
 
+	// LogsKustoCli is the Kusto client connected to the logs kusto cluster.
+	LogsKustoCli []metrics.StatementExecutor
+
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
 
@@ -120,6 +123,9 @@ type ServiceOpts struct {
 	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
 	// keys are distributed.
 	PartitionSize int
+
+	// FunctionStore is the store of functions to sync with the Kusto cluster.
+	FunctionStore adx.FunctionStore
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -266,6 +272,18 @@ func (s *Service) Open(ctx context.Context) error {
 		t := adx.NewDropUnusedTablesTask(v)
 		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
 			return t.Run(ctx)
+		})
+
+		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
+		s.scheduler.ScheduleEvery(5*time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
+			return f.Run(ctx)
+		})
+	}
+
+	for _, v := range s.opts.LogsKustoCli {
+		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
+		s.scheduler.ScheduleEvery(5*time.Minute, "sync-logs-functions", func(ctx context.Context) error {
+			return f.Run(ctx)
 		})
 	}
 
