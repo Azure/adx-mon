@@ -274,7 +274,7 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	kqlFunctionsStore := &storage.Functions{}
+	kqlFunctionsStore := storage.NewFunctions(ctrlCli)
 	kqlCRDOpts := crd.Options{
 		CtrlCli: ctrlCli,
 		List:    &v1.FunctionList{},

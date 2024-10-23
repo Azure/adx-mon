@@ -115,15 +115,30 @@ func (fp FunctionParameter) String() string {
 	return sb.String()
 }
 
+// FunctionStatusEnum defines the possible status values for FunctionStatus
+type FunctionStatusEnum string
+
+const (
+	PermanentFailure FunctionStatusEnum = "PermanentFailure"
+	Failed           FunctionStatusEnum = "Failed"
+	Success          FunctionStatusEnum = "Success"
+)
+
 // FunctionStatus defines the observed state of Function
 type FunctionStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// LastTimeReconciled is the last time the Function was reconciled
 	LastTimeReconciled metav1.Time `json:"lastTimeReconciled"`
 	// Message is a human-readable message indicating details about the Function
-	Message string `json:"message"`
+	Message string `json:"message,omitempty"`
+	// Error is a string that communicates any error message if one exists
+	Error string `json:"error,omitempty"`
+	// Status is an enum that represents the status of the Function
+	Status FunctionStatusEnum `json:"status"`
+}
+
+func (fs FunctionStatus) String() string {
+	return fmt.Sprintf("LastTimeReconciled: %s, Message: %s, Error: %s, Status: %s",
+		fs.LastTimeReconciled, fs.Message, fs.Error, fs.Status)
 }
 
 // +kubebuilder:object:root=true

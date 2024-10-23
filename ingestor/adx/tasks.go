@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type TableDetail struct {
@@ -101,6 +103,7 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 
 type FunctionStore interface {
 	Functions() []*v1.Function
+	UpdateStatus(ctx context.Context, fn *v1.Function) error
 }
 
 type SyncFunctionsTask struct {
@@ -116,6 +119,14 @@ func NewSyncFunctionsTask(store FunctionStore, kustoCli StatementExecutor) *Sync
 		cache:    make(map[string]*v1.Function),
 		store:    store,
 		kustoCli: kustoCli,
+	}
+}
+
+func (t *SyncFunctionsTask) updateStatus(fn *v1.Function, status v1.FunctionStatusEnum) {
+	fn.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
+	fn.Status.Status = status
+	if err := t.store.UpdateStatus(context.Background(), fn); err != nil {
+		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Spec.Name, err)
 	}
 }
 
@@ -143,6 +154,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		stmt, err := function.Spec.MarshalToKQL()
 		if err != nil {
+			t.updateStatus(function, v1.PermanentFailure)
 			logger.Errorf("Failed to marshal function %s.%s to KQL: %v", function.Spec.Database, function.Spec.Name, err)
 			// This is a permanent failure, something is wrong with the function definition
 			t.cache[cacheKey] = function
@@ -151,6 +163,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
+				t.updateStatus(function, v1.PermanentFailure)
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Spec.Name, err)
 				// We want to fall through here so that we can cache this object, there's no need
 				// to retry creating it. If it's updated, we'll detect the change in the cached
@@ -158,10 +171,13 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				t.cache[cacheKey] = function
 				continue
 			} else {
+				t.updateStatus(function, v1.Failed)
 				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Spec.Name, err)
 				continue
 			}
 		}
+
+		t.updateStatus(function, v1.Success)
 	}
 
 	return nil

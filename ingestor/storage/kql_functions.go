@@ -14,6 +14,21 @@ type Functions struct {
 	mu        sync.RWMutex
 	views     *v1.FunctionList
 	functions *v1.FunctionList
+	client    client.StatusClient
+}
+
+func NewFunctions(client client.StatusClient) *Functions {
+	return &Functions{
+		client: client,
+	}
+}
+
+func (f *Functions) UpdateStatus(ctx context.Context, fn *v1.Function) error {
+	if f.client == nil {
+		return fmt.Errorf("no client provided")
+	}
+
+	return f.client.Status().Update(ctx, fn)
 }
 
 func (f *Functions) View(database, table string) (*v1.Function, bool) {

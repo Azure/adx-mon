@@ -1091,7 +1091,13 @@ X      - functions
 X    verbs:
 X      - get
 X      - list
-X      - watch
+X  - apiGroups:
+X      - adx-mon.azure.com
+X    resources:
+X      - functions/status
+X    verbs:
+X      - update
+X      - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

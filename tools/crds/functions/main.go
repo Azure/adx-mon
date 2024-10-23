@@ -58,7 +58,7 @@ func main() {
 				logger.Errorf("Failed to marshal function %s.%s to KQL: %v", function.Spec.Database, function.Spec.Name, err)
 				continue
 			}
-			logger.Infof("Found %s", k.String())
+			logger.Infof("Found %s\n\tStatus %s", k.String(), function.Status.String())
 		}
 
 		<-time.After(time.Minute)
