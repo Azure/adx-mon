@@ -6,7 +6,7 @@ import (
 )
 
 // closeEvery is the chance that a request will be closed.
-const closeEvery = 10000 // every 1000 requests will be closed
+const closeEvery = 10000 // every 10000 requests will be closed
 
 var counter uint64
 
