@@ -561,7 +561,7 @@ var (
 func (a *writerAdapter) Write(data []byte) (int, error) {
 	// Ignore TLS handshake errors that results in just a closed connection.  Load balancer
 	// health checks will cause this error to be logged.
-	if bytes.Contains(data, tlsHandshakeError) && bytes.Contains(data, ioEOFError) {
+	if bytes.Contains(data, tlsHandshakeError) && bytes.Contains(data, ioEOFError) || bytes.Contains(data, []byte("connection reset by peer")) {
 		return len(data), nil
 	}
 	return a.Writer.Write(data)

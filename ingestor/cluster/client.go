@@ -3,12 +3,13 @@ package cluster
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	adxhttp "github.com/Azure/adx-mon/pkg/http"
 )
 
 var (
@@ -101,31 +102,20 @@ func (c ClientOpts) WithDefaults() ClientOpts {
 }
 
 func NewClient(opts ClientOpts) (*Client, error) {
-	opts = opts.WithDefaults()
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.MaxIdleConns = opts.MaxIdleConns
-	t.MaxConnsPerHost = opts.MaxConnsPerHost
-	t.MaxIdleConnsPerHost = opts.MaxIdleConnsPerHost
-	t.ResponseHeaderTimeout = opts.ResponseHeaderTimeout
-	t.IdleConnTimeout = opts.IdleConnTimeout
-	if t.TLSClientConfig == nil {
-		t.TLSClientConfig = &tls.Config{}
-	}
-	t.TLSClientConfig.InsecureSkipVerify = opts.InsecureSkipVerify
-	t.TLSHandshakeTimeout = opts.TLSHandshakeTimeout
-	t.DisableKeepAlives = opts.DisableKeepAlives
-
-	if opts.DisableHTTP2 {
-		t.ForceAttemptHTTP2 = false
-		t.TLSNextProto = make(map[string]func(authority string, c *tls.Conn) http.RoundTripper)
-		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify}
-		t.TLSClientConfig.NextProtos = []string{"http/1.1"}
-	}
-
-	httpClient := &http.Client{
-		Timeout:   opts.Timeout,
-		Transport: t,
-	}
+	httpClient := adxhttp.NewClient(
+		adxhttp.ClientOpts{
+			Timeout:               opts.Timeout,
+			IdleConnTimeout:       opts.IdleConnTimeout,
+			ResponseHeaderTimeout: opts.ResponseHeaderTimeout,
+			MaxIdleConns:          opts.MaxIdleConns,
+			MaxIdleConnsPerHost:   opts.MaxIdleConnsPerHost,
+			MaxConnsPerHost:       opts.MaxConnsPerHost,
+			TLSHandshakeTimeout:   opts.TLSHandshakeTimeout,
+			InsecureSkipVerify:    opts.InsecureSkipVerify,
+			DisableHTTP2:          opts.DisableHTTP2,
+			Close:                 opts.Close,
+			DisableKeepAlives:     opts.DisableKeepAlives,
+		})
 
 	return &Client{
 		httpClient: httpClient,
