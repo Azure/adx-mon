@@ -3,8 +3,8 @@
 # To extract the files from this archive, save it to some FILE, remove
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
-lock_dir=_sh00162
-# Made on 2024-10-23 13:26 UTC by <root@71faa8180e10>.
+lock_dir=_sh00160
+# Made on 2024-10-23 22:49 UTC by <root@226f55d9a012>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -12,10 +12,10 @@ lock_dir=_sh00162
 # This shar contains:
 # length mode       name
 # ------ ---------- ------------------------------------------
-#   5941 -rwxr-xr-x setup.sh
-#  11563 -rw-r--r-- collector.yaml
+#   6055 -rw-r--r-- setup.sh
+#   4411 -rw-r--r-- ingestor.yaml
 #   5804 -rw-r--r-- ksm.yaml
-#   4535 -rw-r--r-- ingestor.yaml
+#  11563 -rw-r--r-- collector.yaml
 #
 MD5SUM=${MD5SUM-md5sum}
 f=`${MD5SUM} --version | egrep '^md5sum .*(core|text)utils'`
@@ -179,75 +179,77 @@ M97)Y("UQ(")297-O=7)C97,@?"!W:&5R92!T>7!E(#U^("=-:6-R;W-O9G0N
 M2W5S=&\O8VQU<W1E<G,G(&%N9"!N86UE(#U^("<D0TQ54U1%4E].04U%)R!\
 M('!R;VIE8W0@;F%M92P@<F5S;W5R8V5'<F]U<"P@<W5B<V-R:7!T:6]N260L
 M(&QO8V%T:6]N+"!P<F]P97)T:65S+G5R:2(I"D-,55-415)?0T]53E0])"AE
-M8VAO("1#3%535$527TE.1D\@?"!J<2`G+F1A=&$@?"!L96YG=&@G*0H*:68@
-M6UL@)$-,55-415)?0T]53E0@+65Q(#`@75T[('1H96X*("`@(&5C:&\@(DYO
-M($MU<W1O(&-L=7-T97(@8V]U;&0@8F4@9F]U;F0@9F]R('1H92!D871A8F%S
-M92!N86UE("<D0TQ54U1%4E].04U%)RX@17AI=&EN9RXB"B`@("!E>&ET(#$*
-M96QS90H@("`@0TQ54U1%4E].04U%/20H96-H;R`D0TQ54U1%4E])3D9/('P@
-M:G$@+7(@)RYD871A6S!=+FYA;64G*0H@("`@4U5"4T-225!424].7TE$/20H
-M96-H;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD871A6S!=+G-U8G-C<FEP
-M=&EO;DED)RD*("`@(%)%4T]54D-%7T=23U50/20H96-H;R`D0TQ54U1%4E])
-M3D9/('P@:G$@+7(@)RYD871A6S!=+G)E<V]U<F-E1W)O=7`G*0H@("`@0418
-M7T911$X])"AE8VAO("1#3%535$527TE.1D\@?"!J<2`M<B`G+F1A=&%;,%TN
-M<')O<&5R=&EE<U]U<FDG*0IF:0IE8VAO"F5C:&\@(D9O=6YD($%$6"!C;'5S
-M=&5R(&EN9F\Z(@IE8VAO("UE("(@($-L=7-T97(@3F%M93H@7&5;,S)M)$-,
-M55-415)?3D%-15QE6S!M(@IE8VAO("UE("(@(%-U8G-C<FEP=&EO;B!)1#H@
-M7&5;,S)M)%-50E-#4DE05$E/3E])1%QE6S!M(@IE8VAO("UE("(@(%)E<V]U
-M<F-E($=R;W5P.B!<95LS,FTD4D533U520T5?1U)/55!<95LP;2(*96-H;R`M
-M92`B("!!1%@@1E%$3CH@7&5;,S)M)$%$6%]&441.7&5;,&TB"F5C:&\*<F5A
-M9"`M<"`B27,@=&AI<R!T:&4@8V]R<F5C="!!1%@@8VQU<W1E<B!I;F9O/R`H
-M>2]N*2`B($-/3D9)4DT*:68@6UL@(B1#3TY&25)-(B`A/2`B>2(@75T[('1H
-M96X*("`@(&5C:&\@(D5X:71I;F<@87,@=&AE($%$6"!C;'5S=&5R(&EN9F\@
-M:7,@;F]T(&-O<G)E8W0N(@H@("`@97AI="`Q"F9I"@IF;W(@1$%404)!4T5?
-M3D%-12!I;B!-971R:6-S($QO9W,[(&1O"B`@("`C($-H96-K(&EF('1H92`D
-M1$%404)!4T5?3D%-12!D871A8F%S92!E>&ES=',*("`@($1!5$%"05-%7T58
-M25-44STD*&%Z(&MU<W1O(&1A=&%B87-E('-H;W<@+2UC;'5S=&5R+6YA;64@
-M)$-,55-415)?3D%-12`M+7)E<V]U<F-E+6=R;W5P("1215-/55)#15]'4D]5
-M4"`M+61A=&%B87-E+6YA;64@)$1!5$%"05-%7TY!344@+2UQ=65R>2`B;F%M
-M92(@+6\@='-V(#(^+V1E=B]N=6QL('Q\(&5C:&\@(B(I"B`@("!I9B!;6R`M
-M>B`B)$1!5$%"05-%7T5825-44R(@75T[('1H96X*("`@("`@("!E8VAO(")4
-M:&4@)$1!5$%"05-%7TY!344@9&%T86)A<V4@9&]E<R!N;W0@97AI<W0N($-R
-M96%T:6YG(&ET(&YO=RXB"B`@("`@("`@87H@:W5S=&\@9&%T86)A<V4@8W)E
-M871E("TM8VQU<W1E<BUN86UE("1#3%535$527TY!344@+2UR97-O=7)C92UG
-M<F]U<"`D4D533U520T5?1U)/55`@+2UD871A8F%S92UN86UE("1$051!0D%3
-M15].04U%("TM<F5A9"UW<FET92UD871A8F%S92`@<V]F="UD96QE=&4M<&5R
-M:6]D/5`S,$0@:&]T+6-A8VAE+7!E<FEO9#U0-T0@;&]C871I;VX])%)%1TE/
-M3@H@("`@96QS90H@("`@("`@(&5C:&\@(E1H92`D1$%404)!4T5?3D%-12!D
-M871A8F%S92!A;')E861Y(&5X:7-T<RXB"B`@("!F:0H*("`@(",@0VAE8VL@
-M:68@=&AE($Y/1$5?4$]/3%])1$5.5$E462!I<R!A;B!A9&UI;B!O;B!T:&4@
-M)$1!5$%"05-%7TY!344@9&%T86)A<V4*("`@($%$34E.7T-(14-+/20H87H@
-M:W5S=&\@9&%T86)A<V4@;&ES="UP<FEN8VEP86P@+2UC;'5S=&5R+6YA;64@
-M)$-,55-415)?3D%-12`M+7)E<V]U<F-E+6=R;W5P("1215-/55)#15]'4D]5
-M4"`M+61A=&%B87-E+6YA;64@)$1!5$%"05-%7TY!344@+2UQ=65R>2`B6S]T
-M>7!E/3TG07!P)R`F)B!A<'!)9#T])R1.3T1%7U!/3TQ?241%3E1)5%DG("8F
-M(')O;&4]/2=!9&UI;B==(B`M;R!T<W8I"B`@("!I9B!;6R`M>B`B)$%$34E.
-M7T-(14-+(B!=73L@=&AE;@H@("`@("`@(&5C:&\@(E1H92!-86YA9V5D($ED
-M96YT:71Y($-L:65N="!)1"!I<R!N;W0@8V]N9FEG=7)E9"!T;R!U<V4@9&%T
-M86)A<V4@)$1!5$%"05-%7TY!344N($%D9&EN9R!I="!A<R!A;B!A9&UI;BXB
-M"B`@("`@("`@87H@:W5S=&\@9&%T86)A<V4@861D+7!R:6YC:7!A;"`M+6-L
-M=7-T97(M;F%M92`D0TQ54U1%4E].04U%("TM<F5S;W5R8V4M9W)O=7`@)%)%
-M4T]54D-%7T=23U50("TM9&%T86)A<V4M;F%M92`D1$%404)!4T5?3D%-12`M
-M+79A;'5E(')O;&4]061M:6X@;F%M93U!1%A-;VX@='EP93UA<'`@87!P+6ED
-M/21.3T1%7U!/3TQ?241%3E1)5%D*("`@(&5L<V4*("`@("`@("!E8VAO(")4
-M:&4@36%N86=E9"!)9&5N=&ET>2!#;&EE;G0@240@:7,@86QR96%D>2!C;VYF
-M:6=U<F5D('1O('5S92!D871A8F%S92`D1$%404)!4T5?3D%-12XB"B`@("!F
-M:0ID;VYE"@IE>'!O<G0@0TQ54U1%4CTD0TQ54U1%4@IE>'!O<G0@4D5'24].
-M/21214=)3TX*97AP;W)T($-,245.5%])1#TD3D]$15]03T],7TE$14Y42519
-M"F5X<&]R="!!1%A?55),/21!1%A?1E%$3@IE;G9S=6)S="`\("130U))4%1?
-M1$E2+V-O;&QE8W1O<BYY86UL('P@:W5B96-T;"!A<'!L>2`M9B`M"F5N=G-U
-M8G-T(#P@)%-#4DE05%]$25(O:6YG97-T;W(N>6%M;"!\(&MU8F5C=&P@87!P
-M;'D@+68@+0IK=6)E8W1L(&%P<&QY("UF("130U))4%1?1$E2+VMS;2YY86UL
-M"@IE8VAO"F5C:&\@+64@(EQE6SDW;5-U8V-E<W-F=6QL>2!D97!L;WEE9"!!
-M1%@M36]N(&-O;7!O;F5N=',@=&\@04M3(&-L=7-T97(@)$-,55-415(N7&5;
-M,&TB"F5C:&\*96-H;R`B0V]L;&5C=&5D('1E;&5M971R>2!C86X@8F4@9F]U
-M;F0@=&AE("1$051!0D%315].04U%(&1A=&%B87-E(&%T("1!1%A?1E%$3BXB
-!"F0@
+M8VAO("1#3%535$527TE.1D\@?"!J<2`G+F1A=&$@?"!L96YG=&@G*0I+55-4
+M3U]214=)3TX])"AE8VAO("1#3%535$527TE.1D\@?"!J<2`M<B`G+F1A=&%;
+M,%TN;&]C871I;VXG*0H*:68@6UL@)$-,55-415)?0T]53E0@+65Q(#`@75T[
+M('1H96X*("`@(&5C:&\@(DYO($MU<W1O(&-L=7-T97(@8V]U;&0@8F4@9F]U
+M;F0@9F]R('1H92!D871A8F%S92!N86UE("<D0TQ54U1%4E].04U%)RX@17AI
+M=&EN9RXB"B`@("!E>&ET(#$*96QS90H@("`@0TQ54U1%4E].04U%/20H96-H
+M;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD871A6S!=+FYA;64G*0H@("`@
+M4U5"4T-225!424].7TE$/20H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@
+M)RYD871A6S!=+G-U8G-C<FEP=&EO;DED)RD*("`@(%)%4T]54D-%7T=23U50
+M/20H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD871A6S!=+G)E<V]U
+M<F-E1W)O=7`G*0H@("`@04187T911$X])"AE8VAO("1#3%535$527TE.1D\@
+M?"!J<2`M<B`G+F1A=&%;,%TN<')O<&5R=&EE<U]U<FDG*0IF:0IE8VAO"F5C
+M:&\@(D9O=6YD($%$6"!C;'5S=&5R(&EN9F\Z(@IE8VAO("UE("(@($-L=7-T
+M97(@3F%M93H@7&5;,S)M)$-,55-415)?3D%-15QE6S!M(@IE8VAO("UE("(@
+M(%-U8G-C<FEP=&EO;B!)1#H@7&5;,S)M)%-50E-#4DE05$E/3E])1%QE6S!M
+M(@IE8VAO("UE("(@(%)E<V]U<F-E($=R;W5P.B!<95LS,FTD4D533U520T5?
+M1U)/55!<95LP;2(*96-H;R`M92`B("!!1%@@1E%$3CH@7&5;,S)M)$%$6%]&
+M441.7&5;,&TB"F5C:&\@+64@(B`@4F5G:6]N.B!<95LS,FTD2U535$]?4D5'
+M24].7&5;,&TB"F5C:&\*<F5A9"`M<"`B27,@=&AI<R!T:&4@8V]R<F5C="!!
+M1%@@8VQU<W1E<B!I;F9O/R`H>2]N*2`B($-/3D9)4DT*:68@6UL@(B1#3TY&
+M25)-(B`A/2`B>2(@75T[('1H96X*("`@(&5C:&\@(D5X:71I;F<@87,@=&AE
+M($%$6"!C;'5S=&5R(&EN9F\@:7,@;F]T(&-O<G)E8W0N(@H@("`@97AI="`Q
+M"F9I"@IF;W(@1$%404)!4T5?3D%-12!I;B!-971R:6-S($QO9W,[(&1O"B`@
+M("`C($-H96-K(&EF('1H92`D1$%404)!4T5?3D%-12!D871A8F%S92!E>&ES
+M=',*("`@($1!5$%"05-%7T5825-44STD*&%Z(&MU<W1O(&1A=&%B87-E('-H
+M;W<@+2UC;'5S=&5R+6YA;64@)$-,55-415)?3D%-12`M+7)E<V]U<F-E+6=R
+M;W5P("1215-/55)#15]'4D]54"`M+61A=&%B87-E+6YA;64@)$1!5$%"05-%
+M7TY!344@+2UQ=65R>2`B;F%M92(@+6\@='-V(#(^+V1E=B]N=6QL('Q\(&5C
+M:&\@(B(I"B`@("!I9B!;6R`M>B`B)$1!5$%"05-%7T5825-44R(@75T[('1H
+M96X*("`@("`@("!E8VAO(")4:&4@)$1!5$%"05-%7TY!344@9&%T86)A<V4@
+M9&]E<R!N;W0@97AI<W0N($-R96%T:6YG(&ET(&YO=RXB"B`@("`@("`@87H@
+M:W5S=&\@9&%T86)A<V4@8W)E871E("TM8VQU<W1E<BUN86UE("1#3%535$52
+M7TY!344@+2UR97-O=7)C92UG<F]U<"`D4D533U520T5?1U)/55`@+2UD871A
+M8F%S92UN86UE("1$051!0D%315].04U%("TM<F5A9"UW<FET92UD871A8F%S
+M92`@<V]F="UD96QE=&4M<&5R:6]D/5`S,$0@:&]T+6-A8VAE+7!E<FEO9#U0
+M-T0@;&]C871I;VX])$M54U1/7U)%1TE/3@H@("`@96QS90H@("`@("`@(&5C
+M:&\@(E1H92`D1$%404)!4T5?3D%-12!D871A8F%S92!A;')E861Y(&5X:7-T
+M<RXB"B`@("!F:0H*("`@(",@0VAE8VL@:68@=&AE($Y/1$5?4$]/3%])1$5.
+M5$E462!I<R!A;B!A9&UI;B!O;B!T:&4@)$1!5$%"05-%7TY!344@9&%T86)A
+M<V4*("`@($%$34E.7T-(14-+/20H87H@:W5S=&\@9&%T86)A<V4@;&ES="UP
+M<FEN8VEP86P@+2UC;'5S=&5R+6YA;64@)$-,55-415)?3D%-12`M+7)E<V]U
+M<F-E+6=R;W5P("1215-/55)#15]'4D]54"`M+61A=&%B87-E+6YA;64@)$1!
+M5$%"05-%7TY!344@+2UQ=65R>2`B6S]T>7!E/3TG07!P)R`F)B!A<'!)9#T]
+M)R1.3T1%7U!/3TQ?241%3E1)5%DG("8F(')O;&4]/2=!9&UI;B==(B`M;R!T
+M<W8I"B`@("!I9B!;6R`M>B`B)$%$34E.7T-(14-+(B!=73L@=&AE;@H@("`@
+M("`@(&5C:&\@(E1H92!-86YA9V5D($ED96YT:71Y($-L:65N="!)1"!I<R!N
+M;W0@8V]N9FEG=7)E9"!T;R!U<V4@9&%T86)A<V4@)$1!5$%"05-%7TY!344N
+M($%D9&EN9R!I="!A<R!A;B!A9&UI;BXB"B`@("`@("`@87H@:W5S=&\@9&%T
+M86)A<V4@861D+7!R:6YC:7!A;"`M+6-L=7-T97(M;F%M92`D0TQ54U1%4E].
+M04U%("TM<F5S;W5R8V4M9W)O=7`@)%)%4T]54D-%7T=23U50("TM9&%T86)A
+M<V4M;F%M92`D1$%404)!4T5?3D%-12`M+79A;'5E(')O;&4]061M:6X@;F%M
+M93U!1%A-;VX@='EP93UA<'`@87!P+6ED/21.3T1%7U!/3TQ?241%3E1)5%D*
+M("`@(&5L<V4*("`@("`@("!E8VAO(")4:&4@36%N86=E9"!)9&5N=&ET>2!#
+M;&EE;G0@240@:7,@86QR96%D>2!C;VYF:6=U<F5D('1O('5S92!D871A8F%S
+M92`D1$%404)!4T5?3D%-12XB"B`@("!F:0ID;VYE"@IE>'!O<G0@0TQ54U1%
+M4CTD0TQ54U1%4@IE>'!O<G0@4D5'24]./21214=)3TX*97AP;W)T($-,245.
+M5%])1#TD3D]$15]03T],7TE$14Y42519"F5X<&]R="!!1%A?55),/21!1%A?
+M1E%$3@IE;G9S=6)S="`\("130U))4%1?1$E2+V-O;&QE8W1O<BYY86UL('P@
+M:W5B96-T;"!A<'!L>2`M9B`M"F5N=G-U8G-T(#P@)%-#4DE05%]$25(O:6YG
+M97-T;W(N>6%M;"!\(&MU8F5C=&P@87!P;'D@+68@+0IK=6)E8W1L(&%P<&QY
+M("UF("130U))4%1?1$E2+VMS;2YY86UL"@IE8VAO"F5C:&\@+64@(EQE6SDW
+M;5-U8V-E<W-F=6QL>2!D97!L;WEE9"!!1%@M36]N(&-O;7!O;F5N=',@=&\@
+M04M3(&-L=7-T97(@)$-,55-415(N7&5;,&TB"F5C:&\*96-H;R`B0V]L;&5C
+M=&5D('1E;&5M971R>2!C86X@8F4@9F]U;F0@=&AE("1$051!0D%315].04U%
+9(&1A=&%B87-E(&%T("1!1%A?1E%$3BXB"F0@
 `
 end
 SHAR_EOF
-  (set 20 24 10 02 02 21 26 'setup.sh'
+  (set 20 24 10 23 22 48 03 'setup.sh'
    eval "${shar_touch}") && \
-  chmod 0755 'setup.sh'
+  chmod 0644 'setup.sh'
 if test $? -ne 0
 then ${echo} "restore of setup.sh failed"
 fi
@@ -255,12 +257,12 @@ fi
   then (
        ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'setup.sh': 'MD5 check failed'
        ) << \SHAR_EOF
-9a72148501a220e2cbf600c138d98377  setup.sh
+53485bcb19c2d2a718855dca4e85ec90  setup.sh
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'setup.sh'` -ne 5941 && \
-  ${echo} "restoration warning:  size of 'setup.sh' is not 5941"
+test `LC_ALL=C wc -c < 'setup.sh'` -ne 6055 && \
+  ${echo} "restoration warning:  size of 'setup.sh' is not 6055"
   fi
 # ============= collector.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'collector.yaml' &&
@@ -699,7 +701,7 @@ X        - name: varlibdockercontainers
 X          hostPath:
 X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 10 15 18 34 10 'collector.yaml'
+  (set 20 24 08 28 07 11 08 'ingestor.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'collector.yaml'
 if test $? -ne 0
@@ -1030,7 +1032,7 @@ X      nodeSelector:
 X        kubernetes.io/os: linux
 X      serviceAccountName: ksm
 SHAR_EOF
-  (set 20 24 10 02 02 21 26 'ksm.yaml'
+  (set 20 24 08 28 07 11 08 'ksm.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ksm.yaml'
 if test $? -ne 0
@@ -1066,6 +1068,13 @@ kind: ClusterRole
 metadata:
 X  name: adx-mon:ingestor
 rules:
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - nodes/metrics
+X      - nodes/proxy
+X    verbs:
+X      - get
 X  - apiGroups:
 X      - ""
 X    resources:
@@ -1178,8 +1187,12 @@ X              mountPath: /mnt/data
 X            - mountPath: /etc/pki/ca-trust/extracted
 X              name: etc-pki-ca-certs
 X              readOnly: true
-X            - mountPath: /etc/ssl/certs
-X              name: ca-certs
+X            - name: config-volume
+X              mountPath: /etc/config
+X            - name: storage
+X              mountPath: /mnt/data
+X            - name: varlog
+X              mountPath: /var/log
 X              readOnly: true
 X      affinity:
 X        podAntiAffinity:
@@ -1211,7 +1224,106 @@ X            path: /etc/pki/ca-trust/extracted
 X            type: DirectoryOrCreate
 X        - name: metrics
 X          hostPath:
-X            path: /mnt/ingestor
+X            path: /mnt/collector
+X        - name: varlog
+X          hostPath:
+X            path: /var/log
+X        - name: varlibdockercontainers
+X          hostPath:
+X            path: /var/lib/docker/containers
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+X  name: collector-singleton-config
+X  namespace: adx-mon
+data:
+X  config.toml: |
+X    # Ingestor URL to send collected telemetry.
+X    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+X
+X    # Region is a location identifier
+X    region = '$REGION'
+X
+X    # Skip TLS verification.
+X    insecure-skip-verify = true
+X
+X    # Address to listen on for endpoints.
+X    listen-addr = ':8080'
+X
+X    # Maximum number of connections to accept.
+X    max-connections = 100
+X
+X    # Maximum number of samples to send in a single batch.
+X    max-batch-size = 10000
+X
+X    # Storage directory for the WAL.
+X    storage-dir = '/mnt/data'
+X
+X    # Regexes of metrics to drop from all sources.
+X    drop-metrics = []
+X
+X    # Disable metrics forwarding to endpoints.
+X    disable-metrics-forwarding = false
+X
+X    # Key/value pairs of labels to add to all metrics.
+X    [add-labels]
+X      host = '$(HOSTNAME)'
+X      cluster = '$CLUSTER'
+X
+X    # Defines a prometheus scrape endpoint.
+X    [prometheus-scrape]
+X
+X      # Database to store metrics in.
+X      database = 'Metrics'
+X
+X      default-drop-metrics = false
+X
+X      # Defines a static scrape target.
+X      static-scrape-target = [
+X        # Scrape api server endpoint
+X        { host-regex = '.*', url = 'https://kubernetes.default.svc/metrics', namespace = 'kube-system', pod = 'kube-apiserver', container = 'kube-apiserver' },
+X      ]
+X
+X      # Scrape interval in seconds.
+X      scrape-interval = 30
+X
+X      # Scrape timeout in seconds.
+X      scrape-timeout = 25
+X
+X      # Disable dynamic discovery of scrape targets.
+X      disable-discovery = true
+X
+X      # Disable metrics forwarding to endpoints.
+X      disable-metrics-forwarding = false
+X
+X      # Regexes of metrics to keep from scraping source.
+X      keep-metrics = []
+X
+X      # Regexes of metrics to drop from scraping source.
+X      drop-metrics = []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+X  name: collector-singleton
+X  namespace: adx-mon
+spec:
+X  replicas: 1
+X  selector:
+X    matchLabels:
+X      adxmon: collector
+X  template:
+X    metadata:
+X      labels:
+X        adxmon: collector
+X      annotations:
+X        adx-mon/scrape: "true"
+X        adx-mon/port: "9091"
+X        adx-mon/path: "/metrics"
+X        adx-mon/log-destination: "Logs:Collector"
+X        adx-mon/log-parsers: json
+X    spec:
 X      tolerations:
 X        - key: CriticalAddonsOnly
 X          operator: Exists
@@ -1222,9 +1334,72 @@ X          tolerationSeconds: 300
 X        - effect: NoExecute
 X          key: node.kubernetes.io/unreachable
 X          operator: Exists
-X          tolerationSeconds: 300
+X          effect: NoSchedule
+X      serviceAccountName: collector
+X      containers:
+X        - name: collector
+X          image: "ghcr.io/azure/adx-mon/collector:latest"
+X          command:
+X            - /collector
+X          args:
+X            - "--config=/etc/config/config.toml"
+X            - "--hostname=$(HOSTNAME)"
+X          env:
+X            - name: LOG_LEVEL
+X              value: INFO
+X            - name: HOSTNAME
+X              valueFrom:
+X                fieldRef:
+X                  fieldPath: spec.nodeName
+X            - name: "GODEBUG"
+X              value: "http2client=0"
+X          volumeMounts:
+X            - mountPath: /etc/ssl/certs
+X              name: ssl-certs
+X              readOnly: true
+X            - mountPath: /etc/pki/ca-trust/extracted
+X              name: etc-pki-ca-certs
+X              readOnly: true
+X            - name: config-volume
+X              mountPath: /etc/config
+X            - name: storage
+X              mountPath: /mnt/data
+X            - name: varlog
+X              mountPath: /var/log
+X              readOnly: true
+X            - name: varlibdockercontainers
+X              mountPath: /var/lib/docker/containers
+X              readOnly: true
+X          resources:
+X            requests:
+X              cpu: 50m
+X              memory: 100Mi
+X            limits:
+X              cpu: 500m
+X              memory: 2000Mi
+X      volumes:
+X        - name: ssl-certs
+X          hostPath:
+X            path: /etc/ssl/certs
+X            type: Directory
+X        - name: etc-pki-ca-certs
+X          hostPath:
+X            path: /etc/pki/ca-trust/extracted
+X            type: DirectoryOrCreate
+X        - name: config-volume
+X          configMap:
+X            name: collector-singleton-config
+X        - name: storage
+X          hostPath:
+X            path: /mnt/collector
+X        - name: varlog
+X          hostPath:
+X            path: /var/log
+X        - name: varlibdockercontainers
+X          hostPath:
+X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 10 22 15 21 00 'ingestor.yaml'
+  (set 20 24 10 23 22 45 17 'collector.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ingestor.yaml'
 if test $? -ne 0
@@ -1234,12 +1409,12 @@ fi
   then (
        ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-9e9c7f67998a15790959249362e69c7a  ingestor.yaml
+f52b99f1c3e76671de45dc247380162f  collector.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4535 && \
-  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4535"
+test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11563 && \
+  ${echo} "restoration warning:  size of 'collector.yaml' is not 11563"
   fi
 if rm -fr ${lock_dir}
 then ${echo} "x - removed lock directory ${lock_dir}."
