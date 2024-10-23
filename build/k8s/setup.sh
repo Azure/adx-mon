@@ -78,6 +78,7 @@ done
 
 CLUSTER_INFO=$(az graph query -q "Resources | where type =~ 'Microsoft.Kusto/clusters' and name =~ '$CLUSTER_NAME' | project name, resourceGroup, subscriptionId, location, properties.uri")
 CLUSTER_COUNT=$(echo $CLUSTER_INFO | jq '.data | length')
+KUSTO_REGION=$(echo $CLUSTER_INFO | jq -r '.data[0].location')
 
 if [[ $CLUSTER_COUNT -eq 0 ]]; then
     echo "No Kusto cluster could be found for the database name '$CLUSTER_NAME'. Exiting."
@@ -94,6 +95,7 @@ echo -e "  Cluster Name: \e[32m$CLUSTER_NAME\e[0m"
 echo -e "  Subscription ID: \e[32m$SUBSCRIPTION_ID\e[0m"
 echo -e "  Resource Group: \e[32m$RESOURCE_GROUP\e[0m"
 echo -e "  ADX FQDN: \e[32m$ADX_FQDN\e[0m"
+echo -e "  Region: \e[32m$KUSTO_REGION\e[0m"
 echo
 read -p "Is this the correct ADX cluster info? (y/n) " CONFIRM
 if [[ "$CONFIRM" != "y" ]]; then
@@ -106,7 +108,7 @@ for DATABASE_NAME in Metrics Logs; do
     DATABASE_EXISTS=$(az kusto database show --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --query "name" -o tsv 2>/dev/null || echo "")
     if [[ -z "$DATABASE_EXISTS" ]]; then
         echo "The $DATABASE_NAME database does not exist. Creating it now."
-        az kusto database create --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --read-write-database  soft-delete-period=P30D hot-cache-period=P7D location=$REGION
+        az kusto database create --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --read-write-database  soft-delete-period=P30D hot-cache-period=P7D location=$KUSTO_REGION
     else
         echo "The $DATABASE_NAME database already exists."
     fi
