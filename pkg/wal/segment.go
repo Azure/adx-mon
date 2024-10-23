@@ -429,7 +429,8 @@ func (s *segment) Repair() error {
 		n, err = s.w.Read(buf[:blockLen])
 		idx += n
 		if err != nil {
-			return err
+			logger.Warnf("Repairing segment %s, unexected error %s, truncating at %d", s.path, err, lastGoodIdx)
+			return s.truncate(int64(lastGoodIdx))
 		}
 
 		if uint32(n) != blockLen {
