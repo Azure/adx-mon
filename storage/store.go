@@ -78,16 +78,18 @@ type StoreOpts struct {
 	LiftedLabels     []string
 	LiftedAttributes []string
 	LiftedResources  []string
+	WALFlushInterval time.Duration
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
 		opts: opts,
 		repository: wal.NewRepository(wal.RepositoryOpts{
-			StorageDir:     opts.StorageDir,
-			SegmentMaxSize: opts.SegmentMaxSize,
-			SegmentMaxAge:  opts.SegmentMaxAge,
-			MaxDiskUsage:   opts.MaxDiskUsage,
+			StorageDir:       opts.StorageDir,
+			SegmentMaxSize:   opts.SegmentMaxSize,
+			SegmentMaxAge:    opts.SegmentMaxAge,
+			MaxDiskUsage:     opts.MaxDiskUsage,
+			WALFlushInterval: opts.WALFlushInterval,
 		}),
 		metrics: make(map[string]prometheus.Counter),
 	}
