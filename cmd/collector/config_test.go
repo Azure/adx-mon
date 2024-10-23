@@ -896,3 +896,42 @@ func TestConfig_ValidateLiftLabels(t *testing.T) {
 		}}
 	require.NoError(t, c.Validate())
 }
+
+func TestConfig_WALFlushInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval int
+		wantErr  bool
+	}{
+		{
+			name:     "WALFlushIntervalGreaterThanZero",
+			interval: 100,
+			wantErr:  false,
+		},
+		{
+			name:     "WALFlushIntervalZero",
+			interval: 100,
+			wantErr:  false,
+		},
+		{
+			name:     "WALFlushIntervalNegative",
+			interval: -100,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{
+				WALFlushIntervalMilliSeconds: tt.interval,
+			}
+			err := c.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Equal(t, "wal-flush-interval must be greater than 0", err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

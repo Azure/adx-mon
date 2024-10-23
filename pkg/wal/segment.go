@@ -34,6 +34,16 @@ var (
 	segmentVersion = byte(1)
 )
 
+type SegmentOption func(s *segment)
+
+func WithFlushIntervale(d time.Duration) SegmentOption {
+	return func(s *segment) {
+		if d.Seconds() > 0 {
+			s.flushInterval = d
+		}
+	}
+}
+
 type Segment interface {
 	Append(ctx context.Context, buf []byte) error
 	Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
@@ -88,10 +98,11 @@ type segment struct {
 	sampleType  uint16
 	sampleCount uint16
 
-	flushCh chan chan error
+	flushCh       chan chan error
+	flushInterval time.Duration
 }
 
-func NewSegment(dir, prefix string) (Segment, error) {
+func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 	flakeId := idgen.NextId()
 
 	createdAt, err := flakeutil.ParseFlakeID(flakeId.String())
@@ -127,8 +138,13 @@ func NewSegment(dir, prefix string) (Segment, error) {
 		bw:        bf,
 		filePos:   8,
 
-		closing: make(chan struct{}),
-		flushCh: make(chan chan error),
+		closing:       make(chan struct{}),
+		flushCh:       make(chan chan error),
+		flushInterval: 100 * time.Millisecond,
+	}
+
+	for _, opt := range opts {
+		opt(f)
 	}
 
 	f.wg.Add(1)
@@ -198,10 +214,11 @@ func Open(path string) (Segment, error) {
 		path:      path,
 		filePos:   uint64(stat.Size()),
 
-		w:       fd,
-		bw:      bf,
-		closing: make(chan struct{}),
-		flushCh: make(chan chan error),
+		w:             fd,
+		bw:            bf,
+		closing:       make(chan struct{}),
+		flushCh:       make(chan chan error),
+		flushInterval: 100 * time.Millisecond,
 	}
 
 	if err := f.Repair(); err != nil {
@@ -450,7 +467,7 @@ func (s *segment) Repair() error {
 func (s *segment) flusher() {
 	defer s.wg.Done()
 
-	t := time.NewTicker(100 * time.Millisecond)
+	t := time.NewTicker(s.flushInterval)
 	defer t.Stop()
 
 	for {

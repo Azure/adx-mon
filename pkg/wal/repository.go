@@ -29,8 +29,9 @@ type RepositoryOpts struct {
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
 
-	MaxDiskUsage    int64
-	MaxSegmentCount int
+	MaxDiskUsage     int64
+	MaxSegmentCount  int
+	WALFlushInterval time.Duration
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
@@ -169,12 +170,13 @@ func (s *Repository) Close() error {
 
 func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	walOpts := WALOpts{
-		Prefix:         prefix,
-		StorageDir:     s.opts.StorageDir,
-		SegmentMaxSize: s.opts.SegmentMaxSize,
-		SegmentMaxAge:  s.opts.SegmentMaxAge,
-		MaxDiskUsage:   s.opts.MaxDiskUsage,
-		Index:          s.index,
+		Prefix:           prefix,
+		StorageDir:       s.opts.StorageDir,
+		SegmentMaxSize:   s.opts.SegmentMaxSize,
+		SegmentMaxAge:    s.opts.SegmentMaxAge,
+		MaxDiskUsage:     s.opts.MaxDiskUsage,
+		Index:            s.index,
+		WALFlushInterval: s.opts.WALFlushInterval,
 	}
 
 	wal, err := NewWAL(walOpts)
