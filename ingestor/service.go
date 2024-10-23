@@ -16,6 +16,7 @@ import (
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/metrics"
+	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -300,16 +301,22 @@ func (s *Service) Close() error {
 
 // HandleReceive handles the prometheus remote write requests and writes them to the store.
 func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
+	adxhttp.MaybeCloseConnection(w, r)
+
 	s.handler.HandleReceive(w, r)
 }
 
 // HandleLogs handles OTLP logs requests and writes them to the store.
 func (s *Service) HandleLogs(w http.ResponseWriter, r *http.Request) {
+	adxhttp.MaybeCloseConnection(w, r)
+
 	s.logsHandler.ServeHTTP(w, r)
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
+	adxhttp.MaybeCloseConnection(w, r)
+
 	start := time.Now()
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/transfer"})
 	filename := r.URL.Query().Get("filename")

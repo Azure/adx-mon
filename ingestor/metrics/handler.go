@@ -101,8 +101,6 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 			logger.Errorf("close http body: %s, path=%s duration=%s", err.Error(), s.Path, time.Since(start).String())
 		}
 	}()
-	r.Close = true
-	w.Header().Set("Connection", "close")
 
 	if !s.health.IsHealthy() {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()

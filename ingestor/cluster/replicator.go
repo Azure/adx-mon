@@ -63,9 +63,10 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		Close:                 false,
 		MaxIdleConnsPerHost:   1,
 		MaxIdleConns:          5,
+		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 20 * time.Second,
 		DisableHTTP2:          true,
-		DisableKeepAlives:     true,
+		DisableKeepAlives:     false,
 	})
 	if err != nil {
 		return nil, err
