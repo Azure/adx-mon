@@ -33,9 +33,10 @@ func init() {
 }
 
 var DefaultConfig = Config{
-	MaxBatchSize: 5000,
-	ListenAddr:   ":8080",
-	StorageDir:   homedir,
+	MaxBatchSize:                 5000,
+	WALFlushIntervalMilliSeconds: 100,
+	ListenAddr:                   ":8080",
+	StorageDir:                   homedir,
 	PrometheusScrape: &PrometheusScrape{
 		StaticScrapeTarget:    []*ScrapeTarget{},
 		ScrapeIntervalSeconds: 30,
@@ -73,11 +74,12 @@ type Config struct {
 	TLSKeyFile         string `toml:"tls-key-file" comment:"Optional path to the TLS key file."`
 	TLSCertFile        string `toml:"tls-cert-file" comment:"Optional path to the TLS cert bundle file."`
 
-	MaxConnections       int   `toml:"max-connections" comment:"Maximum number of connections to accept."`
-	MaxBatchSize         int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
-	MaxSegmentAgeSeconds int   `toml:"max-segment-age-seconds" comment:"Max segment agent in seconds."`
-	MaxSegmentSize       int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
-	MaxDiskUsage         int64 `toml:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
+	MaxConnections               int   `toml:"max-connections" comment:"Maximum number of connections to accept."`
+	MaxBatchSize                 int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
+	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds" comment:"Max segment agent in seconds."`
+	MaxSegmentSize               int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
+	MaxDiskUsage                 int64 `toml:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
+	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms" comment:"Interval to flush the WAL. (default 100)"`
 
 	StorageDir  string `toml:"storage-dir" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
@@ -459,6 +461,12 @@ func (c *Config) Validate() error {
 		if err := c.PrometheusScrape.Validate(); err != nil {
 			return err
 		}
+	}
+
+	if c.WALFlushIntervalMilliSeconds == 0 {
+		c.WALFlushIntervalMilliSeconds = DefaultConfig.WALFlushIntervalMilliSeconds
+	} else if c.WALFlushIntervalMilliSeconds < 0 {
+		return errors.New("wal-flush-interval must be greater than 0")
 	}
 
 	return nil

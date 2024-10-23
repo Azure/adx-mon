@@ -119,6 +119,12 @@ type ServiceOpts struct {
 	Region string
 
 	MaxConnections int
+
+	// WALFlushInterval is the interval at which the WAL segment is flushed to disk.  A higher value results in
+	// better disk IO and less CPU usage but has a greater risk of data loss in the event of a crash.  A lower
+	// value results in more frequent disk IO and higher CPU usage but less data loss in the event of a crash.
+	// The default is 100ms and the value must be greater than 0.
+	WALFlushInterval time.Duration
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -184,6 +190,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		LiftedLabels:     opts.LiftLabels,
 		LiftedAttributes: opts.LiftAttributes,
 		LiftedResources:  opts.LiftResources,
+		WALFlushInterval: opts.WALFlushInterval,
 	})
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
