@@ -3,8 +3,8 @@
 # To extract the files from this archive, save it to some FILE, remove
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
-lock_dir=_sh00303
-# Made on 2024-08-28 18:31 UTC by <root@1cda6bf9feb3>.
+lock_dir=_sh00162
+# Made on 2024-10-23 13:26 UTC by <root@71faa8180e10>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -13,9 +13,9 @@ lock_dir=_sh00303
 # length mode       name
 # ------ ---------- ------------------------------------------
 #   5941 -rwxr-xr-x setup.sh
-#   4411 -rw-r--r-- ingestor.yaml
+#  11563 -rw-r--r-- collector.yaml
 #   5804 -rw-r--r-- ksm.yaml
-#  11579 -rw-r--r-- collector.yaml
+#   4535 -rw-r--r-- ingestor.yaml
 #
 MD5SUM=${MD5SUM-md5sum}
 f=`${MD5SUM} --version | egrep '^md5sum .*(core|text)utils'`
@@ -245,7 +245,7 @@ M;F0@=&AE("1$051!0D%315].04U%(&1A=&%B87-E(&%T("1!1%A?1E%$3BXB
 `
 end
 SHAR_EOF
-  (set 20 24 08 28 00 11 08 'setup.sh'
+  (set 20 24 10 02 02 21 26 'setup.sh'
    eval "${shar_touch}") && \
   chmod 0755 'setup.sh'
 if test $? -ne 0
@@ -262,8 +262,8 @@ else
 test `LC_ALL=C wc -c < 'setup.sh'` -ne 5941 && \
   ${echo} "restoration warning:  size of 'setup.sh' is not 5941"
   fi
-# ============= ingestor.yaml ==============
-  sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
+# ============= collector.yaml ==============
+  sed 's/^X//' << 'SHAR_EOF' > 'collector.yaml' &&
 ---
 apiVersion: v1
 kind: Namespace
@@ -273,14 +273,21 @@ X  name: adx-mon
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-X  name: ingestor
+X  name: collector
 X  namespace: adx-mon
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-X  name: adx-mon:ingestor
+X  name: adx-mon:collector
 rules:
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - nodes/metrics
+X      - nodes/proxy
+X    verbs:
+X      - get
 X  - apiGroups:
 X      - ""
 X    resources:
@@ -290,125 +297,221 @@ X    verbs:
 X      - get
 X      - list
 X      - watch
+X  - nonResourceURLs:
+X      - /metrics
+X    verbs:
+X      - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-X  name: adx-mon:ingestor
+X  name: adx-mon:collector
 roleRef:
 X  apiGroup: rbac.authorization.k8s.io
 X  kind: ClusterRole
-X  name: adx-mon:ingestor
+X  name: adx-mon:collector
 subjects:
 X  - kind: ServiceAccount
-X    name: ingestor
+X    name: collector
 X    namespace: adx-mon
 ---
 apiVersion: v1
-kind: Service
+kind: ConfigMap
 metadata:
-X  name: ingestor
+X  name: collector-config
 X  namespace: adx-mon
-spec:
-X  type: ClusterIP
-X  selector:
-X    app: ingestor
-X  ports:
-X    # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
-X    - port: 443
-X      targetPort: 9090
-X      # Optional field
-X      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
-X      #nodePort: 30007
+data:
+X  config.toml: |
+X    # Ingestor URL to send collected telemetry.
+X    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+X
+X    # Region is a location identifier
+X    region = '$REGION'
+X
+X    # Skip TLS verification.
+X    insecure-skip-verify = true
+X
+X    # Address to listen on for endpoints.
+X    listen-addr = ':8080'
+X
+X    # Maximum number of connections to accept.
+X    max-connections = 100
+X
+X    # Maximum number of samples to send in a single batch.
+X    max-batch-size = 10000
+X
+X    # Storage directory for the WAL.
+X    storage-dir = '/mnt/data'
+X
+X    # Regexes of metrics to drop from all sources.
+X    drop-metrics = []
+X
+X    # Disable metrics forwarding to endpoints.
+X    disable-metrics-forwarding = false
+X
+X    # Key/value pairs of labels to add to all metrics.
+X    [add-labels]
+X      host = '$(HOSTNAME)'
+X      cluster = '$CLUSTER'
+X
+X    # Defines a prometheus scrape endpoint.
+X    [prometheus-scrape]
+X
+X      # Database to store metrics in.
+X      database = 'Metrics'
+X
+X      default-drop-metrics = false
+X
+X      # Defines a static scrape target.
+X      static-scrape-target = [
+X        # Scrape our own metrics
+X        { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector' },
+X
+X        # Scrape kubelet metrics
+X        # { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics', namespace = 'kube-system', pod = 'kubelet', container = 'kubelet' },
+X
+X        # Scrape cadvisor metrics
+X        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/cadvisor', namespace = 'kube-system', pod = 'kubelet', container = 'cadvisor' },
+X
+X        # Scrape cadvisor metrics
+X        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/resource', namespace = 'kube-system', pod = 'kubelet', container = 'resource' },
+X      ]
+X
+X      # Scrape interval in seconds.
+X      scrape-interval = 30
+X
+X      # Scrape timeout in seconds.
+X      scrape-timeout = 25
+X
+X      # Disable metrics forwarding to endpoints.
+X      disable-metrics-forwarding = false
+X
+X      # Regexes of metrics to keep from scraping source.
+X      keep-metrics = []
+X
+X      # Regexes of metrics to drop from scraping source.
+X      drop-metrics = []
+X
+X    # Defines a prometheus remote write endpoint.
+X    [[prometheus-remote-write]]
+X
+X      # Database to store metrics in.
+X      database = 'Metrics'
+X
+X      # The path to listen on for prometheus remote write requests.  Defaults to /receive.
+X      path = '/receive'
+X
+X      # Regexes of metrics to drop.
+X      drop-metrics = []
+X
+X      # Disable metrics forwarding to endpoints.
+X      disable-metrics-forwarding = false
+X
+X      # Key/value pairs of labels to add to this source.
+X      [prometheus-remote-write.add-labels]
+X
+X    # Defines an OpenTelemetry log endpoint.
+X    [otel-log]
+X      # Attributes lifted from the Body and added to Attributes.
+X      lift-attributes = ['kusto.database', 'kusto.table']
+X
+X      # Key/value pairs of attributes to add to all logs.
+X      [otel-log.add-attributes]
+X        Host = '$(HOSTNAME)'
+X        cluster = '$CLUSTER'
+X
+X    [[tail-log]]
+X
+X      parsers = ['json']
+X
+X      log-type = 'kubernetes'
+X
+X      [tail-log.add-attributes]
+X        Host = '$(HOSTNAME)'
+X        Cluster = '$CLUSTER'
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: DaemonSet
 metadata:
-X  name: ingestor
+X  name: collector
 X  namespace: adx-mon
 spec:
-X  serviceName: "adx-mon"
-X  replicas: 1
-X  updateStrategy:
-X    type: RollingUpdate
 X  selector:
 X    matchLabels:
-X      app: ingestor
+X      adxmon: collector
+X  updateStrategy:
+X    type: RollingUpdate
+X    rollingUpdate:
+X      maxSurge: 0
+X      maxUnavailable: 30%
 X  template:
 X    metadata:
 X      labels:
-X        app: ingestor
+X        adxmon: collector
 X      annotations:
 X        adx-mon/scrape: "true"
 X        adx-mon/port: "9091"
 X        adx-mon/path: "/metrics"
-X        adx-mon/log-destination: "Logs:Ingestor"
+X        adx-mon/log-destination: "Logs:Collector"
 X        adx-mon/log-parsers: json
 X    spec:
-X      serviceAccountName: ingestor
+X      tolerations:
+X        - key: CriticalAddonsOnly
+X          operator: Exists
+X        - key: node-role.kubernetes.io/control-plane
+X          operator: Exists
+X          effect: NoSchedule
+X        - key: node-role.kubernetes.io/master
+X          operator: Exists
+X          effect: NoSchedule
+X      serviceAccountName: collector
 X      containers:
-X        - name: ingestor
-X          image: ghcr.io/azure/adx-mon/ingestor:latest
+X        - name: collector
+X          image: "ghcr.io/azure/adx-mon/collector:latest"
+X          command:
+X            - /collector
+X          args:
+X            - "--config=/etc/config/config.toml"
+X            - "--hostname=$(HOSTNAME)"
 X          ports:
-X            - containerPort: 9090
-X              name: ingestor
-X            - containerPort: 9091
-X              name: metrics
+X            - containerPort: 8080
+X              protocol: TCP
+X              hostPort: 3100
 X          env:
 X            - name: LOG_LEVEL
 X              value: INFO
+X            - name: HOSTNAME
+X              valueFrom:
+X                fieldRef:
+X                  fieldPath: spec.nodeName
 X            - name: "GODEBUG"
 X              value: "http2client=0"
-X            - name: "AZURE_RESOURCE"
-X              value: "$ADX_URL"
-X            - name:  "AZURE_CLIENT_ID"
-X              value: "$CLIENT_ID"
-X          command:
-X            - /ingestor
-X          args:
-X            - "--storage-dir=/mnt/data"
-X            - "--max-segment-age=5s"
-X            - "--max-disk-usage=21474836480"
-X            - "--max-transfer-size=10485760"
-X            - "--max-connections=1000"
-X            - "--insecure-skip-verify"
-X            - "--lift-label=host"
-X            - "--lift-label=cluster"
-X            - "--lift-label=adxmon_namespace=Namespace"
-X            - "--lift-label=adxmon_pod=Pod"
-X            - "--lift-label=adxmon_container=Container"
-X            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
-X            - "--logs-kusto-endpoints=Logs=$ADX_URL"
 X          volumeMounts:
-X            - name: metrics
-X              mountPath: /mnt/data
+X            - mountPath: /etc/ssl/certs
+X              name: ssl-certs
+X              readOnly: true
 X            - mountPath: /etc/pki/ca-trust/extracted
 X              name: etc-pki-ca-certs
 X              readOnly: true
-X            - mountPath: /etc/ssl/certs
-X              name: ca-certs
+X            - name: config-volume
+X              mountPath: /etc/config
+X            - name: storage
+X              mountPath: /mnt/data
+X            - name: varlog
+X              mountPath: /var/log
 X              readOnly: true
-X      affinity:
-X        podAntiAffinity:
-X          requiredDuringSchedulingIgnoredDuringExecution:
-X            - labelSelector:
-X                matchExpressions:
-X                  - key: app
-X                    operator: In
-X                    values:
-X                      - ingestor
-X              topologyKey: kubernetes.io/hostname
-X        nodeAffinity:
-X          preferredDuringSchedulingIgnoredDuringExecution:
-X            - weight: 1
-X              preference:
-X                matchExpressions:
-X                  - key: agentpool
-X                    operator: In
-X                    values:
-X                      - aks-system
+X            - name: varlibdockercontainers
+X              mountPath: /var/lib/docker/containers
+X              readOnly: true
+X          resources:
+X            requests:
+X              cpu: 50m
+X              memory: 100Mi
+X            limits:
+X              cpu: 500m
+X              memory: 2000Mi
 X      volumes:
-X        - name: ca-certs
+X        - name: ssl-certs
 X          hostPath:
 X            path: /etc/ssl/certs
 X            type: Directory
@@ -416,37 +519,202 @@ X        - name: etc-pki-ca-certs
 X          hostPath:
 X            path: /etc/pki/ca-trust/extracted
 X            type: DirectoryOrCreate
-X        - name: metrics
+X        - name: config-volume
+X          configMap:
+X            # Provide the name of the ConfigMap containing the files you want
+X            # to add to the container
+X            name: collector-config
+X        - name: storage
 X          hostPath:
-X            path: /mnt/ingestor
+X            path: /mnt/collector
+X        - name: varlog
+X          hostPath:
+X            path: /var/log
+X        - name: varlibdockercontainers
+X          hostPath:
+X            path: /var/lib/docker/containers
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+X  name: collector-singleton-config
+X  namespace: adx-mon
+data:
+X  config.toml: |
+X    # Ingestor URL to send collected telemetry.
+X    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+X
+X    # Region is a location identifier
+X    region = '$REGION'
+X
+X    # Skip TLS verification.
+X    insecure-skip-verify = true
+X
+X    # Address to listen on for endpoints.
+X    listen-addr = ':8080'
+X
+X    # Maximum number of connections to accept.
+X    max-connections = 100
+X
+X    # Maximum number of samples to send in a single batch.
+X    max-batch-size = 10000
+X
+X    # Storage directory for the WAL.
+X    storage-dir = '/mnt/data'
+X
+X    # Regexes of metrics to drop from all sources.
+X    drop-metrics = []
+X
+X    # Disable metrics forwarding to endpoints.
+X    disable-metrics-forwarding = false
+X
+X    # Key/value pairs of labels to add to all metrics.
+X    [add-labels]
+X      host = '$(HOSTNAME)'
+X      cluster = '$CLUSTER'
+X
+X    # Defines a prometheus scrape endpoint.
+X    [prometheus-scrape]
+X
+X      # Database to store metrics in.
+X      database = 'Metrics'
+X
+X      default-drop-metrics = false
+X
+X      # Defines a static scrape target.
+X      static-scrape-target = [
+X        # Scrape api server endpoint
+X        { host-regex = '.*', url = 'https://kubernetes.default.svc/metrics', namespace = 'kube-system', pod = 'kube-apiserver', container = 'kube-apiserver' },
+X      ]
+X
+X      # Scrape interval in seconds.
+X      scrape-interval = 30
+X
+X      # Scrape timeout in seconds.
+X      scrape-timeout = 25
+X
+X      # Disable dynamic discovery of scrape targets.
+X      disable-discovery = true
+X
+X      # Disable metrics forwarding to endpoints.
+X      disable-metrics-forwarding = false
+X
+X      # Regexes of metrics to keep from scraping source.
+X      keep-metrics = []
+X
+X      # Regexes of metrics to drop from scraping source.
+X      drop-metrics = []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+X  name: collector-singleton
+X  namespace: adx-mon
+spec:
+X  replicas: 1
+X  selector:
+X    matchLabels:
+X      adxmon: collector
+X  template:
+X    metadata:
+X      labels:
+X        adxmon: collector
+X      annotations:
+X        adx-mon/scrape: "true"
+X        adx-mon/port: "9091"
+X        adx-mon/path: "/metrics"
+X        adx-mon/log-destination: "Logs:Collector"
+X        adx-mon/log-parsers: json
+X    spec:
 X      tolerations:
 X        - key: CriticalAddonsOnly
 X          operator: Exists
-X        - effect: NoExecute
-X          key: node.kubernetes.io/not-ready
+X        - key: node-role.kubernetes.io/control-plane
 X          operator: Exists
-X          tolerationSeconds: 300
-X        - effect: NoExecute
-X          key: node.kubernetes.io/unreachable
+X          effect: NoSchedule
+X        - key: node-role.kubernetes.io/master
 X          operator: Exists
-X          tolerationSeconds: 300
+X          effect: NoSchedule
+X      serviceAccountName: collector
+X      containers:
+X        - name: collector
+X          image: "ghcr.io/azure/adx-mon/collector:latest"
+X          command:
+X            - /collector
+X          args:
+X            - "--config=/etc/config/config.toml"
+X            - "--hostname=$(HOSTNAME)"
+X          env:
+X            - name: LOG_LEVEL
+X              value: INFO
+X            - name: HOSTNAME
+X              valueFrom:
+X                fieldRef:
+X                  fieldPath: spec.nodeName
+X            - name: "GODEBUG"
+X              value: "http2client=0"
+X          volumeMounts:
+X            - mountPath: /etc/ssl/certs
+X              name: ssl-certs
+X              readOnly: true
+X            - mountPath: /etc/pki/ca-trust/extracted
+X              name: etc-pki-ca-certs
+X              readOnly: true
+X            - name: config-volume
+X              mountPath: /etc/config
+X            - name: storage
+X              mountPath: /mnt/data
+X            - name: varlog
+X              mountPath: /var/log
+X              readOnly: true
+X            - name: varlibdockercontainers
+X              mountPath: /var/lib/docker/containers
+X              readOnly: true
+X          resources:
+X            requests:
+X              cpu: 50m
+X              memory: 100Mi
+X            limits:
+X              cpu: 500m
+X              memory: 2000Mi
+X      volumes:
+X        - name: ssl-certs
+X          hostPath:
+X            path: /etc/ssl/certs
+X            type: Directory
+X        - name: etc-pki-ca-certs
+X          hostPath:
+X            path: /etc/pki/ca-trust/extracted
+X            type: DirectoryOrCreate
+X        - name: config-volume
+X          configMap:
+X            name: collector-singleton-config
+X        - name: storage
+X          hostPath:
+X            path: /mnt/collector
+X        - name: varlog
+X          hostPath:
+X            path: /var/log
+X        - name: varlibdockercontainers
+X          hostPath:
+X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 08 28 00 11 08 'ingestor.yaml'
+  (set 20 24 10 15 18 34 10 'collector.yaml'
    eval "${shar_touch}") && \
-  chmod 0644 'ingestor.yaml'
+  chmod 0644 'collector.yaml'
 if test $? -ne 0
-then ${echo} "restore of ingestor.yaml failed"
+then ${echo} "restore of collector.yaml failed"
 fi
   if ${md5check}
   then (
-       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
+       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'collector.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-bc7e16695c1fd9f9a81162a55092635e  ingestor.yaml
+f52b99f1c3e76671de45dc247380162f  collector.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4411 && \
-  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4411"
+test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11563 && \
+  ${echo} "restoration warning:  size of 'collector.yaml' is not 11563"
   fi
 # ============= ksm.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
@@ -762,7 +1030,7 @@ X      nodeSelector:
 X        kubernetes.io/os: linux
 X      serviceAccountName: ksm
 SHAR_EOF
-  (set 20 24 08 28 00 11 08 'ksm.yaml'
+  (set 20 24 10 02 02 21 26 'ksm.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ksm.yaml'
 if test $? -ne 0
@@ -779,8 +1047,8 @@ else
 test `LC_ALL=C wc -c < 'ksm.yaml'` -ne 5804 && \
   ${echo} "restoration warning:  size of 'ksm.yaml' is not 5804"
   fi
-# ============= collector.yaml ==============
-  sed 's/^X//' << 'SHAR_EOF' > 'collector.yaml' &&
+# ============= ingestor.yaml ==============
+  sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
 ---
 apiVersion: v1
 kind: Namespace
@@ -790,20 +1058,14 @@ X  name: adx-mon
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-X  name: collector
+X  name: ingestor
 X  namespace: adx-mon
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-X  name: adx-mon:collector
+X  name: adx-mon:ingestor
 rules:
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - nodes/metrics
-X    verbs:
-X      - get
 X  - apiGroups:
 X      - ""
 X    resources:
@@ -813,388 +1075,133 @@ X    verbs:
 X      - get
 X      - list
 X      - watch
-X  - nonResourceURLs:
-X      - /metrics
+X  - apiGroups:
+X      - adx-mon.azure.com
+X    resources:
+X      - functions
 X    verbs:
 X      - get
+X      - list
+X      - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-X  name: adx-mon:collector
+X  name: adx-mon:ingestor
 roleRef:
 X  apiGroup: rbac.authorization.k8s.io
 X  kind: ClusterRole
-X  name: adx-mon:collector
+X  name: adx-mon:ingestor
 subjects:
 X  - kind: ServiceAccount
-X    name: collector
+X    name: ingestor
 X    namespace: adx-mon
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: Service
 metadata:
-X  name: collector-config
-X  namespace: adx-mon
-data:
-X  config.toml: |
-X    # Ingestor URL to send collected telemetry.
-X    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
-X
-X    # Region is a location identifier
-X    region = '$REGION'
-X
-X    # Skip TLS verification.
-X    insecure-skip-verify = true
-X
-X    # Address to listen on for endpoints.
-X    listen-addr = ':8080'
-X
-X    # Maximum number of connections to accept.
-X    max-connections = 100
-X
-X    # Maximum number of samples to send in a single batch.
-X    max-batch-size = 10000
-X
-X    # Storage directory for the WAL.
-X    storage-dir = '/mnt/data'
-X
-X    # Regexes of metrics to drop from all sources.
-X    drop-metrics = []
-X
-X    # Disable metrics forwarding to endpoints.
-X    disable-metrics-forwarding = false
-X
-X    # Key/value pairs of labels to add to all metrics.
-X    [add-labels]
-X      host = '$(HOSTNAME)'
-X      cluster = '$CLUSTER'
-X
-X    # Defines a prometheus scrape endpoint.
-X    [prometheus-scrape]
-X
-X      # Database to store metrics in.
-X      database = 'Metrics'
-X
-X      default-drop-metrics = false
-X
-X      # Defines a static scrape target.
-X      static-scrape-target = [
-X        # Scrape our own metrics
-X        { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector' },
-X
-X        # Scrape kubelet metrics
-X        # { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics', namespace = 'kube-system', pod = 'kubelet', container = 'kubelet' },
-X
-X        # Scrape cadvisor metrics
-X        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/cadvisor', namespace = 'kube-system', pod = 'kubelet', container = 'cadvisor' },
-X
-X        # Scrape cadvisor metrics
-X        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/resource', namespace = 'kube-system', pod = 'kubelet', container = 'resource' },
-X      ]
-X
-X      # Scrape interval in seconds.
-X      scrape-interval = 30
-X
-X      # Scrape timeout in seconds.
-X      scrape-timeout = 25
-X
-X      # Disable metrics forwarding to endpoints.
-X      disable-metrics-forwarding = false
-X
-X      # Regexes of metrics to keep from scraping source.
-X      keep-metrics = []
-X
-X      # Regexes of metrics to drop from scraping source.
-X      drop-metrics = []
-X
-X    # Defines a prometheus remote write endpoint.
-X    [[prometheus-remote-write]]
-X
-X      # Database to store metrics in.
-X      database = 'Metrics'
-X
-X      # The path to listen on for prometheus remote write requests.  Defaults to /receive.
-X      path = '/receive'
-X
-X      # Regexes of metrics to drop.
-X      drop-metrics = []
-X
-X      # Disable metrics forwarding to endpoints.
-X      disable-metrics-forwarding = false
-X
-X      # Key/value pairs of labels to add to this source.
-X      [prometheus-remote-write.add-labels]
-X
-X    # Defines an OpenTelemetry log endpoint.
-X    [otel-log]
-X      # Attributes lifted from the Body and added to Attributes.
-X      lift-attributes = ['kusto.database', 'kusto.table']
-X
-X      # Key/value pairs of attributes to add to all logs.
-X      [otel-log.add-attributes]
-X        Host = '$(HOSTNAME)'
-X        cluster = '$CLUSTER'
-X
-X    [[tail-log]]
-X
-X      parsers = ['json']
-X
-X      log-type = 'kubernetes'
-X
-X      [tail-log.add-attributes]
-X        Host = '$(HOSTNAME)'
-X        Cluster = '$CLUSTER'
----
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-X  name: collector
+X  name: ingestor
 X  namespace: adx-mon
 spec:
+X  type: ClusterIP
 X  selector:
-X    matchLabels:
-X      adxmon: collector
+X    app: ingestor
+X  ports:
+X    # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
+X    - port: 443
+X      targetPort: 9090
+X      # Optional field
+X      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
+X      #nodePort: 30007
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+spec:
+X  serviceName: "adx-mon"
+X  replicas: 1
 X  updateStrategy:
 X    type: RollingUpdate
-X    rollingUpdate:
-X      maxSurge: 0
-X      maxUnavailable: 30%
-X  template:
-X    metadata:
-X      labels:
-X        adxmon: collector
-X      annotations:
-X        adx-mon/scrape: "true"
-X        adx-mon/port: "9091"
-X        adx-mon/path: "/metrics"
-X        adx-mon/log-destination: "Logs:Collector"
-X        adx-mon/log-parsers: json
-X    spec:
-X      tolerations:
-X        - key: CriticalAddonsOnly
-X          operator: Exists
-X        - key: node-role.kubernetes.io/control-plane
-X          operator: Exists
-X          effect: NoSchedule
-X        - key: node-role.kubernetes.io/master
-X          operator: Exists
-X          effect: NoSchedule
-X      serviceAccountName: collector
-X      containers:
-X        - name: collector
-X          image: "ghcr.io/azure/adx-mon/collector:latest"
-X          command:
-X            - /collector
-X          args:
-X            - "--config=/etc/config/config.toml"
-X            - "--hostname=$(HOSTNAME)"
-X          ports:
-X            - containerPort: 8080
-X              protocol: TCP
-X              hostPort: 3100
-X          env:
-X            - name: LOG_LEVEL
-X              value: INFO
-X            - name: HOSTNAME
-X              valueFrom:
-X                fieldRef:
-X                  fieldPath: spec.nodeName
-X            - name: "GODEBUG"
-X              value: "http2client=0"
-X          volumeMounts:
-X            - mountPath: /etc/ssl/certs
-X              name: ssl-certs
-X              readOnly: true
-X            - mountPath: /etc/pki/ca-trust/extracted
-X              name: etc-pki-ca-certs
-X              readOnly: true
-X            - name: config-volume
-X              mountPath: /etc/config
-X            - name: storage
-X              mountPath: /mnt/data
-X            - name: varlogpods
-X              mountPath: /var/log/pods
-X              readOnly: true
-X            - name: varlibdockercontainers
-X              mountPath: /var/lib/docker/containers
-X              readOnly: true
-X          resources:
-X            requests:
-X              cpu: 50m
-X              memory: 100Mi
-X            limits:
-X              cpu: 500m
-X              memory: 2000Mi
-X      volumes:
-X        - name: ssl-certs
-X          hostPath:
-X            path: /etc/ssl/certs
-X            type: Directory
-X        - name: etc-pki-ca-certs
-X          hostPath:
-X            path: /etc/pki/ca-trust/extracted
-X            type: DirectoryOrCreate
-X        - name: config-volume
-X          configMap:
-X            # Provide the name of the ConfigMap containing the files you want
-X            # to add to the container
-X            name: collector-config
-X        - name: storage
-X          hostPath:
-X            path: /mnt/collector
-X        - name: varlogpods
-X          hostPath:
-X            path: /var/log/pods
-X        - name: varlibdockercontainers
-X          hostPath:
-X            path: /var/lib/docker/containers
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-X  name: collector-singleton-config
-X  namespace: adx-mon
-data:
-X  config.toml: |
-X    # Ingestor URL to send collected telemetry.
-X    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
-X
-X    # Region is a location identifier
-X    region = '$REGION'
-X
-X    # Skip TLS verification.
-X    insecure-skip-verify = true
-X
-X    # Address to listen on for endpoints.
-X    listen-addr = ':8080'
-X
-X    # Maximum number of connections to accept.
-X    max-connections = 100
-X
-X    # Maximum number of samples to send in a single batch.
-X    max-batch-size = 10000
-X
-X    # Storage directory for the WAL.
-X    storage-dir = '/mnt/data'
-X
-X    # Regexes of metrics to drop from all sources.
-X    drop-metrics = []
-X
-X    # Disable metrics forwarding to endpoints.
-X    disable-metrics-forwarding = false
-X
-X    # Key/value pairs of labels to add to all metrics.
-X    [add-labels]
-X      host = '$(HOSTNAME)'
-X      cluster = '$CLUSTER'
-X
-X    # Defines a prometheus scrape endpoint.
-X    [prometheus-scrape]
-X
-X      # Database to store metrics in.
-X      database = 'Metrics'
-X
-X      default-drop-metrics = false
-X
-X      # Defines a static scrape target.
-X      static-scrape-target = [
-X        # Scrape api server endpoint
-X        { host-regex = '.*', url = 'https://kubernetes.default.svc/metrics', namespace = 'kube-system', pod = 'kube-apiserver', container = 'kube-apiserver' },
-X      ]
-X
-X      # Scrape interval in seconds.
-X      scrape-interval = 30
-X
-X      # Scrape timeout in seconds.
-X      scrape-timeout = 25
-X
-X      # Disable dynamic discovery of scrape targets.
-X      disable-discovery = true
-X
-X      # Disable metrics forwarding to endpoints.
-X      disable-metrics-forwarding = false
-X
-X      # Regexes of metrics to keep from scraping source.
-X      keep-metrics = []
-X
-X      # Regexes of metrics to drop from scraping source.
-X      drop-metrics = []
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-X  name: collector-singleton
-X  namespace: adx-mon
-spec:
-X  replicas: 1
 X  selector:
 X    matchLabels:
-X      adxmon: collector
+X      app: ingestor
 X  template:
 X    metadata:
 X      labels:
-X        adxmon: collector
+X        app: ingestor
 X      annotations:
 X        adx-mon/scrape: "true"
 X        adx-mon/port: "9091"
 X        adx-mon/path: "/metrics"
-X        adx-mon/log-destination: "Logs:Collector"
+X        adx-mon/log-destination: "Logs:Ingestor"
 X        adx-mon/log-parsers: json
 X    spec:
-X      tolerations:
-X        - key: CriticalAddonsOnly
-X          operator: Exists
-X        - key: node-role.kubernetes.io/control-plane
-X          operator: Exists
-X          effect: NoSchedule
-X        - key: node-role.kubernetes.io/master
-X          operator: Exists
-X          effect: NoSchedule
-X      serviceAccountName: collector
+X      serviceAccountName: ingestor
 X      containers:
-X        - name: collector
-X          image: "ghcr.io/azure/adx-mon/collector:latest"
-X          command:
-X            - /collector
-X          args:
-X            - "--config=/etc/config/config.toml"
-X            - "--hostname=$(HOSTNAME)"
+X        - name: ingestor
+X          image: ghcr.io/azure/adx-mon/ingestor:latest
+X          ports:
+X            - containerPort: 9090
+X              name: ingestor
+X            - containerPort: 9091
+X              name: metrics
 X          env:
 X            - name: LOG_LEVEL
 X              value: INFO
-X            - name: HOSTNAME
-X              valueFrom:
-X                fieldRef:
-X                  fieldPath: spec.nodeName
 X            - name: "GODEBUG"
 X              value: "http2client=0"
+X            - name: "AZURE_RESOURCE"
+X              value: "$ADX_URL"
+X            - name:  "AZURE_CLIENT_ID"
+X              value: "$CLIENT_ID"
+X          command:
+X            - /ingestor
+X          args:
+X            - "--storage-dir=/mnt/data"
+X            - "--max-segment-age=5s"
+X            - "--max-disk-usage=21474836480"
+X            - "--max-transfer-size=10485760"
+X            - "--max-connections=1000"
+X            - "--insecure-skip-verify"
+X            - "--lift-label=host"
+X            - "--lift-label=cluster"
+X            - "--lift-label=adxmon_namespace=Namespace"
+X            - "--lift-label=adxmon_pod=Pod"
+X            - "--lift-label=adxmon_container=Container"
+X            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
+X            - "--logs-kusto-endpoints=Logs=$ADX_URL"
 X          volumeMounts:
-X            - mountPath: /etc/ssl/certs
-X              name: ssl-certs
-X              readOnly: true
+X            - name: metrics
+X              mountPath: /mnt/data
 X            - mountPath: /etc/pki/ca-trust/extracted
 X              name: etc-pki-ca-certs
 X              readOnly: true
-X            - name: config-volume
-X              mountPath: /etc/config
-X            - name: storage
-X              mountPath: /mnt/data
-X            - name: varlogpods
-X              mountPath: /var/log/pods
+X            - mountPath: /etc/ssl/certs
+X              name: ca-certs
 X              readOnly: true
-X            - name: varlibdockercontainers
-X              mountPath: /var/lib/docker/containers
-X              readOnly: true
-X          resources:
-X            requests:
-X              cpu: 50m
-X              memory: 100Mi
-X            limits:
-X              cpu: 500m
-X              memory: 2000Mi
+X      affinity:
+X        podAntiAffinity:
+X          requiredDuringSchedulingIgnoredDuringExecution:
+X            - labelSelector:
+X                matchExpressions:
+X                  - key: app
+X                    operator: In
+X                    values:
+X                      - ingestor
+X              topologyKey: kubernetes.io/hostname
+X        nodeAffinity:
+X          preferredDuringSchedulingIgnoredDuringExecution:
+X            - weight: 1
+X              preference:
+X                matchExpressions:
+X                  - key: agentpool
+X                    operator: In
+X                    values:
+X                      - aks-system
 X      volumes:
-X        - name: ssl-certs
+X        - name: ca-certs
 X          hostPath:
 X            path: /etc/ssl/certs
 X            type: Directory
@@ -1202,35 +1209,37 @@ X        - name: etc-pki-ca-certs
 X          hostPath:
 X            path: /etc/pki/ca-trust/extracted
 X            type: DirectoryOrCreate
-X        - name: config-volume
-X          configMap:
-X            name: collector-singleton-config
-X        - name: storage
+X        - name: metrics
 X          hostPath:
-X            path: /mnt/collector
-X        - name: varlogpods
-X          hostPath:
-X            path: /var/log/pods
-X        - name: varlibdockercontainers
-X          hostPath:
-X            path: /var/lib/docker/containers
+X            path: /mnt/ingestor
+X      tolerations:
+X        - key: CriticalAddonsOnly
+X          operator: Exists
+X        - effect: NoExecute
+X          key: node.kubernetes.io/not-ready
+X          operator: Exists
+X          tolerationSeconds: 300
+X        - effect: NoExecute
+X          key: node.kubernetes.io/unreachable
+X          operator: Exists
+X          tolerationSeconds: 300
 SHAR_EOF
-  (set 20 24 08 28 18 30 42 'collector.yaml'
+  (set 20 24 10 22 15 21 00 'ingestor.yaml'
    eval "${shar_touch}") && \
-  chmod 0644 'collector.yaml'
+  chmod 0644 'ingestor.yaml'
 if test $? -ne 0
-then ${echo} "restore of collector.yaml failed"
+then ${echo} "restore of ingestor.yaml failed"
 fi
   if ${md5check}
   then (
-       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'collector.yaml': 'MD5 check failed'
+       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-65be414ae573e00f23b557475374f789  collector.yaml
+9e9c7f67998a15790959249362e69c7a  ingestor.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11579 && \
-  ${echo} "restoration warning:  size of 'collector.yaml' is not 11579"
+test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4535 && \
+  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4535"
   fi
 if rm -fr ${lock_dir}
 then ${echo} "x - removed lock directory ${lock_dir}."
