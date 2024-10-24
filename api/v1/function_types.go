@@ -18,10 +18,7 @@ package v1
 
 import (
 	"fmt"
-	"strings"
-	"text/template"
 
-	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -39,80 +36,14 @@ type FunctionSpec struct {
 
 	// Database is the name of the database in which the function will be created
 	Database string `json:"database"`
-	// Table is the name of the table in which the function will be created. We must
-	// specify a table if the function is a view, otherwise the Table name is optional.
-	Table string `json:"table,omitempty"`
-	// Name is the name of the function
-	Name string `json:"name"`
-	// IsView is a flag indicating whether the function is a view
-	IsView bool `json:"isView,omitempty"`
-	// Folder is the folder in which the function will be created
-	Folder string `json:"folder,omitempty"`
-	// DocString is the documentation string for the function
-	DocString string `json:"docString,omitempty"`
-	// Body is the body of the function
+	// Body is the KQL body of the function
 	Body string `json:"body"`
-	// Parameters is a list of parameters for the function
-	Parameters []FunctionParameter `json:"parameters,omitempty"`
-}
 
-func (fs FunctionSpec) MarshalToKQL() (*kql.Builder, error) {
-	tmpl := template.Must(template.New("fn").Funcs(template.FuncMap{
-		"serialize": func(parameters []FunctionParameter) string {
-			var params []string
-			for _, param := range fs.Parameters {
-				params = append(params, param.String())
-			}
-			return strings.Join(params, ", ")
-		},
-	}).Parse(`.create-or-alter function
-	with( view={{ .IsView }}, folder='{{ .Folder }}', docstring='{{ .DocString }}')
-	{{ .Name }} ( {{ serialize .Parameters }} ) {
-		{{ .Body }}
-}`))
-
-	var s strings.Builder
-	if err := tmpl.Execute(&s, fs); err != nil {
-		return nil, fmt.Errorf("failed to execute template: %w", err)
-	}
-	return kql.New("").AddUnsafe(s.String()), nil
-}
-
-type Field struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-}
-
-type FunctionParameter struct {
-	Name    string  `json:"name"`
-	Type    string  `json:"type"`
-	Fields  []Field `json:"fields,omitempty"`  // Nested fields for record type
-	Default string  `json:"default,omitempty"` // Default value for timespan type
-}
-
-func (fp FunctionParameter) String() string {
-	var sb strings.Builder
-
-	sb.WriteString(fp.Name)
-	sb.WriteString(": ")
-
-	if len(fp.Fields) > 0 {
-		sb.WriteString("(")
-		for i, field := range fp.Fields {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			sb.WriteString(fmt.Sprintf("%s:%s", field.Name, field.Type))
-		}
-		sb.WriteString(")")
-	} else {
-		sb.WriteString(fp.Type)
-		if fp.Default != "" {
-			sb.WriteString(fmt.Sprintf("=%s", fp.Default))
-		}
-	}
-
-	return sb.String()
+	// TODO we need to know if a function is a view and we also need to know the function's name.
+	// We'll accomplish both by writing a parser and later a validator for the body of the function.
+	// For now, we'll just assume that the function name is the same as the name of the Function resource
+	// and if that name is the same as the table's name, then we'll assume it's a view. This is only a
+	// temporary measure until we can write a parser and validator for the body of the function.
 }
 
 // FunctionStatusEnum defines the possible status values for FunctionStatus

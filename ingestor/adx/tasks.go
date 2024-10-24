@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -126,7 +127,7 @@ func (t *SyncFunctionsTask) updateStatus(fn *v1.Function, status v1.FunctionStat
 	fn.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
 	fn.Status.Status = status
 	if err := t.store.UpdateStatus(context.Background(), fn); err != nil {
-		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Spec.Name, err)
+		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Name, err)
 	}
 }
 
@@ -141,7 +142,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			continue
 		}
 
-		cacheKey := function.Spec.Database + function.Spec.Name
+		cacheKey := function.Spec.Database + function.Name
 		if fn, ok := t.cache[cacheKey]; ok {
 			if function.ResourceVersion != fn.ResourceVersion {
 				// invalidate our cache
@@ -152,19 +153,11 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			}
 		}
 
-		stmt, err := function.Spec.MarshalToKQL()
-		if err != nil {
-			t.updateStatus(function, v1.PermanentFailure)
-			logger.Errorf("Failed to marshal function %s.%s to KQL: %v", function.Spec.Database, function.Spec.Name, err)
-			// This is a permanent failure, something is wrong with the function definition
-			t.cache[cacheKey] = function
-			continue
-		}
-
+		stmt := kql.New("").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
 				t.updateStatus(function, v1.PermanentFailure)
-				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Spec.Name, err)
+				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				// We want to fall through here so that we can cache this object, there's no need
 				// to retry creating it. If it's updated, we'll detect the change in the cached
 				// object and try again after invalidating the cache.
@@ -172,11 +165,12 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				continue
 			} else {
 				t.updateStatus(function, v1.Failed)
-				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Spec.Name, err)
+				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				continue
 			}
 		}
 
+		logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
 		t.updateStatus(function, v1.Success)
 	}
 

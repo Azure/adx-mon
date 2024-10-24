@@ -53,12 +53,7 @@ func main() {
 	for {
 		functions := functionStorage.List()
 		for _, function := range functions {
-			k, err := function.Spec.MarshalToKQL()
-			if err != nil {
-				logger.Errorf("Failed to marshal function %s.%s to KQL: %v", function.Spec.Database, function.Spec.Name, err)
-				continue
-			}
-			logger.Infof("Found %s\n\tStatus %s", k.String(), function.Status.String())
+			logger.Infof("Found %s\n\tStatus %s", function.Spec.Body, function.Status.String())
 		}
 
 		<-time.After(time.Minute)

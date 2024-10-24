@@ -3,8 +3,8 @@
 # To extract the files from this archive, save it to some FILE, remove
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
-lock_dir=_sh00160
-# Made on 2024-10-23 22:49 UTC by <root@226f55d9a012>.
+lock_dir=_sh00161
+# Made on 2024-10-24 17:20 UTC by <root@e3ad885d7449>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -13,9 +13,9 @@ lock_dir=_sh00160
 # length mode       name
 # ------ ---------- ------------------------------------------
 #   6055 -rw-r--r-- setup.sh
-#   4411 -rw-r--r-- ingestor.yaml
-#   5804 -rw-r--r-- ksm.yaml
 #  11563 -rw-r--r-- collector.yaml
+#   5804 -rw-r--r-- ksm.yaml
+#   4642 -rw-r--r-- ingestor.yaml
 #
 MD5SUM=${MD5SUM-md5sum}
 f=`${MD5SUM} --version | egrep '^md5sum .*(core|text)utils'`
@@ -247,7 +247,7 @@ M=&5D('1E;&5M971R>2!C86X@8F4@9F]U;F0@=&AE("1$051!0D%315].04U%
 `
 end
 SHAR_EOF
-  (set 20 24 10 23 22 48 03 'setup.sh'
+  (set 20 24 10 24 15 49 43 'setup.sh'
    eval "${shar_touch}") && \
   chmod 0644 'setup.sh'
 if test $? -ne 0
@@ -701,7 +701,7 @@ X        - name: varlibdockercontainers
 X          hostPath:
 X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 08 28 07 11 08 'ingestor.yaml'
+  (set 20 24 10 15 18 34 10 'collector.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'collector.yaml'
 if test $? -ne 0
@@ -1032,7 +1032,7 @@ X      nodeSelector:
 X        kubernetes.io/os: linux
 X      serviceAccountName: ksm
 SHAR_EOF
-  (set 20 24 08 28 07 11 08 'ksm.yaml'
+  (set 20 24 10 02 02 21 26 'ksm.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ksm.yaml'
 if test $? -ne 0
@@ -1068,13 +1068,6 @@ kind: ClusterRole
 metadata:
 X  name: adx-mon:ingestor
 rules:
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - nodes/metrics
-X      - nodes/proxy
-X    verbs:
-X      - get
 X  - apiGroups:
 X      - ""
 X    resources:
@@ -1193,12 +1186,8 @@ X              mountPath: /mnt/data
 X            - mountPath: /etc/pki/ca-trust/extracted
 X              name: etc-pki-ca-certs
 X              readOnly: true
-X            - name: config-volume
-X              mountPath: /etc/config
-X            - name: storage
-X              mountPath: /mnt/data
-X            - name: varlog
-X              mountPath: /var/log
+X            - mountPath: /etc/ssl/certs
+X              name: ca-certs
 X              readOnly: true
 X      affinity:
 X        podAntiAffinity:
@@ -1230,106 +1219,7 @@ X            path: /etc/pki/ca-trust/extracted
 X            type: DirectoryOrCreate
 X        - name: metrics
 X          hostPath:
-X            path: /mnt/collector
-X        - name: varlog
-X          hostPath:
-X            path: /var/log
-X        - name: varlibdockercontainers
-X          hostPath:
-X            path: /var/lib/docker/containers
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-X  name: collector-singleton-config
-X  namespace: adx-mon
-data:
-X  config.toml: |
-X    # Ingestor URL to send collected telemetry.
-X    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
-X
-X    # Region is a location identifier
-X    region = '$REGION'
-X
-X    # Skip TLS verification.
-X    insecure-skip-verify = true
-X
-X    # Address to listen on for endpoints.
-X    listen-addr = ':8080'
-X
-X    # Maximum number of connections to accept.
-X    max-connections = 100
-X
-X    # Maximum number of samples to send in a single batch.
-X    max-batch-size = 10000
-X
-X    # Storage directory for the WAL.
-X    storage-dir = '/mnt/data'
-X
-X    # Regexes of metrics to drop from all sources.
-X    drop-metrics = []
-X
-X    # Disable metrics forwarding to endpoints.
-X    disable-metrics-forwarding = false
-X
-X    # Key/value pairs of labels to add to all metrics.
-X    [add-labels]
-X      host = '$(HOSTNAME)'
-X      cluster = '$CLUSTER'
-X
-X    # Defines a prometheus scrape endpoint.
-X    [prometheus-scrape]
-X
-X      # Database to store metrics in.
-X      database = 'Metrics'
-X
-X      default-drop-metrics = false
-X
-X      # Defines a static scrape target.
-X      static-scrape-target = [
-X        # Scrape api server endpoint
-X        { host-regex = '.*', url = 'https://kubernetes.default.svc/metrics', namespace = 'kube-system', pod = 'kube-apiserver', container = 'kube-apiserver' },
-X      ]
-X
-X      # Scrape interval in seconds.
-X      scrape-interval = 30
-X
-X      # Scrape timeout in seconds.
-X      scrape-timeout = 25
-X
-X      # Disable dynamic discovery of scrape targets.
-X      disable-discovery = true
-X
-X      # Disable metrics forwarding to endpoints.
-X      disable-metrics-forwarding = false
-X
-X      # Regexes of metrics to keep from scraping source.
-X      keep-metrics = []
-X
-X      # Regexes of metrics to drop from scraping source.
-X      drop-metrics = []
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-X  name: collector-singleton
-X  namespace: adx-mon
-spec:
-X  replicas: 1
-X  selector:
-X    matchLabels:
-X      adxmon: collector
-X  template:
-X    metadata:
-X      labels:
-X        adxmon: collector
-X      annotations:
-X        adx-mon/scrape: "true"
-X        adx-mon/port: "9091"
-X        adx-mon/path: "/metrics"
-X        adx-mon/log-destination: "Logs:Collector"
-X        adx-mon/log-parsers: json
-X    spec:
+X            path: /mnt/ingestor
 X      tolerations:
 X        - key: CriticalAddonsOnly
 X          operator: Exists
@@ -1340,72 +1230,9 @@ X          tolerationSeconds: 300
 X        - effect: NoExecute
 X          key: node.kubernetes.io/unreachable
 X          operator: Exists
-X          effect: NoSchedule
-X      serviceAccountName: collector
-X      containers:
-X        - name: collector
-X          image: "ghcr.io/azure/adx-mon/collector:latest"
-X          command:
-X            - /collector
-X          args:
-X            - "--config=/etc/config/config.toml"
-X            - "--hostname=$(HOSTNAME)"
-X          env:
-X            - name: LOG_LEVEL
-X              value: INFO
-X            - name: HOSTNAME
-X              valueFrom:
-X                fieldRef:
-X                  fieldPath: spec.nodeName
-X            - name: "GODEBUG"
-X              value: "http2client=0"
-X          volumeMounts:
-X            - mountPath: /etc/ssl/certs
-X              name: ssl-certs
-X              readOnly: true
-X            - mountPath: /etc/pki/ca-trust/extracted
-X              name: etc-pki-ca-certs
-X              readOnly: true
-X            - name: config-volume
-X              mountPath: /etc/config
-X            - name: storage
-X              mountPath: /mnt/data
-X            - name: varlog
-X              mountPath: /var/log
-X              readOnly: true
-X            - name: varlibdockercontainers
-X              mountPath: /var/lib/docker/containers
-X              readOnly: true
-X          resources:
-X            requests:
-X              cpu: 50m
-X              memory: 100Mi
-X            limits:
-X              cpu: 500m
-X              memory: 2000Mi
-X      volumes:
-X        - name: ssl-certs
-X          hostPath:
-X            path: /etc/ssl/certs
-X            type: Directory
-X        - name: etc-pki-ca-certs
-X          hostPath:
-X            path: /etc/pki/ca-trust/extracted
-X            type: DirectoryOrCreate
-X        - name: config-volume
-X          configMap:
-X            name: collector-singleton-config
-X        - name: storage
-X          hostPath:
-X            path: /mnt/collector
-X        - name: varlog
-X          hostPath:
-X            path: /var/log
-X        - name: varlibdockercontainers
-X          hostPath:
-X            path: /var/lib/docker/containers
+X          tolerationSeconds: 300
 SHAR_EOF
-  (set 20 24 10 23 22 45 17 'collector.yaml'
+  (set 20 24 10 24 15 50 02 'ingestor.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ingestor.yaml'
 if test $? -ne 0
@@ -1415,12 +1242,12 @@ fi
   then (
        ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-f52b99f1c3e76671de45dc247380162f  collector.yaml
+df7a562aadcee17dd58fd9d4307b43a5  ingestor.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11563 && \
-  ${echo} "restoration warning:  size of 'collector.yaml' is not 11563"
+test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4642 && \
+  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4642"
   fi
 if rm -fr ${lock_dir}
 then ${echo} "x - removed lock directory ${lock_dir}."

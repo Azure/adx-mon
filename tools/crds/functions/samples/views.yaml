@@ -6,21 +6,18 @@ metadata:
   namespace: adx-mon
 spec:
   database: Logs
-  name: Collector
-  table: Collector
-  isView: true
-  folder: views
-  docString: This View presents a user defined schema for the Collector table.
   body: |
-    Collector
-    | extend timestamp = coalesce(todatetime(Body["ts"]), Timestamp),
-            level = tostring(Body["lvl"]),
-            message = tostring(Body["msg"]),
-            cluster = tostring(Resource["cluster"]),
-            node = tostring(Resource["Host"]),
-            kubernetes = bag_pack(
-                "container", Resource["adxmon_container"],
-                "pod", Resource["pod"],
-                "namespace", Resource["namespace"]
-            )
-    | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+    .create-or-alter function with (view=true, folder='views') Collector () {
+      Collector
+      | extend timestamp = coalesce(todatetime(Body["ts"]), Timestamp),
+              level = tostring(Body["lvl"]),
+              message = tostring(Body["msg"]),
+              cluster = tostring(Resource["cluster"]),
+              node = tostring(Resource["Host"]),
+              kubernetes = bag_pack(
+                  "container", Resource["adxmon_container"],
+                  "pod", Resource["pod"],
+                  "namespace", Resource["namespace"]
+              )
+      | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+    }

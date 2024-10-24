@@ -6,14 +6,9 @@ metadata:
   namespace: adx-mon
 spec:
   database: Logs
-  name: CollectorErrors
-  folder: samples
-  docString: Filters Collector table for errors.
-  parameters:
-    - name: period
-      type: timespan
-      default: 1h
   body: |
-    Collector
-    | where timestamp > ago(period)
-    | where level == "ERR"
+    .create-or-alter function CollectorErrors (period: timespan=1h) {
+      Collector
+      | where timestamp > ago(period)
+      | where level == "ERR"
+    }

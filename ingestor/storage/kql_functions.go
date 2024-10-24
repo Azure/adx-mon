@@ -39,14 +39,7 @@ func (f *Functions) View(database, table string) (*v1.Function, bool) {
 		return nil, false
 	}
 
-	// Views act as facades for Tables, which the same name as the Table but
-	// presenting a user defined schema instead of the stored OTLP. We therefore
-	// identify a View by matching the database and then the Table == View.Name
-	for _, view := range f.views.Items {
-		if view.Spec.IsView && view.Spec.Database == database && view.Spec.Name == table {
-			return view.DeepCopy(), true
-		}
-	}
+	// TODO (jesthom): Once the parser is in place we can identify the Views.
 
 	return nil, false
 }
@@ -104,35 +97,17 @@ func (f *Functions) Receive(ctx context.Context, list client.ObjectList) error {
 		// the function in all tracked databases? This would be useful for adx-mon's
 		// own functions, for example.
 		if function.Spec.Database == "" {
-			logger.Errorf("Function %s has no database", function.Spec.Name)
+			logger.Errorf("Function %s has no database", function.Name)
 			continue
 		}
-		if function.Spec.IsView {
-			if function.Spec.Table == "" {
-				logger.Errorf("Function %s has no table", function.Spec.Name)
-				continue
-			}
-			if function.Spec.Name != function.Spec.Table {
-				logger.Errorf("View %s has a name that does not match the Table", function.Spec.Name)
-				continue
-			}
-		} else {
-			if function.Spec.Name == "" {
-				logger.Errorf("Function %s has no name", function.Spec.Name)
-				continue
-			}
-		}
-		if _, ok := unique[function.Spec.Database+function.Spec.Name]; ok {
-			logger.Errorf("Function %s is a duplicate", function.Spec.Name)
+		// TODO (jesthom): Once the parser is in place we can perform more validation.
+		if _, ok := unique[function.Spec.Database+function.Name]; ok {
+			logger.Errorf("Function %s is a duplicate", function.Name)
 			continue
 		}
-		unique[function.Spec.Database+function.Spec.Name] = struct{}{}
-
-		if function.Spec.IsView {
-			views.Items = append(views.Items, *function.DeepCopy())
-		} else {
-			functions.Items = append(functions.Items, *function.DeepCopy())
-		}
+		unique[function.Spec.Database+function.Name] = struct{}{}
+		// TODO (jesthom): Once the parser is in place separate out the Views from the Functions.
+		functions.Items = append(functions.Items, *function.DeepCopy())
 	}
 	// TODO (jesthom): Do we want to identify those Views that we know about but
 	// are no longer in the system and should therefore be deleted?

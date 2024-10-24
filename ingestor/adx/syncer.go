@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -307,18 +308,13 @@ func (s *Syncer) EnsureView(ctx context.Context, table string) error {
 		} else {
 			// Cache is valid, nothing to do
 			if logger.IsDebug() {
-				logger.Debugf("View %s.%s is up to date", s.database, view.Spec.Name)
+				logger.Debugf("View %s.%s is up to date", s.database, view.Name)
 			}
 			return nil
 		}
 	}
 
-	stmt, err := view.Spec.MarshalToKQL()
-	if err != nil {
-		updateStatusFn(v1.PermanentFailure)
-		logger.Errorf("Failed to marshal view %s.%s to KQL: %v", s.database, table, err)
-		return nil
-	}
+	stmt := kql.New("").AddUnsafe(view.Spec.Body)
 	if _, err := s.KustoCli.Mgmt(ctx, s.database, stmt); err != nil {
 		if !errors.Retry(err) {
 			updateStatusFn(v1.PermanentFailure)
