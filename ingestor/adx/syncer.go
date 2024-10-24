@@ -10,11 +10,15 @@ import (
 	"sync"
 	"time"
 
+	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type SampleType int
@@ -32,8 +36,14 @@ type mgmt interface {
 	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
+type ViewStore interface {
+	View(database, table string) (*v1.Function, bool)
+	UpdateStatus(ctx context.Context, fn *v1.Function) error
+}
+
 type Syncer struct {
-	KustoCli mgmt
+	KustoCli  mgmt
+	ViewStore ViewStore
 
 	database string
 
@@ -42,6 +52,7 @@ type Syncer struct {
 	st       SampleType
 
 	tables map[string]struct{}
+	views  map[string]*v1.Function
 
 	defaultMapping schema.SchemaMapping
 	cancelFn       context.CancelFunc
@@ -60,14 +71,17 @@ type Table struct {
 	TableName string `kusto:"TableName"`
 }
 
-func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMapping, st SampleType) *Syncer {
+func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMapping, st SampleType, vs ViewStore) *Syncer {
 	return &Syncer{
-		KustoCli:       kustoCli,
+		KustoCli:  kustoCli,
+		ViewStore: vs,
+
 		database:       database,
 		defaultMapping: defaultMapping,
 		mappings:       make(map[string]schema.SchemaMapping),
 		st:             st,
 		tables:         make(map[string]struct{}),
+		views:          make(map[string]*v1.Function),
 	}
 }
 
@@ -262,6 +276,63 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 	}
 	s.mappings[name] = mapping
 	return name, nil
+}
+
+// EnsureView will create or update a KQL View for the specified Table if one exists.
+func (s *Syncer) EnsureView(ctx context.Context, table string) error {
+	view, ok := s.ViewStore.View(s.database, table)
+	if !ok {
+		if logger.IsDebug() {
+			logger.Debugf("No view found for %s.%s", s.database, table)
+		}
+		return nil
+	}
+
+	updateStatusFn := func(status v1.FunctionStatusEnum) {
+		view.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
+		view.Status.Status = status
+		if err := s.ViewStore.UpdateStatus(ctx, view); err != nil {
+			logger.Errorf("Failed to update status for view %s.%s v%s: %v", s.database, view.Name, view.ResourceVersion, err)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cached, ok := s.views[s.database+table]
+	if ok {
+		// Is our cached version out of date?
+		if cached.ResourceVersion != view.ResourceVersion {
+			// Invalidate cache
+			delete(s.views, s.database+table)
+		} else {
+			// Cache is valid, nothing to do
+			if logger.IsDebug() {
+				logger.Debugf("View %s.%s is up to date", s.database, view.Name)
+			}
+			return nil
+		}
+	}
+
+	stmt := kql.New("").AddUnsafe(view.Spec.Body)
+	if _, err := s.KustoCli.Mgmt(ctx, s.database, stmt); err != nil {
+		if !errors.Retry(err) {
+			updateStatusFn(v1.PermanentFailure)
+			logger.Errorf("Permanent failure to create view %s.%s: %v", s.database, table, err)
+			// We want to fall through here so that we can cache this object, there's no need
+			// to retry creating it. If it's updated, we'll detect the change in the cached
+			// object and try again after invalidating the cache.
+		} else {
+			updateStatusFn(v1.Failed)
+			logger.Warnf("Transient failure to create view %s.%s: %v", s.database, table, err)
+			return nil
+		}
+	}
+
+	updateStatusFn(v1.Success)
+	s.views[s.database+table] = view
+
+	return nil
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {

@@ -1,0 +1,23 @@
+---
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: collector
+  namespace: adx-mon
+spec:
+  database: Logs
+  body: |
+    .create-or-alter function with (view=true, folder='views') Collector () {
+      Collector
+      | extend timestamp = coalesce(todatetime(Body["ts"]), Timestamp),
+              level = tostring(Body["lvl"]),
+              message = tostring(Body["msg"]),
+              cluster = tostring(Resource["cluster"]),
+              node = tostring(Resource["Host"]),
+              kubernetes = bag_pack(
+                  "container", Resource["adxmon_container"],
+                  "pod", Resource["pod"],
+                  "namespace", Resource["namespace"]
+              )
+      | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+    }
