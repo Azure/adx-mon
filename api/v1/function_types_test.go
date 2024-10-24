@@ -25,22 +25,7 @@ spec:
       | extend diff=Value-prevVal
       | extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
       | project-away prevVal, diff, h
-    )
-  parameters:
-    - name: T
-      type: record
-      fields:
-        - name: Timestamp
-          type: datetime
-        - name: SeriesId
-          type: long
-        - name: Labels
-          type: dynamic
-        - name: Value
-          type: real
-    - name: interval
-      type: timespan
-      default: 1m`
+    )`
 
 	var fn Function
 	err := yaml.Unmarshal([]byte(yamlStr), &fn)
