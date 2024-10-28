@@ -116,13 +116,13 @@ func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	require.Equal(t, "otel-log.add-attributes key must be set", c.Validate().Error())
 }
 
-func TestConfig_ValidateConfig_TailLog(t *testing.T) {
+func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 	c := Config{
-		TailLog: []*TailLog{
-			&TailLog{
+		HostLog: []*HostLog{
+			&HostLog{
 				DisableKubeDiscovery: true,
 			},
-			&TailLog{},
+			&HostLog{},
 		},
 	}
 
@@ -130,13 +130,13 @@ func TestConfig_ValidateConfig_TailLog(t *testing.T) {
 
 	// Both taillog configs will try to discover Kubernetes pods.
 	c = Config{
-		TailLog: []*TailLog{
-			&TailLog{},
-			&TailLog{},
+		HostLog: []*HostLog{
+			&HostLog{},
+			&HostLog{},
 		},
 	}
 
-	require.Equal(t, "tail-log.disable-kube-discovery not set for more than one TailLog configuration", c.Validate().Error())
+	require.Equal(t, "host-log.disable-kube-discovery not set for more than one HostLog configuration", c.Validate().Error())
 }
 
 func TestConfig_OtelMetrics(t *testing.T) {
@@ -564,18 +564,18 @@ func TestConfig_Validate_PrometheusRemoteWrite(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_TailLog(t *testing.T) {
+func TestConfig_Validate_HostLog(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  *TailLog
+		config  *HostLog
 		wantErr bool
 	}{
 		{
 			name: "Success_valid_static_targets",
-			config: &TailLog{
+			config: &HostLog{
 				DisableKubeDiscovery: true,
 				AddAttributes:        map[string]string{"key": "value"},
-				StaticTailTarget: []*TailTarget{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						LogType:  "docker",
@@ -591,8 +591,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Success_empty_log_type_default",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						Database: "db",
@@ -607,8 +607,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Success_no_log_type_no_parsers",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						Database: "db",
@@ -620,8 +620,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_empty_path",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						LogType:  "docker",
 						Database: "db",
@@ -636,8 +636,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_empty_db",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						LogType:  "docker",
@@ -652,8 +652,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_empty_table",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						LogType:  "docker",
@@ -668,8 +668,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure invalid parser",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						LogType:  "docker",
@@ -686,8 +686,8 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_invalid_log_type",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						LogType:  "foo",
@@ -703,9 +703,9 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_empty_attribute_key",
-			config: &TailLog{
+			config: &HostLog{
 				AddAttributes: map[string]string{"": "value"},
-				StaticTailTarget: []*TailTarget{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						Database: "db",
@@ -717,9 +717,9 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_empty_attribute_value",
-			config: &TailLog{
+			config: &HostLog{
 				AddAttributes: map[string]string{"key": ""},
-				StaticTailTarget: []*TailTarget{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						Database: "db",
@@ -731,15 +731,15 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Success_valid_transform",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						Database: "db",
 						Table:    "table",
 					},
 				},
-				Transforms: []*TailTransform{
+				Transforms: []*LogTransform{
 					{
 						Name: "plugin",
 						Config: map[string]interface{}{
@@ -753,15 +753,15 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 		},
 		{
 			name: "Failure_invalid_transform",
-			config: &TailLog{
-				StaticTailTarget: []*TailTarget{
+			config: &HostLog{
+				StaticFileTargets: []*TailTarget{
 					{
 						FilePath: "/path",
 						Database: "db",
 						Table:    "table",
 					},
 				},
-				Transforms: []*TailTransform{
+				Transforms: []*LogTransform{
 					{
 						Name: "plugin",
 						Config: map[string]interface{}{
@@ -777,6 +777,18 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "Failure_invalid_journald_target",
+			config: &HostLog{
+				JournalTargets: []*JournalTarget{
+					{
+						Database: "db",
+						// Expects table
+					},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -784,6 +796,151 @@ func TestConfig_Validate_TailLog(t *testing.T) {
 			err := tt.config.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestConfig_JournalTarget_Validate(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *JournalTarget
+		err    string
+	}{
+		{
+			name: "Success_valid_journal_target",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+			},
+			err: "",
+		},
+		{
+			name: "Failure_empty_database",
+			config: &JournalTarget{
+				Table: "table",
+			},
+			err: "database must be set",
+		},
+		{
+			name: "Failure_empty_table",
+			config: &JournalTarget{
+				Database: "db",
+			},
+			err: "table must be set",
+		},
+		{
+			name: "Success_valid_journal_target_with_filters",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"_SYSTEMD_UNIT=foo",
+					"_PID = 2021",
+				},
+			},
+			err: "",
+		},
+		{
+			name: "Success_valid_journal_target_with_filters_and_disjunction",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"_SYSTEMD_UNIT=foo",
+					"_SYSTEMD_UNIT=bar",
+					"+",
+					"_PID = 2021",
+				},
+			},
+			err: "",
+		},
+		{
+			name: "Failure_filter_without_value",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"",
+					"_PID=2021",
+				},
+			},
+			err: "match must have a value",
+		},
+		{
+			name: "Failure_filter_non_kv",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"_PID",
+				},
+			},
+			err: "match _PID must be in the format key=value",
+		},
+		{
+			name: "Failure_filter_only_key",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"_PID=",
+				},
+			},
+			err: "match _PID= must have a value",
+		},
+		{
+			name: "Failure_filter_only_value",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"=2021",
+				},
+			},
+			err: "match =2021 must have a key",
+		},
+		{
+			name: "Failure_filter_initial_disjunction",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Matches: []string{
+					"+",
+					"_PID=2021",
+				},
+			},
+			err: "matches must not start with +",
+		},
+		{
+			name: "Success_valid_journal_target_with_parser",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Parsers:  []string{"json"},
+			},
+			err: "",
+		},
+		{
+			name: "Failure_invalid_parser",
+			config: &JournalTarget{
+				Database: "db",
+				Table:    "table",
+				Parsers:  []string{"json", "does-not-exist"},
+			},
+			err: "parsers does-not-exist is not a valid parser",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.err, err.Error())
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
