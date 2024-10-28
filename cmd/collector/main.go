@@ -488,7 +488,7 @@ func realMain(ctx *cli.Context) error {
 		})
 	}
 
-	for _, v := range cfg.TailLog {
+	for _, v := range cfg.HostLog {
 		tailSourceConfig := tail.TailSourceConfig{}
 		if !v.DisableKubeDiscovery {
 			informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
@@ -510,7 +510,7 @@ func realMain(ctx *cli.Context) error {
 			})
 
 			staticTargets := []tail.FileTailTarget{}
-			for _, target := range v.StaticTailTarget {
+			for _, target := range v.StaticFileTargets {
 				staticTargets = append(staticTargets, tail.FileTailTarget{
 					FilePath: target.FilePath,
 					LogType:  target.LogType,

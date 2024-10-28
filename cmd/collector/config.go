@@ -57,10 +57,11 @@ var DefaultConfig = Config{
 			AddLabels: make(map[string]string),
 		},
 	},
-	TailLog: []*TailLog{
+	HostLog: []*HostLog{
 		{
-			StaticTailTarget: []*TailTarget{},
-			AddAttributes:    make(map[string]string),
+			StaticFileTargets: []*TailTarget{},
+			JournalTargets:    []*JournalTarget{},
+			AddAttributes:     make(map[string]string),
 		},
 	},
 }
@@ -104,7 +105,7 @@ type Config struct {
 	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
 	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
 	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint. Optionally accepts OTLP/HTTP and/or OTLP/gRPC."`
-	TailLog               []*TailLog               `toml:"tail-log" comment:"Defines a tail log scraper."`
+	HostLog               []*HostLog               `toml:"host-log" comment:"Defines a host log scraper."`
 }
 
 type PrometheusScrape struct {
@@ -313,48 +314,36 @@ func (w *OtelMetric) Validate() error {
 	return nil
 }
 
-type TailLog struct {
-	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of kubernetes pod targets. Only one TailLog configuration can use kubernetes discovery."`
+type HostLog struct {
+	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of kubernetes pod targets. Only one HostLog configuration can use kubernetes discovery."`
 	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	StaticTailTarget     []*TailTarget     `toml:"static-target" comment:"Defines a static tail target."`
-	Transforms           []*TailTransform  `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
+	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
+	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
 }
 
-type TailTarget struct {
-	FilePath string           `toml:"file-path" comment:"The path to the file to tail."`
-	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files.  Options are: docker, plain."`
-	Database string           `toml:"database" comment:"Database to store logs in."`
-	Table    string           `toml:"table" comment:"Table to store logs in."`
-	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
-}
-
-type TailTransform struct {
-	Name   string         `toml:"name" comment:"The name of the transform to apply to the log line."`
-	Config map[string]any `toml:"config" comment:"The configuration for the transform."`
-}
-
-func (w *TailLog) Validate() error {
+func (w *HostLog) Validate() error {
 	for k, v := range w.AddAttributes {
 		if k == "" {
-			return errors.New("tail-log.add-attributes key must be set")
+			return errors.New("host-log.add-attributes key must be set")
 		}
 		if v == "" {
-			return errors.New("tail-log.add-attributes value must be set")
+			return errors.New("host-log.add-attributes value must be set")
 		}
 	}
 
 	// Empty is ok - defaults to plain
 	validLogTypes := []sourceparse.Type{sourceparse.LogTypeDocker, sourceparse.LogTypeCri, sourceparse.LogTypeKubernetes, sourceparse.LogTypePlain, ""}
 
-	for _, v := range w.StaticTailTarget {
+	for _, v := range w.StaticFileTargets {
 		if v.FilePath == "" {
-			return errors.New("tail-log.static-target.file-path must be set")
+			return errors.New("host-log.file-target.file-path must be set")
 		}
 		if v.Database == "" {
-			return errors.New("tail-log.static-target.database must be set")
+			return errors.New("host-log.file-target.database must be set")
 		}
 		if v.Table == "" {
-			return errors.New("tail-log.static-target.table must be set")
+			return errors.New("host-log.file-target.table must be set")
 		}
 
 		foundValidType := false
@@ -365,23 +354,92 @@ func (w *TailLog) Validate() error {
 			}
 		}
 		if !foundValidType {
-			return fmt.Errorf("tail-log.static-target.log-type %s is not a valid log type", v.LogType)
+			return fmt.Errorf("host-log.file-target.log-type %s is not a valid log type", v.LogType)
 		}
 
 		for _, parserName := range v.Parsers {
 			if !parser.IsValidParser(parserName) {
-				return fmt.Errorf("tail-log.static-target.parsers %s is not a valid parser", parserName)
+				return fmt.Errorf("host-log.file-target.parsers %s is not a valid parser", parserName)
 			}
+		}
+	}
+
+	for _, v := range w.JournalTargets {
+		if err := v.Validate(); err != nil {
+			return fmt.Errorf("host-log.journal-target.%w", err)
 		}
 	}
 
 	for _, v := range w.Transforms {
 		if !transforms.IsValidTransformType(v.Name) {
-			return fmt.Errorf("tail-log.transforms %s is not a valid transform", v.Name)
+			return fmt.Errorf("host-log.transforms %s is not a valid transform", v.Name)
 		}
 	}
 
 	return nil
+}
+
+type JournalTarget struct {
+	Matches  []string `toml:"matches" comment:"Matches for the journal reader based on journalctl MATCHES. To select a systemd unit, use the field _SYSTEMD_UNIT. (e.g. '_SYSTEMD_UNIT=avahi-daemon.service' for selecting logs from the avahi-daemon service.)"`
+	Database string   `toml:"database" comment:"Database to store logs in."`
+	Table    string   `toml:"table" comment:"Table to store logs in."`
+	Parsers  []string `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+}
+
+func (j *JournalTarget) Validate() error {
+	if j.Database == "" {
+		return errors.New("database must be set")
+	}
+	if j.Table == "" {
+		return errors.New("table must be set")
+	}
+
+	haveFirstFilter := false
+	for _, filter := range j.Matches {
+		if filter == "" {
+			return errors.New("match must have a value")
+		}
+
+		if filter == "+" {
+			if !haveFirstFilter {
+				return errors.New("matches must not start with +")
+			}
+			continue
+		}
+
+		splitVals := strings.Split(filter, "=")
+		if len(splitVals) != 2 {
+			return fmt.Errorf("match %s must be in the format key=value", filter)
+		}
+		if splitVals[0] == "" {
+			return fmt.Errorf("match %s must have a key", filter)
+		}
+		if splitVals[1] == "" {
+			return fmt.Errorf("match %s must have a value", filter)
+		}
+		haveFirstFilter = true
+	}
+
+	for _, parserName := range j.Parsers {
+		if !parser.IsValidParser(parserName) {
+			return fmt.Errorf("parsers %s is not a valid parser", parserName)
+		}
+	}
+
+	return nil
+}
+
+type TailTarget struct {
+	FilePath string           `toml:"file-path" comment:"The path to the file to tail."`
+	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files.  Options are: docker, plain."`
+	Database string           `toml:"database" comment:"Database to store logs in."`
+	Table    string           `toml:"table" comment:"Table to store logs in."`
+	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+}
+
+type LogTransform struct {
+	Name   string         `toml:"name" comment:"The name of the transform to apply to the log line."`
+	Config map[string]any `toml:"config" comment:"The configuration for the transform."`
 }
 
 func (c *Config) Validate() error {
@@ -432,13 +490,13 @@ func (c *Config) Validate() error {
 	}
 
 	tailScrapingFromKube := false
-	for _, v := range c.TailLog {
+	for _, v := range c.HostLog {
 		if err := v.Validate(); err != nil {
 			return err
 		}
 		if !v.DisableKubeDiscovery {
 			if tailScrapingFromKube {
-				return errors.New("tail-log.disable-kube-discovery not set for more than one TailLog configuration")
+				return errors.New("host-log.disable-kube-discovery not set for more than one HostLog configuration")
 			}
 			tailScrapingFromKube = true
 		}
