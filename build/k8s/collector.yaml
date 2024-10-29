@@ -153,7 +153,12 @@ data:
       parsers = ['json']
 
       journal-target = [
-        { filters = { _SYSTEMD_UNIT = 'kubelet.service' }, database = 'Logs', table = 'Kubelet' }
+        # matches are optional and are parsed like MATCHES in journalctl.
+        # If different fields are matched, only entries matching all terms are included.
+        # If the same fields are matched, entries matching any term are included.
+        # + can be added between to include a disjunction of terms.
+        # See examples under man 1 journalctl
+        { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
       ]
 
 ---
@@ -230,6 +235,9 @@ spec:
             - name: varlibdockercontainers
               mountPath: /var/lib/docker/containers
               readOnly: true
+            - name: etcmachineid
+              mountPath: /etc/machine-id
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -260,6 +268,10 @@ spec:
         - name: varlibdockercontainers
           hostPath:
             path: /var/lib/docker/containers
+        - name: etcmachineid
+          hostPath:
+            path: /etc/machine-id
+            type: File
 ---
 apiVersion: v1
 kind: ConfigMap
