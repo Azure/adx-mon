@@ -19,8 +19,10 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/sources/journal"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
+	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -555,6 +557,61 @@ func realMain(ctx *cli.Context) error {
 		opts.LogCollectionHandlers = append(opts.LogCollectionHandlers, collector.LogCollectorOpts{
 			Create: createFunc,
 		})
+
+		if len(v.JournalTargets) > 0 {
+			journalCreateFunction := func(store storage.Store) (*logs.Service, error) {
+				addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes)
+
+				// TODO - combine these with shared file tail code
+				transformers := []types.Transformer{}
+				for _, t := range v.Transforms {
+					transform, err := transforms.NewTransform(t.Name, t.Config)
+					if err != nil {
+						return nil, fmt.Errorf("create transform: %w", err)
+					}
+					transformers = append(transformers, transform)
+				}
+
+				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
+					Store:         store,
+					AddAttributes: addAttributes,
+				})
+				if err != nil {
+					return nil, fmt.Errorf("create sink for tailsource: %w", err)
+				}
+
+				targets := make([]journal.JournalTargetConfig, 0, len(v.JournalTargets))
+				for _, target := range v.JournalTargets {
+					parsers, err := parser.NewParsers(target.Parsers)
+					if err != nil {
+						return nil, fmt.Errorf("create parsers: %w", err)
+					}
+
+					targets = append(targets, journal.JournalTargetConfig{
+						Matches:        target.Matches,
+						Database:       target.Database,
+						Table:          target.Table,
+						LogLineParsers: parsers,
+					})
+				}
+				journalConfig := journal.SourceConfig{
+					Targets:         targets,
+					CursorDirectory: cfg.StorageDir,
+					WorkerCreator:   engine.WorkerCreator(transformers, sink),
+				}
+
+				source := journal.New(journalConfig)
+
+				return &logs.Service{
+					Source: source,
+					Sink:   sink,
+				}, nil
+			}
+
+			opts.LogCollectionHandlers = append(opts.LogCollectionHandlers, collector.LogCollectorOpts{
+				Create: journalCreateFunction,
+			})
+		}
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
