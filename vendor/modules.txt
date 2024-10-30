@@ -161,6 +161,7 @@ github.com/cespare/xxhash/v2
 # github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 ## explicit
 github.com/coreos/go-systemd/internal/dlopen
+github.com/coreos/go-systemd/journal
 github.com/coreos/go-systemd/sdjournal
 # github.com/cpuguy83/go-md2man/v2 v2.0.5
 ## explicit; go 1.11
