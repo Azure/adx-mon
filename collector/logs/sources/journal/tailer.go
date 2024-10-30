@@ -26,6 +26,7 @@ type tailer struct {
 	reader         journalReader
 	database       string
 	table          string
+	cursorFilePath string
 	logLineParsers []parser.Parser
 	batchQueue     chan<- *types.Log
 
@@ -35,6 +36,8 @@ type tailer struct {
 
 // readFromJournal follows the flow described in the examples within `man 3 sd_journal_wait`.
 func (t *tailer) readFromJournal(ctx context.Context) error {
+	t.seekCursorAtStart()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -80,7 +83,6 @@ func (t *tailer) readFromJournal(ctx context.Context) error {
 		log.Timestamp = uint64(entry.RealtimeTimestamp) * 1000 // microseconds -> nanoseconds
 		log.ObservedTimestamp = uint64(time.Now().UnixNano())
 		log.Body[types.BodyKeyMessage] = message
-		log.Attributes[journald_cursor_attribute] = entry.Cursor
 		log.Attributes[types.AttributeDatabaseName] = t.database
 		log.Attributes[types.AttributeTableName] = t.table
 
@@ -100,7 +102,32 @@ func (t *tailer) readFromJournal(ctx context.Context) error {
 			delete(log.Body, types.BodyKeyMessage)
 		}
 
+		// Write after parsing to ensure these values are always set to values we need for acking.
+		log.Attributes[journald_cursor_attribute] = entry.Cursor
+		log.Attributes[journald_cursor_filename_attribute] = t.cursorFilePath
+
 		t.batchQueue <- log
+	}
+}
+
+func (t *tailer) seekCursorAtStart() {
+	existingCursor, err := readCursor(t.cursorFilePath)
+	if err != nil {
+		logger.Warnf("failed to read cursor %s: %v", t.cursorFilePath, err)
+		t.reader.SeekHead()
+	} else {
+		if logger.IsDebug() {
+			logger.Debugf("journal: found existing cursor in %q: %s", t.cursorFilePath, existingCursor)
+		}
+
+		err := t.reader.SeekCursor(existingCursor)
+		if err != nil {
+			logger.Warnf("failed to seek to cursor %s: %v", existingCursor, err)
+			t.reader.SeekHead()
+		} else {
+			// Cursor points at the last read entry, so skip it
+			t.reader.NextSkip(1)
+		}
 	}
 }
 
@@ -130,6 +157,7 @@ func (t *tailer) waitForNewJournalEntries(ctx context.Context) error {
 	}
 }
 
+// combinePartialMessages combines partial log messages that have been split by journald due to the line-max configuration.
 func (j *tailer) combinePartialMessages(entry *sdjournal.JournalEntry) (string, bool) {
 	isPartial := entry.Fields[journald_line_break_field] == journald_line_break_value_line_max
 
