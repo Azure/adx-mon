@@ -536,7 +536,7 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 				ConcurrentUploads: concurrentUploads,
 				DefaultMapping:    defaultMapping,
 				SampleType:        sampleType,
-				ViewStore:         fnStore,
+				FnStore:           fnStore,
 			}))
 		}
 
