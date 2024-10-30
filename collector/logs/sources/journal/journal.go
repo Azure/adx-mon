@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	journald_cursor_attribute = "adxmon_journald_cursor"
+	journald_cursor_attribute          = "adxmon_journald_cursor"
+	journald_cursor_filename_attribute = "adxmon_journald_cursor_filename"
 )
 
 // journalReader is an interface for reading journal entries.
@@ -23,7 +24,7 @@ type journalReader interface {
 	Next() (uint64, error)
 	GetEntry() (*sdjournal.JournalEntry, error)
 	NextSkip(skip uint64) (uint64, error)
-	SeekTail() error
+	SeekHead() error
 	SeekCursor(cursor string) error
 	Wait(timeout time.Duration) int
 	Close() error
@@ -74,7 +75,17 @@ func (s *Source) Open(ctx context.Context) error {
 	batchQueue := make(chan *types.Log, 512)
 	outputQueue := make(chan *types.LogBatch, 1)
 
-	noopAckGenerator := func(*types.Log) func() { return func() {} }
+	ackGenerator := func(*types.Log) func() { return func() {} }
+	if s.cursorDirectory != "" {
+		ackGenerator = func(log *types.Log) func() {
+			return func() {
+				cursorFilePath := log.Attributes[journald_cursor_filename_attribute].(string)
+				cursorValue := log.Attributes[journald_cursor_attribute].(string)
+				writeCursor(cursorFilePath, cursorValue)
+			}
+		}
+	}
+
 	tailers := make([]*tailer, 0, len(s.targets))
 	for _, target := range s.targets {
 		logger.Info("Opening journal source", "filters", target.Matches, "database", target.Database, "table", target.Table)
@@ -99,12 +110,12 @@ func (s *Source) Open(ctx context.Context) error {
 			}
 		}
 
-		reader.SeekTail()
-
+		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table)
 		tailer := &tailer{
 			reader:         reader,
 			database:       target.Database,
 			table:          target.Table,
+			cursorFilePath: cPath,
 			logLineParsers: target.LogLineParsers,
 			batchQueue:     batchQueue,
 
@@ -120,7 +131,7 @@ func (s *Source) Open(ctx context.Context) error {
 			MaxBatchWait: 1 * time.Second,
 			InputQueue:   batchQueue,
 			OutputQueue:  outputQueue,
-			AckGenerator: noopAckGenerator, // TODO, ack and create position cursors
+			AckGenerator: ackGenerator,
 		}
 		s.group.Go(func() error {
 			return engine.BatchLogs(ctx, batchConfig)
@@ -136,10 +147,10 @@ func (s *Source) Open(ctx context.Context) error {
 }
 
 func (s *Source) Close() error {
+	s.closeFn()
 	err := s.group.Wait()
 
 	return err
-	return s.group.Wait()
 }
 
 func (s *Source) Name() string {

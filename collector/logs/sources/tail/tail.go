@@ -324,9 +324,6 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 
 			position := line.Offset
 			currentFileId := line.FileIdentifier
-			log.Attributes[cursor_position] = position
-			log.Attributes[cursor_file_id] = currentFileId
-			log.Attributes[cursor_file_name] = tailer.tail.Filename
 			log.Attributes[types.AttributeDatabaseName] = tailer.database
 			log.Attributes[types.AttributeTableName] = tailer.table
 
@@ -349,6 +346,11 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 				// Successful parse, remove the raw message
 				delete(log.Body, types.BodyKeyMessage)
 			}
+
+			// Write after parsing to ensure these values are always set to values we need for acking.
+			log.Attributes[cursor_position] = position
+			log.Attributes[cursor_file_id] = currentFileId
+			log.Attributes[cursor_file_name] = tailer.tail.Filename
 
 			outputQueue <- log
 		}
