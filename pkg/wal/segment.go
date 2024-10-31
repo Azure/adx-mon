@@ -114,6 +114,12 @@ func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 	if !fs.ValidPath(fileName) {
 		return nil, fmt.Errorf("invalid segment filename: %s", fileName)
 	}
+	// Ensure the filename is just the base name, with no path separators within it
+	baseName := filepath.Base(fileName)
+	if baseName != fileName {
+		return nil, fmt.Errorf("invalid segment filename: %s", fileName)
+	}
+
 	path := filepath.Join(dir, fileName)
 	fw, err := os.Create(path)
 	if err != nil {
