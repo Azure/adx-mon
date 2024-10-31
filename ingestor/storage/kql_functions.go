@@ -31,6 +31,14 @@ func (f *Functions) UpdateStatus(ctx context.Context, fn *v1.Function) error {
 	return f.client.Status().Update(ctx, fn)
 }
 
+func (f *Functions) Delete(ctx context.Context, fn *v1.Function) error {
+	if f.client == nil {
+		return fmt.Errorf("no client provided")
+	}
+
+	return nil
+}
+
 func (f *Functions) View(database, table string) (*v1.Function, bool) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -109,8 +117,6 @@ func (f *Functions) Receive(ctx context.Context, list client.ObjectList) error {
 		// TODO (jesthom): Once the parser is in place separate out the Views from the Functions.
 		functions.Items = append(functions.Items, *function.DeepCopy())
 	}
-	// TODO (jesthom): Do we want to identify those Views that we know about but
-	// are no longer in the system and should therefore be deleted?
 
 	f.mu.Lock()
 	f.views = views
