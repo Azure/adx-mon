@@ -47,6 +47,30 @@ func TestNewSegment(t *testing.T) {
 	}
 }
 
+func TestNewSegment_InvalidPath(t *testing.T) {
+	tests := []struct {
+		Prefix string
+	}{
+		{Prefix: "Logs_BadPath/badfile"},
+		{Prefix: "Logs/file_BadPath"},
+		{Prefix: "Logs\\/file_BadPath"},
+		{Prefix: "../Logsfile_BadPath"},
+		{Prefix: "Logsfile/../../_BadPath"},
+		{Prefix: "Logsfile_BadPath/../../../../"},
+		{Prefix: "/"},
+		{Prefix: "_/"},
+		{Prefix: "/_"},
+		{Prefix: "/_/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.Prefix, func(t *testing.T) {
+			_, err := wal.NewSegment("", tt.Prefix)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid segment filename")
+		})
+	}
+}
+
 func TestSegment_CreatedAt(t *testing.T) {
 	tests := []struct {
 		Name string
