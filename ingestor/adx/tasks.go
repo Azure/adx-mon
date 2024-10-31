@@ -104,6 +104,7 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 
 type FunctionStore interface {
 	Functions() []*v1.Function
+	View(database, table string) (*v1.Function, bool)
 	UpdateStatus(ctx context.Context, fn *v1.Function) error
 }
 
@@ -120,14 +121,6 @@ func NewSyncFunctionsTask(store FunctionStore, kustoCli StatementExecutor) *Sync
 		cache:    make(map[string]*v1.Function),
 		store:    store,
 		kustoCli: kustoCli,
-	}
-}
-
-func (t *SyncFunctionsTask) updateStatus(fn *v1.Function, status v1.FunctionStatusEnum) {
-	fn.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
-	fn.Status.Status = status
-	if err := t.store.UpdateStatus(context.Background(), fn); err != nil {
-		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Name, err)
 	}
 }
 
@@ -156,7 +149,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		stmt := kql.New("").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
-				t.updateStatus(function, v1.PermanentFailure)
+				updateKQLFunctionStatus(ctx, t.store, function, v1.PermanentFailure, err)
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				// We want to fall through here so that we can cache this object, there's no need
 				// to retry creating it. If it's updated, we'll detect the change in the cached
@@ -164,15 +157,30 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				t.cache[cacheKey] = function
 				continue
 			} else {
-				t.updateStatus(function, v1.Failed)
+				updateKQLFunctionStatus(ctx, t.store, function, v1.Failed, err)
 				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				continue
 			}
 		}
 
 		logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
-		t.updateStatus(function, v1.Success)
+		updateKQLFunctionStatus(ctx, t.store, function, v1.Success, nil)
 	}
 
 	return nil
+}
+
+func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Function, status v1.FunctionStatusEnum, err error) {
+	fn.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
+	fn.Status.Status = status
+	if err != nil {
+		errMsg := err.Error()
+		if len(errMsg) > 256 {
+			errMsg = errMsg[:256]
+		}
+		fn.Status.Error = errMsg
+	}
+	if err := store.UpdateStatus(ctx, fn); err != nil {
+		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Name, err)
+	}
 }

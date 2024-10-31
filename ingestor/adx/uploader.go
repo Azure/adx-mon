@@ -56,11 +56,11 @@ type UploaderOpts struct {
 	Dimensions        []string
 	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
-	ViewStore         ViewStore
+	FnStore           FunctionStore
 }
 
 func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
-	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType, opts.ViewStore)
+	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType, opts.FnStore)
 
 	return &uploader{
 		KustoCli:   kustoCli,
