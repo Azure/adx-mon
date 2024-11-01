@@ -2,6 +2,8 @@ package schema_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Azure/adx-mon/schema"
@@ -97,14 +99,85 @@ func TestNewSchema_AddLiftedMapping(t *testing.T) {
 	require.Equal(t, "5", mapping[5].Properties.Ordinal)
 }
 
-func TestNormalize(t *testing.T) {
-	require.Equal(t, "Redis", string(schema.Normalize([]byte("__redis__"))))
-	require.Equal(t, "UsedCpuUserChildren", string(schema.Normalize([]byte("used_cpu_user_children"))))
-	require.Equal(t, "Host1", string(schema.Normalize([]byte("host_1"))))
-	require.Equal(t, "Region", string(schema.Normalize([]byte("region"))))
-	require.Equal(t, "JobEtcdRequestLatency75pctlrate5m", string(schema.Normalize([]byte("Job:etcdRequestLatency:75pctlrate5m"))))
-	require.Equal(t, "TestLimit", string(schema.Normalize([]byte("Test$limit"))))
-	require.Equal(t, "TestRateLimit", string(schema.Normalize([]byte("Test::Rate$limit"))))
+func TestNormalizeAdxIdentifier(t *testing.T) {
+	test := func(t *testing.T, expected string, input string) {
+		t.Helper()
+		require.Equal(t, expected, schema.NormalizeAdxIdentifier(input))
+	}
+
+	// Kusto does not appear to allow characters outside of the ASCII range
+	test(t, "Redis", "Redis⌘")
+	test(t, "Redis", "Redis⌘日本語")
+	test(t, "Redis", "_Re-d.is")
+	test(t, "9Redis", "9Redis")
+	test(t, "RedisRequests", "$Redis::/Requests")
+	// Invalid UTF-8 character
+	test(t, "RedisRequests", "Redis\xc3\x28Requests")
+
+	// max length
+	test(t, strings.Repeat("a", 1024), strings.Repeat("a", 1025))
+	// preserve first portion
+	test(t, fmt.Sprintf("b%s", strings.Repeat("a", 1023)), fmt.Sprintf("b%s", strings.Repeat("a", 1025)))
+	// Remove invalid characters in middle, still truncate
+	test(t, fmt.Sprintf("aaaa%s", strings.Repeat("a", 1020)), fmt.Sprintf("aaaa_%s", strings.Repeat("a", 1025)))
+}
+
+func BenchmarkNormalizeAdxIdentifier(b *testing.B) {
+	b.Run("No changes", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			schema.NormalizeAdxIdentifier("Redis")
+		}
+	})
+
+	b.Run("Normalize characters out", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			schema.NormalizeAdxIdentifier("Redis_Metrics")
+		}
+	})
+}
+
+func TestAppendNormalizeAdxIdentifier(t *testing.T) {
+	test := func(t *testing.T, expected string, input string) {
+		t.Helper()
+		require.Equal(t, expected, string(schema.AppendNormalizeAdxIdentifier([]byte{}, []byte(input))))
+	}
+
+	// Kusto does not appear to allow characters outside of the ASCII range
+	test(t, "Redis", "Redis⌘")
+	test(t, "Redis", "Redis⌘日本語")
+	test(t, "Redis", "_Re-d.is")
+	test(t, "9Redis", "9Redis")
+	test(t, "RedisRequests", "$Redis::/Requests")
+	// Invalid UTF-8 character
+	test(t, "RedisRequests", "Redis\xc3\x28Requests")
+
+	// max length
+	test(t, strings.Repeat("a", 1024), strings.Repeat("a", 1025))
+	// preserve first portion
+	test(t, fmt.Sprintf("b%s", strings.Repeat("a", 1023)), fmt.Sprintf("b%s", strings.Repeat("a", 1025)))
+	// Remove invalid characters in middle, still truncate
+	test(t, fmt.Sprintf("aaaa%s", strings.Repeat("a", 1020)), fmt.Sprintf("aaaa_%s", strings.Repeat("a", 1025)))
+}
+
+func TestNormalizeMetricName(t *testing.T) {
+	require.Equal(t, "Redis", string(schema.NormalizeMetricName([]byte("__redis__"))))
+	require.Equal(t, "UsedCpuUserChildren", string(schema.NormalizeMetricName([]byte("used_cpu_user_children"))))
+	require.Equal(t, "Host1", string(schema.NormalizeMetricName([]byte("host_1"))))
+	require.Equal(t, "Region", string(schema.NormalizeMetricName([]byte("region"))))
+	require.Equal(t, "Region1", string(schema.NormalizeMetricName([]byte("region_⌘1"))))
+	require.Equal(t, "Region", string(schema.NormalizeMetricName([]byte("region-._"))))
+	require.Equal(t, "JobEtcdRequestLatency75pctlrate5m", string(schema.NormalizeMetricName([]byte("Job:etcdRequestLatency:75pctlrate5m"))))
+	require.Equal(t, "TestLimit", string(schema.NormalizeMetricName([]byte("Test$limit"))))
+	require.Equal(t, "TestRateLimit", string(schema.NormalizeMetricName([]byte("Test::Rate$limit"))))
+	// Invalid UTF-8 character
+	require.Equal(t, "RedisRequests", schema.NormalizeAdxIdentifier("Redis\xc3\x28Requests"))
+
+	// max length
+	require.Equal(t, fmt.Sprintf("A%s", strings.Repeat("a", 1023)), string(schema.NormalizeMetricName([]byte(strings.Repeat("a", 1025)))))
+	// preserve first portion
+	require.Equal(t, fmt.Sprintf("B%s", strings.Repeat("a", 1023)), string(schema.NormalizeMetricName([]byte(fmt.Sprintf("b%s", strings.Repeat("a", 1025))))))
+	// Remove invalid characters in middle, still truncate
+	require.Equal(t, fmt.Sprintf("AaaaA%s", strings.Repeat("a", 1019)), string(schema.NormalizeMetricName([]byte(fmt.Sprintf("aaaa_%s", strings.Repeat("a", 1025))))))
 }
 
 func TestAppendCSVHeaderWithValidMapping(t *testing.T) {

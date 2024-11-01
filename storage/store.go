@@ -353,7 +353,7 @@ func SegmentKey(dst []byte, labels []*prompb.Label, hash uint64) ([]byte, error)
 
 	dst = append(dst, database...)
 	dst = append(dst, delim...)
-	dst = schema.AppendNormalize(dst, name)
+	dst = schema.AppendNormalizeMetricName(dst, name)
 	dst = append(dst, delim...)
 	return strconv.AppendUint(dst, hash, 36), nil
 }
