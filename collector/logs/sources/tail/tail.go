@@ -299,7 +299,8 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 			}
 		case line, ok := <-tailer.tail.Lines:
 			if !ok {
-				return fmt.Errorf("readLines: tailer closed the channel for filename %q", tailer.tail.Filename)
+				logger.Infof("readLines: tailer closed the channel for filename %q", tailer.tail.Filename)
+				return nil // No longer getting lines due to the tailer being closed. Exit.
 			}
 			if line.Err != nil {
 				logger.Errorf("readLines: tailer error for filename %q: %v", tailer.tail.Filename, line.Err)
