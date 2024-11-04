@@ -41,6 +41,7 @@ type PodDiscovery struct {
 	cancel               context.CancelFunc
 	podInformer          *k8s.PodInformer
 	informerRegistration cache.ResourceEventHandlerRegistration
+	wg                   sync.WaitGroup
 }
 
 func NewPodDiscovery(opts PodDiscoveryOpts, tailsource TailerSourceInterface) *PodDiscovery {
@@ -63,7 +64,9 @@ func (i *PodDiscovery) Open(ctx context.Context) error {
 		return err
 	}
 
+	i.wg.Add(1)
 	go func() {
+		defer i.wg.Done()
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -83,6 +86,7 @@ func (i *PodDiscovery) Close() error {
 	i.cancel()
 	i.podInformer.Remove(i.informerRegistration)
 	i.informerRegistration = nil
+	i.wg.Wait()
 	return nil
 }
 

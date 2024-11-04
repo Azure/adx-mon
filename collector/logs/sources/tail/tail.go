@@ -70,10 +70,10 @@ type TailSource struct {
 	cursorDirectory string
 	workerCreator   engine.WorkerCreatorFunc
 
-	mu           sync.RWMutex
-	closeFn      context.CancelFunc
 	ackGenerator func(*types.Log) func()
 	tailers      map[string]*Tailer
+	// protects tailers
+	mu sync.RWMutex
 
 	podDiscovery *PodDiscovery
 }
@@ -93,9 +93,6 @@ func NewTailSource(config TailSourceConfig) (*TailSource, error) {
 }
 
 func (s *TailSource) Open(ctx context.Context) error {
-	ctx, closeFn := context.WithCancel(ctx)
-	s.closeFn = closeFn
-
 	s.ackGenerator = noopAckGenerator
 	if s.cursorDirectory != "" {
 		s.ackGenerator = func(log *types.Log) func() {
@@ -115,10 +112,7 @@ func (s *TailSource) Open(ctx context.Context) error {
 		err := s.AddTarget(target, nil)
 		if err != nil {
 			// On startup, if we fail to add a target, we should close all the tailers we've opened so far and return.
-			for _, t := range s.tailers {
-				t.Stop()
-				t.Wait()
-			}
+			s.Close()
 			return fmt.Errorf("TailSource open: %w", err)
 		}
 	}
@@ -127,10 +121,7 @@ func (s *TailSource) Open(ctx context.Context) error {
 		err := s.podDiscovery.Open(ctx)
 		if err != nil {
 			// On startup, if we fail to open the pod discovery, we should close all the tailers we've opened so far and return.
-			for _, t := range s.tailers {
-				t.Stop()
-				t.Wait()
-			}
+			s.Close()
 			return fmt.Errorf("TailSource open: %w", err)
 		}
 	}
@@ -152,8 +143,6 @@ func (s *TailSource) Close() error {
 	}
 	clear(s.tailers)
 	s.mu.Unlock()
-
-	s.closeFn()
 	return nil
 }
 
