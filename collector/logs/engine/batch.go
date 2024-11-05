@@ -15,7 +15,7 @@ type BatchConfig struct {
 	AckGenerator func(log *types.Log) func()
 }
 
-func BatchLogs(ctx context.Context, config BatchConfig) error {
+func BatchLogs(ctx context.Context, config BatchConfig) {
 	ticker := time.NewTicker(config.MaxBatchWait)
 	defer ticker.Stop()
 
@@ -28,7 +28,7 @@ func BatchLogs(ctx context.Context, config BatchConfig) error {
 				flush(config, currentBatch)
 			}
 			close(config.OutputQueue)
-			return nil
+			return
 		case <-ticker.C:
 			if len(currentBatch.Logs) != 0 {
 				flush(config, currentBatch)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
@@ -12,7 +13,6 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/tenebris-tech/tail"
-	"golang.org/x/sync/errgroup"
 )
 
 type TailerConfig struct {
@@ -28,7 +28,7 @@ type TailerConfig struct {
 type Tailer struct {
 	tail           *tail.Tail
 	shutdown       context.CancelFunc
-	errgroup       *errgroup.Group
+	wg             sync.WaitGroup
 	database       string
 	table          string
 	logTypeParser  sourceparse.LogTypeParser
@@ -37,8 +37,7 @@ type Tailer struct {
 }
 
 func StartTailing(config TailerConfig) (*Tailer, error) {
-	group, ctx := errgroup.WithContext(context.Background())
-	ctx, shutdown := context.WithCancel(ctx)
+	ctx, shutdown := context.WithCancel(context.Background())
 
 	batchQueue := make(chan *types.Log, 512)
 	outputQueue := make(chan *types.LogBatch, 1)
@@ -57,16 +56,13 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 	}
 
 	tailFile, err := tail.TailFile(config.Target.FilePath, tailConfig)
+	// This error is fatal. They are only returned in cases of misconfiguration in this path.
 	if err != nil {
 		shutdown()
 		return nil, fmt.Errorf("addTarget create tailfile: %w", err)
 	}
 
-	parsers, err := parser.NewParsers(config.Target.Parsers)
-	if err != nil {
-		shutdown()
-		return nil, fmt.Errorf("addTarget create parsers: %w", err)
-	}
+	parsers := parser.NewParsers(config.Target.Parsers, fmt.Sprintf("tailfile %q", config.Target.FilePath))
 
 	attributes := make(map[string]interface{})
 	for k, v := range config.Target.Resources {
@@ -76,16 +72,18 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 	tailer := &Tailer{
 		tail:           tailFile,
 		shutdown:       shutdown,
-		errgroup:       group,
 		database:       config.Target.Database,
 		table:          config.Target.Table,
 		logTypeParser:  sourceparse.GetLogTypeParser(config.Target.LogType),
 		logLineParsers: parsers,
 		resources:      attributes,
 	}
-	group.Go(func() error {
-		return readLines(ctx, tailer, config.UpdateChan, batchQueue)
-	})
+
+	tailer.wg.Add(1)
+	go func() {
+		defer tailer.wg.Done()
+		readLines(tailer, config.UpdateChan, batchQueue)
+	}()
 
 	batchConfig := engine.BatchConfig{
 		MaxBatchSize: 1000,
@@ -94,12 +92,19 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 		OutputQueue:  outputQueue,
 		AckGenerator: config.AckGenerator,
 	}
-	group.Go(func() error {
-		return engine.BatchLogs(ctx, batchConfig)
-	})
+
+	tailer.wg.Add(1)
+	go func() {
+		defer tailer.wg.Done()
+		engine.BatchLogs(ctx, batchConfig)
+	}()
 
 	worker := config.WorkerCreator(config.WorkerName, outputQueue)
-	group.Go(worker.Run)
+	tailer.wg.Add(1)
+	go func() {
+		defer tailer.wg.Done()
+		worker.Run()
+	}()
 
 	return tailer, nil
 }
@@ -115,22 +120,17 @@ func (t *Tailer) Stop() {
 
 // Wait waits for the tailer to finish processing.
 func (t *Tailer) Wait() {
-	t.errgroup.Wait()
+	t.wg.Wait()
 }
 
-func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue chan<- *types.Log) error {
+// Consumes until tailer.tail is closed
+func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue chan<- *types.Log) {
 	for {
 		select {
-		case <-ctx.Done():
-			return nil
 		// Receive updates from the optional updateChannel.
 		case newTarget, ok := <-updateChannel:
 			if ok {
-				newParsers, err := parser.NewParsers(newTarget.Parsers)
-				if err != nil {
-					logger.Errorf("readLines: parser error for filename %q: %v", tailer.tail.Filename, err)
-					continue
-				}
+				newParsers := parser.NewParsers(newTarget.Parsers, fmt.Sprintf("tailfile %q", newTarget.FilePath))
 				tailer.logLineParsers = newParsers
 				tailer.database = newTarget.Database
 				tailer.table = newTarget.Table
@@ -142,7 +142,7 @@ func readLines(ctx context.Context, tailer *Tailer, updateChannel <-chan FileTai
 		case line, ok := <-tailer.tail.Lines:
 			if !ok {
 				logger.Infof("readLines: tailer closed the channel for filename %q", tailer.tail.Filename)
-				return nil // No longer getting lines due to the tailer being closed. Exit.
+				return // No longer getting lines due to the tailer being closed. Exit.
 			}
 			if line.Err != nil {
 				logger.Errorf("readLines: tailer error for filename %q: %v", tailer.tail.Filename, line.Err)

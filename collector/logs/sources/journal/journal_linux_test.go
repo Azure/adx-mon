@@ -3,13 +3,15 @@ package journal
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/coreos/go-systemd/journal"
 	"github.com/stretchr/testify/require"
 )
@@ -22,9 +24,12 @@ func TestJournalE2E(t *testing.T) {
 		t.Skip("journal is not available - skipping")
 	}
 
+	logger.SetLevel(slog.LevelDebug)
+
 	cursorDir := t.TempDir()
 	testtag := "COLLECTORE2E"
-	testValue := fmt.Sprintf("testValue-%d", time.Now().UnixNano())
+	randNum := rand.Int()
+	testValue := fmt.Sprintf("testValue-%d", randNum)
 	journalFields := map[string]string{testtag: testValue}
 	t.Logf("Sending logs - view in journalctl with journalctl %s=%s", testtag, testValue)
 	matchTag := fmt.Sprintf("%s=%s", testtag, testValue)
@@ -55,8 +60,8 @@ func TestJournalE2E(t *testing.T) {
 	ctx := context.Background()
 	err := service.Open(ctx)
 	require.NoError(t, err)
-	defer service.Close()
 	<-sink.DoneChan()
+	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), sink.Latest().Body[types.BodyKeyMessage])
 
 	// Start next batch with same tag, offset from the last log
