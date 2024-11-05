@@ -35,14 +35,14 @@ type tailer struct {
 }
 
 // readFromJournal follows the flow described in the examples within `man 3 sd_journal_wait`.
-func (t *tailer) readFromJournal(ctx context.Context) error {
+func (t *tailer) readFromJournal(ctx context.Context) {
 	t.seekCursorAtStart()
 
 	for {
 		select {
 		case <-ctx.Done():
 			t.reader.Close()
-			return nil
+			return
 		default:
 		}
 

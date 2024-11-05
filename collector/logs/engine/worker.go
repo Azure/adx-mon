@@ -27,11 +27,10 @@ func WorkerCreator(transforms []types.Transformer, sink types.Sink) func(string,
 	}
 }
 
-func (w *worker) Run() error {
+func (w *worker) Run() {
 	for msg := range w.Input {
 		w.processBatch(context.Background(), msg)
 	}
-	return nil
 }
 
 func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {

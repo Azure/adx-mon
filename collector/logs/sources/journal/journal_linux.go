@@ -3,13 +3,13 @@ package journal
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/coreos/go-systemd/sdjournal"
-	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -37,7 +37,7 @@ type Source struct {
 
 	tailers []*tailer
 	closeFn context.CancelFunc
-	group   *errgroup.Group
+	wg      sync.WaitGroup
 }
 
 // New creates a new journal source.
@@ -52,9 +52,6 @@ func New(config SourceConfig) *Source {
 func (s *Source) Open(ctx context.Context) error {
 	ctx, closeFn := context.WithCancel(ctx)
 	s.closeFn = closeFn
-
-	group, ctx := errgroup.WithContext(ctx)
-	s.group = group
 
 	batchQueue := make(chan *types.Log, 512)
 	outputQueue := make(chan *types.LogBatch, 1)
@@ -106,9 +103,11 @@ func (s *Source) Open(ctx context.Context) error {
 			streamPartials: make(map[string]string),
 		}
 
-		s.group.Go(func() error {
-			return tailer.readFromJournal(ctx)
-		})
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			tailer.readFromJournal(ctx)
+		}()
 
 		batchConfig := engine.BatchConfig{
 			MaxBatchSize: 1000,
@@ -117,11 +116,18 @@ func (s *Source) Open(ctx context.Context) error {
 			OutputQueue:  outputQueue,
 			AckGenerator: ackGenerator,
 		}
-		s.group.Go(func() error {
-			return engine.BatchLogs(ctx, batchConfig)
-		})
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			engine.BatchLogs(ctx, batchConfig)
+		}()
+
 		worker := s.workerCreator("journal", outputQueue)
-		s.group.Go(worker.Run)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			worker.Run()
+		}()
 
 		tailers = append(tailers, tailer)
 	}
@@ -132,9 +138,8 @@ func (s *Source) Open(ctx context.Context) error {
 
 func (s *Source) Close() error {
 	s.closeFn()
-	err := s.group.Wait()
-
-	return err
+	s.wg.Wait()
+	return nil
 }
 
 func (s *Source) Name() string {
