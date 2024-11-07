@@ -29,9 +29,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/schema"
-	"github.com/Azure/adx-mon/tools/otlp/logs/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -84,6 +82,8 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
+
+			&cli.BoolFlag{Name: "kustainer", Usage: "Use kustainer for ingestion"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -295,6 +295,7 @@ func realMain(ctx *cli.Context) error {
 	metricsKusto := ctx.StringSlice("metrics-kusto-endpoints")
 	if len(metricsKusto) > 0 {
 		metricsUploaders, metricsDatabases, err = newUploaders(
+			ctx,
 			metricsKusto, storageDir, concurrentUploads,
 			defaultMapping, adx.PromMetrics, kqlFunctionsStore)
 		if err != nil {
@@ -310,6 +311,7 @@ func realMain(ctx *cli.Context) error {
 	logsKusto := ctx.StringSlice("logs-kusto-endpoints")
 	if len(logsKusto) > 0 {
 		logsUploaders, logsDatabases, err = newUploaders(
+			ctx,
 			logsKusto, storageDir, concurrentUploads,
 			schema.DefaultLogsMapping, adx.OTLPLogs, kqlFunctionsStore)
 		if err != nil {
@@ -488,10 +490,11 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 	return dyCli, client, ctrlCli, nil
 }
 
-func newKustoClient(endpoint string) (ingest.QueryClient, error) {
+func newKustoClient(ctx *cli.Context, endpoint string) (*kusto.Client, error) {
 	kcsb := kusto.NewConnectionStringBuilder(endpoint)
-	kcsb.WithDefaultAzureCredential()
-
+	if !ctx.Bool("kustainer") {
+		kcsb.WithDefaultAzureCredential()
+	}
 	return kusto.New(kcsb)
 }
 
@@ -510,7 +513,7 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 	return addr, database, nil
 }
 
-func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
+func newUploaders(ctx *cli.Context, endpoints []string, storageDir string, concurrentUploads int,
 	defaultMapping schema.SchemaMapping, sampleType adx.SampleType, fnStore *storage.Functions) ([]adx.Uploader, []string, error) {
 
 	var uploaders []adx.Uploader
@@ -520,25 +523,20 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 		if err != nil {
 			return nil, nil, err
 		}
-		if strings.HasPrefix(addr, "http://") {
 
-			logger.Warnf("Using Kustainer for endpoint %s", endpoint)
-			uploaders = append(uploaders, kustainer.New(database, addr))
-		} else {
-
-			client, err := newKustoClient(addr)
-			if err != nil {
-				return nil, nil, err
-			}
-			uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
-				StorageDir:        storageDir,
-				Database:          database,
-				ConcurrentUploads: concurrentUploads,
-				DefaultMapping:    defaultMapping,
-				SampleType:        sampleType,
-				FnStore:           fnStore,
-			}))
+		client, err := newKustoClient(ctx, addr)
+		if err != nil {
+			return nil, nil, err
 		}
+		uploaders = append(uploaders, adx.NewUploader(client, adx.UploaderOpts{
+			StorageDir:        storageDir,
+			Database:          database,
+			ConcurrentUploads: concurrentUploads,
+			DefaultMapping:    defaultMapping,
+			SampleType:        sampleType,
+			FnStore:           fnStore,
+			Kustainer:         ctx.Bool("kustainer"),
+		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
 	}

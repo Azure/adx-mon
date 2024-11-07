@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -35,7 +36,7 @@ type Uploader interface {
 }
 
 type uploader struct {
-	KustoCli   ingest.QueryClient
+	KustoCli   *kusto.Client
 	storageDir string
 	database   string
 	opts       UploaderOpts
@@ -46,7 +47,7 @@ type uploader struct {
 
 	wg        sync.WaitGroup
 	mu        sync.RWMutex
-	ingestors map[string]*ingest.Ingestion
+	ingestors map[string]ingest.Ingestor
 }
 
 type UploaderOpts struct {
@@ -57,9 +58,16 @@ type UploaderOpts struct {
 	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
 	FnStore           FunctionStore
+
+	// Kustainer is used to indicate if we should ingest into a volatile database
+	// facilitated by Kustainer. The only reason you would want to set this value
+	// is for testing purposes.
+	Kustainer bool
 }
 
-func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
+func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
+	logger.Infof("BUGBUG Kusto Endpoint=%s, Kustainer=%t, Database=%s", kustoCli.Endpoint(), opts.Kustainer, opts.Database)
+
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType, opts.FnStore)
 
 	return &uploader{
@@ -69,7 +77,7 @@ func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 		database:   opts.Database,
 		opts:       opts,
 		queue:      make(chan *cluster.Batch, 10000),
-		ingestors:  make(map[string]*ingest.Ingestion),
+		ingestors:  make(map[string]ingest.Ingestor),
 	}
 }
 
@@ -144,12 +152,18 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	n.mu.RUnlock()
 
 	if ingestor == nil {
-		ingestor, err = func() (*ingest.Ingestion, error) {
+		ingestor, err = func() (ingest.Ingestor, error) {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 
 			ingestor = n.ingestors[table]
 			if ingestor != nil {
+				return ingestor, nil
+			}
+
+			if n.opts.Kustainer {
+				ingestor = testutils.NewUploadReader(n.KustoCli, database, table)
+				n.ingestors[table] = ingestor
 				return ingestor, nil
 			}
 

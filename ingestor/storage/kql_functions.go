@@ -87,6 +87,9 @@ func (f *Functions) List() []*v1.Function {
 }
 
 func (f *Functions) Receive(ctx context.Context, list client.ObjectList) error {
+	if list == nil {
+		return nil
+	}
 	items, ok := list.(*v1.FunctionList)
 	if !ok {
 		return fmt.Errorf("expected *v1.FunctionList, got %T", list)

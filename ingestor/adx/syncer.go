@@ -105,9 +105,8 @@ func (s *Syncer) Close() error {
 }
 
 func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
-	query := fmt.Sprintf(".show database %s ingestion mappings", s.database)
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(query)
-	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	query := kql.New(".show database ").AddUnsafe(s.database).AddLiteral(" ingestion mappings")
+	rows, err := s.KustoCli.Mgmt(ctx, s.database, query)
 	if err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -80,10 +81,12 @@ func (c *CRD) Close() error {
 	c.cancel()
 	return nil
 }
-
 func (c *CRD) List(ctx context.Context) (client.ObjectList, error) {
 	list := c.opts.List.DeepCopyObject().(client.ObjectList)
 	if err := c.opts.CtrlCli.List(ctx, list); err != nil {
+		if errors.Is(err, &meta.NoKindMatchError{}) {
+			return list, nil
+		}
 		return nil, fmt.Errorf("failed to list CRDs: %w", err)
 	}
 
