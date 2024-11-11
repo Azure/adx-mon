@@ -12,6 +12,7 @@ require (
 	github.com/bufbuild/connect-go v1.10.0
 	github.com/cespare/xxhash v1.1.0
 	github.com/cespare/xxhash/v2 v2.3.0
+	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
 	github.com/golang-jwt/jwt/v5 v5.2.1
@@ -34,7 +35,7 @@ require (
 	github.com/urfave/cli/v2 v2.27.5
 	github.com/valyala/fastjson v1.6.4
 	golang.org/x/net v0.30.0
-	golang.org/x/sync v0.8.0
+	golang.org/x/sync v0.9.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80
 	google.golang.org/protobuf v1.35.1
 	k8s.io/api v0.30.3
@@ -61,7 +62,6 @@ require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.2.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
-	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.0 // indirect
 	github.com/evanphx/json-patch v4.12.0+incompatible // indirect
