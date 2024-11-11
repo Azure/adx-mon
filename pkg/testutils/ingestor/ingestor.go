@@ -6,14 +6,20 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Azure/adx-mon/pkg/testutils/log"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// TODO: Create a reusable container so we don't have to re-build
+// each test run. https://golang.testcontainers.org/features/creating_container/#reusable-container
+// Use the current git-sha as the tag for the image.
+
 const (
 	DefaultImage = "ghcr.io/azure/adx-mon/ingestor"
-	DefaultTag   = "local-build"
 )
+
+var DefaultTag = testcontainers.SessionID()
 
 type IngestorContainer struct {
 	testcontainers.Container
@@ -27,13 +33,18 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 			"LOG_LEVEL": "DEBUG",
 		},
 		Cmd: []string{
+			"--insecure-skip-verify",
 			"--disable-peer-transfer",
 			"--max-segment-size", "1024", // We want to quickly get logs into kustainer
+			"--storage-dir", "/",
 		},
-		WaitingFor: wait.ForListeningPort("9090/tcp"),
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("9090/tcp"),
+			wait.ForLog(".*Listening at.*").AsRegexp(),
+		),
 	}
 	if img == "" {
-		f, err := os.Create("../../../Dockerfile")
+		f, err := os.Create("../../Dockerfile")
 		if err != nil {
 			return nil, fmt.Errorf("failed to open Dockerfile: %w", err)
 		}
@@ -48,8 +59,9 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 		req.FromDockerfile = testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
-			Context:       "../../..",
+			Context:       "../..",
 			PrintBuildLog: true,
+			KeepImage:     true,
 		}
 	}
 
@@ -95,6 +107,22 @@ func WithKubeconfig(kubeconfigPath string) testcontainers.CustomizeRequestOption
 func WithNamespace(namespaceName string) testcontainers.CustomizeRequestOption {
 	return func(req *testcontainers.GenericContainerRequest) error {
 		req.Cmd = append(req.Cmd, "--namespace", namespaceName)
+		return nil
+	}
+}
+
+func WithKustoLogsEndpoint(endpoint, dbName string) testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		req.Cmd = append(req.Cmd, fmt.Sprintf("--logs-kusto-endpoints=%s=%s", dbName, endpoint))
+		return nil
+	}
+}
+
+func WithLogger(logger log.Logger) testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		req.LogConsumerCfg = &testcontainers.LogConsumerConfig{
+			Consumers: []testcontainers.LogConsumer{logger},
+		}
 		return nil
 	}
 }
