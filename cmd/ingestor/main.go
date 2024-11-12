@@ -408,6 +408,14 @@ func realMain(ctx *cli.Context) error {
 	srv.ErrorLog = newLogger()
 
 	go func() {
+		// Under high connection load and when the server is doing a lot of IO, this
+		// can cause the server to be unresponsive.  This pins the accept goroutine
+		// to a single CPU to reduce context switching and improve performance.
+		runtime.LockOSThread()
+		if err := pinToCPU(0); err != nil {
+			logger.Warnf("Failed to pin to CPU: %s", err)
+		}
+
 		if err := srv.ServeTLS(l, cacert, key); err != nil {
 			logger.Errorf(err.Error())
 		}

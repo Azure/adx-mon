@@ -172,6 +172,9 @@ func (r *replicator) transfer(ctx context.Context) {
 							logger.Errorf("Failed to remove segment: %s", err)
 						}
 						return nil
+					} else if errors.Is(err, ErrSegmentLocked) {
+						// Segment is locked, retry later.
+						return nil
 					} else if errors.Is(err, ErrPeerOverloaded) {
 						// Ingestor is overloaded, mark the peer as unhealthy and retry later.
 						r.Health.SetPeerUnhealthy(owner)

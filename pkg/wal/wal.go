@@ -21,11 +21,12 @@ var (
 	ErrMaxDiskUsageExceeded = fmt.Errorf("max disk usage exceeded")
 	ErrMaxSegmentsExceeded  = fmt.Errorf("max segments exceeded")
 	ErrSegmentClosed        = fmt.Errorf("segment closed")
+	ErrSegmentLocked        = fmt.Errorf("segment locked")
 
 	idgen *flake.Flake
 
 	bwPool = pool.NewGeneric(10000, func(sz int) interface{} {
-		return bufio.NewWriterSize(nil, 4*1024)
+		return bufio.NewWriterSize(nil, 8*1024)
 	})
 )
 

@@ -425,10 +425,12 @@ func prioritizeOldest(a []string) []string {
 	var b []string
 
 	// Find the index that is roughly 10% from the end of the list
-	idx := len(a) - int(math.Round(float64(len(a))*0.1))
-	// Move last 10% of batches to the front of the list
+	idx := len(a) - int(math.Round(float64(len(a))*0.2))
+	// Move last 20% of batches to the front of the list
 	b = append(b, a[idx:]...)
-	// Move first 90% of batches to the end of the list
+	// Reverse the list so the oldest batches are first
+	slices.Reverse(b)
+	// Move first 80% of batches to the end of the list
 	b = append(b, a[:idx]...)
 	return b
 }
