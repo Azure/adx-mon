@@ -118,6 +118,11 @@ func Run(ctx context.Context, c *k8s.Cluster) error {
 		break
 	}
 
+	// We're highly capacity contrained in kustainer so we're going to limit the amount of telemetry
+	if err := client.AppsV1().Deployments("adx-mon").Delete(ctx, "collector-singleton", metav1.DeleteOptions{}); err != nil {
+		return fmt.Errorf("failed to delete deployment: %w", err)
+	}
+
 	return nil
 }
 
