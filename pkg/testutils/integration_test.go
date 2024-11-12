@@ -1,7 +1,8 @@
-package k8s_test
+package testutils_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -15,7 +16,29 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 )
 
-func TestK8sWithStack(t *testing.T) {
+func TestMain(m *testing.M) {
+	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Minute))
+	// defer cancel()
+
+	// TODO: Reuse containers
+
+	// Build our component containers without running them. This will improve
+	// the performance of our tests as they can all share the same containers.
+
+	// _, err := ingestor.Run(ctx)
+	// if err != nil {
+	// 	os.Exit(1)
+	// }
+
+	// _, err = collector.Run(ctx)
+	// if err != nil {
+	// 	os.Exit(1)
+	// }
+
+	os.Exit(m.Run())
+}
+
+func TestLogs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
 	}
@@ -31,11 +54,6 @@ func TestK8sWithStack(t *testing.T) {
 	kubeConfigPath, err := testutils.WriteKubeConfig(ctx, k, t.TempDir())
 	require.NoError(t, err)
 	t.Logf("Kubeconfig: %s", kubeConfigPath)
-
-	// Logging container
-	s, err := sample.Run(ctx, sample.WithCluster(ctx, k))
-	testcontainers.CleanupContainer(t, s)
-	require.NoError(t, err)
 
 	// Kustainer
 	kc, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k))
@@ -61,6 +79,10 @@ func TestK8sWithStack(t *testing.T) {
 	testcontainers.CleanupContainer(t, c)
 	require.NoError(t, err)
 
-	t.Log("=========== debug ===========")
-	time.Sleep(time.Hour)
+	// Logging container
+	s, err := sample.Run(ctx, sample.WithCluster(ctx, k))
+	testcontainers.CleanupContainer(t, s)
+	require.NoError(t, err)
+
+	// TODO: Query Kustainer for logs in the Sample table and Sample view
 }

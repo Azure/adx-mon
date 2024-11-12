@@ -58,7 +58,7 @@ data:
   config.toml: |
     # We have to keep our scape targets very light due to the capacity
     # constraints of kustainer
-    
+
     # Ingestor URL to send collected telemetry.
     endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
 
@@ -82,6 +82,8 @@ data:
 
     # Regexes of metrics to drop from all sources.
     drop-metrics = []
+
+    keep-metrics = ['^adxmon.*']
 
     # Disable metrics forwarding to endpoints.
     disable-metrics-forwarding = false
@@ -115,10 +117,10 @@ data:
       disable-metrics-forwarding = false
 
       # Regexes of metrics to keep from scraping source.
-      keep-metrics = []
+      keep-metrics = ['^adxmon.*']
 
       # Regexes of metrics to drop from scraping source.
-      drop-metrics = []
+      drop-metrics = ['^go.*', '^process.*', '^promhttp.*']
 
     # Defines a prometheus remote write endpoint.
     [[prometheus-remote-write]]

@@ -22,3 +22,23 @@ spec:
       - name: sample
         image: sample:latest
         imagePullPolicy: Never
+---
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: sample
+spec:
+  body: |
+    .create-or-alter function with (view=true, folder='views') Sample () {
+      Sample
+      | extend msg = tostring(Body.msg),
+              encoding = tostring(Body.handler.encoding),
+              number = toint(Body.handler.number),
+              ['time'] = todatetime(Body['time']),
+              level = tostring(Body.level),
+              host = tostring(Resource.host),
+              namespace = tostring(Resource.namespace),
+              container = tostring(Resource.container)
+      | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+    }
+  database: Logs
