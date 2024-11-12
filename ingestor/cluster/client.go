@@ -15,6 +15,7 @@ import (
 var (
 	ErrPeerOverloaded = fmt.Errorf("peer overloaded")
 	ErrSegmentExists  = fmt.Errorf("segment already exists")
+	ErrSegmentLocked  = fmt.Errorf("segment is locked")
 )
 
 type ErrBadRequest struct {
@@ -162,6 +163,10 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 		if resp.StatusCode == http.StatusConflict {
 			return ErrSegmentExists
+		}
+
+		if resp.StatusCode == http.StatusLocked {
+			return ErrSegmentLocked
 		}
 
 		if resp.StatusCode == http.StatusBadRequest {

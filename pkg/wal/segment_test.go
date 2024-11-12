@@ -276,11 +276,18 @@ func TestSegment_Closed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
-			s, err := wal.NewSegment(dir, "Foo")
+			s, err := wal.NewSegment(dir, "Foo1")
+			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			p := s.Path()
+			require.NoError(t, s.Close())
+			buf, err := os.ReadFile(p)
+			require.NoError(t, err)
+
+			s, err = wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
 			require.NoError(t, s.Close())
-			require.Equal(t, s.Write(context.Background(), []byte("test")), wal.ErrSegmentClosed)
-			require.Equal(t, s.Append(context.Background(), []byte("test")), wal.ErrSegmentClosed)
+			require.Equal(t, wal.ErrSegmentClosed, s.Write(context.Background(), []byte("test")))
+			require.Equal(t, wal.ErrSegmentClosed, s.Append(context.Background(), buf))
 
 			_, err = s.Iterator()
 			require.Equal(t, err, wal.ErrSegmentClosed)

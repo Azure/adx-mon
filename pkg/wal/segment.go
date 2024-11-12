@@ -19,6 +19,7 @@ import (
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
+	adxsync "github.com/Azure/adx-mon/pkg/sync"
 	"github.com/klauspost/compress/s2"
 	gbp "github.com/libp2p/go-buffer-pool"
 )
@@ -83,7 +84,7 @@ type segment struct {
 	filePos   uint64
 
 	wg sync.WaitGroup
-	mu sync.RWMutex
+	mu *adxsync.CountingRWMutex
 
 	// w is the underlying segment file on disk
 	w *os.File
@@ -147,6 +148,7 @@ func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 		closing:       make(chan struct{}),
 		flushCh:       make(chan chan error),
 		flushInterval: 100 * time.Millisecond,
+		mu:            adxsync.NewCountingRWMutex(5),
 	}
 
 	for _, opt := range opts {
@@ -225,6 +227,7 @@ func Open(path string) (Segment, error) {
 		closing:       make(chan struct{}),
 		flushCh:       make(chan chan error),
 		flushInterval: 100 * time.Millisecond,
+		mu:            adxsync.NewCountingRWMutex(5),
 	}
 
 	if err := f.Repair(); err != nil {
@@ -313,13 +316,6 @@ func (s *segment) Iterator() (Iterator, error) {
 // Append appends a raw blocks to the segment.  This is used for appending blocks that have already been compressed.
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
 func (s *segment) Append(ctx context.Context, buf []byte) error {
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return ErrSegmentClosed
-	}
-	s.mu.RUnlock()
-
 	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
 	if err != nil {
 		return err
@@ -332,8 +328,11 @@ func (s *segment) Append(ctx context.Context, buf []byte) error {
 		return nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.mu.TryLock() {
+		defer s.mu.Unlock()
+	} else {
+		return ErrSegmentLocked
+	}
 
 	if s.closed {
 		return ErrSegmentClosed
