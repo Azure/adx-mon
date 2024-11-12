@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/pkg/logger"
 )
 
 // Parser is the interface for parsing log messages.
@@ -18,8 +19,8 @@ type ParserConfig struct {
 	Type ParserType
 }
 
-// NewParser creates a new parser instance.
-func NewParser(parserType ParserType) (Parser, error) {
+// newParser creates a new parser instance.
+func newParser(parserType ParserType) (Parser, error) {
 	switch parserType {
 	case ParserTypeJson:
 		return NewJsonParser(JsonParserConfig{})
@@ -28,16 +29,19 @@ func NewParser(parserType ParserType) (Parser, error) {
 	}
 }
 
-func NewParsers(parserTypes []string) ([]Parser, error) {
-	parsers := make([]Parser, len(parserTypes))
-	for i, parserType := range parserTypes {
-		parser, err := NewParser(ParserType(parserType))
+// NewParsers creates a list of valid parser instances.
+// Invalid parsers or those that cannot be created will be skipped with warning logs including the source string.
+func NewParsers(parserTypes []string, source string) []Parser {
+	parsers := make([]Parser, 0, len(parserTypes))
+	for _, parserType := range parserTypes {
+		parser, err := newParser(ParserType(parserType))
 		if err != nil {
-			return nil, err
+			logger.Warnf("Failed to create parser %s for %s: %v", parserType, source, err)
+			continue
 		}
-		parsers[i] = parser
+		parsers = append(parsers, parser)
 	}
-	return parsers, nil
+	return parsers
 }
 
 func IsValidParser(parserType string) bool {

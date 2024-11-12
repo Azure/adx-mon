@@ -19,6 +19,7 @@ func TestTailSourceStaticTargets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
+	t.Parallel()
 	numLogs := 1000
 
 	testDir := t.TempDir()
@@ -79,6 +80,7 @@ func TestTailSourcePartialLogs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
+	t.Parallel()
 	testDir := t.TempDir()
 	// consistent date so we know how many bytes are generated in the file.
 	// generatedLogStartTime := time.Unix(0, 0)
@@ -132,6 +134,7 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
+	t.Parallel()
 	numLogs := 1000
 
 	testDir := t.TempDir()
@@ -215,6 +218,7 @@ func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}
+	t.Parallel()
 	numLogs := 1000
 
 	testDir := t.TempDir()

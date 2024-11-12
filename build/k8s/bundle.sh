@@ -4,7 +4,7 @@
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
 lock_dir=_sh00161
-# Made on 2024-10-25 13:34 UTC by <root@3cffe31eeee7>.
+# Made on 2024-11-07 20:58 UTC by <root@02a36b068b2e>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -13,7 +13,7 @@ lock_dir=_sh00161
 # length mode       name
 # ------ ---------- ------------------------------------------
 #   6055 -rw-r--r-- setup.sh
-#  11563 -rw-r--r-- collector.yaml
+#  11999 -rw-r--r-- collector.yaml
 #   5804 -rw-r--r-- ksm.yaml
 #   4642 -rw-r--r-- ingestor.yaml
 #
@@ -247,7 +247,7 @@ M=&5D('1E;&5M971R>2!C86X@8F4@9F]U;F0@=&AE("1$051!0D%315].04U%
 `
 end
 SHAR_EOF
-  (set 20 24 10 24 15 49 43 'setup.sh'
+  (set 20 24 10 24 20 52 09 'setup.sh'
    eval "${shar_touch}") && \
   chmod 0644 'setup.sh'
 if test $? -ne 0
@@ -351,7 +351,7 @@ X
 X    # Disable metrics forwarding to endpoints.
 X    disable-metrics-forwarding = false
 X
-X    # Key/value pairs of labels to add to all metrics.
+X    # Key/value pairs of labels to add to all metrics and logs.
 X    [add-labels]
 X      host = '$(HOSTNAME)'
 X      cluster = '$CLUSTER'
@@ -417,20 +417,18 @@ X    [otel-log]
 X      # Attributes lifted from the Body and added to Attributes.
 X      lift-attributes = ['kusto.database', 'kusto.table']
 X
-X      # Key/value pairs of attributes to add to all logs.
-X      [otel-log.add-attributes]
-X        Host = '$(HOSTNAME)'
-X        cluster = '$CLUSTER'
-X
-X    [[tail-log]]
-X
+X    [[host-log]]
 X      parsers = ['json']
 X
-X      log-type = 'kubernetes'
+X      journal-target = [
+X        # matches are optional and are parsed like MATCHES in journalctl.
+X        # If different fields are matched, only entries matching all terms are included.
+X        # If the same fields are matched, entries matching any term are included.
+X        # + can be added between to include a disjunction of terms.
+X        # See examples under man 1 journalctl
+X        { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
+X      ]
 X
-X      [tail-log.add-attributes]
-X        Host = '$(HOSTNAME)'
-X        Cluster = '$CLUSTER'
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -505,6 +503,9 @@ X              readOnly: true
 X            - name: varlibdockercontainers
 X              mountPath: /var/lib/docker/containers
 X              readOnly: true
+X            - name: etcmachineid
+X              mountPath: /etc/machine-id
+X              readOnly: true
 X          resources:
 X            requests:
 X              cpu: 50m
@@ -535,6 +536,10 @@ X            path: /var/log
 X        - name: varlibdockercontainers
 X          hostPath:
 X            path: /var/lib/docker/containers
+X        - name: etcmachineid
+X          hostPath:
+X            path: /etc/machine-id
+X            type: File
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -701,7 +706,7 @@ X        - name: varlibdockercontainers
 X          hostPath:
 X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 10 15 18 34 10 'collector.yaml'
+  (set 20 24 11 01 21 55 34 'collector.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'collector.yaml'
 if test $? -ne 0
@@ -711,12 +716,12 @@ fi
   then (
        ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'collector.yaml': 'MD5 check failed'
        ) << \SHAR_EOF
-f52b99f1c3e76671de45dc247380162f  collector.yaml
+c80e5ee8d23e4af68f104f3194c0c90e  collector.yaml
 SHAR_EOF
 
 else
-test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11563 && \
-  ${echo} "restoration warning:  size of 'collector.yaml' is not 11563"
+test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11999 && \
+  ${echo} "restoration warning:  size of 'collector.yaml' is not 11999"
   fi
 # ============= ksm.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
@@ -1032,7 +1037,7 @@ X      nodeSelector:
 X        kubernetes.io/os: linux
 X      serviceAccountName: ksm
 SHAR_EOF
-  (set 20 24 10 02 02 21 26 'ksm.yaml'
+  (set 20 24 08 28 01 41 04 'ksm.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ksm.yaml'
 if test $? -ne 0
@@ -1232,7 +1237,7 @@ X          key: node.kubernetes.io/unreachable
 X          operator: Exists
 X          tolerationSeconds: 300
 SHAR_EOF
-  (set 20 24 10 24 17 57 56 'ingestor.yaml'
+  (set 20 24 10 31 17 24 57 'ingestor.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'ingestor.yaml'
 if test $? -ne 0

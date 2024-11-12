@@ -368,7 +368,7 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 
 	batch := make([]*prompb.TimeSeries, 2500)
 	for i := 0; i < 2500; i++ {
-		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), nil, 0, 0)
+		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	}
 	for i := 0; i < b.N; i++ {
 		require.NoError(b, s.WriteTimeSeries(context.Background(), batch))

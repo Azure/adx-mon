@@ -11,7 +11,7 @@ services:
 
   ingestor:
     build:
-      dockerfile: tools/otlp/logs/Dockerfile.ingestor
+      dockerfile: build/images/Dockerfile.ingestor
       context: ../../..
     volumes:
       - ~/.kube/config:/root/.kube/config
@@ -26,7 +26,7 @@ services:
 
   collector:
     build:
-      dockerfile: tools/otlp/logs/Dockerfile.collector
+      dockerfile: build/images/Dockerfile.collector
       context: ../../..
     volumes:
       - ~/.kube/config:/root/.kube/config

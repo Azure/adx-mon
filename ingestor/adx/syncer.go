@@ -220,10 +220,10 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 	}
 
 	var b bytes.Buffer
-	kind := schema.Normalize([]byte(table))
+	kind := schema.NormalizeMetricName([]byte(table))
 	b.Write(kind)
 	for _, v := range mapping {
-		b.Write(schema.Normalize([]byte(v.Column)))
+		b.Write(schema.NormalizeMetricName([]byte(v.Column)))
 	}
 
 	name := fmt.Sprintf("%s_%d", string(kind), xxhash.Sum64(b.Bytes()))

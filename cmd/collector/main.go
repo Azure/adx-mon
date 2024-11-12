@@ -582,10 +582,7 @@ func realMain(ctx *cli.Context) error {
 
 				targets := make([]journal.JournalTargetConfig, 0, len(v.JournalTargets))
 				for _, target := range v.JournalTargets {
-					parsers, err := parser.NewParsers(target.Parsers)
-					if err != nil {
-						return nil, fmt.Errorf("create parsers: %w", err)
-					}
+					parsers := parser.NewParsers(target.Parsers, "journal")
 
 					targets = append(targets, journal.JournalTargetConfig{
 						Matches:        target.Matches,

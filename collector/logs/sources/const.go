@@ -2,11 +2,11 @@ package sources
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
-	"golang.org/x/sync/errgroup"
 )
 
 type ConstSource struct {
@@ -19,7 +19,7 @@ type ConstSource struct {
 	workerGenerator engine.WorkerCreatorFunc
 	closeFn         context.CancelFunc
 
-	errGroup *errgroup.Group
+	wg sync.WaitGroup
 }
 
 // TODO more variety of source values
@@ -37,12 +37,12 @@ func NewConstSource(value string, flushDuration time.Duration, maxBatchSize int,
 func (s *ConstSource) Open(ctx context.Context) error {
 	ctx, closeFn := context.WithCancel(ctx)
 	s.closeFn = closeFn
-	group, groupCtx := errgroup.WithContext(ctx)
-	s.errGroup = group
 
-	group.Go(func() error {
-		return s.generate(groupCtx)
-	})
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.generate(ctx)
+	}()
 	config := engine.BatchConfig{
 		MaxBatchSize: s.MaxBatchSize,
 		MaxBatchWait: s.FlushDuration,
@@ -53,19 +53,25 @@ func (s *ConstSource) Open(ctx context.Context) error {
 			}
 		},
 	}
-	group.Go(func() error {
-		return engine.BatchLogs(groupCtx, config)
-	})
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		engine.BatchLogs(ctx, config)
+	}()
 
 	worker := s.workerGenerator("ConstSource", s.outputQueue)
-	group.Go(worker.Run)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		worker.Run()
+	}()
 
 	return nil
 }
 
 func (s *ConstSource) Close() error {
 	s.closeFn()
-	s.errGroup.Wait()
+	s.wg.Wait()
 	return nil
 }
 
@@ -73,7 +79,7 @@ func (s *ConstSource) Name() string {
 	return "ConstSource"
 }
 
-func (s *ConstSource) generate(ctx context.Context) error {
+func (s *ConstSource) generate(ctx context.Context) {
 	for {
 		log := types.LogPool.Get(1).(*types.Log)
 		log.Reset()
@@ -83,7 +89,7 @@ func (s *ConstSource) generate(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case s.internalQueue <- log:
 		}
 	}
