@@ -28,7 +28,7 @@ require (
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
-	github.com/prometheus/common v0.60.0
+	github.com/prometheus/common v0.60.1
 	github.com/stretchr/testify v1.9.0
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/traefik/yaegi v0.15.1
