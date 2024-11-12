@@ -1,0 +1,253 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adx-mon
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: collector
+  namespace: adx-mon
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:collector
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/metrics
+      - nodes/proxy
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:collector
+subjects:
+  - kind: ServiceAccount
+    name: collector
+    namespace: adx-mon
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-config
+  namespace: adx-mon
+data:
+  config.toml: |
+    # We have to keep our scape targets very light due to the capacity
+    # constraints of kustainer
+    
+    # Ingestor URL to send collected telemetry.
+    endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+
+    # Region is a location identifier
+    region = '$REGION'
+
+    # Skip TLS verification.
+    insecure-skip-verify = true
+
+    # Address to listen on for endpoints.
+    listen-addr = ':8080'
+
+    # Maximum number of connections to accept.
+    max-connections = 100
+
+    # Maximum number of samples to send in a single batch.
+    max-batch-size = 10000
+
+    # Storage directory for the WAL.
+    storage-dir = '/mnt/data'
+
+    # Regexes of metrics to drop from all sources.
+    drop-metrics = []
+
+    # Disable metrics forwarding to endpoints.
+    disable-metrics-forwarding = false
+
+    # Key/value pairs of labels to add to all metrics and logs.
+    [add-labels]
+      host = '$(HOSTNAME)'
+      cluster = '$CLUSTER'
+
+    # Defines a prometheus scrape endpoint.
+    [prometheus-scrape]
+
+      # Database to store metrics in.
+      database = 'Metrics'
+
+      default-drop-metrics = false
+
+      # Defines a static scrape target.
+      static-scrape-target = [
+        # Scrape our own metrics
+        { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector' },
+      ]
+
+      # Scrape interval in seconds.
+      scrape-interval = 30
+
+      # Scrape timeout in seconds.
+      scrape-timeout = 25
+
+      # Disable metrics forwarding to endpoints.
+      disable-metrics-forwarding = false
+
+      # Regexes of metrics to keep from scraping source.
+      keep-metrics = []
+
+      # Regexes of metrics to drop from scraping source.
+      drop-metrics = []
+
+    # Defines a prometheus remote write endpoint.
+    [[prometheus-remote-write]]
+
+      # Database to store metrics in.
+      database = 'Metrics'
+
+      # The path to listen on for prometheus remote write requests.  Defaults to /receive.
+      path = '/receive'
+
+      # Regexes of metrics to drop.
+      drop-metrics = []
+
+      # Disable metrics forwarding to endpoints.
+      disable-metrics-forwarding = false
+
+      # Key/value pairs of labels to add to this source.
+      [prometheus-remote-write.add-labels]
+
+    # Defines an OpenTelemetry log endpoint.
+    [otel-log]
+      # Attributes lifted from the Body and added to Attributes.
+      lift-attributes = ['kusto.database', 'kusto.table']
+
+    [[host-log]]
+      parsers = ['json']
+
+      journal-target = [
+        # matches are optional and are parsed like MATCHES in journalctl.
+        # If different fields are matched, only entries matching all terms are included.
+        # If the same fields are matched, entries matching any term are included.
+        # + can be added between to include a disjunction of terms.
+        # See examples under man 1 journalctl
+        { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
+      ]
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: collector
+  namespace: adx-mon
+spec:
+  selector:
+    matchLabels:
+      adxmon: collector
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 30%
+  template:
+    metadata:
+      labels:
+        adxmon: collector
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "9091"
+        adx-mon/path: "/metrics"
+        adx-mon/log-destination: "Logs:Collector"
+        adx-mon/log-parsers: json
+    spec:
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      serviceAccountName: collector
+      containers:
+        - name: collector
+          image: "collector:latest"
+          imagePullPolicy: Never
+          command:
+            - /collector
+          args:
+            - "--config=/etc/config/config.toml"
+            - "--hostname=$(HOSTNAME)"
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              hostPort: 3100
+          env:
+            - name: LOG_LEVEL
+              value: INFO
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: "GODEBUG"
+              value: "http2client=0"
+          volumeMounts:
+            - mountPath: /etc/ssl/certs
+              name: ssl-certs
+              readOnly: true
+            - name: config-volume
+              mountPath: /etc/config
+            - name: storage
+              mountPath: /mnt/data
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+            limits:
+              cpu: 500m
+              memory: 2000Mi
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: config-volume
+          configMap:
+            name: collector-config
+        - name: storage
+          hostPath:
+            path: /mnt/collector
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers

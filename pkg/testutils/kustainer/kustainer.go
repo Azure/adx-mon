@@ -8,207 +8,94 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	"github.com/testcontainers/testcontainers-go/wait"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
+	kwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 )
 
-// type KustainerContainer struct {
-// 	testcontainers.Container
-// }
+type KustainerContainer struct {
+	testcontainers.Container
 
-// func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KustainerContainer, error) {
-// 	req := testcontainers.ContainerRequest{
-// 		Image:        img,
-// 		ExposedPorts: []string{"8080/tcp"},
-// 		Env: map[string]string{
-// 			"ACCEPT_EULA": "Y",
-// 		},
-// 		WaitingFor: wait.ForAll(
-// 			wait.ForListeningPort("8080/tcp"),
-// 			wait.ForLog(".*Hit 'CTRL-C' or 'CTRL-BREAK' to quit.*").AsRegexp(),
-// 		),
-// 	}
-// 	genericContainerReq := testcontainers.GenericContainerRequest{
-// 		ContainerRequest: req,
-// 		Started:          true,
-// 	}
-
-// 	for _, opt := range opts {
-// 		if err := opt.Customize(&genericContainerReq); err != nil {
-// 			return nil, err
-// 		}
-// 	}
-
-// 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
-// 	var c *KustainerContainer
-// 	if container != nil {
-// 		c = &KustainerContainer{Container: container}
-// 	}
-
-// 	if err != nil {
-// 		return c, fmt.Errorf("generic container: %w", err)
-// 	}
-
-// 	return c, nil
-// }
-
-// func WithNetwork(networkName string) testcontainers.CustomizeRequestOption {
-// 	return func(req *testcontainers.GenericContainerRequest) error {
-// 		req.Networks = []string{networkName}
-// 		return nil
-// 	}
-// }
-
-// func (c *KustainerContainer) MustConnectionUrl(ctx context.Context) string {
-// 	connectionString, err := c.ConnectionUrl(ctx)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	return connectionString
-// }
-
-// func (c *KustainerContainer) ConnectionUrl(ctx context.Context) (string, error) {
-// 	containerPort, err := c.MappedPort(ctx, "8080/tcp")
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	host, err := c.Host(ctx)
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	return fmt.Sprintf("http://%s:%s", host, containerPort.Port()), nil
-// }
-
-// func (c *KustainerContainer) Service(ctx context.Context) (*corev1.Service, error) {
-// 	containerPort, err := c.MappedPort(ctx, "8080/tcp")
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &corev1.Service{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name: "kustainer",
-// 		},
-// 		Spec: corev1.ServiceSpec{
-// 			Type: corev1.ServiceTypeNodePort,
-// 			Selector: map[string]string{
-// 				"app": "kustainer",
-// 			},
-// 			Ports: []corev1.ServicePort{
-// 				{
-// 					Name:       "kustainer",
-// 					Protocol:   corev1.ProtocolTCP,
-// 					NodePort:   int32(containerPort.Int()),
-// 					TargetPort: intstr.FromInt(8080),
-// 					Port:       8080,
-// 				},
-// 			},
-// 		},
-// 	}, nil
-// }
-
-// func (c *KustainerContainer) CreateDatabase(ctx context.Context, dbName string) error {
-// 	connectionString, err := c.ConnectionUrl(ctx)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to get connection string: %w", err)
-// 	}
-
-// 	cb := kusto.NewConnectionStringBuilder(connectionString)
-// 	client, err := kusto.New(cb)
-// 	if err != nil {
-// 		return fmt.Errorf("new kusto client: %w", err)
-// 	}
-// 	defer client.Close()
-
-// 	stmt := kql.New(".create database ").AddUnsafe(dbName).AddLiteral(" volatile")
-// 	_, err = client.Mgmt(ctx, "", stmt)
-// 	if err != nil && !strings.Contains(err.Error(), "already exists") {
-// 		return fmt.Errorf("create database %s: %w", dbName, err)
-// 	}
-
-// 	return nil
-// }
-
-// type TableColum struct {
-// 	Name string
-// 	Type string
-// }
-
-// func (c *KustainerContainer) CreateTable(ctx context.Context, dbName, tblName string, columns []TableColum) error {
-// 	connectionString, err := c.ConnectionUrl(ctx)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to get connection string: %w", err)
-// 	}
-
-// 	cb := kusto.NewConnectionStringBuilder(connectionString)
-// 	client, err := kusto.New(cb)
-// 	if err != nil {
-// 		return fmt.Errorf("new kusto client: %w", err)
-// 	}
-// 	defer client.Close()
-
-// 	var schema []string
-// 	for _, column := range columns {
-// 		schema = append(schema, fmt.Sprintf("%s:%s", column.Name, column.Type))
-// 	}
-
-// 	stmt := kql.New(".create table ").AddUnsafe(tblName).AddLiteral(" (").AddUnsafe(strings.Join(schema, ", ")).AddLiteral(")")
-// 	_, err = client.Mgmt(ctx, dbName, stmt)
-// 	if err != nil && !strings.Contains(err.Error(), "already exists") {
-// 		return fmt.Errorf("create table %s: %w", tblName, err)
-// 	}
-
-// 	return nil
-// }
-
-type Kusto struct {
-	kubeconfig string
-	endpoint   string
-	stop       chan struct{}
+	endpoint string
+	stop     chan struct{}
 }
 
-func New(kubeconfig string) *Kusto {
-	return &Kusto{kubeconfig: kubeconfig}
-}
-
-func (k *Kusto) Open(ctx context.Context) error {
-	config, err := clientcmd.BuildConfigFromFlags("", k.kubeconfig)
-	if err != nil {
-		return fmt.Errorf("failed to build kubeconfig: %w", err)
+func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KustainerContainer, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        img,
+		ExposedPorts: []string{"8080/tcp"},
+		Env: map[string]string{
+			"ACCEPT_EULA": "Y",
+		},
+		WaitingFor: wait.ForAll(
+			wait.ForListeningPort("8080/tcp"),
+			wait.ForLog(".*Hit 'CTRL-C' or 'CTRL-BREAK' to quit.*").AsRegexp(),
+		),
+	}
+	genericContainerReq := testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
 	}
 
+	for _, opt := range opts {
+		if err := opt.Customize(&genericContainerReq); err != nil {
+			return nil, err
+		}
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	var c *KustainerContainer
+	if container != nil {
+		c = &KustainerContainer{Container: container}
+	}
+
+	if err != nil {
+		return c, fmt.Errorf("generic container: %w", err)
+	}
+
+	return c, nil
+}
+
+func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Config) error {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return fmt.Errorf("failed to create clientset: %w", err)
+		return fmt.Errorf("failed to create client: %w", err)
 	}
 
-	// Get the service's pod
-	pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
-		LabelSelector: "app=kustainer",
+	var podName string
+	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
+			LabelSelector: "app=kustainer",
+		})
+		if err != nil {
+			return false, nil
+		}
+		if len(pods.Items) == 0 {
+			return false, nil
+		}
+
+		podName = pods.Items[0].Name
+		return true, nil
 	})
 	if err != nil {
-		return fmt.Errorf("failed to list pods: %w", err)
-	}
-	if len(pods.Items) == 0 {
-		return fmt.Errorf("no pods found for service kustainer")
+		return fmt.Errorf("failed to get pod name: %w", err)
 	}
 
-	podName := pods.Items[0].Name
-
-	err = wait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-		if err := k.WaitForLog(ctx, clientset, podName, "Hit 'CTRL-C' or 'CTRL-BREAK' to quit"); err != nil {
+	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		if err := c.waitForLog(ctx, clientset, podName, "Hit 'CTRL-C' or 'CTRL-BREAK' to quit"); err != nil {
 			return false, nil
 		}
 		return true, nil
@@ -217,8 +104,8 @@ func (k *Kusto) Open(ctx context.Context) error {
 		return fmt.Errorf("failed create container: %w", err)
 	}
 
-	err = wait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-		if err := k.connect(ctx, config, podName); err != nil {
+	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+		if err := c.connect(ctx, config, podName); err != nil {
 			return false, nil
 		}
 		return true, nil
@@ -227,33 +114,52 @@ func (k *Kusto) Open(ctx context.Context) error {
 		return fmt.Errorf("failed to connect to kustainer: %w", err)
 	}
 
-	cb := kusto.NewConnectionStringBuilder(k.endpoint)
-	client, err := kusto.New(cb)
-	if err != nil {
-		return fmt.Errorf("new kusto client: %w", err)
-	}
-	defer client.Close()
-
-	for _, dbName := range []string{"Metrics", "Logs"} {
-		stmt := kql.New(".create database ").AddUnsafe(dbName).AddLiteral(" volatile")
-		_, err = client.Mgmt(ctx, "", stmt)
-		if err != nil && !strings.Contains(err.Error(), "already exists") {
-			return fmt.Errorf("create database %s: %w", dbName, err)
-		}
-	}
-
 	return nil
 }
 
-func (k *Kusto) Close() error {
+func (c *KustainerContainer) Close() error {
+	if c.stop != nil {
+		close(c.stop)
+	}
 	return nil
 }
 
-func (k *Kusto) Endpoint() string {
-	return k.endpoint
+func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
+			PreCreates: []testcontainers.ContainerRequestHook{
+				func(ctx context.Context, req testcontainers.ContainerRequest) error {
+
+					rootDir, err := testutils.GetGitRootDir()
+					if err != nil {
+						return fmt.Errorf("failed to get git root dir: %w", err)
+					}
+
+					lfp := filepath.Join(rootDir, "pkg/testutils/kustainer/k8s.yaml")
+					rfp := filepath.Join(testutils.K3sManifests, "kustainer.yaml")
+					if err := k.CopyFileToContainer(ctx, lfp, rfp, 0644); err != nil {
+						return fmt.Errorf("failed to copy file to container: %w", err)
+					}
+
+					return nil
+				},
+			},
+		})
+
+		return nil
+	}
 }
 
-func (k *Kusto) WaitForLog(ctx context.Context, client *kubernetes.Clientset, podName, logMsg string) error {
+// WithStarted will start the container when it is created.
+// You don't want to do this if you want to load the container into a k8s cluster.
+func WithStarted() testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		req.Started = true
+		return nil
+	}
+}
+
+func (c *KustainerContainer) waitForLog(ctx context.Context, client *kubernetes.Clientset, podName, logMsg string) error {
 	req := client.CoreV1().Pods("default").GetLogs(podName, &corev1.PodLogOptions{
 		Follow: true,
 	})
@@ -278,7 +184,7 @@ func (k *Kusto) WaitForLog(ctx context.Context, client *kubernetes.Clientset, po
 	return nil
 }
 
-func (k *Kusto) connect(ctx context.Context, config *rest.Config, podName string) error {
+func (c *KustainerContainer) connect(ctx context.Context, config *rest.Config, podName string) error {
 	// Create port forward
 	transport, upgrader, err := spdy.RoundTripperFor(config)
 	if err != nil {
@@ -314,8 +220,8 @@ func (k *Kusto) connect(ctx context.Context, config *rest.Config, podName string
 			return fmt.Errorf("failed to get local port: %w", err)
 		}
 		endpoint := fmt.Sprintf("http://localhost:%d", localPorts[0].Local)
-		k.stop = stopChan
-		k.endpoint = endpoint
+		c.stop = stopChan
+		c.endpoint = endpoint
 		return nil
 	case <-time.After(10 * time.Second):
 		close(stopChan)
@@ -324,4 +230,24 @@ func (k *Kusto) connect(ctx context.Context, config *rest.Config, podName string
 		close(stopChan)
 		return fmt.Errorf("timeout waiting for port forward")
 	}
+}
+
+func (c *KustainerContainer) ConnectionUrl() string {
+	return c.endpoint
+}
+
+func (c *KustainerContainer) CreateDatabase(ctx context.Context, dbName string) error {
+	cb := kusto.NewConnectionStringBuilder(c.endpoint)
+	client, err := kusto.New(cb)
+	if err != nil {
+		return fmt.Errorf("new kusto client: %w", err)
+	}
+	defer client.Close()
+
+	stmt := kql.New(".create database ").AddUnsafe(dbName).AddLiteral(" volatile")
+	_, err = client.Mgmt(ctx, "", stmt)
+	if err != nil && !strings.Contains(err.Error(), "already exists") {
+		return fmt.Errorf("create database %s: %w", dbName, err)
+	}
+	return nil
 }

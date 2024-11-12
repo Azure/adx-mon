@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample
+  labels:
+    app: sample
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample
+  template:
+    metadata:
+      labels:
+        app: sample
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/log-destination: "Logs:Sample"
+        adx-mon/log-parsers: "json"
+    spec:
+      containers:
+      - name: sample
+        image: sample:latest
+        imagePullPolicy: Never

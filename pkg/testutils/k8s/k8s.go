@@ -146,12 +146,15 @@ func (c *Cluster) InstallCRD(ctx context.Context, crdPath string) error {
 		return fmt.Errorf("failed to decode manifest: %w", err)
 	}
 
+	kind := unstructuredObj.GetObjectKind().GroupVersionKind().Kind
+
 	// Apply the unstructured object
 	gvr := schema.GroupVersionResource{
 		Group:    unstructuredObj.GroupVersionKind().Group,
 		Version:  unstructuredObj.GroupVersionKind().Version,
-		Resource: "customresourcedefinitions",
+		Resource: strings.ToLower(kind + "s"),
 	}
+	fmt.Printf("BUGBUG %s\n", gvr.Resource)
 	_, err = dynClient.Resource(gvr).Create(context.Background(), &unstructuredObj, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create resource: %w", err)

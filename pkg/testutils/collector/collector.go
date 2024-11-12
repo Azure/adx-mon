@@ -4,40 +4,50 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
+	"path/filepath"
 
-	"github.com/Azure/adx-mon/pkg/testutils/k8s"
+	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"github.com/testcontainers/testcontainers-go/modules/k3s"
 )
 
 const (
-	DefaultImage = "ghcr.io/azure/adx-mon/collector"
+	DefaultImage = "collector"
+	DefaultTag   = "latest"
 )
 
-var DefaultTag = testcontainers.SessionID()
+type CollectorContainer struct {
+	testcontainers.Container
+}
 
-func Build(ctx context.Context) error {
-	f, err := os.Create("../../../Dockerfile")
+func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*CollectorContainer, error) {
+	rootDir, err := testutils.GetGitRootDir()
 	if err != nil {
-		return fmt.Errorf("failed to open Dockerfile: %w", err)
+		return nil, fmt.Errorf("failed to get git root dir: %w", err)
+	}
+
+	f, err := os.Create(filepath.Join(rootDir, "Dockerfile"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to open Dockerfile: %w", err)
 	}
 	defer func() {
-		f.Close()
 		os.Remove(f.Name())
 	}()
+
 	if _, err := f.WriteString(dockerfile); err != nil {
-		return fmt.Errorf("failed to write Dockerfile: %w", err)
+		return nil, fmt.Errorf("failed to write Dockerfile: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close Dockerfile: %w", err)
+	}
+
 	req := testcontainers.ContainerRequest{
+		Name: "collector" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
-			Context:       "../../../.",
+			Context:       rootDir,
 			PrintBuildLog: true,
-			KeepImage:     true,
 		},
 	}
 
@@ -45,85 +55,62 @@ func Build(ctx context.Context) error {
 		ContainerRequest: req,
 	}
 
-	_, err = testcontainers.GenericContainer(ctx, genericContainerReq)
-	return err
+	for _, opt := range opts {
+		if err := opt.Customize(&genericContainerReq); err != nil {
+			return nil, err
+		}
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	var c *CollectorContainer
+	if container != nil {
+		c = &CollectorContainer{Container: container}
+	}
+
+	if err != nil {
+		return c, fmt.Errorf("generic container: %w", err)
+	}
+
+	return c, nil
 }
 
-func Run(ctx context.Context, c *k8s.Cluster) error {
-	// Build Ingestor from source
-	err := Build(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to build collector container: %w", err)
+// WithStarted will start the container when it is created.
+// You don't want to do this if you want to load the container into a k8s cluster.
+func WithStarted() testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		req.Started = true
+		return nil
 	}
-	collectorImage := fmt.Sprintf("%s:%s", DefaultImage, DefaultTag)
-	if err := c.LoadImages(ctx, collectorImage); err != nil {
-		return fmt.Errorf("failed to load image: %w", err)
+}
+
+func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
+			PreCreates: []testcontainers.ContainerRequestHook{
+				func(ctx context.Context, req testcontainers.ContainerRequest) error {
+
+					if err := k.LoadImages(ctx, DefaultImage+":"+DefaultTag); err != nil {
+						return fmt.Errorf("failed to load image: %w", err)
+					}
+
+					rootDir, err := testutils.GetGitRootDir()
+					if err != nil {
+						return fmt.Errorf("failed to get git root dir: %w", err)
+					}
+
+					lfp := filepath.Join(rootDir, "pkg/testutils/collector/k8s.yaml")
+					rfp := filepath.Join(testutils.K3sManifests, "collector.yaml")
+					if err := k.CopyFileToContainer(ctx, lfp, rfp, 0644); err != nil {
+						return fmt.Errorf("failed to copy file to container: %w", err)
+					}
+
+					return nil
+				},
+			},
+		})
+
+		return nil
 	}
-
-	client, err := kubernetes.NewForConfig(c.GetRestConfig())
-	if err != nil {
-		return fmt.Errorf("failed to create k8s client: %w", err)
-	}
-
-	daemonSets, err := client.AppsV1().DaemonSets("adx-mon").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to list daemonsets: %w", err)
-	}
-
-	for _, daemonSet := range daemonSets.Items {
-		if daemonSet.Name != "collector" {
-			continue
-		}
-
-		if err := client.AppsV1().DaemonSets(daemonSet.Namespace).Delete(ctx, daemonSet.Name, metav1.DeleteOptions{}); err != nil {
-			return fmt.Errorf("failed to delete daemonset: %w", err)
-		}
-
-		var (
-			volumes  []corev1.Volume
-			filtered = []string{"etcmachineid", "etc-pki-ca-certs", "storage"}
-		)
-		for _, volume := range daemonSet.Spec.Template.Spec.Volumes {
-			if slices.Contains(filtered, volume.Name) {
-				continue
-			}
-			volumes = append(volumes, volume)
-		}
-		daemonSet.Spec.Template.Spec.Volumes = volumes
-
-		for idx, container := range daemonSet.Spec.Template.Spec.Containers {
-			if container.Name != "collector" {
-				continue
-			}
-
-			var volumeMounts []corev1.VolumeMount
-			for _, volumeMount := range container.VolumeMounts {
-				if slices.Contains(filtered, volumeMount.Name) {
-					continue
-				}
-				volumeMounts = append(volumeMounts, volumeMount)
-			}
-			daemonSet.Spec.Template.Spec.Containers[idx].VolumeMounts = volumeMounts
-
-			daemonSet.Spec.Template.Spec.Containers[idx].ImagePullPolicy = corev1.PullNever // we'll load it ourselves
-			daemonSet.Spec.Template.Spec.Containers[idx].Image = collectorImage
-		}
-
-		daemonSet.ResourceVersion = "" // clear resource version to force a create
-		_, err = client.AppsV1().DaemonSets(daemonSet.Namespace).Create(ctx, &daemonSet, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to create daemonset: %w", err)
-		}
-
-		break
-	}
-
-	// We're highly capacity contrained in kustainer so we're going to limit the amount of telemetry
-	if err := client.AppsV1().Deployments("adx-mon").Delete(ctx, "collector-singleton", metav1.DeleteOptions{}); err != nil {
-		return fmt.Errorf("failed to delete deployment: %w", err)
-	}
-
-	return nil
 }
 
 var dockerfile = `
