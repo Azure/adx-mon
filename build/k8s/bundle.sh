@@ -4,7 +4,7 @@
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
 lock_dir=_sh00161
-# Made on 2024-11-07 20:58 UTC by <root@02a36b068b2e>.
+# Made on 2024-11-12 17:28 UTC by <root@e31556e2e1ae>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -13,9 +13,9 @@ lock_dir=_sh00161
 # length mode       name
 # ------ ---------- ------------------------------------------
 #   6055 -rw-r--r-- setup.sh
-#  11999 -rw-r--r-- collector.yaml
+#   7692 -rw-r--r-- ingestor.yaml
 #   5804 -rw-r--r-- ksm.yaml
-#   4642 -rw-r--r-- ingestor.yaml
+#  11999 -rw-r--r-- collector.yaml
 #
 MD5SUM=${MD5SUM-md5sum}
 f=`${MD5SUM} --version | egrep '^md5sum .*(core|text)utils'`
@@ -247,7 +247,7 @@ M=&5D('1E;&5M971R>2!C86X@8F4@9F]U;F0@=&AE("1$051!0D%315].04U%
 `
 end
 SHAR_EOF
-  (set 20 24 10 24 20 52 09 'setup.sh'
+  (set 20 24 11 04 18 25 37 'setup.sh'
    eval "${shar_touch}") && \
   chmod 0644 'setup.sh'
 if test $? -ne 0
@@ -263,6 +263,619 @@ SHAR_EOF
 else
 test `LC_ALL=C wc -c < 'setup.sh'` -ne 6055 && \
   ${echo} "restoration warning:  size of 'setup.sh' is not 6055"
+  fi
+# ============= ingestor.yaml ==============
+  sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+X  name: adx-mon
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+X  name: adx-mon:ingestor
+rules:
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - namespaces
+X      - pods
+X    verbs:
+X      - get
+X      - list
+X      - watch
+X  - apiGroups:
+X      - adx-mon.azure.com
+X    resources:
+X      - functions
+X    verbs:
+X      - get
+X      - list
+X  - apiGroups:
+X      - adx-mon.azure.com
+X    resources:
+X      - functions/status
+X    verbs:
+X      - update
+X      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+X  name: adx-mon:ingestor
+roleRef:
+X  apiGroup: rbac.authorization.k8s.io
+X  kind: ClusterRole
+X  name: adx-mon:ingestor
+subjects:
+X  - kind: ServiceAccount
+X    name: ingestor
+X    namespace: adx-mon
+---
+apiVersion: v1
+kind: Service
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+spec:
+X  type: ClusterIP
+X  selector:
+X    app: ingestor
+X  ports:
+X    # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
+X    - port: 443
+X      targetPort: 9090
+X      # Optional field
+X      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
+X      #nodePort: 30007
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+spec:
+X  serviceName: "adx-mon"
+X  replicas: 1
+X  updateStrategy:
+X    type: RollingUpdate
+X  selector:
+X    matchLabels:
+X      app: ingestor
+X  template:
+X    metadata:
+X      labels:
+X        app: ingestor
+X      annotations:
+X        adx-mon/scrape: "true"
+X        adx-mon/port: "9091"
+X        adx-mon/path: "/metrics"
+X        adx-mon/log-destination: "Logs:Ingestor"
+X        adx-mon/log-parsers: json
+X    spec:
+X      serviceAccountName: ingestor
+X      containers:
+X        - name: ingestor
+X          image: ghcr.io/azure/adx-mon/ingestor:latest
+X          ports:
+X            - containerPort: 9090
+X              name: ingestor
+X            - containerPort: 9091
+X              name: metrics
+X          env:
+X            - name: LOG_LEVEL
+X              value: INFO
+X            - name: "GODEBUG"
+X              value: "http2client=0"
+X            - name: "AZURE_RESOURCE"
+X              value: "$ADX_URL"
+X            - name:  "AZURE_CLIENT_ID"
+X              value: "$CLIENT_ID"
+X          command:
+X            - /ingestor
+X          args:
+X            - "--storage-dir=/mnt/data"
+X            - "--max-segment-age=5s"
+X            - "--max-disk-usage=21474836480"
+X            - "--max-transfer-size=10485760"
+X            - "--max-connections=1000"
+X            - "--insecure-skip-verify"
+X            - "--lift-label=host"
+X            - "--lift-label=cluster"
+X            - "--lift-label=adxmon_namespace=Namespace"
+X            - "--lift-label=adxmon_pod=Pod"
+X            - "--lift-label=adxmon_container=Container"
+X            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
+X            - "--logs-kusto-endpoints=Logs=$ADX_URL"
+X          volumeMounts:
+X            - name: metrics
+X              mountPath: /mnt/data
+X            - mountPath: /etc/pki/ca-trust/extracted
+X              name: etc-pki-ca-certs
+X              readOnly: true
+X            - mountPath: /etc/ssl/certs
+X              name: ca-certs
+X              readOnly: true
+X      affinity:
+X        podAntiAffinity:
+X          requiredDuringSchedulingIgnoredDuringExecution:
+X            - labelSelector:
+X                matchExpressions:
+X                  - key: app
+X                    operator: In
+X                    values:
+X                      - ingestor
+X              topologyKey: kubernetes.io/hostname
+X        nodeAffinity:
+X          preferredDuringSchedulingIgnoredDuringExecution:
+X            - weight: 1
+X              preference:
+X                matchExpressions:
+X                  - key: agentpool
+X                    operator: In
+X                    values:
+X                      - aks-system
+X      volumes:
+X        - name: ca-certs
+X          hostPath:
+X            path: /etc/ssl/certs
+X            type: Directory
+X        - name: etc-pki-ca-certs
+X          hostPath:
+X            path: /etc/pki/ca-trust/extracted
+X            type: DirectoryOrCreate
+X        - name: metrics
+X          hostPath:
+X            path: /mnt/ingestor
+X      tolerations:
+X        - key: CriticalAddonsOnly
+X          operator: Exists
+X        - effect: NoExecute
+X          key: node.kubernetes.io/not-ready
+X          operator: Exists
+X          tolerationSeconds: 300
+X        - effect: NoExecute
+X          key: node.kubernetes.io/unreachable
+X          operator: Exists
+X          tolerationSeconds: 300
+---
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+X  annotations:
+X    controller-gen.kubebuilder.io/version: v0.16.1
+X  name: functions.adx-mon.azure.com
+spec:
+X  group: adx-mon.azure.com
+X  names:
+X    kind: Function
+X    listKind: FunctionList
+X    plural: functions
+X    singular: function
+X  scope: Namespaced
+X  versions:
+X    - name: v1
+X      schema:
+X        openAPIV3Schema:
+X          description: Function defines a KQL function to be maintained in the Kusto
+X            cluster
+X          properties:
+X            apiVersion:
+X              description: |-
+X                APIVersion defines the versioned schema of this representation of an object.
+X                Servers should convert recognized schemas to the latest internal value, and
+X                may reject unrecognized values.
+X                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+X              type: string
+X            kind:
+X              description: |-
+X                Kind is a string value representing the REST resource this object represents.
+X                Servers may infer this from the endpoint the client submits requests to.
+X                Cannot be updated.
+X                In CamelCase.
+X                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+X              type: string
+X            metadata:
+X              type: object
+X            spec:
+X              description: FunctionSpec defines the desired state of Function
+X              properties:
+X                body:
+X                  description: Body is the KQL body of the function
+X                  type: string
+X                database:
+X                  description: Database is the name of the database in which the function
+X                    will be created
+X                  type: string
+X              required:
+X                - body
+X                - database
+X              type: object
+X            status:
+X              description: FunctionStatus defines the observed state of Function
+X              properties:
+X                error:
+X                  description: Error is a string that communicates any error message
+X                    if one exists
+X                  type: string
+X                lastTimeReconciled:
+X                  description: LastTimeReconciled is the last time the Function was
+X                    reconciled
+X                  format: date-time
+X                  type: string
+X                message:
+X                  description: Message is a human-readable message indicating details
+X                    about the Function
+X                  type: string
+X                status:
+X                  description: Status is an enum that represents the status of the Function
+X                  type: string
+X              required:
+X                - lastTimeReconciled
+X                - status
+X              type: object
+X          type: object
+X      served: true
+X      storage: true
+X      subresources:
+X        status: {}
+SHAR_EOF
+  (set 20 24 11 12 17 26 14 'ingestor.yaml'
+   eval "${shar_touch}") && \
+  chmod 0644 'ingestor.yaml'
+if test $? -ne 0
+then ${echo} "restore of ingestor.yaml failed"
+fi
+  if ${md5check}
+  then (
+       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
+       ) << \SHAR_EOF
+e902a9b8b7b725e6ec40f70263f4c368  ingestor.yaml
+SHAR_EOF
+
+else
+test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 7692 && \
+  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 7692"
+  fi
+# ============= ksm.yaml ==============
+  sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+X  name: monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+X  labels:
+X    app.kubernetes.io/name: ksm
+X  name: ksm
+X  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+X  labels:
+X    app.kubernetes.io/name: ksm
+X  name: ksm
+rules:
+X  - apiGroups:
+X      - certificates.k8s.io
+X    resources:
+X      - certificatesigningrequests
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - configmaps
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - batch
+X    resources:
+X      - cronjobs
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - extensions
+X      - apps
+X    resources:
+X      - daemonsets
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - extensions
+X      - apps
+X    resources:
+X      - deployments
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - endpoints
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - autoscaling
+X    resources:
+X      - horizontalpodautoscalers
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - extensions
+X      - networking.k8s.io
+X    resources:
+X      - ingresses
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - batch
+X    resources:
+X      - jobs
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - coordination.k8s.io
+X    resources:
+X      - leases
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - limitranges
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - admissionregistration.k8s.io
+X    resources:
+X      - mutatingwebhookconfigurations
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - namespaces
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - networking.k8s.io
+X    resources:
+X      - networkpolicies
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - nodes
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - persistentvolumeclaims
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - persistentvolumes
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - policy
+X    resources:
+X      - poddisruptionbudgets
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - pods
+X    verbs:
+X      - get
+X      - list
+X      - watch
+X  - apiGroups:
+X      - extensions
+X      - apps
+X    resources:
+X      - replicasets
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - replicationcontrollers
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - resourcequotas
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - secrets
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - services
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - apps
+X    resources:
+X      - statefulsets
+X    verbs:
+X      - get
+X      - list
+X      - watch
+X  - apiGroups:
+X      - storage.k8s.io
+X    resources:
+X      - storageclasses
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - admissionregistration.k8s.io
+X    resources:
+X      - validatingwebhookconfigurations
+X    verbs:
+X      - list
+X      - watch
+X  - apiGroups:
+X      - storage.k8s.io
+X    resources:
+X      - volumeattachments
+X    verbs:
+X      - list
+X      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+X  labels:
+X    app.kubernetes.io/name: ksm
+X  name: ksm
+roleRef:
+X  apiGroup: rbac.authorization.k8s.io
+X  kind: ClusterRole
+X  name: ksm
+subjects:
+X  - kind: ServiceAccount
+X    name: ksm
+X    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+X  labels:
+X    app.kubernetes.io/component: exporter
+X    app.kubernetes.io/name: kube-state-metrics
+X    app.kubernetes.io/version: 2.13.0
+X  name: ksm-shard
+X  namespace: monitoring
+spec:
+X  replicas: 2
+X  selector:
+X    matchLabels:
+X      app.kubernetes.io/name: kube-state-metrics
+X  serviceName: kube-state-metrics
+X  template:
+X    metadata:
+X      annotations:
+X        adx-mon/path: /metrics
+X        adx-mon/port: "8080"
+X        adx-mon/scrape: "true"
+X      labels:
+X        app.kubernetes.io/component: exporter
+X        app.kubernetes.io/name: kube-state-metrics
+X        app.kubernetes.io/version: 2.13.0
+X    spec:
+X      automountServiceAccountToken: true
+X      containers:
+X        - args:
+X            - --pod=$(POD_NAME)
+X            - --pod-namespace=$(POD_NAMESPACE)
+X          env:
+X            - name: POD_NAME
+X              valueFrom:
+X                fieldRef:
+X                  fieldPath: metadata.name
+X            - name: POD_NAMESPACE
+X              valueFrom:
+X                fieldRef:
+X                  fieldPath: metadata.namespace
+X          image: mcr.microsoft.com/oss/kubernetes/kube-state-metrics:v2.12.0
+X          livenessProbe:
+X            httpGet:
+X              path: /livez
+X              port: http-metrics
+X            initialDelaySeconds: 5
+X            timeoutSeconds: 5
+X          name: kube-state-metrics
+X          ports:
+X            - containerPort: 8080
+X              name: http-metrics
+X            - containerPort: 8081
+X              name: telemetry
+X          readinessProbe:
+X            httpGet:
+X              path: /readyz
+X              port: telemetry
+X            initialDelaySeconds: 5
+X            timeoutSeconds: 5
+X          securityContext:
+X            allowPrivilegeEscalation: false
+X            capabilities:
+X              drop:
+X                - ALL
+X            readOnlyRootFilesystem: true
+X            runAsNonRoot: true
+X            runAsUser: 65534
+X            seccompProfile:
+X              type: RuntimeDefault
+X      nodeSelector:
+X        kubernetes.io/os: linux
+X      serviceAccountName: ksm
+SHAR_EOF
+  (set 20 24 10 05 02 33 17 'ksm.yaml'
+   eval "${shar_touch}") && \
+  chmod 0644 'ksm.yaml'
+if test $? -ne 0
+then ${echo} "restore of ksm.yaml failed"
+fi
+  if ${md5check}
+  then (
+       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ksm.yaml': 'MD5 check failed'
+       ) << \SHAR_EOF
+10d53e71dba491c8196e27d97a781b18  ksm.yaml
+SHAR_EOF
+
+else
+test `LC_ALL=C wc -c < 'ksm.yaml'` -ne 5804 && \
+  ${echo} "restoration warning:  size of 'ksm.yaml' is not 5804"
   fi
 # ============= collector.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'collector.yaml' &&
@@ -706,7 +1319,7 @@ X        - name: varlibdockercontainers
 X          hostPath:
 X            path: /var/lib/docker/containers
 SHAR_EOF
-  (set 20 24 11 01 21 55 34 'collector.yaml'
+  (set 20 24 11 04 18 25 37 'collector.yaml'
    eval "${shar_touch}") && \
   chmod 0644 'collector.yaml'
 if test $? -ne 0
@@ -722,537 +1335,6 @@ SHAR_EOF
 else
 test `LC_ALL=C wc -c < 'collector.yaml'` -ne 11999 && \
   ${echo} "restoration warning:  size of 'collector.yaml' is not 11999"
-  fi
-# ============= ksm.yaml ==============
-  sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
----
-apiVersion: v1
-kind: Namespace
-metadata:
-X  name: monitoring
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-X  labels:
-X    app.kubernetes.io/name: ksm
-X  name: ksm
-X  namespace: monitoring
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-X  labels:
-X    app.kubernetes.io/name: ksm
-X  name: ksm
-rules:
-X  - apiGroups:
-X      - certificates.k8s.io
-X    resources:
-X      - certificatesigningrequests
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - configmaps
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - batch
-X    resources:
-X      - cronjobs
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - extensions
-X      - apps
-X    resources:
-X      - daemonsets
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - extensions
-X      - apps
-X    resources:
-X      - deployments
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - endpoints
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - autoscaling
-X    resources:
-X      - horizontalpodautoscalers
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - extensions
-X      - networking.k8s.io
-X    resources:
-X      - ingresses
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - batch
-X    resources:
-X      - jobs
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - coordination.k8s.io
-X    resources:
-X      - leases
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - limitranges
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - admissionregistration.k8s.io
-X    resources:
-X      - mutatingwebhookconfigurations
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - namespaces
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - networking.k8s.io
-X    resources:
-X      - networkpolicies
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - nodes
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - persistentvolumeclaims
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - persistentvolumes
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - policy
-X    resources:
-X      - poddisruptionbudgets
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - pods
-X    verbs:
-X      - get
-X      - list
-X      - watch
-X  - apiGroups:
-X      - extensions
-X      - apps
-X    resources:
-X      - replicasets
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - replicationcontrollers
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - resourcequotas
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - secrets
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - services
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - apps
-X    resources:
-X      - statefulsets
-X    verbs:
-X      - get
-X      - list
-X      - watch
-X  - apiGroups:
-X      - storage.k8s.io
-X    resources:
-X      - storageclasses
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - admissionregistration.k8s.io
-X    resources:
-X      - validatingwebhookconfigurations
-X    verbs:
-X      - list
-X      - watch
-X  - apiGroups:
-X      - storage.k8s.io
-X    resources:
-X      - volumeattachments
-X    verbs:
-X      - list
-X      - watch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-X  labels:
-X    app.kubernetes.io/name: ksm
-X  name: ksm
-roleRef:
-X  apiGroup: rbac.authorization.k8s.io
-X  kind: ClusterRole
-X  name: ksm
-subjects:
-X  - kind: ServiceAccount
-X    name: ksm
-X    namespace: monitoring
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-X  labels:
-X    app.kubernetes.io/component: exporter
-X    app.kubernetes.io/name: kube-state-metrics
-X    app.kubernetes.io/version: 2.13.0
-X  name: ksm-shard
-X  namespace: monitoring
-spec:
-X  replicas: 2
-X  selector:
-X    matchLabels:
-X      app.kubernetes.io/name: kube-state-metrics
-X  serviceName: kube-state-metrics
-X  template:
-X    metadata:
-X      annotations:
-X        adx-mon/path: /metrics
-X        adx-mon/port: "8080"
-X        adx-mon/scrape: "true"
-X      labels:
-X        app.kubernetes.io/component: exporter
-X        app.kubernetes.io/name: kube-state-metrics
-X        app.kubernetes.io/version: 2.13.0
-X    spec:
-X      automountServiceAccountToken: true
-X      containers:
-X        - args:
-X            - --pod=$(POD_NAME)
-X            - --pod-namespace=$(POD_NAMESPACE)
-X          env:
-X            - name: POD_NAME
-X              valueFrom:
-X                fieldRef:
-X                  fieldPath: metadata.name
-X            - name: POD_NAMESPACE
-X              valueFrom:
-X                fieldRef:
-X                  fieldPath: metadata.namespace
-X          image: mcr.microsoft.com/oss/kubernetes/kube-state-metrics:v2.12.0
-X          livenessProbe:
-X            httpGet:
-X              path: /livez
-X              port: http-metrics
-X            initialDelaySeconds: 5
-X            timeoutSeconds: 5
-X          name: kube-state-metrics
-X          ports:
-X            - containerPort: 8080
-X              name: http-metrics
-X            - containerPort: 8081
-X              name: telemetry
-X          readinessProbe:
-X            httpGet:
-X              path: /readyz
-X              port: telemetry
-X            initialDelaySeconds: 5
-X            timeoutSeconds: 5
-X          securityContext:
-X            allowPrivilegeEscalation: false
-X            capabilities:
-X              drop:
-X                - ALL
-X            readOnlyRootFilesystem: true
-X            runAsNonRoot: true
-X            runAsUser: 65534
-X            seccompProfile:
-X              type: RuntimeDefault
-X      nodeSelector:
-X        kubernetes.io/os: linux
-X      serviceAccountName: ksm
-SHAR_EOF
-  (set 20 24 08 28 01 41 04 'ksm.yaml'
-   eval "${shar_touch}") && \
-  chmod 0644 'ksm.yaml'
-if test $? -ne 0
-then ${echo} "restore of ksm.yaml failed"
-fi
-  if ${md5check}
-  then (
-       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ksm.yaml': 'MD5 check failed'
-       ) << \SHAR_EOF
-10d53e71dba491c8196e27d97a781b18  ksm.yaml
-SHAR_EOF
-
-else
-test `LC_ALL=C wc -c < 'ksm.yaml'` -ne 5804 && \
-  ${echo} "restoration warning:  size of 'ksm.yaml' is not 5804"
-  fi
-# ============= ingestor.yaml ==============
-  sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
----
-apiVersion: v1
-kind: Namespace
-metadata:
-X  name: adx-mon
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-X  name: ingestor
-X  namespace: adx-mon
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-X  name: adx-mon:ingestor
-rules:
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - namespaces
-X      - pods
-X    verbs:
-X      - get
-X      - list
-X      - watch
-X  - apiGroups:
-X      - adx-mon.azure.com
-X    resources:
-X      - functions
-X    verbs:
-X      - get
-X      - list
-X  - apiGroups:
-X      - adx-mon.azure.com
-X    resources:
-X      - functions/status
-X    verbs:
-X      - update
-X      - patch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-X  name: adx-mon:ingestor
-roleRef:
-X  apiGroup: rbac.authorization.k8s.io
-X  kind: ClusterRole
-X  name: adx-mon:ingestor
-subjects:
-X  - kind: ServiceAccount
-X    name: ingestor
-X    namespace: adx-mon
----
-apiVersion: v1
-kind: Service
-metadata:
-X  name: ingestor
-X  namespace: adx-mon
-spec:
-X  type: ClusterIP
-X  selector:
-X    app: ingestor
-X  ports:
-X    # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
-X    - port: 443
-X      targetPort: 9090
-X      # Optional field
-X      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
-X      #nodePort: 30007
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-X  name: ingestor
-X  namespace: adx-mon
-spec:
-X  serviceName: "adx-mon"
-X  replicas: 1
-X  updateStrategy:
-X    type: RollingUpdate
-X  selector:
-X    matchLabels:
-X      app: ingestor
-X  template:
-X    metadata:
-X      labels:
-X        app: ingestor
-X      annotations:
-X        adx-mon/scrape: "true"
-X        adx-mon/port: "9091"
-X        adx-mon/path: "/metrics"
-X        adx-mon/log-destination: "Logs:Ingestor"
-X        adx-mon/log-parsers: json
-X    spec:
-X      serviceAccountName: ingestor
-X      containers:
-X        - name: ingestor
-X          image: ghcr.io/azure/adx-mon/ingestor:latest
-X          ports:
-X            - containerPort: 9090
-X              name: ingestor
-X            - containerPort: 9091
-X              name: metrics
-X          env:
-X            - name: LOG_LEVEL
-X              value: INFO
-X            - name: "GODEBUG"
-X              value: "http2client=0"
-X            - name: "AZURE_RESOURCE"
-X              value: "$ADX_URL"
-X            - name:  "AZURE_CLIENT_ID"
-X              value: "$CLIENT_ID"
-X          command:
-X            - /ingestor
-X          args:
-X            - "--storage-dir=/mnt/data"
-X            - "--max-segment-age=5s"
-X            - "--max-disk-usage=21474836480"
-X            - "--max-transfer-size=10485760"
-X            - "--max-connections=1000"
-X            - "--insecure-skip-verify"
-X            - "--lift-label=host"
-X            - "--lift-label=cluster"
-X            - "--lift-label=adxmon_namespace=Namespace"
-X            - "--lift-label=adxmon_pod=Pod"
-X            - "--lift-label=adxmon_container=Container"
-X            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
-X            - "--logs-kusto-endpoints=Logs=$ADX_URL"
-X          volumeMounts:
-X            - name: metrics
-X              mountPath: /mnt/data
-X            - mountPath: /etc/pki/ca-trust/extracted
-X              name: etc-pki-ca-certs
-X              readOnly: true
-X            - mountPath: /etc/ssl/certs
-X              name: ca-certs
-X              readOnly: true
-X      affinity:
-X        podAntiAffinity:
-X          requiredDuringSchedulingIgnoredDuringExecution:
-X            - labelSelector:
-X                matchExpressions:
-X                  - key: app
-X                    operator: In
-X                    values:
-X                      - ingestor
-X              topologyKey: kubernetes.io/hostname
-X        nodeAffinity:
-X          preferredDuringSchedulingIgnoredDuringExecution:
-X            - weight: 1
-X              preference:
-X                matchExpressions:
-X                  - key: agentpool
-X                    operator: In
-X                    values:
-X                      - aks-system
-X      volumes:
-X        - name: ca-certs
-X          hostPath:
-X            path: /etc/ssl/certs
-X            type: Directory
-X        - name: etc-pki-ca-certs
-X          hostPath:
-X            path: /etc/pki/ca-trust/extracted
-X            type: DirectoryOrCreate
-X        - name: metrics
-X          hostPath:
-X            path: /mnt/ingestor
-X      tolerations:
-X        - key: CriticalAddonsOnly
-X          operator: Exists
-X        - effect: NoExecute
-X          key: node.kubernetes.io/not-ready
-X          operator: Exists
-X          tolerationSeconds: 300
-X        - effect: NoExecute
-X          key: node.kubernetes.io/unreachable
-X          operator: Exists
-X          tolerationSeconds: 300
-SHAR_EOF
-  (set 20 24 10 31 17 24 57 'ingestor.yaml'
-   eval "${shar_touch}") && \
-  chmod 0644 'ingestor.yaml'
-if test $? -ne 0
-then ${echo} "restore of ingestor.yaml failed"
-fi
-  if ${md5check}
-  then (
-       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
-       ) << \SHAR_EOF
-df7a562aadcee17dd58fd9d4307b43a5  ingestor.yaml
-SHAR_EOF
-
-else
-test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 4642 && \
-  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 4642"
   fi
 if rm -fr ${lock_dir}
 then ${echo} "x - removed lock directory ${lock_dir}."
