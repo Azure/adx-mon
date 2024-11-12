@@ -191,7 +191,15 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 		return sanitizeErrorString(err)
 	}
 
+	// TODO res as returned by testutils::uploader is returning a nil object.
+	// need to essentially skip the wait step here
+
+	// TODO in the morning just launch the test then watch
+	// the container's logs
+
+	fmt.Printf("BUGBUG res=%v\n", res)
 	err = <-res.Wait(ctx)
+	fmt.Printf("BUGBUG err=%v\n", err)
 	if err != nil {
 		return err
 	}

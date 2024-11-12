@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/testutils/collector"
 	"github.com/Azure/adx-mon/pkg/testutils/ingestor"
 	"github.com/Azure/adx-mon/pkg/testutils/k8s"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
@@ -36,6 +37,7 @@ func TestK8sWithStack(t *testing.T) {
 	manifests := []string{
 		"build/k8s/ksm.yaml",
 		"build/k8s/ingestor.yaml",
+		"build/k8s/collector.yaml",
 		"pkg/testutils/kustainer/k8s.yaml",
 	}
 	c := k8s.New(ctx, manifests)
@@ -48,6 +50,7 @@ func TestK8sWithStack(t *testing.T) {
 
 	t.Logf("Kusto endpoint: %s", k.Endpoint())
 	require.NoError(t, ingestor.RunWithKustoEndpoint(ctx, c))
+	require.NoError(t, collector.Run(ctx, c))
 
 	require.NoError(t, k.Close())
 	require.NoError(t, c.Close())

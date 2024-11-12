@@ -64,7 +64,8 @@ func (c *Cluster) Open(ctx context.Context) error {
 
 	k3sContainer, err := k3s.Run(
 		ctx,
-		"rancher/k3s:v1.27.1-k3s1",
+		// "rancher/k3s:v1.27.1-k3s1",
+		"rancher/k3s:v1.31.2-k3s1",
 		manifests...,
 	)
 	if err != nil {

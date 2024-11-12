@@ -44,16 +44,6 @@ func Build(ctx context.Context) error {
 		return fmt.Errorf("failed to write Dockerfile: %w", err)
 	}
 	req := testcontainers.ContainerRequest{
-		ExposedPorts: []string{"9090/tcp"},
-		Env: map[string]string{
-			"LOG_LEVEL": "DEBUG",
-		},
-		Cmd: []string{
-			"--insecure-skip-verify",
-			"--disable-peer-transfer",
-			"--max-segment-size", "1024", // We want to quickly get logs into kustainer
-			"--storage-dir", "/",
-		},
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
@@ -65,7 +55,6 @@ func Build(ctx context.Context) error {
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
-		Started:          true,
 	}
 
 	_, err = testcontainers.GenericContainer(ctx, genericContainerReq)
@@ -157,7 +146,7 @@ func RunWithKustoEndpoint(ctx context.Context, c *k8s.Cluster) error {
 	// Build Ingestor from source
 	err := Build(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to run ingestor container: %w", err)
+		return fmt.Errorf("failed to build ingestor container: %w", err)
 	}
 	ingestorImage := fmt.Sprintf("%s:%s", DefaultImage, DefaultTag)
 	if err := c.LoadImages(ctx, ingestorImage); err != nil {
@@ -218,7 +207,6 @@ func RunWithKustoEndpoint(ctx context.Context, c *k8s.Cluster) error {
 		scanner := bufio.NewScanner(stream)
 		for scanner.Scan() {
 			line := scanner.Text()
-			fmt.Printf("BUGBUG %s\n", line)
 			if strings.Contains(line, "Listening at") {
 				return nil
 			}

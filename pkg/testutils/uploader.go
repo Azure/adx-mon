@@ -47,5 +47,5 @@ func (u *Uploader) FromReader(ctx context.Context, reader io.Reader, options ...
 		return nil, fmt.Errorf("failed to ingest data: %w", err)
 	}
 
-	return nil, nil
+	return &ingest.Result{}, nil
 }
