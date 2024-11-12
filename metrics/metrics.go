@@ -148,7 +148,7 @@ var (
 		Subsystem: "alerter",
 		Name:      "notification_unhealthy",
 		Help:      "Gauge indicating if a notification is healthy or not",
-	}, []string{"namespace", "name"})
+	}, []string{})
 
 	// Collector metrics
 	CollectorHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{

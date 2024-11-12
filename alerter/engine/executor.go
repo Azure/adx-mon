@@ -175,10 +175,10 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		}
 
 		logger.Errorf("Failed to create Notification: %s\n", err)
-		metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(1)
+		metrics.NotificationUnhealthy.WithLabelValues().Set(1)
 		return nil
 	}
-	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
+	metrics.NotificationUnhealthy.WithLabelValues().Set(0)
 
 	return nil
 }

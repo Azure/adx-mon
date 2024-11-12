@@ -133,7 +133,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			metrics.NotificationUnhealthy.WithLabelValues().Set(1)
 			return
 		}
 
@@ -148,11 +148,12 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		}); err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s/%s: %s", endpointBaseName, e.rule.Namespace, e.rule.Name, err)
 			// Only set the notification as failed if we are not able to send a failure alert directly.
-			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			metrics.NotificationUnhealthy.WithLabelValues().Set(1)
 			return
 		}
 		// Query failed due to user error, so return the query to healthy.
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+		metrics.NotificationUnhealthy.WithLabelValues().Set(0)
 		return
 	}
 
