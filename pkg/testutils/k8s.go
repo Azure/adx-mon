@@ -57,6 +57,8 @@ func WriteKubeConfig(ctx context.Context, k *k3s.K3sContainer, dir string) (stri
 }
 
 func VerifyCRDFunctionInstalled(ctx context.Context, t *testing.T, kubeConfigYaml, fnName string) {
+	t.Helper()
+
 	// The Function "Sample" is invalid: metadata.name: Invalid value: "Sample": a lowercase RFC 1123 subdomain
 	fnName = strings.ToLower(fnName)
 
