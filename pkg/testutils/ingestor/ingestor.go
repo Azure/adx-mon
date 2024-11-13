@@ -48,6 +48,7 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 			Tag:           DefaultTag,
 			Context:       rootDir,
 			PrintBuildLog: true,
+			KeepImage:     true,
 		},
 	}
 

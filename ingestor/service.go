@@ -276,14 +276,14 @@ func (s *Service) Open(ctx context.Context) error {
 		})
 
 		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
-		s.scheduler.ScheduleEvery(5*time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
+		s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
 	}
 
 	for _, v := range s.opts.LogsKustoCli {
 		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
-		s.scheduler.ScheduleEvery(5*time.Minute, "sync-logs-functions", func(ctx context.Context) error {
+		s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
 	}

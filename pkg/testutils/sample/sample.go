@@ -27,17 +27,20 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Samp
 	}
 
 	req := testcontainers.ContainerRequest{
+		Name: "sample" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
 			Context:       filepath.Join(rootDir, "pkg/testutils/sample"),
 			Dockerfile:    "./container/Dockerfile",
 			PrintBuildLog: true,
+			KeepImage:     true,
 		},
 	}
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
+		Reuse:            true,
 	}
 	for _, opt := range opts {
 		if err := opt.Customize(&genericContainerReq); err != nil {

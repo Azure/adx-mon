@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,7 +149,10 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		stmt := kql.New("").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-			if !errors.Retry(err) {
+			if !errors.Retry(err) && !strings.Contains(err.Error(), "Failed to resolve table expression named") {
+				// Until we have a KQL parser in place, we don't know which Table the View is targetting so we
+				// can't validate that the Table exists before creating the View; therefore, we have to inspect
+				// the error and not count as permanent if the Table doesn't yet exist.
 				updateKQLFunctionStatus(ctx, t.store, function, v1.PermanentFailure, err)
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				// We want to fall through here so that we can cache this object, there's no need

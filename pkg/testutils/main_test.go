@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils/ingestor"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/adx-mon/pkg/testutils/sample"
+	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 )
 
@@ -90,6 +91,11 @@ func (c *Cluster) Open() error {
 }
 
 func (c *Cluster) Close() {
+	cfg := testcontainers.ReadConfig()
+	if cfg.Config.RyukDisabled {
+		return
+	}
+
 	ctx := context.Background()
 	c.k8s.Terminate(ctx)
 	c.kustainer.Terminate(ctx)

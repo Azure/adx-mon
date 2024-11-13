@@ -49,6 +49,7 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Coll
 			Tag:           DefaultTag,
 			Context:       rootDir,
 			PrintBuildLog: true,
+			KeepImage:     true,
 		},
 	}
 
@@ -128,11 +129,11 @@ func WithConfig(ctx context.Context) testcontainers.CustomizeRequestOption {
 var dockerfile = `
 FROM golang:1.22 as builder
 
-ADD . /code
-WORKDIR /code
-
 # Headers required for journal input build
 RUN apt update && apt install -y libsystemd-dev
+
+ADD . /code
+WORKDIR /code
 
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o ./bin/collector ./cmd/collector
 

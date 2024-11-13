@@ -77,11 +77,11 @@ func FunctionExists(ctx context.Context, t *testing.T, database, function, uri s
 			break
 		}
 		if errInline != nil {
-			t.Logf("Partial failure to retrieve tables: %v", errInline)
+			t.Logf("Partial failure to retrieve functions: %v", errInline)
 			continue
 		}
 		if errFinal != nil {
-			t.Errorf("Failed to retrieve tables: %v", errFinal)
+			t.Errorf("Failed to retrieve functions: %v", errFinal)
 		}
 
 		var fn Function
@@ -126,11 +126,11 @@ func TableHasRows(ctx context.Context, t *testing.T, database, table, uri string
 			break
 		}
 		if errInline != nil {
-			t.Logf("Partial failure to retrieve tables: %v", errInline)
+			t.Logf("Partial failure to retrieve row count: %v", errInline)
 			continue
 		}
 		if errFinal != nil {
-			t.Errorf("Failed to retrieve tables: %v", errFinal)
+			t.Errorf("Failed to retrieve row count: %v", errFinal)
 		}
 
 		var count RowCount

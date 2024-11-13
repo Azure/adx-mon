@@ -30,10 +30,10 @@ metadata:
 spec:
   body: |
     .create-or-alter function with (view=true, folder='views') Sample () {
-      Sample
+      table('Sample')
       | extend msg = tostring(Body.msg),
-              encoding = tostring(Body.handler.encoding),
-              number = toint(Body.handler.number),
+              encoding = tostring(Body['handler']['encoding']),
+              number = toint(Body['handler']['number']),
               ['time'] = todatetime(Body['time']),
               level = tostring(Body.level),
               host = tostring(Resource.host),
