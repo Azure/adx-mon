@@ -233,6 +233,15 @@ func (c *KustainerContainer) connect(ctx context.Context, config *rest.Config, p
 }
 
 func (c *KustainerContainer) ConnectionUrl() string {
+	if c.endpoint == "" {
+		// This means we're running out-of-cluster
+		port, err := c.MappedPort(context.Background(), "8080")
+		if err != nil {
+			return ""
+		}
+		return "http://localhost:" + port.Port()
+	}
+
 	return c.endpoint
 }
 

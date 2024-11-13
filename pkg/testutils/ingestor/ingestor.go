@@ -53,6 +53,7 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
+		Reuse:            true,
 	}
 
 	for _, opt := range opts {

@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +54,7 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Coll
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
+		Reuse:            true,
 	}
 
 	for _, opt := range opts {
@@ -110,6 +112,16 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		})
 
 		return nil
+	}
+}
+
+// TODO Accept a collector configuration and write it to a temp directory, then transfer it to the cluster,
+// overwriting the existing configuration. Also create a default configuration if none is provided.
+// Note, this would require moving the configuration to somewhere it can be imported, get feedback
+// from the team.
+func WithConfig(ctx context.Context) testcontainers.CustomizeRequestOption {
+	return func(req *testcontainers.GenericContainerRequest) error {
+		return errors.New("not implemented")
 	}
 }
 
