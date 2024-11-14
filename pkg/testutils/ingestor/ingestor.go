@@ -3,7 +3,6 @@ package ingestor
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
@@ -26,27 +25,13 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 		return nil, fmt.Errorf("failed to get git root dir: %w", err)
 	}
 
-	f, err := os.Create(filepath.Join(rootDir, "Dockerfile"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to open Dockerfile: %w", err)
-	}
-	defer func() {
-		os.Remove(f.Name())
-	}()
-
-	if _, err := f.WriteString(dockerfile); err != nil {
-		return nil, fmt.Errorf("failed to write Dockerfile: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close Dockerfile: %w", err)
-	}
-
 	req := testcontainers.ContainerRequest{
 		Name: "ingestor" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
 			Context:       rootDir,
+			Dockerfile:    "pkg/testutils/ingestor/Dockerfile",
 			PrintBuildLog: true,
 			KeepImage:     true,
 		},
@@ -114,41 +99,3 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		return nil
 	}
 }
-
-// TODO
-// dockerfile is a copy of build/images/Dockerfile.ingestor - I can't seem to get the context
-// to allow adding from the parent directory.
-// I tried the following combinations:
-// Context:       filepath.Join(rootDir, "/build/images"),
-// Dockerfile:    "Dockerfile.ingestor",
-//
-// Context:       filepath.Join(rootDir, "/build/images"),
-// Dockerfile:    "../Dockerfile.ingestor",
-//
-// Context:       filepath.Join(rootDir, "/build/images/.."),
-// Dockerfile:    "Dockerfile.ingestor",
-//
-// Context:       rootDir,
-// Dockerfile:    "build/images/Dockerfile.ingestor",
-//
-// Context:       "../../../.",
-// Dockerfile:    "build/images/Dockerfile.ingestor",
-//
-// Context:       "../../../.",
-// Dockerfile:    "./build/images/Dockerfile.ingestor",
-var dockerfile = `
-FROM golang:1.22 as builder
-
-ADD ./ /code
-WORKDIR /code
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/ingestor ./cmd/ingestor
-
-FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
-
-LABEL org.opencontainers.image.source https://github.com/Azure/adx-mon
-
-COPY --from=builder /code/bin /
-
-ENTRYPOINT ["/ingestor"]
-`

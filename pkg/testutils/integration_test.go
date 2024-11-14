@@ -59,12 +59,10 @@ func TestLogSampleView(t *testing.T) {
 
 	testutils.VerifyCRDFunctionInstalled(ctx, t, TestCluster.KubeConfigPath(), target)
 
-	// t.Logf("Kusto URI: %s", uri)
-	// t.Logf("Kubeconfig: %s", TestCluster.KubeConfigPath())
-	// time.Sleep(time.Hour)
-
 	row := QuerySampleView(ctx, t, database, target, uri)
 	row.Validate(t)
+
+	// time.Sleep(time.Hour)
 }
 
 func QuerySampleView(ctx context.Context, t *testing.T, database, view, uri string) SampleViewRow {
