@@ -69,7 +69,11 @@ func VerifyCRDFunctionInstalled(ctx context.Context, t *testing.T, kubeConfigYam
 	config, err := clientcmd.BuildConfigFromFlags("", kubeConfigYaml)
 	require.NoError(t, err)
 
-	client, err := ctrlclient.New(config, ctrlclient.Options{})
+	client, err := ctrlclient.New(config, ctrlclient.Options{
+		WarningHandler: ctrlclient.WarningHandlerOptions{
+			SuppressWarnings: true,
+		},
+	})
 	require.NoError(t, err)
 
 	functionStorage := &storage.Functions{}
@@ -86,7 +90,7 @@ func VerifyCRDFunctionInstalled(ctx context.Context, t *testing.T, kubeConfigYam
 
 		functions := functionStorage.List()
 		for _, function := range functions {
-			t.Logf("Found function %s with status %s", function.GetName(), function.Status.String())
+			t.Logf("Found function %s with status %s", function.GetName(), function.Status.Status)
 			if function.GetName() == fnName {
 				return function.Status.Status == v1.Success
 			}

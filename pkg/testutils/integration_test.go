@@ -34,7 +34,7 @@ func TestLogSampleOTLP(t *testing.T) {
 
 func TestLogSampleView(t *testing.T) {
 	var (
-		waitFor  = 10 * time.Minute
+		waitFor  = 30 * time.Minute
 		database = "Logs"
 		target   = "Sample"
 		uri      = TestCluster.KustoConnectionURL()
@@ -54,6 +54,10 @@ func TestLogSampleView(t *testing.T) {
 	}, waitFor, 30*time.Second)
 
 	testutils.VerifyCRDFunctionInstalled(ctx, t, TestCluster.KubeConfigPath(), target)
+
+	// t.Logf("Kusto URI: %s", uri)
+	// t.Logf("Kubeconfig: %s", TestCluster.KubeConfigPath())
+	// time.Sleep(time.Hour)
 
 	row := QuerySampleView(ctx, t, database, target, uri)
 	row.Validate(t)

@@ -262,3 +262,22 @@ spec:
     storage: true
     subresources:
       status: {}
+---
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: ingestor
+spec:
+  body: |
+    .create-or-alter function with (view=true, folder='views') Ingestor () {
+      table('Ingestor')
+      | extend msg = tostring(Body.msg),
+               lvl = tostring(Body.lvl),
+               ts = todatetime(Body.ts),
+               namespace = tostring(Resource.namespace),
+               container = tostring(Resource.container),
+               pod = tostring(Resource.pod),
+               host = tostring(Resource.host)
+      | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+    }
+  database: Logs
