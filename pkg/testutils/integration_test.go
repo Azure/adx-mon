@@ -23,10 +23,12 @@ func TestLogSampleOTLP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
+	t.Logf("Checking if table %s exists in database %s", table, database)
 	require.Eventually(t, func() bool {
 		return testutils.TableExists(ctx, t, database, table, uri)
 	}, waitFor, 10*time.Second)
 
+	t.Logf("Checking if table %s has rows in database %s", table, database)
 	require.Eventually(t, func() bool {
 		return testutils.TableHasRows(ctx, t, database, table, uri)
 	}, waitFor, time.Second)
@@ -45,10 +47,12 @@ func TestLogSampleView(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
+	t.Logf("Checking if table %s exists in database %s", target, database)
 	require.Eventually(t, func() bool {
 		return testutils.TableExists(ctx, t, database, target, uri)
 	}, waitFor, 10*time.Second)
 
+	t.Logf("Checking if function %s exists in database %s", target, database)
 	require.Eventually(t, func() bool {
 		return testutils.FunctionExists(ctx, t, database, target, uri)
 	}, waitFor, 30*time.Second)

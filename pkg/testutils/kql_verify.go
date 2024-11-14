@@ -47,7 +47,6 @@ func TableExists(ctx context.Context, t *testing.T, database, table, uri string)
 		}
 	}
 
-	t.Logf("Table %s not found in database %s", table, database)
 	return false
 }
 
@@ -95,7 +94,6 @@ func FunctionExists(ctx context.Context, t *testing.T, database, function, uri s
 		}
 	}
 
-	t.Logf("Function %s not found in database %s", function, database)
 	return false
 }
 
