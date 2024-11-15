@@ -117,7 +117,7 @@ data:
       disable-metrics-forwarding = false
 
       # Regexes of metrics to keep from scraping source.
-      keep-metrics = ['^adxmon.*']
+      keep-metrics = ['^adxmon.*', '^sample.*']
 
       # Regexes of metrics to drop from scraping source.
       drop-metrics = ['^go.*', '^process.*', '^promhttp.*']

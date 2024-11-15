@@ -17,11 +17,28 @@ spec:
         adx-mon/scrape: "true"
         adx-mon/log-destination: "Logs:Sample"
         adx-mon/log-parsers: "json"
+        adx-mon/port: "8080"
+        adx-mon/path: "/metrics"
     spec:
       containers:
       - name: sample
         image: sample:latest
         imagePullPolicy: Never
+        ports:
+          - containerPort: 8080
+            name: metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample
+  namespace: default
+spec:
+  selector:
+    app: sample
+  ports:
+    - protocol: TCP
+      port: 8080
 ---
 apiVersion: adx-mon.azure.com/v1
 kind: Function

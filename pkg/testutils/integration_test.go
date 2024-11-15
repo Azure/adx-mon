@@ -62,7 +62,7 @@ func TestLogSampleView(t *testing.T) {
 	row := QuerySampleView(ctx, t, database, target, uri)
 	row.Validate(t)
 
-	// time.Sleep(time.Hour)
+	time.Sleep(time.Hour)
 }
 
 func QuerySampleView(ctx context.Context, t *testing.T, database, view, uri string) SampleViewRow {
