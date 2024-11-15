@@ -43,10 +43,6 @@ test:
 	go test ./...
 .PHONY: test
 
-e2e:
-	KUSTO_INTEGRATION_TEST=true go test -timeout 5m -count=1 -v github.com/Azure/adx-mon/tools/test/logs
-.PHONY: e2e
-
 default:
 	@$(MAKE) test
 	@$(MAKE) build
