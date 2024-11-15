@@ -19,6 +19,6 @@ collection and analysis of observability data.
 
 ## Learn More
 * [Installation](installation.md)
-* [Quick Start](quick-start)
+* [Quick Start](quick-start.md)
 * [Concepts](concepts.md)
 * [Cook Book](cookbook.md) 
