@@ -4,65 +4,119 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
+	"github.com/Azure/adx-mon/pkg/testutils/collector"
+	"github.com/Azure/adx-mon/pkg/testutils/ingestor"
+	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
+	"github.com/Azure/adx-mon/pkg/testutils/sample"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/k3s"
 )
 
-func TestLogSampleOTLP(t *testing.T) {
+func TestSampleIntegration(t *testing.T) {
+	// This test creates a Kubernets and Kusto cluster,
+	// installs adx-mon into the Kubernetes cluster,
+	// and a Pod named "sample" that emits JSON formatted
+	// logs and a single metric counter. The test ensures:
+	// 1. Collector scrapes logs and metrics from the sample Pod
+	// 2. Ingestor ingests logs and metrics into Kusto
+	// 3. Logs and metrics are available in Kusto
+	// 4. Logs have the correct schema as defined in the sample CRD
 	var (
-		waitFor  = 10 * time.Minute
-		database = "Logs"
-		table    = "Sample"
-		uri      = TestCluster.KustoConnectionURL()
+		waitFor         = 30 * time.Minute
+		logsDatabase    = "Logs"
+		metricsDatabase = "Metrics"
+		logsTable       = "Sample"
+		metricsTable    = "SampleIterationTotal"
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
-	defer cancel()
-
-	t.Logf("Checking if table %s exists in database %s", table, database)
-	require.Eventually(t, func() bool {
-		return testutils.TableExists(ctx, t, database, table, uri)
-	}, waitFor, 10*time.Second)
-
-	t.Logf("Checking if table %s has rows in database %s", table, database)
-	require.Eventually(t, func() bool {
-		return testutils.TableHasRows(ctx, t, database, table, uri)
-	}, waitFor, time.Second)
-}
-
-func TestLogSampleView(t *testing.T) {
-	var (
-		waitFor  = 30 * time.Minute
-		database = "Logs"
-		target   = "Sample"
-		uri      = TestCluster.KustoConnectionURL()
-	)
-	t.Logf("Kusto URI: %s", uri)
-	t.Logf("Kubeconfig: %s", TestCluster.KubeConfigPath())
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 	defer cancel()
 
-	t.Logf("Checking if table %s exists in database %s", target, database)
-	require.Eventually(t, func() bool {
-		return testutils.TableExists(ctx, t, database, target, uri)
-	}, waitFor, 10*time.Second)
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	testcontainers.CleanupContainer(t, k3sContainer)
+	require.NoError(t, err)
 
-	t.Logf("Checking if function %s exists in database %s", target, database)
-	require.Eventually(t, func() bool {
-		return testutils.FunctionExists(ctx, t, database, target, uri)
-	}, waitFor, 30*time.Second)
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
 
-	testutils.VerifyCRDFunctionInstalled(ctx, t, TestCluster.KubeConfigPath(), target)
+	restConfig, err := testutils.K8sRestConfig(ctx, k3sContainer)
+	require.NoError(t, err)
+	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
 
-	row := QuerySampleView(ctx, t, database, target, uri)
-	row.Validate(t)
+	t.Run("Create databases", func(t *testing.T) {
+		for _, dbName := range []string{"Metrics", "Logs"} {
+			require.NoError(t, kustoContainer.CreateDatabase(ctx, dbName))
+		}
+	})
 
-	time.Sleep(time.Hour)
+	ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, ingestorContainer)
+	require.NoError(t, err)
+
+	collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, collectorContainer)
+	require.NoError(t, err)
+
+	sampleContainer, err := sample.Run(ctx, sample.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, sampleContainer)
+	require.NoError(t, err)
+
+	dir, err := os.MkdirTemp("", ".kube")
+	require.NoError(t, err)
+	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, dir)
+	require.NoError(t, err)
+
+	t.Run("Logs", func(t *testing.T) {
+		t.Run("Table exists in Kusto", func(t *testing.T) {
+			require.Eventually(t, func() bool {
+				return testutils.TableExists(ctx, t, logsDatabase, logsTable, kustoContainer.ConnectionUrl())
+			}, waitFor, 10*time.Second)
+		})
+
+		t.Run("Table has rows", func(t *testing.T) {
+			require.Eventually(t, func() bool {
+				return testutils.TableHasRows(ctx, t, logsDatabase, logsTable, kustoContainer.ConnectionUrl())
+			}, waitFor, time.Second)
+		})
+
+		t.Run("View exists in Kusto", func(t *testing.T) {
+			require.Eventually(t, func() bool {
+				return testutils.FunctionExists(ctx, t, logsDatabase, logsTable, kustoContainer.ConnectionUrl())
+			}, waitFor, 30*time.Second)
+		})
+
+		t.Run("View has correct schema", func(t *testing.T) {
+			testutils.VerifyCRDFunctionInstalled(ctx, t, kubeconfig, logsTable)
+			row := QuerySampleView(ctx, t, logsDatabase, logsTable, kustoContainer.ConnectionUrl())
+			row.Validate(t)
+		})
+	})
+
+	t.Run("Metrics", func(t *testing.T) {
+		t.Run("Table exists in Kusto", func(t *testing.T) {
+			require.Eventually(t, func() bool {
+				return testutils.TableExists(ctx, t, metricsDatabase, metricsTable, kustoContainer.ConnectionUrl())
+			}, waitFor, 10*time.Second)
+		})
+
+		t.Run("Table has rows", func(t *testing.T) {
+			require.Eventually(t, func() bool {
+				return testutils.TableHasRows(ctx, t, metricsDatabase, metricsTable, kustoContainer.ConnectionUrl())
+			}, waitFor, time.Second)
+		})
+	})
+
+	t.Logf("Kusto URI: %s", kustoContainer.ConnectionUrl())
+	t.Logf("Kubeconfig: %s", kubeconfig)
 }
 
 func QuerySampleView(ctx context.Context, t *testing.T, database, view, uri string) SampleViewRow {

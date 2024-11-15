@@ -42,7 +42,6 @@ func TableExists(ctx context.Context, t *testing.T, database, table, uri string)
 			continue
 		}
 		if tbl.TableName == table {
-			t.Logf("Found table %s in database %s", table, database)
 			return true
 		}
 	}
@@ -89,7 +88,6 @@ func FunctionExists(ctx context.Context, t *testing.T, database, function, uri s
 			continue
 		}
 		if fn.Name == function {
-			t.Logf("Found function %s in database %s", function, database)
 			return true
 		}
 	}
@@ -136,7 +134,6 @@ func TableHasRows(ctx context.Context, t *testing.T, database, table, uri string
 			t.Errorf("Failed to convert row to struct: %v", err)
 			continue
 		}
-		t.Logf("Table %s has %d rows", table, count.Count)
 		return count.Count > 0
 	}
 

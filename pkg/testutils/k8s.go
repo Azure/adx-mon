@@ -90,7 +90,6 @@ func VerifyCRDFunctionInstalled(ctx context.Context, t *testing.T, kubeConfigYam
 
 		functions := functionStorage.List()
 		for _, function := range functions {
-			t.Logf("Found function %s with status %s", function.GetName(), function.Status.Status)
 			if function.GetName() == fnName {
 				return function.Status.Status == v1.Success
 			}
