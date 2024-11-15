@@ -21,7 +21,7 @@ bash <(curl -s  https://raw.githubusercontent.com/Azure/adx-mon/main/build/k8s/b
 ```
 
 This script will prompt you for the name or you AKS and ADX cluster and configure them to accept telemetry from ADX-Mon
-components. 
+components. It configure the provided ADX cluster with `Metrics` and `Logs` databases and deploy the Collector and Ingestor services to begin collecting and shipping data from the AKS cluster.
 
 ## Annotate Your Pods
 
@@ -30,33 +30,63 @@ OTEL endpoints.  The simplest model is to annotate your pods with the appropriat
 
 ### Metrics
 
-ADX-Mon collector support scraping Prometheus style endpoints directly.  To enable this, annotate your pods with the
+ADX-Mon collector support scraping Prometheus style endpoints directly. To enable this, annotate your pods with these annotations, configuring the port and path to match the port and http path for the metrics endpoint of your service.
+
+Prometheus metric names will be transformed from `snake_case` to `TitleCase`. As an example, `adxmon_collector_logs_sent` is transformed into `AdxmonCollectorLogsSent` when sent to Kusto.
+
 ```yaml
-adx-mon/metrics: "true"
+adx-mon/scrape: "true"
 adx-mon/port: "8080"
 adx-mon/path: "/metrics"
 ```
 
-
-```sh
-# TODO: Add instructions for annotating pods with metrics
-```
-
 ### Logs
 
-```sh
-# TODO: Add instructions for annotating pods with logs
+ADX-Mon collector supports discovering logs from pods. To configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`.
+
+By default, collector parses each log line as plaintext, but an optional list of log-parsers can be defined as a comma separated list. It currently supports json-formatted log lines in addition to plaintext.
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/log-destination: "Logs:Collector"
+adx-mon/log-parsers: json
 ```
 
-### Query Your Data
+## Query Your Data
 
-```sh
-# TODO: Add instructions for querying data
+After bootstrapping, the provided ADX cluster will begin to populate with metrics and logs. The `Metrics` database is configured with a default `30s` batch latency for ADX ingestion to optimize for latency, while `Logs` is configured with a default of `5m` to optimize for throughput.
+
+### Metric Examples
+
+```kql
+// Process a prometheus-style counter to determine the number of logs sent by a given source in Collector in the last hour
+AdxmonCollectorLogsSent
+| where Timestamp > ago(1h)
+// convert from point-in-time count to amount of increase per interval
+| invoke prom_delta()
+| summarize TotalSent=sum(Value) by Host=tostring(Labels.host), Source=tostring(Labels.source)
 ```
 
+### Log Examples
 
-### Setup Dashboards
+```kql
+// Get all non-info logs from Collector from the last hour
+Collector
+| where Timestamp > ago(1h)
+| where Body.lvl != "INF"
+| project Timestamp, Level=Body.lvl, Msg=Body.msg, Pod=Resource.pod, Host=Resource.host
+```
 
-Any ADX compatible visualization tool can be used to visualize collected telemetry.  ADX Dashboards is a simple solution
-that is native to ADX.  You can also use Azure Managed Grafana with the Azure Data Explorer datasource to leverge Grafana
-powerful visualization capabilities.
+```kql
+// Graph the number of container creations every 15 minutes over the last day, per Host and Cluster
+let _lookback=ago(1d);
+Kubelet
+| where Timestamp > _lookback
+| where Body.message contains "Syncloop ADD"
+| make-series Creations=count() default=0 on Timestamp from _lookback to now() step 15m by Host=tostring(Resource.host), Cluster=tostring(Resource.cluster)
+| render timechart 
+```
+
+## Setup Dashboards
+
+Any ADX compatible visualization tool can be used to visualize collected telemetry. ADX Dashboards is a simple solution that is native to ADX. You can also use Azure Managed Grafana with the Azure Data Explorer datasource to leverage Grafana's powerful visualization capabilities.
