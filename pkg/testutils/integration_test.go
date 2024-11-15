@@ -30,7 +30,7 @@ func TestSampleIntegration(t *testing.T) {
 	// 3. Logs and metrics are available in Kusto
 	// 4. Logs have the correct schema as defined in the sample CRD
 	var (
-		waitFor         = 30 * time.Minute
+		waitFor         = 10 * time.Minute
 		logsDatabase    = "Logs"
 		metricsDatabase = "Metrics"
 		logsTable       = "Sample"
