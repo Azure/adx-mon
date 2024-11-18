@@ -48,6 +48,7 @@ nav:
   - 'concepts.md'
   - 'cookbook.md'
   - Reference:
+      - 'config.md'
       - 'ingestor.md'
   - Designs:
       - 'designs/log-integration-with-kubernetes.md'
