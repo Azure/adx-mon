@@ -82,8 +82,6 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
-
-			&cli.BoolFlag{Name: "kustainer", Usage: "Use kustainer for ingestion"},
 		},
 
 		Action: func(ctx *cli.Context) error {
@@ -492,7 +490,7 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 
 func newKustoClient(ctx *cli.Context, endpoint string) (*kusto.Client, error) {
 	kcsb := kusto.NewConnectionStringBuilder(endpoint)
-	if !ctx.Bool("kustainer") {
+	if strings.Contains(endpoint, "https://") {
 		kcsb.WithDefaultAzureCredential()
 	}
 	return kusto.New(kcsb)
@@ -535,7 +533,6 @@ func newUploaders(ctx *cli.Context, endpoints []string, storageDir string, concu
 			DefaultMapping:    defaultMapping,
 			SampleType:        sampleType,
 			FnStore:           fnStore,
-			Kustainer:         ctx.Bool("kustainer"),
 		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
