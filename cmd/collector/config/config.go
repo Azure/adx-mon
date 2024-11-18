@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"errors"
@@ -33,6 +33,7 @@ func init() {
 }
 
 var DefaultConfig = Config{
+	Endpoint:                     "https://ingestor.adx-mon.svc.cluster.local",
 	MaxBatchSize:                 5000,
 	WALFlushIntervalMilliSeconds: 100,
 	ListenAddr:                   ":8080",
@@ -67,45 +68,45 @@ var DefaultConfig = Config{
 }
 
 type Config struct {
-	Endpoint           string `toml:"endpoint" comment:"Ingestor URL to send collected telemetry."`
-	Kubeconfig         string `toml:"kube-config" comment:"Path to kubernetes client config"`
-	InsecureSkipVerify bool   `toml:"insecure-skip-verify" comment:"Skip TLS verification."`
-	ListenAddr         string `toml:"listen-addr" comment:"Address to listen on for endpoints."`
-	Region             string `toml:"region" comment:"Region is a location identifier."`
-	TLSKeyFile         string `toml:"tls-key-file" comment:"Optional path to the TLS key file."`
-	TLSCertFile        string `toml:"tls-cert-file" comment:"Optional path to the TLS cert bundle file."`
+	Endpoint           string `toml:"endpoint,omitempty" comment:"Ingestor URL to send collected telemetry."`
+	Kubeconfig         string `toml:"kube-config,omitempty" comment:"Path to kubernetes client config"`
+	InsecureSkipVerify bool   `toml:"insecure-skip-verify,omitempty" comment:"Skip TLS verification."`
+	ListenAddr         string `toml:"listen-addr,omitempty" comment:"Address to listen on for endpoints."`
+	Region             string `toml:"region,omitempty" comment:"Region is a location identifier."`
+	TLSKeyFile         string `toml:"tls-key-file,omitempty" comment:"Optional path to the TLS key file."`
+	TLSCertFile        string `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
 
-	MaxConnections               int   `toml:"max-connections" comment:"Maximum number of connections to accept."`
-	MaxBatchSize                 int   `toml:"max-batch-size" comment:"Maximum number of samples to send in a single batch."`
-	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds" comment:"Max segment agent in seconds."`
-	MaxSegmentSize               int64 `toml:"max-segment-size" comment:"Maximum segment size in bytes."`
-	MaxDiskUsage                 int64 `toml:"max-disk-usage" comment:"Maximum allowed size in bytes of all segments on disk."`
-	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms" comment:"Interval to flush the WAL. (default 100)"`
+	MaxConnections               int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
+	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
+	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
+	MaxSegmentSize               int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
+	MaxDiskUsage                 int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
+	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
 
-	StorageDir  string `toml:"storage-dir" comment:"Storage directory for the WAL and log cursors."`
-	EnablePprof bool   `toml:"enable-pprof" comment:"Enable pprof endpoints."`
-
-	// These are global config options that apply to all endpoints.
-	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
-	AddLabels                 map[string]string `toml:"add-labels" comment:"Global Key/value pairs of labels to add to all metrics."`
-	DropLabels                map[string]string `toml:"drop-labels" comment:"Global labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
-	DropMetrics               []string          `toml:"drop-metrics" comment:"Global Regexes of metrics to drop."`
-	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
-	LiftLabels                []*LiftLabel      `toml:"lift-labels" comment:"Global labels to lift from the metric to top level columns"`
-
-	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
+	StorageDir  string `toml:"storage-dir,omitempty" comment:"Storage directory for the WAL and log cursors."`
+	EnablePprof bool   `toml:"enable-pprof,omitempty" comment:"Enable pprof endpoints."`
 
 	// These are global config options that apply to all endpoints.
-	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
-	LiftResources  []*LiftResource   `toml:"lift-resources" comment:"Fields lifted from the Resource and added as top level columns."`
+	DefaultDropMetrics        *bool             `toml:"default-drop-metrics,omitempty" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
+	AddLabels                 map[string]string `toml:"add-labels,omitempty" comment:"Global Key/value pairs of labels to add to all metrics."`
+	DropLabels                map[string]string `toml:"drop-labels,omitempty" comment:"Global labels to drop if they match a metrics regex in the format <metrics regex>=<label name>. These are dropped from all metrics collected by this agent"`
+	DropMetrics               []string          `toml:"drop-metrics,omitempty" comment:"Global Regexes of metrics to drop."`
+	KeepMetrics               []string          `toml:"keep-metrics,omitempty" comment:"Global Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value,omitempty" comment:"Global Regexes of metrics to keep if they have the given label and value. These are kept from all metrics collected by this agent"`
+	LiftLabels                []*LiftLabel      `toml:"lift-labels,omitempty" comment:"Global labels to lift from the metric to top level columns"`
 
-	PrometheusScrape      *PrometheusScrape        `toml:"prometheus-scrape" comment:"Defines a prometheus scrape endpoint."`
-	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write" comment:"Defines a prometheus remote write endpoint."`
-	OtelLog               *OtelLog                 `toml:"otel-log" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
-	OtelMetric            []*OtelMetric            `toml:"otel-metric" comment:"Defines an OpenTelemetry metric endpoint. Optionally accepts OTLP/HTTP and/or OTLP/gRPC."`
-	HostLog               []*HostLog               `toml:"host-log" comment:"Defines a host log scraper."`
+	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding,omitempty" comment:"Disable metrics forwarding to endpoints."`
+
+	// These are global config options that apply to all endpoints.
+	AddAttributes  map[string]string `toml:"add-attributes,omitempty" comment:"Key/value pairs of attributes to add to all logs."`
+	LiftAttributes []string          `toml:"lift-attributes,omitempty" comment:"Attributes lifted from the Body field and added to Attributes."`
+	LiftResources  []*LiftResource   `toml:"lift-resources,omitempty" comment:"Fields lifted from the Resource and added as top level columns."`
+
+	PrometheusScrape      *PrometheusScrape        `toml:"prometheus-scrape,omitempty" comment:"Defines a prometheus format endpoint scraper."`
+	PrometheusRemoteWrite []*PrometheusRemoteWrite `toml:"prometheus-remote-write,omitempty" comment:"Defines a prometheus remote write endpoint."`
+	OtelLog               *OtelLog                 `toml:"otel-log,omitempty" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
+	OtelMetric            []*OtelMetric            `toml:"otel-metric,omitempty" comment:"Defines an OpenTelemetry metric endpoint. Accepts OTLP/HTTP and/or OTLP/gRPC."`
+	HostLog               []*HostLog               `toml:"host-log,omitempty" comment:"Defines a host log scraper."`
 }
 
 type PrometheusScrape struct {
@@ -118,10 +119,10 @@ type PrometheusScrape struct {
 
 	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
 	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>."`
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
-	KeepMetrics               []string          `toml:"keep-metrics" comment:"Global Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Global Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
 }
 
 func (s *PrometheusScrape) Validate() error {
@@ -142,7 +143,7 @@ func (s *PrometheusScrape) Validate() error {
 }
 
 type LabelMatcher struct {
-	LabelRegex string `toml:"label-regex" comment:"The regex to match the label value against.  If the label value matches, the metric will be kept."`
+	LabelRegex string `toml:"label-regex," comment:"The regex to match the label value against.  If the label value matches, the metric will be kept."`
 	ValueRegex string `toml:"value-regex" comment:"The regex to match the label value against.  If the label value matches, the metric will be kept."`
 }
 
@@ -190,10 +191,10 @@ type PrometheusRemoteWrite struct {
 
 	DefaultDropMetrics        *bool             `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
 	AddLabels                 map[string]string `toml:"add-labels" comment:"Key/value pairs of labels to add to all metrics."`
-	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
+	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>."`
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
 }
 
 func (w *PrometheusRemoteWrite) Validate() error {
@@ -265,7 +266,7 @@ type OtelMetric struct {
 	DropLabels                map[string]string `toml:"drop-labels" comment:"Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent"`
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
-	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value in the format <metrics regex>=<label name>=<label value>.  These are kept from all metrics collected by this agent"`
+	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
 }
 
 func (w *OtelMetric) Validate() error {
@@ -315,7 +316,7 @@ func (w *OtelMetric) Validate() error {
 }
 
 type HostLog struct {
-	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of kubernetes pod targets. Only one HostLog configuration can use kubernetes discovery."`
+	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
 	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
 	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
@@ -431,7 +432,7 @@ func (j *JournalTarget) Validate() error {
 
 type TailTarget struct {
 	FilePath string           `toml:"file-path" comment:"The path to the file to tail."`
-	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files.  Options are: docker, plain."`
+	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, plain."`
 	Database string           `toml:"database" comment:"Database to store logs in."`
 	Table    string           `toml:"table" comment:"Table to store logs in."`
 	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Azure/adx-mon/cmd/collector/config"
 	"github.com/Azure/adx-mon/collector"
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
@@ -52,7 +53,7 @@ func main() {
 					buf := bytes.Buffer{}
 					enc := toml.NewEncoder(&buf)
 					enc.SetIndentTables(true)
-					if err := enc.Encode(DefaultConfig); err != nil {
+					if err := enc.Encode(config.DefaultConfig); err != nil {
 						return err
 					}
 
@@ -78,7 +79,7 @@ func realMain(ctx *cli.Context) error {
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
 
-	var cfg = DefaultConfig
+	var cfg = config.DefaultConfig
 	configFile := ctx.String("config")
 
 	if configFile == "" {
@@ -90,7 +91,7 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
-	var fileConfig Config
+	var fileConfig config.Config
 	if err := toml.Unmarshal(configBytes, &fileConfig); err != nil {
 		var derr *toml.DecodeError
 		if errors.As(err, &derr) {
