@@ -1,7 +1,7 @@
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240701200714-7fa05f4b0c8d.2 h1:1RMuQGfkZL2B04uXU92rUe30hKORnVs+eqz1gjbUoH4=
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240701200714-7fa05f4b0c8d.2/go.mod h1:89UaIG+thFtRrvN8Fm2xi0JSTkA08YcaJuCHQF+VtOo=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.1-20240701200714-7fa05f4b0c8d.1 h1:X02QcDb5RRbjVbSfaPSk/bSrDkjb595lDzai3D8M1wY=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.1-20240701200714-7fa05f4b0c8d.1/go.mod h1:mvHSR69lzH0TiYh+X2+oBUWBLSyAqaHTU/Ujs6hdP50=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.2-20240701200714-7fa05f4b0c8d.1 h1:2kjqzcDbkLgj3rgq2+yIjhSTMgxIXyZPkFBzrOS8p80=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.2-20240701200714-7fa05f4b0c8d.1/go.mod h1:SZGYoEuFaDWF6OSlFMGDLnngyZghM+qpC5KEWwmn2IM=
 dario.cat/mergo v1.0.0 h1:AGCNq9Evsj31mOgNPcLyXc+4PNABt905YmuqPYYpBWk=
 dario.cat/mergo v1.0.0/go.mod h1:uNxQE+84aUszobStD9th8a29P2fMDhsBdgRYvZOxGmk=
 github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 h1:bvDV9vkmnHYOMsOr4WLk+Vo07yKIzd94sVoIqshQ4bU=
@@ -407,8 +407,8 @@ google.golang.org/genproto/googleapis/api v0.0.0-20240318140521-94a12d6c2237 h1:
 google.golang.org/genproto/googleapis/api v0.0.0-20240318140521-94a12d6c2237/go.mod h1:Z5Iiy3jtmioajWHDGFk7CeugTyHtPvMHA4UTmUkyalE=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 h1:NnYq6UN9ReLM9/Y01KWNOWyI5xQ9kbIms5GGJVwS/Yc=
 google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237/go.mod h1:WtryC6hu0hhx87FDGxWCDptyssuo68sk10vYjF+T9fY=
-google.golang.org/protobuf v1.35.1 h1:m3LfL6/Ca+fqnjnlqQXNpFPABW1UD7mjh8KO2mKFytA=
-google.golang.org/protobuf v1.35.1/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
+google.golang.org/protobuf v1.35.2 h1:8Ar7bF+apOIoThw1EdZl0p1oWvMqTHmpA2fRTyZO8io=
+google.golang.org/protobuf v1.35.2/go.mod h1:9fA7Ob0pmnwhb644+1+CVWFRbNajQ6iRojtC/QF5bRE=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=

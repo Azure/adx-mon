@@ -6,7 +6,7 @@ toolchain go1.22.3
 
 require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20240701200714-7fa05f4b0c8d.2
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.1-20240701200714-7fa05f4b0c8d.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.35.2-20240701200714-7fa05f4b0c8d.1
 	github.com/Azure/azure-kusto-go v0.15.2
 	github.com/VictoriaMetrics/easyproto v0.1.4
 	github.com/bufbuild/connect-go v1.10.0
@@ -40,7 +40,7 @@ require (
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.27.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237
-	google.golang.org/protobuf v1.35.1
+	google.golang.org/protobuf v1.35.2
 	k8s.io/api v0.31.2
 	k8s.io/apimachinery v0.31.2
 	k8s.io/client-go v0.31.2
