@@ -38,14 +38,18 @@ markdown_extensions:
   - pymdownx.mark
   - attr_list
   - pymdownx.emoji:
-      emoji_index: !!python/name:materialx.emoji.twemoji
-      emoji_generator: !!python/name:materialx.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
+  - 'Docs Home':
+      - 'index.md'
   - 'quick-start.md'
   - 'concepts.md'
   - 'cookbook.md'
   - Reference:
-      - 'installation.md'
-      - 'architecture.md'
+      - 'config.md'
       - 'ingestor.md'
+  - Designs:
+      - 'designs/log-integration-with-kubernetes.md'
+      - 'designs/schema-etl.md'

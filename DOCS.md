@@ -3,6 +3,7 @@ Documentation uses [Material for MkDocs](https://squidfunk.github.io/mkdocs-mate
 To build the docs locally, run:
 
 ```bash
+go run tools/docgen/config/config.go
 docker run --rm -it -p 8000:8000 -v ${PWD}:/docs squidfunk/mkdocs-material
 ```
 

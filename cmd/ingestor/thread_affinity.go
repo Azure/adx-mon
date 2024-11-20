@@ -2,4 +2,4 @@
 
 package main
 
-func pinToCPU(cpu int) error {}
+func pinToCPU(cpu int) error { return nil }
