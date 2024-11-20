@@ -1,0 +1,37 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kustainer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kustainer
+  template:
+    metadata:
+      labels:
+        app: kustainer
+    spec:
+      containers:
+        - name: kustainer
+          image: "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest"
+          ports:
+            - containerPort: 8080
+              name: kustainer
+          env:
+            - name: ACCEPT_EULA
+              value: "Y"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kustainer
+  namespace: default
+spec:
+  selector:
+    app: kustainer
+  ports:
+    - protocol: TCP
+      port: 8080
+---
