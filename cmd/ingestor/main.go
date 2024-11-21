@@ -30,7 +30,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -495,9 +494,12 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 	return dyCli, client, ctrlCli, nil
 }
 
-func newKustoClient(endpoint string) (ingest.QueryClient, error) {
+func newKustoClient(endpoint string) (*kusto.Client, error) {
 	kcsb := kusto.NewConnectionStringBuilder(endpoint)
-	kcsb.WithDefaultAzureCredential()
+
+	if strings.HasPrefix(endpoint, "https://") {
+		kcsb.WithDefaultAzureCredential()
+	}
 
 	return kusto.New(kcsb)
 }
