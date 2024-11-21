@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -129,17 +130,32 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	defer t.mu.Unlock()
 
 	functions := t.store.Functions()
+	for functionName := range t.cache {
+		if !slices.ContainsFunc(functions, func(f *v1.Function) bool {
+			if f.Spec.Database != t.kustoCli.Database() {
+				return false
+			}
+			return f.Name == functionName
+		}) {
+			// Function no longer exists, remove from cache and Kusto
+			stmt := kql.New(".drop function ").AddUnsafe(functionName)
+			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				logger.Warnf("Failed to drop function %s: %v", functionName, err)
+			}
+			delete(t.cache, functionName)
+		}
+	}
+
 	for _, function := range functions {
 
 		if function.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
 
-		cacheKey := function.Spec.Database + function.Name
-		if fn, ok := t.cache[cacheKey]; ok {
+		if fn, ok := t.cache[function.Name]; ok {
 			if function.ResourceVersion != fn.ResourceVersion {
 				// invalidate our cache
-				delete(t.cache, cacheKey)
+				delete(t.cache, function.Name)
 			} else {
 				// function is up to date
 				continue
@@ -154,7 +170,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				// We want to fall through here so that we can cache this object, there's no need
 				// to retry creating it. If it's updated, we'll detect the change in the cached
 				// object and try again after invalidating the cache.
-				t.cache[cacheKey] = function
+				t.cache[function.Name] = function
 				continue
 			} else {
 				updateKQLFunctionStatus(ctx, t.store, function, v1.Failed, err)
@@ -179,6 +195,8 @@ func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Fu
 			errMsg = errMsg[:256]
 		}
 		fn.Status.Error = errMsg
+	} else {
+		fn.Status.Error = ""
 	}
 	if err := store.UpdateStatus(ctx, fn); err != nil {
 		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Name, err)

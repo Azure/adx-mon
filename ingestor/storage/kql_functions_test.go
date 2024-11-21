@@ -23,8 +23,6 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, v1.AddToScheme(scheme))
 
-	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
-	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))
 	fnCrdPath := filepath.Join(t.TempDir(), "fn-crd.yaml")
 	os.WriteFile(fnCrdPath, []byte(crd), 0644)
 
@@ -33,7 +31,7 @@ func TestFunctions(t *testing.T) {
 	testcontainers.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
-	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
+	require.NoError(t, testutils.InstallFunctionsCRD(ctx, k3sContainer, t.TempDir()))
 	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, fnCrdPath, filepath.Join(testutils.K3sManifests, "fn-crd.yaml"), 0644))
 
 	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
