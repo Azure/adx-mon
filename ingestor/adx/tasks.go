@@ -2,6 +2,7 @@ package adx
 
 import (
 	"context"
+	ERRS "errors"
 	"fmt"
 	"io"
 	"sync"
@@ -137,7 +138,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		cacheKey := function.Spec.Database + function.Name
 		if fn, ok := t.cache[cacheKey]; ok {
-			if function.ResourceVersion != fn.ResourceVersion {
+			if function.Generation != fn.Generation {
 				// invalidate our cache
 				delete(t.cache, cacheKey)
 			} else {
@@ -149,12 +150,13 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		stmt := kql.New("").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
-				updateKQLFunctionStatus(ctx, t.store, function, v1.PermanentFailure, err)
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-				// We want to fall through here so that we can cache this object, there's no need
-				// to retry creating it. If it's updated, we'll detect the change in the cached
-				// object and try again after invalidating the cache.
-				t.cache[cacheKey] = function
+				if err = updateKQLFunctionStatus(ctx, t.store, function, v1.PermanentFailure, err); err != nil {
+					logger.Errorf("Failed to update permanent failure status: %v", err)
+				} else {
+					// Cache this permanent failure. Only retry if the generation changes.
+					t.cache[cacheKey] = function
+				}
 				continue
 			} else {
 				updateKQLFunctionStatus(ctx, t.store, function, v1.Failed, err)
@@ -164,23 +166,39 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		}
 
 		logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
-		updateKQLFunctionStatus(ctx, t.store, function, v1.Success, nil)
+		if err := updateKQLFunctionStatus(ctx, t.store, function, v1.Success, nil); err != nil {
+			logger.Errorf("Failed to update success status: %v", err)
+		} else {
+			t.cache[cacheKey] = function
+		}
 	}
 
 	return nil
 }
 
-func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Function, status v1.FunctionStatusEnum, err error) {
+func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
 	fn.Status.Status = status
 	if err != nil {
 		errMsg := err.Error()
+
+		var kustoerr *errors.HttpError
+		if ERRS.As(err, &kustoerr) {
+			decoded := kustoerr.UnmarshalREST()
+			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
+				if errMsgVal, ok := errMap["@message"].(string); ok {
+					errMsg = errMsgVal
+				}
+			}
+		}
+
 		if len(errMsg) > 256 {
 			errMsg = errMsg[:256]
 		}
 		fn.Status.Error = errMsg
 	}
 	if err := store.UpdateStatus(ctx, fn); err != nil {
-		logger.Errorf("Failed to update status for function %s.%s: %v", fn.Spec.Database, fn.Name, err)
+		return fmt.Errorf("update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
 	}
+	return nil
 }
