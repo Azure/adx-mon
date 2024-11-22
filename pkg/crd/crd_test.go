@@ -14,10 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type TestStore struct {
@@ -45,10 +42,6 @@ func (s *TestStore) Count() int32 {
 }
 
 func TestCRD(t *testing.T) {
-	scheme := clientgoscheme.Scheme
-	require.NoError(t, clientgoscheme.AddToScheme(scheme))
-	require.NoError(t, v1.AddToScheme(scheme))
-
 	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
 	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))
 	fnCrdPath := filepath.Join(t.TempDir(), "fn-crd.yaml")
@@ -62,16 +55,7 @@ func TestCRD(t *testing.T) {
 	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
 	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, fnCrdPath, filepath.Join(testutils.K3sManifests, "fn-crd.yaml"), 0644))
 
-	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
-	require.NoError(t, err)
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	require.NoError(t, err)
-	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{
-		WarningHandler: ctrlclient.WarningHandlerOptions{
-			SuppressWarnings: true,
-		},
-	})
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 
 	ts := &TestStore{t: t}

@@ -2,7 +2,6 @@ package collector
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -101,12 +100,20 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 	}
 }
 
-// TODO Accept a collector configuration and write it to a temp directory, then transfer it to the cluster,
-// overwriting the existing configuration. Also create a default configuration if none is provided.
-// Note, this would require moving the configuration to somewhere it can be imported, get feedback
-// from the team.
-func WithConfig(ctx context.Context) testcontainers.CustomizeRequestOption {
-	return func(req *testcontainers.GenericContainerRequest) error {
-		return errors.New("not implemented")
+type KustoTableSchema struct{}
+
+func (k *KustoTableSchema) TableName() string {
+	return "Collector"
+}
+
+func (k *KustoTableSchema) CslColumns() []string {
+	return []string{
+		"msg:string",
+		"lvl:string",
+		"ts:datetime",
+		"namespace:string",
+		"container:string",
+		"pod:string",
+		"host:string",
 	}
 }
