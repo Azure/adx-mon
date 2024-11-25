@@ -136,7 +136,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			continue
 		}
 
-		cacheKey := function.Spec.Database + function.Name
+		cacheKey := function.Namespace + function.Name
 		if fn, ok := t.cache[cacheKey]; ok {
 			if function.Generation != fn.Generation {
 				// invalidate our cache
@@ -198,7 +198,7 @@ func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Fu
 		fn.Status.Error = errMsg
 	}
 	if err := store.UpdateStatus(ctx, fn); err != nil {
-		return fmt.Errorf("update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
+		return fmt.Errorf("Failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
 	}
 	return nil
 }
