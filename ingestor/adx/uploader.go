@@ -14,10 +14,12 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 )
 
 const ConcurrentUploads = 50
@@ -35,7 +37,7 @@ type Uploader interface {
 }
 
 type uploader struct {
-	KustoCli   ingest.QueryClient
+	KustoCli   *kusto.Client
 	storageDir string
 	database   string
 	opts       UploaderOpts
@@ -44,9 +46,10 @@ type uploader struct {
 	queue   chan *cluster.Batch
 	closeFn context.CancelFunc
 
-	wg        sync.WaitGroup
-	mu        sync.RWMutex
-	ingestors map[string]*ingest.Ingestion
+	wg                  sync.WaitGroup
+	mu                  sync.RWMutex
+	ingestors           map[string]ingest.Ingestor
+	requireDirectIngest bool
 }
 
 type UploaderOpts struct {
@@ -59,7 +62,7 @@ type UploaderOpts struct {
 	FnStore           FunctionStore
 }
 
-func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
+func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType, opts.FnStore)
 
 	return &uploader{
@@ -69,7 +72,7 @@ func NewUploader(kustoCli ingest.QueryClient, opts UploaderOpts) *uploader {
 		database:   opts.Database,
 		opts:       opts,
 		queue:      make(chan *cluster.Batch, 10000),
-		ingestors:  make(map[string]*ingest.Ingestion),
+		ingestors:  make(map[string]ingest.Ingestor),
 	}
 }
 
@@ -79,6 +82,15 @@ func (n *uploader) Open(ctx context.Context) error {
 
 	if err := n.syncer.Open(c); err != nil {
 		return err
+	}
+
+	requireDirectIngest, err := n.clusterRequiresDirectIngest(ctx)
+	if err != nil {
+		return err
+	}
+	if requireDirectIngest {
+		logger.Warnf("Cluster=%s requires direct ingest: %s", n.database, n.KustoCli.Endpoint())
+		n.requireDirectIngest = true
 	}
 
 	for i := 0; i < n.opts.ConcurrentUploads; i++ {
@@ -144,12 +156,18 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	n.mu.RUnlock()
 
 	if ingestor == nil {
-		ingestor, err = func() (*ingest.Ingestion, error) {
+		ingestor, err = func() (ingest.Ingestor, error) {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 
 			ingestor = n.ingestors[table]
 			if ingestor != nil {
+				return ingestor, nil
+			}
+
+			if n.requireDirectIngest {
+				ingestor = testutils.NewUploadReader(n.KustoCli, database, table)
+				n.ingestors[table] = ingestor
 				return ingestor, nil
 			}
 
@@ -326,4 +344,56 @@ func (n *uploader) extractSchema(path string) (string, error) {
 		return string(b[:idx]), nil
 	}
 	return string(b), nil
+}
+
+// clusterRequiresDirectIngest checks if the cluster is configured to require direct ingest.
+// In particular, if a cluster's details have a named marked as KustoPersonal, we know this
+// cluster to be a Kustainer, which does not support queued or streaming ingestion.
+// https://learn.microsoft.com/en-us/azure/data-explorer/kusto-emulator-overview#limitations
+func (n *uploader) clusterRequiresDirectIngest(ctx context.Context) (bool, error) {
+	stmt := kql.New(".show cluster details")
+	rows, err := n.KustoCli.Mgmt(ctx, n.database, stmt)
+	if err != nil {
+		return false, fmt.Errorf("failed to query cluster details: %w", err)
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to retrieve cluster details: %w", errFinal)
+		}
+
+		var cs clusterDetails
+		if err := row.ToStruct(&cs); err != nil {
+			return false, fmt.Errorf("failed to convert row to struct: %w", err)
+		}
+		return cs.Name == "KustoPersonal", nil
+	}
+	return false, nil
+}
+
+type clusterDetails struct {
+	NodeId                 string    `kusto:"NodeId"`
+	Address                string    `kusto:"Address"`
+	Name                   string    `kusto:"Name"`
+	StartTime              time.Time `kusto:"StartTime"`
+	AssignedHotExtents     int       `kusto:"AssignedHotExtents"`
+	IsAdmin                bool      `kusto:"IsAdmin"`
+	MachineTotalMemory     int64     `kusto:"MachineTotalMemory"`
+	MachineAvailableMemory int64     `kusto:"MachineAvailableMemory"`
+	ProcessorCount         int       `kusto:"ProcessorCount"`
+	HotExtentsOriginalSize int64     `kusto:"HotExtentsOriginalSize"`
+	HotExtentsSize         int64     `kusto:"HotExtentsSize"`
+	EnvironmentDescription string    `kusto:"EnvironmentDescription"`
+	ProductVersion         string    `kusto:"ProductVersion"`
+	Reserved0              int       `kusto:"Reserved0"`
+	ClockDescription       string    `kusto:"ClockDescription"`
+	RuntimeDescription     string    `kusto:"RuntimeDescription"`
 }
