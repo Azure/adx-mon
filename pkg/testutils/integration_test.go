@@ -15,7 +15,10 @@ import (
 )
 
 func TestIntegration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	// An extra generous timeout for the test. The test should run in
+	// about 5 minutes, but when running with the race detector, it
+	// can take longer.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
