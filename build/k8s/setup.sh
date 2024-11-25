@@ -23,12 +23,14 @@ if [[ "$CURRENT_DATE" > "$TOKEN_EXPIRY" ]]; then
 fi
 
 for EXT in resource-graph kusto; do
-    read -p "The '$ext' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
-    if [[ "$INSTALL_EXT" == "y" ]]; then
-        az extension add --name "$EXT"
-    else
-        echo "The '$EXT' extension is required. Exiting."
-        exit 1
+    if ! az extension show --name $EXT &> /dev/null; then
+        read -p "The '$ext' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
+        if [[ "$INSTALL_EXT" == "y" ]]; then
+            az extension add --name "$EXT"
+        else
+            echo "The '$EXT' extension is required. Exiting."
+            exit 1
+        fi
     fi
 done
 
@@ -131,7 +133,92 @@ envsubst < $SCRIPT_DIR/ingestor.yaml | kubectl apply -f -
 envsubst < $SCRIPT_DIR/collector.yaml | kubectl apply -f -
 kubectl apply -f $SCRIPT_DIR/ksm.yaml
 
+# Restart all workloads for schema changes to be reflected if this is an update
+kubectl rollout restart sts ingestor -n adx-mon
+kubectl rollout restart ds collector -n adx-mon
+kubectl rollout restart deploy collector-singleton -n adx-mon
+
+GRAFANA_ENDPOINT=""
+echo
+read -p "Do you want to setup an Azure Managed Grafana instance to visualize the AKS telemetry? (y/n) " CONFIRM
+if [[ "$CONFIRM" == "y" ]]; then
+    if ! az extension show --name amg &> /dev/null; then
+        read -p "The 'amg' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
+        if [[ "$INSTALL_EXT" == "y" ]]; then
+            az extension add --name "amg"
+        else
+            echo "The 'amg' extension is required to setup grafana. Exiting."
+            exit 1
+        fi
+    fi
+
+    read -p "Please enter name of Azure Managed Grafana instance (new or existing): " GRAFANA
+    while [[ -z "${GRAFANA// }" ]]; do
+        echo "Instance name cannot be empty. Please enter the name:"
+        read GRAFANA
+    done
+
+    GRAFANA_INFO=$(az graph query -q "Resources | where type =~ 'Microsoft.Dashboard/grafana' and name =~ '$GRAFANA' | project name, resourceGroup, subscriptionId, location, properties.endpoint")
+    GRAFANA_COUNT=$(echo $GRAFANA_INFO | jq '.data | length')
+    if [[ GRAFANA_COUNT -eq 0 ]]; then
+        # Create Azure Managed Grafana
+        echo "The $GRAFANA instance does not exist. Creating it in $RESOURCE_GROUP resource group."
+        az grafana create --name "$GRAFANA" --resource-group "$RESOURCE_GROUP"
+        GRAFANA_INFO=$(az grafana show --name "$GRAFANA" --resource-group "$RESOURCE_GROUP" -o json)
+        GRAFANA_RG=$RESOURCE_GROUP
+        GRAFANA_ENDPOINT=$(echo $GRAFANA_INFO | jq -r '.properties.endpoint')
+    else
+        GRAFANA_SUB=$(echo $GRAFANA_INFO | jq -r '.data[0].subscriptionId')
+        GRAFANA_RG=$(echo $GRAFANA_INFO | jq -r '.data[0].resourceGroup')
+        GRAFANA_ENDPOINT=$(echo $GRAFANA_INFO | jq -r '.data[0].properties_endpoint')
+        GRAFANA_REGION=$(echo $GRAFANA_INFO | jq -r '.data[0].location')
+
+        echo
+        echo "Found Grafana instance:"
+        echo -e "  Name: \e[32m$GRAFANA\e[0m"
+        echo -e "  Subscription ID: \e[32m$GRAFANA_SUB\e[0m"
+        echo -e "  Resource Group: \e[32m$GRAFANA_RG\e[0m"
+        echo -e "  Endpoint: \e[32m$GRAFANA_ENDPOINT\e[0m"
+        echo -e "  Region: \e[32m$GRAFANA_REGION\e[0m"
+        echo
+        read -p "Is this the correct info? (y/n) " CONFIRM
+        if [[ "$CONFIRM" != "y" ]]; then
+            echo "Exiting as the Grafana info is not correct."
+            exit 1
+        fi
+    fi
+
+    # Grant the grafana MSI as a reader/viewer on the kusto cluster
+    GRAFANA_IDENTITY=$(az grafana show -n "$GRAFANA" -g "$GRAFANA_RG" --query identity.principalId -o json | jq -r .)
+    az kusto database add-principal --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name Metrics --value role=Viewer name=AzureManagedGrafana type=app app-id=$GRAFANA_IDENTITY
+
+    # Ensure data source already doesn't exist
+    DATASOURCE_EXISTS=$(az grafana data-source show -n "$GRAFANA" -g "$GRAFANA_RG" --data-source $CLUSTER_NAME --query "name" -o json 2>/dev/null || echo "")
+     if [[ -z "$DATASOURCE_EXISTS" ]]; then
+        # Add Kusto cluster as datasource
+        echo "Adding Kusto $CLUSTER_NAME as data source to grafana"
+          # Add the kusto cluster as a datasource in grafana
+          az grafana data-source create -n "$GRAFANA" -g "$GRAFANA_RG" --definition '{"name": "'$CLUSTER_NAME'","type": "grafana-azure-data-explorer-datasource","access": "proxy","jsonData": {"clusterUrl": "'$ADX_URL'"}}'
+    else
+        echo "The $GRAFANA instance already has a data-source $CLUSTER_NAME"
+    fi
+
+    # Import Grafana dashboards if the user wants
+    read -p "Do you want to import pre-built dashboards in this Grafana instance? (y/n) " IMPORT_DASHBOARDS
+    if [[ "$IMPORT_DASHBOARDS" == "y" ]]; then
+      for DASHBOARD in api-server cluster-info metrics-stats namespaces pods; do
+         az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --definition @"$SCRIPT_DIR/dashboards/$DASHBOARD.json" --overwrite
+      done
+    else
+        echo "No dashboards will be imported."
+    fi
+fi
+
 echo
 echo -e "\e[97mSuccessfully deployed ADX-Mon components to AKS cluster $CLUSTER.\e[0m"
 echo
 echo "Collected telemetry can be found the $DATABASE_NAME database at $ADX_FQDN."
+if [ ! -z "$GRAFANA_ENDPOINT" ]; then
+    echo
+    echo "Azure Managed Grafana instance can be accessed at $GRAFANA_ENDPOINT."
+fi
