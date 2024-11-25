@@ -22,15 +22,15 @@ if [[ "$CURRENT_DATE" > "$TOKEN_EXPIRY" ]]; then
     az login
 fi
 
-if ! az extension show --name resource-graph &> /dev/null; then
-    read -p "The 'resource-graph' extension is not installed. Do you want to install it now? (y/n) " INSTALL_RG
-    if [[ "$INSTALL_RG" == "y" ]]; then
-        az extension add --name resource-graph
+for EXT in resource-graph kusto; do
+    read -p "The '$ext' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
+    if [[ "$INSTALL_EXT" == "y" ]]; then
+        az extension add --name "$EXT"
     else
-        echo "The 'resource-graph' extension is required. Exiting."
+        echo "The '$EXT' extension is required. Exiting."
         exit 1
     fi
-fi
+done
 
 # Ask for the name of the aks cluster and read it as input.  With that name, run a graph query to find
 read -p "Please enter the name of the AKS cluster where ADX-Mon components should be deployed: " CLUSTER
@@ -51,7 +51,7 @@ SUBSCRIPTION_ID=$(echo $CLUSTER_INFO | jq -r '.data[0].subscriptionId')
 REGION=$(echo $CLUSTER_INFO | jq -r '.data[0].location')
 
 # Find the managed identity client ID attached to the AKS node pools
-NODE_POOL_IDENTITY=$(az aks show --resource-group $RESOURCE_GROUP --name $CLUSTER --query identityProfile.kubeletidentity.clientId -o tsv)
+NODE_POOL_IDENTITY=$(az aks show --resource-group $RESOURCE_GROUP --name $CLUSTER --query identityProfile.kubeletidentity.clientId -o json | jq . -r)
 
 echo
 echo -e "Found AKS cluster info:"
@@ -127,8 +127,8 @@ export CLUSTER=$CLUSTER
 export REGION=$REGION
 export CLIENT_ID=$NODE_POOL_IDENTITY
 export ADX_URL=$ADX_FQDN
-envsubst < $SCRIPT_DIR/collector.yaml | kubectl apply -f -
 envsubst < $SCRIPT_DIR/ingestor.yaml | kubectl apply -f -
+envsubst < $SCRIPT_DIR/collector.yaml | kubectl apply -f -
 kubectl apply -f $SCRIPT_DIR/ksm.yaml
 
 echo
