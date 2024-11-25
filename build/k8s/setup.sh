@@ -103,6 +103,15 @@ if [[ "$CONFIRM" != "y" ]]; then
     exit 1
 fi
 
+# Check if the NODE_POOL_IDENTITY is AllDatabasesAdmin on the ADX cluster
+CLUSTER_ADMIN_CHECK=$(az kusto cluster-principal-assignment list --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --query "[?type=='App' && appId=='$NODE_POOL_IDENTITY' && role=='AllDatabasesAdmin']" -o tsv)
+if [[ -z "$CLUSTER_ADMIN_CHECK" ]]; then
+    echo "The Managed Identity Client ID is not configured as AllDatabasesAdmin. Adding."
+    az kusto cluster-principal-assignment create --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --role AllDatabasesAdmin --principal-assignment-name ADXMon --principal-type App --principal-id "$NODE_POOL_IDENTITY"
+else
+    echo "The Managed Identity Client ID is already configured as AllDatabasesAdmin."
+fi
+
 for DATABASE_NAME in Metrics Logs; do
     # Check if the $DATABASE_NAME database exists
     DATABASE_EXISTS=$(az kusto database show --cluster-name $CLUSTER_NAME --resource-group $RESOURCE_GROUP --database-name $DATABASE_NAME --query "name" -o tsv 2>/dev/null || echo "")
