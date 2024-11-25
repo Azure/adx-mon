@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -137,7 +138,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		cacheKey := function.Spec.Database + function.Name
 		if fn, ok := t.cache[cacheKey]; ok {
-			if function.ResourceVersion != fn.ResourceVersion {
+			if function.GetGeneration() != fn.GetGeneration() {
 				// invalidate our cache
 				delete(t.cache, cacheKey)
 			} else {
@@ -163,8 +164,28 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			}
 		}
 
+		t.cache[cacheKey] = function
 		logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
 		updateKQLFunctionStatus(ctx, t.store, function, v1.Success, nil)
+	}
+
+	for cacheKey, fn := range t.cache {
+		if !slices.ContainsFunc(functions, func(i *v1.Function) bool {
+			return fn.Name == i.Name && fn.Spec.Database == i.Spec.Database
+		}) {
+			logger.Warnf("Function %s.%s is no longer in the store, deleting", fn.Spec.Database, fn.Name)
+			stmt := kql.New(".drop function ").AddUnsafe(fn.Name)
+			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				if !errors.Retry(err) {
+					logger.Errorf("Failed to delete function %s.%s: %v", fn.Spec.Database, fn.Name, err)
+					delete(t.cache, cacheKey)
+				} else {
+					logger.Warnf("Transient failure to delete function %s.%s: %v", fn.Spec.Database, fn.Name, err)
+					continue
+				}
+			}
+			delete(t.cache, cacheKey)
+		}
 	}
 
 	return nil

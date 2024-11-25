@@ -65,6 +65,13 @@ type Table struct {
 func FunctionExists(ctx context.Context, t *testing.T, database, function, uri string) bool {
 	t.Helper()
 
+	fn := GetFunction(ctx, t, database, function, uri)
+	return fn.Name == function
+}
+
+func GetFunction(ctx context.Context, t *testing.T, database, function, uri string) Function {
+	t.Helper()
+
 	cb := kusto.NewConnectionStringBuilder(uri)
 	client, err := kusto.New(cb)
 	require.NoError(t, err)
@@ -94,11 +101,11 @@ func FunctionExists(ctx context.Context, t *testing.T, database, function, uri s
 			continue
 		}
 		if fn.Name == function {
-			return true
+			return fn
 		}
 	}
 
-	return false
+	return Function{}
 }
 
 type Function struct {

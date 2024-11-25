@@ -91,7 +91,7 @@ func (f *Functions) Receive(ctx context.Context, list client.ObjectList) error {
 	if !ok {
 		return fmt.Errorf("expected *v1.FunctionList, got %T", list)
 	}
-	if items == nil || len(items.Items) == 0 {
+	if items == nil {
 		return nil
 	}
 
