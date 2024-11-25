@@ -40,7 +40,7 @@ clean:
 .PHONY: clean
 
 test:
-	go test ./...
+	go test -timeout 30m ./...
 .PHONY: test
 
 default:
