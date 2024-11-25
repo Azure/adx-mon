@@ -4,7 +4,7 @@
 # everything before the '#!/bin/sh' line above, then type 'sh FILE'.
 #
 lock_dir=_sh00161
-# Made on 2024-11-12 17:28 UTC by <root@e31556e2e1ae>.
+# Made on 2024-11-25 17:27 UTC by <root@7550341d2551>.
 # Source directory was '/build'.
 #
 # Existing files WILL be overwritten.
@@ -12,9 +12,9 @@ lock_dir=_sh00161
 # This shar contains:
 # length mode       name
 # ------ ---------- ------------------------------------------
-#   6055 -rw-r--r-- setup.sh
-#   7692 -rw-r--r-- ingestor.yaml
 #   5804 -rw-r--r-- ksm.yaml
+#   7692 -rw-r--r-- ingestor.yaml
+#   6014 -rw-r--r-- setup.sh
 #  11999 -rw-r--r-- collector.yaml
 #
 MD5SUM=${MD5SUM-md5sum}
@@ -106,446 +106,6 @@ then ${echo} "x - created lock directory ${lock_dir}."
 else ${echo} "x - failed to create lock directory ${lock_dir}."
      exit 1
 fi
-# ============= setup.sh ==============
-  sed 's/^X//' << 'SHAR_EOF' | uudecode &&
-begin 600 setup.sh
-M(R$O8FEN+V)A<V@*<V5T("UE=6\@<&EP969A:6P*4T-225!47T1)4CTB)"AD
-M:7)N86UE("(D>T)!4TA?4T]54D-%6S!=?2(I(@H*"FEF("$@8V]M;6%N9"`M
-M=B!A>B`F/B`O9&5V+VYU;&P*=&AE;@H@("`@96-H;R`B5&AE("=A>B<@8V]M
-M;6%N9"!C;W5L9"!N;W0@8F4@9F]U;F0N(%!L96%S92!I;G-T86QL($%Z=7)E
-M($-,22!B969O<F4@8V]N=&EN=6EN9RXB"B`@("!E>&ET"F9I"@II9B`A(&%Z
-M(&%C8V]U;G0@<VAO=R`F/B`O9&5V+VYU;&P[('1H96X*("`@(&5C:&\@(EEO
-M=2!A<F4@;F]T(&QO9V=E9"!I;B!T;R!!>G5R92!#3$DN(%!L96%S92!L;V<@
-M:6XN(@H@("`@87H@;&]G:6X*9FD*"E1/2T5.7T584$E263TD*&%Z(&%C8V]U
-M;G0@9V5T+6%C8V5S<RUT;VME;B`M+7%U97)Y(&5X<&ER97-?;VX@+6\@='-V
-M*0I#55)214Y47T1!5$4])"AD871E("UU("LE<RD*"FEF(%M;("(D0U524D5.
-M5%]$051%(B`^("(D5$]+14Y?15A025)9(B!=73L@=&AE;@H@("`@96-H;R`B
-M66]U<B!!>G5R92!#3$D@=&]K96X@:&%S(&5X<&ER960N(%!L96%S92!L;V<@
-M:6X@86=A:6XN(@H@("`@87H@;&]G:6X*9FD*"FEF("$@87H@97AT96YS:6]N
-M('-H;W<@+2UN86UE(')E<V]U<F-E+6=R87!H("8^("]D978O;G5L;#L@=&AE
-M;@H@("`@<F5A9"`M<"`B5&AE("=R97-O=7)C92UG<F%P:"<@97AT96YS:6]N
-M(&ES(&YO="!I;G-T86QL960N($1O('EO=2!W86YT('1O(&EN<W1A;&P@:70@
-M;F]W/R`H>2]N*2`B($E.4U1!3$Q?4D<*("`@(&EF(%M;("(D24Y35$%,3%]2
-M1R(@/3T@(GDB(%U=.R!T:&5N"B`@("`@("`@87H@97AT96YS:6]N(&%D9"`M
-M+6YA;64@<F5S;W5R8V4M9W)A<&@*("`@(&5L<V4*("`@("`@("!E8VAO(")4
-M:&4@)W)E<V]U<F-E+6=R87!H)R!E>'1E;G-I;VX@:7,@<F5Q=6ER960N($5X
-M:71I;F<N(@H@("`@("`@(&5X:70@,0H@("`@9FD*9FD*"B,@07-K(&9O<B!T
-M:&4@;F%M92!O9B!T:&4@86MS(&-L=7-T97(@86YD(')E860@:70@87,@:6YP
-M=70N("!7:71H('1H870@;F%M92P@<G5N(&$@9W)A<&@@<75E<GD@=&\@9FEN
-M9`IR96%D("UP(")0;&5A<V4@96YT97(@=&AE(&YA;64@;V8@=&AE($%+4R!C
-M;'5S=&5R('=H97)E($%$6"U-;VX@8V]M<&]N96YT<R!S:&]U;&0@8F4@9&5P
-M;&]Y960Z("(@0TQ54U1%4@IW:&EL92!;6R`M>B`B)'M#3%535$52+R\@?2(@
-M75T[(&1O"B`@("!E8VAO(")#;'5S=&5R(&-A;FYO="!B92!E;7!T>2X@4&QE
-M87-E(&5N=&5R('1H92!N86UE(&]F('1H92!!2U,@8VQU<W1E<CHB"B`@("!R
-M96%D($-,55-415(*9&]N90H*(R!2=6X@82!G<F%P:"!Q=65R>2!T;R!F:6YD
-M('1H92!C;'5S=&5R)W,@<F5S;W5R8V4@9W)O=7`@86YD('-U8G-C<FEP=&EO
-M;B!I9`I#3%535$527TE.1D\])"AA>B!G<F%P:"!Q=65R>2`M<2`B4F5S;W5R
-M8V5S('P@=VAE<F4@='EP92`]?B`G36EC<F]S;V9T+D-O;G1A:6YE<E-E<G9I
-M8V4O;6%N86=E9$-L=7-T97)S)R!A;F0@;F%M92`]?B`G)$-,55-415(G('P@
-M<')O:F5C="!R97-O=7)C94=R;W5P+"!S=6)S8W)I<'1I;VY)9"P@;&]C871I
-M;VXB*0II9B!;6R`D*&5C:&\@)$-,55-415)?24Y&3R!\(&IQ("<N9&%T82!\
-M(&QE;F=T:"<I("UE<2`P(%U=.R!T:&5N"B`@("!E8VAO(").;R!!2U,@8VQU
-M<W1E<B!C;W5L9"!B92!F;W5N9"!F;W(@=&AE(&-L=7-T97(@;F%M92`G)$-,
-M55-415(G+B!%>&ET:6YG+B(*("`@(&5X:70@,0IF:0H*4D533U520T5?1U)/
-M55`])"AE8VAO("1#3%535$527TE.1D\@?"!J<2`M<B`G+F1A=&%;,%TN<F5S
-M;W5R8V5'<F]U<"<I"E-50E-#4DE05$E/3E])1#TD*&5C:&\@)$-,55-415)?
-M24Y&3R!\(&IQ("UR("<N9&%T85LP72YS=6)S8W)I<'1I;VY)9"<I"E)%1TE/
-M3CTD*&5C:&\@)$-,55-415)?24Y&3R!\(&IQ("UR("<N9&%T85LP72YL;V-A
-M=&EO;B<I"@HC($9I;F0@=&AE(&UA;F%G960@:61E;G1I='D@8VQI96YT($E$
-M(&%T=&%C:&5D('1O('1H92!!2U,@;F]D92!P;V]L<PI.3T1%7U!/3TQ?241%
-M3E1)5%D])"AA>B!A:W,@<VAO=R`M+7)E<V]U<F-E+6=R;W5P("1215-/55)#
-M15]'4D]54"`M+6YA;64@)$-,55-415(@+2UQ=65R>2!I9&5N=&ET>5!R;V9I
-M;&4N:W5B96QE=&ED96YT:71Y+F-L:65N=$ED("UO('1S=BD*"F5C:&\*96-H
-M;R`M92`B1F]U;F0@04M3(&-L=7-T97(@:6YF;SHB"F5C:&\@+64@(B`@04M3
-M($-L=7-T97(@3F%M93H@7&5;,S)M)$-,55-415)<95LP;2(*96-H;R`M92`B
-M("!297-O=7)C92!'<F]U<#H@7&5;,S)M)%)%4T]54D-%7T=23U507&5;,&TB
-M"F5C:&\@+64@(B`@4W5B<V-R:7!T:6]N($E$.EQE6S,R;2`D4U5"4T-225!4
-M24].7TE$7&5;,&TB"F5C:&\@+64@(B`@4F5G:6]N.B!<95LS,FTD4D5'24].
-M7&5;,&TB"F5C:&\@+64@(B`@36%N86=E9"!)9&5N=&ET>2!#;&EE;G0@240Z
-M(%QE6S,R;21.3T1%7U!/3TQ?241%3E1)5%E<95LP;2(*96-H;PIR96%D("UP
-M("))<R!T:&ES(&EN9F]R;6%T:6]N(&-O<G)E8W0_("AY+VXI("(@0T].1DE2
-M30II9B!;6R`B)$-/3D9)4DTB("$](")Y(B!=73L@=&AE;@H@("`@96-H;R`B
-M17AI=&EN9R!A<R!T:&4@:6YF;W)M871I;VX@:7,@;F]T(&-O<G)E8W0N(@H@
-M("`@97AI="`Q"F9I"@IA>B!A:W,@9V5T+6-R961E;G1I86QS("TM<W5B<V-R
-M:7!T:6]N("1354)30U))4%1)3TY?240@+2UR97-O=7)C92UG<F]U<"`D4D53
-M3U520T5?1U)/55`@+2UN86UE("1#3%535$52"@IE8VAO"G)E860@+7`@(E!L
-M96%S92!E;G1E<B!T:&4@07IU<F4@1&%T82!%>'!L;W)E<B!C;'5S=&5R(&YA
-M;64@=VAE<F4@0418+4UO;B!W:6QL('-T;W)E('1E;&5M971R>3H@(B!#3%53
-M5$527TY!344*=VAI;&4@6UL@+7H@(B1[0TQ54U1%4E].04U%+R\@?2(@75T[
-M(&1O"B`@("!E8VAO(")!1%@@8VQU<W1E<B!N86UE(&-A;FYO="!B92!E;7!T
-M>2X@4&QE87-E(&5N=&5R('1H92!D871A8F%S92!N86UE.B(*("`@(')E860@
-M0TQ54U1%4E].04U%"F1O;F4*"D-,55-415)?24Y&3STD*&%Z(&=R87!H('%U
-M97)Y("UQ(")297-O=7)C97,@?"!W:&5R92!T>7!E(#U^("=-:6-R;W-O9G0N
-M2W5S=&\O8VQU<W1E<G,G(&%N9"!N86UE(#U^("<D0TQ54U1%4E].04U%)R!\
-M('!R;VIE8W0@;F%M92P@<F5S;W5R8V5'<F]U<"P@<W5B<V-R:7!T:6]N260L
-M(&QO8V%T:6]N+"!P<F]P97)T:65S+G5R:2(I"D-,55-415)?0T]53E0])"AE
-M8VAO("1#3%535$527TE.1D\@?"!J<2`G+F1A=&$@?"!L96YG=&@G*0I+55-4
-M3U]214=)3TX])"AE8VAO("1#3%535$527TE.1D\@?"!J<2`M<B`G+F1A=&%;
-M,%TN;&]C871I;VXG*0H*:68@6UL@)$-,55-415)?0T]53E0@+65Q(#`@75T[
-M('1H96X*("`@(&5C:&\@(DYO($MU<W1O(&-L=7-T97(@8V]U;&0@8F4@9F]U
-M;F0@9F]R('1H92!D871A8F%S92!N86UE("<D0TQ54U1%4E].04U%)RX@17AI
-M=&EN9RXB"B`@("!E>&ET(#$*96QS90H@("`@0TQ54U1%4E].04U%/20H96-H
-M;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD871A6S!=+FYA;64G*0H@("`@
-M4U5"4T-225!424].7TE$/20H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@
-M)RYD871A6S!=+G-U8G-C<FEP=&EO;DED)RD*("`@(%)%4T]54D-%7T=23U50
-M/20H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD871A6S!=+G)E<V]U
-M<F-E1W)O=7`G*0H@("`@04187T911$X])"AE8VAO("1#3%535$527TE.1D\@
-M?"!J<2`M<B`G+F1A=&%;,%TN<')O<&5R=&EE<U]U<FDG*0IF:0IE8VAO"F5C
-M:&\@(D9O=6YD($%$6"!C;'5S=&5R(&EN9F\Z(@IE8VAO("UE("(@($-L=7-T
-M97(@3F%M93H@7&5;,S)M)$-,55-415)?3D%-15QE6S!M(@IE8VAO("UE("(@
-M(%-U8G-C<FEP=&EO;B!)1#H@7&5;,S)M)%-50E-#4DE05$E/3E])1%QE6S!M
-M(@IE8VAO("UE("(@(%)E<V]U<F-E($=R;W5P.B!<95LS,FTD4D533U520T5?
-M1U)/55!<95LP;2(*96-H;R`M92`B("!!1%@@1E%$3CH@7&5;,S)M)$%$6%]&
-M441.7&5;,&TB"F5C:&\@+64@(B`@4F5G:6]N.B!<95LS,FTD2U535$]?4D5'
-M24].7&5;,&TB"F5C:&\*<F5A9"`M<"`B27,@=&AI<R!T:&4@8V]R<F5C="!!
-M1%@@8VQU<W1E<B!I;F9O/R`H>2]N*2`B($-/3D9)4DT*:68@6UL@(B1#3TY&
-M25)-(B`A/2`B>2(@75T[('1H96X*("`@(&5C:&\@(D5X:71I;F<@87,@=&AE
-M($%$6"!C;'5S=&5R(&EN9F\@:7,@;F]T(&-O<G)E8W0N(@H@("`@97AI="`Q
-M"F9I"@IF;W(@1$%404)!4T5?3D%-12!I;B!-971R:6-S($QO9W,[(&1O"B`@
-M("`C($-H96-K(&EF('1H92`D1$%404)!4T5?3D%-12!D871A8F%S92!E>&ES
-M=',*("`@($1!5$%"05-%7T5825-44STD*&%Z(&MU<W1O(&1A=&%B87-E('-H
-M;W<@+2UC;'5S=&5R+6YA;64@)$-,55-415)?3D%-12`M+7)E<V]U<F-E+6=R
-M;W5P("1215-/55)#15]'4D]54"`M+61A=&%B87-E+6YA;64@)$1!5$%"05-%
-M7TY!344@+2UQ=65R>2`B;F%M92(@+6\@='-V(#(^+V1E=B]N=6QL('Q\(&5C
-M:&\@(B(I"B`@("!I9B!;6R`M>B`B)$1!5$%"05-%7T5825-44R(@75T[('1H
-M96X*("`@("`@("!E8VAO(")4:&4@)$1!5$%"05-%7TY!344@9&%T86)A<V4@
-M9&]E<R!N;W0@97AI<W0N($-R96%T:6YG(&ET(&YO=RXB"B`@("`@("`@87H@
-M:W5S=&\@9&%T86)A<V4@8W)E871E("TM8VQU<W1E<BUN86UE("1#3%535$52
-M7TY!344@+2UR97-O=7)C92UG<F]U<"`D4D533U520T5?1U)/55`@+2UD871A
-M8F%S92UN86UE("1$051!0D%315].04U%("TM<F5A9"UW<FET92UD871A8F%S
-M92`@<V]F="UD96QE=&4M<&5R:6]D/5`S,$0@:&]T+6-A8VAE+7!E<FEO9#U0
-M-T0@;&]C871I;VX])$M54U1/7U)%1TE/3@H@("`@96QS90H@("`@("`@(&5C
-M:&\@(E1H92`D1$%404)!4T5?3D%-12!D871A8F%S92!A;')E861Y(&5X:7-T
-M<RXB"B`@("!F:0H*("`@(",@0VAE8VL@:68@=&AE($Y/1$5?4$]/3%])1$5.
-M5$E462!I<R!A;B!A9&UI;B!O;B!T:&4@)$1!5$%"05-%7TY!344@9&%T86)A
-M<V4*("`@($%$34E.7T-(14-+/20H87H@:W5S=&\@9&%T86)A<V4@;&ES="UP
-M<FEN8VEP86P@+2UC;'5S=&5R+6YA;64@)$-,55-415)?3D%-12`M+7)E<V]U
-M<F-E+6=R;W5P("1215-/55)#15]'4D]54"`M+61A=&%B87-E+6YA;64@)$1!
-M5$%"05-%7TY!344@+2UQ=65R>2`B6S]T>7!E/3TG07!P)R`F)B!A<'!)9#T]
-M)R1.3T1%7U!/3TQ?241%3E1)5%DG("8F(')O;&4]/2=!9&UI;B==(B`M;R!T
-M<W8I"B`@("!I9B!;6R`M>B`B)$%$34E.7T-(14-+(B!=73L@=&AE;@H@("`@
-M("`@(&5C:&\@(E1H92!-86YA9V5D($ED96YT:71Y($-L:65N="!)1"!I<R!N
-M;W0@8V]N9FEG=7)E9"!T;R!U<V4@9&%T86)A<V4@)$1!5$%"05-%7TY!344N
-M($%D9&EN9R!I="!A<R!A;B!A9&UI;BXB"B`@("`@("`@87H@:W5S=&\@9&%T
-M86)A<V4@861D+7!R:6YC:7!A;"`M+6-L=7-T97(M;F%M92`D0TQ54U1%4E].
-M04U%("TM<F5S;W5R8V4M9W)O=7`@)%)%4T]54D-%7T=23U50("TM9&%T86)A
-M<V4M;F%M92`D1$%404)!4T5?3D%-12`M+79A;'5E(')O;&4]061M:6X@;F%M
-M93U!1%A-;VX@='EP93UA<'`@87!P+6ED/21.3T1%7U!/3TQ?241%3E1)5%D*
-M("`@(&5L<V4*("`@("`@("!E8VAO(")4:&4@36%N86=E9"!)9&5N=&ET>2!#
-M;&EE;G0@240@:7,@86QR96%D>2!C;VYF:6=U<F5D('1O('5S92!D871A8F%S
-M92`D1$%404)!4T5?3D%-12XB"B`@("!F:0ID;VYE"@IE>'!O<G0@0TQ54U1%
-M4CTD0TQ54U1%4@IE>'!O<G0@4D5'24]./21214=)3TX*97AP;W)T($-,245.
-M5%])1#TD3D]$15]03T],7TE$14Y42519"F5X<&]R="!!1%A?55),/21!1%A?
-M1E%$3@IE;G9S=6)S="`\("130U))4%1?1$E2+V-O;&QE8W1O<BYY86UL('P@
-M:W5B96-T;"!A<'!L>2`M9B`M"F5N=G-U8G-T(#P@)%-#4DE05%]$25(O:6YG
-M97-T;W(N>6%M;"!\(&MU8F5C=&P@87!P;'D@+68@+0IK=6)E8W1L(&%P<&QY
-M("UF("130U))4%1?1$E2+VMS;2YY86UL"@IE8VAO"F5C:&\@+64@(EQE6SDW
-M;5-U8V-E<W-F=6QL>2!D97!L;WEE9"!!1%@M36]N(&-O;7!O;F5N=',@=&\@
-M04M3(&-L=7-T97(@)$-,55-415(N7&5;,&TB"F5C:&\*96-H;R`B0V]L;&5C
-M=&5D('1E;&5M971R>2!C86X@8F4@9F]U;F0@=&AE("1$051!0D%315].04U%
-9(&1A=&%B87-E(&%T("1!1%A?1E%$3BXB"F0@
-`
-end
-SHAR_EOF
-  (set 20 24 11 04 18 25 37 'setup.sh'
-   eval "${shar_touch}") && \
-  chmod 0644 'setup.sh'
-if test $? -ne 0
-then ${echo} "restore of setup.sh failed"
-fi
-  if ${md5check}
-  then (
-       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'setup.sh': 'MD5 check failed'
-       ) << \SHAR_EOF
-53485bcb19c2d2a718855dca4e85ec90  setup.sh
-SHAR_EOF
-
-else
-test `LC_ALL=C wc -c < 'setup.sh'` -ne 6055 && \
-  ${echo} "restoration warning:  size of 'setup.sh' is not 6055"
-  fi
-# ============= ingestor.yaml ==============
-  sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
----
-apiVersion: v1
-kind: Namespace
-metadata:
-X  name: adx-mon
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-X  name: ingestor
-X  namespace: adx-mon
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-X  name: adx-mon:ingestor
-rules:
-X  - apiGroups:
-X      - ""
-X    resources:
-X      - namespaces
-X      - pods
-X    verbs:
-X      - get
-X      - list
-X      - watch
-X  - apiGroups:
-X      - adx-mon.azure.com
-X    resources:
-X      - functions
-X    verbs:
-X      - get
-X      - list
-X  - apiGroups:
-X      - adx-mon.azure.com
-X    resources:
-X      - functions/status
-X    verbs:
-X      - update
-X      - patch
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-X  name: adx-mon:ingestor
-roleRef:
-X  apiGroup: rbac.authorization.k8s.io
-X  kind: ClusterRole
-X  name: adx-mon:ingestor
-subjects:
-X  - kind: ServiceAccount
-X    name: ingestor
-X    namespace: adx-mon
----
-apiVersion: v1
-kind: Service
-metadata:
-X  name: ingestor
-X  namespace: adx-mon
-spec:
-X  type: ClusterIP
-X  selector:
-X    app: ingestor
-X  ports:
-X    # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
-X    - port: 443
-X      targetPort: 9090
-X      # Optional field
-X      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
-X      #nodePort: 30007
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-X  name: ingestor
-X  namespace: adx-mon
-spec:
-X  serviceName: "adx-mon"
-X  replicas: 1
-X  updateStrategy:
-X    type: RollingUpdate
-X  selector:
-X    matchLabels:
-X      app: ingestor
-X  template:
-X    metadata:
-X      labels:
-X        app: ingestor
-X      annotations:
-X        adx-mon/scrape: "true"
-X        adx-mon/port: "9091"
-X        adx-mon/path: "/metrics"
-X        adx-mon/log-destination: "Logs:Ingestor"
-X        adx-mon/log-parsers: json
-X    spec:
-X      serviceAccountName: ingestor
-X      containers:
-X        - name: ingestor
-X          image: ghcr.io/azure/adx-mon/ingestor:latest
-X          ports:
-X            - containerPort: 9090
-X              name: ingestor
-X            - containerPort: 9091
-X              name: metrics
-X          env:
-X            - name: LOG_LEVEL
-X              value: INFO
-X            - name: "GODEBUG"
-X              value: "http2client=0"
-X            - name: "AZURE_RESOURCE"
-X              value: "$ADX_URL"
-X            - name:  "AZURE_CLIENT_ID"
-X              value: "$CLIENT_ID"
-X          command:
-X            - /ingestor
-X          args:
-X            - "--storage-dir=/mnt/data"
-X            - "--max-segment-age=5s"
-X            - "--max-disk-usage=21474836480"
-X            - "--max-transfer-size=10485760"
-X            - "--max-connections=1000"
-X            - "--insecure-skip-verify"
-X            - "--lift-label=host"
-X            - "--lift-label=cluster"
-X            - "--lift-label=adxmon_namespace=Namespace"
-X            - "--lift-label=adxmon_pod=Pod"
-X            - "--lift-label=adxmon_container=Container"
-X            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
-X            - "--logs-kusto-endpoints=Logs=$ADX_URL"
-X          volumeMounts:
-X            - name: metrics
-X              mountPath: /mnt/data
-X            - mountPath: /etc/pki/ca-trust/extracted
-X              name: etc-pki-ca-certs
-X              readOnly: true
-X            - mountPath: /etc/ssl/certs
-X              name: ca-certs
-X              readOnly: true
-X      affinity:
-X        podAntiAffinity:
-X          requiredDuringSchedulingIgnoredDuringExecution:
-X            - labelSelector:
-X                matchExpressions:
-X                  - key: app
-X                    operator: In
-X                    values:
-X                      - ingestor
-X              topologyKey: kubernetes.io/hostname
-X        nodeAffinity:
-X          preferredDuringSchedulingIgnoredDuringExecution:
-X            - weight: 1
-X              preference:
-X                matchExpressions:
-X                  - key: agentpool
-X                    operator: In
-X                    values:
-X                      - aks-system
-X      volumes:
-X        - name: ca-certs
-X          hostPath:
-X            path: /etc/ssl/certs
-X            type: Directory
-X        - name: etc-pki-ca-certs
-X          hostPath:
-X            path: /etc/pki/ca-trust/extracted
-X            type: DirectoryOrCreate
-X        - name: metrics
-X          hostPath:
-X            path: /mnt/ingestor
-X      tolerations:
-X        - key: CriticalAddonsOnly
-X          operator: Exists
-X        - effect: NoExecute
-X          key: node.kubernetes.io/not-ready
-X          operator: Exists
-X          tolerationSeconds: 300
-X        - effect: NoExecute
-X          key: node.kubernetes.io/unreachable
-X          operator: Exists
-X          tolerationSeconds: 300
----
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-X  annotations:
-X    controller-gen.kubebuilder.io/version: v0.16.1
-X  name: functions.adx-mon.azure.com
-spec:
-X  group: adx-mon.azure.com
-X  names:
-X    kind: Function
-X    listKind: FunctionList
-X    plural: functions
-X    singular: function
-X  scope: Namespaced
-X  versions:
-X    - name: v1
-X      schema:
-X        openAPIV3Schema:
-X          description: Function defines a KQL function to be maintained in the Kusto
-X            cluster
-X          properties:
-X            apiVersion:
-X              description: |-
-X                APIVersion defines the versioned schema of this representation of an object.
-X                Servers should convert recognized schemas to the latest internal value, and
-X                may reject unrecognized values.
-X                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-X              type: string
-X            kind:
-X              description: |-
-X                Kind is a string value representing the REST resource this object represents.
-X                Servers may infer this from the endpoint the client submits requests to.
-X                Cannot be updated.
-X                In CamelCase.
-X                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-X              type: string
-X            metadata:
-X              type: object
-X            spec:
-X              description: FunctionSpec defines the desired state of Function
-X              properties:
-X                body:
-X                  description: Body is the KQL body of the function
-X                  type: string
-X                database:
-X                  description: Database is the name of the database in which the function
-X                    will be created
-X                  type: string
-X              required:
-X                - body
-X                - database
-X              type: object
-X            status:
-X              description: FunctionStatus defines the observed state of Function
-X              properties:
-X                error:
-X                  description: Error is a string that communicates any error message
-X                    if one exists
-X                  type: string
-X                lastTimeReconciled:
-X                  description: LastTimeReconciled is the last time the Function was
-X                    reconciled
-X                  format: date-time
-X                  type: string
-X                message:
-X                  description: Message is a human-readable message indicating details
-X                    about the Function
-X                  type: string
-X                status:
-X                  description: Status is an enum that represents the status of the Function
-X                  type: string
-X              required:
-X                - lastTimeReconciled
-X                - status
-X              type: object
-X          type: object
-X      served: true
-X      storage: true
-X      subresources:
-X        status: {}
-SHAR_EOF
-  (set 20 24 11 12 17 26 14 'ingestor.yaml'
-   eval "${shar_touch}") && \
-  chmod 0644 'ingestor.yaml'
-if test $? -ne 0
-then ${echo} "restore of ingestor.yaml failed"
-fi
-  if ${md5check}
-  then (
-       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
-       ) << \SHAR_EOF
-e902a9b8b7b725e6ec40f70263f4c368  ingestor.yaml
-SHAR_EOF
-
-else
-test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 7692 && \
-  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 7692"
-  fi
 # ============= ksm.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'ksm.yaml' &&
 ---
@@ -876,6 +436,445 @@ SHAR_EOF
 else
 test `LC_ALL=C wc -c < 'ksm.yaml'` -ne 5804 && \
   ${echo} "restoration warning:  size of 'ksm.yaml' is not 5804"
+  fi
+# ============= ingestor.yaml ==============
+  sed 's/^X//' << 'SHAR_EOF' > 'ingestor.yaml' &&
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+X  name: adx-mon
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+X  name: adx-mon:ingestor
+rules:
+X  - apiGroups:
+X      - ""
+X    resources:
+X      - namespaces
+X      - pods
+X    verbs:
+X      - get
+X      - list
+X      - watch
+X  - apiGroups:
+X      - adx-mon.azure.com
+X    resources:
+X      - functions
+X    verbs:
+X      - get
+X      - list
+X  - apiGroups:
+X      - adx-mon.azure.com
+X    resources:
+X      - functions/status
+X    verbs:
+X      - update
+X      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+X  name: adx-mon:ingestor
+roleRef:
+X  apiGroup: rbac.authorization.k8s.io
+X  kind: ClusterRole
+X  name: adx-mon:ingestor
+subjects:
+X  - kind: ServiceAccount
+X    name: ingestor
+X    namespace: adx-mon
+---
+apiVersion: v1
+kind: Service
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+spec:
+X  type: ClusterIP
+X  selector:
+X    app: ingestor
+X  ports:
+X    # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
+X    - port: 443
+X      targetPort: 9090
+X      # Optional field
+X      # By default and for convenience, the Kubernetes control plane will allocate a port from a range (default: 30000-32767)
+X      #nodePort: 30007
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+X  name: ingestor
+X  namespace: adx-mon
+spec:
+X  serviceName: "adx-mon"
+X  replicas: 1
+X  updateStrategy:
+X    type: RollingUpdate
+X  selector:
+X    matchLabels:
+X      app: ingestor
+X  template:
+X    metadata:
+X      labels:
+X        app: ingestor
+X      annotations:
+X        adx-mon/scrape: "true"
+X        adx-mon/port: "9091"
+X        adx-mon/path: "/metrics"
+X        adx-mon/log-destination: "Logs:Ingestor"
+X        adx-mon/log-parsers: json
+X    spec:
+X      serviceAccountName: ingestor
+X      containers:
+X        - name: ingestor
+X          image: ghcr.io/azure/adx-mon/ingestor:latest
+X          ports:
+X            - containerPort: 9090
+X              name: ingestor
+X            - containerPort: 9091
+X              name: metrics
+X          env:
+X            - name: LOG_LEVEL
+X              value: INFO
+X            - name: "GODEBUG"
+X              value: "http2client=0"
+X            - name: "AZURE_RESOURCE"
+X              value: "$ADX_URL"
+X            - name:  "AZURE_CLIENT_ID"
+X              value: "$CLIENT_ID"
+X          command:
+X            - /ingestor
+X          args:
+X            - "--storage-dir=/mnt/data"
+X            - "--max-segment-age=5s"
+X            - "--max-disk-usage=21474836480"
+X            - "--max-transfer-size=10485760"
+X            - "--max-connections=1000"
+X            - "--insecure-skip-verify"
+X            - "--lift-label=host"
+X            - "--lift-label=cluster"
+X            - "--lift-label=adxmon_namespace=Namespace"
+X            - "--lift-label=adxmon_pod=Pod"
+X            - "--lift-label=adxmon_container=Container"
+X            - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
+X            - "--logs-kusto-endpoints=Logs=$ADX_URL"
+X          volumeMounts:
+X            - name: metrics
+X              mountPath: /mnt/data
+X            - mountPath: /etc/pki/ca-trust/extracted
+X              name: etc-pki-ca-certs
+X              readOnly: true
+X            - mountPath: /etc/ssl/certs
+X              name: ca-certs
+X              readOnly: true
+X      affinity:
+X        podAntiAffinity:
+X          requiredDuringSchedulingIgnoredDuringExecution:
+X            - labelSelector:
+X                matchExpressions:
+X                  - key: app
+X                    operator: In
+X                    values:
+X                      - ingestor
+X              topologyKey: kubernetes.io/hostname
+X        nodeAffinity:
+X          preferredDuringSchedulingIgnoredDuringExecution:
+X            - weight: 1
+X              preference:
+X                matchExpressions:
+X                  - key: agentpool
+X                    operator: In
+X                    values:
+X                      - aks-system
+X      volumes:
+X        - name: ca-certs
+X          hostPath:
+X            path: /etc/ssl/certs
+X            type: Directory
+X        - name: etc-pki-ca-certs
+X          hostPath:
+X            path: /etc/pki/ca-trust/extracted
+X            type: DirectoryOrCreate
+X        - name: metrics
+X          hostPath:
+X            path: /mnt/ingestor
+X      tolerations:
+X        - key: CriticalAddonsOnly
+X          operator: Exists
+X        - effect: NoExecute
+X          key: node.kubernetes.io/not-ready
+X          operator: Exists
+X          tolerationSeconds: 300
+X        - effect: NoExecute
+X          key: node.kubernetes.io/unreachable
+X          operator: Exists
+X          tolerationSeconds: 300
+---
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+X  annotations:
+X    controller-gen.kubebuilder.io/version: v0.16.1
+X  name: functions.adx-mon.azure.com
+spec:
+X  group: adx-mon.azure.com
+X  names:
+X    kind: Function
+X    listKind: FunctionList
+X    plural: functions
+X    singular: function
+X  scope: Namespaced
+X  versions:
+X    - name: v1
+X      schema:
+X        openAPIV3Schema:
+X          description: Function defines a KQL function to be maintained in the Kusto
+X            cluster
+X          properties:
+X            apiVersion:
+X              description: |-
+X                APIVersion defines the versioned schema of this representation of an object.
+X                Servers should convert recognized schemas to the latest internal value, and
+X                may reject unrecognized values.
+X                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+X              type: string
+X            kind:
+X              description: |-
+X                Kind is a string value representing the REST resource this object represents.
+X                Servers may infer this from the endpoint the client submits requests to.
+X                Cannot be updated.
+X                In CamelCase.
+X                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+X              type: string
+X            metadata:
+X              type: object
+X            spec:
+X              description: FunctionSpec defines the desired state of Function
+X              properties:
+X                body:
+X                  description: Body is the KQL body of the function
+X                  type: string
+X                database:
+X                  description: Database is the name of the database in which the function
+X                    will be created
+X                  type: string
+X              required:
+X                - body
+X                - database
+X              type: object
+X            status:
+X              description: FunctionStatus defines the observed state of Function
+X              properties:
+X                error:
+X                  description: Error is a string that communicates any error message
+X                    if one exists
+X                  type: string
+X                lastTimeReconciled:
+X                  description: LastTimeReconciled is the last time the Function was
+X                    reconciled
+X                  format: date-time
+X                  type: string
+X                message:
+X                  description: Message is a human-readable message indicating details
+X                    about the Function
+X                  type: string
+X                status:
+X                  description: Status is an enum that represents the status of the Function
+X                  type: string
+X              required:
+X                - lastTimeReconciled
+X                - status
+X              type: object
+X          type: object
+X      served: true
+X      storage: true
+X      subresources:
+X        status: {}
+SHAR_EOF
+  (set 20 24 11 12 17 26 14 'ingestor.yaml'
+   eval "${shar_touch}") && \
+  chmod 0644 'ingestor.yaml'
+if test $? -ne 0
+then ${echo} "restore of ingestor.yaml failed"
+fi
+  if ${md5check}
+  then (
+       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'ingestor.yaml': 'MD5 check failed'
+       ) << \SHAR_EOF
+e902a9b8b7b725e6ec40f70263f4c368  ingestor.yaml
+SHAR_EOF
+
+else
+test `LC_ALL=C wc -c < 'ingestor.yaml'` -ne 7692 && \
+  ${echo} "restoration warning:  size of 'ingestor.yaml' is not 7692"
+  fi
+# ============= setup.sh ==============
+  sed 's/^X//' << 'SHAR_EOF' | uudecode &&
+begin 600 setup.sh
+M(R$O8FEN+V)A<V@*<V5T("UE=6\@<&EP969A:6P*4T-225!47T1)4CTB)"AD
+M:7)N86UE("(D>T)!4TA?4T]54D-%6S!=?2(I(@H*"FEF("$@8V]M;6%N9"`M
+M=B!A>B`F/B`O9&5V+VYU;&P*=&AE;@H@("`@96-H;R`B5&AE("=A>B<@8V]M
+M;6%N9"!C;W5L9"!N;W0@8F4@9F]U;F0N(%!L96%S92!I;G-T86QL($%Z=7)E
+M($-,22!B969O<F4@8V]N=&EN=6EN9RXB"B`@("!E>&ET"F9I"@II9B`A(&%Z
+M(&%C8V]U;G0@<VAO=R`F/B`O9&5V+VYU;&P[('1H96X*("`@(&5C:&\@(EEO
+M=2!A<F4@;F]T(&QO9V=E9"!I;B!T;R!!>G5R92!#3$DN(%!L96%S92!L;V<@
+M:6XN(@H@("`@87H@;&]G:6X*9FD*"E1/2T5.7T584$E263TD*&%Z(&%C8V]U
+M;G0@9V5T+6%C8V5S<RUT;VME;B`M+7%U97)Y(&5X<&ER97-?;VX@+6\@='-V
+M*0I#55)214Y47T1!5$4])"AD871E("UU("LE<RD*"FEF(%M;("(D0U524D5.
+M5%]$051%(B`^("(D5$]+14Y?15A025)9(B!=73L@=&AE;@H@("`@96-H;R`B
+M66]U<B!!>G5R92!#3$D@=&]K96X@:&%S(&5X<&ER960N(%!L96%S92!L;V<@
+M:6X@86=A:6XN(@H@("`@87H@;&]G:6X*9FD*"F9O<B!%6%0@:6X@<F5S;W5R
+M8V4M9W)A<&@@:W5S=&\[(&1O"B`@("!R96%D("UP(")4:&4@)R1E>'0G(&5X
+M=&5N<VEO;B!I<R!N;W0@:6YS=&%L;&5D+B!$;R!Y;W4@=V%N="!T;R!I;G-T
+M86QL(&ET(&YO=S\@*'DO;BD@(B!)3E-404Q,7T585`H@("`@:68@6UL@(B1)
+M3E-404Q,7T585"(@/3T@(GDB(%U=.R!T:&5N"B`@("`@("`@87H@97AT96YS
+M:6]N(&%D9"`M+6YA;64@(B1%6%0B"B`@("!E;'-E"B`@("`@("`@96-H;R`B
+M5&AE("<D15A4)R!E>'1E;G-I;VX@:7,@<F5Q=6ER960N($5X:71I;F<N(@H@
+M("`@("`@(&5X:70@,0H@("`@9FD*9&]N90H*(R!!<VL@9F]R('1H92!N86UE
+M(&]F('1H92!A:W,@8VQU<W1E<B!A;F0@<F5A9"!I="!A<R!I;G!U="X@(%=I
+M=&@@=&AA="!N86UE+"!R=6X@82!G<F%P:"!Q=65R>2!T;R!F:6YD"G)E860@
+M+7`@(E!L96%S92!E;G1E<B!T:&4@;F%M92!O9B!T:&4@04M3(&-L=7-T97(@
+M=VAE<F4@0418+4UO;B!C;VUP;VYE;G1S('-H;W5L9"!B92!D97!L;WEE9#H@
+M(B!#3%535$52"G=H:6QE(%M;("UZ("(D>T-,55-415(O+R!](B!=73L@9&\*
+M("`@(&5C:&\@(D-L=7-T97(@8V%N;F]T(&)E(&5M<'1Y+B!0;&5A<V4@96YT
+M97(@=&AE(&YA;64@;V8@=&AE($%+4R!C;'5S=&5R.B(*("`@(')E860@0TQ5
+M4U1%4@ID;VYE"@HC(%)U;B!A(&=R87!H('%U97)Y('1O(&9I;F0@=&AE(&-L
+M=7-T97(G<R!R97-O=7)C92!G<F]U<"!A;F0@<W5B<V-R:7!T:6]N(&ED"D-,
+M55-415)?24Y&3STD*&%Z(&=R87!H('%U97)Y("UQ(")297-O=7)C97,@?"!W
+M:&5R92!T>7!E(#U^("=-:6-R;W-O9G0N0V]N=&%I;F5R4V5R=FEC92]M86YA
+M9V5D0VQU<W1E<G,G(&%N9"!N86UE(#U^("<D0TQ54U1%4B<@?"!P<F]J96-T
+M(')E<V]U<F-E1W)O=7`L('-U8G-C<FEP=&EO;DED+"!L;V-A=&EO;B(I"FEF
+M(%M;("0H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@)RYD871A('P@;&5N9W1H
+M)RD@+65Q(#`@75T[('1H96X*("`@(&5C:&\@(DYO($%+4R!C;'5S=&5R(&-O
+M=6QD(&)E(&9O=6YD(&9O<B!T:&4@8VQU<W1E<B!N86UE("<D0TQ54U1%4B<N
+M($5X:71I;F<N(@H@("`@97AI="`Q"F9I"@I215-/55)#15]'4D]54#TD*&5C
+M:&\@)$-,55-415)?24Y&3R!\(&IQ("UR("<N9&%T85LP72YR97-O=7)C94=R
+M;W5P)RD*4U5"4T-225!424].7TE$/20H96-H;R`D0TQ54U1%4E])3D9/('P@
+M:G$@+7(@)RYD871A6S!=+G-U8G-C<FEP=&EO;DED)RD*4D5'24]./20H96-H
+M;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD871A6S!=+FQO8V%T:6]N)RD*
+M"B,@1FEN9"!T:&4@;6%N86=E9"!I9&5N=&ET>2!C;&EE;G0@240@871T86-H
+M960@=&\@=&AE($%+4R!N;V1E('!O;VQS"DY/1$5?4$]/3%])1$5.5$E463TD
+M*&%Z(&%K<R!S:&]W("TM<F5S;W5R8V4M9W)O=7`@)%)%4T]54D-%7T=23U50
+M("TM;F%M92`D0TQ54U1%4B`M+7%U97)Y(&ED96YT:71Y4')O9FEL92YK=6)E
+M;&5T:61E;G1I='DN8VQI96YT260@+6\@:G-O;B!\(&IQ("X@+7(I"@IE8VAO
+M"F5C:&\@+64@(D9O=6YD($%+4R!C;'5S=&5R(&EN9F\Z(@IE8VAO("UE("(@
+M($%+4R!#;'5S=&5R($YA;64Z(%QE6S,R;21#3%535$527&5;,&TB"F5C:&\@
+M+64@(B`@4F5S;W5R8V4@1W)O=7`Z(%QE6S,R;21215-/55)#15]'4D]54%QE
+M6S!M(@IE8VAO("UE("(@(%-U8G-C<FEP=&EO;B!)1#I<95LS,FT@)%-50E-#
+M4DE05$E/3E])1%QE6S!M(@IE8VAO("UE("(@(%)E9VEO;CH@7&5;,S)M)%)%
+M1TE/3EQE6S!M(@IE8VAO("UE("(@($UA;F%G960@261E;G1I='D@0VQI96YT
+M($E$.B!<95LS,FTD3D]$15]03T],7TE$14Y425197&5;,&TB"F5C:&\*<F5A
+M9"`M<"`B27,@=&AI<R!I;F9O<FUA=&EO;B!C;W)R96-T/R`H>2]N*2`B($-/
+M3D9)4DT*:68@6UL@(B1#3TY&25)-(B`A/2`B>2(@75T[('1H96X*("`@(&5C
+M:&\@(D5X:71I;F<@87,@=&AE(&EN9F]R;6%T:6]N(&ES(&YO="!C;W)R96-T
+M+B(*("`@(&5X:70@,0IF:0H*87H@86MS(&=E="UC<F5D96YT:6%L<R`M+7-U
+M8G-C<FEP=&EO;B`D4U5"4T-225!424].7TE$("TM<F5S;W5R8V4M9W)O=7`@
+M)%)%4T]54D-%7T=23U50("TM;F%M92`D0TQ54U1%4@H*96-H;PIR96%D("UP
+M(")0;&5A<V4@96YT97(@=&AE($%Z=7)E($1A=&$@17AP;&]R97(@8VQU<W1E
+M<B!N86UE('=H97)E($%$6"U-;VX@=VEL;"!S=&]R92!T96QE;65T<GDZ("(@
+M0TQ54U1%4E].04U%"G=H:6QE(%M;("UZ("(D>T-,55-415)?3D%-12\O('TB
+M(%U=.R!D;PH@("`@96-H;R`B0418(&-L=7-T97(@;F%M92!C86YN;W0@8F4@
+M96UP='DN(%!L96%S92!E;G1E<B!T:&4@9&%T86)A<V4@;F%M93HB"B`@("!R
+M96%D($-,55-415)?3D%-10ID;VYE"@I#3%535$527TE.1D\])"AA>B!G<F%P
+M:"!Q=65R>2`M<2`B4F5S;W5R8V5S('P@=VAE<F4@='EP92`]?B`G36EC<F]S
+M;V9T+DMU<W1O+V-L=7-T97)S)R!A;F0@;F%M92`]?B`G)$-,55-415)?3D%-
+M12<@?"!P<F]J96-T(&YA;64L(')E<V]U<F-E1W)O=7`L('-U8G-C<FEP=&EO
+M;DED+"!L;V-A=&EO;BP@<')O<&5R=&EE<RYU<FDB*0I#3%535$527T-/54Y4
+M/20H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@)RYD871A('P@;&5N9W1H)RD*
+M2U535$]?4D5'24]./20H96-H;R`D0TQ54U1%4E])3D9/('P@:G$@+7(@)RYD
+M871A6S!=+FQO8V%T:6]N)RD*"FEF(%M;("1#3%535$527T-/54Y4("UE<2`P
+M(%U=.R!T:&5N"B`@("!E8VAO(").;R!+=7-T;R!C;'5S=&5R(&-O=6QD(&)E
+M(&9O=6YD(&9O<B!T:&4@9&%T86)A<V4@;F%M92`G)$-,55-415)?3D%-12<N
+M($5X:71I;F<N(@H@("`@97AI="`Q"F5L<V4*("`@($-,55-415)?3D%-13TD
+M*&5C:&\@)$-,55-415)?24Y&3R!\(&IQ("UR("<N9&%T85LP72YN86UE)RD*
+M("`@(%-50E-#4DE05$E/3E])1#TD*&5C:&\@)$-,55-415)?24Y&3R!\(&IQ
+M("UR("<N9&%T85LP72YS=6)S8W)I<'1I;VY)9"<I"B`@("!215-/55)#15]'
+M4D]54#TD*&5C:&\@)$-,55-415)?24Y&3R!\(&IQ("UR("<N9&%T85LP72YR
+M97-O=7)C94=R;W5P)RD*("`@($%$6%]&441./20H96-H;R`D0TQ54U1%4E])
+M3D9/('P@:G$@+7(@)RYD871A6S!=+G!R;W!E<G1I97-?=7)I)RD*9FD*96-H
+M;PIE8VAO(")&;W5N9"!!1%@@8VQU<W1E<B!I;F9O.B(*96-H;R`M92`B("!#
+M;'5S=&5R($YA;64Z(%QE6S,R;21#3%535$527TY!345<95LP;2(*96-H;R`M
+M92`B("!3=6)S8W)I<'1I;VX@240Z(%QE6S,R;21354)30U))4%1)3TY?241<
+M95LP;2(*96-H;R`M92`B("!297-O=7)C92!'<F]U<#H@7&5;,S)M)%)%4T]5
+M4D-%7T=23U507&5;,&TB"F5C:&\@+64@(B`@0418($911$XZ(%QE6S,R;21!
+M1%A?1E%$3EQE6S!M(@IE8VAO("UE("(@(%)E9VEO;CH@7&5;,S)M)$M54U1/
+M7U)%1TE/3EQE6S!M(@IE8VAO"G)E860@+7`@(DES('1H:7,@=&AE(&-O<G)E
+M8W0@0418(&-L=7-T97(@:6YF;S\@*'DO;BD@(B!#3TY&25)-"FEF(%M;("(D
+M0T].1DE232(@(3T@(GDB(%U=.R!T:&5N"B`@("!E8VAO(")%>&ET:6YG(&%S
+M('1H92!!1%@@8VQU<W1E<B!I;F9O(&ES(&YO="!C;W)R96-T+B(*("`@(&5X
+M:70@,0IF:0H*9F]R($1!5$%"05-%7TY!344@:6X@365T<FEC<R!,;V=S.R!D
+M;PH@("`@(R!#:&5C:R!I9B!T:&4@)$1!5$%"05-%7TY!344@9&%T86)A<V4@
+M97AI<W1S"B`@("!$051!0D%315]%6$E35%,])"AA>B!K=7-T;R!D871A8F%S
+M92!S:&]W("TM8VQU<W1E<BUN86UE("1#3%535$527TY!344@+2UR97-O=7)C
+M92UG<F]U<"`D4D533U520T5?1U)/55`@+2UD871A8F%S92UN86UE("1$051!
+M0D%315].04U%("TM<75E<GD@(FYA;64B("UO('1S=B`R/B]D978O;G5L;"!\
+M?"!E8VAO("(B*0H@("`@:68@6UL@+7H@(B1$051!0D%315]%6$E35%,B(%U=
+M.R!T:&5N"B`@("`@("`@96-H;R`B5&AE("1$051!0D%315].04U%(&1A=&%B
+M87-E(&1O97,@;F]T(&5X:7-T+B!#<F5A=&EN9R!I="!N;W<N(@H@("`@("`@
+M(&%Z(&MU<W1O(&1A=&%B87-E(&-R96%T92`M+6-L=7-T97(M;F%M92`D0TQ5
+M4U1%4E].04U%("TM<F5S;W5R8V4M9W)O=7`@)%)%4T]54D-%7T=23U50("TM
+M9&%T86)A<V4M;F%M92`D1$%404)!4T5?3D%-12`M+7)E860M=W)I=&4M9&%T
+M86)A<V4@('-O9G0M9&5L971E+7!E<FEO9#U0,S!$(&AO="UC86-H92UP97)I
+M;V0]4#=$(&QO8V%T:6]N/21+55-43U]214=)3TX*("`@(&5L<V4*("`@("`@
+M("!E8VAO(")4:&4@)$1!5$%"05-%7TY!344@9&%T86)A<V4@86QR96%D>2!E
+M>&ES=',N(@H@("`@9FD*"B`@("`C($-H96-K(&EF('1H92!.3T1%7U!/3TQ?
+M241%3E1)5%D@:7,@86X@861M:6X@;VX@=&AE("1$051!0D%315].04U%(&1A
+M=&%B87-E"B`@("!!1$U)3E]#2$5#2STD*&%Z(&MU<W1O(&1A=&%B87-E(&QI
+M<W0M<')I;F-I<&%L("TM8VQU<W1E<BUN86UE("1#3%535$527TY!344@+2UR
+M97-O=7)C92UG<F]U<"`D4D533U520T5?1U)/55`@+2UD871A8F%S92UN86UE
+M("1$051!0D%315].04U%("TM<75E<GD@(EL_='EP93T])T%P<"<@)B8@87!P
+M260]/2<D3D]$15]03T],7TE$14Y42519)R`F)B!R;VQE/3TG061M:6XG72(@
+M+6\@='-V*0H@("`@:68@6UL@+7H@(B1!1$U)3E]#2$5#2R(@75T[('1H96X*
+M("`@("`@("!E8VAO(")4:&4@36%N86=E9"!)9&5N=&ET>2!#;&EE;G0@240@
+M:7,@;F]T(&-O;F9I9W5R960@=&\@=7-E(&1A=&%B87-E("1$051!0D%315].
+M04U%+B!!9&1I;F<@:70@87,@86X@861M:6XN(@H@("`@("`@(&%Z(&MU<W1O
+M(&1A=&%B87-E(&%D9"UP<FEN8VEP86P@+2UC;'5S=&5R+6YA;64@)$-,55-4
+M15)?3D%-12`M+7)E<V]U<F-E+6=R;W5P("1215-/55)#15]'4D]54"`M+61A
+M=&%B87-E+6YA;64@)$1!5$%"05-%7TY!344@+2UV86QU92!R;VQE/4%D;6EN
+M(&YA;64]041836]N('1Y<&4]87!P(&%P<"UI9#TD3D]$15]03T],7TE$14Y4
+M2519"B`@("!E;'-E"B`@("`@("`@96-H;R`B5&AE($UA;F%G960@261E;G1I
+M='D@0VQI96YT($E$(&ES(&%L<F5A9'D@8V]N9FEG=7)E9"!T;R!U<V4@9&%T
+M86)A<V4@)$1!5$%"05-%7TY!344N(@H@("`@9FD*9&]N90H*97AP;W)T($-,
+M55-415(])$-,55-415(*97AP;W)T(%)%1TE/3CTD4D5'24]."F5X<&]R="!#
+M3$E%3E1?240])$Y/1$5?4$]/3%])1$5.5$E460IE>'!O<G0@04187U523#TD
+M04187T911$X*96YV<W5B<W0@/"`D4T-225!47T1)4B]I;F=E<W1O<BYY86UL
+M('P@:W5B96-T;"!A<'!L>2`M9B`M"F5N=G-U8G-T(#P@)%-#4DE05%]$25(O
+M8V]L;&5C=&]R+GEA;6P@?"!K=6)E8W1L(&%P<&QY("UF("T*:W5B96-T;"!A
+M<'!L>2`M9B`D4T-225!47T1)4B]K<VTN>6%M;`H*96-H;PIE8VAO("UE(")<
+M95LY-VU3=6-C97-S9G5L;'D@9&5P;&]Y960@0418+4UO;B!C;VUP;VYE;G1S
+M('1O($%+4R!C;'5S=&5R("1#3%535$52+EQE6S!M(@IE8VAO"F5C:&\@(D-O
+M;&QE8W1E9"!T96QE;65T<GD@8V%N(&)E(&9O=6YD('1H92`D1$%404)!4T5?
+=3D%-12!D871A8F%S92!A="`D04187T911$XN(@ID
+`
+end
+SHAR_EOF
+  (set 20 24 11 25 17 18 45 'setup.sh'
+   eval "${shar_touch}") && \
+  chmod 0644 'setup.sh'
+if test $? -ne 0
+then ${echo} "restore of setup.sh failed"
+fi
+  if ${md5check}
+  then (
+       ${MD5SUM} -c >/dev/null 2>&1 || ${echo} 'setup.sh': 'MD5 check failed'
+       ) << \SHAR_EOF
+3b5995a7ba6d2ad0caa54f55ae4db3bb  setup.sh
+SHAR_EOF
+
+else
+test `LC_ALL=C wc -c < 'setup.sh'` -ne 6014 && \
+  ${echo} "restoration warning:  size of 'setup.sh' is not 6014"
   fi
 # ============= collector.yaml ==============
   sed 's/^X//' << 'SHAR_EOF' > 'collector.yaml' &&
