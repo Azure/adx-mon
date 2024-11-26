@@ -1,3 +1,5 @@
+//go:build !disableDocker
+
 package crd_test
 
 import (

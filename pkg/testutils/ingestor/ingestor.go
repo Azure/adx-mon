@@ -1,3 +1,5 @@
+//go:build !disableDocker
+
 package ingestor
 
 import (
