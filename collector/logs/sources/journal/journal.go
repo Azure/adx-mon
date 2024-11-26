@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux || !cgo
 
 package journal
 
@@ -8,7 +8,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 )
 
-// Dummy impl for all non-linux platforms
+// Dummy impl for all non-linux or non-CGo platforms
 
 type Source struct{}
 
