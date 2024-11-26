@@ -1,10 +1,9 @@
-FROM golang:1.22 as builder
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as builder
 
-ADD .. /code
+RUN tdnf install -y golang systemd-devel gcc glibc-devel binutils kernel-headers
+
+ADD . /code
 WORKDIR /code
-
-# Headers required for journal input build
-RUN apt update && apt install -y libsystemd-dev
 
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o ./bin/collector ./cmd/collector
 

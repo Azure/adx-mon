@@ -1,6 +1,8 @@
-FROM golang:1.22 as builder
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as builder
 
-ADD .. /code
+RUN tdnf install -y golang
+
+ADD . /code
 WORKDIR /code
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/ingestor ./cmd/ingestor
