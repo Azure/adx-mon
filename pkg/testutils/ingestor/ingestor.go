@@ -20,18 +20,13 @@ type IngestorContainer struct {
 }
 
 func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*IngestorContainer, error) {
-	rootDir, err := testutils.GetGitRootDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get git root dir: %w", err)
-	}
-
 	req := testcontainers.ContainerRequest{
 		Name: "ingestor" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
-			Context:       rootDir,
-			Dockerfile:    "pkg/testutils/ingestor/Dockerfile",
+			Context:       "../../..", // repo base
+			Dockerfile:    "build/images/Dockerfile.ingestor",
 			PrintBuildLog: true,
 			KeepImage:     true,
 		},
