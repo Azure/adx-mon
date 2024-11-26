@@ -21,18 +21,13 @@ type CollectorContainer struct {
 }
 
 func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*CollectorContainer, error) {
-	rootDir, err := testutils.GetGitRootDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get git root dir: %w", err)
-	}
-
 	req := testcontainers.ContainerRequest{
 		Name: "collector" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:          DefaultImage,
 			Tag:           DefaultTag,
-			Context:       rootDir,
-			Dockerfile:    "pkg/testutils/collector/Dockerfile",
+			Context:       "../../..", // repo base
+			Dockerfile:    "build/images/Dockerfile.collector",
 			PrintBuildLog: true,
 			KeepImage:     true,
 		},
