@@ -99,3 +99,21 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		return nil
 	}
 }
+
+type KustoTableSchema struct{}
+
+func (k *KustoTableSchema) TableName() string {
+	return "Collector"
+}
+
+func (k *KustoTableSchema) CslColumns() []string {
+	return []string{
+		"msg:string",
+		"lvl:string",
+		"ts:datetime",
+		"namespace:string",
+		"container:string",
+		"pod:string",
+		"host:string",
+	}
+}

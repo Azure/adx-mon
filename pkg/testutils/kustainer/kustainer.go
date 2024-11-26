@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
@@ -199,9 +200,9 @@ func (c *KustainerContainer) connect(ctx context.Context, config *rest.Config, p
 
 	ports := []string{"0:8080"}
 	stopChan, readyChan := make(chan struct{}, 1), make(chan struct{})
-	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	out, errOut := threadsafeBuffer{}, threadsafeBuffer{}
 
-	pf, err := portforward.New(dialer, ports, stopChan, readyChan, out, errOut)
+	pf, err := portforward.New(dialer, ports, stopChan, readyChan, &out, &errOut)
 	if err != nil {
 		return fmt.Errorf("failed to create port forward: %w", err)
 	}
@@ -259,4 +260,15 @@ func (c *KustainerContainer) CreateDatabase(ctx context.Context, dbName string) 
 		return fmt.Errorf("create database %s: %w", dbName, err)
 	}
 	return nil
+}
+
+type threadsafeBuffer struct {
+	sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *threadsafeBuffer) Write(p []byte) (n int, err error) {
+	b.Lock()
+	defer b.Unlock()
+	return b.buffer.Write(p)
 }
