@@ -17,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,11 +70,8 @@ func TestCRD(t *testing.T) {
 
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	require.NoError(t, err)
-	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{
-		WarningHandler: ctrlclient.WarningHandlerOptions{
-			SuppressWarnings: true,
-		},
-	})
+	config.WarningHandler = rest.NoWarnings{}
+	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{})
 	require.NoError(t, err)
 
 	ts := &TestStore{t: t}
