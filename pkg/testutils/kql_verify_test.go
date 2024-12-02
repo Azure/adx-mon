@@ -1,3 +1,5 @@
+//go:build !disableDocker
+
 package testutils_test
 
 import (

@@ -46,12 +46,9 @@ func GetKubeConfig(ctx context.Context, k *k3s.K3sContainer) (*rest.Config, ctrl
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get rest config: %w", err)
 	}
+	restCfg.WarningHandler = rest.NoWarnings{}
 
-	ctrlCli, err := ctrlclient.New(restCfg, ctrlclient.Options{
-		WarningHandler: ctrlclient.WarningHandlerOptions{
-			SuppressWarnings: true,
-		},
-	})
+	ctrlCli, err := ctrlclient.New(restCfg, ctrlclient.Options{})
 
-	return restCfg, ctrlCli, nil
+	return restCfg, ctrlCli, err
 }

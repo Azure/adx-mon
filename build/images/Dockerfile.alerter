@@ -1,4 +1,6 @@
-FROM golang:1.22 as builder
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as builder
+
+RUN tdnf install -y golang
 
 ADD . /code
 WORKDIR /code
