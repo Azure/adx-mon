@@ -5,7 +5,9 @@ package collector
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
@@ -22,15 +24,22 @@ type CollectorContainer struct {
 }
 
 func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*CollectorContainer, error) {
+	var relative string
+	for iter := range 4 {
+		relative = strings.Repeat("../", iter)
+		if _, err := os.Stat(filepath.Join(relative, "build/images/Dockerfile.ingestor")); err == nil {
+			break
+		}
+	}
+
 	req := testcontainers.ContainerRequest{
 		Name: "collector" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:          DefaultImage,
-			Tag:           DefaultTag,
-			Context:       "../../..", // repo base
-			Dockerfile:    "build/images/Dockerfile.collector",
-			PrintBuildLog: true,
-			KeepImage:     true,
+			Repo:       DefaultImage,
+			Tag:        DefaultTag,
+			Context:    relative, // repo base
+			Dockerfile: "build/images/Dockerfile.collector",
+			KeepImage:  true,
 		},
 	}
 
