@@ -4,9 +4,10 @@ package collector
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
@@ -23,15 +24,22 @@ type CollectorContainer struct {
 }
 
 func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*CollectorContainer, error) {
+	var relative string
+	for iter := range 4 {
+		relative = strings.Repeat("../", iter)
+		if _, err := os.Stat(filepath.Join(relative, "build/images/Dockerfile.ingestor")); err == nil {
+			break
+		}
+	}
+
 	req := testcontainers.ContainerRequest{
 		Name: "collector" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:          DefaultImage,
-			Tag:           DefaultTag,
-			Context:       "../../..", // repo base
-			Dockerfile:    "build/images/Dockerfile.collector",
-			PrintBuildLog: true,
-			KeepImage:     true,
+			Repo:       DefaultImage,
+			Tag:        DefaultTag,
+			Context:    relative, // repo base
+			Dockerfile: "build/images/Dockerfile.collector",
+			KeepImage:  true,
 		},
 	}
 
@@ -98,12 +106,20 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 	}
 }
 
-// TODO Accept a collector configuration and write it to a temp directory, then transfer it to the cluster,
-// overwriting the existing configuration. Also create a default configuration if none is provided.
-// Note, this would require moving the configuration to somewhere it can be imported, get feedback
-// from the team.
-func WithConfig(ctx context.Context) testcontainers.CustomizeRequestOption {
-	return func(req *testcontainers.GenericContainerRequest) error {
-		return errors.New("not implemented")
+type KustoTableSchema struct{}
+
+func (k *KustoTableSchema) TableName() string {
+	return "Collector"
+}
+
+func (k *KustoTableSchema) CslColumns() []string {
+	return []string{
+		"msg:string",
+		"lvl:string",
+		"ts:datetime",
+		"namespace:string",
+		"container:string",
+		"pod:string",
+		"host:string",
 	}
 }

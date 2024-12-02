@@ -5,7 +5,9 @@ package ingestor
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
@@ -22,15 +24,22 @@ type IngestorContainer struct {
 }
 
 func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*IngestorContainer, error) {
+	var relative string
+	for iter := range 4 {
+		relative = strings.Repeat("../", iter)
+		if _, err := os.Stat(filepath.Join(relative, "build/images/Dockerfile.ingestor")); err == nil {
+			break
+		}
+	}
+
 	req := testcontainers.ContainerRequest{
 		Name: "ingestor" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:          DefaultImage,
-			Tag:           DefaultTag,
-			Context:       "../../..", // repo base
-			Dockerfile:    "build/images/Dockerfile.ingestor",
-			PrintBuildLog: true,
-			KeepImage:     true,
+			Repo:       DefaultImage,
+			Tag:        DefaultTag,
+			Context:    relative, // repo base
+			Dockerfile: "build/images/Dockerfile.ingestor",
+			KeepImage:  true,
 		},
 	}
 
@@ -94,5 +103,23 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		})
 
 		return nil
+	}
+}
+
+type KustoTableSchema struct{}
+
+func (k *KustoTableSchema) TableName() string {
+	return "Collector"
+}
+
+func (k *KustoTableSchema) CslColumns() []string {
+	return []string{
+		"msg:string",
+		"lvl:string",
+		"ts:datetime",
+		"namespace:string",
+		"container:string",
+		"pod:string",
+		"host:string",
 	}
 }

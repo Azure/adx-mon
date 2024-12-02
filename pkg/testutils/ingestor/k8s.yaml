@@ -115,7 +115,6 @@ spec:
           command:
             - /ingestor
           args:
-            - "--kustainer"
             - "--storage-dir=/mnt/data"
             - "--max-segment-age=5s"
             - "--max-disk-usage=21474836480"

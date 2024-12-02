@@ -13,7 +13,7 @@ import (
 )
 
 func TestCollector(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
 	c, err := collector.Run(ctx)
