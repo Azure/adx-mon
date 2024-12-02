@@ -2,6 +2,7 @@ package testutils_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,8 +19,30 @@ func TestIntegration(t *testing.T) {
 	// An extra generous timeout for the test. The test should run in
 	// about 5 minutes, but when running with the race detector, it
 	// can take longer.
+	wg := sync.WaitGroup{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-	defer cancel()
+	t.Cleanup(cancel)
+
+	kustainerUrl := StartCluster(ctx, t)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		VerifyLogs(ctx, t, kustainerUrl)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		VerifyMetrics(ctx, t, kustainerUrl)
+	}()
+
+	wg.Wait()
+}
+
+func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string) {
+	t.Helper()
+	wg := sync.WaitGroup{}
 
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
@@ -38,68 +61,95 @@ func TestIntegration(t *testing.T) {
 	t.Logf("Kubeconfig: %s", kubeconfig)
 	t.Logf("Kustainer: %s", kustoContainer.ConnectionUrl())
 
-	t.Run("Create databases", func(t *testing.T) {
+	wg.Add(1)
+	go t.Run("Configure Kusto", func(t *testing.T) {
+		defer wg.Done()
+
+		opts := kustainer.IngestionBatchingPolicy{
+			MaximumBatchingTimeSpan: 30 * time.Second,
+		}
 		for _, dbName := range []string{"Metrics", "Logs"} {
 			require.NoError(t, kustoContainer.CreateDatabase(ctx, dbName))
+			require.NoError(t, kustoContainer.SetIngestionBatchingPolicy(ctx, dbName, opts))
 		}
 	})
 
-	ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
-	testcontainers.CleanupContainer(t, ingestorContainer)
-	require.NoError(t, err)
+	wg.Add(1)
+	go t.Run("Build and install Ingestor", func(tt *testing.T) {
+		defer wg.Done()
 
-	collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
-	testcontainers.CleanupContainer(t, collectorContainer)
-	require.NoError(t, err)
+		ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, ingestorContainer)
+		require.NoError(tt, err)
+	})
 
-	t.Run("Logs", func(t *testing.T) {
-		var (
-			pollInterval = time.Second
-			timeout      = 5 * time.Minute
-			database     = "Logs"
-			table        = "Collector"
-		)
+	wg.Add(1)
+	go t.Run("Build and install Collector", func(tt *testing.T) {
+		defer wg.Done()
 
+		collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, collectorContainer)
+		require.NoError(tt, err)
+	})
+
+	kustoUrl = kustoContainer.ConnectionUrl()
+	wg.Wait()
+	return
+}
+
+func VerifyLogs(ctx context.Context, t *testing.T, kustainerUrl string) {
+	t.Helper()
+	var (
+		pollInterval = time.Second
+		timeout      = 5 * time.Minute
+		database     = "Logs"
+		table        = "Collector"
+	)
+
+	t.Run("Verify Logs", func(t *testing.T) {
 		t.Run("Table exists in Kusto", func(t *testing.T) {
 			require.Eventually(t, func() bool {
-				return testutils.TableExists(ctx, t, database, table, kustoContainer.ConnectionUrl())
+				return testutils.TableExists(ctx, t, database, table, kustainerUrl)
 			}, timeout, pollInterval)
 		})
 
 		t.Run("Table has rows", func(t *testing.T) {
 			require.Eventually(t, func() bool {
-				return testutils.TableHasRows(ctx, t, database, table, kustoContainer.ConnectionUrl())
+				return testutils.TableHasRows(ctx, t, database, table, kustainerUrl)
 			}, timeout, pollInterval)
 		})
 
 		t.Run("View exists in Kusto", func(t *testing.T) {
 			require.Eventually(t, func() bool {
-				return testutils.FunctionExists(ctx, t, database, table, kustoContainer.ConnectionUrl())
+				return testutils.FunctionExists(ctx, t, database, table, kustainerUrl)
 			}, timeout, pollInterval)
 		})
 
 		t.Run("Verify view schema", func(t *testing.T) {
-			testutils.VerifyTableSchema(ctx, t, database, table, kustoContainer.ConnectionUrl(), &collector.KustoTableSchema{})
+			testutils.VerifyTableSchema(ctx, t, database, table, kustainerUrl, &collector.KustoTableSchema{})
 		})
 	})
+}
 
-	t.Run("Metrics", func(t *testing.T) {
-		var (
-			pollInterval = time.Second
-			timeout      = 5 * time.Minute
-			database     = "Metrics"
-			table        = "AdxmonCollectorHealthCheck"
-		)
+func VerifyMetrics(ctx context.Context, t *testing.T, kustainerUrl string) {
+	t.Helper()
+	var (
+		pollInterval = time.Second
+		timeout      = 5 * time.Minute
+		database     = "Metrics"
+		table        = "AdxmonCollectorHealthCheck"
+	)
 
+	t.Run("Verify Metrics", func(t *testing.T) {
 		t.Run("Table exists in Kusto", func(t *testing.T) {
 			require.Eventually(t, func() bool {
-				return testutils.TableExists(ctx, t, database, table, kustoContainer.ConnectionUrl())
+				return testutils.TableExists(ctx, t, database, table, kustainerUrl)
 			}, timeout, pollInterval)
 		})
 
 		t.Run("Table has rows", func(t *testing.T) {
 			require.Eventually(t, func() bool {
-				return testutils.TableHasRows(ctx, t, database, table, kustoContainer.ConnectionUrl())
+				return testutils.TableHasRows(ctx, t, database, table, kustainerUrl)
 			}, timeout, pollInterval)
 		})
 	})

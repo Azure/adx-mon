@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -262,6 +263,72 @@ func (c *KustainerContainer) CreateDatabase(ctx context.Context, dbName string) 
 	return nil
 }
 
+type IngestionBatchingPolicy struct {
+	MaximumBatchingTimeSpan time.Duration `json:"MaximumBatchingTimeSpan,omitempty"`
+	MaximumNumberOfItems    int           `json:"MaximumNumberOfItems,omitempty"`
+	MaximumRawDataSizeMB    int           `json:"MaximumRawDataSizeMB,omitempty"`
+}
+
+// MarshalJSON customizes the JSON representation of IngestionBatchingPolicy
+func (p IngestionBatchingPolicy) MarshalJSON() ([]byte, error) {
+	type Alias IngestionBatchingPolicy
+	return json.Marshal(&struct {
+		MaximumBatchingTimeSpan string `json:"MaximumBatchingTimeSpan"`
+		*Alias
+	}{
+		MaximumBatchingTimeSpan: fmt.Sprintf("%02d:%02d:%02d", int(p.MaximumBatchingTimeSpan.Hours()), int(p.MaximumBatchingTimeSpan.Minutes())%60, int(p.MaximumBatchingTimeSpan.Seconds())%60),
+		Alias:                   (*Alias)(&p),
+	})
+}
+
+// UnmarshalJSON customizes the JSON unmarshalling of IngestionBatchingPolicy
+func (p *IngestionBatchingPolicy) UnmarshalJSON(data []byte) error {
+	type Alias IngestionBatchingPolicy
+	aux := &struct {
+		MaximumBatchingTimeSpan string `json:"MaximumBatchingTimeSpan"`
+		*Alias
+	}{
+		Alias: (*Alias)(p),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	duration, err := time.ParseDuration(aux.MaximumBatchingTimeSpan)
+	if err != nil {
+		return err
+	}
+	p.MaximumBatchingTimeSpan = duration
+	return nil
+}
+
+// Custom String method to format duration as "00:00:01"
+func (p IngestionBatchingPolicy) String() string {
+	return fmt.Sprintf("%02d:%02d:%02d", int(p.MaximumBatchingTimeSpan.Hours()), int(p.MaximumBatchingTimeSpan.Minutes())%60, int(p.MaximumBatchingTimeSpan.Seconds())%60)
+}
+
+func (c *KustainerContainer) SetIngestionBatchingPolicy(ctx context.Context, dbName string, p IngestionBatchingPolicy) error {
+	cb := kusto.NewConnectionStringBuilder(c.endpoint)
+	client, err := kusto.New(cb)
+	if err != nil {
+		return fmt.Errorf("new kusto client: %w", err)
+	}
+	defer client.Close()
+
+	policy, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal policy: %w", err)
+	}
+
+	stmt := kql.New(".alter database ").AddUnsafe(dbName).AddLiteral(" policy ingestionbatching").
+		AddLiteral("```").AddUnsafe(string(policy)).AddLiteral("```")
+	_, err = client.Mgmt(ctx, "", stmt)
+	if err != nil {
+		return fmt.Errorf("create database %s: %w", dbName, err)
+	}
+
+	return nil
+}
+
 type threadsafeBuffer struct {
 	sync.Mutex
 	buffer bytes.Buffer
@@ -271,4 +338,10 @@ func (b *threadsafeBuffer) Write(p []byte) (n int, err error) {
 	b.Lock()
 	defer b.Unlock()
 	return b.buffer.Write(p)
+}
+
+func (b *threadsafeBuffer) Read(p []byte) (n int, err error) {
+	b.Lock()
+	defer b.Unlock()
+	return b.buffer.Read(p)
 }

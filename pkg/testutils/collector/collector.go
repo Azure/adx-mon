@@ -28,12 +28,11 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Coll
 	req := testcontainers.ContainerRequest{
 		Name: "collector" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:          DefaultImage,
-			Tag:           DefaultTag,
-			Context:       rootDir,
-			Dockerfile:    "pkg/testutils/collector/Dockerfile",
-			PrintBuildLog: true,
-			KeepImage:     true,
+			Repo:       DefaultImage,
+			Tag:        DefaultTag,
+			Context:    rootDir,
+			Dockerfile: "pkg/testutils/collector/Dockerfile",
+			KeepImage:  true,
 		},
 	}
 

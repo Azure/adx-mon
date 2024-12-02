@@ -28,12 +28,11 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 	req := testcontainers.ContainerRequest{
 		Name: "ingestor" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:          DefaultImage,
-			Tag:           DefaultTag,
-			Context:       rootDir,
-			Dockerfile:    "pkg/testutils/ingestor/Dockerfile",
-			PrintBuildLog: true,
-			KeepImage:     true,
+			Repo:       DefaultImage,
+			Tag:        DefaultTag,
+			Context:    rootDir,
+			Dockerfile: "pkg/testutils/ingestor/Dockerfile",
+			KeepImage:  true,
 		},
 	}
 
