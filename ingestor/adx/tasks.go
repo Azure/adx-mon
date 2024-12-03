@@ -5,6 +5,7 @@ import (
 	ERRS "errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -125,18 +126,38 @@ func NewSyncFunctionsTask(store FunctionStore, kustoCli StatementExecutor) *Sync
 	}
 }
 
+func (t *SyncFunctionsTask) cacheKey(fn *v1.Function) string {
+	return fn.Namespace + fn.Name
+}
+
 func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	functions := t.store.Functions()
+	for cacheKey, cacheFn := range t.cache {
+		if !slices.ContainsFunc(functions, func(f *v1.Function) bool {
+			if f.Spec.Database != t.kustoCli.Database() {
+				return false
+			}
+			return t.cacheKey(f) == cacheKey
+		}) {
+			// Function no longer exists, remove from cache and Kusto
+			stmt := kql.New(".drop function ").AddUnsafe(cacheFn.Name)
+			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				logger.Warnf("Failed to drop function %s: %v", cacheFn.Name, err)
+			}
+			delete(t.cache, cacheKey)
+		}
+	}
+
 	for _, function := range functions {
 
 		if function.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
 
-		cacheKey := function.Namespace + function.Name
+		cacheKey := t.cacheKey(function)
 		if fn, ok := t.cache[cacheKey]; ok {
 			if function.Generation != fn.Generation {
 				// invalidate our cache

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -170,6 +171,30 @@ func TestSyncFunctionsTask(t *testing.T) {
 		// Run again, but cached so no updates
 		err = task.Run(context.Background())
 		validate(err, 2, 2)
+	})
+
+	t.Run("crd deletions cause corresponding kusto deletions", func(t *testing.T) {
+		task, fnStore, kustoCli, validate := newSyncFunctionsTask(t)
+		// Add fn2 to the store
+		fnStore.funcs = append(fnStore.funcs, &v1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation:      1,
+				ResourceVersion: "sdfaasf",
+				Name:            "fn2",
+				Namespace:       "ns1",
+			},
+			Spec: v1.FunctionSpec{
+				Database: "testdb",
+			},
+		})
+		err := task.Run(context.Background())
+		validate(err, 2, 2)
+
+		// Delete fn2 from the store
+		fnStore.funcs = slices.Delete(fnStore.funcs, 1, 2)
+		err = task.Run(context.Background())
+		validate(err, 3, 2)
+		require.Equal(t, kustoCli.stmts[2], ".drop function fn2") // The third management command should be a delete statement
 	})
 }
 
