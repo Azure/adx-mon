@@ -21,7 +21,7 @@ bash <(curl -s  https://raw.githubusercontent.com/Azure/adx-mon/main/build/k8s/b
 ```
 
 This script will prompt you for the name or you AKS and ADX cluster and configure them to accept telemetry from ADX-Mon
-components. It configure the provided ADX cluster with `Metrics` and `Logs` databases and deploy the Collector and Ingestor services to begin collecting and shipping data from the AKS cluster.
+components. It configures the provided ADX cluster with `Metrics` and `Logs` databases and deploy the Collector and Ingestor services to begin collecting and shipping data from the AKS cluster.
 
 ## Annotate Your Pods
 
@@ -90,3 +90,22 @@ Kubelet
 ## Setup Dashboards
 
 Any ADX compatible visualization tool can be used to visualize collected telemetry. ADX Dashboards is a simple solution that is native to ADX. You can also use Azure Managed Grafana with the Azure Data Explorer datasource to leverage Grafana's powerful visualization capabilities.
+
+### Azure Managed Grafana via quick-start script
+
+As part of the quick-start script, one can set up an Azure Managed Grafana (AMG) instance. After configuring ADX-Mon on the AKS cluster the script will prompt you about it, and you can provide the name of an existing Grafana instance you have access to or decide to create one.
+You will also be prompted about importing pre-built dashboards to monitor the AKS cluster.
+
+> Note: The script tries to create the AMG instance in the same resource group as the ADX cluster. 
+
+Here's a glimpse of what comes as part of the pre-built dashboards:
+#### API Server
+![API Server](images/api-server-dashboard.png "API Server Dashboard")
+#### Cluster Info
+![Cluster Info](images/cluster-info-dashboard.png "Cluster Info Dashboard")
+#### Metrics Stats
+![Metrics Stats](images/metrics-stats-dashboard.png "Metrics Stats Dashboard")
+#### Namespaces
+![Namespaces](images/namespaces-dashboard.png "Namespaces Dashboard")
+#### Pods
+![Pods](images/pods-dashboard.png "Pods Dashboard")
