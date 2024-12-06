@@ -75,51 +75,28 @@ spec:
             description: FunctionSpec defines the desired state of Function
             properties:
               body:
-                description: Body is the body of the function
+                description: Body is the KQL body of the function
                 type: string
               database:
                 description: Database is the name of the database in which the function
                   will be created
                 type: string
-              docString:
-                description: DocString is the documentation string for the function
-                type: string
-              folder:
-                description: Folder is the folder in which the function will be created
-                type: string
-              isView:
-                description: IsView is a flag indicating whether the function is a
-                  view
-                type: boolean
-              name:
-                description: Name is the name of the function
-                type: string
-              parameters:
-                description: Parameters is a list of parameters for the function
-                items:
-                  properties:
-                    name:
-                      type: string
-                    type:
-                      type: string
-                  required:
-                  - name
-                  - type
-                  type: object
-                type: array
-              table:
+              suspend:
                 description: |-
-                  Table is the name of the table in which the function will be created. We must
-                  specify a table if the function is a view, otherwise the Table name is optional.
-                type: string
+                  This flag tells the controller to suspend subsequent executions, it does
+                  not apply to already started executions.  Defaults to false.
+                type: boolean
             required:
             - body
             - database
-            - name
             type: object
           status:
             description: FunctionStatus defines the observed state of Function
             properties:
+              error:
+                description: Error is a string that communicates any error message
+                  if one exists
+                type: string
               lastTimeReconciled:
                 description: LastTimeReconciled is the last time the Function was
                   reconciled
@@ -129,9 +106,18 @@ spec:
                 description: Message is a human-readable message indicating details
                   about the Function
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  for this Function
+                format: int64
+                type: integer
+              status:
+                description: Status is an enum that represents the status of the Function
+                type: string
             required:
             - lastTimeReconciled
-            - message
+            - observedGeneration
+            - status
             type: object
         type: object
     served: true
