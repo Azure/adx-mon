@@ -121,6 +121,44 @@ func TestKQLController(t *testing.T) {
 	require.Equal(t, resource.Status.Status, adxmonv1.Success)
 	require.Equal(t, currentGeneration, resource.Status.ObservedGeneration)
 
+	// Test retries by overwriting the existing kusto client with one that has an invalid url
+
+	// - Close the connection
+	invalidKustoClient, err := kusto.New(kusto.NewConnectionStringBuilder("http://invalid-url"))
+	require.NoError(t, err)
+	defer invalidKustoClient.Close()
+	controllerReconciler.KustoCli = invalidKustoClient
+
+	// - Update the function again, which will cause a reconcile attempt
+	resource.Spec.Body = fmt.Sprintf(".create-or-alter function %s () {print 'Update 2';}", resourceName)
+	require.NoError(t, k8sClient.Update(ctx, resource))
+
+	_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: typeNamespacedName,
+	})
+	require.NoError(t, err)
+
+	// - Verify the reconcile failed
+	require.NoError(t, k8sClient.Get(ctx, typeNamespacedName, resource))
+	require.Equal(t, resource.Status.Status, adxmonv1.Failed)
+
+	// - Give reconcile a valid kusto client
+	controllerReconciler.KustoCli = kustoClient
+	_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: typeNamespacedName,
+	})
+	require.NoError(t, err)
+
+	// - Wait for a successful reconciliation
+	require.Eventually(t, func() bool {
+		fn := testutils.GetFunction(ctx, t, resource.Spec.Database, resourceName, kustoClient.Endpoint())
+		return strings.Contains(fn.Body, "Update 2")
+	}, time.Minute, time.Second)
+
+	// - Verify the reconcile succeeded
+	require.NoError(t, k8sClient.Get(ctx, typeNamespacedName, resource))
+	require.Equal(t, resource.Status.Status, adxmonv1.Success)
+
 	// Delete function
 	require.NoError(t, k8sClient.Delete(ctx, resource))
 
