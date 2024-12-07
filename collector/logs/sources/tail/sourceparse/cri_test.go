@@ -11,29 +11,29 @@ func TestCriParse(t *testing.T) {
 	t.Run("Single full log", func(t *testing.T) {
 		parser := NewCriParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout F log1", log)
+		message, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout F log1", log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "log1", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "log1", message)
 	})
 
 	t.Run("Single empty log", func(t *testing.T) {
 		parser := NewCriParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout F ", log)
+		message, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout F ", log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "", message)
 	})
 
 	t.Run("Single partial log", func(t *testing.T) {
 		parser := NewCriParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout P log1", log)
+		_, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout P log1", log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 	})
@@ -52,7 +52,7 @@ func TestCriParse(t *testing.T) {
 		for _, line := range invalidLogs {
 			parser := NewCriParser()
 			log := types.NewLog()
-			_, err := parser.Parse(line, log)
+			_, _, err := parser.Parse(line, log)
 			require.Error(t, err)
 		}
 	})
@@ -60,47 +60,47 @@ func TestCriParse(t *testing.T) {
 	t.Run("Partials combined", func(t *testing.T) {
 		parser := NewCriParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout P log1 ", log)
+		_, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout P log1 ", log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stdout P log2 ", log)
+		_, isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stdout P log2 ", log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stdout F log3", log)
+		message, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout F log3", log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "log1 log2 log3", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "log1 log2 log3", message)
 	})
 
 	t.Run("Partials combined per stream", func(t *testing.T) {
 		parser := NewCriParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout P stdoutlog1 message ", log)
+		_, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout P stdoutlog1 message ", log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stderr P stderrlog1 ", log)
+		_, isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stderr P stderrlog1 ", log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stdout F stdoutlog2", log)
+		message, isPartial, err := parser.Parse("2021-07-01T00:00:00.000000000Z stdout F stdoutlog2", log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "stdoutlog1 message stdoutlog2", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "stdoutlog1 message stdoutlog2", message)
 
 		log = types.NewLog()
-		isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stderr F stderrlog2", log)
+		message, isPartial, err = parser.Parse("2021-07-01T00:00:00.000000000Z stderr F stderrlog2", log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stderr", log.Body["stream"])
-		require.Equal(t, "stderrlog1 stderrlog2", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "stderrlog1 stderrlog2", message)
 	})
 }
 

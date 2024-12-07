@@ -9,7 +9,7 @@ import (
 
 // Parser is the interface for parsing log messages.
 type Parser interface {
-	Parse(*types.Log) error
+	Parse(*types.Log, string) error
 }
 
 type ParserType string

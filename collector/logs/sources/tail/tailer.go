@@ -153,7 +153,7 @@ func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue 
 			log := types.LogPool.Get(1).(*types.Log)
 			log.Reset()
 
-			isPartial, err := tailer.logTypeParser.Parse(line.Text, log)
+			message, isPartial, err := tailer.logTypeParser.Parse(line.Text, log)
 			if err != nil {
 				logger.Errorf("readLines: parselog error for filename %q: %v", tailer.tail.Filename, err)
 				//skip
@@ -176,7 +176,7 @@ func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue 
 
 			successfulParse := false
 			for _, parser := range tailer.logLineParsers {
-				err := parser.Parse(log)
+				err := parser.Parse(log, message)
 				if err == nil {
 					successfulParse = true
 					break // successful parse
@@ -185,9 +185,9 @@ func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue 
 				}
 			}
 
-			if successfulParse {
-				// Successful parse, remove the raw message
-				delete(log.Body, types.BodyKeyMessage)
+			if !successfulParse {
+				// Unsuccessful parse, add the raw message
+				log.Body[types.BodyKeyMessage] = message
 			}
 
 			// Write after parsing to ensure these values are always set to values we need for acking.

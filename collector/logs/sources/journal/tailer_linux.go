@@ -84,13 +84,12 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 		log.Reset()
 		log.Timestamp = uint64(entry.RealtimeTimestamp) * 1000 // microseconds -> nanoseconds
 		log.ObservedTimestamp = uint64(time.Now().UnixNano())
-		log.Body[types.BodyKeyMessage] = message
 		log.Attributes[types.AttributeDatabaseName] = t.database
 		log.Attributes[types.AttributeTableName] = t.table
 
 		successfulParse := false
 		for _, logLineParser := range t.logLineParsers {
-			err := logLineParser.Parse(log)
+			err := logLineParser.Parse(log, message)
 			if err == nil {
 				successfulParse = true
 				break
@@ -99,9 +98,9 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 			}
 		}
 
-		if successfulParse {
-			// Successful parse, remove the raw message
-			delete(log.Body, types.BodyKeyMessage)
+		if !successfulParse {
+			// Unsuccessful parse, add the raw message
+			log.Body[types.BodyKeyMessage] = message
 		}
 
 		// Write after parsing to ensure these values are always set to values we need for acking.
