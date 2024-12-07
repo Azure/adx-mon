@@ -82,6 +82,23 @@ data:
 
     # Disable metrics forwarding to endpoints.
     disable-metrics-forwarding = false
+  
+    lift-labels = [
+      { name = 'host' },
+      { name = 'cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    # Key/value pairs of labels to add to all metrics.
+    lift-resources = [
+      { name = 'host' },
+      { name = 'cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
 
     # Key/value pairs of labels to add to all metrics and logs.
     [add-labels]
@@ -306,6 +323,23 @@ data:
 
     # Disable metrics forwarding to endpoints.
     disable-metrics-forwarding = false
+    
+    lift-labels = [
+      { name = 'host' },
+      { name = 'cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    # Key/value pairs of labels to add to all metrics.
+    lift-resources = [
+      { name = 'host' },
+      { name = 'cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
 
     # Key/value pairs of labels to add to all metrics.
     [add-labels]

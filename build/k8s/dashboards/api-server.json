@@ -1,0 +1,1319 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 48,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Search Logs",
+      "tooltip": "",
+      "type": "link",
+      "url": "$LogsURL"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Errors"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 169,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| invoke prom_rate()\n| summarize Value=sum(Value) by bin(Timestamp, $__timeInterval)\n| project Timestamp, Requests=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.code startswith \"5\"\n| invoke prom_rate()\n| summarize Value=sum(Value) by bin(Timestamp, $__timeInterval)\n| project Timestamp, Errors=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "B",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "fieldMinMax": false
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 308,
+      "options": {
+        "calculate": false,
+        "cellGap": 0,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 32
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestDurationSecondsBucket\n| where $__timeFilter(Timestamp)\n| extend Series=toreal(Labels.le)\n| where Labels.le != \"+Inf\"\n| invoke prom_delta()\n| summarize Value=sum(Value) by bin(Timestamp, 1m), Series\n| project Timestamp, Series, Value\n| order by Timestamp desc, Series asc\n| extend Value=case(prev(Series) < Series, iff(Value-prev(Value) > 0, Value-prev(Value), toreal(0)), Value)\n| project Timestamp, tostring(Series), Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Latency",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "interval": "1m",
+      "options": {
+        "displayMode": "gradient",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Value$/",
+          "values": true
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "hidden"
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.resource != \"\"\n| invoke prom_rate()\n| extend Series=tostring(Labels.resource)\n| summarize Value=sum(Value) by Series\n| project Series, Value\n| order by Value desc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "API Server - Requests By Resource",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 30,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| invoke prom_delta()\n| extend Code=tostring(Labels.code)\n| summarize Value=sum(Value) by bin(Timestamp, $__timeInterval), Code\n| project Timestamp, Code, Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "API Server - Requests By Code",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 2,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| invoke prom_delta()\n| extend Verb=tostring(Labels.verb)\n| summarize Value=sum(Value) by bin(Timestamp, $__timeInterval), Verb\n| project Timestamp, Verb, Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "API Server - Requests By Verb",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 8,
+      "panels": [],
+      "repeat": "Verb",
+      "repeatDirection": "h",
+      "title": "$Verb",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      },
+      "id": 1,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "repeat": "Resource",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.resource in ($Resource)\n| where Labels.verb in ($Verb)\n| invoke prom_delta()\n| extend Code=tostring(Labels.code)\n| summarize Value=sum(Value) by bin(Timestamp, $__timeInterval), Code\n| project Timestamp, Code, Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "$Resource By Code",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "fieldMinMax": false
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      },
+      "id": 4,
+      "options": {
+        "calculate": false,
+        "cellGap": 0,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 32
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "repeat": "Resource",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestDurationSecondsBucket\n| where $__timeFilter(Timestamp)\n| extend Series=toreal(Labels.le)\n| where Labels.resource in ($Resource)\n| where Labels.verb in ($Verb)\n| invoke prom_delta()\n| summarize Value=sum(Value) by bin(Timestamp, 1m), Series\n| project Timestamp, Series, Value\n| order by Timestamp desc, Series asc\n| extend Value=case(prev(Series) < Series, iff(Value-prev(Value) > 0, Value-prev(Value), toreal(0)), Value)\n| project Timestamp, tostring(Series), Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Latency",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "id": 7,
+      "interval": "1m",
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "decbytes"
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "repeat": "Resource",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverResponseSizesBucket\n| where $__timeFilter(Timestamp)\n| extend Series=toreal(Labels.le)\n| where Labels.resource in ($Resource)\n| where Labels.verb in ($Verb)\n| invoke prom_delta()\n| summarize Value=sum(Value) by bin(Timestamp, 1m), Series\n| project Timestamp, Series, Value\n| order by Timestamp desc, Series asc\n| extend Value=case(prev(Series) < Series, iff(Value-prev(Value) > 0, Value-prev(Value), toreal(0)), Value)\n| project Timestamp, tostring(Series), Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Response Size",
+      "type": "heatmap"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Datasource",
+        "options": [],
+        "query": "grafana-azure-data-explorer-datasource",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource:text}"
+        },
+        "definition": "ContainerCpuUsageSecondsTotal | where $__timeFilter(Timestamp) | distinct Cluster",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Cluster",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ContainerCpuUsageSecondsTotal | where $__timeFilter(Timestamp) | distinct Cluster",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "resultFormat": "table"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "apiservices",
+            "assign",
+            "assignimage",
+            "assignmetadata",
+            "certificatesigningrequests",
+            "clusterrolebindings",
+            "clusterroles",
+            "configmaps",
+            "configs",
+            "constraintpodstatuses",
+            "constrainttemplatepodstatuses",
+            "constrainttemplates",
+            "controllerrevisions",
+            "cronjobs",
+            "csidrivers",
+            "csinodes",
+            "csistoragecapacities",
+            "customresourcedefinitions",
+            "daemonsets",
+            "deployments",
+            "endpoints",
+            "endpointslices",
+            "events",
+            "expansiontemplate",
+            "expansiontemplatepodstatuses",
+            "flowschemas",
+            "functions",
+            "horizontalpodautoscalers",
+            "ingressclasses",
+            "ingresses",
+            "jobs",
+            "k8sazurecustomcontainerallowedimages",
+            "k8sazurev2customcontainerallowedimages",
+            "leases",
+            "limitranges",
+            "modifyset",
+            "mutatingwebhookconfigurations",
+            "mutatorpodstatuses",
+            "namespaces",
+            "networkpolicies",
+            "nodenetworkconfigs",
+            "nodes",
+            "persistentvolumeclaims",
+            "persistentvolumes",
+            "poddisruptionbudgets",
+            "pods",
+            "podtemplates",
+            "priorityclasses",
+            "prioritylevelconfigurations",
+            "providers",
+            "replicasets",
+            "replicationcontrollers",
+            "resourcequotas",
+            "rolebindings",
+            "roles",
+            "runtimeclasses",
+            "secrets",
+            "serviceaccounts",
+            "services",
+            "statefulsets",
+            "storageclasses",
+            "subjectaccessreviews",
+            "syncsets",
+            "tokenreviews",
+            "validatingadmissionpolicies",
+            "validatingadmissionpolicybindings",
+            "validatingwebhookconfigurations",
+            "volumeattachments",
+            "volumesnapshotclasses",
+            "volumesnapshotcontents",
+            "volumesnapshots"
+          ],
+          "value": [
+            "apiservices",
+            "assign",
+            "assignimage",
+            "assignmetadata",
+            "certificatesigningrequests",
+            "clusterrolebindings",
+            "clusterroles",
+            "configmaps",
+            "configs",
+            "constraintpodstatuses",
+            "constrainttemplatepodstatuses",
+            "constrainttemplates",
+            "controllerrevisions",
+            "cronjobs",
+            "csidrivers",
+            "csinodes",
+            "csistoragecapacities",
+            "customresourcedefinitions",
+            "daemonsets",
+            "deployments",
+            "endpoints",
+            "endpointslices",
+            "events",
+            "expansiontemplate",
+            "expansiontemplatepodstatuses",
+            "flowschemas",
+            "functions",
+            "horizontalpodautoscalers",
+            "ingressclasses",
+            "ingresses",
+            "jobs",
+            "k8sazurecustomcontainerallowedimages",
+            "k8sazurev2customcontainerallowedimages",
+            "leases",
+            "limitranges",
+            "modifyset",
+            "mutatingwebhookconfigurations",
+            "mutatorpodstatuses",
+            "namespaces",
+            "networkpolicies",
+            "nodenetworkconfigs",
+            "nodes",
+            "persistentvolumeclaims",
+            "persistentvolumes",
+            "poddisruptionbudgets",
+            "pods",
+            "podtemplates",
+            "priorityclasses",
+            "prioritylevelconfigurations",
+            "providers",
+            "replicasets",
+            "replicationcontrollers",
+            "resourcequotas",
+            "rolebindings",
+            "roles",
+            "runtimeclasses",
+            "secrets",
+            "serviceaccounts",
+            "services",
+            "statefulsets",
+            "storageclasses",
+            "subjectaccessreviews",
+            "syncsets",
+            "tokenreviews",
+            "validatingadmissionpolicies",
+            "validatingadmissionpolicybindings",
+            "validatingwebhookconfigurations",
+            "volumeattachments",
+            "volumesnapshotclasses",
+            "volumesnapshotcontents",
+            "volumesnapshots"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource}"
+        },
+        "definition": "ApiserverRequestTotal\n| where Timestamp > ago(30m)\n| where Cluster == \"$Cluster\"\n| where Labels.resource != \"\"\n| distinct tostring(Labels.resource)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "",
+        "multi": true,
+        "name": "Resource",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ApiserverRequestTotal\n| where Timestamp > ago(30m)\n| where Cluster == \"$Cluster\"\n| where Labels.resource != \"\"\n| distinct tostring(Labels.resource)",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "resultFormat": "table"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "GET",
+          "value": "GET"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "Verb",
+        "options": [
+          {
+            "selected": false,
+            "text": "All",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "LIST",
+            "value": "LIST"
+          },
+          {
+            "selected": false,
+            "text": "PUT",
+            "value": "PUT"
+          },
+          {
+            "selected": false,
+            "text": "POST",
+            "value": "POST"
+          },
+          {
+            "selected": true,
+            "text": "GET",
+            "value": "GET"
+          },
+          {
+            "selected": false,
+            "text": "PATCH",
+            "value": "PATCH"
+          },
+          {
+            "selected": false,
+            "text": "DELETE",
+            "value": "DELETE"
+          },
+          {
+            "selected": false,
+            "text": "WATCH",
+            "value": "WATCH"
+          },
+          {
+            "selected": false,
+            "text": "CONNECT",
+            "value": "CONNECT"
+          }
+        ],
+        "query": "LIST,PUT,POST,GET,PATCH,DELETE,WATCH,CONNECT",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource:text}"
+        },
+        "definition": "print strcat(\"https://\", current_cluster_endpoint(), \"/\", \"Logs\")",
+        "hide": 2,
+        "includeAll": false,
+        "multi": false,
+        "name": "LogsURL",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "print strcat(\"https://\", current_cluster_endpoint(), \"/\", \"Logs\")",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "resultFormat": "table"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "API Server",
+  "weekStart": ""
+}
