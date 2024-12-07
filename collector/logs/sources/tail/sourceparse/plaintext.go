@@ -8,10 +8,9 @@ import (
 
 type PlaintextParser struct{}
 
-func (p *PlaintextParser) Parse(line string, log *types.Log) (bool, error) {
+func (p *PlaintextParser) Parse(line string, log *types.Log) (string, bool, error) {
 	log.Timestamp = uint64(time.Now().UnixNano())
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body[types.BodyKeyMessage] = line
 
-	return false, nil
+	return line, false, nil
 }

@@ -9,12 +9,9 @@ import (
 
 func TestJsonParse(t *testing.T) {
 	parser, _ := NewJsonParser(JsonParserConfig{})
-	log := &types.Log{
-		Body: map[string]interface{}{
-			types.BodyKeyMessage: `{"a": 1, "b": "2", "c": {"d": 3}}`,
-		},
-	}
-	err := parser.Parse(log)
+	msg := `{"a": 1, "b": "2", "c": {"d": 3}}`
+	log := types.NewLog()
+	err := parser.Parse(log, msg)
 	require.NoError(t, err)
 	require.Equal(t, 1.0, log.Body["a"])
 	require.Equal(t, "2", log.Body["b"])
@@ -23,14 +20,11 @@ func TestJsonParse(t *testing.T) {
 
 func BenchmarkJsonParse(b *testing.B) {
 	parser, _ := NewJsonParser(JsonParserConfig{})
-	log := &types.Log{
-		Body: map[string]interface{}{
-			types.BodyKeyMessage: `{"a": 1, "b": "2", "c": {"d": 3}}`,
-		},
-	}
+	msg := `{"a": 1, "b": "2", "c": {"d": 3}}`
+	log := types.NewLog()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		parser.Parse(log)
+		parser.Parse(log, msg)
 	}
 }

@@ -11,18 +11,18 @@ func TestDockerParse(t *testing.T) {
 	t.Run("Single full log", func(t *testing.T) {
 		parser := NewDockerParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse(`{"log":"log1\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		message, isPartial, err := parser.Parse(`{"log":"log1\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "log1", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "log1", message)
 	})
 
 	t.Run("Invalid formatted log", func(t *testing.T) {
 		parser := NewDockerParser()
 		log := types.NewLog()
-		_, err := parser.Parse(`{"log":"log1\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z`, log)
+		_, _, err := parser.Parse(`{"log":"log1\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z`, log)
 		require.Error(t, err)
 	})
 
@@ -30,7 +30,7 @@ func TestDockerParse(t *testing.T) {
 		parser := NewDockerParser()
 		log := types.NewLog()
 		// No newline at the end of the "log" field
-		isPartial, err := parser.Parse(`{"log":"log1","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		_, isPartial, err := parser.Parse(`{"log":"log1","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 	})
@@ -38,48 +38,48 @@ func TestDockerParse(t *testing.T) {
 	t.Run("Partials combined", func(t *testing.T) {
 		parser := NewDockerParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse(`{"log":"log1 ","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		_, isPartial, err := parser.Parse(`{"log":"log1 ","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse(`{"log":"log2 ","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		_, isPartial, err = parser.Parse(`{"log":"log2 ","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse(`{"log":"log3\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		message, isPartial, err := parser.Parse(`{"log":"log3\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "log1 log2 log3", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "log1 log2 log3", message)
 	})
 
 	t.Run("Partials combined per stream", func(t *testing.T) {
 		parser := NewDockerParser()
 		log := types.NewLog()
-		isPartial, err := parser.Parse(`{"log":"stdoutlog1 ","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		_, isPartial, err := parser.Parse(`{"log":"stdoutlog1 ","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
-		isPartial, err = parser.Parse(`{"log":"stderrlog1 ","stream":"stderr","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		_, isPartial, err = parser.Parse(`{"log":"stderrlog1 ","stream":"stderr","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.True(t, isPartial)
 
 		log = types.NewLog()
-		isPartial, err = parser.Parse(`{"log":"stdoutlog2\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		message, isPartial, err := parser.Parse(`{"log":"stdoutlog2\n","stream":"stdout","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stdout", log.Body["stream"])
-		require.Equal(t, "stdoutlog1 stdoutlog2", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "stdoutlog1 stdoutlog2", message)
 
 		log = types.NewLog()
-		isPartial, err = parser.Parse(`{"log":"stderrlog2\n","stream":"stderr","time":"2021-07-01T00:00:00.000000000Z"}`, log)
+		message, isPartial, err = parser.Parse(`{"log":"stderrlog2\n","stream":"stderr","time":"2021-07-01T00:00:00.000000000Z"}`, log)
 		require.NoError(t, err)
 		require.False(t, isPartial)
 		require.Equal(t, uint64(1625097600000000000), log.Timestamp)
 		require.Equal(t, "stderr", log.Body["stream"])
-		require.Equal(t, "stderrlog1 stderrlog2", log.Body[types.BodyKeyMessage])
+		require.Equal(t, "stderrlog1 stderrlog2", message)
 	})
 }
 

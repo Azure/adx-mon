@@ -27,12 +27,7 @@ func NewJsonParser(config JsonParserConfig) (*JsonParser, error) {
 
 // Attempts to parse the message as JSON and adds the parsed fields to the log body.
 // Not safe for concurrent use.
-func (p *JsonParser) Parse(log *types.Log) error {
-	msg, ok := log.Body[types.BodyKeyMessage].(string)
-	if !ok {
-		return ErrNotString
-	}
-
+func (p *JsonParser) Parse(log *types.Log, msg string) error {
 	if len(msg) == 0 || msg[0] != '{' {
 		return nil
 	}

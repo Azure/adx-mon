@@ -84,25 +84,10 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 		log.Reset()
 		log.Timestamp = uint64(entry.RealtimeTimestamp) * 1000 // microseconds -> nanoseconds
 		log.ObservedTimestamp = uint64(time.Now().UnixNano())
-		log.Body[types.BodyKeyMessage] = message
 		log.Attributes[types.AttributeDatabaseName] = t.database
 		log.Attributes[types.AttributeTableName] = t.table
 
-		successfulParse := false
-		for _, logLineParser := range t.logLineParsers {
-			err := logLineParser.Parse(log)
-			if err == nil {
-				successfulParse = true
-				break
-			} else if logger.IsDebug() {
-				logger.Debugf("readFromJournal: parser error for journald input %v", err)
-			}
-		}
-
-		if successfulParse {
-			// Successful parse, remove the raw message
-			delete(log.Body, types.BodyKeyMessage)
-		}
+		parser.ExecuteParsers(t.logLineParsers, log, message, "journald")
 
 		// Write after parsing to ensure these values are always set to values we need for acking.
 		log.Attributes[journald_cursor_attribute] = entry.Cursor

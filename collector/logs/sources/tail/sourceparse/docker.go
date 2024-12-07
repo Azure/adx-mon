@@ -44,11 +44,11 @@ func NewDockerParser() *DockerParser {
 
 // Parse parses logs in the Docker json log format and combines partial logs.
 // Not safe for concurrent use.
-func (p *DockerParser) Parse(line string, log *types.Log) (isPartial bool, err error) {
+func (p *DockerParser) Parse(line string, log *types.Log) (message string, isPartial bool, err error) {
 	p.parsed.Reset()
 	err = ffjson.Unmarshal([]byte(line), p.parsed)
 	if err != nil {
-		return false, fmt.Errorf("parseDockerLog: %w", err)
+		return "", false, fmt.Errorf("parseDockerLog: %w", err)
 	}
 
 	// Docker json logs are always terminated by a newline.
@@ -63,7 +63,7 @@ func (p *DockerParser) Parse(line string, log *types.Log) (isPartial bool, err e
 
 	if isPartial {
 		p.streamPartials[p.parsed.Stream] = currentLogMsg
-		return true, nil
+		return "", true, nil
 	} else if hasPreviousLog {
 		delete(p.streamPartials, p.parsed.Stream)
 	}
@@ -76,7 +76,7 @@ func (p *DockerParser) Parse(line string, log *types.Log) (isPartial bool, err e
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
 	log.Body["stream"] = p.parsed.Stream
 	// Strip trailing newline
-	log.Body[types.BodyKeyMessage] = currentLogMsg[:len(currentLogMsg)-dockerCompleteLogSuffixLength]
+	msg := currentLogMsg[:len(currentLogMsg)-dockerCompleteLogSuffixLength]
 
-	return false, nil
+	return msg, false, nil
 }

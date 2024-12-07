@@ -21,7 +21,7 @@ const (
 // Must assign log.Timestamp, log.ObservedTimestamp, and the types.BodyKeyMessage property of log.Body.
 type LogTypeParser interface {
 	// Parse parses a line of text from a file into a log.
-	Parse(line string, log *types.Log) (isPartial bool, err error)
+	Parse(line string, log *types.Log) (message string, isPartial bool, err error)
 }
 
 func GetLogTypeParser(logType Type) LogTypeParser {
