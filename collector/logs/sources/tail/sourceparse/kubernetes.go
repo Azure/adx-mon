@@ -15,7 +15,7 @@ func NewKubernetesParser() *KubernetesParser {
 }
 
 // Parse parses a line of text from a file into a log.
-func (p *KubernetesParser) Parse(line string, log *types.Log) (isPartial bool, err error) {
+func (p *KubernetesParser) Parse(line string, log *types.Log) (message string, isPartial bool, err error) {
 	if p.parser == nil {
 		if isDockerLog(line) {
 			p.parser = NewDockerParser()

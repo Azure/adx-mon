@@ -82,8 +82,6 @@ func TestTailSourcePartialLogs(t *testing.T) {
 	}
 	t.Parallel()
 	testDir := t.TempDir()
-	// consistent date so we know how many bytes are generated in the file.
-	// generatedLogStartTime := time.Unix(0, 0)
 	testFileOne := filepath.Join(testDir, "test.log")
 	file, err := os.OpenFile(testFileOne, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0640)
 	require.NoError(t, err)
