@@ -56,12 +56,12 @@ REGION=$(echo $CLUSTER_INFO | jq -r '.data[0].location')
 NODE_POOL_IDENTITY=$(az aks show --resource-group $RESOURCE_GROUP --name $CLUSTER --query identityProfile.kubeletidentity.clientId -o json | jq . -r)
 
 echo
-echo -e "Found AKS cluster info:"
-echo -e "  AKS Cluster Name: \e[32m$CLUSTER\e[0m"
-echo -e "  Resource Group: \e[32m$RESOURCE_GROUP\e[0m"
-echo -e "  Subscription ID:\e[32m $SUBSCRIPTION_ID\e[0m"
-echo -e "  Region: \e[32m$REGION\e[0m"
-echo -e "  Managed Identity Client ID: \e[32m$NODE_POOL_IDENTITY\e[0m"
+printf "Found AKS cluster info:\n"
+printf "  AKS Cluster Name: \e[32m$CLUSTER\e[0m\n"
+printf "  Resource Group: \e[32m$RESOURCE_GROUP\e[0m\n"
+printf "  Subscription ID:\e[32m $SUBSCRIPTION_ID\e[0m\n"
+printf "  Region: \e[32m$REGION\e[0m\n"
+printf "  Managed Identity Client ID: \e[32m$NODE_POOL_IDENTITY\e[0m\n"
 echo
 read -p "Is this information correct? (y/n) " CONFIRM
 if [[ "$CONFIRM" != "y" ]]; then
@@ -92,12 +92,12 @@ else
     ADX_FQDN=$(echo $CLUSTER_INFO | jq -r '.data[0].properties_uri')
 fi
 echo
-echo "Found ADX cluster info:"
-echo -e "  Cluster Name: \e[32m$CLUSTER_NAME\e[0m"
-echo -e "  Subscription ID: \e[32m$SUBSCRIPTION_ID\e[0m"
-echo -e "  Resource Group: \e[32m$RESOURCE_GROUP\e[0m"
-echo -e "  ADX FQDN: \e[32m$ADX_FQDN\e[0m"
-echo -e "  Region: \e[32m$KUSTO_REGION\e[0m"
+printf "Found ADX cluster info:\n"
+printf "  Cluster Name: \e[32m$CLUSTER_NAME\e[0m\n"
+printf "  Subscription ID: \e[32m$SUBSCRIPTION_ID\e[0m\n"
+printf "  Resource Group: \e[32m$RESOURCE_GROUP\e[0m\n"
+printf "  ADX FQDN: \e[32m$ADX_FQDN\e[0m\n"
+printf "  Region: \e[32m$KUSTO_REGION\e[0m\n"
 echo
 read -p "Is this the correct ADX cluster info? (y/n) " CONFIRM
 if [[ "$CONFIRM" != "y" ]]; then
@@ -174,12 +174,12 @@ if [[ "$CONFIRM" == "y" ]]; then
         GRAFANA_REGION=$(echo $GRAFANA_INFO | jq -r '.data[0].location')
 
         echo
-        echo "Found Grafana instance:"
-        echo -e "  Name: \e[32m$GRAFANA\e[0m"
-        echo -e "  Subscription ID: \e[32m$GRAFANA_SUB\e[0m"
-        echo -e "  Resource Group: \e[32m$GRAFANA_RG\e[0m"
-        echo -e "  Endpoint: \e[32m$GRAFANA_ENDPOINT\e[0m"
-        echo -e "  Region: \e[32m$GRAFANA_REGION\e[0m"
+        printf "Found Grafana instance:\n"
+        printf "  Name: \e[32m$GRAFANA\e[0m\n"
+        printf "  Subscription ID: \e[32m$GRAFANA_SUB\e[0m\n"
+        printf "  Resource Group: \e[32m$GRAFANA_RG\e[0m\n"
+        printf "  Endpoint: \e[32m$GRAFANA_ENDPOINT\e[0m\n"
+        printf "  Region: \e[32m$GRAFANA_REGION\e[0m\n"
         echo
         read -p "Is this the correct info? (y/n) " CONFIRM
         if [[ "$CONFIRM" != "y" ]]; then
@@ -215,7 +215,7 @@ if [[ "$CONFIRM" == "y" ]]; then
 fi
 
 echo
-echo -e "\e[97mSuccessfully deployed ADX-Mon components to AKS cluster $CLUSTER.\e[0m"
+printf "\e[97mSuccessfully deployed ADX-Mon components to AKS cluster $CLUSTER.\e[0m"
 echo
 echo "Collected telemetry can be found the $DATABASE_NAME database at $ADX_FQDN."
 if [ ! -z "$GRAFANA_ENDPOINT" ]; then
