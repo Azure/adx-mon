@@ -87,21 +87,7 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 		log.Attributes[types.AttributeDatabaseName] = t.database
 		log.Attributes[types.AttributeTableName] = t.table
 
-		successfulParse := false
-		for _, logLineParser := range t.logLineParsers {
-			err := logLineParser.Parse(log, message)
-			if err == nil {
-				successfulParse = true
-				break
-			} else if logger.IsDebug() {
-				logger.Debugf("readFromJournal: parser error for journald input %v", err)
-			}
-		}
-
-		if !successfulParse {
-			// Unsuccessful parse, add the raw message
-			log.Body[types.BodyKeyMessage] = message
-		}
+		parser.ExecuteParsers(t.logLineParsers, log, message, "journald")
 
 		// Write after parsing to ensure these values are always set to values we need for acking.
 		log.Attributes[journald_cursor_attribute] = entry.Cursor
