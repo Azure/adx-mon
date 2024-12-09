@@ -1,0 +1,1948 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource:text}"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 51,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Cluster",
+      "tooltip": "",
+      "type": "link",
+      "url": "https://grafana-largecluster-d4ffgvdnftbvcmfs.cca.grafana.azure.com/d/edv1lbleguuwwb/cluster-info?orgId=1"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true,
+            "inspect": false
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mem"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ready"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 1
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 0
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ready"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 15,
+        "x": 0,
+        "y": 0
+      },
+      "id": 15,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": true,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "\nlet podStatus=(\n    KubePodStatusReady\n    | where Timestamp >= ago(30m)\n    | where Cluster==\"$Cluster\"\n    | extend Namespace=tostring(Labels.namespace)\n    | extend Pod=tostring(Labels.pod)\n    | extend Container=tostring(Labels.container)\n    | where Namespace == \"$Namespace\"\n    | where Labels.condition == \"true\"\n    | summarize arg_max(Timestamp, Value) by Namespace, Pod\n    | project-away Timestamp\n    | project-rename Ready=Value\n);\nlet cpuUsage=(\n    ContainerCpuUsageSecondsTotal\n    | where Timestamp >= ago(30m)\n    | where Labels.cpu == \"total\"\n    | where Container == \"cadvisor\"\n    | where Cluster==\"$Cluster\"\n    | extend Namespace=tostring(Labels.namespace)\n    | extend Pod=tostring(Labels.pod)\n    | extend Container=tostring(Labels.container)\n    | where Namespace == \"$Namespace\"\n    | where Container == \"\"\n    | where Labels.id endswith \".slice\"\n    | invoke prom_rate()\n    | summarize CPU=round(avg(Value)+0.0005,3) by Namespace, Pod, tostring(Labels.id)\n    | project-away Labels_id\n);\nlet memUsage=(\n    ContainerMemoryUsageBytes\n    | where Timestamp >= ago(30m)\n    | where Cluster==\"$Cluster\"\n    | extend Namespace=tostring(Labels.namespace)\n    | extend Pod=tostring(Labels.pod)\n    | extend Container=tostring(Labels.container)\n    | where Namespace == \"$Namespace\"\n    | where Container == \"\"\n    | where Labels.id endswith \".slice\"\n    | summarize Mem=round(avg(Value)+0.0005,3) by Namespace, Pod, tostring(Labels.id)\n    | project-away Labels_id\n);\npodStatus\n    | join kind=leftouter cpuUsage on Namespace, Pod | project-away Pod1, Namespace1\n    | join kind=leftouter memUsage on Namespace, Pod | project-away Pod1, Namespace1\n    | extend Ready=case(Ready == 1, \"✅\", \"❌\")\n    \n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Field"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "left"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 4,
+        "x": 15,
+        "y": 0
+      },
+      "id": 16,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": false,
+        "sortBy": []
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "\nlet podStatus=(\n    KubePodStatusReady\n    | where Timestamp >= ago(30m)\n    | where Cluster==\"$Cluster\"\n    | extend Namespace=tostring(Labels.namespace)\n    | extend Pod=tostring(Labels.pod)\n    | extend Container=tostring(Labels.container)\n    | where Namespace == \"$Namespace\"\n    | where Labels.condition == \"true\"\n    | summarize arg_max(Timestamp, Value) by Namespace, Pod\n    | project-away Timestamp\n    | project-rename Ready=Value\n);\nlet cpuUsage=(\n    ContainerCpuUsageSecondsTotal\n    | where Timestamp >= ago(30m)\n    | where Labels.cpu == \"total\"\n    | where Container == \"cadvisor\"\n    | where Cluster==\"$Cluster\"\n    | extend Namespace=tostring(Labels.namespace)\n    | extend Pod=tostring(Labels.pod)\n    | extend Container=tostring(Labels.container)\n    | where Namespace == \"$Namespace\"\n    | where Container == \"\"\n    | where Labels.id endswith \".slice\"\n    | invoke prom_rate()\n    | summarize CPU=round(avg(Value)+0.0005,3) by Namespace, Pod, tostring(Labels.id)\n    | project-away Labels_id\n);\nlet memUsage=(\n    ContainerMemoryUsageBytes\n    | where Timestamp >= ago(30m)\n    | where Cluster==\"$Cluster\"\n    | extend Namespace=tostring(Labels.namespace)\n    | extend Pod=tostring(Labels.pod)\n    | extend Container=tostring(Labels.container)\n    | where Namespace == \"$Namespace\"\n    | where Container == \"\"\n    | where Labels.id endswith \".slice\"\n    | summarize Mem=round(avg(Value)+0.0005,3) by Namespace, Pod, tostring(Labels.id)\n    | project-away Labels_id\n);\npodStatus\n    | join kind=leftouter cpuUsage on Namespace, Pod | project-away Pod1, Namespace1\n    | join kind=leftouter memUsage on Namespace, Pod | project-away Pod1, Namespace1\n    | extend Ready=case(Ready == 1, \"✅\", \"❌\")\n    | where Namespace == \"$Namespace\"\n    | where Pod == \"$Pod\"\n    | limit 1\n    | extend Row=pack_all() \n    | mv-expand Row\n    | extend Field=bag_keys(Row)[0]\n    | extend Value=Row[tostring(Field)]\n    | project tostring(Field), tostring(Value)\n    \n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "panels": [],
+      "title": "CPU",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "Cores"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 0,
+        "y": 13
+      },
+      "id": 1,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| where Labels.cpu==\"total\"\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod == \"$Pod\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container != \"\"\n| invoke prom_delta()\n| summarize Value=sum(Value)/60 by bin(Timestamp, 60000ms), Pod\n| project Timestamp, Usage=round(Value,3)\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Usage",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "KubePodContainerResourceRequests\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod == \"$Pod\"\n| where Labels.resource == \"cpu\"\n| project Timestamp, Requests=Value",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Requests",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "KubePodContainerResourceLimits\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod == \"$Pod\"\n| where Labels.resource == \"cpu\"\n| project Timestamp, Limits=Value",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Limits",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "CPU Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "red",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMax": 1,
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 10,
+        "y": 13
+      },
+      "id": 2,
+      "interval": "30s",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "let throttled=ContainerCpuCfsThrottledPeriodsTotal\n| where $__timeFilter(Timestamp)\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod == \"$Pod\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container != \"\"\n| invoke prom_delta()\n| extend Value=Value/60\n| make-series Throttled=sum(Value) on Timestamp from bin($__timeFrom, $__timeInterval) to bin($__timeTo, $__timeInterval) step $__timeInterval by Pod\n| project Pod, Timestamp, Throttled;\nlet total=ContainerCpuCfsPeriodsTotal\n| where $__timeFilter(Timestamp)\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod == \"$Pod\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container != \"\"\n| invoke prom_delta()\n| extend Value=Value/60\n| make-series Total=sum(Value) on Timestamp from bin($__timeFrom, $__timeInterval) to bin($__timeTo, $__timeInterval) step $__timeInterval by Pod\n| project Pod, Timestamp, Total;\nthrottled\n| join total on Pod\n| extend Value=series_divide(Throttled, Total)\n| project Timestamp, Name=Pod, Value\n| invoke grafana_series()\n// | extend Nan=series_fill_const(series_greater_equals(Value, 0), bool(false))\n// | extend Inf=series_equals(Value, real(+inf))\n// | extend Value=array_iff(Nan, Value, 0)\n// | extend Value=array_iff(Inf, 0, Value)\n// | project-away Nan, Inf\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Usage",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "title": "CPU Throttling",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 8,
+      "title": "Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 0,
+        "y": 21
+      },
+      "id": 4,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerMemoryWorkingSetBytes\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| extend Value=Value\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, WorkingSet=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "WorkingSet",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerMemoryCache\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| extend Value=Value\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Cache=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Cached",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerMemoryRss\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| extend Value=Value\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, RSS=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "RSS",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerMemoryUsageBytes\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| extend Value=Value\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Usage=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Usage",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Memory Usage",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 9,
+      "panels": [],
+      "title": "Network",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 0,
+        "y": 29
+      },
+      "id": 5,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkReceiveBytesTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value)*-1 by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Recieve=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Receive Bytes",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkTransmitBytesTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Transmit=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Network Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 9,
+        "x": 10,
+        "y": 29
+      },
+      "id": 6,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkReceivePacketsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value)*-1 by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Recieve=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Receive Bytes",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkTransmitPacketsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Transmit=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Network Packets",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 0,
+        "y": 38
+      },
+      "id": 10,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkReceiveErrorsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value)*-1 by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Recieve=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Receive Bytes",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkTransmitErrorsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Transmit=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Network Errors",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 9,
+        "x": 10,
+        "y": 38
+      },
+      "id": 11,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkReceivePacketsDroppedTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value)*-1 by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Recieve=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Receive Bytes",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerNetworkTransmitPacketsDroppedTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Transmit=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Network Dropped Packets",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "id": 12,
+      "panels": [],
+      "title": "Disk IO",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 0,
+        "y": 48
+      },
+      "id": 13,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerFsReadsBytesTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value)*-1 by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Read=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Receive Bytes",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerFsWritesBytesTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Write=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Disk Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource:text}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "iops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 10,
+        "y": 48
+      },
+      "id": 14,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerFsReadsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value)*-1 by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Read=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Receive Bytes",
+          "resultFormat": "time_series"
+        },
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource:text}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "5.0.3",
+          "query": "ContainerFsWritesTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"$Namespace\"\n| where Pod == \"$Pod\"\n| invoke prom_delta()\n| extend Value=Value/60\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), tostring(Labels.id), Pod\n| project Timestamp, Transmit=Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Disk IOPS",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Datasource",
+        "options": [],
+        "query": "grafana-azure-data-explorer-datasource",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource:text}"
+        },
+        "definition": "ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| distinct Cluster\n| order by Cluster asc",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Cluster",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "azureLogAnalytics": {
+            "query": "",
+            "resources": []
+          },
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| distinct Cluster\n| order by Cluster asc",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table",
+          "subscription": "2F45F5B0-7EE2-4E90-A416-D3881BDCF783"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "adx-mon",
+          "value": "adx-mon"
+        },
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource:text}"
+        },
+        "definition": "ContainerCpuUserSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.namespace != \"\"\n| distinct tostring(Labels.namespace)\n| order by Labels_namespace asc",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Namespace",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "azureLogAnalytics": {
+            "query": "",
+            "resources": []
+          },
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "from": {
+              "property": {
+                "name": "ContainerCpuUserSecondsTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerCpuUserSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.namespace != \"\"\n| distinct tostring(Labels.namespace)\n| order by Labels_namespace asc",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table",
+          "subscription": "2F45F5B0-7EE2-4E90-A416-D3881BDCF783"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource:text}"
+        },
+        "definition": "ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod != \"\"\n| distinct tostring(Labels.pod)\n| order by Labels_pod asc",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Pod",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "azureLogAnalytics": {
+            "query": "",
+            "resources": []
+          },
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Labels.namespace == \"$Namespace\"\n| where Labels.pod != \"\"\n| distinct tostring(Labels.pod)\n| order by Labels_pod asc",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table",
+          "subscription": "2F45F5B0-7EE2-4E90-A416-D3881BDCF783"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "nowDelay": ""
+  },
+  "timezone": "utc",
+  "title": "Pods",
+  "weekStart": ""
+}

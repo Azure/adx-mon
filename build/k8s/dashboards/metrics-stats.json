@@ -1,0 +1,2845 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource}"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 53,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 10000,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 9000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": ".show tables details\n| summarize dcount(TableName)  ",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Metrics",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 14,
+      "interval": "1m",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Value$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorTableCardinalityCount\n| where Timestamp >= ago(30m)\n| extend Table=tostring(Labels.table)\n| summarize Value=round(avg(Value)) by bin(Timestamp, 1m), Table\n| summarize Value=sum(Value) by bin(Timestamp, 1m)\n| order by Timestamp asc  \n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Active Series",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AMCost"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": ".show extents \n| summarize Samples=sum(RowCount)\n| extend AMCost=(Samples/10e6)*0.16",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Samples",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 28,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonCollectorHealthCheck\n| where Timestamp >= ago(30m)\n| summarize dcount(Host)",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Hosts",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "id": 29,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "max"
+          ],
+          "fields": "/^Value$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "ContainerCpuUsageSecondsTotal\n| where Timestamp >= ago(30m)\n| where Cluster == \"$Cluster\"\n| distinct tostring(Labels.pod)\n| summarize Value=count()\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Pods",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "wps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "hideTimeOverride": true,
+      "id": 13,
+      "interval": "1m",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "/^Value$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorSamplesStoredTotal\n| where Timestamp >= ago(30m)\n| where Timestamp < ago(5m)\n| where Container == \"ingestor\"\n| invoke prom_delta()\n| summarize Value=sum(Value)/60 by bin(Timestamp, 1m), Pod\n| summarize Value=sum(Value) by bin(Timestamp, 1m)\n\n\n\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "timeShift": "5m",
+      "title": "Samples Throughput",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 4
+      },
+      "hideTimeOverride": true,
+      "id": 19,
+      "interval": "1m",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "firstNotNull"
+          ],
+          "fields": "/^Value$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorWalSegmentsMaxAgeSeconds\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Pod startswith \"ingestor\"\n| where Value != 9223372036.8547764\n| make-series Value=avg(Value) on Timestamp from ago(30m) to now() step 60000ms\n| extend mvg=series_fir(Value, repeat(1, 5), true, true)\n| extend mvg=array_slice(mvg, 0, array_length(mvg)-5)\n| extend Value=mvg[array_length(mvg)-1]\n| project Value\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "timeShift": "1m",
+      "title": "Avg Segment Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 4
+      },
+      "hideTimeOverride": true,
+      "id": 24,
+      "interval": "1m",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "first"
+          ],
+          "fields": "/^Value$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorWalSegmentsMaxAgeSeconds\n| where Timestamp >= ago(30m) and Timestamp <= now()\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| where Value != 9223372036.8547764\n| make-series Value=max(Value) on Timestamp from ago(30m) to now() step 60000ms\n| extend mvg=series_fir(Value, repeat(1, 5), true, true)\n| extend mvg=array_slice(mvg, 0, array_length(mvg)-5)\n| extend Value=mvg[array_length(mvg)-1]\n| project Value",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "timeShift": "1m",
+      "title": "Max Segment Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10000000000
+              }
+            ]
+          },
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 4
+      },
+      "id": 20,
+      "interval": "1m",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorWalSegmentsSizeBytes\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| extend metric=tostring(Labels.metric)\n| summarize Value=max(Value) by bin(Timestamp, 5m), metric, Host\n| summarize Value=sum(Value) by bin(Timestamp, 5m), Host\n| summarize avg(Value) by Timestamp\n| order by Timestamp asc\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "WAL Segments Disk Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 4
+      },
+      "id": 21,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Rention$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": ".show extents \n| summarize MinCreate=min(MinCreatedOn), MaxCreate=max(MaxCreatedOn)\n| extend TimeRange=MaxCreate - MinCreate\n| extend Rention=strcat(format_timespan(TimeRange, 'dd'), \" days\")\n| project-away MinCreate, MaxCreate, TimeRange",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Rentention",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 4
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": ".show extents \n| summarize sum(ExtentSize+IndexSize)",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "DB Size",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 4
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": ".show extents \n| summarize sum(OriginalSize)",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ],
+      "title": "Uncompressed DB Size",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "hideTimeOverride": true,
+      "id": 12,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorSamplesStoredTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Pod startswith \"ingestor\"\n| invoke prom_delta()\n| summarize sum(Value)/($__timeInterval/1s) by bin(Timestamp, $__timeInterval)\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "timeShift": "1m",
+      "title": "Ingestor Sample Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 11,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorRequestsReceivedTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| invoke prom_delta()\n| extend code=tostring(Labels.code)\n| extend path=tostring(Labels.path)\n| summarize Avg=sum(Value)/($__timeInterval/1s) by bin(Timestamp, $__timeInterval), code, path\n| order by Timestamp asc, code, path\n| project Timestamp, code, path, Avg\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Ingestor Requests by Path",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "hideTimeOverride": true,
+      "id": 16,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorWalSegmentsMaxAgeSeconds\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| where Value != 9223372036.8547764\n| make-series Value=max(Value) on Timestamp from $__timeFrom to $__timeTo step $__timeInterval by Pod\n| extend stats=series_stats_dynamic(Value)\n| order by toreal(stats.max) desc\n| limit 10\n| project Pod, Timestamp, Value\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "timeShift": "1m",
+      "title": "Top Max Segment Age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 22,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorRequestsReceivedTotal\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| invoke prom_delta()\n| extend code=tostring(Labels.code)\n| summarize Avg=sum(Value)/($__timeInterval/1s) by bin(Timestamp, $__timeInterval), Host\n| order by Timestamp asc, Host\n| project Timestamp, Host, Avg\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Ingestor Requests By Host",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": -1,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 23,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorWalSegmentsCount\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| extend metric=tostring(Labels.metric)\n| summarize Value=avg(Value) by bin(Timestamp, $__timeInterval), Host, metric\n| make-series Value=sum(Value) on Timestamp from $__timeFrom to $__timeTo step $__timeInterval by Host\n| extend stats=series_stats_dynamic(Value)\n| order by toreal(stats.max) desc\n| limit 10\n| project Host, Timestamp, Value",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "title": "Top WAL Segments Count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "hideTimeOverride": true,
+      "id": 18,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "database": "$Database",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "hide": false,
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorTableCardinalityCount\n| where $__timeFilter(Timestamp)\n| extend table = tostring(Labels.table)\n| make-series Value=avg(Value) default = 0 on Timestamp from $__timeFrom to $__timeTo step $__timeInterval by table\n| extend stats=series_stats_dynamic(Value)\n| order by toint(stats.max) desc\n| project Timestamp, table, Value\n| limit 10 \n| extend Value=series_fill_forward(Value, 0)\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "timeShift": "1m",
+      "title": "Top Active Series",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": -1,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 25,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorWalSegmentsSizeBytes\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| extend metric=tostring(Labels.metric)\n| summarize hint.shufflekey=Host Value=avg(Value) by bin(Timestamp, $__timeInterval), metric, Host\n| make-series Value=sum(Value) default = 0 on Timestamp from $__timeFrom to $__timeTo step $__timeInterval by Host\n| extend stats=series_stats_dynamic(Value)\n| order by toreal(stats.max) desc\n| limit 10\n| project Host, Timestamp, Value\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "title": "Top WAL Segments Disk Usage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": -1,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10000
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "id": 26,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorQueueSize\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| extend queue=tostring(Labels.queue)\n| where queue == \"upload\"\n| make-series Value=sum(Value) default = 0 on Timestamp from $__timeFrom to $__timeTo step $__timeInterval by queue, Host\n| extend stats=series_stats_dynamic(Value)\n| order by toreal(stats.max) desc\n| limit 10\n| project queue, Host, Timestamp, Value\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "title": "Upload Queue Size",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": -1,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "light-yellow",
+                "value": 5000
+              },
+              {
+                "color": "semi-dark-red",
+                "value": 10000
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "id": 27,
+      "interval": "1m",
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "from": {
+              "property": {
+                "name": "AdxmonIngestorRequestsReceivedTotal",
+                "type": "string"
+              },
+              "type": "property"
+            },
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [
+                {
+                  "expressions": [
+                    {
+                      "operator": {
+                        "name": "==",
+                        "value": ""
+                      },
+                      "property": {
+                        "name": "UnderlayName",
+                        "type": "string"
+                      },
+                      "type": "operator"
+                    }
+                  ],
+                  "type": "or"
+                }
+              ],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "4.4.1",
+          "query": "AdxmonIngestorQueueSize\n| where $__timeFilter(Timestamp)\n| where Cluster == \"$Cluster\"\n| where Container == \"ingestor\"\n| extend queue=tostring(Labels.queue)\n| where queue == \"transfer\"\n| make-series Value=sum(Value) default = 0 on Timestamp from $__timeFrom to $__timeTo step $__timeInterval by queue, Host\n| extend stats=series_stats_dynamic(Value)\n| order by toreal(stats.max) desc\n| limit 10\n| project queue, Host, Timestamp, Value\n\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series_adx_series"
+        }
+      ],
+      "title": "Transfer Queue Size",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 34,
+      "panels": [],
+      "title": "Resource Usage",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "id": 30,
+      "interval": "1m",
+      "options": {
+        "calculate": false,
+        "calculation": {
+          "xBuckets": {
+            "mode": "count",
+            "value": ""
+          }
+        },
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "let buckets=50;\nlet binSize=toscalar(ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| where Labels.cpu==\"total\"\n| where Labels.namespace == \"adx-mon\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container == \"ingestor\"\n| invoke prom_delta()\n| summarize Value=(max(Value)/60) by bin(Timestamp, 60000ms), Namespace, Pod\n| summarize min(Value), max(Value), avg(Value)\n| extend Diff=(max_Value - min_Value) / buckets\n| project Diff);\nContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| where Labels.cpu==\"total\"\n| where Labels.namespace == \"adx-mon\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container == \"ingestor\"\n| invoke prom_rate()\n| summarize Value=round(avg(Value)+0.0005,3) by bin(Timestamp, 60000ms), Pod\n| summarize Value=count() by Timestamp, Bin=round(bin(Value, toreal(binSize)), 3)\n| order by Timestamp asc\n| project Timestamp, tostring(Bin), Value\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Ingestor CPU Usage (Cores)",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "id": 31,
+      "interval": "1m",
+      "maxPerRow": 2,
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "RdYlGn",
+          "steps": 64
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "decbytes"
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "repeat": "Namespace",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerMemoryWorkingSetBytes\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"adx-mon\"\n| where Container == \"ingestor\"\n| extend Value=Value\n| summarize Value=avg(Value) by bin(Timestamp, 60000ms), Namespace, Pod\n| summarize Value=count() by Timestamp, Bin=bin(Value, 5e6), Namespace\n| project Timestamp, tostring(Bin), Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "WorkingSet",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Ingestor Mem Usage",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "id": 35,
+      "interval": "1m",
+      "options": {
+        "calculate": false,
+        "calculation": {
+          "xBuckets": {
+            "mode": "count",
+            "value": ""
+          }
+        },
+        "cellGap": 1,
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 128
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "let buckets=50;\nlet binSize=toscalar(ContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| where Labels.cpu==\"total\"\n| where Labels.namespace == \"adx-mon\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container == \"collector\"\n| invoke prom_delta()\n| summarize Value=(max(Value)/60) by bin(Timestamp, 60000ms), Namespace, Pod\n| summarize min(Value), max(Value), avg(Value)\n| extend Diff=(max_Value - min_Value) / buckets\n| project Diff);\nContainerCpuUsageSecondsTotal\n| where $__timeFilter(Timestamp)\n| where Cluster==\"$Cluster\"\n| where Labels.cpu==\"total\"\n| where Labels.namespace == \"adx-mon\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Container == \"collector\"\n| invoke prom_rate()\n| summarize Value=round(avg(Value)+0.0005,3) by bin(Timestamp, 60000ms), Pod\n| summarize Value=count() by Timestamp, Bin=round(bin(Value, toreal(binSize)), 3)\n| order by Timestamp asc\n| project Timestamp, tostring(Bin), Value\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "Usage",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Collector CPU Usage (Cores)",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "grafana-azure-data-explorer-datasource",
+        "uid": "${Datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "fieldMinMax": false
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 58
+      },
+      "id": 33,
+      "interval": "1m",
+      "maxPerRow": 2,
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": {
+          "exponent": 1,
+          "fill": "light-yellow",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "RdYlGn",
+          "steps": 128
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "decbytes"
+        }
+      },
+      "pluginVersion": "10.4.11",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "OpenAI": false,
+          "database": "Metrics",
+          "datasource": {
+            "type": "grafana-azure-data-explorer-datasource",
+            "uid": "${Datasource}"
+          },
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.3",
+          "query": "ContainerMemoryWorkingSetBytes\n| where $__timeFilter(Timestamp)\n| where Labels !has \"id\"\n| where Cluster==\"$Cluster\"\n| extend Namespace=tostring(Labels.namespace)\n| extend Pod=tostring(Labels.pod)\n| extend Container=tostring(Labels.container)\n| where Namespace == \"adx-mon\"\n| where Container == \"collector\"\n| extend Value=Value\n| summarize Value=avg(Value) by bin(Timestamp, 60000ms), Namespace, Pod\n| summarize Value=count() by Timestamp, Bin=bin(Value, 1e7), Namespace\n| project Timestamp, tostring(Bin), Value\n| order by Timestamp asc\n",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "refId": "WorkingSet",
+          "resultFormat": "time_series"
+        }
+      ],
+      "title": "Collector Mem Usage",
+      "type": "heatmap"
+    }
+  ],
+  "refresh": "",
+  "revision": 1,
+  "schemaVersion": 39,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "Datasource",
+        "options": [],
+        "query": "grafana-azure-data-explorer-datasource",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "Metrics",
+          "value": "Metrics"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Database",
+        "multi": false,
+        "name": "Database",
+        "options": [
+          {
+            "selected": true,
+            "text": "Metrics",
+            "value": "Metrics"
+          }
+        ],
+        "query": "Metrics",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "datasource": {
+          "type": "grafana-azure-data-explorer-datasource",
+          "uid": "${Datasource}"
+        },
+        "definition": "ContainerCpuUsageSecondsTotal | where $__timeFilter(Timestamp) | distinct Cluster",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "Cluster",
+        "options": [],
+        "query": {
+          "OpenAI": false,
+          "clusterUri": "",
+          "database": "Metrics",
+          "expression": {
+            "groupBy": {
+              "expressions": [],
+              "type": "and"
+            },
+            "reduce": {
+              "expressions": [],
+              "type": "and"
+            },
+            "where": {
+              "expressions": [],
+              "type": "and"
+            }
+          },
+          "pluginVersion": "5.0.5",
+          "query": "ContainerCpuUsageSecondsTotal | where $__timeFilter(Timestamp) | distinct Cluster",
+          "querySource": "raw",
+          "queryType": "KQL",
+          "rawMode": true,
+          "resultFormat": "table"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Metrics Stats",
+  "weekStart": ""
+}
