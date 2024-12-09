@@ -9,7 +9,7 @@ import (
 
 // Parser is the interface for parsing log messages.
 type Parser interface {
-	Parse(*types.Log) error
+	Parse(*types.Log, string) error
 }
 
 type ParserType string
@@ -50,5 +50,23 @@ func IsValidParser(parserType string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func ExecuteParsers(parsers []Parser, log *types.Log, message string, name string) {
+	successfulParse := false
+	for _, parser := range parsers {
+		err := parser.Parse(log, message)
+		if err == nil {
+			successfulParse = true
+			break // successful parse
+		} else if logger.IsDebug() {
+			logger.Debugf("parser error for source %q: %v", name, err)
+		}
+	}
+
+	if !successfulParse {
+		// Unsuccessful parse, add the raw message
+		log.Body[types.BodyKeyMessage] = message
 	}
 }

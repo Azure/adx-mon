@@ -19,24 +19,24 @@ func NewCriParser() *CriParser {
 }
 
 // Not safe for concurrent use.
-func (p *CriParser) Parse(line string, log *types.Log) (isPartial bool, err error) {
+func (p *CriParser) Parse(line string, log *types.Log) (message string, isPartial bool, err error) {
 	timestampEndIdx := strings.IndexByte(line, ' ')
 	if timestampEndIdx == -1 {
-		return false, fmt.Errorf("parseCriLog: invalid log format - timestamp not found")
+		return "", false, fmt.Errorf("parseCriLog: invalid log format - timestamp not found")
 	}
 	timestamp := line[:timestampEndIdx]
 	rest := line[timestampEndIdx+1:]
 
 	streamEndIdx := strings.IndexByte(rest, ' ')
 	if streamEndIdx == -1 {
-		return false, fmt.Errorf("parseCriLog: invalid log format - stream not found")
+		return "", false, fmt.Errorf("parseCriLog: invalid log format - stream not found")
 	}
 	stream := rest[:streamEndIdx]
 	rest = rest[streamEndIdx+1:]
 
 	tagEndIdx := strings.IndexByte(rest, ' ')
 	if tagEndIdx == -1 {
-		return false, fmt.Errorf("parseCriLog: invalid log format - tag not found")
+		return "", false, fmt.Errorf("parseCriLog: invalid log format - tag not found")
 	}
 	tag := rest[:tagEndIdx]
 	rest = rest[tagEndIdx+1:]
@@ -51,20 +51,19 @@ func (p *CriParser) Parse(line string, log *types.Log) (isPartial bool, err erro
 
 	if isPartial {
 		p.streamPartials[stream] = currentLogMsg
-		return true, nil
+		return "", true, nil
 	} else if hasPreviousLog {
 		delete(p.streamPartials, stream)
 	}
 
 	parsedTimestamp, err := time.Parse(time.RFC3339Nano, timestamp)
 	if err != nil {
-		return false, fmt.Errorf("parseCriLog time.Parse: %w", err)
+		return "", false, fmt.Errorf("parseCriLog time.Parse: %w", err)
 	}
 
 	log.Timestamp = uint64(parsedTimestamp.UnixNano())
 	log.ObservedTimestamp = uint64(time.Now().UnixNano())
 	log.Body["stream"] = stream
-	log.Body[types.BodyKeyMessage] = currentLogMsg
 
-	return false, nil
+	return currentLogMsg, false, nil
 }
