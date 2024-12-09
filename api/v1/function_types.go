@@ -30,20 +30,15 @@ type FunctionSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// To protect against specifying arbitrary KQL, we'll only allow
-	// specification of the Function's body, we'll generate the scaffold
-	// for `.create-or-alter function` statement
+	// This flag tells the controller to suspend subsequent executions, it does
+	// not apply to already started executions.  Defaults to false.
+	// +optional
+	Suspend *bool `json:"suspend,omitempty"`
 
 	// Database is the name of the database in which the function will be created
 	Database string `json:"database"`
 	// Body is the KQL body of the function
 	Body string `json:"body"`
-
-	// TODO we need to know if a function is a view and we also need to know the function's name.
-	// We'll accomplish both by writing a parser and later a validator for the body of the function.
-	// For now, we'll just assume that the function name is the same as the name of the Function resource
-	// and if that name is the same as the table's name, then we'll assume it's a view. This is only a
-	// temporary measure until we can write a parser and validator for the body of the function.
 }
 
 // FunctionStatusEnum defines the possible status values for FunctionStatus
@@ -57,6 +52,8 @@ const (
 
 // FunctionStatus defines the observed state of Function
 type FunctionStatus struct {
+	// ObservedGeneration is the most recent generation observed for this Function
+	ObservedGeneration int64 `json:"observedGeneration"`
 	// LastTimeReconciled is the last time the Function was reconciled
 	LastTimeReconciled metav1.Time `json:"lastTimeReconciled"`
 	// Message is a human-readable message indicating details about the Function
