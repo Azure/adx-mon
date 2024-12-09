@@ -13,6 +13,7 @@ import (
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/logs/v1/logsv1connect"
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/ingestor/controller"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/otlp"
 	"github.com/Azure/adx-mon/metrics"
@@ -24,6 +25,7 @@ import (
 	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 // invalidEntityCharacters is a regex that matches invalid characters for Kusto entities and segment files.
@@ -125,8 +127,7 @@ type ServiceOpts struct {
 	// keys are distributed.
 	PartitionSize int
 
-	// FunctionStore is the store of functions to sync with the Kusto cluster.
-	FunctionStore adx.FunctionStore
+	Manager manager.Manager
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -216,6 +217,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	sched := scheduler.NewScheduler(coord)
 
+	// TODO
+	// KustoClis := append(LogsKustoCli, MetricsKustoCli...)
+	// This can be used to parameterize our controller
+
 	return &Service{
 		opts:        opts,
 		databases:   databases,
@@ -274,18 +279,14 @@ func (s *Service) Open(ctx context.Context) error {
 		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
 			return t.Run(ctx)
 		})
-
-		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
-		s.scheduler.ScheduleEvery(5*time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
-			return f.Run(ctx)
-		})
 	}
 
-	for _, v := range s.opts.LogsKustoCli {
-		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
-		s.scheduler.ScheduleEvery(5*time.Minute, "sync-logs-functions", func(ctx context.Context) error {
-			return f.Run(ctx)
-		})
+	if err := (&controller.FunctionReconciler{
+		Client:    s.opts.Manager.GetClient(),
+		Scheme:    s.opts.Manager.GetScheme(),
+		KustoClis: append(s.opts.MetricsKustoCli, s.opts.LogsKustoCli...),
+	}).SetupWithManager(s.opts.Manager); err != nil {
+		return fmt.Errorf("unable to create controller: %v", err)
 	}
 
 	return nil

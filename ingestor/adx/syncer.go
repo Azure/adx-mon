@@ -14,8 +14,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 	"github.com/cespare/xxhash"
 )
@@ -37,7 +35,6 @@ type mgmt interface {
 
 type Syncer struct {
 	KustoCli mgmt
-	fnStore  FunctionStore
 
 	database string
 
@@ -65,10 +62,9 @@ type Table struct {
 	TableName string `kusto:"TableName"`
 }
 
-func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMapping, st SampleType, fns FunctionStore) *Syncer {
+func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMapping, st SampleType) *Syncer {
 	return &Syncer{
 		KustoCli: kustoCli,
-		fnStore:  fns,
 
 		database:       database,
 		defaultMapping: defaultMapping,
@@ -270,55 +266,6 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 	}
 	s.mappings[name] = mapping
 	return name, nil
-}
-
-// EnsureView will create or update a KQL View for the specified Table if one exists.
-func (s *Syncer) EnsureView(ctx context.Context, table string) error {
-	view, ok := s.fnStore.View(s.database, table)
-	if !ok {
-		if logger.IsDebug() {
-			logger.Debugf("No view found for %s.%s", s.database, table)
-		}
-		return nil
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	cached, ok := s.views[s.database+table]
-	if ok {
-		// Is our cached version out of date?
-		if cached.ResourceVersion != view.ResourceVersion {
-			// Invalidate cache
-			delete(s.views, s.database+table)
-		} else {
-			// Cache is valid, nothing to do
-			if logger.IsDebug() {
-				logger.Debugf("View %s.%s is up to date", s.database, view.Name)
-			}
-			return nil
-		}
-	}
-
-	stmt := kql.New("").AddUnsafe(view.Spec.Body)
-	if _, err := s.KustoCli.Mgmt(ctx, s.database, stmt); err != nil {
-		if !errors.Retry(err) {
-			updateKQLFunctionStatus(ctx, s.fnStore, view, v1.PermanentFailure, err)
-			logger.Errorf("Permanent failure to create view %s.%s: %v", s.database, table, err)
-			// We want to fall through here so that we can cache this object, there's no need
-			// to retry creating it. If it's updated, we'll detect the change in the cached
-			// object and try again after invalidating the cache.
-		} else {
-			updateKQLFunctionStatus(ctx, s.fnStore, view, v1.Failed, err)
-			logger.Warnf("Transient failure to create view %s.%s: %v", s.database, table, err)
-			return nil
-		}
-	}
-
-	updateKQLFunctionStatus(ctx, s.fnStore, view, v1.Success, nil)
-	s.views[s.database+table] = view
-
-	return nil
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {

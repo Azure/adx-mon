@@ -18,9 +18,10 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
-	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,8 +36,8 @@ import (
 // FunctionReconciler reconciles a Function object
 type FunctionReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	KustoCli *kusto.Client
+	Scheme    *runtime.Scheme
+	KustoClis []metrics.StatementExecutor
 }
 
 const (
@@ -156,8 +157,14 @@ func (r *FunctionReconciler) ReconcileKusto(ctx context.Context, fn *adxmonv1.Fu
 		stmt = kql.New(".drop function ").AddUnsafe(fn.GetName()).AddLiteral(" ifexists")
 	}
 
-	_, err := r.KustoCli.Mgmt(ctx, fn.Spec.Database, stmt)
-	return err
+	for _, kustoCli := range r.KustoClis {
+		if kustoCli.Database() == fn.Spec.Database {
+			_, err := kustoCli.Mgmt(ctx, stmt)
+			return err
+		}
+	}
+
+	return errors.New("no matching database found")
 }
 
 var (

@@ -22,9 +22,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pkg/crd"
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
@@ -38,6 +36,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -106,7 +105,7 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
-	_, k8scli, ctrlCli, err := newKubeClient(ctx)
+	_, k8scli, _, err := newKubeClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -272,18 +271,6 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	kqlFunctionsStore := storage.NewFunctions(ctrlCli)
-	kqlCRDOpts := crd.Options{
-		CtrlCli: ctrlCli,
-		List:    &v1.FunctionList{},
-		Store:   kqlFunctionsStore,
-	}
-	kqlFnOperator := crd.New(kqlCRDOpts)
-	if err := kqlFnOperator.Open(svcCtx); err != nil {
-		logger.Fatalf("Failed to start kql function operator: %s", err)
-	}
-	defer kqlFnOperator.Close()
-
 	var (
 		allowedDatabases                []string
 		metricsUploaders, logsUploaders []adx.Uploader
@@ -294,7 +281,7 @@ func realMain(ctx *cli.Context) error {
 	if len(metricsKusto) > 0 {
 		metricsUploaders, metricsDatabases, err = newUploaders(
 			metricsKusto, storageDir, concurrentUploads,
-			defaultMapping, adx.PromMetrics, kqlFunctionsStore)
+			defaultMapping, adx.PromMetrics)
 		if err != nil {
 			logger.Fatalf("Failed to create uploader: %s", err)
 		}
@@ -309,7 +296,7 @@ func realMain(ctx *cli.Context) error {
 	if len(logsKusto) > 0 {
 		logsUploaders, logsDatabases, err = newUploaders(
 			logsKusto, storageDir, concurrentUploads,
-			schema.DefaultLogsMapping, adx.OTLPLogs, kqlFunctionsStore)
+			schema.DefaultLogsMapping, adx.OTLPLogs)
 		if err != nil {
 			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 		}
@@ -339,6 +326,15 @@ func realMain(ctx *cli.Context) error {
 		logsKustoCli = append(logsKustoCli, cli)
 	}
 
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:           scheme,
+		LeaderElection:   true,
+		LeaderElectionID: "340c786e.azure.com",
+	})
+	if err != nil {
+		logger.Fatalf("Failed to create controller manager: %s", err)
+	}
+
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:              k8scli,
 		LogsKustoCli:        logsKustoCli,
@@ -363,7 +359,7 @@ func realMain(ctx *cli.Context) error {
 		LiftedColumns:       sortedLiftedLabels,
 		DropLabels:          dropLabels,
 		DropMetrics:         dropMetrics,
-		FunctionStore:       kqlFunctionsStore,
+		Manager:             mgr,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
@@ -424,6 +420,12 @@ func realMain(ctx *cli.Context) error {
 	go func() {
 		if err := metricsSrv.ListenAndServe(); err != nil {
 			logger.Errorf(err.Error())
+		}
+	}()
+
+	go func() {
+		if err := mgr.Start(svcCtx); err != nil {
+			logger.Errorf("Failed to start controller manager: %s", err)
 		}
 	}()
 
@@ -520,7 +522,7 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
-	defaultMapping schema.SchemaMapping, sampleType adx.SampleType, fnStore *storage.Functions) ([]adx.Uploader, []string, error) {
+	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
 
 	var uploaders []adx.Uploader
 	var uploadDatabaseNames []string
@@ -540,7 +542,6 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 			ConcurrentUploads: concurrentUploads,
 			DefaultMapping:    defaultMapping,
 			SampleType:        sampleType,
-			FnStore:           fnStore,
 		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)

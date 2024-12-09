@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/controller"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -50,10 +51,16 @@ func TestKQLController(t *testing.T) {
 	require.NoError(t, err)
 	defer kustoClient.Close()
 
+	kustoClis := []metrics.StatementExecutor{
+		&StatementExecutor{
+			KustoCli:     kustoClient,
+			DatabaseName: "NetDefaultDB",
+		},
+	}
 	controllerReconciler := &controller.FunctionReconciler{
-		Client:   k8sClient,
-		Scheme:   k8sClient.Scheme(),
-		KustoCli: kustoClient,
+		Client:    k8sClient,
+		Scheme:    k8sClient.Scheme(),
+		KustoClis: kustoClis,
 	}
 
 	// Create a function
@@ -127,7 +134,13 @@ func TestKQLController(t *testing.T) {
 	invalidKustoClient, err := kusto.New(kusto.NewConnectionStringBuilder("http://invalid-url"))
 	require.NoError(t, err)
 	defer invalidKustoClient.Close()
-	controllerReconciler.KustoCli = invalidKustoClient
+	invalidKustoClis := []metrics.StatementExecutor{
+		&StatementExecutor{
+			KustoCli:     invalidKustoClient,
+			DatabaseName: "NetDefaultDB",
+		},
+	}
+	controllerReconciler.KustoClis = invalidKustoClis
 
 	// - Update the function again, which will cause a reconcile attempt
 	resource.Spec.Body = fmt.Sprintf(".create-or-alter function %s () {print 'Update 2';}", resourceName)
@@ -143,7 +156,7 @@ func TestKQLController(t *testing.T) {
 	require.Equal(t, resource.Status.Status, adxmonv1.Failed)
 
 	// - Give reconcile a valid kusto client
-	controllerReconciler.KustoCli = kustoClient
+	controllerReconciler.KustoClis = kustoClis
 	_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 		NamespacedName: typeNamespacedName,
 	})
@@ -171,4 +184,16 @@ func TestKQLController(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !testutils.FunctionExists(ctx, t, resource.Spec.Database, resourceName, kustoClient.Endpoint())
 	}, time.Minute, time.Second)
+}
+
+type StatementExecutor struct {
+	KustoCli     *kusto.Client
+	DatabaseName string
+}
+
+func (s *StatementExecutor) Database() string {
+	return s.DatabaseName
+}
+func (s *StatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	return s.KustoCli.Mgmt(ctx, s.DatabaseName, query, options...)
 }
