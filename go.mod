@@ -38,7 +38,7 @@ require (
 	github.com/valyala/fastjson v1.6.4
 	golang.org/x/net v0.31.0
 	golang.org/x/sync v0.9.0
-	golang.org/x/sys v0.27.0
+	golang.org/x/sys v0.28.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240701130421-f6361c86f094
 	google.golang.org/protobuf v1.35.2
 	k8s.io/api v0.31.3
