@@ -82,7 +82,11 @@ data:
 
     # Disable metrics forwarding to endpoints.
     disable-metrics-forwarding = false
-  
+
+    # WAL flush interval in milliseconds.  For collector it's lowered to reduce CPU usage since
+    # fewer metrics are in flight.
+    wal-flush-interval-ms = 1000
+
     lift-labels = [
       { name = 'host' },
       { name = 'cluster' },
@@ -324,6 +328,10 @@ data:
     # Disable metrics forwarding to endpoints.
     disable-metrics-forwarding = false
     
+    # WAL flush interval in milliseconds.  For collector it's lowered to reduce CPU usage since
+    # fewer metrics are in flight.
+    wal-flush-interval-ms = 1000
+
     lift-labels = [
       { name = 'host' },
       { name = 'cluster' },
