@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/metrics"
+	kerrs "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,7 +43,7 @@ type FunctionReconciler struct {
 
 const (
 	// RetryAfter is the time to wait before retrying a failed Kusto operation
-	RetryAfter = 10 * time.Minute
+	RetryAfter = time.Minute
 )
 
 // +kubebuilder:rbac:groups=adx-mon.azure.com,resources=functions,verbs=get;list;watch;create;update;patch;delete
@@ -64,6 +65,7 @@ func (r *FunctionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if function.Spec.Suspend != nil && *function.Spec.Suspend {
+		log.Info("Suspended", "function", function.GetName())
 		// The object is suspended, so we don't need to do anything
 		return ctrl.Result{}, nil
 	}
@@ -85,17 +87,17 @@ func (r *FunctionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	} else {
 		// The object is being deleted
 		if controllerutil.ContainsFinalizer(function, finalizerName) {
+			log.Info("Deleting", "function", function.GetName())
 
 			if err := r.ReconcileKusto(ctx, function); err != nil {
 				function.Status = adxmonv1.FunctionStatus{
 					LastTimeReconciled: metav1.Now(),
 					Message:            "Failed to delete function in Kusto cluster",
-					// TODO set error from kusto
-					Error:  "",
-					Status: adxmonv1.Failed,
+					Error:              kustoErrorMsg(err),
+					Status:             adxmonv1.Failed,
 				}
 				if err := r.Status().Update(ctx, function); err != nil {
-					log.Error(err, "unable to update Function status")
+					log.Error(err, "Unable to update status", "function", function.GetName())
 				}
 				return ctrl.Result{Requeue: true, RequeueAfter: RetryAfter}, nil
 			}
@@ -118,19 +120,17 @@ func (r *FunctionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
-	// TODO KQL validation. If invalid, set the status as being a permanent failure
-	// and don't bother requeuing the function.
-
 	if err := r.ReconcileKusto(ctx, function); err != nil {
+		log.Error(err, "Failed to reconcile", "function", function.GetName())
+
 		function.Status = adxmonv1.FunctionStatus{
 			LastTimeReconciled: metav1.Now(),
-			Message:            "Failed to delete function in Kusto cluster",
-			// TODO set error from kusto
-			Error:  "",
-			Status: adxmonv1.Failed,
+			Message:            "Failed to reconcile function in Kusto cluster",
+			Error:              kustoErrorMsg(err),
+			Status:             adxmonv1.Failed,
 		}
 		if err := r.Status().Update(ctx, function); err != nil {
-			log.Error(err, "unable to update Function status")
+			log.Error(err, "Unable to update status", "function", function.GetName())
 		}
 		return ctrl.Result{Requeue: true, RequeueAfter: RetryAfter}, nil
 	}
@@ -142,8 +142,9 @@ func (r *FunctionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		Status:             adxmonv1.Success,
 	}
 	if err := r.Status().Update(ctx, function); err != nil {
-		log.Error(err, "unable to update Function status")
+		log.Error(err, "Unable to update status", "function", function.GetName())
 	}
+	log.Info("Reconciled", "function", function.GetName())
 
 	return ctrl.Result{}, nil
 }
@@ -194,4 +195,23 @@ func (r *FunctionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.Function{}).
 		Complete(r)
+}
+
+func kustoErrorMsg(err error) string {
+	var errMsg string
+	var kustoerr *kerrs.HttpError
+	if errors.As(err, &kustoerr) {
+		decoded := kustoerr.UnmarshalREST()
+		if errMap, ok := decoded["error"].(map[string]interface{}); ok {
+			if errMsgVal, ok := errMap["@message"].(string); ok {
+				errMsg = errMsgVal
+			}
+		}
+	}
+
+	if len(errMsg) > 256 {
+		errMsg = errMsg[:256]
+	}
+
+	return errMsg
 }

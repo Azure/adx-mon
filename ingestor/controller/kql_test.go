@@ -10,10 +10,10 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/controller"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -27,7 +27,7 @@ import (
 
 func TestKQLController(t *testing.T) {
 	// Scaffold
-	logf.SetLogger(logr.Logger{})
+	logf.SetLogger(logger.LogrHandler())
 
 	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
 	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))

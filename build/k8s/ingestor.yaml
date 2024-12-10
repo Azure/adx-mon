@@ -20,10 +20,12 @@ rules:
     resources:
       - namespaces
       - pods
+      - events
     verbs:
       - get
       - list
       - watch
+      - create
   - apiGroups:
       - adx-mon.azure.com
     resources:
@@ -44,6 +46,18 @@ rules:
       - update
       - patch
       - get
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch 
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

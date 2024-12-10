@@ -326,6 +326,7 @@ func realMain(ctx *cli.Context) error {
 		logsKustoCli = append(logsKustoCli, cli)
 	}
 
+	ctrl.SetLogger(logger.LogrHandler())
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:           scheme,
 		LeaderElection:   true,

@@ -217,10 +217,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	sched := scheduler.NewScheduler(coord)
 
-	// TODO
-	// KustoClis := append(LogsKustoCli, MetricsKustoCli...)
-	// This can be used to parameterize our controller
-
 	return &Service{
 		opts:        opts,
 		databases:   databases,

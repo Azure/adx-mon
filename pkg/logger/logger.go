@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 )
@@ -51,6 +52,10 @@ func init() {
 	default:
 		fmt.Printf("Unknown log level: %s != [ERROR,WARN,INFO,DEBUG,TRACE]\n", level)
 	}
+}
+
+func LogrHandler() logr.Logger {
+	return logr.FromSlogHandler(slog.Default().Handler())
 }
 
 func SetLevel(level slog.Level) {
