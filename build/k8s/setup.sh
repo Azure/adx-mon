@@ -87,13 +87,22 @@ if [[ $CLUSTER_COUNT -eq 0 ]]; then
     
     # Process available SKUs in the region
     az extension add --name kusto
-    available_skus=$(az kusto cluster list-sku --subscription "$SUBSCRIPTION_ID" --query "[?contains(locations, '$KUSTO_REGION')]" --output table | awk '$3 == "Standard" {print $2}')
+    recommended_skus=("Standard_L8as_v3" "Standard_L16as_v3" "Standard_L32as_v3")
+    skus=$(az kusto cluster list-sku --subscription "$SUBSCRIPTION_ID" --query "[?contains(locations, '$KUSTO_REGION')]" --output table | awk '$3 == "Standard" {print $2}')
+    available_skus=()
+    while read -r word; do
+        if [[ " ${recommended_skus[@]} " =~ " $word " ]]; then
+            available_skus+=("$word (recommended)")
+        else
+            available_skus+=("$word")
+        fi
+    done <<< "$skus"
 
     # Prompt user for SKU selection
     PS3="Select a SKU value from the listed options: "
-    select choice in $available_skus; do
+    select choice in "${available_skus[@]}"; do
         if [[ -n $choice ]]; then
-            CLUSTER_SKU=$choice
+            CLUSTER_SKU="${choice// (recommended)/}"
             echo "SKU selected: $CLUSTER_SKU"
             break
         else
