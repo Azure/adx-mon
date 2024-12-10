@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
@@ -65,12 +66,7 @@ type ScraperOpts struct {
 
 	Endpoints []string
 
-	RemoteClient RemoteWriteClient
-}
-
-type RemoteWriteClient interface {
-	Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error
-	CloseIdleConnections()
+	RemoteClient remote.RemoteWriteClient
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -114,7 +110,7 @@ type Scraper struct {
 	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
-	remoteClient       RemoteWriteClient
+	remoteClient       remote.RemoteWriteClient
 	scrapeClient       *MetricsClient
 	seriesCreator      *seriesCreator
 

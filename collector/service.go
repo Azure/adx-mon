@@ -18,7 +18,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
@@ -202,22 +201,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		InsecureSkipVerify: opts.InsecureSkipVerify,
 	})
 
-	remoteClient, err := promremote.NewClient(
-		promremote.ClientOpts{
-			Timeout:               20 * time.Second,
-			InsecureSkipVerify:    opts.InsecureSkipVerify,
-			Close:                 false,
-			MaxIdleConnsPerHost:   1,
-			MaxConnsPerHost:       5,
-			MaxIdleConns:          1,
-			ResponseHeaderTimeout: 20 * time.Second,
-			DisableHTTP2:          true,
-			DisableKeepAlives:     true,
-		})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
-	}
-
 	var metricHttpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
@@ -237,7 +220,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
 		writer := otlp.NewOltpMetricWriter(otlp.OltpMetricWriterOpts{
 			RequestTransformer:       handlerOpts.MetricOpts.RequestTransformer(),
-			Client:                   remoteClient,
+			Client:                   &StoreRemoteClient{store},
 			Endpoints:                opts.Endpoints,
 			MaxBatchSize:             opts.MaxBatchSize,
 			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,

@@ -13,7 +13,7 @@ import (
 	metricsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/metrics/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/adx-mon/pkg/promremote"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
 	"golang.org/x/sync/errgroup"
 )
@@ -88,13 +88,13 @@ type OltpMetricWriterOpts struct {
 
 	Endpoints []string
 
-	Client *promremote.Client
+	Client remote.RemoteWriteClient
 }
 
 type OltpMetricWriter struct {
 	requestTransformer       *transform.RequestTransformer
 	endpoints                []string
-	remoteClient             *promremote.Client
+	remoteClient             remote.RemoteWriteClient
 	maxBatchSize             int
 	disableMetricsForwarding bool
 }

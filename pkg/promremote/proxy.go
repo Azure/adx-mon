@@ -10,11 +10,12 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"golang.org/x/sync/errgroup"
 )
 
 type RemoteWriteProxy struct {
-	client                   RemoteWriteClient
+	client                   remote.RemoteWriteClient
 	endpoints                []string
 	maxBatchSize             int
 	disableMetricsForwarding bool
@@ -27,7 +28,7 @@ type RemoteWriteProxy struct {
 	cancelFn context.CancelFunc
 }
 
-func NewRemoteWriteProxy(client RemoteWriteClient, endpoints []string, maxBatchSize int, disableMetricsForwarding bool) *RemoteWriteProxy {
+func NewRemoteWriteProxy(client remote.RemoteWriteClient, endpoints []string, maxBatchSize int, disableMetricsForwarding bool) *RemoteWriteProxy {
 	p := &RemoteWriteProxy{
 		client:                   client,
 		endpoints:                endpoints,
