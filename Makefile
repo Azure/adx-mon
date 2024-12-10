@@ -40,7 +40,7 @@ clean:
 .PHONY: clean
 
 test:
-	go test -timeout 30m ./...
+	INTEGRATION=1 go test -timeout 30m ./...
 .PHONY: test
 
 default:

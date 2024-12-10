@@ -1,5 +1,3 @@
-//go:build !disableDocker
-
 package crd_test
 
 import (
@@ -44,6 +42,8 @@ func (s *TestStore) Count() int32 {
 }
 
 func TestCRD(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
 	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))
 	fnCrdPath := filepath.Join(t.TempDir(), "fn-crd.yaml")

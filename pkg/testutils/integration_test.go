@@ -16,6 +16,8 @@ import (
 )
 
 func TestIntegration(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	// An extra generous timeout for the test. The test should run in
 	// about 5 minutes, but when running with the race detector, it
 	// can take longer.

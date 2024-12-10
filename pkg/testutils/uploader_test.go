@@ -1,5 +1,3 @@
-//go:build !disableDocker
-
 package testutils_test
 
 import (
@@ -16,6 +14,8 @@ import (
 )
 
 func TestUploader(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	var (
 		database = "NetDefaultDB"
 		table    = "Table_0"
