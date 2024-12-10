@@ -187,8 +187,11 @@ func (s *Scraper) scrape(ctx context.Context) {
 	defer s.wg.Done()
 
 	// Sleep for a random amount of time to avoid thundering herd
-	if s.opts.ScrapeInterval > 0 {
-		time.Sleep(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second):
+		// continue
 	}
 
 	reconnectTimer := time.NewTicker(5 * time.Minute)
