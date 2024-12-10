@@ -30,9 +30,6 @@ type Service struct {
 
 	cancel context.CancelFunc
 
-	// remoteClient is the metrics client used to send metrics to ingestor.
-	remoteClient *promremote.Client
-
 	// metricsSvc is the internal metrics component for collector specific metrics.
 	metricsSvc metrics.Service
 
@@ -225,7 +222,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
 	for _, handlerOpts := range opts.PromMetricsHandlers {
-		// proxy := promremote.NewRemoteWriteProxy(remoteClient, opts.Endpoints, opts.MaxBatchSize, handlerOpts.MetricOpts.DisableMetricsForwarding)
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
@@ -236,7 +232,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
-		// workerSvcs = append(workerSvcs, proxy)
 	}
 
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
@@ -344,7 +339,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		grpcHandlers: grpcHandlers,
 		batcher:      batcher,
 		replicator:   replicator,
-		remoteClient: remoteClient,
 	}
 
 	return svc, nil

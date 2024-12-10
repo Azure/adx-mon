@@ -123,8 +123,6 @@ type Scraper struct {
 
 	mu      sync.RWMutex
 	targets map[string]ScrapeTarget
-
-	wr *prompb.WriteRequest
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
