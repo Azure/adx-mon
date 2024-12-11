@@ -1,5 +1,3 @@
-//go:build !disableDocker
-
 package testutils_test
 
 import (
@@ -13,6 +11,8 @@ import (
 )
 
 func TestTableExists(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	k, err := kustainer.Run(context.Background(), "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
 	testcontainers.CleanupContainer(t, k)
 	require.NoError(t, err)
@@ -22,6 +22,8 @@ func TestTableExists(t *testing.T) {
 }
 
 func TestTableHasRows(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	k, err := kustainer.Run(context.Background(), "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
 	testcontainers.CleanupContainer(t, k)
 	require.NoError(t, err)

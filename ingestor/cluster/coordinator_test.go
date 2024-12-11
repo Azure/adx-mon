@@ -1,5 +1,3 @@
-//go:build !disableDocker
-
 package cluster
 
 import (
@@ -263,6 +261,8 @@ func (l *fakePodLister) Pods(namespace string) v12.PodNamespaceLister {
 }
 
 func TestCoordinatorInK8s(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	// This is an integration test where a Coordinator is created using a k3s cluster
 	// configuration and a statefulset is then created that matches the Coordinator's
 	// peer predicate. What we're testing is that the Coordinator is correctly utilizing

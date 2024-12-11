@@ -1,5 +1,3 @@
-//go:build !disableDocker
-
 package storage_test
 
 import (
@@ -22,6 +20,8 @@ import (
 )
 
 func TestFunctions(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	scheme := clientgoscheme.Scheme
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, v1.AddToScheme(scheme))

@@ -1,11 +1,10 @@
-//go:build !disableDocker
-
 package adx
 
 import (
 	"context"
 	"testing"
 
+	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/stretchr/testify/require"
@@ -13,6 +12,8 @@ import (
 )
 
 func TestClusterRequiresDirectIngest(t *testing.T) {
+	testutils.IntegrationTest(t)
+
 	ctx := context.Background()
 	k, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
 	testcontainers.CleanupContainer(t, k)
