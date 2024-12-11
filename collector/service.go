@@ -18,7 +18,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
@@ -29,9 +28,6 @@ type Service struct {
 	opts *ServiceOpts
 
 	cancel context.CancelFunc
-
-	// remoteClient is the metrics client used to send metrics to ingestor.
-	remoteClient *promremote.Client
 
 	// metricsSvc is the internal metrics component for collector specific metrics.
 	metricsSvc metrics.Service
@@ -205,27 +201,10 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		InsecureSkipVerify: opts.InsecureSkipVerify,
 	})
 
-	remoteClient, err := promremote.NewClient(
-		promremote.ClientOpts{
-			Timeout:               20 * time.Second,
-			InsecureSkipVerify:    opts.InsecureSkipVerify,
-			Close:                 false,
-			MaxIdleConnsPerHost:   1,
-			MaxConnsPerHost:       5,
-			MaxIdleConns:          1,
-			ResponseHeaderTimeout: 20 * time.Second,
-			DisableHTTP2:          true,
-			DisableKeepAlives:     true,
-		})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create prometheus remote client: %w", err)
-	}
-
 	var metricHttpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
 	for _, handlerOpts := range opts.PromMetricsHandlers {
-		// proxy := promremote.NewRemoteWriteProxy(remoteClient, opts.Endpoints, opts.MaxBatchSize, handlerOpts.MetricOpts.DisableMetricsForwarding)
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
@@ -236,13 +215,12 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
-		// workerSvcs = append(workerSvcs, proxy)
 	}
 
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
 		writer := otlp.NewOltpMetricWriter(otlp.OltpMetricWriterOpts{
 			RequestTransformer:       handlerOpts.MetricOpts.RequestTransformer(),
-			Client:                   remoteClient,
+			Client:                   &StoreRemoteClient{store},
 			Endpoints:                opts.Endpoints,
 			MaxBatchSize:             opts.MaxBatchSize,
 			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
@@ -344,7 +322,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		grpcHandlers: grpcHandlers,
 		batcher:      batcher,
 		replicator:   replicator,
-		remoteClient: remoteClient,
 	}
 
 	return svc, nil

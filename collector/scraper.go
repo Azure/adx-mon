@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
@@ -65,12 +66,7 @@ type ScraperOpts struct {
 
 	Endpoints []string
 
-	RemoteClient RemoteWriteClient
-}
-
-type RemoteWriteClient interface {
-	Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error
-	CloseIdleConnections()
+	RemoteClient remote.RemoteWriteClient
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -114,7 +110,7 @@ type Scraper struct {
 	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
-	remoteClient       RemoteWriteClient
+	remoteClient       remote.RemoteWriteClient
 	scrapeClient       *MetricsClient
 	seriesCreator      *seriesCreator
 
@@ -123,8 +119,6 @@ type Scraper struct {
 
 	mu      sync.RWMutex
 	targets map[string]ScrapeTarget
-
-	wr *prompb.WriteRequest
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -189,8 +183,11 @@ func (s *Scraper) scrape(ctx context.Context) {
 	defer s.wg.Done()
 
 	// Sleep for a random amount of time to avoid thundering herd
-	if s.opts.ScrapeInterval > 0 {
-		time.Sleep(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second):
+		// continue
 	}
 
 	reconnectTimer := time.NewTicker(5 * time.Minute)
