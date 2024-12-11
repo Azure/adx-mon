@@ -85,18 +85,20 @@ KUSTO_REGION=$REGION
 if [[ $CLUSTER_COUNT -eq 0 ]]; then
     echo "No Kusto cluster could be found for the database name '$CLUSTER_NAME'. Creating cluster."
     
-    # Process available SKUs in the region
+    # Process available SKUs in the region, sorted by recommended
     az extension add --name kusto
     recommended_skus=("Standard_L8as_v3" "Standard_L16as_v3" "Standard_L32as_v3")
-    skus=$(az kusto cluster list-sku --subscription "$SUBSCRIPTION_ID" --query "[?contains(locations, '$KUSTO_REGION')]" --output table | awk '$3 == "Standard" {print $2}')
-    available_skus=()
+    skus=$(az kusto cluster list-sku --subscription "$SUBSCRIPTION_ID" --query "[?contains(locations, '$KUSTO_REGION') && tier == 'Standard'].name" --output tsv)
+    available_rec=()
+    available_nonrec=()
     while read -r word; do
         if [[ " ${recommended_skus[@]} " =~ " $word " ]]; then
-            available_skus+=("$word (recommended)")
+            available_rec+=("$word (recommended)")
         else
-            available_skus+=("$word")
+            available_nonrec+=("$word")
         fi
     done <<< "$skus"
+    available_skus=("${available_rec[@]}" "${available_nonrec[@]}")
 
     # Prompt user for SKU selection
     PS3="Select a SKU value from the listed options: "
