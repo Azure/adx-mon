@@ -24,7 +24,7 @@ fi
 
 for EXT in resource-graph kusto; do
     if ! az extension show --name $EXT &> /dev/null; then
-        read -p "The '$ext' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
+        read -p "The '$EXT' extension is not installed. Do you want to install it now? (y/n) " INSTALL_EXT
         if [[ "$INSTALL_EXT" == "y" ]]; then
             az extension add --name "$EXT"
         else
@@ -80,15 +80,46 @@ done
 
 CLUSTER_INFO=$(az graph query -q "Resources | where type =~ 'Microsoft.Kusto/clusters' and name =~ '$CLUSTER_NAME' | project name, resourceGroup, subscriptionId, location, properties.uri")
 CLUSTER_COUNT=$(echo $CLUSTER_INFO | jq '.data | length')
-KUSTO_REGION=$(echo $CLUSTER_INFO | jq -r '.data[0].location')
+KUSTO_REGION=$REGION
 
 if [[ $CLUSTER_COUNT -eq 0 ]]; then
-    echo "No Kusto cluster could be found for the database name '$CLUSTER_NAME'. Exiting."
-    exit 1
+    echo "No Kusto cluster could be found for the database name '$CLUSTER_NAME'. Creating cluster."
+    
+    # Process available SKUs in the region, sorted by recommended
+    az extension add --name kusto
+    recommended_skus=("Standard_L8as_v3" "Standard_L16as_v3" "Standard_L32as_v3")
+    skus=$(az kusto cluster list-sku --subscription "$SUBSCRIPTION_ID" --query "[?contains(locations, '$KUSTO_REGION') && tier == 'Standard'].name" --output tsv)
+    available_rec=()
+    available_nonrec=()
+    while read -r word; do
+        if [[ " ${recommended_skus[@]} " =~ " $word " ]]; then
+            available_rec+=("$word (recommended)")
+        else
+            available_nonrec+=("$word")
+        fi
+    done <<< "$skus"
+    available_skus=("${available_rec[@]}" "${available_nonrec[@]}")
+
+    # Prompt user for SKU selection
+    PS3="Select a SKU value from the listed options: "
+    select choice in "${available_skus[@]}"; do
+        if [[ -n $choice ]]; then
+            CLUSTER_SKU="${choice// (recommended)/}"
+            echo "SKU selected: $CLUSTER_SKU"
+            break
+        else
+            echo "Invalid selection. Please choose a valid option."
+        fi
+    done
+
+    echo "Creating Kusto cluster with database name '$CLUSTER_NAME' in resource group '$RESOURCE_GROUP' with SKU '$CLUSTER_SKU'"
+    az kusto cluster create --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --sku name="$CLUSTER_SKU" tier="Standard"
+    ADX_FQDN=$(az kusto cluster show --resource-group "$RESOURCE_GROUP" --name "$CLUSTER_NAME" --query "uri" -o tsv)
 else
     CLUSTER_NAME=$(echo $CLUSTER_INFO | jq -r '.data[0].name')
     SUBSCRIPTION_ID=$(echo $CLUSTER_INFO | jq -r '.data[0].subscriptionId')
     RESOURCE_GROUP=$(echo $CLUSTER_INFO | jq -r '.data[0].resourceGroup')
+    KUSTO_REGION=$(echo $CLUSTER_INFO | jq -r '.data[0].location')
     ADX_FQDN=$(echo $CLUSTER_INFO | jq -r '.data[0].properties_uri')
 fi
 echo
