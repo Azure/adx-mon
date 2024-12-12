@@ -59,11 +59,10 @@ type UploaderOpts struct {
 	Dimensions        []string
 	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
-	FnStore           FunctionStore
 }
 
 func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
-	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType, opts.FnStore)
+	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
 
 	return &uploader{
 		KustoCli:   kustoCli,
@@ -141,14 +140,6 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	name, err := n.syncer.EnsureMapping(table, mapping)
 	if err != nil {
 		return err
-	}
-
-	// This shouldn't take long and is not critical to the upload.
-	viewCtx, viewCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer viewCancel()
-
-	if err := n.syncer.EnsureView(viewCtx, table); err != nil {
-		logger.Errorf("Failed to create view %s.%s: %v", database, table, err)
 	}
 
 	n.mu.RLock()

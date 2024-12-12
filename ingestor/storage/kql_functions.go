@@ -2,126 +2,88 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
 
-	v1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/logger"
+	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/scheduler"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type Functions struct {
-	mu        sync.RWMutex
-	views     *v1.FunctionList
-	functions *v1.FunctionList
-	client    client.StatusClient
+type Functions interface {
+	UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error
+	List(ctx context.Context) ([]*adxmonv1.Function, error)
 }
 
-func NewFunctions(client client.StatusClient) *Functions {
-	return &Functions{
-		client: client,
+type functions struct {
+	Client  client.Client
+	Elector scheduler.Elector
+}
+
+func NewFunctions(client client.Client, elector scheduler.Elector) *functions {
+	return &functions{
+		Client:  client,
+		Elector: elector,
 	}
 }
 
-func (f *Functions) UpdateStatus(ctx context.Context, fn *v1.Function) error {
-	if f.client == nil {
+func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error {
+	if f.Client == nil {
 		return fmt.Errorf("no client provided")
 	}
 
-	return f.client.Status().Update(ctx, fn)
-}
-
-func (f *Functions) Delete(ctx context.Context, fn *v1.Function) error {
-	if f.client == nil {
-		return fmt.Errorf("no client provided")
+	if fn.Status.Status == adxmonv1.Success {
+		fn.Status.ObservedGeneration = fn.GetGeneration()
 	}
 
-	return nil
+	fn.Status.LastTimeReconciled = metav1.Now()
+	return f.Client.Status().Update(ctx, fn)
 }
 
-func (f *Functions) View(database, table string) (*v1.Function, bool) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	if f.views == nil {
-		return nil, false
+func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
+	if f.Client == nil {
+		return nil, fmt.Errorf("no client provided")
 	}
 
-	// TODO (jesthom): Once the parser is in place we can identify the Views.
-
-	return nil, false
-}
-
-func (f *Functions) Functions() []*v1.Function {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	if f.functions == nil {
-		return nil
+	if f.Elector != nil && !f.Elector.IsLeader() {
+		return nil, nil
 	}
 
-	var fns []*v1.Function
-	for _, f := range f.functions.Items {
-		fns = append(fns, f.DeepCopy())
-	}
-	return fns
-}
-
-func (f *Functions) List() []*v1.Function {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	var fns []*v1.Function
-	if f.functions != nil {
-		for _, fn := range f.functions.Items {
-			fns = append(fns, fn.DeepCopy())
+	list := &adxmonv1.FunctionList{}
+	if err := f.Client.List(ctx, list); err != nil {
+		if errors.Is(err, &meta.NoKindMatchError{}) {
+			return nil, nil
 		}
-	}
-	if f.views != nil {
-		for _, view := range f.views.Items {
-			fns = append(fns, view.DeepCopy())
-		}
+		return nil, fmt.Errorf("failed to list functions: %w", err)
 	}
 
-	return fns
-}
-
-func (f *Functions) Receive(ctx context.Context, list client.ObjectList) error {
-	items, ok := list.(*v1.FunctionList)
-	if !ok {
-		return fmt.Errorf("expected *v1.FunctionList, got %T", list)
-	}
-	if items == nil || len(items.Items) == 0 {
-		return nil
-	}
-
-	var (
-		views     = &v1.FunctionList{}
-		functions = &v1.FunctionList{}
-		unique    = make(map[string]struct{})
-	)
-	for _, function := range items.Items {
-		// TODO (jesthom): If a database isn't specified, should we just consider installing
-		// the function in all tracked databases? This would be useful for adx-mon's
-		// own functions, for example.
-		if function.Spec.Database == "" {
-			logger.Errorf("Function %s has no database", function.Name)
+	var fns []*adxmonv1.Function
+	for _, fn := range list.Items {
+		if fn.Spec.Suspend != nil && *fn.Spec.Suspend {
+			// Skip suspended functions
 			continue
 		}
-		// TODO (jesthom): Once the parser is in place we can perform more validation.
-		if _, ok := unique[function.Spec.Database+function.Name]; ok {
-			logger.Errorf("Function %s is a duplicate", function.Name)
+
+		switch fn.GetGeneration() {
+		case fn.Status.ObservedGeneration:
+			// Skip functions that are up to date
 			continue
+
+		case 1:
+			fn.Status.Reason = "Function created"
+
+		default:
+			fn.Status.Reason = "Function updated"
 		}
-		unique[function.Spec.Database+function.Name] = struct{}{}
-		// TODO (jesthom): Once the parser is in place separate out the Views from the Functions.
-		functions.Items = append(functions.Items, *function.DeepCopy())
+
+		// TODO once we can parse the KQL and appropriately determine
+		// if the error is really due to a permanent failure, we can
+		// filter out the functions that are in a permanent failure state.
+
+		fns = append(fns, &fn)
 	}
 
-	f.mu.Lock()
-	f.views = views
-	f.functions = functions
-	f.mu.Unlock()
-
-	return nil
+	return fns, nil
 }

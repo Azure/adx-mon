@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type TableDetail struct {
@@ -103,81 +102,55 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 	}
 }
 
-type FunctionStore interface {
-	Functions() []*v1.Function
-	View(database, table string) (*v1.Function, bool)
-	UpdateStatus(ctx context.Context, fn *v1.Function) error
-}
-
 type SyncFunctionsTask struct {
-	cache map[string]*v1.Function
-	mu    sync.RWMutex
-
-	store    FunctionStore
+	store    storage.Functions
 	kustoCli StatementExecutor
 }
 
-func NewSyncFunctionsTask(store FunctionStore, kustoCli StatementExecutor) *SyncFunctionsTask {
+func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor) *SyncFunctionsTask {
 	return &SyncFunctionsTask{
-		cache:    make(map[string]*v1.Function),
 		store:    store,
 		kustoCli: kustoCli,
 	}
 }
 
 func (t *SyncFunctionsTask) Run(ctx context.Context) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 
-	functions := t.store.Functions()
+	functions, err := t.store.List(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list functions: %w", err)
+	}
 	for _, function := range functions {
 
 		if function.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
 
-		cacheKey := function.Namespace + function.Name
-		if fn, ok := t.cache[cacheKey]; ok {
-			if function.Generation != fn.Generation {
-				// invalidate our cache
-				delete(t.cache, cacheKey)
-			} else {
-				// function is up to date
-				continue
-			}
-		}
-
 		stmt := kql.New("").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-				if err = updateKQLFunctionStatus(ctx, t.store, function, v1.PermanentFailure, err); err != nil {
+				if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
 					logger.Errorf("Failed to update permanent failure status: %v", err)
-				} else {
-					// Cache this permanent failure. Only retry if the generation changes.
-					t.cache[cacheKey] = function
 				}
 				continue
 			} else {
-				updateKQLFunctionStatus(ctx, t.store, function, v1.Failed, err)
+				t.updateKQLFunctionStatus(ctx, function, v1.Failed, err)
 				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				continue
 			}
 		}
 
 		logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
-		if err := updateKQLFunctionStatus(ctx, t.store, function, v1.Success, nil); err != nil {
+		if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
 			logger.Errorf("Failed to update success status: %v", err)
-		} else {
-			t.cache[cacheKey] = function
 		}
 	}
 
 	return nil
 }
 
-func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
-	fn.Status.LastTimeReconciled = metav1.Time{Time: time.Now()}
+func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
 		errMsg := err.Error()
@@ -197,7 +170,7 @@ func updateKQLFunctionStatus(ctx context.Context, store FunctionStore, fn *v1.Fu
 		}
 		fn.Status.Error = errMsg
 	}
-	if err := store.UpdateStatus(ctx, fn); err != nil {
+	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("Failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
 	}
 	return nil
