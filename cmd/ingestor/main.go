@@ -22,9 +22,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
-	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
-	"github.com/Azure/adx-mon/pkg/crd"
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
@@ -272,18 +270,6 @@ func realMain(ctx *cli.Context) error {
 		dropMetrics = append(dropMetrics, metricRegex)
 	}
 
-	kqlFunctionsStore := storage.NewFunctions(ctrlCli)
-	kqlCRDOpts := crd.Options{
-		CtrlCli: ctrlCli,
-		List:    &v1.FunctionList{},
-		Store:   kqlFunctionsStore,
-	}
-	kqlFnOperator := crd.New(kqlCRDOpts)
-	if err := kqlFnOperator.Open(svcCtx); err != nil {
-		logger.Fatalf("Failed to start kql function operator: %s", err)
-	}
-	defer kqlFnOperator.Close()
-
 	var (
 		allowedDatabases                []string
 		metricsUploaders, logsUploaders []adx.Uploader
@@ -294,7 +280,7 @@ func realMain(ctx *cli.Context) error {
 	if len(metricsKusto) > 0 {
 		metricsUploaders, metricsDatabases, err = newUploaders(
 			metricsKusto, storageDir, concurrentUploads,
-			defaultMapping, adx.PromMetrics, kqlFunctionsStore)
+			defaultMapping, adx.PromMetrics)
 		if err != nil {
 			logger.Fatalf("Failed to create uploader: %s", err)
 		}
@@ -309,7 +295,7 @@ func realMain(ctx *cli.Context) error {
 	if len(logsKusto) > 0 {
 		logsUploaders, logsDatabases, err = newUploaders(
 			logsKusto, storageDir, concurrentUploads,
-			schema.DefaultLogsMapping, adx.OTLPLogs, kqlFunctionsStore)
+			schema.DefaultLogsMapping, adx.OTLPLogs)
 		if err != nil {
 			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
 		}
@@ -341,6 +327,7 @@ func realMain(ctx *cli.Context) error {
 
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:              k8scli,
+		K8sCtrlCli:          ctrlCli,
 		LogsKustoCli:        logsKustoCli,
 		MetricsKustoCli:     metricsKustoCli,
 		MetricsDatabases:    metricsDatabases,
@@ -363,7 +350,6 @@ func realMain(ctx *cli.Context) error {
 		LiftedColumns:       sortedLiftedLabels,
 		DropLabels:          dropLabels,
 		DropMetrics:         dropMetrics,
-		FunctionStore:       kqlFunctionsStore,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
@@ -520,7 +506,7 @@ func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
-	defaultMapping schema.SchemaMapping, sampleType adx.SampleType, fnStore *storage.Functions) ([]adx.Uploader, []string, error) {
+	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
 
 	var uploaders []adx.Uploader
 	var uploadDatabaseNames []string
@@ -540,7 +526,6 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 			ConcurrentUploads: concurrentUploads,
 			DefaultMapping:    defaultMapping,
 			SampleType:        sampleType,
-			FnStore:           fnStore,
 		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
