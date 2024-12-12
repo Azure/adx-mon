@@ -2,17 +2,24 @@ package testutils_test
 
 import (
 	"context"
+	"io"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
+	"github.com/Azure/adx-mon/pkg/testutils/alerter"
 	"github.com/Azure/adx-mon/pkg/testutils/collector"
 	"github.com/Azure/adx-mon/pkg/testutils/ingestor"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestIntegration(t *testing.T) {
@@ -25,7 +32,7 @@ func TestIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	t.Cleanup(cancel)
 
-	kustainerUrl := StartCluster(ctx, t)
+	kustainerUrl, k3sContainer := StartCluster(ctx, t)
 
 	wg.Add(1)
 	go func() {
@@ -39,10 +46,16 @@ func TestIntegration(t *testing.T) {
 		VerifyMetrics(ctx, t, kustainerUrl)
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		VerifyAlerts(ctx, t, kustainerUrl, k3sContainer)
+	}()
+
 	wg.Wait()
 }
 
-func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string) {
+func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
 	t.Helper()
 	wg := sync.WaitGroup{}
 
@@ -94,9 +107,87 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string) {
 		require.NoError(tt, err)
 	})
 
+	wg.Add(1)
+	go t.Run("Build and install Alerter", func(tt *testing.T) {
+		defer wg.Done()
+
+		crdPath := filepath.Join(t.TempDir(), "crd.yaml")
+		require.NoError(t, testutils.CopyFile("../../kustomize/bases/alertrules_crd.yaml", crdPath))
+		require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
+
+		alerterContainer, err := alerter.Run(ctx, alerter.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, alerterContainer)
+		require.NoError(tt, err)
+	})
+
 	kustoUrl = kustoContainer.ConnectionUrl()
 	wg.Wait()
 	return
+}
+
+func VerifyAlerts(ctx context.Context, t *testing.T, kustainerUrl string, k3sContainer *k3s.K3sContainer) {
+	t.Helper()
+
+	t.Run("Install rule", func(t *testing.T) {
+		rule := &adxmonv1.AlertRule{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "AlertRule",
+				APIVersion: "adx-mon.azure.com/v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "testalert",
+				Namespace: "adx-mon",
+			},
+			Spec: adxmonv1.AlertRuleSpec{
+				Database:          "Logs",
+				Interval:          metav1.Duration{Duration: time.Minute},
+				Query:             "Collector | take 1 | extend CorrelationId=\"some-id\", Title=\"Test alert\", Severity=\"Critical\" | project Title, Severity, CorrelationId",
+				AutoMitigateAfter: metav1.Duration{Duration: time.Hour},
+				Destination:       "sometestdestination",
+			},
+		}
+		_, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
+		require.NoError(t, err)
+		require.NoError(t, k8sClient.Create(ctx, rule))
+	})
+
+	t.Run("Verify alert rule triggers", func(t *testing.T) {
+		cb := kusto.NewConnectionStringBuilder(kustainerUrl)
+		client, err := kusto.New(cb)
+		require.NoError(t, err)
+		defer client.Close()
+
+		stmt := kql.New("AdxmonAlerterQueryHealth | where Labels['name'] == 'testalert' | where Value == 1 | count")
+		require.Eventually(t, func() bool {
+			rows, err := client.Query(ctx, "Metrics", stmt)
+			if err != nil {
+				return false
+			}
+
+			for {
+				row, errInline, errFinal := rows.NextRowOrError()
+				if errFinal == io.EOF {
+					break
+				}
+				if errInline != nil {
+					t.Logf("Partial failure to retrieve tables: %v", errInline)
+					continue
+				}
+				if errFinal != nil {
+					t.Logf("Failed to retrieve tables: %v", errFinal)
+				}
+
+				var res KustoCountResult
+				if err := row.ToStruct(&res); err != nil {
+					t.Logf("Failed to convert row to struct: %v", err)
+					continue
+				}
+				return res.Count > 0
+			}
+
+			return false
+		}, 10*time.Minute, time.Second)
+	})
 }
 
 func VerifyLogs(ctx context.Context, t *testing.T, kustainerUrl string) {
@@ -155,4 +246,8 @@ func VerifyMetrics(ctx context.Context, t *testing.T, kustainerUrl string) {
 			}, timeout, pollInterval)
 		})
 	})
+}
+
+type KustoCountResult struct {
+	Count int64 `kusto:"Count"`
 }

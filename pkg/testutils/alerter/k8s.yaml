@@ -1,0 +1,119 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adx-mon
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alerter
+  namespace: adx-mon
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alerter
+  namespace: adx-mon
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: alerter
+  type: ClusterIP
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:alerter
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - "adx-mon.azure.com"
+    resources:
+      - alertrules
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:alerter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:alerter
+subjects:
+  - kind: ServiceAccount
+    name: alerter
+    namespace: adx-mon
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alerter
+  namespace: adx-mon
+spec:
+  selector:
+    matchLabels:
+      app: "alerter"
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: "alerter"
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "8080"
+        adx-mon/path: "/metrics"
+        adx-mon/log-destination: "Logs:Alerter"
+        adx-mon/log-parsers: json
+    spec:
+      serviceAccountName: alerter
+      containers:
+        - name: alerter
+          image: "alerter:latest"
+          imagePullPolicy: Never
+          command:
+            - /alerter
+          args:
+            - "--port=8080"
+            - "--kusto-endpoint=Metrics=http://kustainer.default.svc.cluster.local:8080"
+            - "--kusto-endpoint=Logs=http://kustainer.default.svc.cluster.local:8080"
+          env:
+            # Disable HTTP/2 in Go's HTTP client. This primarily affects the kusto client.
+            # Prevents us from running into issues like https://github.com/golang/go/issues/59690
+            - name: "GODEBUG"
+              value: "http2client=0"
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /etc/pki/ca-trust/extracted
+              name: etc-pki-ca-certs
+              readOnly: true
+            - mountPath: /etc/ssl/certs
+              name: ca-certs
+              readOnly: true
+      volumes:
+        - name: ca-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+

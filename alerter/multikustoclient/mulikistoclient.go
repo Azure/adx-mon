@@ -3,6 +3,7 @@ package multikustoclient
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/metrics"
@@ -18,8 +19,10 @@ type multiKustoClient struct {
 func New(endpoints map[string]string, configureAuth authConfiguror, max int) (multiKustoClient, error) {
 	clients := make(map[string]*kusto.Client)
 	for name, endpoint := range endpoints {
-		kcsb := kusto.NewConnectionStringBuilder(endpoint).WithAzCli()
-		kcsb = configureAuth(kcsb)
+		kcsb := kusto.NewConnectionStringBuilder(endpoint)
+		if strings.HasPrefix(endpoint, "https://") {
+			kcsb = configureAuth(kcsb.WithAzCli())
+		}
 		client, err := kusto.New(kcsb)
 		if err != nil {
 			return multiKustoClient{}, fmt.Errorf("kusto client=%s: %w", endpoint, err)
