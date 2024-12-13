@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
@@ -125,6 +126,43 @@ func TableHasRows(ctx context.Context, t *testing.T, database, table, uri string
 	defer client.Close()
 
 	query := kql.New("").AddUnsafe(table).AddLiteral(" | count")
+	rows, err := client.Query(ctx, database, query)
+	require.NoError(t, err)
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			t.Logf("Partial failure to retrieve row count: %v", errInline)
+			continue
+		}
+		if errFinal != nil {
+			t.Errorf("Failed to retrieve row count: %v", errFinal)
+		}
+
+		var count RowCount
+		if err := row.ToStruct(&count); err != nil {
+			t.Errorf("Failed to convert row to struct: %v", err)
+			continue
+		}
+		return count.Count > 0
+	}
+
+	return false
+}
+
+func TableHasRowsSince(ctx context.Context, t *testing.T, database, table, uri string, since time.Time) bool {
+	t.Helper()
+
+	cb := kusto.NewConnectionStringBuilder(uri)
+	client, err := kusto.New(cb)
+	require.NoError(t, err)
+	defer client.Close()
+
+	query := kql.New("table('").AddUnsafe(table).AddLiteral("') | where Timestamp > datetime('").AddUnsafe(since.Format(time.RFC3339Nano)).AddLiteral("') | count")
 	rows, err := client.Query(ctx, database, query)
 	require.NoError(t, err)
 	defer rows.Stop()
