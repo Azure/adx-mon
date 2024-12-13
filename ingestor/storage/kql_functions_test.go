@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/storage"
@@ -149,6 +150,25 @@ func TestFunctions(t *testing.T) {
 		require.Len(t, fns, 1)
 
 		coord.isLeader = false
+		fns, err = functionStore.List(ctx)
+		require.NoError(t, err)
+		require.Empty(t, fns)
+	})
+
+	t.Run("Can delete function", func(t *testing.T) {
+		fn := &adxmonv1.Function{}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
+
+		require.True(t, controllerutil.ContainsFinalizer(fn, storage.FinalizerName))
+		require.NoError(t, ctrlCli.Delete(ctx, fn))
+
+		fns, err := functionStore.List(ctx)
+		require.NoError(t, err)
+		require.Len(t, fns, 1)
+
+		fns[0].Status.Status = adxmonv1.Success
+		require.NoError(t, functionStore.UpdateStatus(ctx, fns[0]))
+
 		fns, err = functionStore.List(ctx)
 		require.NoError(t, err)
 		require.Empty(t, fns)

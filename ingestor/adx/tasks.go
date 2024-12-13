@@ -126,6 +126,20 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			continue
 		}
 
+		if !function.DeletionTimestamp.IsZero() {
+			// Until we can parse KQL we don't actually know the function's
+			// name as described in this CRD; however, we'll make the assumption
+			// that the CRD name is the same as the function name in Kusto and
+			// attempt a delete.
+			stmt := kql.New(".drop function ").AddUnsafe(function.Name).AddLiteral(" ifexists")
+			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
+				// Deletion is best-effort, especially while we still can't parse KQL
+			}
+			t.updateKQLFunctionStatus(ctx, function, v1.Success, nil)
+			return nil
+		}
+
 		stmt := kql.New("").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
