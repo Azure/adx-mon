@@ -47,6 +47,11 @@ spec:
                 description: Database is the name of the database in which the function
                   will be created
                 type: string
+              suspend:
+                description: |-
+                  This flag tells the controller to suspend subsequent executions, it does
+                  not apply to already started executions.  Defaults to false.
+                type: boolean
             required:
             - body
             - database
@@ -67,11 +72,21 @@ spec:
                 description: Message is a human-readable message indicating details
                   about the Function
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  for this Function
+                format: int64
+                type: integer
+              reason:
+                description: Reason is a string that communicates the reason for a
+                  transition
+                type: string
               status:
                 description: Status is an enum that represents the status of the Function
                 type: string
             required:
             - lastTimeReconciled
+            - observedGeneration
             - status
             type: object
         type: object
