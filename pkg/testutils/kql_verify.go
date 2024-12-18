@@ -191,8 +191,95 @@ func TableHasRowsSince(ctx context.Context, t *testing.T, database, table, uri s
 	return false
 }
 
+func TableHasErrorsSince(ctx context.Context, t *testing.T, database, table, uri string, since time.Time) bool {
+	t.Helper()
+
+	cb := kusto.NewConnectionStringBuilder(uri)
+	client, err := kusto.New(cb)
+	require.NoError(t, err)
+	defer client.Close()
+
+	query := kql.New("").AddUnsafe(table).AddLiteral(" | where ts > datetime('").AddUnsafe(since.Format(time.RFC3339Nano)).AddLiteral("') | where lvl != 'INF' | count")
+	rows, err := client.Query(ctx, database, query)
+	require.NoError(t, err)
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			t.Logf("Partial failure to retrieve row count: %v", errInline)
+			continue
+		}
+		if errFinal != nil {
+			t.Errorf("Failed to retrieve row count: %v", errFinal)
+		}
+
+		var count RowCount
+		if err := row.ToStruct(&count); err != nil {
+			t.Errorf("Failed to convert row to struct: %v", err)
+			continue
+		}
+		return count.Count > 0
+	}
+
+	return false
+}
+
 type RowCount struct {
 	Count int64 `kusto:"Count"`
+}
+
+type MetricsHealth struct {
+	IsHealthy bool `kusto:"IsHealthy"`
+}
+
+func ComponentMetricsHealth(ctx context.Context, t *testing.T, uri string, since time.Time) bool {
+	t.Helper()
+
+	cb := kusto.NewConnectionStringBuilder(uri)
+	client, err := kusto.New(cb)
+	require.NoError(t, err)
+	defer client.Close()
+
+	for _, table := range []string{"AdxmonCollectorHealthCheck", "AdxmonIngestorHealthCheck"} {
+		query := kql.New("").
+			AddUnsafe(table).
+			AddLiteral(" | where Timestamp > datetime('").AddUnsafe(since.Format(time.RFC3339Nano)).
+			AddLiteral("') | summarize Healthy=sum(Value), Checks=count() | project IsHealthy = Healthy == Checks")
+		rows, err := client.Query(ctx, "Metrics", query)
+		require.NoError(t, err)
+		defer rows.Stop()
+
+		for {
+			row, errInline, errFinal := rows.NextRowOrError()
+			if errFinal == io.EOF {
+				break
+			}
+			if errInline != nil {
+				t.Logf("Partial failure to retrieve row count: %v", errInline)
+				continue
+			}
+			if errFinal != nil {
+				t.Errorf("Failed to retrieve row count: %v", errFinal)
+			}
+
+			var health MetricsHealth
+			if err := row.ToStruct(&health); err != nil {
+				t.Errorf("Failed to convert row to struct: %v", err)
+				continue
+			}
+
+			if !health.IsHealthy {
+				t.Logf("Component %s is not healthy", table)
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func VerifyTableSchema(ctx context.Context, t *testing.T, database, table, uri string, expect TableSchema) {

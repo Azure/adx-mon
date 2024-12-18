@@ -20,6 +20,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 func TestIntegration(t *testing.T) {
@@ -71,6 +72,9 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	require.NoError(t, err)
 	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
 
+	k8sClient, err := kubernetes.NewForConfig(restConfig)
+	require.NoError(t, err)
+
 	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
 	require.NoError(t, err)
 	t.Logf("Kubeconfig: %s", kubeconfig)
@@ -96,6 +100,12 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, ingestorContainer)
 		require.NoError(tt, err)
+
+		ss := ingestor.StatefulSet()
+		require.Eventually(tt, func() bool {
+			_, err := k8sClient.AppsV1().StatefulSets("adx-mon").Create(ctx, ss, metav1.CreateOptions{})
+			return err == nil
+		}, 10*time.Minute, time.Second)
 	})
 
 	wg.Add(1)
@@ -105,6 +115,12 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, collectorContainer)
 		require.NoError(tt, err)
+
+		ds := collector.DaemonSet()
+		require.Eventually(tt, func() bool {
+			_, err := k8sClient.AppsV1().DaemonSets("adx-mon").Create(ctx, ds, metav1.CreateOptions{})
+			return err == nil
+		}, 10*time.Minute, time.Second)
 	})
 
 	wg.Add(1)
