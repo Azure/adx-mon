@@ -19,7 +19,7 @@ import (
 )
 
 func TestRollback(t *testing.T) {
-	// testutils.RollbackTest(t)
+	testutils.RollbackTest(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	t.Cleanup(cancel)

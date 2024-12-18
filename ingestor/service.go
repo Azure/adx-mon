@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	"github.com/Azure/adx-mon/ingestor/otlp"
+	ingestorstorage "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -24,6 +25,7 @@ import (
 	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // invalidEntityCharacters is a regex that matches invalid characters for Kusto entities and segment files.
@@ -74,7 +76,8 @@ type ServiceOpts struct {
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
 
-	K8sCli kubernetes.Interface
+	K8sCli     kubernetes.Interface
+	K8sCtrlCli client.Client
 
 	// MetricsKustoCli is the Kusto client connected to the metrics kusto cluster.
 	MetricsKustoCli []metrics.StatementExecutor
@@ -124,9 +127,6 @@ type ServiceOpts struct {
 	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
 	// keys are distributed.
 	PartitionSize int
-
-	// FunctionStore is the store of functions to sync with the Kusto cluster.
-	FunctionStore adx.FunctionStore
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -269,20 +269,21 @@ func (s *Service) Open(ctx context.Context) error {
 		return nil
 	})
 
+	fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
 	for _, v := range s.opts.MetricsKustoCli {
 		t := adx.NewDropUnusedTablesTask(v)
 		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
 			return t.Run(ctx)
 		})
 
-		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
+		f := adx.NewSyncFunctionsTask(fnStore, v)
 		s.scheduler.ScheduleEvery(5*time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
 	}
 
 	for _, v := range s.opts.LogsKustoCli {
-		f := adx.NewSyncFunctionsTask(s.opts.FunctionStore, v)
+		f := adx.NewSyncFunctionsTask(fnStore, v)
 		s.scheduler.ScheduleEvery(5*time.Minute, "sync-logs-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
