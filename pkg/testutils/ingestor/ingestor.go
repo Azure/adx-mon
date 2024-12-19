@@ -8,10 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kwait "k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/kubernetes"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -78,23 +87,101 @@ func WithStarted() testcontainers.CustomizeRequestOption {
 
 func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.CustomizeRequestOption {
 	return func(req *testcontainers.GenericContainerRequest) error {
+		isolateKinds := []string{"StatefulSet"}
+		writeTo, err := os.MkdirTemp("", "ingestor")
+		if err != nil {
+			return fmt.Errorf("failed to create temp dir: %w", err)
+		}
+
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
 
+					// We build to "ingestor:latest", load that image into the k3s cluster
 					if err := k.LoadImages(ctx, DefaultImage+":"+DefaultTag); err != nil {
 						return fmt.Errorf("failed to load image: %w", err)
 					}
-
-					rootDir, err := testutils.GetGitRootDir()
 					if err != nil {
-						return fmt.Errorf("failed to get git root dir: %w", err)
+						return fmt.Errorf("failed to create temp dir: %w", err)
 					}
 
-					lfp := filepath.Join(rootDir, "pkg/testutils/ingestor/k8s.yaml")
-					rfp := filepath.Join(testutils.K3sManifests, "ingestor.yaml")
-					if err := k.CopyFileToContainer(ctx, lfp, rfp, 0644); err != nil {
+					// Our quick-start builds the necessary manifests to install ingestor. We need
+					// to extract the actual StatefulSet that runs the ingestor instances so that we
+					// can customize the launch arguments. In addition, these manifests are installed
+					// as static pod manifests, which means they're immutable, so we install the statefulset
+					// separately so that we can mutate the state at runtime.
+					if err := testutils.ExtractManifests(writeTo, "build/k8s/ingestor.yaml", isolateKinds); err != nil {
+						return fmt.Errorf("failed to extract manifests: %w", err)
+					}
+
+					manifestsPath := filepath.Join(writeTo, "manifests.yaml")
+					containerPath := filepath.Join(testutils.K3sManifests, "ingestor-manifests.yaml")
+					if err := k.CopyFileToContainer(ctx, manifestsPath, containerPath, 0644); err != nil {
 						return fmt.Errorf("failed to copy file to container: %w", err)
+					}
+
+					return nil
+				},
+			},
+			PostCreates: []testcontainers.ContainerHook{
+				func(ctx context.Context, c testcontainers.Container) error {
+					// Deserialize our statefulset manifest and customize it to our needs
+					ssPath := filepath.Join(writeTo, isolateKinds[0]+".yaml")
+					ssData, err := os.ReadFile(ssPath)
+					if err != nil {
+						return fmt.Errorf("failed to read file: %w", err)
+					}
+
+					var statefulSet appsv1.StatefulSet
+					if err := yaml.Unmarshal(ssData, &statefulSet); err != nil {
+						return fmt.Errorf("failed to unmarshal statefulset: %w", err)
+					}
+
+					statefulSet.Spec.Template.Spec.Containers[0].Image = DefaultImage + ":" + DefaultTag
+					statefulSet.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullNever
+					statefulSet.Spec.Template.Spec.Containers[0].Args = []string{
+						"--storage-dir=/mnt/data",
+						"--max-segment-age=5s",
+						"--max-disk-usage=21474836480",
+						"--max-transfer-size=10485760",
+						"--max-connections=1000",
+						"--insecure-skip-verify",
+						"--metrics-kusto-endpoints=Metrics=http://kustainer.default.svc.cluster.local:8080",
+						"--logs-kusto-endpoints=Logs=http://kustainer.default.svc.cluster.local:8080",
+					}
+					statefulSet.Spec.Template.Spec.Affinity = nil
+					statefulSet.Spec.Template.Spec.Tolerations = nil
+
+					restConfig, _, err := testutils.GetKubeConfig(ctx, k)
+					if err != nil {
+						return fmt.Errorf("failed to get kube config: %w", err)
+					}
+
+					clientset, err := kubernetes.NewForConfig(restConfig)
+					if err != nil {
+						return fmt.Errorf("failed to create clientset: %w", err)
+					}
+
+					ctrlCli, err := ctrlclient.New(restConfig, ctrlclient.Options{})
+					if err != nil {
+						return fmt.Errorf("failed to create controller client: %w", err)
+					}
+
+					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+						ns, err := clientset.CoreV1().Namespaces().Get(ctx, statefulSet.GetNamespace(), metav1.GetOptions{})
+						return ns != nil && err == nil, nil
+					})
+					if err != nil {
+						return fmt.Errorf("failed to wait for namespace: %w", err)
+					}
+
+					_, err = clientset.AppsV1().StatefulSets(statefulSet.Namespace).Create(ctx, &statefulSet, metav1.CreateOptions{})
+					if err != nil {
+						return fmt.Errorf("failed to create statefulset: %w", err)
+					}
+
+					if err := ctrlCli.Create(ctx, ingestorFunction); err != nil {
+						return fmt.Errorf("failed to create ingestor function: %w", err)
 					}
 
 					return nil
@@ -122,4 +209,29 @@ func (k *KustoTableSchema) CslColumns() []string {
 		"pod:string",
 		"host:string",
 	}
+}
+
+var ingestorFunction = &adxmonv1.Function{
+	TypeMeta: metav1.TypeMeta{
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Function",
+	},
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "ingestor",
+		Namespace: "adx-mon",
+	},
+	Spec: adxmonv1.FunctionSpec{
+		Database: "Logs",
+		Body: `.create-or-alter function with (view=true, folder='views') Ingestor () {
+  table('Ingestor')
+  | extend msg = tostring(Body.msg),
+		   lvl = tostring(Body.lvl),
+		   ts = todatetime(Body.ts),
+		   namespace = tostring(Resource.namespace),
+		   container = tostring(Resource.container),
+		   pod = tostring(Resource.pod),
+		   host = tostring(Resource.host)
+  | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+}`,
+	},
 }
