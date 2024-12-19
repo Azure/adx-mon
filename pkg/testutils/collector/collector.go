@@ -7,11 +7,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
+	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kwait "k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/kubernetes"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -77,7 +87,14 @@ func WithStarted() testcontainers.CustomizeRequestOption {
 }
 
 func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.CustomizeRequestOption {
+
 	return func(req *testcontainers.GenericContainerRequest) error {
+		isolateKinds := []string{"DaemonSet", "ConfigMap", "Deployment"}
+		writeTo, err := os.MkdirTemp("", "collector")
+		if err != nil {
+			return fmt.Errorf("failed to create temp dir: %w", err)
+		}
+
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
@@ -86,15 +103,79 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to load image: %w", err)
 					}
 
-					rootDir, err := testutils.GetGitRootDir()
-					if err != nil {
-						return fmt.Errorf("failed to get git root dir: %w", err)
+					if err := testutils.ExtractManifests(writeTo, "build/k8s/collector.yaml", isolateKinds); err != nil {
+						return fmt.Errorf("failed to extract manifests: %w", err)
 					}
 
-					lfp := filepath.Join(rootDir, "pkg/testutils/collector/k8s.yaml")
-					rfp := filepath.Join(testutils.K3sManifests, "collector.yaml")
-					if err := k.CopyFileToContainer(ctx, lfp, rfp, 0644); err != nil {
+					manifestsPath := filepath.Join(writeTo, "manifests.yaml")
+					containerPath := filepath.Join(testutils.K3sManifests, "collector-manifests.yaml")
+					if err := k.CopyFileToContainer(ctx, manifestsPath, containerPath, 0644); err != nil {
 						return fmt.Errorf("failed to copy file to container: %w", err)
+					}
+
+					return nil
+				},
+			},
+			PostCreates: []testcontainers.ContainerHook{
+				func(ctx context.Context, c testcontainers.Container) error {
+					// Deserialize our statefulset manifest and customize it to our needs
+					dsPath := filepath.Join(writeTo, "DaemonSet.yaml")
+					dsData, err := os.ReadFile(dsPath)
+					if err != nil {
+						return fmt.Errorf("failed to read file: %w", err)
+					}
+
+					var daemonset appsv1.DaemonSet
+					if err := yaml.Unmarshal(dsData, &daemonset); err != nil {
+						return fmt.Errorf("failed to unmarshal daemonset: %w", err)
+					}
+					daemonset.Spec.Template.Spec.Tolerations = nil
+					daemonset.Spec.Template.Spec.Containers[0].Image = DefaultImage + ":" + DefaultTag
+					daemonset.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullNever
+
+					daemonset.Spec.Template.Spec.Volumes = slices.DeleteFunc(daemonset.Spec.Template.Spec.Volumes, func(v corev1.Volume) bool {
+						return v.Name == "etcmachineid"
+					})
+					daemonset.Spec.Template.Spec.Containers[0].VolumeMounts = slices.DeleteFunc(daemonset.Spec.Template.Spec.Containers[0].VolumeMounts, func(v corev1.VolumeMount) bool {
+						return v.Name == "etcmachineid"
+					})
+
+					// Wait for our manifests to be applied
+					restConfig, _, err := testutils.GetKubeConfig(ctx, k)
+					if err != nil {
+						return fmt.Errorf("failed to get kube config: %w", err)
+					}
+
+					clientset, err := kubernetes.NewForConfig(restConfig)
+					if err != nil {
+						return fmt.Errorf("failed to create clientset: %w", err)
+					}
+
+					ctrlCli, err := ctrlclient.New(restConfig, ctrlclient.Options{})
+					if err != nil {
+						return fmt.Errorf("failed to create controller client: %w", err)
+					}
+
+					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+						ns, err := clientset.CoreV1().Namespaces().Get(ctx, daemonset.GetNamespace(), metav1.GetOptions{})
+						return ns != nil && err == nil, nil
+					})
+					if err != nil {
+						return fmt.Errorf("failed to wait for namespace: %w", err)
+					}
+
+					_, err = clientset.CoreV1().ConfigMaps(collectorConfigMap.Namespace).Create(ctx, collectorConfigMap, metav1.CreateOptions{})
+					if err != nil {
+						return fmt.Errorf("failed to create configmap: %w", err)
+					}
+
+					_, err = clientset.AppsV1().DaemonSets(daemonset.Namespace).Create(ctx, &daemonset, metav1.CreateOptions{})
+					if err != nil {
+						return fmt.Errorf("failed to create daemonset: %w", err)
+					}
+
+					if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
+						return fmt.Errorf("failed to create collector function: %w", err)
 					}
 
 					return nil
@@ -122,4 +203,145 @@ func (k *KustoTableSchema) CslColumns() []string {
 		"pod:string",
 		"host:string",
 	}
+}
+
+var collectorFunction = &adxmonv1.Function{
+	TypeMeta: metav1.TypeMeta{
+		APIVersion: "adx-mon.azure.com/v1",
+		Kind:       "Function",
+	},
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "collector",
+		Namespace: "adx-mon",
+	},
+	Spec: adxmonv1.FunctionSpec{
+		Database: "Logs",
+		Body: `.create-or-alter function with (view=true, folder='views') Collector () {
+  table('Collector')
+  | extend msg = tostring(Body.msg),
+		   lvl = tostring(Body.lvl),
+		   ts = todatetime(Body.ts),
+		   namespace = tostring(Resource.namespace),
+		   container = tostring(Resource.container),
+		   pod = tostring(Resource.pod),
+		   host = tostring(Resource.host)
+  | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
+}`,
+	},
+}
+
+// collectorConfigMap is a minimal config suitable for use by kustainer
+var collectorConfigMap = &corev1.ConfigMap{
+	TypeMeta: metav1.TypeMeta{
+		APIVersion: "v1",
+		Kind:       "ConfigMap",
+	},
+	ObjectMeta: metav1.ObjectMeta{
+		Name:      "collector-config",
+		Namespace: "adx-mon",
+	},
+	Data: map[string]string{
+		"config.toml": `
+# We have to keep our scape targets very light due to the capacity
+# constraints of kustainer
+
+# Ingestor URL to send collected telemetry.
+endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+
+# Region is a location identifier
+region = '$REGION'
+
+# Skip TLS verification.
+insecure-skip-verify = true
+
+# Address to listen on for endpoints.
+listen-addr = ':8080'
+
+# Maximum number of connections to accept.
+max-connections = 100
+
+# Maximum number of samples to send in a single batch.
+max-batch-size = 10000
+
+# Storage directory for the WAL.
+storage-dir = '/mnt/data'
+
+# Regexes of metrics to drop from all sources.
+drop-metrics = []
+
+keep-metrics = ['^adxmon.*']
+
+# Disable metrics forwarding to endpoints.
+disable-metrics-forwarding = false
+
+# Key/value pairs of labels to add to all metrics and logs.
+[add-labels]
+  host = '$(HOSTNAME)'
+  cluster = '$CLUSTER'
+
+# Defines a prometheus scrape endpoint.
+[prometheus-scrape]
+
+  # Database to store metrics in.
+  database = 'Metrics'
+
+  default-drop-metrics = false
+
+  # Defines a static scrape target.
+  static-scrape-target = [
+    # Scrape our own metrics
+    { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = 'adx-mon', pod = 'collector', container = 'collector' },
+  ]
+
+  # Scrape interval in seconds.
+  scrape-interval = 30
+
+  # Scrape timeout in seconds.
+  scrape-timeout = 25
+
+  # Disable metrics forwarding to endpoints.
+  disable-metrics-forwarding = false
+
+  # Regexes of metrics to keep from scraping source.
+  keep-metrics = ['^adxmon.*', '^sample.*']
+
+  # Regexes of metrics to drop from scraping source.
+  drop-metrics = ['^go.*', '^process.*', '^promhttp.*']
+
+# Defines a prometheus remote write endpoint.
+[[prometheus-remote-write]]
+
+  # Database to store metrics in.
+  database = 'Metrics'
+
+  # The path to listen on for prometheus remote write requests.  Defaults to /receive.
+  path = '/receive'
+
+  # Regexes of metrics to drop.
+  drop-metrics = []
+
+  # Disable metrics forwarding to endpoints.
+  disable-metrics-forwarding = false
+
+  # Key/value pairs of labels to add to this source.
+  [prometheus-remote-write.add-labels]
+
+# Defines an OpenTelemetry log endpoint.
+[otel-log]
+  # Attributes lifted from the Body and added to Attributes.
+  lift-attributes = ['kusto.database', 'kusto.table']
+
+[[host-log]]
+  parsers = ['json']
+
+  journal-target = [
+    # matches are optional and are parsed like MATCHES in journalctl.
+    # If different fields are matched, only entries matching all terms are included.
+    # If the same fields are matched, entries matching any term are included.
+    # + can be added between to include a disjunction of terms.
+    # See examples under man 1 journalctl
+    { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
+  ]
+`,
+	},
 }
