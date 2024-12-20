@@ -32,8 +32,8 @@ spec:
 var multiRule = `apiVersion: adx-mon.azure.com/v1
 kind: AlertRule
 metadata:
-  name: alertRuleOne
-  namespace: namespaceOne
+  name: alert-rule-one
+  namespace: namespace-one
 spec:
   database: SomeDB
   interval: 1h
@@ -54,8 +54,8 @@ spec:
 apiVersion: adx-mon.azure.com/v1
 kind: AlertRule
 metadata:
-  name: alertRuleTwo
-  namespace: namespaceTwo
+  name: alert-rule-two
+  namespace: namespace-two
 spec:
   database: SomeDB
   interval: 1h
@@ -94,6 +94,94 @@ autoMitigateAfter: 2h
   destination: "peoplewhocare"
 `
 
+var invalidNameExample = `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: bar-Invalid
+  namespace: foo
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+`
+
+var invalidNamespaceExample = `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: bar
+  namespace: foo-Invalid
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+`
+
+var invalidLabelExample = `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: bar
+  namespace: foo
+  labels:
+    -invalid-label: foo
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+`
+
+var invalidAnnotationExample = `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: bar
+  namespace: foo
+  annotations:
+    -invalid-annotation: foo
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+`
+
 func TestFromPath(t *testing.T) {
 	validFileDirectory := t.TempDir()
 	testfile := filepath.Join(validFileDirectory, "test.yaml")
@@ -107,6 +195,26 @@ func TestFromPath(t *testing.T) {
 	invalidFileDirectory := t.TempDir()
 	invalidTestfile := filepath.Join(invalidFileDirectory, "invalid.yaml")
 	err = os.WriteFile(invalidTestfile, []byte(invalidRuleExample), 0644)
+	require.NoError(t, err)
+
+	invalidNameFileDirectory := t.TempDir()
+	invalidNameTestfile := filepath.Join(invalidNameFileDirectory, "invalidName.yaml")
+	err = os.WriteFile(invalidNameTestfile, []byte(invalidNameExample), 0644)
+	require.NoError(t, err)
+
+	invalidNamespaceFileDirectory := t.TempDir()
+	invalidNamespaceTestfile := filepath.Join(invalidNamespaceFileDirectory, "invalidNamespace.yaml")
+	err = os.WriteFile(invalidNamespaceTestfile, []byte(invalidNamespaceExample), 0644)
+	require.NoError(t, err)
+
+	invalidLabelFileDirectory := t.TempDir()
+	invalidLabelTestfile := filepath.Join(invalidLabelFileDirectory, "invalidLabel.yaml")
+	err = os.WriteFile(invalidLabelTestfile, []byte(invalidLabelExample), 0644)
+	require.NoError(t, err)
+
+	invalidAnnotationFileDirectory := t.TempDir()
+	invalidAnnotationTestfile := filepath.Join(invalidAnnotationFileDirectory, "invalidAnnotation.yaml")
+	err = os.WriteFile(invalidAnnotationTestfile, []byte(invalidAnnotationExample), 0644)
 	require.NoError(t, err)
 
 	type testcase struct {
@@ -131,6 +239,26 @@ func TestFromPath(t *testing.T) {
 			path:      "/tmp/doesnotexist",
 			expectErr: true,
 		},
+		{
+			name:      "invalid name in yaml should return error",
+			path:      invalidNameFileDirectory,
+			expectErr: true,
+		},
+		{
+			name:      "invalid namespace in yaml should return error",
+			path:      invalidNamespaceFileDirectory,
+			expectErr: true,
+		},
+		{
+			name:      "invalid label in yaml should return error",
+			path:      invalidLabelFileDirectory,
+			expectErr: true,
+		},
+		{
+			name:      "invalid annotation in yaml should return error",
+			path:      invalidAnnotationFileDirectory,
+			expectErr: true,
+		},
 	}
 
 	for _, tc := range testcases {
@@ -143,10 +271,10 @@ func TestFromPath(t *testing.T) {
 				require.Equal(t, 3, len(store.rules))
 				require.Equal(t, "foo", store.rules[0].Namespace)
 				require.Equal(t, "bar", store.rules[0].Name)
-				require.Equal(t, "namespaceOne", store.rules[1].Namespace)
-				require.Equal(t, "alertRuleOne", store.rules[1].Name)
-				require.Equal(t, "namespaceTwo", store.rules[2].Namespace)
-				require.Equal(t, "alertRuleTwo", store.rules[2].Name)
+				require.Equal(t, "namespace-one", store.rules[1].Namespace)
+				require.Equal(t, "alert-rule-one", store.rules[1].Name)
+				require.Equal(t, "namespace-two", store.rules[2].Namespace)
+				require.Equal(t, "alert-rule-two", store.rules[2].Name)
 			}
 		})
 	}
