@@ -72,6 +72,49 @@ spec:
   destination: "peoplewhocare"
 `
 
+var dupeRule = `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: alert-rule-one
+  namespace: namespace-one
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+
+---
+
+apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: alert-rule-one
+  namespace: namespace-one
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+`
+
 // has incorrect indentation, which leads to unknown field errors
 var invalidRuleExample = `apiVersion: adx-mon.azure.com/v1
 kind: AlertRule
@@ -192,6 +235,11 @@ func TestFromPath(t *testing.T) {
 	err = os.WriteFile(multiTestfile, []byte(multiRule), 0644)
 	require.NoError(t, err)
 
+	dupeRuleDirectory := t.TempDir()
+	dupeTestfile := filepath.Join(dupeRuleDirectory, "dupetest.yaml")
+	err = os.WriteFile(dupeTestfile, []byte(dupeRule), 0644)
+	require.NoError(t, err)
+
 	invalidFileDirectory := t.TempDir()
 	invalidTestfile := filepath.Join(invalidFileDirectory, "invalid.yaml")
 	err = os.WriteFile(invalidTestfile, []byte(invalidRuleExample), 0644)
@@ -257,6 +305,11 @@ func TestFromPath(t *testing.T) {
 		{
 			name:      "invalid annotation in yaml should return error",
 			path:      invalidAnnotationFileDirectory,
+			expectErr: true,
+		},
+		{
+			name:      "dupe namespace/name in dir should return error",
+			path:      dupeRuleDirectory,
 			expectErr: true,
 		},
 	}

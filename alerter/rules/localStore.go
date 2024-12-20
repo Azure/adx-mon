@@ -43,6 +43,15 @@ func FromPath(path, region string) (*fileStore, error) {
 		}
 		return nil
 	})
+
+	knownRules := map[string]bool{}
+	for _, rule := range s.Rules() {
+		key := rule.Namespace + "/" + rule.Name
+		if knownRules[key] {
+			return nil, fmt.Errorf("duplicate rule %s", key)
+		}
+		knownRules[key] = true
+	}
 	return s, err
 
 }
