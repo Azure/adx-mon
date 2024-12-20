@@ -153,6 +153,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	if err != nil {
 		return err
 	}
+
 	logger.Infof("Linting rules from path=%s", path)
 
 	lint := NewLinter()
