@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Azure/adx-mon/alerter/junit"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,36 +24,70 @@ type fileStore struct {
 
 func FromPath(path, region string) (*fileStore, error) {
 	s := &fileStore{}
+	var loaderrors []error
+	suite := junit.Testsuite{}
+	defer func() {
+		jxml, err := os.OpenFile("junit-adxmon-lint.xml", os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			logger.Errorf("failed to open junit xml file: %s", err)
+			return
+		}
+		suite.WriteXML(jxml)
+	}()
 	// walk files in directory
 	err := filepath.WalkDir(path, func(path string, info os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return err //when does this happen on reading a dir? just get out
 		}
 		if info.IsDir() {
 			return nil
 		}
+		tc := junit.Testcase{
+			Name: path,
+		}
+		suite.AddTestcase(tc)
+
 		f, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("failed to open file '%s': %w", path, err)
+			loaderrors = append(loaderrors, fmt.Errorf("failed to open file '%s': %w", path, err))
+			tc.Failure = &junit.Result{
+				Message: fmt.Sprintf("failed to open file '%s': %s", path, err),
+				Type:    "lint",
+			}
+			return nil
 		}
 		defer f.Close()
 		logger.Infof("reading file %q", path)
 		err = s.fromStream(f, region)
 		if err != nil {
-			return fmt.Errorf("failed to read file '%s': %w", path, err)
+			loaderrors = append(loaderrors, fmt.Errorf("failed to parse file '%s': %w", path, err))
+			tc.Failure = &junit.Result{
+				Message: fmt.Sprintf("failed to parse file '%s': %s", path, err),
+				Type:    "lint",
+			}
+			return nil
 		}
 		return nil
 	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk directory: %w", err)
+	}
 
 	knownRules := map[string]bool{}
 	for _, rule := range s.Rules() {
 		key := rule.Namespace + "/" + rule.Name
 		if knownRules[key] {
-			return nil, fmt.Errorf("duplicate rule %s", key)
+			loaderrors = append(loaderrors, fmt.Errorf("duplicate rule %s", key))
+			suite.AddTestcase(junit.Testcase{Name: "duplicate check", Failure: &junit.Result{Message: err.Error(), Type: "lint"}})
+			continue
 		}
 		knownRules[key] = true
 	}
-	return s, err
+	if len(loaderrors) > 0 {
+		return nil, fmt.Errorf("failed to load rules: %w", fmt.Errorf("%v", loaderrors))
+	}
+	return s, nil
 
 }
 
