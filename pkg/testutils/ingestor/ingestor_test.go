@@ -17,7 +17,7 @@ import (
 func TestIngestor(t *testing.T) {
 	testutils.IntegrationTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	t.Run("outside cluster", func(t *testing.T) {

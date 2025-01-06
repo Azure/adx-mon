@@ -57,7 +57,6 @@ func TestIntegration(t *testing.T) {
 
 func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
 	t.Helper()
-	wg := sync.WaitGroup{}
 
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
@@ -76,10 +75,7 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	t.Logf("Kubeconfig: %s", kubeconfig)
 	t.Logf("Kustainer: %s", kustoContainer.ConnectionUrl())
 
-	wg.Add(1)
-	go t.Run("Configure Kusto", func(t *testing.T) {
-		defer wg.Done()
-
+	t.Run("Configure Kusto", func(t *testing.T) {
 		opts := kustainer.IngestionBatchingPolicy{
 			MaximumBatchingTimeSpan: 30 * time.Second,
 		}
@@ -89,28 +85,19 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		}
 	})
 
-	wg.Add(1)
-	go t.Run("Build and install Ingestor", func(tt *testing.T) {
-		defer wg.Done()
-
+	t.Run("Build and install Ingestor and Collector", func(tt *testing.T) {
 		ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, ingestorContainer)
 		require.NoError(tt, err)
 	})
 
-	wg.Add(1)
-	go t.Run("Build and install Collector", func(tt *testing.T) {
-		defer wg.Done()
-
+	t.Run("Build and install Collector", func(tt *testing.T) {
 		collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, collectorContainer)
 		require.NoError(tt, err)
 	})
 
-	wg.Add(1)
-	go t.Run("Build and install Alerter", func(tt *testing.T) {
-		defer wg.Done()
-
+	t.Run("Build and install Alerter", func(tt *testing.T) {
 		crdPath := filepath.Join(t.TempDir(), "crd.yaml")
 		require.NoError(t, testutils.CopyFile("../../kustomize/bases/alertrules_crd.yaml", crdPath))
 		require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
@@ -121,7 +108,6 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	})
 
 	kustoUrl = kustoContainer.ConnectionUrl()
-	wg.Wait()
 	return
 }
 
