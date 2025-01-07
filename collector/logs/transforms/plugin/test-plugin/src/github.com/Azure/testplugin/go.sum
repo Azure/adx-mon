@@ -1,5 +1,7 @@
 github.com/Azure/adx-mon v0.0.0-20240522171325-300776b36aa1 h1:UfgHWBrgcDZqKO0Vl42h0ADaQ/QYMzu/b0JJ/7w2WZQ=
 github.com/Azure/adx-mon v0.0.0-20240522171325-300776b36aa1/go.mod h1:sUQgYrvfWcwm9CCkQtxe4G0ugVb4lNzjkZXCQsCi4SQ=
+github.com/Azure/adx-mon v0.0.0-20250107001405-a2931963b84e h1:ePF8a2bcgdefJQcaXcaxqMddYoLQF3JEfbyd8QlTdTQ=
+github.com/Azure/adx-mon v0.0.0-20250107001405-a2931963b84e/go.mod h1:At6f9TUuzK5MP1q0Kekk4tABdbb2RLIShIk3W3czTtY=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/libp2p/go-buffer-pool v0.1.0 h1:oK4mSFcQz7cTQIfqbe4MIj9gLW+mnanjyFtc6cdF0Y8=
