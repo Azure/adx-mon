@@ -25,6 +25,7 @@ var (
 // Client is a client for the prometheus remote write API.  It is safe to be shared between goroutines.
 type Client struct {
 	httpClient *http.Client
+	endpoint   string
 	opts       ClientOpts
 }
 
@@ -64,6 +65,9 @@ type ClientOpts struct {
 
 	// DisableKeepAlives controls whether the client disables HTTP keep-alives.
 	DisableKeepAlives bool
+
+	// Endpoint for writing to the prometheus remote write API.
+	Endpoint string
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -112,6 +116,7 @@ func NewClient(opts ClientOpts) (*Client, error) {
 
 	return &Client{
 		httpClient: httpClient,
+		endpoint:   opts.Endpoint,
 		opts:       opts,
 	}, nil
 }
@@ -131,7 +136,7 @@ func (c *Client) Write(ctx context.Context, endpoint string, wr *prompb.WriteReq
 	encoded := snappy.Encode(b1[:0], b)
 	body := bytes.NewReader(encoded)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/receive", endpoint), body)
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/receive", c.endpoint), body)
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}

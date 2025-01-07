@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 )
@@ -29,15 +30,13 @@ func TestScraper_sendBatch(t *testing.T) {
 			name:         "TestEmptyWriteRequest",
 			writeRequest: &prompb.WriteRequest{},
 			opts: &ScraperOpts{
-				Endpoints:    []string{"http://fake:1234"},
-				RemoteClient: &fakeClient{expectedSamples: 0},
+				RemoteClients: []remote.RemoteWriteClient{&fakeClient{expectedSamples: 0}},
 			},
 		},
 		{
 			name: "TestValidWriteRequest",
 			opts: &ScraperOpts{
-				Endpoints:    []string{"http://fake:1234"},
-				RemoteClient: &fakeClient{expectedSamples: 1},
+				RemoteClients: []remote.RemoteWriteClient{&fakeClient{expectedSamples: 1}},
 			},
 			writeRequest: &prompb.WriteRequest{
 				Timeseries: []*prompb.TimeSeries{
@@ -56,8 +55,7 @@ func TestScraper_sendBatch(t *testing.T) {
 			name: "TestDefaultDropMetrics",
 			opts: &ScraperOpts{
 				DefaultDropMetrics: true,
-				Endpoints:          []string{"http://fake:1234"},
-				RemoteClient:       &fakeClient{expectedSamples: 0},
+				RemoteClients:      []remote.RemoteWriteClient{&fakeClient{expectedSamples: 0}},
 			},
 			writeRequest: &prompb.WriteRequest{
 				Timeseries: []*prompb.TimeSeries{
@@ -80,8 +78,8 @@ func TestScraper_sendBatch(t *testing.T) {
 			wr := s.flushBatchIfNecessary(context.Background(), tt.writeRequest)
 			err := s.sendBatch(context.Background(), wr)
 			require.NoError(t, err)
-			if tt.opts.RemoteClient.(*fakeClient).expectedSamples > 0 {
-				require.True(t, tt.opts.RemoteClient.(*fakeClient).called)
+			if tt.opts.RemoteClients[0].(*fakeClient).expectedSamples > 0 {
+				require.True(t, tt.opts.RemoteClients[0].(*fakeClient).called)
 			}
 		})
 	}
@@ -143,7 +141,7 @@ type fakeClient struct {
 	called          bool
 }
 
-func (f *fakeClient) Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error {
+func (f *fakeClient) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	f.called = true
 	if len(wr.Timeseries) != f.expectedSamples {
 		return fmt.Errorf("expected %d samples, got %d", f.expectedSamples, len(wr.Timeseries))

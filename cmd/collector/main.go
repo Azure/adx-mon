@@ -120,21 +120,20 @@ func realMain(ctx *cli.Context) error {
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
 
-	var endpoints []string
+	var endpoint string
 	if cfg.Endpoint != "" {
-		for _, endpoint := range []string{cfg.Endpoint} {
-			u, err := url.Parse(endpoint)
-			if err != nil {
-				return fmt.Errorf("failed to parse endpoint %s: %w", endpoint, err)
-			}
+		endpoint = cfg.Endpoint
 
-			if u.Scheme != "http" && u.Scheme != "https" {
-				return fmt.Errorf("endpoint %s must be http or https", endpoint)
-			}
-
-			logger.Infof("Using remote write endpoint %s", endpoint)
-			endpoints = append(endpoints, endpoint)
+		u, err := url.Parse(cfg.Endpoint)
+		if err != nil {
+			return fmt.Errorf("failed to parse endpoint %s: %w", endpoint, err)
 		}
+
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("endpoint %s must be http or https", endpoint)
+		}
+
+		logger.Infof("Using remote write endpoint %s", endpoint)
 	}
 
 	if cfg.StorageDir == "" {
@@ -298,7 +297,7 @@ func realMain(ctx *cli.Context) error {
 		Scraper:            scraperOpts,
 		ListenAddr:         cfg.ListenAddr,
 		NodeName:           hostname,
-		Endpoints:          endpoints,
+		Endpoint:           endpoint,
 		LiftLabels:         sortedLiftedLabels,
 		AddAttributes:      addAttributes,
 		LiftAttributes:     liftAttributes,

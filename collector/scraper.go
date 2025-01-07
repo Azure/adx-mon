@@ -64,9 +64,7 @@ type ScraperOpts struct {
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
-	Endpoints []string
-
-	RemoteClient remote.RemoteWriteClient
+	RemoteClients []remote.RemoteWriteClient
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -110,7 +108,7 @@ type Scraper struct {
 	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
-	remoteClient       remote.RemoteWriteClient
+	remoteClients      []remote.RemoteWriteClient
 	scrapeClient       *MetricsClient
 	seriesCreator      *seriesCreator
 
@@ -127,7 +125,7 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		opts:               *opts,
 		seriesCreator:      &seriesCreator{},
 		requestTransformer: opts.RequestTransformer(),
-		remoteClient:       opts.RemoteClient,
+		remoteClients:      opts.RemoteClients,
 		targets:            make(map[string]ScrapeTarget),
 	}
 }
@@ -201,7 +199,9 @@ func (s *Scraper) scrape(ctx context.Context) {
 		case <-t.C:
 			s.scrapeTargets(ctx)
 		case <-reconnectTimer.C:
-			s.remoteClient.CloseIdleConnections()
+			for _, remoteClient := range s.remoteClients {
+				remoteClient.CloseIdleConnections()
+			}
 		}
 	}
 }
@@ -303,7 +303,7 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		return nil
 	}
 
-	if len(s.opts.Endpoints) == 0 || logger.IsDebug() {
+	if len(s.remoteClients) == 0 || logger.IsDebug() {
 		var sb strings.Builder
 		for _, ts := range wr.Timeseries {
 			sb.Reset()
@@ -325,14 +325,13 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 
 	start := time.Now()
 	defer func() {
-		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.opts.Endpoints), time.Since(start))
+		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.remoteClients), time.Since(start))
 	}()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, endpoint := range s.opts.Endpoints {
-		endpoint := endpoint
+	for _, remoteClient := range s.remoteClients {
 		g.Go(func() error {
-			return s.remoteClient.Write(gCtx, endpoint, wr)
+			return remoteClient.Write(gCtx, wr)
 		})
 	}
 	return g.Wait()

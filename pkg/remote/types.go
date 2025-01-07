@@ -7,6 +7,6 @@ import (
 )
 
 type RemoteWriteClient interface {
-	Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error
+	Write(ctx context.Context, wr *prompb.WriteRequest) error
 	CloseIdleConnections()
 }
