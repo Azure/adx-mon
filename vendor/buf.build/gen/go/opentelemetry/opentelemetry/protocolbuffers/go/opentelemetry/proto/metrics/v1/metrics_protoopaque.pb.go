@@ -18,7 +18,7 @@
 // 	protoc        (unknown)
 // source: opentelemetry/proto/metrics/v1/metrics.proto
 
-//go:build !protoopaque
+//go:build protoopaque
 
 package metricsv1
 
@@ -226,15 +226,10 @@ func (x DataPointFlags) Number() protoreflect.EnumNumber {
 // When new fields are added into this message, the OTLP request MUST be updated
 // as well.
 type MetricsData struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// An array of ResourceMetrics.
-	// For data coming from a single resource this array will typically contain
-	// one element. Intermediary nodes that receive data from multiple origins
-	// typically batch the data before forwarding further and in that case this
-	// array will contain multiple elements.
-	ResourceMetrics []*ResourceMetrics `protobuf:"bytes,1,rep,name=resource_metrics,json=resourceMetrics,proto3" json:"resource_metrics,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                      protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_ResourceMetrics *[]*ResourceMetrics    `protobuf:"bytes,1,rep,name=resource_metrics,json=resourceMetrics,proto3" json:"resource_metrics,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *MetricsData) Reset() {
@@ -264,13 +259,15 @@ func (x *MetricsData) ProtoReflect() protoreflect.Message {
 
 func (x *MetricsData) GetResourceMetrics() []*ResourceMetrics {
 	if x != nil {
-		return x.ResourceMetrics
+		if x.xxx_hidden_ResourceMetrics != nil {
+			return *x.xxx_hidden_ResourceMetrics
+		}
 	}
 	return nil
 }
 
 func (x *MetricsData) SetResourceMetrics(v []*ResourceMetrics) {
-	x.ResourceMetrics = v
+	x.xxx_hidden_ResourceMetrics = &v
 }
 
 type MetricsData_builder struct {
@@ -288,27 +285,18 @@ func (b0 MetricsData_builder) Build() *MetricsData {
 	m0 := &MetricsData{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.ResourceMetrics = b.ResourceMetrics
+	x.xxx_hidden_ResourceMetrics = &b.ResourceMetrics
 	return m0
 }
 
 // A collection of ScopeMetrics from a Resource.
 type ResourceMetrics struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The resource for the metrics in this message.
-	// If this field is not set then no resource info is known.
-	Resource *v1.Resource `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
-	// A list of metrics that originate from a resource.
-	ScopeMetrics []*ScopeMetrics `protobuf:"bytes,2,rep,name=scope_metrics,json=scopeMetrics,proto3" json:"scope_metrics,omitempty"`
-	// The Schema URL, if known. This is the identifier of the Schema that the resource data
-	// is recorded in. Notably, the last part of the URL path is the version number of the
-	// schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
-	// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-	// This schema_url applies to the data in the "resource" field. It does not apply
-	// to the data in the "scope_metrics" field which have their own schema_url field.
-	SchemaUrl     string `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Resource     *v1.Resource           `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	xxx_hidden_ScopeMetrics *[]*ScopeMetrics       `protobuf:"bytes,2,rep,name=scope_metrics,json=scopeMetrics,proto3" json:"scope_metrics,omitempty"`
+	xxx_hidden_SchemaUrl    string                 `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ResourceMetrics) Reset() {
@@ -338,46 +326,48 @@ func (x *ResourceMetrics) ProtoReflect() protoreflect.Message {
 
 func (x *ResourceMetrics) GetResource() *v1.Resource {
 	if x != nil {
-		return x.Resource
+		return x.xxx_hidden_Resource
 	}
 	return nil
 }
 
 func (x *ResourceMetrics) GetScopeMetrics() []*ScopeMetrics {
 	if x != nil {
-		return x.ScopeMetrics
+		if x.xxx_hidden_ScopeMetrics != nil {
+			return *x.xxx_hidden_ScopeMetrics
+		}
 	}
 	return nil
 }
 
 func (x *ResourceMetrics) GetSchemaUrl() string {
 	if x != nil {
-		return x.SchemaUrl
+		return x.xxx_hidden_SchemaUrl
 	}
 	return ""
 }
 
 func (x *ResourceMetrics) SetResource(v *v1.Resource) {
-	x.Resource = v
+	x.xxx_hidden_Resource = v
 }
 
 func (x *ResourceMetrics) SetScopeMetrics(v []*ScopeMetrics) {
-	x.ScopeMetrics = v
+	x.xxx_hidden_ScopeMetrics = &v
 }
 
 func (x *ResourceMetrics) SetSchemaUrl(v string) {
-	x.SchemaUrl = v
+	x.xxx_hidden_SchemaUrl = v
 }
 
 func (x *ResourceMetrics) HasResource() bool {
 	if x == nil {
 		return false
 	}
-	return x.Resource != nil
+	return x.xxx_hidden_Resource != nil
 }
 
 func (x *ResourceMetrics) ClearResource() {
-	x.Resource = nil
+	x.xxx_hidden_Resource = nil
 }
 
 type ResourceMetrics_builder struct {
@@ -401,29 +391,20 @@ func (b0 ResourceMetrics_builder) Build() *ResourceMetrics {
 	m0 := &ResourceMetrics{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Resource = b.Resource
-	x.ScopeMetrics = b.ScopeMetrics
-	x.SchemaUrl = b.SchemaUrl
+	x.xxx_hidden_Resource = b.Resource
+	x.xxx_hidden_ScopeMetrics = &b.ScopeMetrics
+	x.xxx_hidden_SchemaUrl = b.SchemaUrl
 	return m0
 }
 
 // A collection of Metrics produced by an Scope.
 type ScopeMetrics struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The instrumentation scope information for the metrics in this message.
-	// Semantically when InstrumentationScope isn't set, it is equivalent with
-	// an empty instrumentation scope name (unknown).
-	Scope *v11.InstrumentationScope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	// A list of metrics that originate from an instrumentation library.
-	Metrics []*Metric `protobuf:"bytes,2,rep,name=metrics,proto3" json:"metrics,omitempty"`
-	// The Schema URL, if known. This is the identifier of the Schema that the metric data
-	// is recorded in. Notably, the last part of the URL path is the version number of the
-	// schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
-	// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-	// This schema_url applies to all metrics in the "metrics" field.
-	SchemaUrl     string `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState    `protogen:"opaque.v1"`
+	xxx_hidden_Scope     *v11.InstrumentationScope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	xxx_hidden_Metrics   *[]*Metric                `protobuf:"bytes,2,rep,name=metrics,proto3" json:"metrics,omitempty"`
+	xxx_hidden_SchemaUrl string                    `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ScopeMetrics) Reset() {
@@ -453,46 +434,48 @@ func (x *ScopeMetrics) ProtoReflect() protoreflect.Message {
 
 func (x *ScopeMetrics) GetScope() *v11.InstrumentationScope {
 	if x != nil {
-		return x.Scope
+		return x.xxx_hidden_Scope
 	}
 	return nil
 }
 
 func (x *ScopeMetrics) GetMetrics() []*Metric {
 	if x != nil {
-		return x.Metrics
+		if x.xxx_hidden_Metrics != nil {
+			return *x.xxx_hidden_Metrics
+		}
 	}
 	return nil
 }
 
 func (x *ScopeMetrics) GetSchemaUrl() string {
 	if x != nil {
-		return x.SchemaUrl
+		return x.xxx_hidden_SchemaUrl
 	}
 	return ""
 }
 
 func (x *ScopeMetrics) SetScope(v *v11.InstrumentationScope) {
-	x.Scope = v
+	x.xxx_hidden_Scope = v
 }
 
 func (x *ScopeMetrics) SetMetrics(v []*Metric) {
-	x.Metrics = v
+	x.xxx_hidden_Metrics = &v
 }
 
 func (x *ScopeMetrics) SetSchemaUrl(v string) {
-	x.SchemaUrl = v
+	x.xxx_hidden_SchemaUrl = v
 }
 
 func (x *ScopeMetrics) HasScope() bool {
 	if x == nil {
 		return false
 	}
-	return x.Scope != nil
+	return x.xxx_hidden_Scope != nil
 }
 
 func (x *ScopeMetrics) ClearScope() {
-	x.Scope = nil
+	x.xxx_hidden_Scope = nil
 }
 
 type ScopeMetrics_builder struct {
@@ -516,9 +499,9 @@ func (b0 ScopeMetrics_builder) Build() *ScopeMetrics {
 	m0 := &ScopeMetrics{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Scope = b.Scope
-	x.Metrics = b.Metrics
-	x.SchemaUrl = b.SchemaUrl
+	x.xxx_hidden_Scope = b.Scope
+	x.xxx_hidden_Metrics = &b.Metrics
+	x.xxx_hidden_SchemaUrl = b.SchemaUrl
 	return m0
 }
 
@@ -610,36 +593,14 @@ func (b0 ScopeMetrics_builder) Build() *ScopeMetrics {
 // when the start time is truly unknown, setting StartTimeUnixNano is
 // strongly encouraged.
 type Metric struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// name of the metric.
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// description of the metric, which can be used in documentation.
-	Description string `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
-	// unit in which the metric value is reported. Follows the format
-	// described by http://unitsofmeasure.org/ucum.html.
-	Unit string `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`
-	// Data determines the aggregation type (if any) of the metric, what is the
-	// reported value type for the data points, as well as the relatationship to
-	// the time interval over which they are reported.
-	//
-	// Types that are valid to be assigned to Data:
-	//
-	//	*Metric_Gauge
-	//	*Metric_Sum
-	//	*Metric_Histogram
-	//	*Metric_ExponentialHistogram
-	//	*Metric_Summary
-	Data isMetric_Data `protobuf_oneof:"data"`
-	// Additional metadata attributes that describe the metric. [Optional].
-	// Attributes are non-identifying.
-	// Consumers SHOULD NOT need to be aware of these attributes.
-	// These attributes MAY be used to encode information allowing
-	// for lossless roundtrip translation to / from another data model.
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Metadata      []*v11.KeyValue `protobuf:"bytes,12,rep,name=metadata,proto3" json:"metadata,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	xxx_hidden_Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	xxx_hidden_Unit        string                 `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`
+	xxx_hidden_Data        isMetric_Data          `protobuf_oneof:"data"`
+	xxx_hidden_Metadata    *[]*v11.KeyValue       `protobuf:"bytes,12,rep,name=metadata,proto3" json:"metadata,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Metric) Reset() {
@@ -669,35 +630,28 @@ func (x *Metric) ProtoReflect() protoreflect.Message {
 
 func (x *Metric) GetName() string {
 	if x != nil {
-		return x.Name
+		return x.xxx_hidden_Name
 	}
 	return ""
 }
 
 func (x *Metric) GetDescription() string {
 	if x != nil {
-		return x.Description
+		return x.xxx_hidden_Description
 	}
 	return ""
 }
 
 func (x *Metric) GetUnit() string {
 	if x != nil {
-		return x.Unit
+		return x.xxx_hidden_Unit
 	}
 	return ""
 }
 
-func (x *Metric) GetData() isMetric_Data {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
 func (x *Metric) GetGauge() *Gauge {
 	if x != nil {
-		if x, ok := x.Data.(*Metric_Gauge); ok {
+		if x, ok := x.xxx_hidden_Data.(*metric_Gauge); ok {
 			return x.Gauge
 		}
 	}
@@ -706,7 +660,7 @@ func (x *Metric) GetGauge() *Gauge {
 
 func (x *Metric) GetSum() *Sum {
 	if x != nil {
-		if x, ok := x.Data.(*Metric_Sum); ok {
+		if x, ok := x.xxx_hidden_Data.(*metric_Sum); ok {
 			return x.Sum
 		}
 	}
@@ -715,7 +669,7 @@ func (x *Metric) GetSum() *Sum {
 
 func (x *Metric) GetHistogram() *Histogram {
 	if x != nil {
-		if x, ok := x.Data.(*Metric_Histogram); ok {
+		if x, ok := x.xxx_hidden_Data.(*metric_Histogram); ok {
 			return x.Histogram
 		}
 	}
@@ -724,7 +678,7 @@ func (x *Metric) GetHistogram() *Histogram {
 
 func (x *Metric) GetExponentialHistogram() *ExponentialHistogram {
 	if x != nil {
-		if x, ok := x.Data.(*Metric_ExponentialHistogram); ok {
+		if x, ok := x.xxx_hidden_Data.(*metric_ExponentialHistogram); ok {
 			return x.ExponentialHistogram
 		}
 	}
@@ -733,7 +687,7 @@ func (x *Metric) GetExponentialHistogram() *ExponentialHistogram {
 
 func (x *Metric) GetSummary() *Summary {
 	if x != nil {
-		if x, ok := x.Data.(*Metric_Summary); ok {
+		if x, ok := x.xxx_hidden_Data.(*metric_Summary); ok {
 			return x.Summary
 		}
 	}
@@ -742,79 +696,81 @@ func (x *Metric) GetSummary() *Summary {
 
 func (x *Metric) GetMetadata() []*v11.KeyValue {
 	if x != nil {
-		return x.Metadata
+		if x.xxx_hidden_Metadata != nil {
+			return *x.xxx_hidden_Metadata
+		}
 	}
 	return nil
 }
 
 func (x *Metric) SetName(v string) {
-	x.Name = v
+	x.xxx_hidden_Name = v
 }
 
 func (x *Metric) SetDescription(v string) {
-	x.Description = v
+	x.xxx_hidden_Description = v
 }
 
 func (x *Metric) SetUnit(v string) {
-	x.Unit = v
+	x.xxx_hidden_Unit = v
 }
 
 func (x *Metric) SetGauge(v *Gauge) {
 	if v == nil {
-		x.Data = nil
+		x.xxx_hidden_Data = nil
 		return
 	}
-	x.Data = &Metric_Gauge{v}
+	x.xxx_hidden_Data = &metric_Gauge{v}
 }
 
 func (x *Metric) SetSum(v *Sum) {
 	if v == nil {
-		x.Data = nil
+		x.xxx_hidden_Data = nil
 		return
 	}
-	x.Data = &Metric_Sum{v}
+	x.xxx_hidden_Data = &metric_Sum{v}
 }
 
 func (x *Metric) SetHistogram(v *Histogram) {
 	if v == nil {
-		x.Data = nil
+		x.xxx_hidden_Data = nil
 		return
 	}
-	x.Data = &Metric_Histogram{v}
+	x.xxx_hidden_Data = &metric_Histogram{v}
 }
 
 func (x *Metric) SetExponentialHistogram(v *ExponentialHistogram) {
 	if v == nil {
-		x.Data = nil
+		x.xxx_hidden_Data = nil
 		return
 	}
-	x.Data = &Metric_ExponentialHistogram{v}
+	x.xxx_hidden_Data = &metric_ExponentialHistogram{v}
 }
 
 func (x *Metric) SetSummary(v *Summary) {
 	if v == nil {
-		x.Data = nil
+		x.xxx_hidden_Data = nil
 		return
 	}
-	x.Data = &Metric_Summary{v}
+	x.xxx_hidden_Data = &metric_Summary{v}
 }
 
 func (x *Metric) SetMetadata(v []*v11.KeyValue) {
-	x.Metadata = v
+	x.xxx_hidden_Metadata = &v
 }
 
 func (x *Metric) HasData() bool {
 	if x == nil {
 		return false
 	}
-	return x.Data != nil
+	return x.xxx_hidden_Data != nil
 }
 
 func (x *Metric) HasGauge() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Data.(*Metric_Gauge)
+	_, ok := x.xxx_hidden_Data.(*metric_Gauge)
 	return ok
 }
 
@@ -822,7 +778,7 @@ func (x *Metric) HasSum() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Data.(*Metric_Sum)
+	_, ok := x.xxx_hidden_Data.(*metric_Sum)
 	return ok
 }
 
@@ -830,7 +786,7 @@ func (x *Metric) HasHistogram() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Data.(*Metric_Histogram)
+	_, ok := x.xxx_hidden_Data.(*metric_Histogram)
 	return ok
 }
 
@@ -838,7 +794,7 @@ func (x *Metric) HasExponentialHistogram() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Data.(*Metric_ExponentialHistogram)
+	_, ok := x.xxx_hidden_Data.(*metric_ExponentialHistogram)
 	return ok
 }
 
@@ -846,41 +802,41 @@ func (x *Metric) HasSummary() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Data.(*Metric_Summary)
+	_, ok := x.xxx_hidden_Data.(*metric_Summary)
 	return ok
 }
 
 func (x *Metric) ClearData() {
-	x.Data = nil
+	x.xxx_hidden_Data = nil
 }
 
 func (x *Metric) ClearGauge() {
-	if _, ok := x.Data.(*Metric_Gauge); ok {
-		x.Data = nil
+	if _, ok := x.xxx_hidden_Data.(*metric_Gauge); ok {
+		x.xxx_hidden_Data = nil
 	}
 }
 
 func (x *Metric) ClearSum() {
-	if _, ok := x.Data.(*Metric_Sum); ok {
-		x.Data = nil
+	if _, ok := x.xxx_hidden_Data.(*metric_Sum); ok {
+		x.xxx_hidden_Data = nil
 	}
 }
 
 func (x *Metric) ClearHistogram() {
-	if _, ok := x.Data.(*Metric_Histogram); ok {
-		x.Data = nil
+	if _, ok := x.xxx_hidden_Data.(*metric_Histogram); ok {
+		x.xxx_hidden_Data = nil
 	}
 }
 
 func (x *Metric) ClearExponentialHistogram() {
-	if _, ok := x.Data.(*Metric_ExponentialHistogram); ok {
-		x.Data = nil
+	if _, ok := x.xxx_hidden_Data.(*metric_ExponentialHistogram); ok {
+		x.xxx_hidden_Data = nil
 	}
 }
 
 func (x *Metric) ClearSummary() {
-	if _, ok := x.Data.(*Metric_Summary); ok {
-		x.Data = nil
+	if _, ok := x.xxx_hidden_Data.(*metric_Summary); ok {
+		x.xxx_hidden_Data = nil
 	}
 }
 
@@ -895,16 +851,16 @@ func (x *Metric) WhichData() case_Metric_Data {
 	if x == nil {
 		return Metric_Data_not_set_case
 	}
-	switch x.Data.(type) {
-	case *Metric_Gauge:
+	switch x.xxx_hidden_Data.(type) {
+	case *metric_Gauge:
 		return Metric_Gauge_case
-	case *Metric_Sum:
+	case *metric_Sum:
 		return Metric_Sum_case
-	case *Metric_Histogram:
+	case *metric_Histogram:
 		return Metric_Histogram_case
-	case *Metric_ExponentialHistogram:
+	case *metric_ExponentialHistogram:
 		return Metric_ExponentialHistogram_case
-	case *Metric_Summary:
+	case *metric_Summary:
 		return Metric_Summary_case
 	default:
 		return Metric_Data_not_set_case
@@ -925,13 +881,13 @@ type Metric_builder struct {
 	// reported value type for the data points, as well as the relatationship to
 	// the time interval over which they are reported.
 
-	// Fields of oneof Data:
+	// Fields of oneof xxx_hidden_Data:
 	Gauge                *Gauge
 	Sum                  *Sum
 	Histogram            *Histogram
 	ExponentialHistogram *ExponentialHistogram
 	Summary              *Summary
-	// -- end of Data
+	// -- end of xxx_hidden_Data
 	// Additional metadata attributes that describe the metric. [Optional].
 	// Attributes are non-identifying.
 	// Consumers SHOULD NOT need to be aware of these attributes.
@@ -946,25 +902,25 @@ func (b0 Metric_builder) Build() *Metric {
 	m0 := &Metric{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Name = b.Name
-	x.Description = b.Description
-	x.Unit = b.Unit
+	x.xxx_hidden_Name = b.Name
+	x.xxx_hidden_Description = b.Description
+	x.xxx_hidden_Unit = b.Unit
 	if b.Gauge != nil {
-		x.Data = &Metric_Gauge{b.Gauge}
+		x.xxx_hidden_Data = &metric_Gauge{b.Gauge}
 	}
 	if b.Sum != nil {
-		x.Data = &Metric_Sum{b.Sum}
+		x.xxx_hidden_Data = &metric_Sum{b.Sum}
 	}
 	if b.Histogram != nil {
-		x.Data = &Metric_Histogram{b.Histogram}
+		x.xxx_hidden_Data = &metric_Histogram{b.Histogram}
 	}
 	if b.ExponentialHistogram != nil {
-		x.Data = &Metric_ExponentialHistogram{b.ExponentialHistogram}
+		x.xxx_hidden_Data = &metric_ExponentialHistogram{b.ExponentialHistogram}
 	}
 	if b.Summary != nil {
-		x.Data = &Metric_Summary{b.Summary}
+		x.xxx_hidden_Data = &metric_Summary{b.Summary}
 	}
-	x.Metadata = b.Metadata
+	x.xxx_hidden_Metadata = &b.Metadata
 	return m0
 }
 
@@ -982,35 +938,35 @@ type isMetric_Data interface {
 	isMetric_Data()
 }
 
-type Metric_Gauge struct {
+type metric_Gauge struct {
 	Gauge *Gauge `protobuf:"bytes,5,opt,name=gauge,proto3,oneof"`
 }
 
-type Metric_Sum struct {
+type metric_Sum struct {
 	Sum *Sum `protobuf:"bytes,7,opt,name=sum,proto3,oneof"`
 }
 
-type Metric_Histogram struct {
+type metric_Histogram struct {
 	Histogram *Histogram `protobuf:"bytes,9,opt,name=histogram,proto3,oneof"`
 }
 
-type Metric_ExponentialHistogram struct {
+type metric_ExponentialHistogram struct {
 	ExponentialHistogram *ExponentialHistogram `protobuf:"bytes,10,opt,name=exponential_histogram,json=exponentialHistogram,proto3,oneof"`
 }
 
-type Metric_Summary struct {
+type metric_Summary struct {
 	Summary *Summary `protobuf:"bytes,11,opt,name=summary,proto3,oneof"`
 }
 
-func (*Metric_Gauge) isMetric_Data() {}
+func (*metric_Gauge) isMetric_Data() {}
 
-func (*Metric_Sum) isMetric_Data() {}
+func (*metric_Sum) isMetric_Data() {}
 
-func (*Metric_Histogram) isMetric_Data() {}
+func (*metric_Histogram) isMetric_Data() {}
 
-func (*Metric_ExponentialHistogram) isMetric_Data() {}
+func (*metric_ExponentialHistogram) isMetric_Data() {}
 
-func (*Metric_Summary) isMetric_Data() {}
+func (*metric_Summary) isMetric_Data() {}
 
 // Gauge represents the type of a scalar metric that always exports the
 // "current value" for every data point. It should be used for an "unknown"
@@ -1022,10 +978,10 @@ func (*Metric_Summary) isMetric_Data() {}
 // AggregationTemporality is not included. Consequently, this also means
 // "StartTimeUnixNano" is ignored for all data points.
 type Gauge struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	DataPoints    []*NumberDataPoint     `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_DataPoints *[]*NumberDataPoint    `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *Gauge) Reset() {
@@ -1055,13 +1011,15 @@ func (x *Gauge) ProtoReflect() protoreflect.Message {
 
 func (x *Gauge) GetDataPoints() []*NumberDataPoint {
 	if x != nil {
-		return x.DataPoints
+		if x.xxx_hidden_DataPoints != nil {
+			return *x.xxx_hidden_DataPoints
+		}
 	}
 	return nil
 }
 
 func (x *Gauge) SetDataPoints(v []*NumberDataPoint) {
-	x.DataPoints = v
+	x.xxx_hidden_DataPoints = &v
 }
 
 type Gauge_builder struct {
@@ -1074,22 +1032,19 @@ func (b0 Gauge_builder) Build() *Gauge {
 	m0 := &Gauge{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.DataPoints = b.DataPoints
+	x.xxx_hidden_DataPoints = &b.DataPoints
 	return m0
 }
 
 // Sum represents the type of a scalar metric that is calculated as a sum of all
 // reported measurements over a time interval.
 type Sum struct {
-	state      protoimpl.MessageState `protogen:"hybrid.v1"`
-	DataPoints []*NumberDataPoint     `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
-	// aggregation_temporality describes if the aggregator reports delta changes
-	// since last report time, or cumulative changes since a fixed start time.
-	AggregationTemporality AggregationTemporality `protobuf:"varint,2,opt,name=aggregation_temporality,json=aggregationTemporality,proto3,enum=opentelemetry.proto.metrics.v1.AggregationTemporality" json:"aggregation_temporality,omitempty"`
-	// If "true" means that the sum is monotonic.
-	IsMonotonic   bool `protobuf:"varint,3,opt,name=is_monotonic,json=isMonotonic,proto3" json:"is_monotonic,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_DataPoints             *[]*NumberDataPoint    `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	xxx_hidden_AggregationTemporality AggregationTemporality `protobuf:"varint,2,opt,name=aggregation_temporality,json=aggregationTemporality,proto3,enum=opentelemetry.proto.metrics.v1.AggregationTemporality" json:"aggregation_temporality,omitempty"`
+	xxx_hidden_IsMonotonic            bool                   `protobuf:"varint,3,opt,name=is_monotonic,json=isMonotonic,proto3" json:"is_monotonic,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *Sum) Reset() {
@@ -1119,35 +1074,37 @@ func (x *Sum) ProtoReflect() protoreflect.Message {
 
 func (x *Sum) GetDataPoints() []*NumberDataPoint {
 	if x != nil {
-		return x.DataPoints
+		if x.xxx_hidden_DataPoints != nil {
+			return *x.xxx_hidden_DataPoints
+		}
 	}
 	return nil
 }
 
 func (x *Sum) GetAggregationTemporality() AggregationTemporality {
 	if x != nil {
-		return x.AggregationTemporality
+		return x.xxx_hidden_AggregationTemporality
 	}
 	return AggregationTemporality_AGGREGATION_TEMPORALITY_UNSPECIFIED
 }
 
 func (x *Sum) GetIsMonotonic() bool {
 	if x != nil {
-		return x.IsMonotonic
+		return x.xxx_hidden_IsMonotonic
 	}
 	return false
 }
 
 func (x *Sum) SetDataPoints(v []*NumberDataPoint) {
-	x.DataPoints = v
+	x.xxx_hidden_DataPoints = &v
 }
 
 func (x *Sum) SetAggregationTemporality(v AggregationTemporality) {
-	x.AggregationTemporality = v
+	x.xxx_hidden_AggregationTemporality = v
 }
 
 func (x *Sum) SetIsMonotonic(v bool) {
-	x.IsMonotonic = v
+	x.xxx_hidden_IsMonotonic = v
 }
 
 type Sum_builder struct {
@@ -1165,22 +1122,20 @@ func (b0 Sum_builder) Build() *Sum {
 	m0 := &Sum{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.DataPoints = b.DataPoints
-	x.AggregationTemporality = b.AggregationTemporality
-	x.IsMonotonic = b.IsMonotonic
+	x.xxx_hidden_DataPoints = &b.DataPoints
+	x.xxx_hidden_AggregationTemporality = b.AggregationTemporality
+	x.xxx_hidden_IsMonotonic = b.IsMonotonic
 	return m0
 }
 
 // Histogram represents the type of a metric that is calculated by aggregating
 // as a Histogram of all reported measurements over a time interval.
 type Histogram struct {
-	state      protoimpl.MessageState `protogen:"hybrid.v1"`
-	DataPoints []*HistogramDataPoint  `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
-	// aggregation_temporality describes if the aggregator reports delta changes
-	// since last report time, or cumulative changes since a fixed start time.
-	AggregationTemporality AggregationTemporality `protobuf:"varint,2,opt,name=aggregation_temporality,json=aggregationTemporality,proto3,enum=opentelemetry.proto.metrics.v1.AggregationTemporality" json:"aggregation_temporality,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state                             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_DataPoints             *[]*HistogramDataPoint `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	xxx_hidden_AggregationTemporality AggregationTemporality `protobuf:"varint,2,opt,name=aggregation_temporality,json=aggregationTemporality,proto3,enum=opentelemetry.proto.metrics.v1.AggregationTemporality" json:"aggregation_temporality,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *Histogram) Reset() {
@@ -1210,24 +1165,26 @@ func (x *Histogram) ProtoReflect() protoreflect.Message {
 
 func (x *Histogram) GetDataPoints() []*HistogramDataPoint {
 	if x != nil {
-		return x.DataPoints
+		if x.xxx_hidden_DataPoints != nil {
+			return *x.xxx_hidden_DataPoints
+		}
 	}
 	return nil
 }
 
 func (x *Histogram) GetAggregationTemporality() AggregationTemporality {
 	if x != nil {
-		return x.AggregationTemporality
+		return x.xxx_hidden_AggregationTemporality
 	}
 	return AggregationTemporality_AGGREGATION_TEMPORALITY_UNSPECIFIED
 }
 
 func (x *Histogram) SetDataPoints(v []*HistogramDataPoint) {
-	x.DataPoints = v
+	x.xxx_hidden_DataPoints = &v
 }
 
 func (x *Histogram) SetAggregationTemporality(v AggregationTemporality) {
-	x.AggregationTemporality = v
+	x.xxx_hidden_AggregationTemporality = v
 }
 
 type Histogram_builder struct {
@@ -1243,21 +1200,19 @@ func (b0 Histogram_builder) Build() *Histogram {
 	m0 := &Histogram{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.DataPoints = b.DataPoints
-	x.AggregationTemporality = b.AggregationTemporality
+	x.xxx_hidden_DataPoints = &b.DataPoints
+	x.xxx_hidden_AggregationTemporality = b.AggregationTemporality
 	return m0
 }
 
 // ExponentialHistogram represents the type of a metric that is calculated by aggregating
 // as a ExponentialHistogram of all reported double measurements over a time interval.
 type ExponentialHistogram struct {
-	state      protoimpl.MessageState           `protogen:"hybrid.v1"`
-	DataPoints []*ExponentialHistogramDataPoint `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
-	// aggregation_temporality describes if the aggregator reports delta changes
-	// since last report time, or cumulative changes since a fixed start time.
-	AggregationTemporality AggregationTemporality `protobuf:"varint,2,opt,name=aggregation_temporality,json=aggregationTemporality,proto3,enum=opentelemetry.proto.metrics.v1.AggregationTemporality" json:"aggregation_temporality,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state                             protoimpl.MessageState            `protogen:"opaque.v1"`
+	xxx_hidden_DataPoints             *[]*ExponentialHistogramDataPoint `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	xxx_hidden_AggregationTemporality AggregationTemporality            `protobuf:"varint,2,opt,name=aggregation_temporality,json=aggregationTemporality,proto3,enum=opentelemetry.proto.metrics.v1.AggregationTemporality" json:"aggregation_temporality,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *ExponentialHistogram) Reset() {
@@ -1287,24 +1242,26 @@ func (x *ExponentialHistogram) ProtoReflect() protoreflect.Message {
 
 func (x *ExponentialHistogram) GetDataPoints() []*ExponentialHistogramDataPoint {
 	if x != nil {
-		return x.DataPoints
+		if x.xxx_hidden_DataPoints != nil {
+			return *x.xxx_hidden_DataPoints
+		}
 	}
 	return nil
 }
 
 func (x *ExponentialHistogram) GetAggregationTemporality() AggregationTemporality {
 	if x != nil {
-		return x.AggregationTemporality
+		return x.xxx_hidden_AggregationTemporality
 	}
 	return AggregationTemporality_AGGREGATION_TEMPORALITY_UNSPECIFIED
 }
 
 func (x *ExponentialHistogram) SetDataPoints(v []*ExponentialHistogramDataPoint) {
-	x.DataPoints = v
+	x.xxx_hidden_DataPoints = &v
 }
 
 func (x *ExponentialHistogram) SetAggregationTemporality(v AggregationTemporality) {
-	x.AggregationTemporality = v
+	x.xxx_hidden_AggregationTemporality = v
 }
 
 type ExponentialHistogram_builder struct {
@@ -1320,8 +1277,8 @@ func (b0 ExponentialHistogram_builder) Build() *ExponentialHistogram {
 	m0 := &ExponentialHistogram{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.DataPoints = b.DataPoints
-	x.AggregationTemporality = b.AggregationTemporality
+	x.xxx_hidden_DataPoints = &b.DataPoints
+	x.xxx_hidden_AggregationTemporality = b.AggregationTemporality
 	return m0
 }
 
@@ -1335,10 +1292,10 @@ func (b0 ExponentialHistogram_builder) Build() *ExponentialHistogram {
 // because the count and sum fields of a SummaryDataPoint are assumed to be
 // cumulative values.
 type Summary struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	DataPoints    []*SummaryDataPoint    `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_DataPoints *[]*SummaryDataPoint   `protobuf:"bytes,1,rep,name=data_points,json=dataPoints,proto3" json:"data_points,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *Summary) Reset() {
@@ -1368,13 +1325,15 @@ func (x *Summary) ProtoReflect() protoreflect.Message {
 
 func (x *Summary) GetDataPoints() []*SummaryDataPoint {
 	if x != nil {
-		return x.DataPoints
+		if x.xxx_hidden_DataPoints != nil {
+			return *x.xxx_hidden_DataPoints
+		}
 	}
 	return nil
 }
 
 func (x *Summary) SetDataPoints(v []*SummaryDataPoint) {
-	x.DataPoints = v
+	x.xxx_hidden_DataPoints = &v
 }
 
 type Summary_builder struct {
@@ -1387,46 +1346,22 @@ func (b0 Summary_builder) Build() *Summary {
 	m0 := &Summary{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.DataPoints = b.DataPoints
+	x.xxx_hidden_DataPoints = &b.DataPoints
 	return m0
 }
 
 // NumberDataPoint is a single data point in a timeseries that describes the
 // time-varying scalar value of a metric.
 type NumberDataPoint struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The set of key/value pairs that uniquely identify the timeseries from
-	// where this point belongs. The list may be empty (may contain 0 elements).
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes []*v11.KeyValue `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	// StartTimeUnixNano is optional but strongly encouraged, see the
-	// the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	StartTimeUnixNano uint64 `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
-	// TimeUnixNano is required, see the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	TimeUnixNano uint64 `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
-	// The value itself.  A point is considered invalid when one of the recognized
-	// value fields is not present inside this oneof.
-	//
-	// Types that are valid to be assigned to Value:
-	//
-	//	*NumberDataPoint_AsDouble
-	//	*NumberDataPoint_AsInt
-	Value isNumberDataPoint_Value `protobuf_oneof:"value"`
-	// (Optional) List of exemplars collected from
-	// measurements that were used to form the data point
-	Exemplars []*Exemplar `protobuf:"bytes,5,rep,name=exemplars,proto3" json:"exemplars,omitempty"`
-	// Flags that apply to this specific data point.  See DataPointFlags
-	// for the available flags and their meaning.
-	Flags         uint32 `protobuf:"varint,8,opt,name=flags,proto3" json:"flags,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                        protoimpl.MessageState  `protogen:"opaque.v1"`
+	xxx_hidden_Attributes        *[]*v11.KeyValue        `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_StartTimeUnixNano uint64                  `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
+	xxx_hidden_TimeUnixNano      uint64                  `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
+	xxx_hidden_Value             isNumberDataPoint_Value `protobuf_oneof:"value"`
+	xxx_hidden_Exemplars         *[]*Exemplar            `protobuf:"bytes,5,rep,name=exemplars,proto3" json:"exemplars,omitempty"`
+	xxx_hidden_Flags             uint32                  `protobuf:"varint,8,opt,name=flags,proto3" json:"flags,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *NumberDataPoint) Reset() {
@@ -1456,35 +1391,30 @@ func (x *NumberDataPoint) ProtoReflect() protoreflect.Message {
 
 func (x *NumberDataPoint) GetAttributes() []*v11.KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *NumberDataPoint) GetStartTimeUnixNano() uint64 {
 	if x != nil {
-		return x.StartTimeUnixNano
+		return x.xxx_hidden_StartTimeUnixNano
 	}
 	return 0
 }
 
 func (x *NumberDataPoint) GetTimeUnixNano() uint64 {
 	if x != nil {
-		return x.TimeUnixNano
+		return x.xxx_hidden_TimeUnixNano
 	}
 	return 0
 }
 
-func (x *NumberDataPoint) GetValue() isNumberDataPoint_Value {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
 func (x *NumberDataPoint) GetAsDouble() float64 {
 	if x != nil {
-		if x, ok := x.Value.(*NumberDataPoint_AsDouble); ok {
+		if x, ok := x.xxx_hidden_Value.(*numberDataPoint_AsDouble); ok {
 			return x.AsDouble
 		}
 	}
@@ -1493,7 +1423,7 @@ func (x *NumberDataPoint) GetAsDouble() float64 {
 
 func (x *NumberDataPoint) GetAsInt() int64 {
 	if x != nil {
-		if x, ok := x.Value.(*NumberDataPoint_AsInt); ok {
+		if x, ok := x.xxx_hidden_Value.(*numberDataPoint_AsInt); ok {
 			return x.AsInt
 		}
 	}
@@ -1502,58 +1432,60 @@ func (x *NumberDataPoint) GetAsInt() int64 {
 
 func (x *NumberDataPoint) GetExemplars() []*Exemplar {
 	if x != nil {
-		return x.Exemplars
+		if x.xxx_hidden_Exemplars != nil {
+			return *x.xxx_hidden_Exemplars
+		}
 	}
 	return nil
 }
 
 func (x *NumberDataPoint) GetFlags() uint32 {
 	if x != nil {
-		return x.Flags
+		return x.xxx_hidden_Flags
 	}
 	return 0
 }
 
 func (x *NumberDataPoint) SetAttributes(v []*v11.KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *NumberDataPoint) SetStartTimeUnixNano(v uint64) {
-	x.StartTimeUnixNano = v
+	x.xxx_hidden_StartTimeUnixNano = v
 }
 
 func (x *NumberDataPoint) SetTimeUnixNano(v uint64) {
-	x.TimeUnixNano = v
+	x.xxx_hidden_TimeUnixNano = v
 }
 
 func (x *NumberDataPoint) SetAsDouble(v float64) {
-	x.Value = &NumberDataPoint_AsDouble{v}
+	x.xxx_hidden_Value = &numberDataPoint_AsDouble{v}
 }
 
 func (x *NumberDataPoint) SetAsInt(v int64) {
-	x.Value = &NumberDataPoint_AsInt{v}
+	x.xxx_hidden_Value = &numberDataPoint_AsInt{v}
 }
 
 func (x *NumberDataPoint) SetExemplars(v []*Exemplar) {
-	x.Exemplars = v
+	x.xxx_hidden_Exemplars = &v
 }
 
 func (x *NumberDataPoint) SetFlags(v uint32) {
-	x.Flags = v
+	x.xxx_hidden_Flags = v
 }
 
 func (x *NumberDataPoint) HasValue() bool {
 	if x == nil {
 		return false
 	}
-	return x.Value != nil
+	return x.xxx_hidden_Value != nil
 }
 
 func (x *NumberDataPoint) HasAsDouble() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*NumberDataPoint_AsDouble)
+	_, ok := x.xxx_hidden_Value.(*numberDataPoint_AsDouble)
 	return ok
 }
 
@@ -1561,23 +1493,23 @@ func (x *NumberDataPoint) HasAsInt() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*NumberDataPoint_AsInt)
+	_, ok := x.xxx_hidden_Value.(*numberDataPoint_AsInt)
 	return ok
 }
 
 func (x *NumberDataPoint) ClearValue() {
-	x.Value = nil
+	x.xxx_hidden_Value = nil
 }
 
 func (x *NumberDataPoint) ClearAsDouble() {
-	if _, ok := x.Value.(*NumberDataPoint_AsDouble); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*numberDataPoint_AsDouble); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *NumberDataPoint) ClearAsInt() {
-	if _, ok := x.Value.(*NumberDataPoint_AsInt); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*numberDataPoint_AsInt); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
@@ -1589,10 +1521,10 @@ func (x *NumberDataPoint) WhichValue() case_NumberDataPoint_Value {
 	if x == nil {
 		return NumberDataPoint_Value_not_set_case
 	}
-	switch x.Value.(type) {
-	case *NumberDataPoint_AsDouble:
+	switch x.xxx_hidden_Value.(type) {
+	case *numberDataPoint_AsDouble:
 		return NumberDataPoint_AsDouble_case
-	case *NumberDataPoint_AsInt:
+	case *numberDataPoint_AsInt:
 		return NumberDataPoint_AsInt_case
 	default:
 		return NumberDataPoint_Value_not_set_case
@@ -1621,10 +1553,10 @@ type NumberDataPoint_builder struct {
 	// The value itself.  A point is considered invalid when one of the recognized
 	// value fields is not present inside this oneof.
 
-	// Fields of oneof Value:
+	// Fields of oneof xxx_hidden_Value:
 	AsDouble *float64
 	AsInt    *int64
-	// -- end of Value
+	// -- end of xxx_hidden_Value
 	// (Optional) List of exemplars collected from
 	// measurements that were used to form the data point
 	Exemplars []*Exemplar
@@ -1637,17 +1569,17 @@ func (b0 NumberDataPoint_builder) Build() *NumberDataPoint {
 	m0 := &NumberDataPoint{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Attributes = b.Attributes
-	x.StartTimeUnixNano = b.StartTimeUnixNano
-	x.TimeUnixNano = b.TimeUnixNano
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_StartTimeUnixNano = b.StartTimeUnixNano
+	x.xxx_hidden_TimeUnixNano = b.TimeUnixNano
 	if b.AsDouble != nil {
-		x.Value = &NumberDataPoint_AsDouble{*b.AsDouble}
+		x.xxx_hidden_Value = &numberDataPoint_AsDouble{*b.AsDouble}
 	}
 	if b.AsInt != nil {
-		x.Value = &NumberDataPoint_AsInt{*b.AsInt}
+		x.xxx_hidden_Value = &numberDataPoint_AsInt{*b.AsInt}
 	}
-	x.Exemplars = b.Exemplars
-	x.Flags = b.Flags
+	x.xxx_hidden_Exemplars = &b.Exemplars
+	x.xxx_hidden_Flags = b.Flags
 	return m0
 }
 
@@ -1665,17 +1597,17 @@ type isNumberDataPoint_Value interface {
 	isNumberDataPoint_Value()
 }
 
-type NumberDataPoint_AsDouble struct {
+type numberDataPoint_AsDouble struct {
 	AsDouble float64 `protobuf:"fixed64,4,opt,name=as_double,json=asDouble,proto3,oneof"`
 }
 
-type NumberDataPoint_AsInt struct {
+type numberDataPoint_AsInt struct {
 	AsInt int64 `protobuf:"fixed64,6,opt,name=as_int,json=asInt,proto3,oneof"`
 }
 
-func (*NumberDataPoint_AsDouble) isNumberDataPoint_Value() {}
+func (*numberDataPoint_AsDouble) isNumberDataPoint_Value() {}
 
-func (*NumberDataPoint_AsInt) isNumberDataPoint_Value() {}
+func (*numberDataPoint_AsInt) isNumberDataPoint_Value() {}
 
 // HistogramDataPoint is a single data point in a timeseries that describes the
 // time-varying values of a Histogram. A Histogram contains summary statistics
@@ -1688,70 +1620,22 @@ func (*NumberDataPoint_AsInt) isNumberDataPoint_Value() {}
 // "explicit_bounds" and "bucket_counts" must be omitted and only "count" and
 // "sum" are known.
 type HistogramDataPoint struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The set of key/value pairs that uniquely identify the timeseries from
-	// where this point belongs. The list may be empty (may contain 0 elements).
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes []*v11.KeyValue `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	// StartTimeUnixNano is optional but strongly encouraged, see the
-	// the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	StartTimeUnixNano uint64 `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
-	// TimeUnixNano is required, see the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	TimeUnixNano uint64 `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
-	// count is the number of values in the population. Must be non-negative. This
-	// value must be equal to the sum of the "count" fields in buckets if a
-	// histogram is provided.
-	Count uint64 `protobuf:"fixed64,4,opt,name=count,proto3" json:"count,omitempty"`
-	// sum of the values in the population. If count is zero then this field
-	// must be zero.
-	//
-	// Note: Sum should only be filled out when measuring non-negative discrete
-	// events, and is assumed to be monotonic over the values of these events.
-	// Negative events *can* be recorded, but sum should not be filled out when
-	// doing so.  This is specifically to enforce compatibility w/ OpenMetrics,
-	// see: https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md#histogram
-	Sum *float64 `protobuf:"fixed64,5,opt,name=sum,proto3,oneof" json:"sum,omitempty"`
-	// bucket_counts is an optional field contains the count values of histogram
-	// for each bucket.
-	//
-	// The sum of the bucket_counts must equal the value in the count field.
-	//
-	// The number of elements in bucket_counts array must be by one greater than
-	// the number of elements in explicit_bounds array.
-	BucketCounts []uint64 `protobuf:"fixed64,6,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
-	// explicit_bounds specifies buckets with explicitly defined bounds for values.
-	//
-	// The boundaries for bucket at index i are:
-	//
-	// (-infinity, explicit_bounds[i]] for i == 0
-	// (explicit_bounds[i-1], explicit_bounds[i]] for 0 < i < size(explicit_bounds)
-	// (explicit_bounds[i-1], +infinity) for i == size(explicit_bounds)
-	//
-	// The values in the explicit_bounds array must be strictly increasing.
-	//
-	// Histogram buckets are inclusive of their upper boundary, except the last
-	// bucket where the boundary is at infinity. This format is intentionally
-	// compatible with the OpenMetrics histogram definition.
-	ExplicitBounds []float64 `protobuf:"fixed64,7,rep,packed,name=explicit_bounds,json=explicitBounds,proto3" json:"explicit_bounds,omitempty"`
-	// (Optional) List of exemplars collected from
-	// measurements that were used to form the data point
-	Exemplars []*Exemplar `protobuf:"bytes,8,rep,name=exemplars,proto3" json:"exemplars,omitempty"`
-	// Flags that apply to this specific data point.  See DataPointFlags
-	// for the available flags and their meaning.
-	Flags uint32 `protobuf:"varint,10,opt,name=flags,proto3" json:"flags,omitempty"`
-	// min is the minimum value over (start_time, end_time].
-	Min *float64 `protobuf:"fixed64,11,opt,name=min,proto3,oneof" json:"min,omitempty"`
-	// max is the maximum value over (start_time, end_time].
-	Max           *float64 `protobuf:"fixed64,12,opt,name=max,proto3,oneof" json:"max,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                        protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Attributes        *[]*v11.KeyValue       `protobuf:"bytes,9,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_StartTimeUnixNano uint64                 `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
+	xxx_hidden_TimeUnixNano      uint64                 `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
+	xxx_hidden_Count             uint64                 `protobuf:"fixed64,4,opt,name=count,proto3" json:"count,omitempty"`
+	xxx_hidden_Sum               float64                `protobuf:"fixed64,5,opt,name=sum,proto3,oneof" json:"sum,omitempty"`
+	xxx_hidden_BucketCounts      []uint64               `protobuf:"fixed64,6,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
+	xxx_hidden_ExplicitBounds    []float64              `protobuf:"fixed64,7,rep,packed,name=explicit_bounds,json=explicitBounds,proto3" json:"explicit_bounds,omitempty"`
+	xxx_hidden_Exemplars         *[]*Exemplar           `protobuf:"bytes,8,rep,name=exemplars,proto3" json:"exemplars,omitempty"`
+	xxx_hidden_Flags             uint32                 `protobuf:"varint,10,opt,name=flags,proto3" json:"flags,omitempty"`
+	xxx_hidden_Min               float64                `protobuf:"fixed64,11,opt,name=min,proto3,oneof" json:"min,omitempty"`
+	xxx_hidden_Max               float64                `protobuf:"fixed64,12,opt,name=max,proto3,oneof" json:"max,omitempty"`
+	XXX_raceDetectHookData       protoimpl.RaceDetectHookData
+	XXX_presence                 [1]uint32
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *HistogramDataPoint) Reset() {
@@ -1781,156 +1665,166 @@ func (x *HistogramDataPoint) ProtoReflect() protoreflect.Message {
 
 func (x *HistogramDataPoint) GetAttributes() []*v11.KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *HistogramDataPoint) GetStartTimeUnixNano() uint64 {
 	if x != nil {
-		return x.StartTimeUnixNano
+		return x.xxx_hidden_StartTimeUnixNano
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) GetTimeUnixNano() uint64 {
 	if x != nil {
-		return x.TimeUnixNano
+		return x.xxx_hidden_TimeUnixNano
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) GetCount() uint64 {
 	if x != nil {
-		return x.Count
+		return x.xxx_hidden_Count
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) GetSum() float64 {
-	if x != nil && x.Sum != nil {
-		return *x.Sum
+	if x != nil {
+		return x.xxx_hidden_Sum
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) GetBucketCounts() []uint64 {
 	if x != nil {
-		return x.BucketCounts
+		return x.xxx_hidden_BucketCounts
 	}
 	return nil
 }
 
 func (x *HistogramDataPoint) GetExplicitBounds() []float64 {
 	if x != nil {
-		return x.ExplicitBounds
+		return x.xxx_hidden_ExplicitBounds
 	}
 	return nil
 }
 
 func (x *HistogramDataPoint) GetExemplars() []*Exemplar {
 	if x != nil {
-		return x.Exemplars
+		if x.xxx_hidden_Exemplars != nil {
+			return *x.xxx_hidden_Exemplars
+		}
 	}
 	return nil
 }
 
 func (x *HistogramDataPoint) GetFlags() uint32 {
 	if x != nil {
-		return x.Flags
+		return x.xxx_hidden_Flags
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) GetMin() float64 {
-	if x != nil && x.Min != nil {
-		return *x.Min
+	if x != nil {
+		return x.xxx_hidden_Min
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) GetMax() float64 {
-	if x != nil && x.Max != nil {
-		return *x.Max
+	if x != nil {
+		return x.xxx_hidden_Max
 	}
 	return 0
 }
 
 func (x *HistogramDataPoint) SetAttributes(v []*v11.KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *HistogramDataPoint) SetStartTimeUnixNano(v uint64) {
-	x.StartTimeUnixNano = v
+	x.xxx_hidden_StartTimeUnixNano = v
 }
 
 func (x *HistogramDataPoint) SetTimeUnixNano(v uint64) {
-	x.TimeUnixNano = v
+	x.xxx_hidden_TimeUnixNano = v
 }
 
 func (x *HistogramDataPoint) SetCount(v uint64) {
-	x.Count = v
+	x.xxx_hidden_Count = v
 }
 
 func (x *HistogramDataPoint) SetSum(v float64) {
-	x.Sum = &v
+	x.xxx_hidden_Sum = v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 4, 11)
 }
 
 func (x *HistogramDataPoint) SetBucketCounts(v []uint64) {
-	x.BucketCounts = v
+	x.xxx_hidden_BucketCounts = v
 }
 
 func (x *HistogramDataPoint) SetExplicitBounds(v []float64) {
-	x.ExplicitBounds = v
+	x.xxx_hidden_ExplicitBounds = v
 }
 
 func (x *HistogramDataPoint) SetExemplars(v []*Exemplar) {
-	x.Exemplars = v
+	x.xxx_hidden_Exemplars = &v
 }
 
 func (x *HistogramDataPoint) SetFlags(v uint32) {
-	x.Flags = v
+	x.xxx_hidden_Flags = v
 }
 
 func (x *HistogramDataPoint) SetMin(v float64) {
-	x.Min = &v
+	x.xxx_hidden_Min = v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 9, 11)
 }
 
 func (x *HistogramDataPoint) SetMax(v float64) {
-	x.Max = &v
+	x.xxx_hidden_Max = v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 10, 11)
 }
 
 func (x *HistogramDataPoint) HasSum() bool {
 	if x == nil {
 		return false
 	}
-	return x.Sum != nil
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 4)
 }
 
 func (x *HistogramDataPoint) HasMin() bool {
 	if x == nil {
 		return false
 	}
-	return x.Min != nil
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 9)
 }
 
 func (x *HistogramDataPoint) HasMax() bool {
 	if x == nil {
 		return false
 	}
-	return x.Max != nil
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 10)
 }
 
 func (x *HistogramDataPoint) ClearSum() {
-	x.Sum = nil
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 4)
+	x.xxx_hidden_Sum = 0
 }
 
 func (x *HistogramDataPoint) ClearMin() {
-	x.Min = nil
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 9)
+	x.xxx_hidden_Min = 0
 }
 
 func (x *HistogramDataPoint) ClearMax() {
-	x.Max = nil
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 10)
+	x.xxx_hidden_Max = 0
 }
 
 type HistogramDataPoint_builder struct {
@@ -2003,17 +1897,26 @@ func (b0 HistogramDataPoint_builder) Build() *HistogramDataPoint {
 	m0 := &HistogramDataPoint{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Attributes = b.Attributes
-	x.StartTimeUnixNano = b.StartTimeUnixNano
-	x.TimeUnixNano = b.TimeUnixNano
-	x.Count = b.Count
-	x.Sum = b.Sum
-	x.BucketCounts = b.BucketCounts
-	x.ExplicitBounds = b.ExplicitBounds
-	x.Exemplars = b.Exemplars
-	x.Flags = b.Flags
-	x.Min = b.Min
-	x.Max = b.Max
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_StartTimeUnixNano = b.StartTimeUnixNano
+	x.xxx_hidden_TimeUnixNano = b.TimeUnixNano
+	x.xxx_hidden_Count = b.Count
+	if b.Sum != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 4, 11)
+		x.xxx_hidden_Sum = *b.Sum
+	}
+	x.xxx_hidden_BucketCounts = b.BucketCounts
+	x.xxx_hidden_ExplicitBounds = b.ExplicitBounds
+	x.xxx_hidden_Exemplars = &b.Exemplars
+	x.xxx_hidden_Flags = b.Flags
+	if b.Min != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 9, 11)
+		x.xxx_hidden_Min = *b.Min
+	}
+	if b.Max != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 10, 11)
+		x.xxx_hidden_Max = *b.Max
+	}
 	return m0
 }
 
@@ -2022,84 +1925,25 @@ func (b0 HistogramDataPoint_builder) Build() *HistogramDataPoint {
 // summary statistics for a population of values, it may optionally contain the
 // distribution of those values across a set of buckets.
 type ExponentialHistogramDataPoint struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The set of key/value pairs that uniquely identify the timeseries from
-	// where this point belongs. The list may be empty (may contain 0 elements).
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes []*v11.KeyValue `protobuf:"bytes,1,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	// StartTimeUnixNano is optional but strongly encouraged, see the
-	// the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	StartTimeUnixNano uint64 `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
-	// TimeUnixNano is required, see the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	TimeUnixNano uint64 `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
-	// count is the number of values in the population. Must be
-	// non-negative. This value must be equal to the sum of the "bucket_counts"
-	// values in the positive and negative Buckets plus the "zero_count" field.
-	Count uint64 `protobuf:"fixed64,4,opt,name=count,proto3" json:"count,omitempty"`
-	// sum of the values in the population. If count is zero then this field
-	// must be zero.
-	//
-	// Note: Sum should only be filled out when measuring non-negative discrete
-	// events, and is assumed to be monotonic over the values of these events.
-	// Negative events *can* be recorded, but sum should not be filled out when
-	// doing so.  This is specifically to enforce compatibility w/ OpenMetrics,
-	// see: https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md#histogram
-	Sum *float64 `protobuf:"fixed64,5,opt,name=sum,proto3,oneof" json:"sum,omitempty"`
-	// scale describes the resolution of the histogram.  Boundaries are
-	// located at powers of the base, where:
-	//
-	//	base = (2^(2^-scale))
-	//
-	// The histogram bucket identified by `index`, a signed integer,
-	// contains values that are greater than (base^index) and
-	// less than or equal to (base^(index+1)).
-	//
-	// The positive and negative ranges of the histogram are expressed
-	// separately.  Negative values are mapped by their absolute value
-	// into the negative range using the same scale as the positive range.
-	//
-	// scale is not restricted by the protocol, as the permissible
-	// values depend on the range of the data.
-	Scale int32 `protobuf:"zigzag32,6,opt,name=scale,proto3" json:"scale,omitempty"`
-	// zero_count is the count of values that are either exactly zero or
-	// within the region considered zero by the instrumentation at the
-	// tolerated degree of precision.  This bucket stores values that
-	// cannot be expressed using the standard exponential formula as
-	// well as values that have been rounded to zero.
-	//
-	// Implementations MAY consider the zero bucket to have probability
-	// mass equal to (zero_count / count).
-	ZeroCount uint64 `protobuf:"fixed64,7,opt,name=zero_count,json=zeroCount,proto3" json:"zero_count,omitempty"`
-	// positive carries the positive range of exponential bucket counts.
-	Positive *ExponentialHistogramDataPoint_Buckets `protobuf:"bytes,8,opt,name=positive,proto3" json:"positive,omitempty"`
-	// negative carries the negative range of exponential bucket counts.
-	Negative *ExponentialHistogramDataPoint_Buckets `protobuf:"bytes,9,opt,name=negative,proto3" json:"negative,omitempty"`
-	// Flags that apply to this specific data point.  See DataPointFlags
-	// for the available flags and their meaning.
-	Flags uint32 `protobuf:"varint,10,opt,name=flags,proto3" json:"flags,omitempty"`
-	// (Optional) List of exemplars collected from
-	// measurements that were used to form the data point
-	Exemplars []*Exemplar `protobuf:"bytes,11,rep,name=exemplars,proto3" json:"exemplars,omitempty"`
-	// min is the minimum value over (start_time, end_time].
-	Min *float64 `protobuf:"fixed64,12,opt,name=min,proto3,oneof" json:"min,omitempty"`
-	// max is the maximum value over (start_time, end_time].
-	Max *float64 `protobuf:"fixed64,13,opt,name=max,proto3,oneof" json:"max,omitempty"`
-	// ZeroThreshold may be optionally set to convey the width of the zero
-	// region. Where the zero region is defined as the closed interval
-	// [-ZeroThreshold, ZeroThreshold].
-	// When ZeroThreshold is 0, zero count bucket stores values that cannot be
-	// expressed using the standard exponential formula as well as values that
-	// have been rounded to zero.
-	ZeroThreshold float64 `protobuf:"fixed64,14,opt,name=zero_threshold,json=zeroThreshold,proto3" json:"zero_threshold,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                        protoimpl.MessageState                 `protogen:"opaque.v1"`
+	xxx_hidden_Attributes        *[]*v11.KeyValue                       `protobuf:"bytes,1,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_StartTimeUnixNano uint64                                 `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
+	xxx_hidden_TimeUnixNano      uint64                                 `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
+	xxx_hidden_Count             uint64                                 `protobuf:"fixed64,4,opt,name=count,proto3" json:"count,omitempty"`
+	xxx_hidden_Sum               float64                                `protobuf:"fixed64,5,opt,name=sum,proto3,oneof" json:"sum,omitempty"`
+	xxx_hidden_Scale             int32                                  `protobuf:"zigzag32,6,opt,name=scale,proto3" json:"scale,omitempty"`
+	xxx_hidden_ZeroCount         uint64                                 `protobuf:"fixed64,7,opt,name=zero_count,json=zeroCount,proto3" json:"zero_count,omitempty"`
+	xxx_hidden_Positive          *ExponentialHistogramDataPoint_Buckets `protobuf:"bytes,8,opt,name=positive,proto3" json:"positive,omitempty"`
+	xxx_hidden_Negative          *ExponentialHistogramDataPoint_Buckets `protobuf:"bytes,9,opt,name=negative,proto3" json:"negative,omitempty"`
+	xxx_hidden_Flags             uint32                                 `protobuf:"varint,10,opt,name=flags,proto3" json:"flags,omitempty"`
+	xxx_hidden_Exemplars         *[]*Exemplar                           `protobuf:"bytes,11,rep,name=exemplars,proto3" json:"exemplars,omitempty"`
+	xxx_hidden_Min               float64                                `protobuf:"fixed64,12,opt,name=min,proto3,oneof" json:"min,omitempty"`
+	xxx_hidden_Max               float64                                `protobuf:"fixed64,13,opt,name=max,proto3,oneof" json:"max,omitempty"`
+	xxx_hidden_ZeroThreshold     float64                                `protobuf:"fixed64,14,opt,name=zero_threshold,json=zeroThreshold,proto3" json:"zero_threshold,omitempty"`
+	XXX_raceDetectHookData       protoimpl.RaceDetectHookData
+	XXX_presence                 [1]uint32
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *ExponentialHistogramDataPoint) Reset() {
@@ -2129,211 +1973,221 @@ func (x *ExponentialHistogramDataPoint) ProtoReflect() protoreflect.Message {
 
 func (x *ExponentialHistogramDataPoint) GetAttributes() []*v11.KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *ExponentialHistogramDataPoint) GetStartTimeUnixNano() uint64 {
 	if x != nil {
-		return x.StartTimeUnixNano
+		return x.xxx_hidden_StartTimeUnixNano
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetTimeUnixNano() uint64 {
 	if x != nil {
-		return x.TimeUnixNano
+		return x.xxx_hidden_TimeUnixNano
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetCount() uint64 {
 	if x != nil {
-		return x.Count
+		return x.xxx_hidden_Count
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetSum() float64 {
-	if x != nil && x.Sum != nil {
-		return *x.Sum
+	if x != nil {
+		return x.xxx_hidden_Sum
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetScale() int32 {
 	if x != nil {
-		return x.Scale
+		return x.xxx_hidden_Scale
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetZeroCount() uint64 {
 	if x != nil {
-		return x.ZeroCount
+		return x.xxx_hidden_ZeroCount
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetPositive() *ExponentialHistogramDataPoint_Buckets {
 	if x != nil {
-		return x.Positive
+		return x.xxx_hidden_Positive
 	}
 	return nil
 }
 
 func (x *ExponentialHistogramDataPoint) GetNegative() *ExponentialHistogramDataPoint_Buckets {
 	if x != nil {
-		return x.Negative
+		return x.xxx_hidden_Negative
 	}
 	return nil
 }
 
 func (x *ExponentialHistogramDataPoint) GetFlags() uint32 {
 	if x != nil {
-		return x.Flags
+		return x.xxx_hidden_Flags
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetExemplars() []*Exemplar {
 	if x != nil {
-		return x.Exemplars
+		if x.xxx_hidden_Exemplars != nil {
+			return *x.xxx_hidden_Exemplars
+		}
 	}
 	return nil
 }
 
 func (x *ExponentialHistogramDataPoint) GetMin() float64 {
-	if x != nil && x.Min != nil {
-		return *x.Min
+	if x != nil {
+		return x.xxx_hidden_Min
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetMax() float64 {
-	if x != nil && x.Max != nil {
-		return *x.Max
+	if x != nil {
+		return x.xxx_hidden_Max
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) GetZeroThreshold() float64 {
 	if x != nil {
-		return x.ZeroThreshold
+		return x.xxx_hidden_ZeroThreshold
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint) SetAttributes(v []*v11.KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *ExponentialHistogramDataPoint) SetStartTimeUnixNano(v uint64) {
-	x.StartTimeUnixNano = v
+	x.xxx_hidden_StartTimeUnixNano = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetTimeUnixNano(v uint64) {
-	x.TimeUnixNano = v
+	x.xxx_hidden_TimeUnixNano = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetCount(v uint64) {
-	x.Count = v
+	x.xxx_hidden_Count = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetSum(v float64) {
-	x.Sum = &v
+	x.xxx_hidden_Sum = v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 4, 14)
 }
 
 func (x *ExponentialHistogramDataPoint) SetScale(v int32) {
-	x.Scale = v
+	x.xxx_hidden_Scale = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetZeroCount(v uint64) {
-	x.ZeroCount = v
+	x.xxx_hidden_ZeroCount = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetPositive(v *ExponentialHistogramDataPoint_Buckets) {
-	x.Positive = v
+	x.xxx_hidden_Positive = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetNegative(v *ExponentialHistogramDataPoint_Buckets) {
-	x.Negative = v
+	x.xxx_hidden_Negative = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetFlags(v uint32) {
-	x.Flags = v
+	x.xxx_hidden_Flags = v
 }
 
 func (x *ExponentialHistogramDataPoint) SetExemplars(v []*Exemplar) {
-	x.Exemplars = v
+	x.xxx_hidden_Exemplars = &v
 }
 
 func (x *ExponentialHistogramDataPoint) SetMin(v float64) {
-	x.Min = &v
+	x.xxx_hidden_Min = v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 11, 14)
 }
 
 func (x *ExponentialHistogramDataPoint) SetMax(v float64) {
-	x.Max = &v
+	x.xxx_hidden_Max = v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 12, 14)
 }
 
 func (x *ExponentialHistogramDataPoint) SetZeroThreshold(v float64) {
-	x.ZeroThreshold = v
+	x.xxx_hidden_ZeroThreshold = v
 }
 
 func (x *ExponentialHistogramDataPoint) HasSum() bool {
 	if x == nil {
 		return false
 	}
-	return x.Sum != nil
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 4)
 }
 
 func (x *ExponentialHistogramDataPoint) HasPositive() bool {
 	if x == nil {
 		return false
 	}
-	return x.Positive != nil
+	return x.xxx_hidden_Positive != nil
 }
 
 func (x *ExponentialHistogramDataPoint) HasNegative() bool {
 	if x == nil {
 		return false
 	}
-	return x.Negative != nil
+	return x.xxx_hidden_Negative != nil
 }
 
 func (x *ExponentialHistogramDataPoint) HasMin() bool {
 	if x == nil {
 		return false
 	}
-	return x.Min != nil
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 11)
 }
 
 func (x *ExponentialHistogramDataPoint) HasMax() bool {
 	if x == nil {
 		return false
 	}
-	return x.Max != nil
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 12)
 }
 
 func (x *ExponentialHistogramDataPoint) ClearSum() {
-	x.Sum = nil
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 4)
+	x.xxx_hidden_Sum = 0
 }
 
 func (x *ExponentialHistogramDataPoint) ClearPositive() {
-	x.Positive = nil
+	x.xxx_hidden_Positive = nil
 }
 
 func (x *ExponentialHistogramDataPoint) ClearNegative() {
-	x.Negative = nil
+	x.xxx_hidden_Negative = nil
 }
 
 func (x *ExponentialHistogramDataPoint) ClearMin() {
-	x.Min = nil
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 11)
+	x.xxx_hidden_Min = 0
 }
 
 func (x *ExponentialHistogramDataPoint) ClearMax() {
-	x.Max = nil
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 12)
+	x.xxx_hidden_Max = 0
 }
 
 type ExponentialHistogramDataPoint_builder struct {
@@ -2420,20 +2274,29 @@ func (b0 ExponentialHistogramDataPoint_builder) Build() *ExponentialHistogramDat
 	m0 := &ExponentialHistogramDataPoint{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Attributes = b.Attributes
-	x.StartTimeUnixNano = b.StartTimeUnixNano
-	x.TimeUnixNano = b.TimeUnixNano
-	x.Count = b.Count
-	x.Sum = b.Sum
-	x.Scale = b.Scale
-	x.ZeroCount = b.ZeroCount
-	x.Positive = b.Positive
-	x.Negative = b.Negative
-	x.Flags = b.Flags
-	x.Exemplars = b.Exemplars
-	x.Min = b.Min
-	x.Max = b.Max
-	x.ZeroThreshold = b.ZeroThreshold
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_StartTimeUnixNano = b.StartTimeUnixNano
+	x.xxx_hidden_TimeUnixNano = b.TimeUnixNano
+	x.xxx_hidden_Count = b.Count
+	if b.Sum != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 4, 14)
+		x.xxx_hidden_Sum = *b.Sum
+	}
+	x.xxx_hidden_Scale = b.Scale
+	x.xxx_hidden_ZeroCount = b.ZeroCount
+	x.xxx_hidden_Positive = b.Positive
+	x.xxx_hidden_Negative = b.Negative
+	x.xxx_hidden_Flags = b.Flags
+	x.xxx_hidden_Exemplars = &b.Exemplars
+	if b.Min != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 11, 14)
+		x.xxx_hidden_Min = *b.Min
+	}
+	if b.Max != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 12, 14)
+		x.xxx_hidden_Max = *b.Max
+	}
+	x.xxx_hidden_ZeroThreshold = b.ZeroThreshold
 	return m0
 }
 
@@ -2441,42 +2304,16 @@ func (b0 ExponentialHistogramDataPoint_builder) Build() *ExponentialHistogramDat
 // time-varying values of a Summary metric. The count and sum fields represent
 // cumulative values.
 type SummaryDataPoint struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The set of key/value pairs that uniquely identify the timeseries from
-	// where this point belongs. The list may be empty (may contain 0 elements).
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes []*v11.KeyValue `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	// StartTimeUnixNano is optional but strongly encouraged, see the
-	// the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	StartTimeUnixNano uint64 `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
-	// TimeUnixNano is required, see the detailed comments above Metric.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	TimeUnixNano uint64 `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
-	// count is the number of values in the population. Must be non-negative.
-	Count uint64 `protobuf:"fixed64,4,opt,name=count,proto3" json:"count,omitempty"`
-	// sum of the values in the population. If count is zero then this field
-	// must be zero.
-	//
-	// Note: Sum should only be filled out when measuring non-negative discrete
-	// events, and is assumed to be monotonic over the values of these events.
-	// Negative events *can* be recorded, but sum should not be filled out when
-	// doing so.  This is specifically to enforce compatibility w/ OpenMetrics,
-	// see: https://github.com/prometheus/OpenMetrics/blob/v1.0.0/specification/OpenMetrics.md#summary
-	Sum float64 `protobuf:"fixed64,5,opt,name=sum,proto3" json:"sum,omitempty"`
-	// (Optional) list of values at different quantiles of the distribution calculated
-	// from the current snapshot. The quantiles must be strictly increasing.
-	QuantileValues []*SummaryDataPoint_ValueAtQuantile `protobuf:"bytes,6,rep,name=quantile_values,json=quantileValues,proto3" json:"quantile_values,omitempty"`
-	// Flags that apply to this specific data point.  See DataPointFlags
-	// for the available flags and their meaning.
-	Flags         uint32 `protobuf:"varint,8,opt,name=flags,proto3" json:"flags,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                        protoimpl.MessageState               `protogen:"opaque.v1"`
+	xxx_hidden_Attributes        *[]*v11.KeyValue                     `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_StartTimeUnixNano uint64                               `protobuf:"fixed64,2,opt,name=start_time_unix_nano,json=startTimeUnixNano,proto3" json:"start_time_unix_nano,omitempty"`
+	xxx_hidden_TimeUnixNano      uint64                               `protobuf:"fixed64,3,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
+	xxx_hidden_Count             uint64                               `protobuf:"fixed64,4,opt,name=count,proto3" json:"count,omitempty"`
+	xxx_hidden_Sum               float64                              `protobuf:"fixed64,5,opt,name=sum,proto3" json:"sum,omitempty"`
+	xxx_hidden_QuantileValues    *[]*SummaryDataPoint_ValueAtQuantile `protobuf:"bytes,6,rep,name=quantile_values,json=quantileValues,proto3" json:"quantile_values,omitempty"`
+	xxx_hidden_Flags             uint32                               `protobuf:"varint,8,opt,name=flags,proto3" json:"flags,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *SummaryDataPoint) Reset() {
@@ -2506,79 +2343,83 @@ func (x *SummaryDataPoint) ProtoReflect() protoreflect.Message {
 
 func (x *SummaryDataPoint) GetAttributes() []*v11.KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *SummaryDataPoint) GetStartTimeUnixNano() uint64 {
 	if x != nil {
-		return x.StartTimeUnixNano
+		return x.xxx_hidden_StartTimeUnixNano
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint) GetTimeUnixNano() uint64 {
 	if x != nil {
-		return x.TimeUnixNano
+		return x.xxx_hidden_TimeUnixNano
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint) GetCount() uint64 {
 	if x != nil {
-		return x.Count
+		return x.xxx_hidden_Count
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint) GetSum() float64 {
 	if x != nil {
-		return x.Sum
+		return x.xxx_hidden_Sum
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint) GetQuantileValues() []*SummaryDataPoint_ValueAtQuantile {
 	if x != nil {
-		return x.QuantileValues
+		if x.xxx_hidden_QuantileValues != nil {
+			return *x.xxx_hidden_QuantileValues
+		}
 	}
 	return nil
 }
 
 func (x *SummaryDataPoint) GetFlags() uint32 {
 	if x != nil {
-		return x.Flags
+		return x.xxx_hidden_Flags
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint) SetAttributes(v []*v11.KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *SummaryDataPoint) SetStartTimeUnixNano(v uint64) {
-	x.StartTimeUnixNano = v
+	x.xxx_hidden_StartTimeUnixNano = v
 }
 
 func (x *SummaryDataPoint) SetTimeUnixNano(v uint64) {
-	x.TimeUnixNano = v
+	x.xxx_hidden_TimeUnixNano = v
 }
 
 func (x *SummaryDataPoint) SetCount(v uint64) {
-	x.Count = v
+	x.xxx_hidden_Count = v
 }
 
 func (x *SummaryDataPoint) SetSum(v float64) {
-	x.Sum = v
+	x.xxx_hidden_Sum = v
 }
 
 func (x *SummaryDataPoint) SetQuantileValues(v []*SummaryDataPoint_ValueAtQuantile) {
-	x.QuantileValues = v
+	x.xxx_hidden_QuantileValues = &v
 }
 
 func (x *SummaryDataPoint) SetFlags(v uint32) {
-	x.Flags = v
+	x.xxx_hidden_Flags = v
 }
 
 type SummaryDataPoint_builder struct {
@@ -2623,13 +2464,13 @@ func (b0 SummaryDataPoint_builder) Build() *SummaryDataPoint {
 	m0 := &SummaryDataPoint{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Attributes = b.Attributes
-	x.StartTimeUnixNano = b.StartTimeUnixNano
-	x.TimeUnixNano = b.TimeUnixNano
-	x.Count = b.Count
-	x.Sum = b.Sum
-	x.QuantileValues = b.QuantileValues
-	x.Flags = b.Flags
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_StartTimeUnixNano = b.StartTimeUnixNano
+	x.xxx_hidden_TimeUnixNano = b.TimeUnixNano
+	x.xxx_hidden_Count = b.Count
+	x.xxx_hidden_Sum = b.Sum
+	x.xxx_hidden_QuantileValues = &b.QuantileValues
+	x.xxx_hidden_Flags = b.Flags
 	return m0
 }
 
@@ -2638,35 +2479,14 @@ func (b0 SummaryDataPoint_builder) Build() *SummaryDataPoint {
 // was recorded, for example the span and trace ID of the active span when the
 // exemplar was recorded.
 type Exemplar struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The set of key/value pairs that were filtered out by the aggregator, but
-	// recorded alongside the original measurement. Only key/value pairs that were
-	// filtered out by the aggregator should be included
-	FilteredAttributes []*v11.KeyValue `protobuf:"bytes,7,rep,name=filtered_attributes,json=filteredAttributes,proto3" json:"filtered_attributes,omitempty"`
-	// time_unix_nano is the exact time when this exemplar was recorded
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
-	// 1970.
-	TimeUnixNano uint64 `protobuf:"fixed64,2,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
-	// The value of the measurement that was recorded. An exemplar is
-	// considered invalid when one of the recognized value fields is not present
-	// inside this oneof.
-	//
-	// Types that are valid to be assigned to Value:
-	//
-	//	*Exemplar_AsDouble
-	//	*Exemplar_AsInt
-	Value isExemplar_Value `protobuf_oneof:"value"`
-	// (Optional) Span ID of the exemplar trace.
-	// span_id may be missing if the measurement is not recorded inside a trace
-	// or if the trace is not sampled.
-	SpanId []byte `protobuf:"bytes,4,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
-	// (Optional) Trace ID of the exemplar trace.
-	// trace_id may be missing if the measurement is not recorded inside a trace
-	// or if the trace is not sampled.
-	TraceId       []byte `protobuf:"bytes,5,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                         protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_FilteredAttributes *[]*v11.KeyValue       `protobuf:"bytes,7,rep,name=filtered_attributes,json=filteredAttributes,proto3" json:"filtered_attributes,omitempty"`
+	xxx_hidden_TimeUnixNano       uint64                 `protobuf:"fixed64,2,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
+	xxx_hidden_Value              isExemplar_Value       `protobuf_oneof:"value"`
+	xxx_hidden_SpanId             []byte                 `protobuf:"bytes,4,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
+	xxx_hidden_TraceId            []byte                 `protobuf:"bytes,5,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
 }
 
 func (x *Exemplar) Reset() {
@@ -2696,28 +2516,23 @@ func (x *Exemplar) ProtoReflect() protoreflect.Message {
 
 func (x *Exemplar) GetFilteredAttributes() []*v11.KeyValue {
 	if x != nil {
-		return x.FilteredAttributes
+		if x.xxx_hidden_FilteredAttributes != nil {
+			return *x.xxx_hidden_FilteredAttributes
+		}
 	}
 	return nil
 }
 
 func (x *Exemplar) GetTimeUnixNano() uint64 {
 	if x != nil {
-		return x.TimeUnixNano
+		return x.xxx_hidden_TimeUnixNano
 	}
 	return 0
 }
 
-func (x *Exemplar) GetValue() isExemplar_Value {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
 func (x *Exemplar) GetAsDouble() float64 {
 	if x != nil {
-		if x, ok := x.Value.(*Exemplar_AsDouble); ok {
+		if x, ok := x.xxx_hidden_Value.(*exemplar_AsDouble); ok {
 			return x.AsDouble
 		}
 	}
@@ -2726,7 +2541,7 @@ func (x *Exemplar) GetAsDouble() float64 {
 
 func (x *Exemplar) GetAsInt() int64 {
 	if x != nil {
-		if x, ok := x.Value.(*Exemplar_AsInt); ok {
+		if x, ok := x.xxx_hidden_Value.(*exemplar_AsInt); ok {
 			return x.AsInt
 		}
 	}
@@ -2735,60 +2550,60 @@ func (x *Exemplar) GetAsInt() int64 {
 
 func (x *Exemplar) GetSpanId() []byte {
 	if x != nil {
-		return x.SpanId
+		return x.xxx_hidden_SpanId
 	}
 	return nil
 }
 
 func (x *Exemplar) GetTraceId() []byte {
 	if x != nil {
-		return x.TraceId
+		return x.xxx_hidden_TraceId
 	}
 	return nil
 }
 
 func (x *Exemplar) SetFilteredAttributes(v []*v11.KeyValue) {
-	x.FilteredAttributes = v
+	x.xxx_hidden_FilteredAttributes = &v
 }
 
 func (x *Exemplar) SetTimeUnixNano(v uint64) {
-	x.TimeUnixNano = v
+	x.xxx_hidden_TimeUnixNano = v
 }
 
 func (x *Exemplar) SetAsDouble(v float64) {
-	x.Value = &Exemplar_AsDouble{v}
+	x.xxx_hidden_Value = &exemplar_AsDouble{v}
 }
 
 func (x *Exemplar) SetAsInt(v int64) {
-	x.Value = &Exemplar_AsInt{v}
+	x.xxx_hidden_Value = &exemplar_AsInt{v}
 }
 
 func (x *Exemplar) SetSpanId(v []byte) {
 	if v == nil {
 		v = []byte{}
 	}
-	x.SpanId = v
+	x.xxx_hidden_SpanId = v
 }
 
 func (x *Exemplar) SetTraceId(v []byte) {
 	if v == nil {
 		v = []byte{}
 	}
-	x.TraceId = v
+	x.xxx_hidden_TraceId = v
 }
 
 func (x *Exemplar) HasValue() bool {
 	if x == nil {
 		return false
 	}
-	return x.Value != nil
+	return x.xxx_hidden_Value != nil
 }
 
 func (x *Exemplar) HasAsDouble() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*Exemplar_AsDouble)
+	_, ok := x.xxx_hidden_Value.(*exemplar_AsDouble)
 	return ok
 }
 
@@ -2796,23 +2611,23 @@ func (x *Exemplar) HasAsInt() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*Exemplar_AsInt)
+	_, ok := x.xxx_hidden_Value.(*exemplar_AsInt)
 	return ok
 }
 
 func (x *Exemplar) ClearValue() {
-	x.Value = nil
+	x.xxx_hidden_Value = nil
 }
 
 func (x *Exemplar) ClearAsDouble() {
-	if _, ok := x.Value.(*Exemplar_AsDouble); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*exemplar_AsDouble); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *Exemplar) ClearAsInt() {
-	if _, ok := x.Value.(*Exemplar_AsInt); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*exemplar_AsInt); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
@@ -2824,10 +2639,10 @@ func (x *Exemplar) WhichValue() case_Exemplar_Value {
 	if x == nil {
 		return Exemplar_Value_not_set_case
 	}
-	switch x.Value.(type) {
-	case *Exemplar_AsDouble:
+	switch x.xxx_hidden_Value.(type) {
+	case *exemplar_AsDouble:
 		return Exemplar_AsDouble_case
-	case *Exemplar_AsInt:
+	case *exemplar_AsInt:
 		return Exemplar_AsInt_case
 	default:
 		return Exemplar_Value_not_set_case
@@ -2850,10 +2665,10 @@ type Exemplar_builder struct {
 	// considered invalid when one of the recognized value fields is not present
 	// inside this oneof.
 
-	// Fields of oneof Value:
+	// Fields of oneof xxx_hidden_Value:
 	AsDouble *float64
 	AsInt    *int64
-	// -- end of Value
+	// -- end of xxx_hidden_Value
 	// (Optional) Span ID of the exemplar trace.
 	// span_id may be missing if the measurement is not recorded inside a trace
 	// or if the trace is not sampled.
@@ -2868,16 +2683,16 @@ func (b0 Exemplar_builder) Build() *Exemplar {
 	m0 := &Exemplar{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.FilteredAttributes = b.FilteredAttributes
-	x.TimeUnixNano = b.TimeUnixNano
+	x.xxx_hidden_FilteredAttributes = &b.FilteredAttributes
+	x.xxx_hidden_TimeUnixNano = b.TimeUnixNano
 	if b.AsDouble != nil {
-		x.Value = &Exemplar_AsDouble{*b.AsDouble}
+		x.xxx_hidden_Value = &exemplar_AsDouble{*b.AsDouble}
 	}
 	if b.AsInt != nil {
-		x.Value = &Exemplar_AsInt{*b.AsInt}
+		x.xxx_hidden_Value = &exemplar_AsInt{*b.AsInt}
 	}
-	x.SpanId = b.SpanId
-	x.TraceId = b.TraceId
+	x.xxx_hidden_SpanId = b.SpanId
+	x.xxx_hidden_TraceId = b.TraceId
 	return m0
 }
 
@@ -2895,38 +2710,26 @@ type isExemplar_Value interface {
 	isExemplar_Value()
 }
 
-type Exemplar_AsDouble struct {
+type exemplar_AsDouble struct {
 	AsDouble float64 `protobuf:"fixed64,3,opt,name=as_double,json=asDouble,proto3,oneof"`
 }
 
-type Exemplar_AsInt struct {
+type exemplar_AsInt struct {
 	AsInt int64 `protobuf:"fixed64,6,opt,name=as_int,json=asInt,proto3,oneof"`
 }
 
-func (*Exemplar_AsDouble) isExemplar_Value() {}
+func (*exemplar_AsDouble) isExemplar_Value() {}
 
-func (*Exemplar_AsInt) isExemplar_Value() {}
+func (*exemplar_AsInt) isExemplar_Value() {}
 
 // Buckets are a set of bucket counts, encoded in a contiguous array
 // of counts.
 type ExponentialHistogramDataPoint_Buckets struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Offset is the bucket index of the first entry in the bucket_counts array.
-	//
-	// Note: This uses a varint encoding as a simple form of compression.
-	Offset int32 `protobuf:"zigzag32,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	// bucket_counts is an array of count values, where bucket_counts[i] carries
-	// the count of the bucket at index (offset+i). bucket_counts[i] is the count
-	// of values greater than base^(offset+i) and less than or equal to
-	// base^(offset+i+1).
-	//
-	// Note: By contrast, the explicit HistogramDataPoint uses
-	// fixed64.  This field is expected to have many buckets,
-	// especially zeros, so uint64 has been selected to ensure
-	// varint encoding.
-	BucketCounts  []uint64 `protobuf:"varint,2,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Offset       int32                  `protobuf:"zigzag32,1,opt,name=offset,proto3" json:"offset,omitempty"`
+	xxx_hidden_BucketCounts []uint64               `protobuf:"varint,2,rep,packed,name=bucket_counts,json=bucketCounts,proto3" json:"bucket_counts,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ExponentialHistogramDataPoint_Buckets) Reset() {
@@ -2956,24 +2759,24 @@ func (x *ExponentialHistogramDataPoint_Buckets) ProtoReflect() protoreflect.Mess
 
 func (x *ExponentialHistogramDataPoint_Buckets) GetOffset() int32 {
 	if x != nil {
-		return x.Offset
+		return x.xxx_hidden_Offset
 	}
 	return 0
 }
 
 func (x *ExponentialHistogramDataPoint_Buckets) GetBucketCounts() []uint64 {
 	if x != nil {
-		return x.BucketCounts
+		return x.xxx_hidden_BucketCounts
 	}
 	return nil
 }
 
 func (x *ExponentialHistogramDataPoint_Buckets) SetOffset(v int32) {
-	x.Offset = v
+	x.xxx_hidden_Offset = v
 }
 
 func (x *ExponentialHistogramDataPoint_Buckets) SetBucketCounts(v []uint64) {
-	x.BucketCounts = v
+	x.xxx_hidden_BucketCounts = v
 }
 
 type ExponentialHistogramDataPoint_Buckets_builder struct {
@@ -2999,8 +2802,8 @@ func (b0 ExponentialHistogramDataPoint_Buckets_builder) Build() *ExponentialHist
 	m0 := &ExponentialHistogramDataPoint_Buckets{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Offset = b.Offset
-	x.BucketCounts = b.BucketCounts
+	x.xxx_hidden_Offset = b.Offset
+	x.xxx_hidden_BucketCounts = b.BucketCounts
 	return m0
 }
 
@@ -3013,16 +2816,11 @@ func (b0 ExponentialHistogramDataPoint_Buckets_builder) Build() *ExponentialHist
 // See the following issue for more context:
 // https://github.com/open-telemetry/opentelemetry-proto/issues/125
 type SummaryDataPoint_ValueAtQuantile struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The quantile of a distribution. Must be in the interval
-	// [0.0, 1.0].
-	Quantile float64 `protobuf:"fixed64,1,opt,name=quantile,proto3" json:"quantile,omitempty"`
-	// The value at the given quantile of a distribution.
-	//
-	// Quantile values must NOT be negative.
-	Value         float64 `protobuf:"fixed64,2,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Quantile float64                `protobuf:"fixed64,1,opt,name=quantile,proto3" json:"quantile,omitempty"`
+	xxx_hidden_Value    float64                `protobuf:"fixed64,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *SummaryDataPoint_ValueAtQuantile) Reset() {
@@ -3052,24 +2850,24 @@ func (x *SummaryDataPoint_ValueAtQuantile) ProtoReflect() protoreflect.Message {
 
 func (x *SummaryDataPoint_ValueAtQuantile) GetQuantile() float64 {
 	if x != nil {
-		return x.Quantile
+		return x.xxx_hidden_Quantile
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint_ValueAtQuantile) GetValue() float64 {
 	if x != nil {
-		return x.Value
+		return x.xxx_hidden_Value
 	}
 	return 0
 }
 
 func (x *SummaryDataPoint_ValueAtQuantile) SetQuantile(v float64) {
-	x.Quantile = v
+	x.xxx_hidden_Quantile = v
 }
 
 func (x *SummaryDataPoint_ValueAtQuantile) SetValue(v float64) {
-	x.Value = v
+	x.xxx_hidden_Value = v
 }
 
 type SummaryDataPoint_ValueAtQuantile_builder struct {
@@ -3088,8 +2886,8 @@ func (b0 SummaryDataPoint_ValueAtQuantile_builder) Build() *SummaryDataPoint_Val
 	m0 := &SummaryDataPoint_ValueAtQuantile{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Quantile = b.Quantile
-	x.Value = b.Value
+	x.xxx_hidden_Quantile = b.Quantile
+	x.xxx_hidden_Value = b.Value
 	return m0
 }
 
@@ -3468,21 +3266,21 @@ func file_opentelemetry_proto_metrics_v1_metrics_proto_init() {
 		return
 	}
 	file_opentelemetry_proto_metrics_v1_metrics_proto_msgTypes[3].OneofWrappers = []any{
-		(*Metric_Gauge)(nil),
-		(*Metric_Sum)(nil),
-		(*Metric_Histogram)(nil),
-		(*Metric_ExponentialHistogram)(nil),
-		(*Metric_Summary)(nil),
+		(*metric_Gauge)(nil),
+		(*metric_Sum)(nil),
+		(*metric_Histogram)(nil),
+		(*metric_ExponentialHistogram)(nil),
+		(*metric_Summary)(nil),
 	}
 	file_opentelemetry_proto_metrics_v1_metrics_proto_msgTypes[9].OneofWrappers = []any{
-		(*NumberDataPoint_AsDouble)(nil),
-		(*NumberDataPoint_AsInt)(nil),
+		(*numberDataPoint_AsDouble)(nil),
+		(*numberDataPoint_AsInt)(nil),
 	}
 	file_opentelemetry_proto_metrics_v1_metrics_proto_msgTypes[10].OneofWrappers = []any{}
 	file_opentelemetry_proto_metrics_v1_metrics_proto_msgTypes[11].OneofWrappers = []any{}
 	file_opentelemetry_proto_metrics_v1_metrics_proto_msgTypes[13].OneofWrappers = []any{
-		(*Exemplar_AsDouble)(nil),
-		(*Exemplar_AsInt)(nil),
+		(*exemplar_AsDouble)(nil),
+		(*exemplar_AsInt)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

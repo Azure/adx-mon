@@ -18,7 +18,7 @@
 // 	protoc        (unknown)
 // source: opentelemetry/proto/resource/v1/resource.proto
 
-//go:build !protoopaque
+//go:build protoopaque
 
 package resourcev1
 
@@ -38,16 +38,11 @@ const (
 
 // Resource information.
 type Resource struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Set of attributes that describe the resource.
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes []*v1.KeyValue `protobuf:"bytes,1,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	// dropped_attributes_count is the number of dropped attributes. If the value is 0, then
-	// no attributes were dropped.
-	DroppedAttributesCount uint32 `protobuf:"varint,2,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3" json:"dropped_attributes_count,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state                             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Attributes             *[]*v1.KeyValue        `protobuf:"bytes,1,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_DroppedAttributesCount uint32                 `protobuf:"varint,2,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3" json:"dropped_attributes_count,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *Resource) Reset() {
@@ -77,24 +72,26 @@ func (x *Resource) ProtoReflect() protoreflect.Message {
 
 func (x *Resource) GetAttributes() []*v1.KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *Resource) GetDroppedAttributesCount() uint32 {
 	if x != nil {
-		return x.DroppedAttributesCount
+		return x.xxx_hidden_DroppedAttributesCount
 	}
 	return 0
 }
 
 func (x *Resource) SetAttributes(v []*v1.KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *Resource) SetDroppedAttributesCount(v uint32) {
-	x.DroppedAttributesCount = v
+	x.xxx_hidden_DroppedAttributesCount = v
 }
 
 type Resource_builder struct {
@@ -113,8 +110,8 @@ func (b0 Resource_builder) Build() *Resource {
 	m0 := &Resource{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Attributes = b.Attributes
-	x.DroppedAttributesCount = b.DroppedAttributesCount
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_DroppedAttributesCount = b.DroppedAttributesCount
 	return m0
 }
 
