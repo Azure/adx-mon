@@ -17,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -43,7 +44,6 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Coll
 	}
 
 	req := testcontainers.ContainerRequest{
-		Name: "collector" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:       DefaultImage,
 			Tag:        DefaultTag,
@@ -55,7 +55,6 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Coll
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
-		Reuse:            true,
 	}
 
 	for _, opt := range opts {
@@ -175,6 +174,11 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					}
 
 					if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
+						if meta.IsNoMatchError(err) {
+							// Ingestor installs the CRD, so if we get a no match error, it's because the CRD
+							// hasn't been installed yet. We can just skip creating the function in this case.
+							return nil
+						}
 						return fmt.Errorf("failed to create collector function: %w", err)
 					}
 

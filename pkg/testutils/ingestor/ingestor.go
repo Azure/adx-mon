@@ -42,7 +42,6 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 	}
 
 	req := testcontainers.ContainerRequest{
-		Name: "ingestor" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:       DefaultImage,
 			Tag:        DefaultTag,
@@ -54,7 +53,6 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
-		Reuse:            true,
 	}
 
 	for _, opt := range opts {

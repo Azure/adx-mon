@@ -32,7 +32,6 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Aler
 	}
 
 	req := testcontainers.ContainerRequest{
-		Name: "alerter" + testcontainers.SessionID(),
 		FromDockerfile: testcontainers.FromDockerfile{
 			Repo:       DefaultImage,
 			Tag:        DefaultTag,
@@ -44,7 +43,6 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Aler
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
-		Reuse:            true,
 	}
 
 	for _, opt := range opts {

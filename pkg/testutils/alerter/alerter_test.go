@@ -26,7 +26,7 @@ func TestAlerter(t *testing.T) {
 func TestInCluster(t *testing.T) {
 	testutils.IntegrationTest(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	t.Cleanup(cancel)
 
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
