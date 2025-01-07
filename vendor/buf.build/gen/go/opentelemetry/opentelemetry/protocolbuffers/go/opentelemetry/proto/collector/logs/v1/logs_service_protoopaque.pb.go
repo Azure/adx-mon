@@ -18,7 +18,7 @@
 // 	protoc        (unknown)
 // source: opentelemetry/proto/collector/logs/v1/logs_service.proto
 
-//go:build !protoopaque
+//go:build protoopaque
 
 package logsv1
 
@@ -37,15 +37,10 @@ const (
 )
 
 type ExportLogsServiceRequest struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// An array of ResourceLogs.
-	// For data coming from a single resource this array will typically contain one
-	// element. Intermediary nodes (such as OpenTelemetry Collector) that receive
-	// data from multiple origins typically batch the data before forwarding further and
-	// in that case this array will contain multiple elements.
-	ResourceLogs  []*v1.ResourceLogs `protobuf:"bytes,1,rep,name=resource_logs,json=resourceLogs,proto3" json:"resource_logs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_ResourceLogs *[]*v1.ResourceLogs    `protobuf:"bytes,1,rep,name=resource_logs,json=resourceLogs,proto3" json:"resource_logs,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ExportLogsServiceRequest) Reset() {
@@ -75,13 +70,15 @@ func (x *ExportLogsServiceRequest) ProtoReflect() protoreflect.Message {
 
 func (x *ExportLogsServiceRequest) GetResourceLogs() []*v1.ResourceLogs {
 	if x != nil {
-		return x.ResourceLogs
+		if x.xxx_hidden_ResourceLogs != nil {
+			return *x.xxx_hidden_ResourceLogs
+		}
 	}
 	return nil
 }
 
 func (x *ExportLogsServiceRequest) SetResourceLogs(v []*v1.ResourceLogs) {
-	x.ResourceLogs = v
+	x.xxx_hidden_ResourceLogs = &v
 }
 
 type ExportLogsServiceRequest_builder struct {
@@ -99,30 +96,15 @@ func (b0 ExportLogsServiceRequest_builder) Build() *ExportLogsServiceRequest {
 	m0 := &ExportLogsServiceRequest{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.ResourceLogs = b.ResourceLogs
+	x.xxx_hidden_ResourceLogs = &b.ResourceLogs
 	return m0
 }
 
 type ExportLogsServiceResponse struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The details of a partially successful export request.
-	//
-	// If the request is only partially accepted
-	// (i.e. when the server accepts only parts of the data and rejects the rest)
-	// the server MUST initialize the `partial_success` field and MUST
-	// set the `rejected_<signal>` with the number of items it rejected.
-	//
-	// Servers MAY also make use of the `partial_success` field to convey
-	// warnings/suggestions to senders even when the request was fully accepted.
-	// In such cases, the `rejected_<signal>` MUST have a value of `0` and
-	// the `error_message` MUST be non-empty.
-	//
-	// A `partial_success` message with an empty value (rejected_<signal> = 0 and
-	// `error_message` = "") is equivalent to it not being set/present. Senders
-	// SHOULD interpret it the same way as in the full success case.
-	PartialSuccess *ExportLogsPartialSuccess `protobuf:"bytes,1,opt,name=partial_success,json=partialSuccess,proto3" json:"partial_success,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                     protoimpl.MessageState    `protogen:"opaque.v1"`
+	xxx_hidden_PartialSuccess *ExportLogsPartialSuccess `protobuf:"bytes,1,opt,name=partial_success,json=partialSuccess,proto3" json:"partial_success,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ExportLogsServiceResponse) Reset() {
@@ -152,24 +134,24 @@ func (x *ExportLogsServiceResponse) ProtoReflect() protoreflect.Message {
 
 func (x *ExportLogsServiceResponse) GetPartialSuccess() *ExportLogsPartialSuccess {
 	if x != nil {
-		return x.PartialSuccess
+		return x.xxx_hidden_PartialSuccess
 	}
 	return nil
 }
 
 func (x *ExportLogsServiceResponse) SetPartialSuccess(v *ExportLogsPartialSuccess) {
-	x.PartialSuccess = v
+	x.xxx_hidden_PartialSuccess = v
 }
 
 func (x *ExportLogsServiceResponse) HasPartialSuccess() bool {
 	if x == nil {
 		return false
 	}
-	return x.PartialSuccess != nil
+	return x.xxx_hidden_PartialSuccess != nil
 }
 
 func (x *ExportLogsServiceResponse) ClearPartialSuccess() {
-	x.PartialSuccess = nil
+	x.xxx_hidden_PartialSuccess = nil
 }
 
 type ExportLogsServiceResponse_builder struct {
@@ -197,27 +179,16 @@ func (b0 ExportLogsServiceResponse_builder) Build() *ExportLogsServiceResponse {
 	m0 := &ExportLogsServiceResponse{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.PartialSuccess = b.PartialSuccess
+	x.xxx_hidden_PartialSuccess = b.PartialSuccess
 	return m0
 }
 
 type ExportLogsPartialSuccess struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The number of rejected log records.
-	//
-	// A `rejected_<signal>` field holding a `0` value indicates that the
-	// request was fully accepted.
-	RejectedLogRecords int64 `protobuf:"varint,1,opt,name=rejected_log_records,json=rejectedLogRecords,proto3" json:"rejected_log_records,omitempty"`
-	// A developer-facing human-readable message in English. It should be used
-	// either to explain why the server rejected parts of the data during a partial
-	// success or to convey warnings/suggestions during a full success. The message
-	// should offer guidance on how users can address such issues.
-	//
-	// error_message is an optional field. An error_message with an empty value
-	// is equivalent to it not being set.
-	ErrorMessage  string `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                         protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_RejectedLogRecords int64                  `protobuf:"varint,1,opt,name=rejected_log_records,json=rejectedLogRecords,proto3" json:"rejected_log_records,omitempty"`
+	xxx_hidden_ErrorMessage       string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields                 protoimpl.UnknownFields
+	sizeCache                     protoimpl.SizeCache
 }
 
 func (x *ExportLogsPartialSuccess) Reset() {
@@ -247,24 +218,24 @@ func (x *ExportLogsPartialSuccess) ProtoReflect() protoreflect.Message {
 
 func (x *ExportLogsPartialSuccess) GetRejectedLogRecords() int64 {
 	if x != nil {
-		return x.RejectedLogRecords
+		return x.xxx_hidden_RejectedLogRecords
 	}
 	return 0
 }
 
 func (x *ExportLogsPartialSuccess) GetErrorMessage() string {
 	if x != nil {
-		return x.ErrorMessage
+		return x.xxx_hidden_ErrorMessage
 	}
 	return ""
 }
 
 func (x *ExportLogsPartialSuccess) SetRejectedLogRecords(v int64) {
-	x.RejectedLogRecords = v
+	x.xxx_hidden_RejectedLogRecords = v
 }
 
 func (x *ExportLogsPartialSuccess) SetErrorMessage(v string) {
-	x.ErrorMessage = v
+	x.xxx_hidden_ErrorMessage = v
 }
 
 type ExportLogsPartialSuccess_builder struct {
@@ -289,8 +260,8 @@ func (b0 ExportLogsPartialSuccess_builder) Build() *ExportLogsPartialSuccess {
 	m0 := &ExportLogsPartialSuccess{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.RejectedLogRecords = b.RejectedLogRecords
-	x.ErrorMessage = b.ErrorMessage
+	x.xxx_hidden_RejectedLogRecords = b.RejectedLogRecords
+	x.xxx_hidden_ErrorMessage = b.ErrorMessage
 	return m0
 }
 

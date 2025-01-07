@@ -18,7 +18,7 @@
 // 	protoc        (unknown)
 // source: opentelemetry/proto/common/v1/common.proto
 
-//go:build !protoopaque
+//go:build protoopaque
 
 package commonv1
 
@@ -39,22 +39,10 @@ const (
 // primitive value such as a string or integer or it may contain an arbitrary nested
 // object containing arrays, key-value lists and primitives.
 type AnyValue struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The value is one of the listed fields. It is valid for all values to be unspecified
-	// in which case this AnyValue is considered to be "empty".
-	//
-	// Types that are valid to be assigned to Value:
-	//
-	//	*AnyValue_StringValue
-	//	*AnyValue_BoolValue
-	//	*AnyValue_IntValue
-	//	*AnyValue_DoubleValue
-	//	*AnyValue_ArrayValue
-	//	*AnyValue_KvlistValue
-	//	*AnyValue_BytesValue
-	Value         isAnyValue_Value `protobuf_oneof:"value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Value isAnyValue_Value       `protobuf_oneof:"value"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AnyValue) Reset() {
@@ -82,16 +70,9 @@ func (x *AnyValue) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-func (x *AnyValue) GetValue() isAnyValue_Value {
-	if x != nil {
-		return x.Value
-	}
-	return nil
-}
-
 func (x *AnyValue) GetStringValue() string {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_StringValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_StringValue); ok {
 			return x.StringValue
 		}
 	}
@@ -100,7 +81,7 @@ func (x *AnyValue) GetStringValue() string {
 
 func (x *AnyValue) GetBoolValue() bool {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_BoolValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_BoolValue); ok {
 			return x.BoolValue
 		}
 	}
@@ -109,7 +90,7 @@ func (x *AnyValue) GetBoolValue() bool {
 
 func (x *AnyValue) GetIntValue() int64 {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_IntValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_IntValue); ok {
 			return x.IntValue
 		}
 	}
@@ -118,7 +99,7 @@ func (x *AnyValue) GetIntValue() int64 {
 
 func (x *AnyValue) GetDoubleValue() float64 {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_DoubleValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_DoubleValue); ok {
 			return x.DoubleValue
 		}
 	}
@@ -127,7 +108,7 @@ func (x *AnyValue) GetDoubleValue() float64 {
 
 func (x *AnyValue) GetArrayValue() *ArrayValue {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_ArrayValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_ArrayValue); ok {
 			return x.ArrayValue
 		}
 	}
@@ -136,7 +117,7 @@ func (x *AnyValue) GetArrayValue() *ArrayValue {
 
 func (x *AnyValue) GetKvlistValue() *KeyValueList {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_KvlistValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_KvlistValue); ok {
 			return x.KvlistValue
 		}
 	}
@@ -145,7 +126,7 @@ func (x *AnyValue) GetKvlistValue() *KeyValueList {
 
 func (x *AnyValue) GetBytesValue() []byte {
 	if x != nil {
-		if x, ok := x.Value.(*AnyValue_BytesValue); ok {
+		if x, ok := x.xxx_hidden_Value.(*anyValue_BytesValue); ok {
 			return x.BytesValue
 		}
 	}
@@ -153,56 +134,56 @@ func (x *AnyValue) GetBytesValue() []byte {
 }
 
 func (x *AnyValue) SetStringValue(v string) {
-	x.Value = &AnyValue_StringValue{v}
+	x.xxx_hidden_Value = &anyValue_StringValue{v}
 }
 
 func (x *AnyValue) SetBoolValue(v bool) {
-	x.Value = &AnyValue_BoolValue{v}
+	x.xxx_hidden_Value = &anyValue_BoolValue{v}
 }
 
 func (x *AnyValue) SetIntValue(v int64) {
-	x.Value = &AnyValue_IntValue{v}
+	x.xxx_hidden_Value = &anyValue_IntValue{v}
 }
 
 func (x *AnyValue) SetDoubleValue(v float64) {
-	x.Value = &AnyValue_DoubleValue{v}
+	x.xxx_hidden_Value = &anyValue_DoubleValue{v}
 }
 
 func (x *AnyValue) SetArrayValue(v *ArrayValue) {
 	if v == nil {
-		x.Value = nil
+		x.xxx_hidden_Value = nil
 		return
 	}
-	x.Value = &AnyValue_ArrayValue{v}
+	x.xxx_hidden_Value = &anyValue_ArrayValue{v}
 }
 
 func (x *AnyValue) SetKvlistValue(v *KeyValueList) {
 	if v == nil {
-		x.Value = nil
+		x.xxx_hidden_Value = nil
 		return
 	}
-	x.Value = &AnyValue_KvlistValue{v}
+	x.xxx_hidden_Value = &anyValue_KvlistValue{v}
 }
 
 func (x *AnyValue) SetBytesValue(v []byte) {
 	if v == nil {
 		v = []byte{}
 	}
-	x.Value = &AnyValue_BytesValue{v}
+	x.xxx_hidden_Value = &anyValue_BytesValue{v}
 }
 
 func (x *AnyValue) HasValue() bool {
 	if x == nil {
 		return false
 	}
-	return x.Value != nil
+	return x.xxx_hidden_Value != nil
 }
 
 func (x *AnyValue) HasStringValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_StringValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_StringValue)
 	return ok
 }
 
@@ -210,7 +191,7 @@ func (x *AnyValue) HasBoolValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_BoolValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_BoolValue)
 	return ok
 }
 
@@ -218,7 +199,7 @@ func (x *AnyValue) HasIntValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_IntValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_IntValue)
 	return ok
 }
 
@@ -226,7 +207,7 @@ func (x *AnyValue) HasDoubleValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_DoubleValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_DoubleValue)
 	return ok
 }
 
@@ -234,7 +215,7 @@ func (x *AnyValue) HasArrayValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_ArrayValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_ArrayValue)
 	return ok
 }
 
@@ -242,7 +223,7 @@ func (x *AnyValue) HasKvlistValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_KvlistValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_KvlistValue)
 	return ok
 }
 
@@ -250,53 +231,53 @@ func (x *AnyValue) HasBytesValue() bool {
 	if x == nil {
 		return false
 	}
-	_, ok := x.Value.(*AnyValue_BytesValue)
+	_, ok := x.xxx_hidden_Value.(*anyValue_BytesValue)
 	return ok
 }
 
 func (x *AnyValue) ClearValue() {
-	x.Value = nil
+	x.xxx_hidden_Value = nil
 }
 
 func (x *AnyValue) ClearStringValue() {
-	if _, ok := x.Value.(*AnyValue_StringValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_StringValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *AnyValue) ClearBoolValue() {
-	if _, ok := x.Value.(*AnyValue_BoolValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_BoolValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *AnyValue) ClearIntValue() {
-	if _, ok := x.Value.(*AnyValue_IntValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_IntValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *AnyValue) ClearDoubleValue() {
-	if _, ok := x.Value.(*AnyValue_DoubleValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_DoubleValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *AnyValue) ClearArrayValue() {
-	if _, ok := x.Value.(*AnyValue_ArrayValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_ArrayValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *AnyValue) ClearKvlistValue() {
-	if _, ok := x.Value.(*AnyValue_KvlistValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_KvlistValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
 func (x *AnyValue) ClearBytesValue() {
-	if _, ok := x.Value.(*AnyValue_BytesValue); ok {
-		x.Value = nil
+	if _, ok := x.xxx_hidden_Value.(*anyValue_BytesValue); ok {
+		x.xxx_hidden_Value = nil
 	}
 }
 
@@ -313,20 +294,20 @@ func (x *AnyValue) WhichValue() case_AnyValue_Value {
 	if x == nil {
 		return AnyValue_Value_not_set_case
 	}
-	switch x.Value.(type) {
-	case *AnyValue_StringValue:
+	switch x.xxx_hidden_Value.(type) {
+	case *anyValue_StringValue:
 		return AnyValue_StringValue_case
-	case *AnyValue_BoolValue:
+	case *anyValue_BoolValue:
 		return AnyValue_BoolValue_case
-	case *AnyValue_IntValue:
+	case *anyValue_IntValue:
 		return AnyValue_IntValue_case
-	case *AnyValue_DoubleValue:
+	case *anyValue_DoubleValue:
 		return AnyValue_DoubleValue_case
-	case *AnyValue_ArrayValue:
+	case *anyValue_ArrayValue:
 		return AnyValue_ArrayValue_case
-	case *AnyValue_KvlistValue:
+	case *anyValue_KvlistValue:
 		return AnyValue_KvlistValue_case
-	case *AnyValue_BytesValue:
+	case *anyValue_BytesValue:
 		return AnyValue_BytesValue_case
 	default:
 		return AnyValue_Value_not_set_case
@@ -339,7 +320,7 @@ type AnyValue_builder struct {
 	// The value is one of the listed fields. It is valid for all values to be unspecified
 	// in which case this AnyValue is considered to be "empty".
 
-	// Fields of oneof Value:
+	// Fields of oneof xxx_hidden_Value:
 	StringValue *string
 	BoolValue   *bool
 	IntValue    *int64
@@ -347,7 +328,7 @@ type AnyValue_builder struct {
 	ArrayValue  *ArrayValue
 	KvlistValue *KeyValueList
 	BytesValue  []byte
-	// -- end of Value
+	// -- end of xxx_hidden_Value
 }
 
 func (b0 AnyValue_builder) Build() *AnyValue {
@@ -355,25 +336,25 @@ func (b0 AnyValue_builder) Build() *AnyValue {
 	b, x := &b0, m0
 	_, _ = b, x
 	if b.StringValue != nil {
-		x.Value = &AnyValue_StringValue{*b.StringValue}
+		x.xxx_hidden_Value = &anyValue_StringValue{*b.StringValue}
 	}
 	if b.BoolValue != nil {
-		x.Value = &AnyValue_BoolValue{*b.BoolValue}
+		x.xxx_hidden_Value = &anyValue_BoolValue{*b.BoolValue}
 	}
 	if b.IntValue != nil {
-		x.Value = &AnyValue_IntValue{*b.IntValue}
+		x.xxx_hidden_Value = &anyValue_IntValue{*b.IntValue}
 	}
 	if b.DoubleValue != nil {
-		x.Value = &AnyValue_DoubleValue{*b.DoubleValue}
+		x.xxx_hidden_Value = &anyValue_DoubleValue{*b.DoubleValue}
 	}
 	if b.ArrayValue != nil {
-		x.Value = &AnyValue_ArrayValue{b.ArrayValue}
+		x.xxx_hidden_Value = &anyValue_ArrayValue{b.ArrayValue}
 	}
 	if b.KvlistValue != nil {
-		x.Value = &AnyValue_KvlistValue{b.KvlistValue}
+		x.xxx_hidden_Value = &anyValue_KvlistValue{b.KvlistValue}
 	}
 	if b.BytesValue != nil {
-		x.Value = &AnyValue_BytesValue{b.BytesValue}
+		x.xxx_hidden_Value = &anyValue_BytesValue{b.BytesValue}
 	}
 	return m0
 }
@@ -392,56 +373,55 @@ type isAnyValue_Value interface {
 	isAnyValue_Value()
 }
 
-type AnyValue_StringValue struct {
+type anyValue_StringValue struct {
 	StringValue string `protobuf:"bytes,1,opt,name=string_value,json=stringValue,proto3,oneof"`
 }
 
-type AnyValue_BoolValue struct {
+type anyValue_BoolValue struct {
 	BoolValue bool `protobuf:"varint,2,opt,name=bool_value,json=boolValue,proto3,oneof"`
 }
 
-type AnyValue_IntValue struct {
+type anyValue_IntValue struct {
 	IntValue int64 `protobuf:"varint,3,opt,name=int_value,json=intValue,proto3,oneof"`
 }
 
-type AnyValue_DoubleValue struct {
+type anyValue_DoubleValue struct {
 	DoubleValue float64 `protobuf:"fixed64,4,opt,name=double_value,json=doubleValue,proto3,oneof"`
 }
 
-type AnyValue_ArrayValue struct {
+type anyValue_ArrayValue struct {
 	ArrayValue *ArrayValue `protobuf:"bytes,5,opt,name=array_value,json=arrayValue,proto3,oneof"`
 }
 
-type AnyValue_KvlistValue struct {
+type anyValue_KvlistValue struct {
 	KvlistValue *KeyValueList `protobuf:"bytes,6,opt,name=kvlist_value,json=kvlistValue,proto3,oneof"`
 }
 
-type AnyValue_BytesValue struct {
+type anyValue_BytesValue struct {
 	BytesValue []byte `protobuf:"bytes,7,opt,name=bytes_value,json=bytesValue,proto3,oneof"`
 }
 
-func (*AnyValue_StringValue) isAnyValue_Value() {}
+func (*anyValue_StringValue) isAnyValue_Value() {}
 
-func (*AnyValue_BoolValue) isAnyValue_Value() {}
+func (*anyValue_BoolValue) isAnyValue_Value() {}
 
-func (*AnyValue_IntValue) isAnyValue_Value() {}
+func (*anyValue_IntValue) isAnyValue_Value() {}
 
-func (*AnyValue_DoubleValue) isAnyValue_Value() {}
+func (*anyValue_DoubleValue) isAnyValue_Value() {}
 
-func (*AnyValue_ArrayValue) isAnyValue_Value() {}
+func (*anyValue_ArrayValue) isAnyValue_Value() {}
 
-func (*AnyValue_KvlistValue) isAnyValue_Value() {}
+func (*anyValue_KvlistValue) isAnyValue_Value() {}
 
-func (*AnyValue_BytesValue) isAnyValue_Value() {}
+func (*anyValue_BytesValue) isAnyValue_Value() {}
 
 // ArrayValue is a list of AnyValue messages. We need ArrayValue as a message
 // since oneof in AnyValue does not allow repeated fields.
 type ArrayValue struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Array of values. The array may be empty (contain 0 elements).
-	Values        []*AnyValue `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Values *[]*AnyValue           `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ArrayValue) Reset() {
@@ -471,13 +451,15 @@ func (x *ArrayValue) ProtoReflect() protoreflect.Message {
 
 func (x *ArrayValue) GetValues() []*AnyValue {
 	if x != nil {
-		return x.Values
+		if x.xxx_hidden_Values != nil {
+			return *x.xxx_hidden_Values
+		}
 	}
 	return nil
 }
 
 func (x *ArrayValue) SetValues(v []*AnyValue) {
-	x.Values = v
+	x.xxx_hidden_Values = &v
 }
 
 type ArrayValue_builder struct {
@@ -491,7 +473,7 @@ func (b0 ArrayValue_builder) Build() *ArrayValue {
 	m0 := &ArrayValue{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Values = b.Values
+	x.xxx_hidden_Values = &b.Values
 	return m0
 }
 
@@ -501,14 +483,10 @@ func (b0 ArrayValue_builder) Build() *ArrayValue {
 // avoid unnecessary extra wrapping (which slows down the protocol). The 2 approaches
 // are semantically equivalent.
 type KeyValueList struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// A collection of key/value pairs of key-value pairs. The list may be empty (may
-	// contain 0 elements).
-	// The keys MUST be unique (it is not allowed to have more than one
-	// value with the same key).
-	Values        []*KeyValue `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Values *[]*KeyValue           `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *KeyValueList) Reset() {
@@ -538,13 +516,15 @@ func (x *KeyValueList) ProtoReflect() protoreflect.Message {
 
 func (x *KeyValueList) GetValues() []*KeyValue {
 	if x != nil {
-		return x.Values
+		if x.xxx_hidden_Values != nil {
+			return *x.xxx_hidden_Values
+		}
 	}
 	return nil
 }
 
 func (x *KeyValueList) SetValues(v []*KeyValue) {
-	x.Values = v
+	x.xxx_hidden_Values = &v
 }
 
 type KeyValueList_builder struct {
@@ -561,18 +541,18 @@ func (b0 KeyValueList_builder) Build() *KeyValueList {
 	m0 := &KeyValueList{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Values = b.Values
+	x.xxx_hidden_Values = &b.Values
 	return m0
 }
 
 // KeyValue is a key-value pair that is used to store Span attributes, Link
 // attributes, etc.
 type KeyValue struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Value         *AnyValue              `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Key   string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	xxx_hidden_Value *AnyValue              `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *KeyValue) Reset() {
@@ -602,35 +582,35 @@ func (x *KeyValue) ProtoReflect() protoreflect.Message {
 
 func (x *KeyValue) GetKey() string {
 	if x != nil {
-		return x.Key
+		return x.xxx_hidden_Key
 	}
 	return ""
 }
 
 func (x *KeyValue) GetValue() *AnyValue {
 	if x != nil {
-		return x.Value
+		return x.xxx_hidden_Value
 	}
 	return nil
 }
 
 func (x *KeyValue) SetKey(v string) {
-	x.Key = v
+	x.xxx_hidden_Key = v
 }
 
 func (x *KeyValue) SetValue(v *AnyValue) {
-	x.Value = v
+	x.xxx_hidden_Value = v
 }
 
 func (x *KeyValue) HasValue() bool {
 	if x == nil {
 		return false
 	}
-	return x.Value != nil
+	return x.xxx_hidden_Value != nil
 }
 
 func (x *KeyValue) ClearValue() {
-	x.Value = nil
+	x.xxx_hidden_Value = nil
 }
 
 type KeyValue_builder struct {
@@ -644,25 +624,21 @@ func (b0 KeyValue_builder) Build() *KeyValue {
 	m0 := &KeyValue{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Key = b.Key
-	x.Value = b.Value
+	x.xxx_hidden_Key = b.Key
+	x.xxx_hidden_Value = b.Value
 	return m0
 }
 
 // InstrumentationScope is a message representing the instrumentation scope information
 // such as the fully qualified name and version.
 type InstrumentationScope struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// An empty instrumentation scope name means the name is unknown.
-	Name    string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	// Additional attributes that describe the scope. [Optional].
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes             []*KeyValue `protobuf:"bytes,3,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	DroppedAttributesCount uint32      `protobuf:"varint,4,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3" json:"dropped_attributes_count,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state                             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Name                   string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	xxx_hidden_Version                string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	xxx_hidden_Attributes             *[]*KeyValue           `protobuf:"bytes,3,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_DroppedAttributesCount uint32                 `protobuf:"varint,4,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3" json:"dropped_attributes_count,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *InstrumentationScope) Reset() {
@@ -692,46 +668,48 @@ func (x *InstrumentationScope) ProtoReflect() protoreflect.Message {
 
 func (x *InstrumentationScope) GetName() string {
 	if x != nil {
-		return x.Name
+		return x.xxx_hidden_Name
 	}
 	return ""
 }
 
 func (x *InstrumentationScope) GetVersion() string {
 	if x != nil {
-		return x.Version
+		return x.xxx_hidden_Version
 	}
 	return ""
 }
 
 func (x *InstrumentationScope) GetAttributes() []*KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *InstrumentationScope) GetDroppedAttributesCount() uint32 {
 	if x != nil {
-		return x.DroppedAttributesCount
+		return x.xxx_hidden_DroppedAttributesCount
 	}
 	return 0
 }
 
 func (x *InstrumentationScope) SetName(v string) {
-	x.Name = v
+	x.xxx_hidden_Name = v
 }
 
 func (x *InstrumentationScope) SetVersion(v string) {
-	x.Version = v
+	x.xxx_hidden_Version = v
 }
 
 func (x *InstrumentationScope) SetAttributes(v []*KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *InstrumentationScope) SetDroppedAttributesCount(v uint32) {
-	x.DroppedAttributesCount = v
+	x.xxx_hidden_DroppedAttributesCount = v
 }
 
 type InstrumentationScope_builder struct {
@@ -751,10 +729,10 @@ func (b0 InstrumentationScope_builder) Build() *InstrumentationScope {
 	m0 := &InstrumentationScope{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Name = b.Name
-	x.Version = b.Version
-	x.Attributes = b.Attributes
-	x.DroppedAttributesCount = b.DroppedAttributesCount
+	x.xxx_hidden_Name = b.Name
+	x.xxx_hidden_Version = b.Version
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_DroppedAttributesCount = b.DroppedAttributesCount
 	return m0
 }
 
@@ -859,13 +837,13 @@ func file_opentelemetry_proto_common_v1_common_proto_init() {
 		return
 	}
 	file_opentelemetry_proto_common_v1_common_proto_msgTypes[0].OneofWrappers = []any{
-		(*AnyValue_StringValue)(nil),
-		(*AnyValue_BoolValue)(nil),
-		(*AnyValue_IntValue)(nil),
-		(*AnyValue_DoubleValue)(nil),
-		(*AnyValue_ArrayValue)(nil),
-		(*AnyValue_KvlistValue)(nil),
-		(*AnyValue_BytesValue)(nil),
+		(*anyValue_StringValue)(nil),
+		(*anyValue_BoolValue)(nil),
+		(*anyValue_IntValue)(nil),
+		(*anyValue_DoubleValue)(nil),
+		(*anyValue_ArrayValue)(nil),
+		(*anyValue_KvlistValue)(nil),
+		(*anyValue_BytesValue)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

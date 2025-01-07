@@ -18,7 +18,7 @@
 // 	protoc        (unknown)
 // source: opentelemetry/proto/logs/v1/logs.proto
 
-//go:build !protoopaque
+//go:build protoopaque
 
 package logsv1
 
@@ -211,15 +211,10 @@ func (x LogRecordFlags) Number() protoreflect.EnumNumber {
 // When new fields are added into this message, the OTLP request MUST be updated
 // as well.
 type LogsData struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// An array of ResourceLogs.
-	// For data coming from a single resource this array will typically contain
-	// one element. Intermediary nodes that receive data from multiple origins
-	// typically batch the data before forwarding further and in that case this
-	// array will contain multiple elements.
-	ResourceLogs  []*ResourceLogs `protobuf:"bytes,1,rep,name=resource_logs,json=resourceLogs,proto3" json:"resource_logs,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_ResourceLogs *[]*ResourceLogs       `protobuf:"bytes,1,rep,name=resource_logs,json=resourceLogs,proto3" json:"resource_logs,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *LogsData) Reset() {
@@ -249,13 +244,15 @@ func (x *LogsData) ProtoReflect() protoreflect.Message {
 
 func (x *LogsData) GetResourceLogs() []*ResourceLogs {
 	if x != nil {
-		return x.ResourceLogs
+		if x.xxx_hidden_ResourceLogs != nil {
+			return *x.xxx_hidden_ResourceLogs
+		}
 	}
 	return nil
 }
 
 func (x *LogsData) SetResourceLogs(v []*ResourceLogs) {
-	x.ResourceLogs = v
+	x.xxx_hidden_ResourceLogs = &v
 }
 
 type LogsData_builder struct {
@@ -273,27 +270,18 @@ func (b0 LogsData_builder) Build() *LogsData {
 	m0 := &LogsData{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.ResourceLogs = b.ResourceLogs
+	x.xxx_hidden_ResourceLogs = &b.ResourceLogs
 	return m0
 }
 
 // A collection of ScopeLogs from a Resource.
 type ResourceLogs struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The resource for the logs in this message.
-	// If this field is not set then resource info is unknown.
-	Resource *v1.Resource `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
-	// A list of ScopeLogs that originate from a resource.
-	ScopeLogs []*ScopeLogs `protobuf:"bytes,2,rep,name=scope_logs,json=scopeLogs,proto3" json:"scope_logs,omitempty"`
-	// The Schema URL, if known. This is the identifier of the Schema that the resource data
-	// is recorded in. Notably, the last part of the URL path is the version number of the
-	// schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
-	// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-	// This schema_url applies to the data in the "resource" field. It does not apply
-	// to the data in the "scope_logs" field which have their own schema_url field.
-	SchemaUrl     string `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Resource  *v1.Resource           `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	xxx_hidden_ScopeLogs *[]*ScopeLogs          `protobuf:"bytes,2,rep,name=scope_logs,json=scopeLogs,proto3" json:"scope_logs,omitempty"`
+	xxx_hidden_SchemaUrl string                 `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ResourceLogs) Reset() {
@@ -323,46 +311,48 @@ func (x *ResourceLogs) ProtoReflect() protoreflect.Message {
 
 func (x *ResourceLogs) GetResource() *v1.Resource {
 	if x != nil {
-		return x.Resource
+		return x.xxx_hidden_Resource
 	}
 	return nil
 }
 
 func (x *ResourceLogs) GetScopeLogs() []*ScopeLogs {
 	if x != nil {
-		return x.ScopeLogs
+		if x.xxx_hidden_ScopeLogs != nil {
+			return *x.xxx_hidden_ScopeLogs
+		}
 	}
 	return nil
 }
 
 func (x *ResourceLogs) GetSchemaUrl() string {
 	if x != nil {
-		return x.SchemaUrl
+		return x.xxx_hidden_SchemaUrl
 	}
 	return ""
 }
 
 func (x *ResourceLogs) SetResource(v *v1.Resource) {
-	x.Resource = v
+	x.xxx_hidden_Resource = v
 }
 
 func (x *ResourceLogs) SetScopeLogs(v []*ScopeLogs) {
-	x.ScopeLogs = v
+	x.xxx_hidden_ScopeLogs = &v
 }
 
 func (x *ResourceLogs) SetSchemaUrl(v string) {
-	x.SchemaUrl = v
+	x.xxx_hidden_SchemaUrl = v
 }
 
 func (x *ResourceLogs) HasResource() bool {
 	if x == nil {
 		return false
 	}
-	return x.Resource != nil
+	return x.xxx_hidden_Resource != nil
 }
 
 func (x *ResourceLogs) ClearResource() {
-	x.Resource = nil
+	x.xxx_hidden_Resource = nil
 }
 
 type ResourceLogs_builder struct {
@@ -386,29 +376,20 @@ func (b0 ResourceLogs_builder) Build() *ResourceLogs {
 	m0 := &ResourceLogs{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Resource = b.Resource
-	x.ScopeLogs = b.ScopeLogs
-	x.SchemaUrl = b.SchemaUrl
+	x.xxx_hidden_Resource = b.Resource
+	x.xxx_hidden_ScopeLogs = &b.ScopeLogs
+	x.xxx_hidden_SchemaUrl = b.SchemaUrl
 	return m0
 }
 
 // A collection of Logs produced by a Scope.
 type ScopeLogs struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The instrumentation scope information for the logs in this message.
-	// Semantically when InstrumentationScope isn't set, it is equivalent with
-	// an empty instrumentation scope name (unknown).
-	Scope *v11.InstrumentationScope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
-	// A list of log records.
-	LogRecords []*LogRecord `protobuf:"bytes,2,rep,name=log_records,json=logRecords,proto3" json:"log_records,omitempty"`
-	// The Schema URL, if known. This is the identifier of the Schema that the log data
-	// is recorded in. Notably, the last part of the URL path is the version number of the
-	// schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
-	// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-	// This schema_url applies to all logs in the "logs" field.
-	SchemaUrl     string `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState    `protogen:"opaque.v1"`
+	xxx_hidden_Scope      *v11.InstrumentationScope `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	xxx_hidden_LogRecords *[]*LogRecord             `protobuf:"bytes,2,rep,name=log_records,json=logRecords,proto3" json:"log_records,omitempty"`
+	xxx_hidden_SchemaUrl  string                    `protobuf:"bytes,3,opt,name=schema_url,json=schemaUrl,proto3" json:"schema_url,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ScopeLogs) Reset() {
@@ -438,46 +419,48 @@ func (x *ScopeLogs) ProtoReflect() protoreflect.Message {
 
 func (x *ScopeLogs) GetScope() *v11.InstrumentationScope {
 	if x != nil {
-		return x.Scope
+		return x.xxx_hidden_Scope
 	}
 	return nil
 }
 
 func (x *ScopeLogs) GetLogRecords() []*LogRecord {
 	if x != nil {
-		return x.LogRecords
+		if x.xxx_hidden_LogRecords != nil {
+			return *x.xxx_hidden_LogRecords
+		}
 	}
 	return nil
 }
 
 func (x *ScopeLogs) GetSchemaUrl() string {
 	if x != nil {
-		return x.SchemaUrl
+		return x.xxx_hidden_SchemaUrl
 	}
 	return ""
 }
 
 func (x *ScopeLogs) SetScope(v *v11.InstrumentationScope) {
-	x.Scope = v
+	x.xxx_hidden_Scope = v
 }
 
 func (x *ScopeLogs) SetLogRecords(v []*LogRecord) {
-	x.LogRecords = v
+	x.xxx_hidden_LogRecords = &v
 }
 
 func (x *ScopeLogs) SetSchemaUrl(v string) {
-	x.SchemaUrl = v
+	x.xxx_hidden_SchemaUrl = v
 }
 
 func (x *ScopeLogs) HasScope() bool {
 	if x == nil {
 		return false
 	}
-	return x.Scope != nil
+	return x.xxx_hidden_Scope != nil
 }
 
 func (x *ScopeLogs) ClearScope() {
-	x.Scope = nil
+	x.xxx_hidden_Scope = nil
 }
 
 type ScopeLogs_builder struct {
@@ -501,97 +484,29 @@ func (b0 ScopeLogs_builder) Build() *ScopeLogs {
 	m0 := &ScopeLogs{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.Scope = b.Scope
-	x.LogRecords = b.LogRecords
-	x.SchemaUrl = b.SchemaUrl
+	x.xxx_hidden_Scope = b.Scope
+	x.xxx_hidden_LogRecords = &b.LogRecords
+	x.xxx_hidden_SchemaUrl = b.SchemaUrl
 	return m0
 }
 
 // A log record according to OpenTelemetry Log Data Model:
 // https://github.com/open-telemetry/oteps/blob/main/text/logs/0097-log-data-model.md
 type LogRecord struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// time_unix_nano is the time when the event occurred.
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January 1970.
-	// Value of 0 indicates unknown or missing timestamp.
-	TimeUnixNano uint64 `protobuf:"fixed64,1,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
-	// Time when the event was observed by the collection system.
-	// For events that originate in OpenTelemetry (e.g. using OpenTelemetry Logging SDK)
-	// this timestamp is typically set at the generation time and is equal to Timestamp.
-	// For events originating externally and collected by OpenTelemetry (e.g. using
-	// Collector) this is the time when OpenTelemetry's code observed the event measured
-	// by the clock of the OpenTelemetry code. This field MUST be set once the event is
-	// observed by OpenTelemetry.
-	//
-	// For converting OpenTelemetry log data to formats that support only one timestamp or
-	// when receiving OpenTelemetry log data by recipients that support only one timestamp
-	// internally the following logic is recommended:
-	//   - Use time_unix_nano if it is present, otherwise use observed_time_unix_nano.
-	//
-	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January 1970.
-	// Value of 0 indicates unknown or missing timestamp.
-	ObservedTimeUnixNano uint64 `protobuf:"fixed64,11,opt,name=observed_time_unix_nano,json=observedTimeUnixNano,proto3" json:"observed_time_unix_nano,omitempty"`
-	// Numerical value of the severity, normalized to values described in Log Data Model.
-	// [Optional].
-	SeverityNumber SeverityNumber `protobuf:"varint,2,opt,name=severity_number,json=severityNumber,proto3,enum=opentelemetry.proto.logs.v1.SeverityNumber" json:"severity_number,omitempty"`
-	// The severity text (also known as log level). The original string representation as
-	// it is known at the source. [Optional].
-	SeverityText string `protobuf:"bytes,3,opt,name=severity_text,json=severityText,proto3" json:"severity_text,omitempty"`
-	// A value containing the body of the log record. Can be for example a human-readable
-	// string message (including multi-line) describing the event in a free form or it can
-	// be a structured data composed of arrays and maps of other values. [Optional].
-	Body *v11.AnyValue `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
-	// Additional attributes that describe the specific event occurrence. [Optional].
-	// Attribute keys MUST be unique (it is not allowed to have more than one
-	// attribute with the same key).
-	Attributes             []*v11.KeyValue `protobuf:"bytes,6,rep,name=attributes,proto3" json:"attributes,omitempty"`
-	DroppedAttributesCount uint32          `protobuf:"varint,7,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3" json:"dropped_attributes_count,omitempty"`
-	// Flags, a bit field. 8 least significant bits are the trace flags as
-	// defined in W3C Trace Context specification. 24 most significant bits are reserved
-	// and must be set to 0. Readers must not assume that 24 most significant bits
-	// will be zero and must correctly mask the bits when reading 8-bit trace flag (use
-	// flags & LOG_RECORD_FLAGS_TRACE_FLAGS_MASK). [Optional].
-	Flags uint32 `protobuf:"fixed32,8,opt,name=flags,proto3" json:"flags,omitempty"`
-	// A unique identifier for a trace. All logs from the same trace share
-	// the same `trace_id`. The ID is a 16-byte array. An ID with all zeroes OR
-	// of length other than 16 bytes is considered invalid (empty string in OTLP/JSON
-	// is zero-length and thus is also invalid).
-	//
-	// This field is optional.
-	//
-	// The receivers SHOULD assume that the log record is not associated with a
-	// trace if any of the following is true:
-	//   - the field is not present,
-	//   - the field contains an invalid value.
-	TraceId []byte `protobuf:"bytes,9,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	// A unique identifier for a span within a trace, assigned when the span
-	// is created. The ID is an 8-byte array. An ID with all zeroes OR of length
-	// other than 8 bytes is considered invalid (empty string in OTLP/JSON
-	// is zero-length and thus is also invalid).
-	//
-	// This field is optional. If the sender specifies a valid span_id then it SHOULD also
-	// specify a valid trace_id.
-	//
-	// The receivers SHOULD assume that the log record is not associated with a
-	// span if any of the following is true:
-	//   - the field is not present,
-	//   - the field contains an invalid value.
-	SpanId []byte `protobuf:"bytes,10,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
-	// A unique identifier of event category/type.
-	// All events with the same event_name are expected to conform to the same
-	// schema for both their attributes and their body.
-	//
-	// Recommended to be fully qualified and short (no longer than 256 characters).
-	//
-	// Presence of event_name on the log record identifies this record
-	// as an event.
-	//
-	// [Optional].
-	//
-	// Status: [Development]
-	EventName     string `protobuf:"bytes,12,opt,name=event_name,json=eventName,proto3" json:"event_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                             protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_TimeUnixNano           uint64                 `protobuf:"fixed64,1,opt,name=time_unix_nano,json=timeUnixNano,proto3" json:"time_unix_nano,omitempty"`
+	xxx_hidden_ObservedTimeUnixNano   uint64                 `protobuf:"fixed64,11,opt,name=observed_time_unix_nano,json=observedTimeUnixNano,proto3" json:"observed_time_unix_nano,omitempty"`
+	xxx_hidden_SeverityNumber         SeverityNumber         `protobuf:"varint,2,opt,name=severity_number,json=severityNumber,proto3,enum=opentelemetry.proto.logs.v1.SeverityNumber" json:"severity_number,omitempty"`
+	xxx_hidden_SeverityText           string                 `protobuf:"bytes,3,opt,name=severity_text,json=severityText,proto3" json:"severity_text,omitempty"`
+	xxx_hidden_Body                   *v11.AnyValue          `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
+	xxx_hidden_Attributes             *[]*v11.KeyValue       `protobuf:"bytes,6,rep,name=attributes,proto3" json:"attributes,omitempty"`
+	xxx_hidden_DroppedAttributesCount uint32                 `protobuf:"varint,7,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3" json:"dropped_attributes_count,omitempty"`
+	xxx_hidden_Flags                  uint32                 `protobuf:"fixed32,8,opt,name=flags,proto3" json:"flags,omitempty"`
+	xxx_hidden_TraceId                []byte                 `protobuf:"bytes,9,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	xxx_hidden_SpanId                 []byte                 `protobuf:"bytes,10,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
+	xxx_hidden_EventName              string                 `protobuf:"bytes,12,opt,name=event_name,json=eventName,proto3" json:"event_name,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *LogRecord) Reset() {
@@ -621,140 +536,142 @@ func (x *LogRecord) ProtoReflect() protoreflect.Message {
 
 func (x *LogRecord) GetTimeUnixNano() uint64 {
 	if x != nil {
-		return x.TimeUnixNano
+		return x.xxx_hidden_TimeUnixNano
 	}
 	return 0
 }
 
 func (x *LogRecord) GetObservedTimeUnixNano() uint64 {
 	if x != nil {
-		return x.ObservedTimeUnixNano
+		return x.xxx_hidden_ObservedTimeUnixNano
 	}
 	return 0
 }
 
 func (x *LogRecord) GetSeverityNumber() SeverityNumber {
 	if x != nil {
-		return x.SeverityNumber
+		return x.xxx_hidden_SeverityNumber
 	}
 	return SeverityNumber_SEVERITY_NUMBER_UNSPECIFIED
 }
 
 func (x *LogRecord) GetSeverityText() string {
 	if x != nil {
-		return x.SeverityText
+		return x.xxx_hidden_SeverityText
 	}
 	return ""
 }
 
 func (x *LogRecord) GetBody() *v11.AnyValue {
 	if x != nil {
-		return x.Body
+		return x.xxx_hidden_Body
 	}
 	return nil
 }
 
 func (x *LogRecord) GetAttributes() []*v11.KeyValue {
 	if x != nil {
-		return x.Attributes
+		if x.xxx_hidden_Attributes != nil {
+			return *x.xxx_hidden_Attributes
+		}
 	}
 	return nil
 }
 
 func (x *LogRecord) GetDroppedAttributesCount() uint32 {
 	if x != nil {
-		return x.DroppedAttributesCount
+		return x.xxx_hidden_DroppedAttributesCount
 	}
 	return 0
 }
 
 func (x *LogRecord) GetFlags() uint32 {
 	if x != nil {
-		return x.Flags
+		return x.xxx_hidden_Flags
 	}
 	return 0
 }
 
 func (x *LogRecord) GetTraceId() []byte {
 	if x != nil {
-		return x.TraceId
+		return x.xxx_hidden_TraceId
 	}
 	return nil
 }
 
 func (x *LogRecord) GetSpanId() []byte {
 	if x != nil {
-		return x.SpanId
+		return x.xxx_hidden_SpanId
 	}
 	return nil
 }
 
 func (x *LogRecord) GetEventName() string {
 	if x != nil {
-		return x.EventName
+		return x.xxx_hidden_EventName
 	}
 	return ""
 }
 
 func (x *LogRecord) SetTimeUnixNano(v uint64) {
-	x.TimeUnixNano = v
+	x.xxx_hidden_TimeUnixNano = v
 }
 
 func (x *LogRecord) SetObservedTimeUnixNano(v uint64) {
-	x.ObservedTimeUnixNano = v
+	x.xxx_hidden_ObservedTimeUnixNano = v
 }
 
 func (x *LogRecord) SetSeverityNumber(v SeverityNumber) {
-	x.SeverityNumber = v
+	x.xxx_hidden_SeverityNumber = v
 }
 
 func (x *LogRecord) SetSeverityText(v string) {
-	x.SeverityText = v
+	x.xxx_hidden_SeverityText = v
 }
 
 func (x *LogRecord) SetBody(v *v11.AnyValue) {
-	x.Body = v
+	x.xxx_hidden_Body = v
 }
 
 func (x *LogRecord) SetAttributes(v []*v11.KeyValue) {
-	x.Attributes = v
+	x.xxx_hidden_Attributes = &v
 }
 
 func (x *LogRecord) SetDroppedAttributesCount(v uint32) {
-	x.DroppedAttributesCount = v
+	x.xxx_hidden_DroppedAttributesCount = v
 }
 
 func (x *LogRecord) SetFlags(v uint32) {
-	x.Flags = v
+	x.xxx_hidden_Flags = v
 }
 
 func (x *LogRecord) SetTraceId(v []byte) {
 	if v == nil {
 		v = []byte{}
 	}
-	x.TraceId = v
+	x.xxx_hidden_TraceId = v
 }
 
 func (x *LogRecord) SetSpanId(v []byte) {
 	if v == nil {
 		v = []byte{}
 	}
-	x.SpanId = v
+	x.xxx_hidden_SpanId = v
 }
 
 func (x *LogRecord) SetEventName(v string) {
-	x.EventName = v
+	x.xxx_hidden_EventName = v
 }
 
 func (x *LogRecord) HasBody() bool {
 	if x == nil {
 		return false
 	}
-	return x.Body != nil
+	return x.xxx_hidden_Body != nil
 }
 
 func (x *LogRecord) ClearBody() {
-	x.Body = nil
+	x.xxx_hidden_Body = nil
 }
 
 type LogRecord_builder struct {
@@ -845,17 +762,17 @@ func (b0 LogRecord_builder) Build() *LogRecord {
 	m0 := &LogRecord{}
 	b, x := &b0, m0
 	_, _ = b, x
-	x.TimeUnixNano = b.TimeUnixNano
-	x.ObservedTimeUnixNano = b.ObservedTimeUnixNano
-	x.SeverityNumber = b.SeverityNumber
-	x.SeverityText = b.SeverityText
-	x.Body = b.Body
-	x.Attributes = b.Attributes
-	x.DroppedAttributesCount = b.DroppedAttributesCount
-	x.Flags = b.Flags
-	x.TraceId = b.TraceId
-	x.SpanId = b.SpanId
-	x.EventName = b.EventName
+	x.xxx_hidden_TimeUnixNano = b.TimeUnixNano
+	x.xxx_hidden_ObservedTimeUnixNano = b.ObservedTimeUnixNano
+	x.xxx_hidden_SeverityNumber = b.SeverityNumber
+	x.xxx_hidden_SeverityText = b.SeverityText
+	x.xxx_hidden_Body = b.Body
+	x.xxx_hidden_Attributes = &b.Attributes
+	x.xxx_hidden_DroppedAttributesCount = b.DroppedAttributesCount
+	x.xxx_hidden_Flags = b.Flags
+	x.xxx_hidden_TraceId = b.TraceId
+	x.xxx_hidden_SpanId = b.SpanId
+	x.xxx_hidden_EventName = b.EventName
 	return m0
 }
 
