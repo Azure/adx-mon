@@ -217,14 +217,16 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 		logger.Infof("Scraping %s", target.String())
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
-			logger.Errorf("Failed to scrape %s: %s", target.Addr, err.Error())
+			logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
+				target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 			continue
 		}
 		for iter.Next() {
 			pt := prompb.TimeSeriesPool.Get()
 			ts, err := iter.TimeSeriesInto(pt)
 			if err != nil {
-				logger.Errorf("Failed to parse series %s: %s", target.Addr, err.Error())
+				logger.Warnf("Failed to parse series %s/%s/%s at %s: %s",
+					target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 				continue
 			}
 
@@ -261,11 +263,11 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
 		if err := iter.Err(); err != nil {
-			logger.Errorf("Failed to scrape %s: %s", target.Addr, err.Error())
+			logger.Warnf("Failed to scrape %s/%s/%s at %s: %s", target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 		}
 
 		if err := iter.Close(); err != nil {
-			logger.Errorf("Failed to close iterator: %s", err.Error())
+			logger.Errorf("Failed to close iterator for %s/%s/%s: %s", target.Namespace, target.Pod, target.Container, err.Error())
 		}
 
 		wr = s.flushBatchIfNecessary(ctx, wr)
