@@ -30,7 +30,7 @@ import (
 type LogsProxyServiceOpts struct {
 	AddAttributes      map[string]string
 	LiftAttributes     []string
-	Endpoints          []string
+	Endpoint           string
 	InsecureSkipVerify bool
 }
 
@@ -60,7 +60,8 @@ func NewLogsProxyService(opts LogsProxyServiceOpts) *LogsProxyService {
 	}
 
 	rpcClients := make(map[string]logsv1connect.LogsServiceClient)
-	for _, endpoint := range opts.Endpoints {
+	if opts.Endpoint != "" {
+		endpoint := opts.Endpoint
 		// We have to strip the path component from our endpoint so gRPC can correctly setup its routing
 		uri, err := url.Parse(endpoint)
 		if err != nil {

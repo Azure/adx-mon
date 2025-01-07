@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
@@ -68,7 +69,7 @@ type Service struct {
 type ServiceOpts struct {
 	ListenAddr string
 	NodeName   string
-	Endpoints  []string
+	Endpoint   string
 
 	// LogCollectionHandlers is the list of log collection handlers
 	LogCollectionHandlers []LogCollectorOpts
@@ -197,7 +198,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	logsProxySvc := otlp.NewLogsProxyService(otlp.LogsProxyServiceOpts{
 		LiftAttributes:     opts.LiftAttributes,
 		AddAttributes:      opts.AddAttributes,
-		Endpoints:          opts.Endpoints,
+		Endpoint:           opts.Endpoint,
 		InsecureSkipVerify: opts.InsecureSkipVerify,
 	})
 
@@ -220,8 +221,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
 		writer := otlp.NewOltpMetricWriter(otlp.OltpMetricWriterOpts{
 			RequestTransformer:       handlerOpts.MetricOpts.RequestTransformer(),
-			Client:                   &StoreRemoteClient{store},
-			Endpoints:                opts.Endpoints,
+			Clients:                  []remote.RemoteWriteClient{&StoreRemoteClient{store}},
 			MaxBatchSize:             opts.MaxBatchSize,
 			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
 		})
@@ -249,11 +249,11 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		transferQueue chan *cluster.Batch
 		partitioner   cluster.MetricPartitioner
 	)
-	if len(opts.Endpoints) > 0 {
+	if opts.Endpoint != "" {
 		// This is a static partitioner that forces all entries to be assigned to the remote endpoint.
 		partitioner = remotePartitioner{
 			host: "remote",
-			addr: opts.Endpoints[0],
+			addr: opts.Endpoint,
 		}
 
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
@@ -293,8 +293,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	var scraper *Scraper
 	if opts.Scraper != nil {
 		scraperOpts := opts.Scraper
-		scraperOpts.RemoteClient = &StoreRemoteClient{store}
-		scraperOpts.Endpoints = opts.Endpoints
+		scraperOpts.RemoteClients = []remote.RemoteWriteClient{&StoreRemoteClient{store}}
 
 		scraper = NewScraper(opts.Scraper)
 	}
@@ -524,7 +523,7 @@ type StoreRemoteClient struct {
 	store storage.Store
 }
 
-func (s *StoreRemoteClient) Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error {
+func (s *StoreRemoteClient) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	return s.store.WriteTimeSeries(ctx, wr.Timeseries)
 }
 

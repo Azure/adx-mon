@@ -86,15 +86,12 @@ type OltpMetricWriterOpts struct {
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
-	Endpoints []string
-
-	Client remote.RemoteWriteClient
+	Clients []remote.RemoteWriteClient
 }
 
 type OltpMetricWriter struct {
 	requestTransformer       *transform.RequestTransformer
-	endpoints                []string
-	remoteClient             remote.RemoteWriteClient
+	remoteClients            []remote.RemoteWriteClient
 	maxBatchSize             int
 	disableMetricsForwarding bool
 }
@@ -102,8 +99,7 @@ type OltpMetricWriter struct {
 func NewOltpMetricWriter(opts OltpMetricWriterOpts) *OltpMetricWriter {
 	return &OltpMetricWriter{
 		requestTransformer:       opts.RequestTransformer,
-		endpoints:                opts.Endpoints,
-		remoteClient:             opts.Client,
+		remoteClients:            opts.Clients,
 		maxBatchSize:             opts.MaxBatchSize,
 		disableMetricsForwarding: opts.DisableMetricsForwarding,
 	}
@@ -187,7 +183,7 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 		return nil
 	}
 
-	if len(t.endpoints) == 0 || logger.IsDebug() {
+	if len(t.remoteClients) == 0 || logger.IsDebug() {
 		var sb strings.Builder
 		for _, ts := range wr.Timeseries {
 			sb.Reset()
@@ -212,14 +208,14 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 
 	start := time.Now()
 	defer func() {
-		logger.Infof("OLTP Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(t.endpoints), time.Since(start))
+		logger.Infof("OLTP Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(t.remoteClients), time.Since(start))
 	}()
 
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, endpoint := range t.endpoints {
-		endpoint := endpoint
+	for _, remoteClient := range t.remoteClients {
+		remoteClient := remoteClient
 		g.Go(func() error {
-			return t.remoteClient.Write(gCtx, endpoint, wr)
+			return remoteClient.Write(gCtx, wr)
 		})
 	}
 	if err := g.Wait(); err != nil {

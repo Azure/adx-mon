@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSendBatchWithValidData(t *testing.T) {
 	client := &MockClient{}
-	proxy := NewRemoteWriteProxy(client, []string{"http://example.com"}, 10, false)
+	proxy := NewRemoteWriteProxy([]remote.RemoteWriteClient{client}, 10, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -41,7 +42,7 @@ func TestSendBatchWithValidData(t *testing.T) {
 
 func TestSendBatchWithEmptyBatch(t *testing.T) {
 	client := &MockClient{}
-	proxy := NewRemoteWriteProxy(client, []string{"http://example.com"}, 1, false)
+	proxy := NewRemoteWriteProxy([]remote.RemoteWriteClient{client}, 1, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -76,6 +77,6 @@ type MockClient struct{}
 
 func (m *MockClient) CloseIdleConnections() {}
 
-func (m *MockClient) Write(ctx context.Context, endpoint string, wr *prompb.WriteRequest) error {
+func (m *MockClient) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	return nil
 }

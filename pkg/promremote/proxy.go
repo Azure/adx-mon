@@ -15,8 +15,7 @@ import (
 )
 
 type RemoteWriteProxy struct {
-	client                   remote.RemoteWriteClient
-	endpoints                []string
+	clients                  []remote.RemoteWriteClient
 	maxBatchSize             int
 	disableMetricsForwarding bool
 
@@ -28,10 +27,9 @@ type RemoteWriteProxy struct {
 	cancelFn context.CancelFunc
 }
 
-func NewRemoteWriteProxy(client remote.RemoteWriteClient, endpoints []string, maxBatchSize int, disableMetricsForwarding bool) *RemoteWriteProxy {
+func NewRemoteWriteProxy(clients []remote.RemoteWriteClient, maxBatchSize int, disableMetricsForwarding bool) *RemoteWriteProxy {
 	p := &RemoteWriteProxy{
-		client:                   client,
-		endpoints:                endpoints,
+		clients:                  clients,
 		maxBatchSize:             maxBatchSize,
 		disableMetricsForwarding: disableMetricsForwarding,
 		queue:                    make(chan *prompb.WriteRequest, 100),
@@ -138,7 +136,7 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 				return bytes.Compare(prompb.MetricName(wr.Timeseries[i]), prompb.MetricName(wr.Timeseries[j])) < 0
 			})
 
-			if len(p.endpoints) == 0 || logger.IsDebug() {
+			if len(p.clients) == 0 || logger.IsDebug() {
 				var sb strings.Builder
 				for _, ts := range wr.Timeseries {
 					sb.Reset()
@@ -160,13 +158,13 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 
 			start := time.Now()
 			g, gCtx := errgroup.WithContext(ctx)
-			for _, endpoint := range p.endpoints {
-				endpoint := endpoint
+			for _, client := range p.clients {
+				client := client
 				g.Go(func() error {
-					return p.client.Write(gCtx, endpoint, wr)
+					return client.Write(gCtx, wr)
 				})
 			}
-			logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(p.endpoints), time.Since(start))
+			logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(p.clients), time.Since(start))
 			if err := g.Wait(); err != nil {
 				logger.Errorf("Error sending batch: %v", err)
 			}

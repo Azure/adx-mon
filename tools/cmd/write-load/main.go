@@ -145,6 +145,7 @@ func writer(ctx context.Context, endpoint string, stats *stats, ch chan *prompb.
 	cli, err := promremote.NewClient(promremote.ClientOpts{
 		InsecureSkipVerify: true,
 		Timeout:            30 * time.Second,
+		Endpoint:           endpoint,
 	})
 	if err != nil {
 		logger.Fatalf("prom client: %v", err)
