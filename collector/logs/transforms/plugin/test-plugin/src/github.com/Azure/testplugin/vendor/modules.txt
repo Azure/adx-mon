@@ -1,4 +1,4 @@
-# github.com/Azure/adx-mon v0.0.0-20240522171325-300776b36aa1
+# github.com/Azure/adx-mon v0.0.0-20250107001405-a2931963b84e
 ## explicit; go 1.22.0
 github.com/Azure/adx-mon/collector/logs/types
 github.com/Azure/adx-mon/pkg/pool
