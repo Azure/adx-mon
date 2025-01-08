@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as builder
 
-RUN tdnf install -y golang systemd-devel gcc glibc-devel binutils kernel-headers
+RUN tdnf install -y golang systemd-devel gcc glibc-devel binutils kernel-headers ca-certificates
 
 ADD . /code
 WORKDIR /code
