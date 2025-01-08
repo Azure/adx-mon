@@ -107,6 +107,7 @@ type Config struct {
 	OtelLog               *OtelLog                 `toml:"otel-log,omitempty" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
 	OtelMetric            []*OtelMetric            `toml:"otel-metric,omitempty" comment:"Defines an OpenTelemetry metric endpoint. Accepts OTLP/HTTP and/or OTLP/gRPC."`
 	HostLog               []*HostLog               `toml:"host-log,omitempty" comment:"Defines a host log scraper."`
+	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon."`
 }
 
 type PrometheusScrape struct {
@@ -123,6 +124,8 @@ type PrometheusScrape struct {
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
 	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+
+	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
 
 func (s *PrometheusScrape) Validate() error {
@@ -444,6 +447,12 @@ type LogTransform struct {
 }
 
 func (c *Config) Validate() error {
+	if c.Exporters != nil {
+		if err := c.Exporters.Validate(); err != nil {
+			return err
+		}
+	}
+
 	tlsCertEmpty := c.TLSCertFile == ""
 	tlsKeyEmpty := c.TLSKeyFile == ""
 	if tlsCertEmpty != tlsKeyEmpty {
@@ -519,6 +528,12 @@ func (c *Config) Validate() error {
 	if c.PrometheusScrape != nil {
 		if err := c.PrometheusScrape.Validate(); err != nil {
 			return err
+		}
+
+		for _, exporterName := range c.PrometheusScrape.Exporters {
+			if !HasMetricsExporter(exporterName, c.Exporters) {
+				return fmt.Errorf("prometheus-scrape.exporters %q not found", exporterName)
+			}
 		}
 	}
 

@@ -436,6 +436,79 @@ func TestConfig_PromScrape_Database(t *testing.T) {
 	require.Equal(t, "prom-scrape.database must be set", c.Validate().Error())
 }
 
+func TestConfig_PromScape_Exporters(t *testing.T) {
+	type testcase struct {
+		name   string
+		config Config
+		err    string
+	}
+
+	tests := []testcase{
+		{
+			name: "Success",
+			config: Config{
+				PrometheusScrape: &PrometheusScrape{
+					Database:              "foo",
+					ScrapeIntervalSeconds: 10,
+					Exporters: []string{
+						"foo",
+						"bar",
+					},
+				},
+
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+						{
+							Name:        "bar",
+							Destination: "http://bar",
+						},
+					},
+				},
+			},
+			err: "",
+		},
+		{
+			name: "Missing exporter",
+			config: Config{
+				PrometheusScrape: &PrometheusScrape{
+					Database:              "foo",
+					ScrapeIntervalSeconds: 10,
+					Exporters: []string{
+						"foo",
+						"bar",
+					},
+				},
+
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+					},
+				},
+			},
+			err: `prometheus-scrape.exporters "bar" not found`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.err, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestConfig_PromWrite_Database(t *testing.T) {
 	c := Config{
 		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
@@ -1086,6 +1159,84 @@ func TestConfig_WALFlushInterval(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				require.Equal(t, "wal-flush-interval must be greater than 0", err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfig_ValidateExporters(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr bool
+	}{
+		{
+			name: "Success",
+			config: Config{
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Failure_empty_name",
+			config: Config{
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Destination: "http://foo",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_empty_destination",
+			config: Config{
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name: "foo",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Failure_duplicate_name",
+			config: Config{
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+						{
+							Name:        "foo",
+							Destination: "http://bar",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 			}

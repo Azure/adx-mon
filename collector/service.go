@@ -293,7 +293,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	var scraper *Scraper
 	if opts.Scraper != nil {
 		scraperOpts := opts.Scraper
-		scraperOpts.RemoteClients = []remote.RemoteWriteClient{&StoreRemoteClient{store}}
+		scraperOpts.RemoteClients = append(scraperOpts.RemoteClients, &StoreRemoteClient{store})
 
 		scraper = NewScraper(opts.Scraper)
 	}
