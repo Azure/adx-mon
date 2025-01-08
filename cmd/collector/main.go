@@ -27,6 +27,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/pelletier/go-toml/v2"
@@ -246,6 +247,16 @@ func realMain(ctx *cli.Context) error {
 			defaultDropMetrics = *cfg.PrometheusScrape.DefaultDropMetrics
 		}
 
+		var remoteClients []remote.RemoteWriteClient
+		for _, exporterName := range cfg.PrometheusScrape.Exporters {
+			remoteClient, err := config.GetMetricsExporter(exporterName, cfg.Exporters)
+			if err != nil {
+				return fmt.Errorf("failed to get exporter %s: %w", exporterName, err)
+			}
+
+			remoteClients = append(remoteClients, remoteClient)
+		}
+
 		scraperOpts = &collector.ScraperOpts{
 			NodeName:                  hostname,
 			PodInformer:               informer,
@@ -262,6 +273,7 @@ func realMain(ctx *cli.Context) error {
 			ScrapeTimeout:             time.Duration(cfg.PrometheusScrape.ScrapeTimeout) * time.Second,
 			Targets:                   staticTargets,
 			MaxBatchSize:              cfg.MaxBatchSize,
+			RemoteClients:             remoteClients,
 		}
 	}
 
