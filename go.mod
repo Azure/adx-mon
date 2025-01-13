@@ -30,7 +30,7 @@ require (
 	github.com/prometheus/common v0.61.0
 	github.com/stretchr/testify v1.10.0
 	github.com/tenebris-tech/tail v1.0.5
-	github.com/testcontainers/testcontainers-go v0.34.0
+	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/testcontainers/testcontainers-go/modules/k3s v0.34.0
 	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.27.5

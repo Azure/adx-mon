@@ -505,7 +505,7 @@ github.com/tenebris-tech/tail/ratelimiter
 github.com/tenebris-tech/tail/util
 github.com/tenebris-tech/tail/watch
 github.com/tenebris-tech/tail/winfile
-# github.com/testcontainers/testcontainers-go v0.34.0
+# github.com/testcontainers/testcontainers-go v0.35.0
 ## explicit; go 1.22
 github.com/testcontainers/testcontainers-go
 github.com/testcontainers/testcontainers-go/exec
