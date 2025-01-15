@@ -198,6 +198,8 @@ type PrometheusRemoteWrite struct {
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
 	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+
+	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
 
 func (w *PrometheusRemoteWrite) Validate() error {
@@ -270,6 +272,8 @@ type OtelMetric struct {
 	DropMetrics               []string          `toml:"drop-metrics" comment:"Regexes of metrics to drop."`
 	KeepMetrics               []string          `toml:"keep-metrics" comment:"Regexes of metrics to keep."`
 	KeepMetricsWithLabelValue []LabelMatcher    `toml:"keep-metrics-with-label-value" comment:"Regexes of metrics to keep if they have the given label and value."`
+
+	Exporters []string `toml:"exporters" comment:"List of exporter names to forward metrics to."`
 }
 
 func (w *OtelMetric) Validate() error {
@@ -491,6 +495,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("prometheus-remote-write.path %s is already defined", v.Path)
 		}
 		existingPaths[v.Path] = struct{}{}
+
+		for _, exporterName := range v.Exporters {
+			if !HasMetricsExporter(exporterName, c.Exporters) {
+				return fmt.Errorf("prometheus-remote-write.exporters %q not found", exporterName)
+			}
+		}
 	}
 
 	if c.OtelLog != nil {
@@ -512,16 +522,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	for _, v := range c.OtelMetric {
+	for i, v := range c.OtelMetric {
 		if err := v.Validate(); err != nil {
 			return err
 		}
 
 		if v.Path != "" {
 			if _, ok := existingPaths[v.Path]; ok {
-				return fmt.Errorf("otel-metric.path %s is already defined", v.Path)
+				return fmt.Errorf("otel-metric[%d].path %s is already defined", i, v.Path)
 			}
 			existingPaths[v.Path] = struct{}{}
+		}
+
+		for _, exporterName := range v.Exporters {
+			if !HasMetricsExporter(exporterName, c.Exporters) {
+				return fmt.Errorf("otel-metric[%d].exporters %q not found", i, exporterName)
+			}
 		}
 	}
 
