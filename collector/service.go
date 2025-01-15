@@ -157,14 +157,18 @@ type MetricsHandlerOpts struct {
 	// DisableMetricsForwarding disables the forwarding of metrics to the remote write endpoint.
 	DisableMetricsForwarding bool
 	DefaultDropMetrics       bool
+
+	RemoteWriteClients []remote.RemoteWriteClient
 }
 
 func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
 	return &transform.RequestTransformer{
-		AddLabels:   o.AddLabels,
-		DropLabels:  o.DropLabels,
-		DropMetrics: o.DropMetrics,
-		KeepMetrics: o.KeepMetrics,
+		AddLabels:                 o.AddLabels,
+		DropLabels:                o.DropLabels,
+		DropMetrics:               o.DropMetrics,
+		KeepMetrics:               o.KeepMetrics,
+		KeepMetricsWithLabelValue: o.KeepMetricsLabelValues,
+		DefaultDropMetrics:        o.DefaultDropMetrics,
 	}
 }
 
@@ -209,7 +213,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
-			RequestWriter:      &StoreRequestWriter{store},
+			RequestWriters:     append(handlerOpts.MetricOpts.RemoteWriteClients, &StoreRequestWriter{store}),
 			HealthChecker:      fakeHealthChecker{},
 		})
 		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
@@ -221,7 +225,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	for _, handlerOpts := range opts.OtlpMetricsHandlers {
 		writer := otlp.NewOltpMetricWriter(otlp.OltpMetricWriterOpts{
 			RequestTransformer:       handlerOpts.MetricOpts.RequestTransformer(),
-			Clients:                  []remote.RemoteWriteClient{&StoreRemoteClient{store}},
+			Clients:                  append(handlerOpts.MetricOpts.RemoteWriteClients, &StoreRemoteClient{store}),
 			MaxBatchSize:             opts.MaxBatchSize,
 			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
 		})
@@ -517,6 +521,9 @@ type StoreRequestWriter struct {
 
 func (s *StoreRequestWriter) Write(ctx context.Context, req *prompb.WriteRequest) error {
 	return s.store.WriteTimeSeries(ctx, req.Timeseries)
+}
+
+func (s *StoreRequestWriter) CloseIdleConnections() {
 }
 
 type StoreRemoteClient struct {

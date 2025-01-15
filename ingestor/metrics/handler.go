@@ -13,19 +13,16 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/golang/snappy"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/errgroup"
 )
 
 type SeriesCounter interface {
 	AddSeries(key string, id uint64)
-}
-
-type RequestWriter interface {
-	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr *prompb.WriteRequest) error
 }
 
 type HealthChecker interface {
@@ -40,8 +37,8 @@ type HandlerOpts struct {
 		TransformWriteRequest(req *prompb.WriteRequest) *prompb.WriteRequest
 	}
 
-	// RequestWriter is the interface that writes the time series to a destination.
-	RequestWriter RequestWriter
+	// RequestWriters is the interface that writes the time series to a destination.
+	RequestWriters []remote.RemoteWriteClient
 
 	// Health is the interface that determines if the service is healthy.
 	HealthChecker HealthChecker
@@ -64,8 +61,8 @@ type Handler struct {
 		TransformWriteRequest(req *prompb.WriteRequest) *prompb.WriteRequest
 	}
 
-	requestWriter RequestWriter
-	health        HealthChecker
+	requestWriters []remote.RemoteWriteClient
+	health         HealthChecker
 }
 
 func (s *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -77,7 +74,7 @@ func NewHandler(opts HandlerOpts) *Handler {
 		Path:               opts.Path,
 		health:             opts.HealthChecker,
 		requestTransformer: opts.RequestTransformer,
-		requestWriter:      opts.RequestWriter,
+		requestWriters:     opts.RequestWriters,
 	}
 }
 
@@ -148,7 +145,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.requestWriter.Write(r.Context(), req)
+	err = s.Write(r.Context(), req)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
@@ -162,4 +159,16 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 
 	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Handler) Write(ctx context.Context, req *prompb.WriteRequest) error {
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, writer := range s.requestWriters {
+		writer := writer
+		g.Go(func() error {
+			return writer.Write(gCtx, req)
+		})
+	}
+
+	return g.Wait()
 }
