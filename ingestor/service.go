@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
@@ -193,15 +194,16 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		dbs[db] = struct{}{}
 	}
 
+	// Deprecated. Metrics are now sent to ingestor from collector via /transfer.
 	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 		RequestTransformer: &transform.RequestTransformer{
 			DropLabels:      opts.DropLabels,
 			DropMetrics:     opts.DropMetrics,
 			AllowedDatabase: dbs,
 		},
-		RequestWriter: coord,
-		HealthChecker: health,
-		Path:          "/receive",
+		RequestWriters: []remote.RemoteWriteClient{remote.NopCloser(coord)},
+		HealthChecker:  health,
+		Path:           "/receive",
 	})
 
 	_, l := logsv1connect.NewLogsServiceHandler(otlp.NewLogsServiceHandler(coord.WriteOTLPLogs, opts.LogsDatabases))
