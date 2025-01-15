@@ -94,6 +94,80 @@ func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 	require.Equal(t, "prometheus-remote-write.drop-labels key must be set", c.Validate().Error())
 }
 
+func TestConfig_ValidatePromRemoteWrite_Exporters(t *testing.T) {
+	type testcase struct {
+		name   string
+		config Config
+		err    string
+	}
+
+	testcases := []testcase{
+		{
+			name: "Success",
+			config: Config{
+				PrometheusRemoteWrite: []*PrometheusRemoteWrite{
+					{
+						Path:     "/receive",
+						Database: "foo",
+						Exporters: []string{
+							"foo",
+							"bar",
+						},
+					},
+				},
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+						{
+							Name:        "bar",
+							Destination: "http://bar",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Missing exporter",
+			config: Config{
+				PrometheusRemoteWrite: []*PrometheusRemoteWrite{
+					{
+						Path:     "/receive",
+						Database: "foo",
+						Exporters: []string{
+							"foo",
+							"bar",
+						},
+					},
+				},
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+					},
+				},
+			},
+			err: `prometheus-remote-write.exporters "bar" not found`,
+		},
+	}
+
+	for _, tt := range testcases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.err, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	c := Config{
 		OtelLog: &OtelLog{
@@ -214,7 +288,7 @@ func TestConfig_OtelMetrics(t *testing.T) {
 					{LabelRegex: "foo", ValueRegex: "bar"},
 				},
 			},
-			err: "otel-metric.path /metrics is already defined",
+			err: "otel-metric[0].path /metrics is already defined",
 		},
 		{
 			name:   "empty db",
@@ -324,7 +398,82 @@ func TestConfig_OtelMetrics(t *testing.T) {
 			}
 		})
 	}
+}
 
+func TestConfig_OtelMetrics_Exporters(t *testing.T) {
+	type testcase struct {
+		name   string
+		config Config
+		err    string
+	}
+
+	tests := []testcase{
+		{
+			name: "Success",
+			config: Config{
+				OtelMetric: []*OtelMetric{
+					{
+						Database: "foo",
+						Path:     "/v1/metrics",
+						GrpcPort: 1234,
+						Exporters: []string{
+							"foo",
+							"bar",
+						},
+					},
+				},
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+						{
+							Name:        "bar",
+							Destination: "http://bar",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Missing exporter",
+			config: Config{
+				OtelMetric: []*OtelMetric{
+					{
+						Database: "foo",
+						Path:     "/v1/metrics",
+						GrpcPort: 1234,
+						Exporters: []string{
+							"foo",
+							"bar",
+						},
+					},
+				},
+				Exporters: &Exporters{
+					OtlpMetricExport: []*OtlpMetricExport{
+						{
+							Name:        "foo",
+							Destination: "http://foo",
+						},
+					},
+				},
+			},
+			err: `otel-metric[0].exporters "bar" not found`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.err, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestConfig_PromScrape_StaticTargets(t *testing.T) {
