@@ -213,6 +213,7 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 				nameBytes = element.Value
 			} else if !bytes.HasPrefix(element.Name, []byte("adxmon_")) {
 				attribute := c.stringKVPool.Get(0).(*commonv1.KeyValue)
+				// Explicitly set all fields to reset, but also to avoid allocations for the value
 				attribute.Key = string(element.Name)
 				// only accept stringval here to avoid allocations
 				stringval := attribute.Value.Value.(*commonv1.AnyValue_StringValue)
@@ -224,6 +225,7 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 
 		for _, sample := range ts.Samples {
 			datapoint := c.datapointPool.Get(0).(*metricsv1.NumberDataPoint)
+			// Explicitly set all fields to reset, but also to avoid allocations for the value
 			datapoint.Attributes = attributes
 			datapoint.TimeUnixNano = uint64(sample.Timestamp * 1000000) // milliseconds to nanoseconds
 			datapoint.StartTimeUnixNano = 0
@@ -241,13 +243,14 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 	serialized, err := proto.Marshal(exportRequest)
 
 	for _, scopeMetric := range scopeMetrics.Metrics {
-		// shared attribute with all datapoints under metric
-		datapoint := scopeMetric.GetGauge().GetDataPoints()[0]
-		for _, attribute := range datapoint.Attributes {
-			c.stringKVPool.Put(attribute)
-		}
+		for idx, datapoint := range scopeMetric.GetGauge().GetDataPoints() {
+			if idx == 0 {
+				// shared attribute with all datapoints under metric
+				for _, attribute := range datapoint.Attributes {
+					c.stringKVPool.Put(attribute)
+				}
+			}
 
-		for _, datapoint := range scopeMetric.GetGauge().GetDataPoints() {
 			c.datapointPool.Put(datapoint)
 		}
 	}
