@@ -44,6 +44,37 @@ example, the `pod` label may be common to all metrics and can be pulled up to a 
 
 ### Logs
 
+Logs are ingested into ADX as [OTLP](https://opentelemetry.io/docs/specs/otel/logs/data-model/#log-and-event-record-definition) records. You can define custom table schemas through a Kubernetes CRD called `Function`, which represents an [ADX View](https://learn.microsoft.com/en-us/kusto/query/schema-entities/views?view=microsoft-fabric). This allows you to present log events in a custom format rather than querying the OTLP structure directly. Below is an example of specifying a custom schema for the Ingestor component:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: ingestor-view
+  namespace: default
+spec:
+  body: |
+    .create-or-alter function with (view=true, folder='views') Ingestor () {
+      table('Ingestor')
+      | project msg = tostring(Body.msg),
+          lvl = tostring(Body.lvl),
+          ts = todatetime(Body.ts),
+          namespace = tostring(Body.namespace),
+          container = tostring(Body.container),
+          pod = tostring(Body.pod),
+          host = tostring(Body.host) 
+    }
+  database: Logs
+```
+
+Naming the View the same as the Table ensures the View takes precedence when queried in ADX. For example:
+
+```kql
+Ingestor
+| where ts > ago(1h)
+| where lvl == 'ERR'
+```
+
 ### Traces
 
 ### Continuous Profiling
