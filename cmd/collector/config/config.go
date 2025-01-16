@@ -107,7 +107,7 @@ type Config struct {
 	OtelLog               *OtelLog                 `toml:"otel-log,omitempty" comment:"Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP."`
 	OtelMetric            []*OtelMetric            `toml:"otel-metric,omitempty" comment:"Defines an OpenTelemetry metric endpoint. Accepts OTLP/HTTP and/or OTLP/gRPC."`
 	HostLog               []*HostLog               `toml:"host-log,omitempty" comment:"Defines a host log scraper."`
-	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon."`
+	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.\nExporters are declared here and referenced by name in each collection source."`
 }
 
 type PrometheusScrape struct {
