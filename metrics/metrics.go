@@ -227,4 +227,18 @@ var (
 		Name:      "metrics_requests_received_total",
 		Help:      "Counter of the number of metrics requests received",
 	}, []string{"protocol", "code", "endpoint"})
+
+	CollectorExporterMetricsSent = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "exporter_sent_metrics",
+		Help:      "Counter of the number of telemetry points successfully sent by an exporter",
+	}, []string{"exporter", "endpoint"})
+
+	CollectorExporterMetricsFailed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "exporter_failed_metrics",
+		Help:      "Counter of the number of telemetry points that failed to be sent by an exporter",
+	}, []string{"exporter", "endpoint"})
 )

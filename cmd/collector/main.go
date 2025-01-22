@@ -27,6 +27,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/pelletier/go-toml/v2"
@@ -159,6 +160,7 @@ func realMain(ctx *cli.Context) error {
 	// Update the default mapping so pooled csv encoders can use the lifted columns
 	schema.DefaultMetricsMapping = defaultMapping
 
+	metricExporterCache := make(map[string]remote.RemoteWriteClient)
 	var informer *k8s.PodInformer
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
@@ -246,6 +248,11 @@ func realMain(ctx *cli.Context) error {
 			defaultDropMetrics = *cfg.PrometheusScrape.DefaultDropMetrics
 		}
 
+		remoteClients, err := getMetricsExporters(cfg.PrometheusScrape.Exporters, cfg.Exporters, metricExporterCache)
+		if err != nil {
+			return fmt.Errorf("prometheus scrape: %w", err)
+		}
+
 		scraperOpts = &collector.ScraperOpts{
 			NodeName:                  hostname,
 			PodInformer:               informer,
@@ -262,6 +269,7 @@ func realMain(ctx *cli.Context) error {
 			ScrapeTimeout:             time.Duration(cfg.PrometheusScrape.ScrapeTimeout) * time.Second,
 			Targets:                   staticTargets,
 			MaxBatchSize:              cfg.MaxBatchSize,
+			RemoteClients:             remoteClients,
 		}
 	}
 
@@ -388,6 +396,11 @@ func realMain(ctx *cli.Context) error {
 			disableMetricsForwarding = *v.DisableMetricsForwarding
 		}
 
+		remoteWriteClients, err := getMetricsExporters(v.Exporters, cfg.Exporters, metricExporterCache)
+		if err != nil {
+			return fmt.Errorf("prometheus remote write: %w", err)
+		}
+
 		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.PrometheusRemoteWriteHandlerOpts{
 			Path: v.Path,
 			MetricOpts: collector.MetricsHandlerOpts{
@@ -398,6 +411,7 @@ func realMain(ctx *cli.Context) error {
 				KeepMetrics:              keepMetrics,
 				KeepMetricsLabelValues:   keepMetricLabelValues,
 				DisableMetricsForwarding: disableMetricsForwarding,
+				RemoteWriteClients:       remoteWriteClients,
 			},
 		})
 	}
@@ -475,6 +489,11 @@ func realMain(ctx *cli.Context) error {
 			disableMetricsForwarding = *v.DisableMetricsForwarding
 		}
 
+		remoteWriteClients, err := getMetricsExporters(v.Exporters, cfg.Exporters, metricExporterCache)
+		if err != nil {
+			return fmt.Errorf("otel metric: %w", err)
+		}
+
 		opts.OtlpMetricsHandlers = append(opts.OtlpMetricsHandlers, collector.OtlpMetricsHandlerOpts{
 			Path:     v.Path,
 			GrpcPort: v.GrpcPort,
@@ -486,6 +505,7 @@ func realMain(ctx *cli.Context) error {
 				KeepMetrics:              keepMetrics,
 				KeepMetricsLabelValues:   keepMetricLabelValues,
 				DisableMetricsForwarding: disableMetricsForwarding,
+				RemoteWriteClients:       remoteWriteClients,
 			},
 		})
 	}
@@ -699,4 +719,23 @@ func parseKeyPairs(kp []string) (map[string]string, error) {
 		m[split[0]] = split[1]
 	}
 	return m, nil
+}
+
+func getMetricsExporters(exporterNames []string, exporters *config.Exporters, cache map[string]remote.RemoteWriteClient) ([]remote.RemoteWriteClient, error) {
+	var remoteClients []remote.RemoteWriteClient
+	for _, exporterName := range exporterNames {
+		if client, ok := cache[exporterName]; ok {
+			remoteClients = append(remoteClients, client)
+			continue
+		}
+
+		remoteClient, err := config.GetMetricsExporter(exporterName, exporters)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get exporter %s: %w", exporterName, err)
+		}
+
+		remoteClients = append(remoteClients, remoteClient)
+		cache[exporterName] = remoteClient
+	}
+	return remoteClients, nil
 }

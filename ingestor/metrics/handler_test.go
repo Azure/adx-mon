@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
 	"github.com/golang/snappy"
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,8 @@ func (f *fakeRequestWriter) Write(ctx context.Context, wr *prompb.WriteRequest) 
 	return f.fn(ctx, wr)
 }
 
+func (f *fakeRequestWriter) CloseIdleConnections() {}
+
 func TestHandler_HandleReceive(t *testing.T) {
 	var called bool
 	writer := &fakeRequestWriter{
@@ -33,7 +36,7 @@ func TestHandler_HandleReceive(t *testing.T) {
 
 	h := NewHandler(HandlerOpts{
 		RequestTransformer: &transform.RequestTransformer{},
-		RequestWriter:      writer,
+		RequestWriters:     []remote.RemoteWriteClient{writer},
 		HealthChecker:      &fakeHealthChecker{healthy: true},
 		Database:           "adxmetrics",
 	})
@@ -87,9 +90,9 @@ func TestHandler_HandleReceive_Unhealthy(t *testing.T) {
 		RequestTransformer: &transform.RequestTransformer{
 			AllowedDatabase: map[string]struct{}{"adxmetrics": {}},
 		},
-		RequestWriter: writer,
-		HealthChecker: &fakeHealthChecker{healthy: false},
-		Database:      "adxmetrics",
+		RequestWriters: []remote.RemoteWriteClient{writer},
+		HealthChecker:  &fakeHealthChecker{healthy: false},
+		Database:       "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{
@@ -141,9 +144,9 @@ func TestHandler_HandleReceive_AllowedDBs(t *testing.T) {
 		RequestTransformer: &transform.RequestTransformer{
 			AllowedDatabase: map[string]struct{}{"adxmetrics": {}},
 		},
-		RequestWriter: writer,
-		HealthChecker: &fakeHealthChecker{healthy: true},
-		Database:      "adxmetrics",
+		RequestWriters: []remote.RemoteWriteClient{writer},
+		HealthChecker:  &fakeHealthChecker{healthy: true},
+		Database:       "adxmetrics",
 	})
 
 	wr := prompb.WriteRequest{

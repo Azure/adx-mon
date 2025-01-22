@@ -60,7 +60,7 @@ lift-attributes = [
 
 # Global labels to drop if they match a metrics regex in the format <metrics regex>=<label name>. These are dropped from all metrics collected by this agent
 [drop-labels]
-  podname = '.*'
+  '^nginx_connections_accepted' = '^pid$'
 
 # Global Regexes of metrics to keep if they have the given label and value. These are kept from all metrics collected by this agent
 [[keep-metrics-with-label-value]]
@@ -93,6 +93,38 @@ lift-attributes = [
   cluster = 'cluster1'
   geo = 'eu'
 
+# Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.
+# Exporters are declared here and referenced by name in each collection source.
+[exporters]
+  # Configuration for exporting metrics to an OTLP/HTTP endpoint.
+  [[exporters.otlp-metric-export]]
+    # Name of the exporter.
+    name = 'to-otlp'
+    # OTLP/HTTP endpoint to send metrics to.
+    destination = 'http://localhost:4318/v1/metrics'
+    # Default to dropping all metrics.  Only metrics matching a keep rule will be kept.
+    default-drop-metrics = true
+    # Regexes of metrics to drop.
+    drop-metrics = []
+    # Regexes of metrics to keep.
+    keep-metrics = [
+      '^kube_pod_ips$'
+    ]
+    # Regexes of metrics to keep if they have the given label and value.
+    keep-metrics-with-label-value = []
+
+    # Key/value pairs of labels to add to all metrics.
+    [exporters.otlp-metric-export.add-labels]
+      forwarded_to = 'otlp'
+
+    # Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.
+    [exporters.otlp-metric-export.drop-labels]
+      '^kube_pod_ips$' = '^ip_family'
+
+    # Key/value pairs of resource attributes to add to all metrics.
+    [exporters.otlp-metric-export.add-resource-attributes]
+      destination_namespace = 'prod-metrics'
+
 ```
 ## Prometheus Scrape
 
@@ -120,6 +152,8 @@ Prometheus scrape discovers pods with the `adx-mon/scrape` annotation as well as
   keep-metrics = [
     'nginx.*'
   ]
+  # List of exporter names to forward metrics to.
+  exporters = []
 
   # Defines a static scrape target.
   [[prometheus-scrape.static-scrape-target]]
@@ -168,6 +202,8 @@ Prometheus remote write accepts metrics from [Prometheus remote write protocol](
   keep-metrics = [
     'nginx.*'
   ]
+  # List of exporter names to forward metrics to.
+  exporters = []
 
   # Key/value pairs of labels to add to all metrics.
   [prometheus-remote-write.add-labels]
@@ -175,7 +211,7 @@ Prometheus remote write accepts metrics from [Prometheus remote write protocol](
 
   # Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.
   [prometheus-remote-write.drop-labels]
-    podname = '.*'
+    '^nginx_connections_accepted' = '^pid$'
 
   # Regexes of metrics to keep if they have the given label and value.
   [[prometheus-remote-write.keep-metrics-with-label-value]]
@@ -231,6 +267,8 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
   keep-metrics = [
     'nginx.*'
   ]
+  # List of exporter names to forward metrics to.
+  exporters = []
 
   # Key/value pairs of labels to add to all metrics.
   [otel-metric.add-labels]
@@ -238,7 +276,7 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
 
   # Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.  These are dropped from all metrics collected by this agent
   [otel-metric.drop-labels]
-    podname = '.*'
+    '^nginx_connections_accepted' = '^pid$'
 
   # Regexes of metrics to keep if they have the given label and value.
   [[otel-metric.keep-metrics-with-label-value]]
@@ -311,5 +349,102 @@ The host log config configures file and journald log collection. By default, Kub
     table = 'Docker'
     # Parsers to apply sequentially to the log line.
     parsers = []
+
+```
+## Exporters
+
+
+Exporters are used to send telemetry to external systems in parallel with data sent to Azure Data Explorer. The collector currently supports sending metrics to [OpenTelemetry OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) endpoints. Exporters are defined under the top level configuration key `exporters`under the exporter type. They are referenced by name in each metric collector.
+
+Metric collectors process metrics through their own metric filters and transforms prior to forwarding them to any defined exporters. The exporters then apply their own filters and transforms before sending the metrics to the destination.
+
+
+```toml
+# Defines a prometheus format endpoint scraper.
+[prometheus-scrape]
+  # Database to store metrics in.
+  database = 'Metrics'
+  # Defines a static scrape target.
+  static-scrape-target = []
+  # Scrape interval in seconds.
+  scrape-interval = 10
+  # Scrape timeout in seconds.
+  scrape-timeout = 5
+  # Disable metrics forwarding to endpoints.
+  disable-metrics-forwarding = false
+  # Disable discovery of kubernetes pod targets.
+  disable-discovery = false
+  # Regexes of metrics to drop.
+  drop-metrics = []
+  # Regexes of metrics to keep.
+  keep-metrics = []
+  # Regexes of metrics to keep if they have the given label and value.
+  keep-metrics-with-label-value = []
+  # List of exporter names to forward metrics to.
+  exporters = [
+    'to-local-otlp',
+    'to-remote-otlp'
+  ]
+
+# Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.
+# Exporters are declared here and referenced by name in each collection source.
+[exporters]
+  # Configuration for exporting metrics to an OTLP/HTTP endpoint.
+  [[exporters.otlp-metric-export]]
+    # Name of the exporter.
+    name = 'to-local-otlp'
+    # OTLP/HTTP endpoint to send metrics to.
+    destination = 'http://localhost:4318/v1/metrics'
+    # Default to dropping all metrics.  Only metrics matching a keep rule will be kept.
+    default-drop-metrics = true
+    # Regexes of metrics to drop.
+    drop-metrics = []
+    # Regexes of metrics to keep.
+    keep-metrics = [
+      '^kube_pod_ips$'
+    ]
+    # Regexes of metrics to keep if they have the given label and value.
+    keep-metrics-with-label-value = []
+
+    # Key/value pairs of labels to add to all metrics.
+    [exporters.otlp-metric-export.add-labels]
+      forwarded_to = 'otlp'
+
+    # Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.
+    [exporters.otlp-metric-export.drop-labels]
+      '^kube_pod_ips$' = '^ip_family'
+
+    # Key/value pairs of resource attributes to add to all metrics.
+    [exporters.otlp-metric-export.add-resource-attributes]
+      destination_namespace = 'prod-metrics'
+
+  [[exporters.otlp-metric-export]]
+    # Name of the exporter.
+    name = 'to-remote-otlp'
+    # OTLP/HTTP endpoint to send metrics to.
+    destination = 'https://metrics.contoso.org/v1/metrics'
+    # Default to dropping all metrics.  Only metrics matching a keep rule will be kept.
+    default-drop-metrics = true
+    # Regexes of metrics to drop.
+    drop-metrics = []
+    # Regexes of metrics to keep.
+    keep-metrics = [
+      '^service_hit_count$',
+      '^service_latency$'
+    ]
+    # Regexes of metrics to keep if they have the given label and value.
+    keep-metrics-with-label-value = []
+
+    # Key/value pairs of labels to add to all metrics.
+    [exporters.otlp-metric-export.add-labels]
+      forwarded_to = 'otlp'
+
+    # Labels to drop if they match a metrics regex in the format <metrics regex>=<label name>.
+    [exporters.otlp-metric-export.drop-labels]
+      '^service_hit_count$' = '^origin_ip$'
+
+    # Key/value pairs of resource attributes to add to all metrics.
+    [exporters.otlp-metric-export.add-resource-attributes]
+      destination_namespace = 'primary-metrics'
 
 ```
