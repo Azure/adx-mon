@@ -357,7 +357,7 @@ func (w *WAL) RemoveAll() error {
 		return fmt.Errorf("wal not closed")
 	}
 
-	closed := w.index.Get(w.opts.Prefix)
+	closed := w.index.Get(nil, w.opts.Prefix)
 	for _, info := range closed {
 		if err := w.Remove(info.Path); err != nil {
 			return err
