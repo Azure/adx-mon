@@ -19,7 +19,7 @@ import (
 )
 
 type Segmenter interface {
-	Get(prefix string) []wal.SegmentInfo
+	Get(infos []wal.SegmentInfo, prefix string) []wal.SegmentInfo
 	PrefixesByAge() []string
 	Remove(si wal.SegmentInfo)
 }
@@ -124,6 +124,8 @@ type batcher struct {
 	maxTransferAge  time.Duration
 	maxTransferSize int64
 	minUploadSize   int64
+
+	tempSet []wal.SegmentInfo
 
 	mu       sync.RWMutex
 	segments map[string]int
@@ -251,12 +253,13 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	)
 
 	b.mu.Lock()
+
 	for _, prefix := range byAge {
-		entries := b.Segmenter.Get(prefix)
+		b.tempSet = b.Segmenter.Get(b.tempSet[:0], prefix)
 
 		groupSize = 0
 		var oldestSegment time.Time
-		for _, v := range entries {
+		for _, v := range b.tempSet {
 			if oldestSegment.IsZero() || v.CreatedAt.Before(oldestSegment) {
 				oldestSegment = v.CreatedAt
 			}
@@ -268,7 +271,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
 		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
-		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(entries)))
+		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
 
 		if n := b.segments[prefix]; n > 0 {
 			if logger.IsDebug() {
@@ -277,7 +280,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			continue
 		}
 
-		groups[prefix] = append(groups[prefix], entries...)
+		groups[prefix] = append(groups[prefix], b.tempSet...)
 	}
 	b.mu.Unlock()
 

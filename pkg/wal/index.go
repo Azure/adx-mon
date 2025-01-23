@@ -32,13 +32,13 @@ func (i *Index) Add(s SegmentInfo) {
 }
 
 // Get returns all segments for a given prefix.
-func (i *Index) Get(prefix string) []SegmentInfo {
+func (i *Index) Get(infos []SegmentInfo, prefix string) []SegmentInfo {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	a := make([]SegmentInfo, len(i.segments[prefix]))
-	copy(a, i.segments[prefix])
-	return a
+	infos = append(infos[:0], i.segments[prefix]...)
+
+	return infos
 }
 
 // Remove removes a segment from the index.
