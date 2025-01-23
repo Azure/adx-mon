@@ -106,6 +106,9 @@ type ServiceOpts struct {
 	// will be rejected until space is freed.  A value of 0 means no max usage.
 	MaxDiskUsage int64
 
+	// MaxSegmentCount is the maximum number of segments files allowed on disk before signaling back-pressure.
+	MaxSegmentCount int64
+
 	// StorageDir is the directory where the WAL will be stored
 	StorageDir string
 
@@ -183,6 +186,22 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		maxSegmentSize = opts.MaxSegmentSize
 	}
 
+	maxSegmentCount := int64(10000)
+	if opts.MaxSegmentCount > 0 {
+		maxSegmentCount = opts.MaxSegmentCount
+	}
+
+	maxDiskUsage := int64(10 * 1024 * 1024 * 1024) // 10 GB
+	if opts.MaxDiskUsage > 0 {
+		maxDiskUsage = opts.MaxDiskUsage
+	}
+
+	health := cluster.NewHealth(cluster.HealthOpts{
+		UnhealthyTimeout: time.Minute,
+		MaxSegmentCount:  maxSegmentCount,
+		MaxDiskUsage:     maxDiskUsage,
+	})
+
 	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
@@ -197,6 +216,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
 		Store:         store,
 		AddAttributes: opts.AddAttributes,
+		HealthChecker: health,
 	})
 
 	logsProxySvc := otlp.NewLogsProxyService(otlp.LogsProxyServiceOpts{
@@ -204,6 +224,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		AddAttributes:      opts.AddAttributes,
 		Endpoint:           opts.Endpoint,
 		InsecureSkipVerify: opts.InsecureSkipVerify,
+		HealthChecker:      health,
 	})
 
 	var metricHttpHandlers []*http.HttpHandler
@@ -214,7 +235,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			Path:               handlerOpts.Path,
 			RequestTransformer: handlerOpts.MetricOpts.RequestTransformer(),
 			RequestWriters:     append(handlerOpts.MetricOpts.RemoteWriteClients, &StoreRequestWriter{store}),
-			HealthChecker:      fakeHealthChecker{},
+			HealthChecker:      health,
 		})
 		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
@@ -228,6 +249,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			Clients:                  append(handlerOpts.MetricOpts.RemoteWriteClients, &StoreRemoteClient{store}),
 			MaxBatchSize:             opts.MaxBatchSize,
 			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
+			HealthChecker: health,
 		})
 		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path, handlerOpts.GrpcPort)
 		if handlerOpts.Path != "" {
@@ -263,7 +285,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
 			Hostname:           opts.NodeName,
 			Partitioner:        partitioner,
-			Health:             fakeHealthChecker{},
+			Health:             health,
 			SegmentRemover:     store,
 			InsecureSkipVerify: opts.InsecureSkipVerify,
 		})
@@ -291,13 +313,16 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MinUploadSize:      4 * 1024 * 1024,
 		UploadQueue:        transferQueue,
 		TransferQueue:      transferQueue,
-		PeerHealthReporter: fakeHealthChecker{},
+		PeerHealthReporter: health,
 	})
+
+	health.QueueSizer = batcher
 
 	var scraper *Scraper
 	if opts.Scraper != nil {
 		scraperOpts := opts.Scraper
 		scraperOpts.RemoteClients = append(scraperOpts.RemoteClients, &StoreRemoteClient{store})
+		scraperOpts.HealthChecker = health
 
 		scraper = NewScraper(opts.Scraper)
 	}
@@ -314,7 +339,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	svc := &Service{
 		opts: opts,
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
-			PeerHealthReport: fakeHealthChecker{},
+			PeerHealthReport: health,
 		}),
 		store:        store,
 		scraper:      scraper,
@@ -493,18 +518,6 @@ func plaintextListenerFunc() func(addr string) (net.Listener, error) {
 		return listener, nil
 	}
 }
-
-type fakeHealthChecker struct{}
-
-func (f fakeHealthChecker) IsPeerHealthy(peer string) bool { return true }
-func (f fakeHealthChecker) SetPeerUnhealthy(peer string)   {}
-func (f fakeHealthChecker) SetPeerHealthy(peer string)     {}
-func (f fakeHealthChecker) TransferQueueSize() int         { return 0 }
-func (f fakeHealthChecker) UploadQueueSize() int           { return 0 }
-func (f fakeHealthChecker) SegmentsTotal() int64           { return 0 }
-func (f fakeHealthChecker) SegmentsSize() int64            { return 0 }
-func (f fakeHealthChecker) IsHealthy() bool                { return true }
-func (f fakeHealthChecker) UnhealthyReason() string        { return "" }
 
 // remotePartitioner is a Partitioner that always returns the same owner that forces a remove transfer.
 type remotePartitioner struct {

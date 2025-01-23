@@ -23,11 +23,13 @@ import (
 type LogsServiceOpts struct {
 	Store         storage.Store
 	AddAttributes map[string]string
+	HealthChecker interface{ IsHealthy() bool }
 }
 
 type LogsService struct {
-	store  storage.Store
-	logger *slog.Logger
+	store         storage.Store
+	logger        *slog.Logger
+	healthChecker interface{ IsHealthy() bool }
 
 	staticAttributes []*commonv1.KeyValue
 }
@@ -55,6 +57,7 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 			),
 		),
 		staticAttributes: add,
+		healthChecker:    opts.HealthChecker,
 	}
 }
 
@@ -69,6 +72,12 @@ func (s *LogsService) Close() error {
 func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/v1/logs"})
 	defer r.Body.Close()
+
+	if !s.healthChecker.IsHealthy() {
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		return
+	}
 
 	switch r.Header.Get("Content-Type") {
 	case "application/x-protobuf":
