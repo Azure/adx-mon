@@ -53,7 +53,7 @@ func TestFunctions(t *testing.T) {
 	require.Eventually(t, func() bool {
 		crd := &adxmonv1.Function{}
 		err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: "default"}, crd)
-		return !errors.Is(err, &meta.NoKindMatchError{})
+		return !errors.Is(err, &meta.NoKindMatchError{}) && !errors.Is(err, &meta.NoResourceMatchError{})
 	}, time.Minute, time.Second)
 
 	functionStore := storage.NewFunctions(ctrlCli, nil)

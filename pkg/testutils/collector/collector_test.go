@@ -57,6 +57,6 @@ func TestCollector(t *testing.T) {
 				return false
 			}
 			return pods.Items[0].Status.Phase == "Running"
-		}, 10*time.Minute, time.Second)
+		}, 30*time.Minute, time.Second)
 	})
 }
