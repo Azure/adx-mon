@@ -65,6 +65,8 @@ type ScraperOpts struct {
 	MaxBatchSize int
 
 	RemoteClients []remote.RemoteWriteClient
+
+	HealthChecker interface{ IsHealthy() bool }
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -111,6 +113,7 @@ type Scraper struct {
 	remoteClients      []remote.RemoteWriteClient
 	scrapeClient       *MetricsClient
 	seriesCreator      *seriesCreator
+	healthChecker      interface{ IsHealthy() bool }
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -126,6 +129,7 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		seriesCreator:      &seriesCreator{},
 		requestTransformer: opts.RequestTransformer(),
 		remoteClients:      opts.RemoteClients,
+		healthChecker:      opts.HealthChecker,
 		targets:            make(map[string]ScrapeTarget),
 	}
 }
@@ -197,6 +201,10 @@ func (s *Scraper) scrape(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if !s.healthChecker.IsHealthy() {
+				logger.Warnf("Collector is unhealthy, skipping scrape")
+				continue
+			}
 			s.scrapeTargets(ctx)
 		case <-reconnectTimer.C:
 			for _, remoteClient := range s.remoteClients {

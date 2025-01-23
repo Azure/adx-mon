@@ -86,7 +86,8 @@ type OltpMetricWriterOpts struct {
 	// MaxBatchSize is the maximum number of samples to send in a single batch.
 	MaxBatchSize int
 
-	Clients []remote.RemoteWriteClient
+	Clients       []remote.RemoteWriteClient
+	HealthChecker interface { IsHealthy() bool }
 }
 
 type OltpMetricWriter struct {
@@ -94,6 +95,7 @@ type OltpMetricWriter struct {
 	remoteClients            []remote.RemoteWriteClient
 	maxBatchSize             int
 	disableMetricsForwarding bool
+	healthChecker            interface{ IsHealthy() bool }
 }
 
 func NewOltpMetricWriter(opts OltpMetricWriterOpts) *OltpMetricWriter {
@@ -102,11 +104,16 @@ func NewOltpMetricWriter(opts OltpMetricWriterOpts) *OltpMetricWriter {
 		remoteClients:            opts.Clients,
 		maxBatchSize:             opts.MaxBatchSize,
 		disableMetricsForwarding: opts.DisableMetricsForwarding,
+		healthChecker: opts.HealthChecker,
 	}
 }
 
 // Write takes an OTLP ExportMetricsServiceRequest and writes it to the configured endpoints.
 func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServiceRequest) error {
+	if !t.healthChecker.IsHealthy() {
+		return errors.New("Overloaded. Retry later")
+	}
+
 	// Causes allocation. Like in prom remote receiver, create rather than using a bunch of space in pool.
 	wr := prompb.WriteRequestPool.Get()
 	defer prompb.WriteRequestPool.Put(wr)

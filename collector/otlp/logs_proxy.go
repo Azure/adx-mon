@@ -32,12 +32,14 @@ type LogsProxyServiceOpts struct {
 	LiftAttributes     []string
 	Endpoint           string
 	InsecureSkipVerify bool
+	HealthChecker      interface{ IsHealthy() bool }
 }
 
 type LogsProxyService struct {
 	staticAttributes []*commonv1.KeyValue
 	clients          map[string]logsv1connect.LogsServiceClient
 	liftAttributes   map[string]struct{}
+	healthChecker    interface{ IsHealthy() bool }
 }
 
 func NewLogsProxyService(opts LogsProxyServiceOpts) *LogsProxyService {
@@ -102,6 +104,7 @@ func NewLogsProxyService(opts LogsProxyServiceOpts) *LogsProxyService {
 		staticAttributes: staticAttributes,
 		liftAttributes:   lift,
 		clients:          rpcClients,
+		healthChecker:    opts.HealthChecker,
 	}
 }
 
@@ -116,6 +119,12 @@ func (s *LogsProxyService) Open(_ context.Context) error {
 func (s *LogsProxyService) Handler(w http.ResponseWriter, r *http.Request) {
 	m := metrics.RequestsReceived.MustCurryWith(prometheus.Labels{"path": "/logs"})
 	defer r.Body.Close()
+
+	if !s.healthChecker.IsHealthy() {
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		return
+	}
 
 	switch r.Header.Get("Content-Type") {
 	case "application/x-protobuf":

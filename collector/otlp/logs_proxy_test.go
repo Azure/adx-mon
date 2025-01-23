@@ -14,7 +14,9 @@ import (
 )
 
 func TestLogsProxyService(t *testing.T) {
-	s := NewLogsProxyService(LogsProxyServiceOpts{})
+	s := NewLogsProxyService(LogsProxyServiceOpts{
+		HealthChecker: fakeHealthChecker{true},
+	})
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
 
@@ -32,3 +34,31 @@ func TestLogsProxyService(t *testing.T) {
 	s.Handler(resp, req)
 	require.Equal(t, http.StatusOK, resp.Code)
 }
+
+func TestLogsProxyService_Overloaded(t *testing.T) {
+	s := NewLogsProxyService(LogsProxyServiceOpts{
+		HealthChecker: fakeHealthChecker{false},
+	})
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+
+	var msg v1.ExportLogsServiceRequest
+	require.NoError(t, protojson.Unmarshal(rawlog, &msg))
+
+	b, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest("POST", "/logs", bytes.NewReader(b))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-protobuf")
+
+	resp := httptest.NewRecorder()
+	s.Handler(resp, req)
+	require.Equal(t, http.StatusTooManyRequests, resp.Code)
+}
+
+type fakeHealthChecker struct {
+	healthy bool
+}
+
+func (f fakeHealthChecker) IsHealthy() bool { return f.healthy }
