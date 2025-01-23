@@ -72,7 +72,7 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 
 	list := &adxmonv1.FunctionList{}
 	if err := f.Client.List(ctx, list); err != nil {
-		if errors.Is(err, &meta.NoKindMatchError{}) {
+		if errors.Is(err, &meta.NoKindMatchError{}) || errors.Is(err, &meta.NoResourceMatchError{}) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to list functions: %w", err)

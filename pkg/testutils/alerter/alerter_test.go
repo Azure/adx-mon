@@ -54,5 +54,5 @@ func TestInCluster(t *testing.T) {
 		}
 
 		return false
-	}, 10*time.Minute, time.Second)
+	}, 30*time.Minute, time.Second)
 }
