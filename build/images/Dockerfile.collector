@@ -8,7 +8,7 @@ WORKDIR /code
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o ./bin/collector ./cmd/collector
 
 # Install systemd lib to get libsystemd.so
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as libsystemdsource
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS libsystemdsource
 
 RUN tdnf install -y systemd
 
