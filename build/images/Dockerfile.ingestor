@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/ingestor ./cmd/inges
 
 FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
 
-LABEL org.opencontainers.image.source https://github.com/Azure/adx-mon
+LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
 
 COPY --from=builder /code/bin /
 
