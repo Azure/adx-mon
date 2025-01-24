@@ -14,7 +14,7 @@ RUN tdnf install -y systemd
 
 FROM mcr.microsoft.com/cbl-mariner/distroless/base:2.0
 
-LABEL org.opencontainers.image.source https://github.com/Azure/adx-mon
+LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
 
 # Binary looks under /usr/lib64 for libsystemd.so and other required so files
 # Found with `export LD_DEBUG=libs` and running the binary
