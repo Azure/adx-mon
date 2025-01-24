@@ -4,7 +4,8 @@ on:
   push:
     branches: [ "main" ]
     tags: [ 'v*.*.*' ]
-
+  pull_request: # TODO: Remove after testing
+    branches: [ "main" ]
 env:
   REGISTRY: ghcr.io
 
@@ -17,6 +18,7 @@ jobs:
       packages: write
     strategy:
       fail-fast: true
+      max-parallel: 1
       matrix:
         include:
           # github.repository as <account>/<repo>
@@ -50,8 +52,9 @@ jobs:
         with:
           images: ${{ matrix.image }}
           # Use latest tag on default branch (main), otherwise use the tag
+          #            type=raw, value=latest, enable={{is_default_branch}}
           tags: |
-            type=raw, value=latest, enable={{is_default_branch}}
+            type=raw, value=latest, enable=true
             type=ref, event=tag
           flavor: |
             latest=false
