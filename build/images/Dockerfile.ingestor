@@ -5,7 +5,14 @@ RUN tdnf install -y golang ca-certificates
 ADD . /code
 WORKDIR /code
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./bin/ingestor ./cmd/ingestor
+ARG VERSION GIT_COMMIT BUILD_TIME
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+-ldflags=" \
+-X 'github.com/Azure/adx-mon/pkg/version.Version=${VERSION}' \
+-X 'github.com/Azure/adx-mon/pkg/version.GitCommit=${GIT_COMMIT}' \
+-X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
+" -o ./bin/ingestor ./cmd/ingestor
 
 FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
 

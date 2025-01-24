@@ -28,6 +28,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/pelletier/go-toml/v2"
@@ -68,6 +69,8 @@ func main() {
 		Action: func(ctx *cli.Context) error {
 			return realMain(ctx)
 		},
+
+		Version: version.String(),
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -76,6 +79,8 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
+	logger.Infof("%s version:%s", os.Args[0], version.String())
+
 	runtime.MemProfileRate = 4096
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)

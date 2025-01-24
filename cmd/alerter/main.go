@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/alerter"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2" // imports as package "cli"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -40,6 +41,7 @@ func main() {
 		Commands: []*cli.Command{
 			NewLintCommand(),
 		},
+		Version: version.String(),
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -48,6 +50,8 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
+	logger.Infof("%s version:%s", os.Args[0], version.String())
+
 	endpoints := make(map[string]string)
 	endpointsArg := ctx.StringSlice("kusto-endpoint")
 	for _, v := range endpointsArg {

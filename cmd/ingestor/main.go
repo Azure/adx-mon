@@ -26,6 +26,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/tls"
+	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -85,6 +86,8 @@ func main() {
 		Action: func(ctx *cli.Context) error {
 			return realMain(ctx)
 		},
+
+		Version: version.String(),
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -93,6 +96,8 @@ func main() {
 }
 
 func realMain(ctx *cli.Context) error {
+	logger.Infof("%s version:%s", os.Args[0], version.String())
+
 	svcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
