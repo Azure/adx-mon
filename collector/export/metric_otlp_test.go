@@ -2,8 +2,10 @@ package export
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
@@ -89,7 +91,7 @@ func BenchmarkPromToOtlpRequest(b *testing.B) {
 	// Run the benchmark
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := exporter.promToOtlpRequest(req)
+		_, _, err := exporter.promToOtlpRequest(req)
 		if err != nil {
 			b.Fatalf("Failed to forward metrics: %v", err)
 		}
@@ -97,9 +99,32 @@ func BenchmarkPromToOtlpRequest(b *testing.B) {
 }
 
 func TestPromToOtlpRequestConcurrent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Helper()
+		require.Equal(t, "POST", r.Method)
+		require.Equal(t, "/v1/metrics", r.URL.Path)
+		require.Equal(t, "application/x-protobuf", r.Header.Get("Content-Type"))
+
+		serialized, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		validateSerialized(t, serialized)
+
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{})
+	}))
+	defer server.Close()
+
 	opts := PromToOtlpExporterOpts{
-		Transformer: &transform.RequestTransformer{},
-		Destination: "",
+		Transformer: &transform.RequestTransformer{
+			AddLabels: map[string]string{
+				"adxmon_database": "Metrics",
+			},
+			DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+				regexp.MustCompile("cpu"): regexp.MustCompile("food"),
+			},
+		},
+		Destination: server.URL + "/v1/metrics",
 		AddResourceAttributes: map[string]string{
 			"resourceAttributeOne": "resourceAttributeValueOne",
 		},
@@ -107,12 +132,16 @@ func TestPromToOtlpRequestConcurrent(t *testing.T) {
 
 	exporter := NewPromToOtlpExporter(opts)
 	req := newWR()
+	req.Timeseries[0].Labels = append(req.Timeseries[0].Labels, &prompb.Label{
+		Name:  []byte("food"),
+		Value: []byte("tacos"),
+	})
 
 	errgroup, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < 50; i++ {
 		errgroup.Go(func() error {
 			// shared exporter
-			validatePromToOtlpRequest(t, exporter, req)
+			exporter.Write(context.Background(), req)
 			return nil
 		})
 	}
@@ -123,10 +152,20 @@ func TestPromToOtlpRequest(t *testing.T) {
 	type testcase struct {
 		name     string
 		exporter *PromToOtlpExporter
+		mutateWR func(req *prompb.WriteRequest)
 	}
 
 	opts := PromToOtlpExporterOpts{
-		Transformer: &transform.RequestTransformer{},
+		Transformer: &transform.RequestTransformer{
+			DefaultDropMetrics: true,
+			KeepMetrics: []*regexp.Regexp{
+				regexp.MustCompile("^cpu$"),
+				regexp.MustCompile("^mem$"),
+			},
+			DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+				regexp.MustCompile(".*"): regexp.MustCompile("moonphase"),
+			},
+		},
 		Destination: "",
 		AddResourceAttributes: map[string]string{
 			"resourceAttributeOne": "resourceAttributeValueOne",
@@ -142,17 +181,52 @@ func TestPromToOtlpRequest(t *testing.T) {
 			name:     "corrupted pool exporter",
 			exporter: setupCorruptedPools(NewPromToOtlpExporter(opts)),
 		},
+		{
+			name:     "extra metric filtered out",
+			exporter: NewPromToOtlpExporter(opts),
+			mutateWR: func(req *prompb.WriteRequest) {
+				req.Timeseries = append(req.Timeseries, &prompb.TimeSeries{
+					Labels: []*prompb.Label{
+						{
+							Name:  []byte("__name__"),
+							Value: []byte("cpuextra"), // filtered out
+						},
+					},
+					Samples: []*prompb.Sample{
+						{
+							Value:     1.0,
+							Timestamp: basets,
+						},
+					},
+				})
+			},
+		},
+		{
+			name:     "extra label filtered out",
+			exporter: NewPromToOtlpExporter(opts),
+			mutateWR: func(req *prompb.WriteRequest) {
+				for _, ts := range req.Timeseries {
+					ts.Labels = append(ts.Labels, &prompb.Label{
+						Name:  []byte("moonphase"), // filtered out
+						Value: []byte("full"),
+					})
+				}
+			},
+		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := newWR()
+			if tc.mutateWR != nil {
+				tc.mutateWR(req)
+			}
 			validatePromToOtlpRequest(t, tc.exporter, req)
 		})
 	}
 
 	exporter := NewPromToOtlpExporter(opts)
-	_, err := exporter.promToOtlpRequest(&prompb.WriteRequest{})
+	_, _, err := exporter.promToOtlpRequest(&prompb.WriteRequest{})
 	require.NoError(t, err)
 }
 
@@ -255,12 +329,17 @@ func setupCorruptedPools(exporter *PromToOtlpExporter) *PromToOtlpExporter {
 }
 
 func validatePromToOtlpRequest(t *testing.T, exporter *PromToOtlpExporter, req *prompb.WriteRequest) {
-	serialized, err := exporter.promToOtlpRequest(req)
+	serialized, timeseriesCount, err := exporter.promToOtlpRequest(req)
 	require.NoError(t, err)
+	require.Equal(t, int64(2), timeseriesCount)
 	require.NotEmpty(t, serialized)
 
+	validateSerialized(t, serialized)
+}
+
+func validateSerialized(t *testing.T, serialized []byte) {
 	exportRequest := &v1.ExportMetricsServiceRequest{}
-	err = proto.Unmarshal(serialized, exportRequest)
+	err := proto.Unmarshal(serialized, exportRequest)
 	require.NoError(t, err)
 
 	// check resourcemetrics
