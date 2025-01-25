@@ -12,9 +12,9 @@ func NewFixed(limit int) Fixed {
 	return make(Fixed, limit)
 }
 
-// Idle returns true if the limiter has all its capacity is available.
+// Idle returns true if the limiter has all its capacity available.
 func (t Fixed) Idle() bool {
-	return len(t) == cap(t)
+	return len(t) == 0
 }
 
 // Available returns the number of available tokens that may be taken.
