@@ -152,6 +152,52 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 	return v
 }
 
+// WalkLabels operates similarly to TransformTimeSeries, but instead of modifying the TimeSeries, it calls the callback with the key and value
+// This is safe to call in parallel if the name and value bytes are not modified by the callback.
+func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name []byte, value []byte)) {
+	f.init()
+
+	var skipLabel bool
+
+	for _, l := range v.Labels {
+		// Never attempt to drop __name__ label as this is required to identify the metric.
+		if bytes.Equal(l.Name, []byte("__name__")) {
+			callback(l.Name, l.Value)
+			continue
+		}
+
+		// To drop a label, it has to match the metrics regex and the label regex.
+		skipLabel = false
+		for metrReg, labelReg := range f.DropLabels {
+			if metrReg.Match(v.Labels[0].Value) && labelReg.Match(l.Name) {
+				skipLabel = true
+				break
+			}
+		}
+
+		if skipLabel {
+			continue
+		}
+
+		// Skip any labels that will be overwritten by the add labels.
+		for _, al := range f.addLabels {
+			if bytes.Equal(l.Name, al.Name) {
+				skipLabel = true
+				break
+			}
+		}
+
+		if skipLabel {
+			continue
+		}
+
+		callback(l.Name, l.Value)
+	}
+	for _, ll := range f.addLabels {
+		callback(ll.Name, ll.Value)
+	}
+}
+
 func (f *RequestTransformer) ShouldDropMetric(v *prompb.TimeSeries, name []byte) bool {
 	if f.DefaultDropMetrics {
 		// Explicitly dropped metrics take precedence over explicitly kept metrics.

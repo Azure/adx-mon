@@ -161,26 +161,24 @@ func NewPromToOtlpExporter(opts PromToOtlpExporterOpts) *PromToOtlpExporter {
 
 // Write sends the given WriteRequest to the given OTLP endpoint
 func (c *PromToOtlpExporter) Write(ctx context.Context, wr *prompb.WriteRequest) error {
-	wr = c.transformer.TransformWriteRequest(wr)
-	count := int64(len(wr.Timeseries))
-	if count == 0 {
-		return nil
-	}
-
-	serialized, err := c.promToOtlpRequest(wr)
+	serialized, timeseriesCount, err := c.promToOtlpRequest(wr)
 	if err != nil {
 		return fmt.Errorf("metric otlp forwarder convert: %w", err)
 	}
 
-	return c.sendRequest(serialized, count)
+	if timeseriesCount == 0 {
+		return nil
+	}
+	return c.sendRequest(serialized, timeseriesCount)
 }
 
 func (c *PromToOtlpExporter) CloseIdleConnections() {
 	c.httpClient.CloseIdleConnections()
 }
 
-func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte, error) {
+func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte, int64, error) {
 	scopeMetrics := &metricsv1.ScopeMetrics{
+		// TODO - assume we filter most or keep most?
 		Metrics: make([]*metricsv1.Metric, 0, len(wr.Timeseries)),
 	}
 	exportRequest := &v1.ExportMetricsServiceRequest{
@@ -196,7 +194,14 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 		},
 	}
 
+	count := int64(0)
 	for _, ts := range wr.Timeseries {
+		nameBytes := prompb.MetricName(ts)
+		if c.transformer.ShouldDropMetric(ts, nameBytes) {
+			continue
+		}
+		count++
+
 		gauge := &metricsv1.Gauge{
 			DataPoints: make([]*metricsv1.NumberDataPoint, 0, len(ts.Samples)),
 		}
@@ -206,21 +211,20 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 			},
 		}
 
-		var nameBytes []byte
 		attributes := make([]*commonv1.KeyValue, 0, len(ts.Labels))
-		for _, element := range ts.Labels {
-			if bytes.Equal(element.Name, nameLabel) {
-				nameBytes = element.Value
-			} else if !bytes.HasPrefix(element.Name, []byte("adxmon_")) {
-				attribute := c.stringKVPool.Get(0).(*commonv1.KeyValue)
-				// Explicitly set all fields to reset, but also to avoid allocations for the value
-				attribute.Key = string(element.Name)
-				// only accept stringval here to avoid allocations
-				stringval := attribute.Value.Value.(*commonv1.AnyValue_StringValue)
-				stringval.StringValue = string(element.Value)
-				attributes = append(attributes, attribute)
+		c.transformer.WalkLabels(ts, func(k, v []byte) {
+			// skip adding the name label and any adxmon_ prefixed labels
+			if bytes.Equal(k, nameLabel) || bytes.HasPrefix(k, []byte("adxmon_")) {
+				return
 			}
-		}
+			attribute := c.stringKVPool.Get(0).(*commonv1.KeyValue)
+			// Explicitly set all fields to reset, but also to avoid allocations for the value
+			attribute.Key = string(k)
+			// only accept stringval here to avoid allocations
+			stringval := attribute.Value.Value.(*commonv1.AnyValue_StringValue)
+			stringval.StringValue = string(v)
+			attributes = append(attributes, attribute)
+		})
 		metric.Name = string(nameBytes)
 
 		for _, sample := range ts.Samples {
@@ -255,7 +259,7 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 		}
 	}
 
-	return serialized, err
+	return serialized, count, err
 }
 
 func (c *PromToOtlpExporter) sendRequest(body []byte, count int64) error {

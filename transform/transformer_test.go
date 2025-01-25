@@ -77,6 +77,109 @@ func TestRequestTransformer_TransformWriteRequest_DropMetricsRegex(t *testing.T)
 	require.Equal(t, 1, len(res.Timeseries))
 }
 
+func TestRequestTransformer_WalkLabels(t *testing.T) {
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
+			{
+				Name:  []byte("__name__"),
+				Value: []byte("cpu"),
+			},
+			{
+				Name:  []byte("region"),
+				Value: []byte("eastus"),
+			},
+			{
+				Name:  []byte("zone"),
+				Value: []byte("3"),
+			},
+		},
+	}
+	type testcase struct {
+		name           string
+		transformer    *transform.RequestTransformer
+		expectedLabels map[string]string
+	}
+
+	tests := []testcase{
+		{
+			name:        "Empty transform",
+			transformer: &transform.RequestTransformer{},
+			expectedLabels: map[string]string{
+				"__name__": "cpu",
+				"region":   "eastus",
+				"zone":     "3",
+			},
+		},
+		{
+			name: "Add labels",
+			transformer: &transform.RequestTransformer{
+				AddLabels: map[string]string{
+					"region":     "centralus",
+					"otherlabel": "othervalue",
+				},
+			},
+			expectedLabels: map[string]string{
+				"__name__":   "cpu",
+				"region":     "centralus",
+				"zone":       "3",
+				"otherlabel": "othervalue",
+			},
+		},
+		{
+			name: "Drop all labels except name",
+			transformer: &transform.RequestTransformer{
+				DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+					regexp.MustCompile(".*"): regexp.MustCompile(".*"),
+				},
+			},
+			expectedLabels: map[string]string{
+				"__name__": "cpu",
+			},
+		},
+		{
+			name: "Different metric configured to drop all labels",
+			transformer: &transform.RequestTransformer{
+				DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+					regexp.MustCompile("memory.*"): regexp.MustCompile(".*"),
+				},
+			},
+			expectedLabels: map[string]string{
+				"__name__": "cpu",
+				"region":   "eastus",
+				"zone":     "3",
+			},
+		},
+		{
+			name: "Drop all labels except name, add label",
+			transformer: &transform.RequestTransformer{
+				DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+					regexp.MustCompile(".*"): regexp.MustCompile(".*"),
+				},
+				AddLabels: map[string]string{
+					"region":     "centralus",
+					"otherlabel": "othervalue",
+				},
+			},
+			expectedLabels: map[string]string{
+				"__name__":   "cpu",
+				"region":     "centralus",
+				"otherlabel": "othervalue",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels := make(map[string]string)
+			tt.transformer.WalkLabels(ts, func(k, v []byte) {
+				labels[string(k)] = string(v)
+			})
+			require.Equal(t, tt.expectedLabels, labels)
+		})
+	}
+
+}
+
 func TestRequestTransformer_TransformWriteRequest_DropLabels(t *testing.T) {
 	f := &transform.RequestTransformer{
 		DropLabels: map[*regexp.Regexp]*regexp.Regexp{
