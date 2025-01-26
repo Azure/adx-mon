@@ -21,7 +21,7 @@ type Repository struct {
 
 	index *Index
 
-	wals *partmap.Map
+	wals *partmap.Map[*WAL]
 }
 
 type RepositoryOpts struct {
@@ -38,7 +38,7 @@ func NewRepository(opts RepositoryOpts) *Repository {
 	return &Repository{
 		opts:  opts,
 		index: NewIndex(),
-		wals:  partmap.NewMap(64),
+		wals:  partmap.NewMap[*WAL](64),
 	}
 }
 
@@ -158,8 +158,8 @@ func (s *Repository) Open(ctx context.Context) error {
 }
 
 func (s *Repository) Close() error {
-	if err := s.wals.Each(func(key string, value any) error {
-		wal := value.(*WAL)
+	if err := s.wals.Each(func(key string, value *WAL) error {
+		wal := value
 		return wal.Close()
 	}); err != nil {
 		return err
@@ -192,13 +192,13 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 }
 
 func (s *Repository) Get(ctx context.Context, key []byte) (*WAL, error) {
-	v, err := s.wals.GetOrCreate(string(key), func() (any, error) {
+	v, err := s.wals.GetOrCreate(string(key), func() (*WAL, error) {
 		return s.newWAL(ctx, string(key))
 	})
 	if err != nil {
 		return nil, err
 	}
-	return v.(*WAL), nil
+	return v, nil
 }
 
 func (s *Repository) Count() int {
@@ -211,7 +211,7 @@ func (s *Repository) Remove(key []byte) error {
 		return nil
 	}
 
-	w := wal.(*WAL)
+	w := wal
 
 	if err := w.RemoveAll(); err != nil {
 		return err
@@ -223,7 +223,7 @@ func (s *Repository) Remove(key []byte) error {
 
 func (s *Repository) Keys() [][]byte {
 	keys := make([][]byte, 0, s.wals.Count())
-	s.wals.Each(func(key string, value any) error {
+	s.wals.Each(func(key string, value *WAL) error {
 		keys = append(keys, []byte(key))
 		return nil
 	})
