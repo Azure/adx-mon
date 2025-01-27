@@ -20,8 +20,15 @@ func TestCollector(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
+	t.Run("released image", func(t *testing.T) {
+		c, err := collector.Run(ctx, "ghcr.io/azure/adx-mon/collector:latest")
+		testcontainers.CleanupContainer(t, c)
+		require.NoError(t, c.Start(ctx))
+		require.NoError(t, err)
+	})
+
 	t.Run("outside cluster", func(t *testing.T) {
-		c, err := collector.Run(ctx)
+		c, err := collector.Run(ctx, "")
 		testcontainers.CleanupContainer(t, c)
 		require.NoError(t, err)
 	})
@@ -31,7 +38,7 @@ func TestCollector(t *testing.T) {
 		testcontainers.CleanupContainer(t, k3sContainer)
 		require.NoError(t, err)
 
-		collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
+		collectorContainer, err := collector.Run(ctx, "", collector.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, collectorContainer)
 		require.NoError(t, err)
 

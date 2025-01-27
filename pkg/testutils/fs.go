@@ -55,6 +55,19 @@ func CopyFile(src, dst string) error {
 	return nil
 }
 
+// RelativePath attempts to find artifact by walking up the directory tree backwards
+func RelativePath(artifact string) (string, bool) {
+	var artifactPath string
+	for iter := range 4 {
+		relative := strings.Repeat("../", iter)
+		artifactPath = filepath.Join(relative, artifact)
+		if _, err := os.Stat(artifactPath); err == nil {
+			break
+		}
+	}
+	return artifactPath, artifactPath != ""
+}
+
 // ExtractManifests is meant to read in a concatenated manifest file and
 // extract the individual manifest described by the isolateKind and write
 // it to the to path.
@@ -67,15 +80,8 @@ func CopyFile(src, dst string) error {
 // - manifests.yaml: all manifests except for the isolateKind
 // - {isolateKind}.yaml: the manifest described by the isolateKind
 func ExtractManifests(to, from string, isolateKinds []string) error {
-	var manifestPath string
-	for iter := range 4 {
-		relative := strings.Repeat("../", iter)
-		manifestPath = filepath.Join(relative, from)
-		if _, err := os.Stat(manifestPath); err == nil {
-			break
-		}
-	}
-	if manifestPath == "" {
+	manifestPath, ok := RelativePath(from)
+	if !ok {
 		return fmt.Errorf("failed to find manifest path")
 	}
 

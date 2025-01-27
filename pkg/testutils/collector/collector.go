@@ -4,6 +4,8 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	kwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
@@ -34,7 +37,7 @@ type CollectorContainer struct {
 	testcontainers.Container
 }
 
-func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*CollectorContainer, error) {
+func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*CollectorContainer, error) {
 	var relative string
 	for iter := range 4 {
 		relative = strings.Repeat("../", iter)
@@ -43,14 +46,21 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Coll
 		}
 	}
 
-	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:       DefaultImage,
-			Tag:        DefaultTag,
-			Context:    relative, // repo base
-			Dockerfile: "build/images/Dockerfile.collector",
-			KeepImage:  true,
-		},
+	var req testcontainers.ContainerRequest
+	if img == "" {
+		req = testcontainers.ContainerRequest{
+			FromDockerfile: testcontainers.FromDockerfile{
+				Repo:       DefaultImage,
+				Tag:        DefaultTag,
+				Context:    relative, // repo base
+				Dockerfile: "build/images/Dockerfile.collector",
+				KeepImage:  true,
+			},
+		}
+	} else {
+		req = testcontainers.ContainerRequest{
+			Image: img,
+		}
 	}
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
@@ -94,11 +104,18 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 			return fmt.Errorf("failed to create temp dir: %w", err)
 		}
 
+		var img string
+		if req.FromDockerfile.Context != "" {
+			img = req.FromDockerfile.Repo + ":" + req.FromDockerfile.Tag
+		} else {
+			img = req.Image
+		}
+
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
 
-					if err := k.LoadImages(ctx, DefaultImage+":"+DefaultTag); err != nil {
+					if err := k.LoadImages(ctx, img); err != nil {
 						return fmt.Errorf("failed to load image: %w", err)
 					}
 
@@ -129,7 +146,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to unmarshal daemonset: %w", err)
 					}
 					daemonset.Spec.Template.Spec.Tolerations = nil
-					daemonset.Spec.Template.Spec.Containers[0].Image = DefaultImage + ":" + DefaultTag
+					daemonset.Spec.Template.Spec.Containers[0].Image = img
 					daemonset.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullNever
 
 					daemonset.Spec.Template.Spec.Volumes = slices.DeleteFunc(daemonset.Spec.Template.Spec.Volumes, func(v corev1.Volume) bool {
@@ -163,23 +180,47 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to wait for namespace: %w", err)
 					}
 
-					_, err = clientset.CoreV1().ConfigMaps(collectorConfigMap.Namespace).Create(ctx, collectorConfigMap, metav1.CreateOptions{})
+					patchBytes, err := json.Marshal(collectorConfigMap)
 					if err != nil {
-						return fmt.Errorf("failed to create configmap: %w", err)
+						return fmt.Errorf("failed to marshal configmap: %w", err)
+					}
+					_, err = clientset.CoreV1().ConfigMaps(collectorConfigMap.Namespace).Patch(ctx, collectorConfigMap.Name, types.ApplyPatchType, patchBytes, metav1.PatchOptions{
+						FieldManager: "testcontainers",
+					})
+					if err != nil {
+						return fmt.Errorf("failed to patch configmap: %w", err)
 					}
 
-					_, err = clientset.AppsV1().DaemonSets(daemonset.Namespace).Create(ctx, &daemonset, metav1.CreateOptions{})
+					patchBytes, err = json.Marshal(daemonset)
 					if err != nil {
-						return fmt.Errorf("failed to create daemonset: %w", err)
+						return fmt.Errorf("failed to marshal daemonset: %w", err)
+					}
+					_, err = clientset.AppsV1().DaemonSets(daemonset.Namespace).Patch(ctx, daemonset.Name, types.ApplyPatchType, patchBytes, metav1.PatchOptions{
+						FieldManager: "testcontainers",
+					})
+					if err != nil {
+						return fmt.Errorf("failed to patch daemonset: %w", err)
 					}
 
-					if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
-						if meta.IsNoMatchError(err) {
-							// Ingestor installs the CRD, so if we get a no match error, it's because the CRD
-							// hasn't been installed yet. We can just skip creating the function in this case.
-							return nil
-						}
-						return fmt.Errorf("failed to create collector function: %w", err)
+					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+						crd := &adxmonv1.Function{}
+						err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: "default"}, crd)
+						return !errors.Is(err, &meta.NoKindMatchError{}) && !errors.Is(err, &meta.NoResourceMatchError{}), nil
+					})
+					if err != nil {
+						return fmt.Errorf("failed to wait for functions to become available: %w", err)
+					}
+
+					collectorFunction.SetManagedFields(nil)
+					patchBytes, err = json.Marshal(collectorFunction)
+					if err != nil {
+						return fmt.Errorf("failed to marshal function: %w", err)
+					}
+					err = ctrlCli.Patch(ctx, collectorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
+						FieldManager: "testcontainers",
+					})
+					if err != nil {
+						return fmt.Errorf("failed to patch function: %w", err)
 					}
 
 					return nil

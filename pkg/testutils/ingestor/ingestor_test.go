@@ -20,8 +20,15 @@ func TestIngestor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
+	t.Run("released image", func(t *testing.T) {
+		c, err := ingestor.Run(ctx, "ghcr.io/azure/adx-mon/ingestor:latest")
+		testcontainers.CleanupContainer(t, c)
+		require.NoError(t, c.Start(ctx))
+		require.NoError(t, err)
+	})
+
 	t.Run("outside cluster", func(t *testing.T) {
-		c, err := ingestor.Run(ctx)
+		c, err := ingestor.Run(ctx, "")
 		testcontainers.CleanupContainer(t, c)
 		require.NoError(t, err)
 	})
@@ -31,7 +38,7 @@ func TestIngestor(t *testing.T) {
 		testcontainers.CleanupContainer(t, k3sContainer)
 		require.NoError(t, err)
 
-		ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
+		ingestorContainer, err := ingestor.Run(ctx, "", ingestor.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, ingestorContainer)
 		require.NoError(t, err)
 

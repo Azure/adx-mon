@@ -17,6 +17,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
 	kwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
@@ -32,7 +34,7 @@ type IngestorContainer struct {
 	testcontainers.Container
 }
 
-func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*IngestorContainer, error) {
+func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*IngestorContainer, error) {
 	var relative string
 	for iter := range 4 {
 		relative = strings.Repeat("../", iter)
@@ -41,14 +43,21 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Inge
 		}
 	}
 
-	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Repo:       DefaultImage,
-			Tag:        DefaultTag,
-			Context:    relative, // repo base
-			Dockerfile: "build/images/Dockerfile.ingestor",
-			KeepImage:  true,
-		},
+	var req testcontainers.ContainerRequest
+	if img == "" {
+		req = testcontainers.ContainerRequest{
+			FromDockerfile: testcontainers.FromDockerfile{
+				Repo:       DefaultImage,
+				Tag:        DefaultTag,
+				Context:    relative, // repo base
+				Dockerfile: "build/images/Dockerfile.ingestor",
+				KeepImage:  true,
+			},
+		}
+	} else {
+		req = testcontainers.ContainerRequest{
+			Image: img,
+		}
 	}
 
 	genericContainerReq := testcontainers.GenericContainerRequest{
@@ -85,18 +94,25 @@ func WithStarted() testcontainers.CustomizeRequestOption {
 
 func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.CustomizeRequestOption {
 	return func(req *testcontainers.GenericContainerRequest) error {
-		isolateKinds := []string{"StatefulSet"}
+		isolateKinds := []string{"StatefulSet", "CustomResourceDefinition"}
 		writeTo, err := os.MkdirTemp("", "ingestor")
 		if err != nil {
 			return fmt.Errorf("failed to create temp dir: %w", err)
+		}
+
+		var img string
+		if req.FromDockerfile.Context != "" {
+			// We build to "ingestor:latest", load that image into the k3s cluster
+			img = req.FromDockerfile.Repo + ":" + req.FromDockerfile.Tag
+		} else {
+			img = req.Image
 		}
 
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
 
-					// We build to "ingestor:latest", load that image into the k3s cluster
-					if err := k.LoadImages(ctx, DefaultImage+":"+DefaultTag); err != nil {
+					if err := k.LoadImages(ctx, img); err != nil {
 						return fmt.Errorf("failed to load image: %w", err)
 					}
 					if err != nil {
@@ -118,7 +134,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to copy file to container: %w", err)
 					}
 
-					return nil
+					return testutils.InstallFunctionsCrd(ctx, k)
 				},
 			},
 			PostCreates: []testcontainers.ContainerHook{
@@ -135,7 +151,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to unmarshal statefulset: %w", err)
 					}
 
-					statefulSet.Spec.Template.Spec.Containers[0].Image = DefaultImage + ":" + DefaultTag
+					statefulSet.Spec.Template.Spec.Containers[0].Image = img
 					statefulSet.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullNever
 					statefulSet.Spec.Template.Spec.Containers[0].Args = []string{
 						"--storage-dir=/mnt/data",
@@ -173,13 +189,27 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to wait for namespace: %w", err)
 					}
 
-					_, err = clientset.AppsV1().StatefulSets(statefulSet.Namespace).Create(ctx, &statefulSet, metav1.CreateOptions{})
+					patchBytes, err := json.Marshal(statefulSet)
 					if err != nil {
-						return fmt.Errorf("failed to create statefulset: %w", err)
+						return fmt.Errorf("failed to marshal statefulset: %w", err)
+					}
+					_, err = clientset.AppsV1().StatefulSets(statefulSet.Namespace).Patch(ctx, statefulSet.Name, types.ApplyPatchType, patchBytes, metav1.PatchOptions{
+						FieldManager: "testcontainers",
+					})
+					if err != nil {
+						return fmt.Errorf("failed to patch statefulset: %w", err)
 					}
 
-					if err := ctrlCli.Create(ctx, ingestorFunction); err != nil {
-						return fmt.Errorf("failed to create ingestor function: %w", err)
+					ingestorFunction.SetManagedFields(nil)
+					patchBytes, err = json.Marshal(ingestorFunction)
+					if err != nil {
+						return fmt.Errorf("failed to marshal function: %w", err)
+					}
+					err = ctrlCli.Patch(ctx, ingestorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
+						FieldManager: "testcontainers",
+					})
+					if err != nil {
+						return fmt.Errorf("failed to patch function: %w", err)
 					}
 
 					return nil
