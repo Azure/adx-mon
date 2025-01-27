@@ -85,14 +85,24 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		}
 	})
 
-	t.Run("Build and install Ingestor and Collector", func(tt *testing.T) {
-		ingestorContainer, err := ingestor.Run(ctx, ingestor.WithCluster(ctx, k3sContainer))
+	t.Run("Install Ingestor and Collector", func(tt *testing.T) {
+		ingestorContainer, err := ingestor.Run(ctx, "ghcr.io/azure/adx-mon/ingestor:latest", ingestor.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, ingestorContainer)
+		require.NoError(tt, err)
+
+		collectorContainer, err := collector.Run(ctx, "ghcr.io/azure/adx-mon/collector:latest", collector.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, collectorContainer)
 		require.NoError(tt, err)
 	})
 
-	t.Run("Build and install Collector", func(tt *testing.T) {
-		collectorContainer, err := collector.Run(ctx, collector.WithCluster(ctx, k3sContainer))
+	t.Run("Build and upgrade Ingestor and Collector", func(tt *testing.T) {
+		// Ensure we can build the current version of the ingestor and collector and
+		// upgrade the previous version to the new.
+		ingestorContainer, err := ingestor.Run(ctx, "", ingestor.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, ingestorContainer)
+		require.NoError(tt, err)
+
+		collectorContainer, err := collector.Run(ctx, "", collector.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, collectorContainer)
 		require.NoError(tt, err)
 	})
