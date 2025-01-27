@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/partmap"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,4 +84,47 @@ func TestMap_Count(t *testing.T) {
 	m.Set("key2", 200)
 
 	require.Equal(t, 2, m.Count())
+}
+
+func TestMap_Mutate(t *testing.T) {
+	m := partmap.NewMap[int](64)
+
+	t.Run("key does not exist", func(t *testing.T) {
+		err := m.Mutate("key1", func(value int) (int, error) {
+			return value + 100, nil
+		})
+		require.NoError(t, err)
+		value, ok := m.Get("key1")
+		require.True(t, ok)
+		require.Equal(t, 100, value)
+	})
+
+	t.Run("key exists", func(t *testing.T) {
+		m.Set("key2", 200)
+
+		err := m.Mutate("key2", func(value int) (int, error) {
+			return value + 100, nil
+		})
+		require.NoError(t, err)
+
+		value, ok := m.Get("key2")
+		require.True(t, ok)
+		require.Equal(t, 300, value)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		err := m.Mutate("key3", func(value int) (int, error) {
+			return 0, assert.AnError
+		})
+		require.Error(t, err)
+		value, ok := m.Get("key3")
+		require.False(t, ok)
+		require.Equal(t, 0, value)
+
+	})
+
+	t.Run("nil fn", func(t *testing.T) {
+		err := m.Mutate("key3", nil)
+		require.Error(t, err)
+	})
 }

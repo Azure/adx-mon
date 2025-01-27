@@ -1,6 +1,7 @@
 package partmap
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/cespare/xxhash"
@@ -94,6 +95,24 @@ func (s *syncMap[V]) getOrCreate(key string, fn func() (V, error)) (V, error) {
 	return v, nil
 }
 
+func (s *syncMap[V]) mutate(key string, fn func(value V) (V, error)) error {
+	if fn == nil {
+		return fmt.Errorf("fn is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Use the zero value of V if the key does not exist.
+	v, _ := s.m[key]
+
+	newValue, err := fn(v)
+	if err != nil {
+		return err
+	}
+	s.m[key] = newValue
+	return nil
+}
+
 // NewMap creates a new Map with the specified number of partitions.
 func NewMap[V any](partitions int) *Map[V] {
 	parts := make([]*syncMap[V], partitions)
@@ -129,6 +148,12 @@ func (m *Map[V]) Set(key string, value V) V {
 func (m *Map[V]) Delete(key string) (V, bool) {
 	idx := m.partition(key)
 	return m.partitions[idx].delete(key)
+}
+
+// Mutate applies a function to the value for a given key and sets the returned value atomically.
+func (m *Map[V]) Mutate(key string, fn func(value V) (V, error)) error {
+	idx := m.partition(key)
+	return m.partitions[idx].mutate(key, fn)
 }
 
 // partition calculates the partition index for a given key.
