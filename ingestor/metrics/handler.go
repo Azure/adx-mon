@@ -18,7 +18,6 @@ import (
 	"github.com/golang/snappy"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sync/errgroup"
 )
 
 type SeriesCounter interface {
@@ -162,13 +161,5 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Handler) Write(ctx context.Context, req *prompb.WriteRequest) error {
-	g, gCtx := errgroup.WithContext(ctx)
-	for _, writer := range s.requestWriters {
-		writer := writer
-		g.Go(func() error {
-			return writer.Write(gCtx, req)
-		})
-	}
-
-	return g.Wait()
+	return remote.WriteRequest(ctx, s.requestWriters, req)
 }
