@@ -34,6 +34,7 @@ require (
 	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.27.5
 	github.com/valyala/fastjson v1.6.4
+	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.34.0
 	golang.org/x/sync v0.10.0
 	golang.org/x/sys v0.29.0

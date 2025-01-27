@@ -17,7 +17,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
-	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -336,13 +335,7 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.remoteClients), time.Since(start))
 	}()
 
-	g, gCtx := errgroup.WithContext(ctx)
-	for _, remoteClient := range s.remoteClients {
-		g.Go(func() error {
-			return remoteClient.Write(gCtx, wr)
-		})
-	}
-	return g.Wait()
+	return remote.WriteRequest(ctx, s.remoteClients, wr)
 }
 
 func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {

@@ -15,7 +15,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -87,7 +86,7 @@ type OltpMetricWriterOpts struct {
 	MaxBatchSize int
 
 	Clients       []remote.RemoteWriteClient
-	HealthChecker interface { IsHealthy() bool }
+	HealthChecker interface{ IsHealthy() bool }
 }
 
 type OltpMetricWriter struct {
@@ -104,7 +103,7 @@ func NewOltpMetricWriter(opts OltpMetricWriterOpts) *OltpMetricWriter {
 		remoteClients:            opts.Clients,
 		maxBatchSize:             opts.MaxBatchSize,
 		disableMetricsForwarding: opts.DisableMetricsForwarding,
-		healthChecker: opts.HealthChecker,
+		healthChecker:            opts.HealthChecker,
 	}
 }
 
@@ -218,14 +217,8 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 		logger.Infof("OLTP Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(t.remoteClients), time.Since(start))
 	}()
 
-	g, gCtx := errgroup.WithContext(ctx)
-	for _, remoteClient := range t.remoteClients {
-		remoteClient := remoteClient
-		g.Go(func() error {
-			return remoteClient.Write(gCtx, wr)
-		})
-	}
-	if err := g.Wait(); err != nil {
+	err := remote.WriteRequest(ctx, t.remoteClients, wr)
+	if err != nil {
 		return writeErr(err)
 	}
 	return nil
