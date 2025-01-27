@@ -255,6 +255,12 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	for _, prefix := range byAge {
 		b.tempSet = b.Segmenter.Get(b.tempSet[:0], prefix)
 
+		// Remove any segments that are already part of a batch so we don't try to double upload them
+		b.tempSet = slices.DeleteFunc(b.tempSet, func(si wal.SegmentInfo) bool {
+			n, _ := b.segments.Get(si.Path)
+			return n > 0
+		})
+
 		groupSize = 0
 		var oldestSegment time.Time
 		for _, v := range b.tempSet {
@@ -270,13 +276,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
 		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
 		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
-
-		if n, _ := b.segments.Get(prefix); n > 0 {
-			if logger.IsDebug() {
-				logger.Debugf("Skipping prefix %s, already processing %d segment batches", prefix, n)
-			}
-			continue
-		}
 
 		groups[prefix] = append(groups[prefix], b.tempSet...)
 	}
@@ -316,15 +315,16 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			batch.Segments = append(batch.Segments, si)
 			batchSize += si.Size
 
+			// Record that this segment is part of a batch.
+			_ = b.segments.Mutate(si.Path, func(n int) (int, error) {
+				return n + 1, nil
+			})
+
 			// The batch is at the optimal size for uploading to kusto, upload directly and start b new batch.
 			if b.minUploadSize > 0 && batchSize >= b.minUploadSize {
 				if logger.IsDebug() {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
 				}
-
-				_ = b.segments.Mutate(prefix, func(n int) (int, error) {
-					return n + 1, nil
-				})
 
 				owned = append(owned, batch)
 				batch = &Batch{
@@ -364,19 +364,11 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		}
 
 		if directUpload {
-			_ = b.segments.Mutate(prefix, func(n int) (int, error) {
-				return n + 1, nil
-			})
-
 			owned = append(owned, batch)
 			batch = nil
 			batchSize = 0
 			continue
 		}
-
-		_ = b.segments.Mutate(prefix, func(n int) (int, error) {
-			return n + 1, nil
-		})
 
 		owner, _ := b.Partitioner.Owner([]byte(prefix))
 
@@ -397,11 +389,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 }
 
 func (b *batcher) Release(batch *Batch) {
-	_ = b.segments.Mutate(batch.Prefix, func(n int) (int, error) {
-		return n - 1, nil
-	})
-	if v, _ := b.segments.Get(batch.Prefix); v <= 0 {
-		_, _ = b.segments.Delete(batch.Prefix)
+	for _, si := range batch.Segments {
+		// Remove the segment from the map if it's no longer part of b batch so we don't leak keys
+		_, _ = b.segments.Delete(si.Path)
 	}
 }
 

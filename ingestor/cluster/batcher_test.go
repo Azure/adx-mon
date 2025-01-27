@@ -365,7 +365,8 @@ func TestBatcher_Stats(t *testing.T) {
 		health:          fakeHealthChecker{healthy: true},
 		segments:        partmap.NewMap[int](64),
 	}
-	_, _, err = a.processSegments()
+
+	owned, _, err := a.processSegments()
 	require.NoError(t, err)
 	require.Equal(t, int64(4), a.SegmentsTotal())
 
@@ -377,6 +378,20 @@ func TestBatcher_Stats(t *testing.T) {
 
 	_, _, err = a.processSegments()
 	require.NoError(t, err)
+
+	// No batches should be returned because existing segments are already assigned to batched and not released
+	require.Equal(t, int64(0), a.SegmentsTotal())
+	require.Equal(t, int64(0), a.SegmentsSize())
+
+	// Release all the segments so they can re-assigned to new batches
+	for _, b := range owned {
+		b.Release()
+	}
+
+	owned, _, err = a.processSegments()
+	require.NoError(t, err)
+
+	// No batches should be returned because existing segments are already assigned to batched and not released
 	require.Equal(t, int64(4), a.SegmentsTotal())
 	require.Equal(t, sz, a.SegmentsSize())
 
@@ -385,6 +400,11 @@ func TestBatcher_Stats(t *testing.T) {
 	sz = 0
 	for _, s := range segments {
 		sz += s.Size
+	}
+
+	// Release all the segments so they can re-assigned to new batches
+	for _, b := range owned {
+		b.Release()
 	}
 
 	_, _, err = a.processSegments()
