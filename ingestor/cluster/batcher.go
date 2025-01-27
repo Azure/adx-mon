@@ -13,6 +13,7 @@ import (
 
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
@@ -127,8 +128,7 @@ type batcher struct {
 
 	tempSet []wal.SegmentInfo
 
-	mu       sync.RWMutex
-	segments map[string]int
+	segments *partmap.Map[int]
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
@@ -147,7 +147,7 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		transferQueue:    opts.TransferQueue,
 		health:           opts.PeerHealthReporter,
 		transferDisabled: opts.TransfersDisabled,
-		segments:         make(map[string]int),
+		segments:         partmap.NewMap[int](64),
 	}
 }
 
@@ -252,8 +252,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		totalFiles, totalSize int64
 	)
 
-	b.mu.Lock()
-
 	for _, prefix := range byAge {
 		b.tempSet = b.Segmenter.Get(b.tempSet[:0], prefix)
 
@@ -273,7 +271,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
 		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
 
-		if n := b.segments[prefix]; n > 0 {
+		if n, _ := b.segments.Get(prefix); n > 0 {
 			if logger.IsDebug() {
 				logger.Debugf("Skipping prefix %s, already processing %d segment batches", prefix, n)
 			}
@@ -282,7 +280,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		groups[prefix] = append(groups[prefix], b.tempSet...)
 	}
-	b.mu.Unlock()
 
 	// For each sample, sort the segments by name.  The last segment is the current segment.
 	for _, prefix := range byAge {
@@ -325,9 +322,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
 				}
 
-				b.mu.Lock()
-				b.segments[prefix]++
-				b.mu.Unlock()
+				_ = b.segments.Mutate(prefix, func(n int) (int, error) {
+					return n + 1, nil
+				})
 
 				owned = append(owned, batch)
 				batch = &Batch{
@@ -367,9 +364,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		}
 
 		if directUpload {
-			b.mu.Lock()
-			b.segments[prefix]++
-			b.mu.Unlock()
+			_ = b.segments.Mutate(prefix, func(n int) (int, error) {
+				return n + 1, nil
+			})
 
 			owned = append(owned, batch)
 			batch = nil
@@ -377,9 +374,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			continue
 		}
 
-		b.mu.Lock()
-		b.segments[prefix]++
-		b.mu.Unlock()
+		_ = b.segments.Mutate(prefix, func(n int) (int, error) {
+			return n + 1, nil
+		})
 
 		owner, _ := b.Partitioner.Owner([]byte(prefix))
 
@@ -400,19 +397,15 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 }
 
 func (b *batcher) Release(batch *Batch) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.segments[batch.Prefix]--
-	if b.segments[batch.Prefix] <= 0 {
-		delete(b.segments, batch.Prefix)
+	_ = b.segments.Mutate(batch.Prefix, func(n int) (int, error) {
+		return n - 1, nil
+	})
+	if v, _ := b.segments.Get(batch.Prefix); v <= 0 {
+		_, _ = b.segments.Delete(batch.Prefix)
 	}
 }
 
 func (b *batcher) Remove(batch *Batch) error {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
 	for _, si := range batch.Segments {
 		err := os.Remove(si.Path)
 		if err != nil && !os.IsNotExist(err) {
