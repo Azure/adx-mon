@@ -11,7 +11,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
-	"golang.org/x/sync/errgroup"
 )
 
 type RemoteWriteProxy struct {
@@ -157,15 +156,9 @@ func (p *RemoteWriteProxy) sendBatch(ctx context.Context) error {
 			}
 
 			start := time.Now()
-			g, gCtx := errgroup.WithContext(ctx)
-			for _, client := range p.clients {
-				client := client
-				g.Go(func() error {
-					return client.Write(gCtx, wr)
-				})
-			}
+			err := remote.WriteRequest(ctx, p.clients, wr)
 			logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(p.clients), time.Since(start))
-			if err := g.Wait(); err != nil {
+			if err != nil {
 				logger.Errorf("Error sending batch: %v", err)
 			}
 			prompb.WriteRequestPool.Put(wr)

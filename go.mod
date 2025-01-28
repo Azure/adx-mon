@@ -4,7 +4,7 @@ go 1.23.5
 
 require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20241217213620-6454adb4e03c.2
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.3-20241217213620-6454adb4e03c.1
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.4-20241217213620-6454adb4e03c.1
 	github.com/Azure/azure-kusto-go v0.15.2
 	github.com/VictoriaMetrics/easyproto v0.1.4
 	github.com/bufbuild/connect-go v1.10.0
@@ -34,11 +34,12 @@ require (
 	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.27.5
 	github.com/valyala/fastjson v1.6.4
+	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.34.0
 	golang.org/x/sync v0.10.0
 	golang.org/x/sys v0.29.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7
-	google.golang.org/protobuf v1.36.3
+	google.golang.org/protobuf v1.36.4
 	k8s.io/api v0.32.1
 	k8s.io/apimachinery v0.32.1
 	k8s.io/client-go v0.32.1

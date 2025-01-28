@@ -6,6 +6,7 @@ import (
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
 	"github.com/stretchr/testify/require"
@@ -36,7 +37,7 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 		storageDir:    dir,
 		Partitioner:   &fakePartitioner{owner: "node1"},
 		Segmenter:     idx,
-		segments:      make(map[string]int),
+		segments:      partmap.NewMap[int](64),
 		minUploadSize: 1,
 	}
 	owner, notOwned, err := a.processSegments()
@@ -90,7 +91,7 @@ func TestBatcher_NodeOwned(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node2"},
 		Segmenter:       idx,
 		health:          &fakeHealthChecker{healthy: true},
-		segments:        make(map[string]int),
+		segments:        partmap.NewMap[int](64),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -134,7 +135,7 @@ func TestBatcher_NewestFirst(t *testing.T) {
 		storageDir:    dir,
 		Partitioner:   &fakePartitioner{owner: "node1"},
 		Segmenter:     idx,
-		segments:      make(map[string]int),
+		segments:      partmap.NewMap[int](64),
 		minUploadSize: 1,
 	}
 	owner, notOwned, err := a.processSegments()
@@ -202,7 +203,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       idx,
 		health:          fakeHealthChecker{healthy: true},
-		segments:        make(map[string]int),
+		segments:        partmap.NewMap[int](64),
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -279,7 +280,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       idx,
 		health:          fakeHealthChecker{healthy: true},
-		segments:        make(map[string]int),
+		segments:        partmap.NewMap[int](64),
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -362,9 +363,10 @@ func TestBatcher_Stats(t *testing.T) {
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       idx,
 		health:          fakeHealthChecker{healthy: true},
-		segments:        make(map[string]int),
+		segments:        partmap.NewMap[int](64),
 	}
-	_, _, err = a.processSegments()
+
+	owned, _, err := a.processSegments()
 	require.NoError(t, err)
 	require.Equal(t, int64(4), a.SegmentsTotal())
 
@@ -376,6 +378,20 @@ func TestBatcher_Stats(t *testing.T) {
 
 	_, _, err = a.processSegments()
 	require.NoError(t, err)
+
+	// No batches should be returned because existing segments are already assigned to batched and not released
+	require.Equal(t, int64(0), a.SegmentsTotal())
+	require.Equal(t, int64(0), a.SegmentsSize())
+
+	// Release all the segments so they can re-assigned to new batches
+	for _, b := range owned {
+		b.Release()
+	}
+
+	owned, _, err = a.processSegments()
+	require.NoError(t, err)
+
+	// No batches should be returned because existing segments are already assigned to batched and not released
 	require.Equal(t, int64(4), a.SegmentsTotal())
 	require.Equal(t, sz, a.SegmentsSize())
 
@@ -384,6 +400,11 @@ func TestBatcher_Stats(t *testing.T) {
 	sz = 0
 	for _, s := range segments {
 		sz += s.Size
+	}
+
+	// Release all the segments so they can re-assigned to new batches
+	for _, b := range owned {
+		b.Release()
 	}
 
 	_, _, err = a.processSegments()

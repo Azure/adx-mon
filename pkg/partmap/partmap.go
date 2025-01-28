@@ -1,21 +1,25 @@
 package partmap
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/cespare/xxhash"
 )
 
-type Map struct {
-	partitions []*syncMap
+// Map is a concurrent map with string keys and generic values, partitioned for better concurrency.
+type Map[V any] struct {
+	partitions []*syncMap[V]
 }
 
-type syncMap struct {
+// syncMap is a thread-safe map with string keys and generic values.
+type syncMap[V any] struct {
 	mu sync.RWMutex
-	m  map[string]any
+	m  map[string]V
 }
 
-func (s *syncMap) apply(fn func(key string, value any) error) error {
+// apply applies a function to each key-value pair in the map.
+func (s *syncMap[V]) apply(fn func(key string, value V) error) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -27,7 +31,8 @@ func (s *syncMap) apply(fn func(key string, value any) error) error {
 	return nil
 }
 
-func (s *syncMap) get(key string) (any, bool) {
+// get retrieves the value for a given key.
+func (s *syncMap[V]) get(key string) (V, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -35,7 +40,8 @@ func (s *syncMap) get(key string) (any, bool) {
 	return v, ok
 }
 
-func (s *syncMap) set(key string, value any) any {
+// set sets the value for a given key.
+func (s *syncMap[V]) set(key string, value V) V {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -47,20 +53,23 @@ func (s *syncMap) set(key string, value any) any {
 	return value
 }
 
-func (s *syncMap) delete(key string) (any, bool) {
+// delete removes the value for a given key.
+func (s *syncMap[V]) delete(key string) (V, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	v := s.m[key]
-	if v == nil {
-		return nil, false
+	v, ok := s.m[key]
+	if !ok {
+		var zero V
+		return zero, false
 	}
 
 	delete(s.m, key)
 	return v, true
 }
 
-func (s *syncMap) getOrCreate(key string, fn func() (any, error)) (any, error) {
+// getOrCreate retrieves the value for a given key or creates it using the provided function.
+func (s *syncMap[V]) getOrCreate(key string, fn func() (V, error)) (V, error) {
 	s.mu.RLock()
 	v, ok := s.m[key]
 	s.mu.RUnlock()
@@ -79,49 +88,81 @@ func (s *syncMap) getOrCreate(key string, fn func() (any, error)) (any, error) {
 	var err error
 	v, err = fn()
 	if err != nil {
-		return nil, err
+		var zero V
+		return zero, err
 	}
 	s.m[key] = v
 	return v, nil
 }
 
-func NewMap(partitons int) *Map {
-	partitions := make([]*syncMap, partitons)
-	for i := range partitions {
-		partitions[i] = &syncMap{
-			m: make(map[string]any),
+func (s *syncMap[V]) mutate(key string, fn func(value V) (V, error)) error {
+	if fn == nil {
+		return fmt.Errorf("fn is nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Use the zero value of V if the key does not exist.
+	v, _ := s.m[key]
+
+	newValue, err := fn(v)
+	if err != nil {
+		return err
+	}
+	s.m[key] = newValue
+	return nil
+}
+
+// NewMap creates a new Map with the specified number of partitions.
+func NewMap[V any](partitions int) *Map[V] {
+	parts := make([]*syncMap[V], partitions)
+	for i := range parts {
+		parts[i] = &syncMap[V]{
+			m: make(map[string]V),
 		}
 	}
-	return &Map{
-		partitions: partitions,
+	return &Map[V]{
+		partitions: parts,
 	}
 }
 
-func (m *Map) GetOrCreate(key string, fn func() (any, error)) (any, error) {
+// GetOrCreate retrieves the value for a given key or creates it using the provided function.
+func (m *Map[V]) GetOrCreate(key string, fn func() (V, error)) (V, error) {
 	idx := m.partition(key)
 	return m.partitions[idx].getOrCreate(key, fn)
 }
 
-func (m *Map) Get(key string) (any, bool) {
+// Get retrieves the value for a given key.
+func (m *Map[V]) Get(key string) (V, bool) {
 	idx := m.partition(key)
 	return m.partitions[idx].get(key)
 }
 
-func (m *Map) Set(key string, value any) any {
+// Set sets the value for a given key.
+func (m *Map[V]) Set(key string, value V) V {
 	idx := m.partition(key)
 	return m.partitions[idx].set(key, value)
 }
 
-func (m *Map) Delete(key string) (any, bool) {
+// Delete removes the value for a given key.
+func (m *Map[V]) Delete(key string) (V, bool) {
 	idx := m.partition(key)
 	return m.partitions[idx].delete(key)
 }
 
-func (m *Map) partition(key string) uint64 {
+// Mutate applies a function to the value for a given key and sets the returned value atomically.
+func (m *Map[V]) Mutate(key string, fn func(value V) (V, error)) error {
+	idx := m.partition(key)
+	return m.partitions[idx].mutate(key, fn)
+}
+
+// partition calculates the partition index for a given key.
+func (m *Map[V]) partition(key string) uint64 {
 	return xxhash.Sum64String(key) % uint64(len(m.partitions))
 }
 
-func (m *Map) Each(fn func(key string, value any) error) error {
+// Each applies a function to each key-value pair in the map.
+func (m *Map[V]) Each(fn func(key string, value V) error) error {
 	for _, partition := range m.partitions {
 		if err := partition.apply(fn); err != nil {
 			return err
@@ -130,7 +171,8 @@ func (m *Map) Each(fn func(key string, value any) error) error {
 	return nil
 }
 
-func (m *Map) Count() int {
+// Count returns the number of key-value pairs in the map.
+func (m *Map[V]) Count() int {
 	var count int
 	for _, partition := range m.partitions {
 		partition.mu.RLock()
