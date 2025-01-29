@@ -49,6 +49,7 @@ type QueueSizer interface {
 	UploadQueueSize() int
 	SegmentsTotal() int64
 	SegmentsSize() int64
+	MaxSegmentAge() time.Duration
 }
 
 func NewHealth(opts HealthOpts) *Health {
@@ -157,4 +158,8 @@ func (h *Health) SegmentsTotal() int64 {
 
 func (h *Health) SegmentsSize() int64 {
 	return h.QueueSizer.SegmentsSize()
+}
+
+func (h *Health) MaxSegmentAge() time.Duration {
+	return h.QueueSizer.MaxSegmentAge()
 }

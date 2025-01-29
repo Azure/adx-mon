@@ -91,6 +91,7 @@ type Batcher interface {
 
 	Release(batch *Batch)
 	Remove(batch *Batch) error
+	MaxSegmentAge() time.Duration
 }
 
 // Batcher manages WAL segments that are ready for upload to kusto or that need
@@ -125,6 +126,7 @@ type batcher struct {
 	maxTransferAge  time.Duration
 	maxTransferSize int64
 	minUploadSize   int64
+	maxSegmentAge   time.Duration
 
 	tempSet []wal.SegmentInfo
 
@@ -184,6 +186,10 @@ func (b *batcher) SegmentsTotal() int64 {
 
 func (b *batcher) SegmentsSize() int64 {
 	return atomic.LoadInt64(&b.segementsSize)
+}
+
+func (b *batcher) MaxSegmentAge() time.Duration {
+	return b.maxSegmentAge
 }
 
 func (b *batcher) watch(ctx context.Context) {
@@ -276,7 +282,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
 		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
 		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
-
+		b.maxSegmentAge = time.Since(oldestSegment)
 		groups[prefix] = append(groups[prefix], b.tempSet...)
 	}
 

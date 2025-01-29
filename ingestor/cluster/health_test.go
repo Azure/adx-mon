@@ -73,6 +73,10 @@ type fakeQueueSizer struct {
 	segmentsTotal     int64
 }
 
+func (f fakeQueueSizer) MaxSegmentAge() time.Duration {
+	return 0
+}
+
 func (f fakeQueueSizer) TransferQueueSize() int { return f.transferQueueSize }
 func (f fakeQueueSizer) UploadQueueSize() int   { return f.uploadQueueSize }
 func (f fakeQueueSizer) SegmentsSize() int64    { return f.segmentsSize }
