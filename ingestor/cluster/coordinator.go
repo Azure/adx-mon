@@ -31,9 +31,6 @@ type Coordinator interface {
 
 	// IsLeader returns true if the current node is the leader.
 	IsLeader() bool
-
-	// Write writes the time series to the correct peer.
-	Write(ctx context.Context, wr *prompb.WriteRequest) error
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -61,7 +58,6 @@ type coordinator struct {
 
 type CoordinatorOpts struct {
 	WriteTimeSeriesFn TimeSeriesWriter
-	WriteOTLPLogsFn   OTLPLogsWriter
 	K8sCli            kubernetes.Interface
 
 	// Namespace is the namespace used to discover peers.  If not specified, the coordinator will

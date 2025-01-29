@@ -334,8 +334,6 @@ func TestCoordinatorInK8s(t *testing.T) {
 	_, err = client.AppsV1().StatefulSets(opts.Namespace).Create(ctx, ss, metav1.CreateOptions{})
 	require.NoError(t, err)
 
-	require.NoError(t, c.Write(ctx, &prompb.WriteRequest{}))
-
 	require.Eventually(t, func() bool {
 		return c.IsLeader()
 	}, time.Minute, 100*time.Millisecond)
