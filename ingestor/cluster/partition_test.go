@@ -1,10 +1,13 @@
 package cluster
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestPartitioner(t *testing.T) {
@@ -22,15 +25,18 @@ func TestOwner_Empty(t *testing.T) {
 	p, err := NewPartition(map[string]string{"node": "http://172.31.63.27:9090/receive"})
 	require.NoError(t, err)
 
+	errgroup, _ := errgroup.WithContext(context.Background())
 	for i := 0; i < 10; i++ {
-		go func() {
+		errgroup.Go(func() error {
 			for i := 0; i < 100000; i++ {
 				if owner, _ := p.Owner([]byte("cpu")); owner == "" {
-					t.Fatal("owner is empty")
+					return fmt.Errorf("owner is empty")
 				}
 			}
-		}()
+			return nil
+		})
 	}
+	require.NoError(t, errgroup.Wait())
 }
 
 //
