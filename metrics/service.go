@@ -21,6 +21,7 @@ type HealthReporter interface {
 	SegmentsTotal() int64
 	SegmentsSize() int64
 	UnhealthyReason() string
+	MaxSegmentAge() time.Duration
 }
 
 type TimeSeriesWriter interface {
@@ -142,7 +143,7 @@ func (s *service) collect(ctx context.Context) {
 
 			logger.Infof("Status IngestionSamplesPerSecond=%0.2f SamplesIngested=%d IsHealthy=%v "+
 				"UploadQueueSize=%d TransferQueueSize=%d SegmentsTotal=%d SegmentsSize=%d UnhealthyReason=%s "+
-				"ActiveConnections=%d DroppedConnections=%d",
+				"ActiveConnections=%d DroppedConnections=%d MaxSegmentAgeSeconds=%0.2f",
 				(currentTotal-lastCount)/60, uint64(currentTotal),
 				s.health.IsHealthy(),
 				s.health.UploadQueueSize(),
@@ -151,7 +152,8 @@ func (s *service) collect(ctx context.Context) {
 				s.health.SegmentsSize(),
 				s.health.UnhealthyReason(),
 				int(activeConns),
-				int(droppedConns))
+				int(droppedConns),
+				s.health.MaxSegmentAge().Seconds())
 
 			lastCount = currentTotal
 

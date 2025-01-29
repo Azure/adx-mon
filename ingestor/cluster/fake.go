@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 )
@@ -72,3 +73,4 @@ func (f fakeBatcher) SegmentsTotal() int64           { return 0 }
 func (f fakeBatcher) SegmentsSize() int64            { return 0 }
 func (f fakeBatcher) Release(batch *Batch)           {}
 func (f fakeBatcher) Remove(batch *Batch) error      { return nil }
+func (f fakeBatcher) MaxSegmentAge() time.Duration   { return 0 }
