@@ -12,12 +12,10 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
-	metricsHandler "github.com/Azure/adx-mon/ingestor/metrics"
 	ingestorstorage "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
@@ -50,7 +48,6 @@ type Service struct {
 
 	scheduler *scheduler.Periodic
 
-	handler       *metricsHandler.Handler
 	requestFilter *transform.RequestTransformer
 	health        interface{ IsHealthy() bool }
 }
@@ -190,18 +187,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		dbs[db] = struct{}{}
 	}
 
-	// Deprecated. Metrics are now sent to ingestor from collector via /transfer.
-	handler := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
-		RequestTransformer: &transform.RequestTransformer{
-			DropLabels:      opts.DropLabels,
-			DropMetrics:     opts.DropMetrics,
-			AllowedDatabase: dbs,
-		},
-		RequestWriters: []remote.RemoteWriteClient{remote.NopCloser(coord)},
-		HealthChecker:  health,
-		Path:           "/receive",
-	})
-
 	databases := make(map[string]struct{})
 	for _, db := range opts.LogsDatabases {
 		databases[db] = struct{}{}
@@ -221,7 +206,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		coordinator: coord,
 		batcher:     batcher,
 		metrics:     metricsSvc,
-		handler:     handler,
 		health:      health,
 		scheduler:   sched,
 		requestFilter: &transform.RequestTransformer{
@@ -311,13 +295,6 @@ func (s *Service) Close() error {
 	}
 
 	return s.store.Close()
-}
-
-// HandleReceive handles the prometheus remote write requests and writes them to the store.
-func (s *Service) HandleReceive(w http.ResponseWriter, r *http.Request) {
-	adxhttp.MaybeCloseConnection(w, r)
-
-	s.handler.HandleReceive(w, r)
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
