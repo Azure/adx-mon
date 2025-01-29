@@ -136,6 +136,12 @@ spec:
             - mountPath: /etc/ssl/certs
               name: ca-certs
               readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 5
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

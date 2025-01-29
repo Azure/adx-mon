@@ -297,6 +297,17 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
+// HandleReady handles the readiness probe.
+func (s *Service) HandleReady(w http.ResponseWriter, r *http.Request) {
+	if s.health.IsHealthy() {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	w.Write([]byte("not ready"))
+}
+
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.
 func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	adxhttp.MaybeCloseConnection(w, r)

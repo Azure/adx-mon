@@ -375,6 +375,7 @@ func realMain(ctx *cli.Context) error {
 	logger.Infof("Listening at %s", ":9090")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
+	mux.HandleFunc("/readyz", svc.HandleReady)
 
 	logger.Infof("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()
