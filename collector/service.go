@@ -49,10 +49,6 @@ type Service struct {
 	// in the local WAL.
 	otelLogsSvc *otlp.LogsService
 
-	// otelProxySvc is the OpenTelemetry logs proxy service that receives OTLP/HTTP Logs requests and
-	// forwards them via OTLP/GRPC to ingestor.
-	otelProxySvc *otlp.LogsProxyService
-
 	// httpHandlers are the write endpoints that receive metrics from Prometheus and Otel clients over HTTP.
 	httpHandlers []*http.HttpHandler
 
@@ -219,14 +215,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		HealthChecker: health,
 	})
 
-	logsProxySvc := otlp.NewLogsProxyService(otlp.LogsProxyServiceOpts{
-		LiftAttributes:     opts.LiftAttributes,
-		AddAttributes:      opts.AddAttributes,
-		Endpoint:           opts.Endpoint,
-		InsecureSkipVerify: opts.InsecureSkipVerify,
-		HealthChecker:      health,
-	})
-
 	var metricHttpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
@@ -249,7 +237,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			Clients:                  append(handlerOpts.MetricOpts.RemoteWriteClients, &StoreRemoteClient{store}),
 			MaxBatchSize:             opts.MaxBatchSize,
 			DisableMetricsForwarding: handlerOpts.MetricOpts.DisableMetricsForwarding,
-			HealthChecker: health,
+			HealthChecker:            health,
 		})
 		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path, handlerOpts.GrpcPort)
 		if handlerOpts.Path != "" {
@@ -345,7 +333,6 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		scraper:      scraper,
 		workerSvcs:   workerSvcs,
 		otelLogsSvc:  logsSvc,
-		otelProxySvc: logsProxySvc,
 		httpHandlers: metricHttpHandlers,
 		grpcHandlers: grpcHandlers,
 		batcher:      batcher,
@@ -381,10 +368,6 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	if err := s.otelLogsSvc.Open(ctx); err != nil {
-		return err
-	}
-
-	if err := s.otelProxySvc.Open(ctx); err != nil {
 		return err
 	}
 
@@ -430,7 +413,6 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	primaryHttp.RegisterHandlerFunc("/v1/logs", s.otelLogsSvc.Handler)
-	primaryHttp.RegisterHandlerFunc("/logs", s.otelProxySvc.Handler)
 
 	for _, handler := range s.httpHandlers {
 		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
@@ -481,9 +463,6 @@ func (s *Service) Close() error {
 	s.metricsSvc.Close()
 	for _, workerSvc := range s.workerSvcs {
 		workerSvc.Close()
-	}
-	if s.otelProxySvc != nil {
-		s.otelProxySvc.Close()
 	}
 	s.cancel()
 	for _, httpServer := range s.httpServers {
