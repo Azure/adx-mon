@@ -34,9 +34,6 @@ type Coordinator interface {
 
 	// Write writes the time series to the correct peer.
 	Write(ctx context.Context, wr *prompb.WriteRequest) error
-
-	// WriteOTLPLogs writes the logs to the correct peer.
-	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -52,7 +49,6 @@ type coordinator struct {
 	factory informers.SharedInformerFactory
 
 	tsw          TimeSeriesWriter
-	lw           OTLPLogsWriter
 	kcli         kubernetes.Interface
 	pl           v12.PodLister
 	hostEntpoint string
@@ -175,7 +171,6 @@ func (c *coordinator) Open(ctx context.Context) error {
 	c.pl = pl
 
 	c.tsw = c.opts.WriteTimeSeriesFn
-	c.lw = c.opts.WriteOTLPLogsFn
 
 	myIP, err := GetOutboundIP()
 	if err != nil {
@@ -231,10 +226,6 @@ func (c *coordinator) Close() error {
 
 func (c *coordinator) Write(ctx context.Context, wr *prompb.WriteRequest) error {
 	return c.tsw(ctx, wr.Timeseries)
-}
-
-func (c *coordinator) WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error {
-	return c.lw(ctx, database, table, logs)
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.

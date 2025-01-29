@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/stretchr/testify/require"
@@ -263,15 +262,6 @@ func (l *fakePodLister) Pods(namespace string) v12.PodNamespaceLister {
 func TestCoordinatorInK8s(t *testing.T) {
 	testutils.IntegrationTest(t)
 
-	// This is an integration test where a Coordinator is created using a k3s cluster
-	// configuration and a statefulset is then created that matches the Coordinator's
-	// peer predicate. What we're testing is that the Coordinator is correctly utilizing
-	// a k8s informer and its predicate is correctly identifying peer pods and its leader state.
-	otlpWriter := func(ctx context.Context, database, table string, logs *otlp.Logs) error {
-		t.Helper()
-		return nil
-	}
-
 	timeSeriesWriter := func(ctx context.Context, ts []*prompb.TimeSeries) error {
 		t.Helper()
 		return nil
@@ -293,7 +283,6 @@ func TestCoordinatorInK8s(t *testing.T) {
 
 	opts := &CoordinatorOpts{
 		WriteTimeSeriesFn:  timeSeriesWriter,
-		WriteOTLPLogsFn:    otlpWriter,
 		K8sCli:             client,
 		Namespace:          "test-namespace",
 		Hostname:           "ingestor-0",
@@ -345,7 +334,6 @@ func TestCoordinatorInK8s(t *testing.T) {
 	_, err = client.AppsV1().StatefulSets(opts.Namespace).Create(ctx, ss, metav1.CreateOptions{})
 	require.NoError(t, err)
 
-	require.NoError(t, c.WriteOTLPLogs(ctx, "test-database", "test-table", &otlp.Logs{}))
 	require.NoError(t, c.Write(ctx, &prompb.WriteRequest{}))
 
 	require.Eventually(t, func() bool {
