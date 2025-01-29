@@ -205,8 +205,12 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					if err != nil {
 						return fmt.Errorf("failed to marshal function: %w", err)
 					}
-					err = ctrlCli.Patch(ctx, ingestorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
-						FieldManager: "testcontainers",
+					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
+						// Patching these CRDs is tricky because Ingestor is actively updating them, so we have to retry
+						err := ctrlCli.Patch(ctx, ingestorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
+							FieldManager: "testcontainers",
+						})
+						return err == nil, nil
 					})
 					if err != nil {
 						return fmt.Errorf("failed to patch function: %w", err)
