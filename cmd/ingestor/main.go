@@ -39,17 +39,6 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type strSliceFlag []string
-
-func (i *strSliceFlag) String() string {
-	return strings.Join(*i, ",")
-}
-
-func (i *strSliceFlag) Set(value string) error {
-	*i = append(*i, value)
-	return nil
-}
-
 func main() {
 	app := &cli.App{
 		Name:  "ingestor",

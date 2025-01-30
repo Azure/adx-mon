@@ -3,7 +3,6 @@ package ingestor
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +75,38 @@ func TestService_HandleTransfer_InvalidFilename(t *testing.T) {
 	}
 }
 
+func TestService_HandleTransfer_ValidFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+	}{
+		{name: "valid file", filename: "testdb_testtable_testschema_1234567890.wal"},
+	}
+
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store:  &fakeStore{},
+	}
+	s.databases = make(map[string]struct{})
+	s.databases["testdb"] = struct{}{}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := bytes.NewReader([]byte{})
+			req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+
+			q := req.URL.Query()
+			q.Add("filename", tt.filename)
+			req.URL.RawQuery = q.Encode()
+			require.NoError(t, err)
+
+			resp := httptest.NewRecorder()
+			s.HandleTransfer(resp, req)
+			require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
+		})
+	}
+}
+
 type fakeStore struct {
 	segements map[string]struct{}
 }
@@ -110,5 +141,5 @@ func (f fakeStore) IsActiveSegment(path string) bool {
 }
 
 func (f fakeStore) Import(filename string, body io.ReadCloser) (int, error) {
-	return 0, fmt.Errorf("Import should not be called")
+	return 0, nil
 }
