@@ -103,3 +103,64 @@ func TestJournalE2E(t *testing.T) {
 	<-sink.DoneChan()
 	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), sink.Latest().Body[types.BodyKeyMessage])
 }
+
+func TestJournalMulipleSources(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+	if !journal.Enabled() {
+		t.Skip("journal is not available - skipping")
+	}
+
+	logger.SetLevel(slog.LevelDebug)
+
+	cursorDir := t.TempDir()
+	testtagOne := "COLLECTORE2E"
+	testtagTwo := "COLLECTORE2E2"
+
+	randNum := rand.Int()
+	testValue := fmt.Sprintf("testValue-%d", randNum)
+	journalFieldsOne := map[string]string{testtagOne: testValue}
+	journalFieldsTwo := map[string]string{testtagTwo: testValue}
+	t.Logf("Sending logs - view in journalctl with journalctl %s=%s", testtagOne, testValue)
+	t.Logf("Sending logs - view in journalctl with journalctl %s=%s", testtagTwo, testValue)
+	matchTagOne := fmt.Sprintf("%s=%s", testtagOne, testValue)
+	matchTagTwo := fmt.Sprintf("%s=%s", testtagTwo, testValue)
+
+	numLogs := 1000
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsOne)
+		require.NoError(t, err)
+		err = journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsTwo)
+		require.NoError(t, err)
+	}
+
+	sink := sinks.NewCountingSink(int64(numLogs * 2)) // both sources send numLogs
+	source := New(SourceConfig{
+		Targets: []JournalTargetConfig{
+			{
+				Matches:  []string{matchTagOne},
+				Database: "testdb",
+				Table:    "testtable",
+			},
+			{
+				Matches:  []string{matchTagTwo},
+				Database: "testdb",
+				Table:    "testtable",
+			},
+		},
+		CursorDirectory: cursorDir,
+		WorkerCreator:   engine.WorkerCreator(nil, sink),
+	})
+
+	service := &logs.Service{
+		Source: source,
+		Sink:   sink,
+	}
+	ctx := context.Background()
+	err := service.Open(ctx)
+	require.NoError(t, err)
+	<-sink.DoneChan()
+	service.Close()
+	require.Equal(t, fmt.Sprintf("%d", numLogs-1), sink.Latest().Body[types.BodyKeyMessage])
+}
