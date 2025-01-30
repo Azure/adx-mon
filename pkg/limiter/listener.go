@@ -50,7 +50,9 @@ type limitListenerConn struct {
 
 func (l *limitListenerConn) Close() error {
 	err := l.Conn.Close()
-	l.releaseOnce.Do(l.release)
-	metrics.IngestorActiveConnections.Dec()
+	l.releaseOnce.Do(func() {
+		l.release()
+		metrics.IngestorActiveConnections.Dec()
+	})
 	return err
 }
