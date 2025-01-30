@@ -3,6 +3,7 @@ package ingestor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"regexp"
@@ -366,6 +367,37 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Service) UploadSegments() error {
+	if err := s.batcher.BatchSegments(); err != nil {
+		return err
+	}
+	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-t.C:
+			if len(s.uploader.UploadQueue()) == 0 && len(s.replicator.TransferQueue()) == 0 {
+				return nil
+			}
+
+			if len(s.uploader.UploadQueue()) != 0 {
+				logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+			}
+			if len(s.replicator.TransferQueue()) != 0 {
+				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+			}
+		case <-timeout.C:
+			return fmt.Errorf("failed to upload segments")
+		}
+	}
 }
 
 func (s *Service) DisableWrites() error {
