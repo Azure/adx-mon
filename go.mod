@@ -157,5 +157,4 @@ require (
 replace (
 	github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
 	github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445
-	google.golang.org/grpc => github.com/grpc/grpc-go v1.56.2
 )
