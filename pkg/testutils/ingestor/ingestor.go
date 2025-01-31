@@ -151,6 +151,27 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to unmarshal statefulset: %w", err)
 					}
 
+					// (jesthom) our container doesn't have curl, so we can't provide the kubelet
+					// an alternate way to ignore the self-signed cert. We'll have to disable the readiness probe
+					statefulSet.Spec.Template.Spec.Containers[0].ReadinessProbe = nil
+					// Readiness probe is https, but the cert is self-signed in our test env
+					// statefulSet.Spec.Template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{
+					// 	InitialDelaySeconds: 5,
+					// 	PeriodSeconds:       5,
+					// 	FailureThreshold:    3,
+					// 	SuccessThreshold:    1,
+					// 	TimeoutSeconds:      1,
+					// 	ProbeHandler: corev1.ProbeHandler{
+					// 		Exec: &corev1.ExecAction{
+					// 			Command: []string{
+					// 				"/bin/sh",
+					// 				"-c",
+					// 				"curl -k https://127.0.0.1:443/readyz",
+					// 			},
+					// 		},
+					// 	},
+					// }
+
 					statefulSet.Spec.Template.Spec.Containers[0].Image = img
 					statefulSet.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullNever
 					statefulSet.Spec.Template.Spec.Containers[0].Args = []string{
@@ -200,20 +221,10 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to patch statefulset: %w", err)
 					}
 
-					ingestorFunction.SetManagedFields(nil)
-					patchBytes, err = json.Marshal(ingestorFunction)
-					if err != nil {
-						return fmt.Errorf("failed to marshal function: %w", err)
-					}
-					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-						// Patching these CRDs is tricky because Ingestor is actively updating them, so we have to retry
-						err := ctrlCli.Patch(ctx, ingestorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
-							FieldManager: "testcontainers",
-						})
-						return err == nil, nil
-					})
-					if err != nil {
-						return fmt.Errorf("failed to patch function: %w", err)
+					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: ingestorFunction.Namespace, Name: ingestorFunction.Name}, ingestorFunction); err != nil {
+						if err := ctrlCli.Create(ctx, ingestorFunction); err != nil {
+							return fmt.Errorf("failed to create function: %w", err)
+						}
 					}
 
 					return nil

@@ -55,9 +55,6 @@ func (s *Source) Open(ctx context.Context) error {
 	ctx, closeFn := context.WithCancel(ctx)
 	s.closeFn = closeFn
 
-	batchQueue := make(chan *types.Log, 512)
-	outputQueue := make(chan *types.LogBatch, 1)
-
 	ackGenerator := func(*types.Log) func() { return func() {} }
 	if s.cursorDirectory != "" {
 		ackGenerator = func(log *types.Log) func() {
@@ -92,6 +89,9 @@ func (s *Source) Open(ctx context.Context) error {
 				return fmt.Errorf("journal source open addMatch %s: %w", match, err)
 			}
 		}
+
+		batchQueue := make(chan *types.Log, 512)
+		outputQueue := make(chan *types.LogBatch, 1)
 
 		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table)
 		tailer := &tailer{

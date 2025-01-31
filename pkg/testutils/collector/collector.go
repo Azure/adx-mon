@@ -200,18 +200,11 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to patch daemonset: %w", err)
 					}
 
-					collectorFunction.SetManagedFields(nil)
-					patchBytes, err = json.Marshal(collectorFunction)
-					if err != nil {
-						return fmt.Errorf("failed to marshal function: %w", err)
+					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: collectorFunction.Namespace, Name: collectorFunction.Name}, collectorFunction); err != nil {
+						if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
+							return fmt.Errorf("failed to create function: %w", err)
+						}
 					}
-					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-						// Patching these CRDs is tricky because Ingestor is actively updating them, so we have to retry
-						err := ctrlCli.Patch(ctx, collectorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
-							FieldManager: "testcontainers",
-						})
-						return err == nil, nil
-					})
 
 					return nil
 				},

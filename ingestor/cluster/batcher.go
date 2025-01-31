@@ -48,20 +48,28 @@ type Batch struct {
 	Table    string
 	Prefix   string
 
-	batcher  Batcher
+	batcher Batcher
+
 	released bool
 	removed  bool
+	mu       sync.Mutex
 }
 
 // Release releases the segments in the batch so they can be processed again.
 func (b *Batch) Release() {
 	b.batcher.Release(b)
+
+	b.mu.Lock()
 	b.released = true
+	b.mu.Unlock()
 }
 
 // Remove removes the segments in the batch from disk.
 func (b *Batch) Remove() error {
+	b.mu.Lock()
 	b.removed = true
+	b.mu.Unlock()
+
 	return b.batcher.Remove(b)
 }
 
@@ -74,10 +82,14 @@ func (b *Batch) Paths() []string {
 }
 
 func (b *Batch) IsReleased() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.released
 }
 
 func (b *Batch) IsRemoved() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.removed
 }
 
