@@ -5,7 +5,6 @@ package collector
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +18,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kwait "k8s.io/apimachinery/pkg/util/wait"
@@ -129,7 +127,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to copy file to container: %w", err)
 					}
 
-					return nil
+					return testutils.InstallFunctionsCrd(ctx, k)
 				},
 			},
 			PostCreates: []testcontainers.ContainerHook{
@@ -202,25 +200,10 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to patch daemonset: %w", err)
 					}
 
-					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-						crd := &adxmonv1.Function{}
-						err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: "default"}, crd)
-						return !errors.Is(err, &meta.NoKindMatchError{}) && !errors.Is(err, &meta.NoResourceMatchError{}), nil
-					})
-					if err != nil {
-						return fmt.Errorf("failed to wait for functions to become available: %w", err)
-					}
-
-					collectorFunction.SetManagedFields(nil)
-					patchBytes, err = json.Marshal(collectorFunction)
-					if err != nil {
-						return fmt.Errorf("failed to marshal function: %w", err)
-					}
-					err = ctrlCli.Patch(ctx, collectorFunction, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
-						FieldManager: "testcontainers",
-					})
-					if err != nil {
-						return fmt.Errorf("failed to patch function: %w", err)
+					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: collectorFunction.Namespace, Name: collectorFunction.Name}, collectorFunction); err != nil {
+						if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
+							return fmt.Errorf("failed to create function: %w", err)
+						}
 					}
 
 					return nil
