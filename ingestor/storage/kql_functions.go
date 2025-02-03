@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -110,6 +111,7 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 		fns = append(fns, &fn)
 	}
 
+	ReportFunctions(fns)
 	return fns, nil
 }
 
@@ -130,4 +132,39 @@ func (f *functions) ensureFinalizer(ctx context.Context, fn *adxmonv1.Function) 
 	}
 
 	return nil
+}
+
+// ReportFunctions logs the status of the provided functions. The intent
+// is to answer the following questions:
+//
+// (Assuming OTLP for the following queries)
+//
+// - What functions are currently (last hour) being managed?
+// T
+// | where Timestamp > ago(1h)
+// | where Body.msg == "Functions"
+// | mv-expand entry = Body.inventory
+// | distinct entry.name
+//
+// - What functions are currently (last hour) failing to be created in Kusto?
+// T
+// | where Timestamp > ago(1h)
+// | where Body.msg == "Functions"
+// | mv-expand entry = Body.inventory
+// | where entry.status == "Failed"
+// | distinct entry.name
+//
+// logs look like
+// {"time":"2025-02-03T21:13:37.026341494Z","level":"INFO","msg":"Functions","inventory":[{"name":"new-fn","namespace":"default","reason":"Function created","status":""},{"name":"updated-fn","namespace":"default","reason":"Function updated","status":"Success"}]}
+func ReportFunctions(fns []*adxmonv1.Function) {
+	functionsArray := make([]any, 0, len(fns))
+	for _, fn := range fns {
+		functionsArray = append(functionsArray, map[string]string{
+			"name":      fn.Name,
+			"namespace": fn.Namespace,
+			"status":    string(fn.Status.Status),
+			"reason":    fn.Status.Reason,
+		})
+	}
+	slog.Default().Info("Functions", slog.Any("inventory", functionsArray))
 }

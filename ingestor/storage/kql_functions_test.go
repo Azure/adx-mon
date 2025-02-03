@@ -1,8 +1,11 @@
 package storage_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -175,10 +178,66 @@ func TestFunctions(t *testing.T) {
 	})
 }
 
+func TestReportFunctions(t *testing.T) {
+	functions := []*adxmonv1.Function{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "new-fn",
+				Namespace: "default",
+			},
+			Status: adxmonv1.FunctionStatus{
+				Reason: "Function created",
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "updated-fn",
+				Namespace:  "default",
+				Generation: 2,
+			},
+			Status: adxmonv1.FunctionStatus{
+				ObservedGeneration: 1,
+				Status:             adxmonv1.Success,
+				Reason:             "Function updated",
+			},
+		},
+	}
+	buf := new(bytes.Buffer)
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+	slog.SetDefault(logger)
+
+	storage.ReportFunctions(functions)
+	t.Logf(buf.String())
+
+	var logMsg FunctionLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logMsg))
+	require.Equal(t, "new-fn", logMsg.NewFn.Name)
+	require.Equal(t, "default", logMsg.NewFn.Namespace)
+	require.Equal(t, "Function created", logMsg.NewFn.Reason)
+	require.Equal(t, "updated-fn", logMsg.UpdatedFn.Name)
+	require.Equal(t, "default", logMsg.UpdatedFn.Namespace)
+	require.Equal(t, "Function updated", logMsg.UpdatedFn.Reason)
+}
+
 type elector struct {
 	isLeader bool
 }
 
 func (e *elector) IsLeader() bool {
 	return e.isLeader
+}
+
+type FunctionLog struct {
+	Time      string   `json:"time"`
+	Level     string   `json:"level"`
+	Msg       string   `json:"msg"`
+	NewFn     Function `json:"new-fn"`
+	UpdatedFn Function `json:"updated-fn"`
+}
+
+type Function struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason"`
 }
