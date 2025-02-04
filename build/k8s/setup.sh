@@ -239,19 +239,19 @@ fi
 
 for DATABASE_NAME in Metrics Logs; do
     # Check if the $DATABASE_NAME database exists
-    DATABASE_EXISTS=$(az kusto database show --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name $DATABASE_NAME --query "name" -o tsv 2>/dev/null || echo "")
+    DATABASE_EXISTS=$(az kusto database show --cluster-name $KUSTO_CLUSTER --subscription $KUSTO_SUB --resource-group $KUSTO_RG --database-name $DATABASE_NAME --query "name" -o tsv 2>/dev/null || echo "")
     if [[ -z "$DATABASE_EXISTS" ]]; then
         echo "The $DATABASE_NAME database does not exist. Creating it now."
-        az kusto database create --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name $DATABASE_NAME --read-write-database  soft-delete-period=P30D hot-cache-period=P7D location=$KUSTO_REGION
+        az kusto database create --cluster-name $KUSTO_CLUSTER --subscription $KUSTO_SUB --resource-group $KUSTO_RG --database-name $DATABASE_NAME --read-write-database  soft-delete-period=P30D hot-cache-period=P7D location=$KUSTO_REGION
     else
         echo "The $DATABASE_NAME database already exists."
     fi
 
     # Check if the NODE_POOL_IDENTITY is an admin on the $DATABASE_NAME database
-    ADMIN_CHECK=$(az kusto database list-principal --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name $DATABASE_NAME --query "[?type=='App' && appId=='$NODE_POOL_IDENTITY' && role=='Admin']" -o tsv)
+    ADMIN_CHECK=$(az kusto database list-principal --subscription $KUSTO_SUB --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name $DATABASE_NAME --query "[?type=='App' && appId=='$NODE_POOL_IDENTITY' && role=='Admin']" -o tsv)
     if [[ -z "$ADMIN_CHECK" ]]; then
         echo "The Managed Identity Client ID is not configured to use database $DATABASE_NAME. Adding it as an admin."
-        az kusto database add-principal --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name $DATABASE_NAME --value role=Admin name=ADXMon type=app app-id=$NODE_POOL_IDENTITY
+        az kusto database add-principal --subscription $KUSTO_SUB --cluster-name $KUSTO_CLUSTER --resource-group $KUSTO_RG --database-name $DATABASE_NAME --value role=Admin name=ADXMon type=app app-id=$NODE_POOL_IDENTITY
     else
         echo "The Managed Identity Client ID is already configured to use database $DATABASE_NAME."
     fi
