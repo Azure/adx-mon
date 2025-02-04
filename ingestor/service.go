@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/adx"
@@ -322,12 +323,23 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
+		xff := r.Header.Get("X-Forwarded-For")
+		// If the header is present, split it by comma and take the first IP address
+		var originalIP string
+		if xff != "" {
+			ips := strings.Split(xff, ",")
+			originalIP = strings.TrimSpace(ips[0])
+		} else {
+			// If the header is not present, use the remote address
+			originalIP = r.RemoteAddr
+		}
+
 		dur := time.Since(start)
 		if dur.Seconds() > 10 {
-			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), r.RemoteAddr, r.ContentLength, filename)
+			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, r.ContentLength, filename)
 		}
 		if err := r.Body.Close(); err != nil {
-			logger.Errorf("close http body: %s, path=/transfer duration=%s", err.Error(), dur.String())
+			logger.Errorf("close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
 		}
 	}()
 
