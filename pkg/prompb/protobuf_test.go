@@ -1,7 +1,6 @@
 package prompb
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -129,15 +128,4 @@ func BenchmarkWriteRequestUnmarshal(b *testing.B) {
 		wr.Timeseries = nil
 		require.NoError(b, wr.Unmarshal(buf))
 	}
-}
-
-func formatBytes(b []byte) string {
-	s := ""
-	for i, v := range b {
-		if i != 0 {
-			s += ", "
-		}
-		s += fmt.Sprint(v)
-	}
-	return s
 }

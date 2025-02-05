@@ -14,8 +14,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -72,16 +70,6 @@ type KustoClient interface {
 	Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error)
 	Endpoint() string
 }
-
-var ruleErrorCounter = promauto.NewCounterVec(
-	prometheus.CounterOpts{
-		Namespace: "l2m",
-		Subsystem: "engine",
-		Name:      "errors",
-		Help:      "Number of errors encountered in the primary execution engine",
-	},
-	[]string{"region"},
-)
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
 	ruleStore := rules.NewStore(rules.StoreOpts{
