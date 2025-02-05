@@ -365,6 +365,7 @@ func realMain(ctx *cli.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/readyz", svc.HandleReady)
+	mux.HandleFunc("/shutdown", svc.HandleShutdown)
 
 	logger.Infof("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()

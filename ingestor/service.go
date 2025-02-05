@@ -51,6 +51,7 @@ type Service struct {
 
 	requestFilter *transform.RequestTransformer
 	health        interface{ IsHealthy() bool }
+	isOpen        bool
 }
 
 type ServiceOpts struct {
@@ -269,10 +270,14 @@ func (s *Service) Open(ctx context.Context) error {
 		})
 	}
 
+	// mark the service as open after all components are open
+	s.isOpen = true
+
 	return nil
 }
 
 func (s *Service) Close() error {
+	s.isOpen = false
 	s.closeFn()
 
 	if err := s.scheduler.Close(); err != nil {
@@ -343,6 +348,12 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	if !s.isOpen {
+		m.WithLabelValues(strconv.Itoa(http.StatusServiceUnavailable)).Inc()
+		http.Error(w, "service is not ready", http.StatusServiceUnavailable)
+		return
+	}
+
 	if !s.health.IsHealthy() {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
@@ -379,6 +390,22 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Service) HandleShutdown(w http.ResponseWriter, r *http.Request) {
+	if err := s.UploadSegments(); err != nil {
+		logger.Errorf("Failed to upload segments: %s", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err := s.Close()
+	if err != nil {
+		logger.Errorf("Failed to close: %s", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Service) UploadSegments() error {
