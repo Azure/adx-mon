@@ -36,10 +36,6 @@ var (
 	metricsCSVWriterPool = pool.NewGeneric(1000, func(sz int) interface{} {
 		return transform2.NewMetricsCSVWriter(bytes.NewBuffer(make([]byte, 0, sz)), nil)
 	})
-
-	bytesBufPool = pool.NewGeneric(1000, func(sz int) interface{} {
-		return bytes.NewBuffer(make([]byte, 0, sz))
-	})
 )
 
 type Store interface {

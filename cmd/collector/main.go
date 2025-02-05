@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 
@@ -710,20 +709,6 @@ func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) 
 	}
 
 	return k8s.NewPodInformer(client, nodeName), nil
-}
-
-// parseKeyPairs parses a list of key pairs in the form of key=value,key=value
-// and returns them as a map.
-func parseKeyPairs(kp []string) (map[string]string, error) {
-	m := make(map[string]string)
-	for _, encoded := range kp {
-		split := strings.Split(encoded, "=")
-		if len(split) != 2 {
-			return nil, fmt.Errorf("invalid key-pair %s", encoded)
-		}
-		m[split[0]] = split[1]
-	}
-	return m, nil
 }
 
 func getMetricsExporters(exporterNames []string, exporters *config.Exporters, cache map[string]remote.RemoteWriteClient) ([]remote.RemoteWriteClient, error) {

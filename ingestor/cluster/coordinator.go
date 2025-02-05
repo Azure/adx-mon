@@ -346,11 +346,3 @@ func IsInitReady(pod *v1.Pod) bool {
 	}
 	return false
 }
-
-func reverse(b []byte) []byte {
-	x := make([]byte, len(b))
-	for i := 0; i < len(b); i++ {
-		x[i] = b[len(b)-i-1]
-	}
-	return x
-}
