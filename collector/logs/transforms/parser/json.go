@@ -29,7 +29,7 @@ func NewJsonParser(config JsonParserConfig) (*JsonParser, error) {
 // Not safe for concurrent use.
 func (p *JsonParser) Parse(log *types.Log, msg string) error {
 	if len(msg) == 0 || msg[0] != '{' {
-		return nil
+		return ErrNotJson
 	}
 
 	clear(p.parsed)
