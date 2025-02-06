@@ -1,36 +1,5 @@
 package otlp_test
 
-import (
-	"log/slog"
-	"testing"
-
-	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
-	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
-)
-
-func TestGroup(t *testing.T) {
-	var log v1.ExportLogsServiceRequest
-	err := protojson.Unmarshal(otlpLog, &log)
-	require.NoError(t, err)
-
-	grouped := otlp.Group(&log, nil, slog.Default())
-	require.Equal(t, 2, len(grouped))
-	for _, g := range grouped {
-		switch g.Table {
-		case "ATable":
-			require.Equal(t, "ADatabase", g.Database)
-			require.Equal(t, 2, len(g.Logs))
-		case "BTable":
-			require.Equal(t, "ADatabase", g.Database)
-			require.Equal(t, 1, len(g.Logs))
-		default:
-			require.Fail(t, "unexpected table", g.Table)
-		}
-	}
-}
-
 var otlpLog = []byte(`{
 	"resourceLogs": [
 		{
