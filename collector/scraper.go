@@ -604,5 +604,3 @@ func getTargetAnnotationMapOrDefault(p *v1.Pod, key string, defaultVal map[strin
 	}
 	return parsedMap
 }
-
-var adxmonNamespaceLabel = []byte("adxmon_namespace")

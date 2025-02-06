@@ -302,7 +302,7 @@ func TestBatcher_Stats(t *testing.T) {
 	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
 	require.NoError(t, err)
 
-	segments := []wal.SegmentInfo{}
+	var segments []wal.SegmentInfo
 
 	idx := wal.NewIndex()
 	f1 := wal.SegmentInfo{
