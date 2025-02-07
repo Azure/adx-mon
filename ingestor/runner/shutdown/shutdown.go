@@ -54,7 +54,7 @@ func (r *ShutDownRunner) Run(ctx context.Context) error {
 			return err
 		}
 
-		if err := r.service.HandleShutdown(); err != nil {
+		if err := r.service.Shutdown(); err != nil {
 			logger.Errorf("failed to shutdown the service: %v", err)
 			return err
 		}

@@ -97,7 +97,7 @@ func (f *fakeIngestorService) HandleTransfer(w http.ResponseWriter, r *http.Requ
 	return
 }
 
-func (f *fakeIngestorService) HandleShutdown() error {
+func (f *fakeIngestorService) Shutdown() error {
 	f.ShutdownCalled = true
 	return nil
 }
