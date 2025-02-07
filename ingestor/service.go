@@ -31,6 +31,16 @@ import (
 // match tranform.Normalize.
 var invalidEntityCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
+type Interface interface {
+	Open(ctx context.Context) error
+	Close() error
+	HandleReady(w http.ResponseWriter, r *http.Request)
+	HandleTransfer(w http.ResponseWriter, r *http.Request)
+	HandleShutdown() error
+	UploadSegments() error
+	DisableWrites() error
+}
+
 type Service struct {
 	walOpts wal.WALOpts
 	opts    ServiceOpts
@@ -381,26 +391,23 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Service) HandleShutdown(w http.ResponseWriter, _ *http.Request) {
+func (s *Service) Shutdown() error {
 	if err := s.DisableWrites(); err != nil {
 		logger.Errorf("Failed to disable writes: %s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return err
 
 	}
 
 	if err := s.UploadSegments(); err != nil {
 		logger.Errorf("Failed to upload segments: %s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return err
 	}
 
 	if err := s.Close(); err != nil {
 		logger.Errorf("Failed to close: %s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return err
 	}
-	w.WriteHeader(http.StatusOK)
+	return nil
 }
 
 func (s *Service) UploadSegments() error {

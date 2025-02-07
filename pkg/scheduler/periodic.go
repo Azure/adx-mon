@@ -57,3 +57,26 @@ func (s *Periodic) ScheduleEvery(interval time.Duration, name string, fn func(ct
 		}
 	}()
 }
+
+type Runner interface {
+	Run(ctx context.Context) error
+	Name() string
+}
+
+func RunForever(ctx context.Context, interval time.Duration, runners ...Runner) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			for _, r := range runners {
+				if err := r.Run(ctx); err != nil {
+					logger.Errorf("Failed to run Runner %s: %v", r.Name(), err)
+				}
+			}
+		}
+	}
+}

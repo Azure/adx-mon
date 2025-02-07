@@ -21,9 +21,11 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
+	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
@@ -365,7 +367,6 @@ func realMain(ctx *cli.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/transfer", svc.HandleTransfer)
 	mux.HandleFunc("/readyz", svc.HandleReady)
-	mux.HandleFunc("/shutdown", svc.HandleShutdown)
 
 	logger.Infof("Metrics Listening at %s", ":9091")
 	metricsMux := http.NewServeMux()
@@ -436,6 +437,11 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Errorf(err.Error())
 		}
+	}()
+
+	go func() {
+		sd := runner.NewShutDownRunner(k8scli, srv, svc)
+		scheduler.RunForever(svcCtx, time.Minute, sd)
 	}()
 
 	<-svcCtx.Done()
