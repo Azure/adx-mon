@@ -46,7 +46,11 @@ test:
 .PHONY: manifests
 manifests:
 	# go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
-	controller-gen rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=kustomize/bases
+	controller-gen rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=config/crd
+
+.PHONY: generate
+generate: 
+        controller-gen object:headerFile="config/boilerplate.go.txt" paths="./..."
 
 default:
 	@$(MAKE) test

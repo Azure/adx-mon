@@ -27,7 +27,12 @@ collection and analysis of observability data.
 
 ## Development
 
+### CRDs
 
+[kubebuilder](https://book.kubebuilder.io/) is used to generate adx-mon's CRDs. 
+
+* Create a new CRD: `kubebuilder create api --group adx-mon --version v1 --kind CRD_NAME --resource --make --controller=false`, replacing `CRD_NAME` with the name of the CRD you want to create.
+* To update a CRD, modify the appropriate spec-type in the _api_ directory and then run `make manifests` to update the CRD specs in `kustomize/bases`
 
 ## Contributing
 

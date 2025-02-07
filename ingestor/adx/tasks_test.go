@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -156,15 +155,11 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
-	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
-	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))
-
 	ctx := context.Background()
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
-
-	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
+	require.NoError(t, testutils.InstallFunctionsCrd(ctx, k3sContainer))
 
 	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
 	testcontainers.CleanupContainer(t, kustoContainer)

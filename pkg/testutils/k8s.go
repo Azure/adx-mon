@@ -68,7 +68,7 @@ func InstallFunctionsCrd(ctx context.Context, k *k3s.K3sContainer) error {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
 
-	crdPath, ok := RelativePath("kustomize/bases/functions_crd.yaml")
+	crdPath, ok := RelativePath("config/crd/bases/adx-mon.azure.com_functions.yaml")
 	if !ok {
 		return fmt.Errorf("failed to find crd path")
 	}
