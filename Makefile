@@ -12,7 +12,7 @@ build-ingestor:
 
 build-collector:
 	mkdir -p bin
-	CGO_ENABLED=1 go build -o bin/collector ./cmd/collector/...
+	CGO_ENABLED=1 go build -o bin/collector ./cmd/collector/
 .PHONY: build
 
 build: build-alerter build-ingestor build-collector
