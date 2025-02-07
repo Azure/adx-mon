@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstallFunctionsCrd(t *testing.T) {
-	testutils.IntegrationTest(t)
+	// testutils.IntegrationTest(t)
 
 	ctx := context.Background()
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")

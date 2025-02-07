@@ -68,32 +68,38 @@ func InstallFunctionsCrd(ctx context.Context, k *k3s.K3sContainer) error {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
 
-	crdPath, ok := RelativePath("kustomize/bases/functions_crd.yaml")
+	basesPath, ok := RelativePath("kustomize/bases")
 	if !ok {
-		return fmt.Errorf("failed to find crd path")
+		return fmt.Errorf("failed to find bases path")
 	}
 
-	crdRawBytes, err := os.ReadFile(crdPath)
+	files, err := filepath.Glob(basesPath + "/*.yaml")
 	if err != nil {
-		return fmt.Errorf("reading CRD file: %w", err)
+		return fmt.Errorf("listing YAML files: %w", err)
 	}
-	var obj unstructured.Unstructured
-	if err := yaml.Unmarshal(crdRawBytes, &obj); err != nil {
-		return err
-	}
-
-	gvk := schema.GroupVersionKind{
-		Group:   "apiextensions.k8s.io",
-		Version: "v1",
-		Kind:    "CustomResourceDefinition",
-	}
-	obj.SetGroupVersionKind(gvk)
-
-	if err := c.Get(context.Background(), client.ObjectKey{Name: obj.GetName()}, &obj); err != nil {
-		if apierrors.IsNotFound(err) {
-			return c.Create(context.Background(), &obj)
+	for _, file := range files {
+		crdRawBytes, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("reading CRD file: %w", err)
 		}
-		return err
+		var obj unstructured.Unstructured
+		if err := yaml.Unmarshal(crdRawBytes, &obj); err != nil {
+			return err
+		}
+
+		gvk := schema.GroupVersionKind{
+			Group:   "apiextensions.k8s.io",
+			Version: "v1",
+			Kind:    "CustomResourceDefinition",
+		}
+		obj.SetGroupVersionKind(gvk)
+
+		if err := c.Get(context.Background(), client.ObjectKey{Name: obj.GetName()}, &obj); err != nil {
+			if apierrors.IsNotFound(err) {
+				return c.Create(context.Background(), &obj)
+			}
+			return err
+		}
 	}
 	return nil
 }
