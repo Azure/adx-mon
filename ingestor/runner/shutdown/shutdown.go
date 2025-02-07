@@ -52,15 +52,14 @@ func (r *ShutDownRunner) Run(ctx context.Context) error {
 		if err := r.httpServer.Close(); err != nil {
 			return fmt.Errorf("failed to close http server: %v", err)
 		}
-
-		if err := r.service.Shutdown(); err != nil {
+		if err := r.service.Shutdown(ctx); err != nil {
 			return fmt.Errorf("failed to shutdown the service: %v", err)
 		}
 		logger.Infof("Service shutdown completed")
 		//set shutdown-completed annotation
 		pod.Annotations[SHUTDOWN_COMPLETED] = "true"
 		if _, err := r.k8sClient.CoreV1().Pods(namespace).Update(ctx, pod, metav1.UpdateOptions{}); err != nil {
-			fmt.Errorf("failed to set shutdown-completed annotation: %v", err)
+			return fmt.Errorf("failed to set shutdown-completed annotation: %v", err)
 		}
 	}
 

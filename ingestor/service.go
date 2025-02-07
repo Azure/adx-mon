@@ -26,6 +26,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	shutdownTimeout = 5 * time.Minute
+)
+
 // invalidEntityCharacters is a regex that matches invalid characters for Kusto entities and segment files.
 // This is a subset of the invalid characters for Kusto entities and segment files naming patterns.  This should
 // match tranform.Normalize.
@@ -36,8 +40,8 @@ type Interface interface {
 	Close() error
 	HandleReady(w http.ResponseWriter, r *http.Request)
 	HandleTransfer(w http.ResponseWriter, r *http.Request)
-	Shutdown() error
-	UploadSegments() error
+	Shutdown(ctx context.Context) error
+	UploadSegments(ctx context.Context) error
 	DisableWrites() error
 }
 
@@ -391,29 +395,29 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Service) Shutdown() error {
+func (s *Service) Shutdown(ctx context.Context) error {
 	if err := s.metrics.Close(); err != nil {
 		return err
 	}
 
-	if err := s.UploadSegments(); err != nil {
+	if err := s.UploadSegments(ctx); err != nil {
 		return fmt.Errorf("Failed to upload segments: %s", err.Error())
 	}
 
 	return nil
 }
 
-func (s *Service) UploadSegments() error {
+func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
 	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
 	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 
+	timeoutCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
+	defer cancel()
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	timeout := time.NewTimer(30 * time.Second)
-	defer timeout.Stop()
 
 	for {
 		select {
@@ -428,8 +432,8 @@ func (s *Service) UploadSegments() error {
 			if len(s.replicator.TransferQueue()) != 0 {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 			}
-		case <-timeout.C:
-			return fmt.Errorf("failed to upload segments")
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("failed to upload segments after %v", shutdownTimeout)
 		}
 	}
 }

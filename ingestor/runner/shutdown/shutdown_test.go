@@ -97,7 +97,7 @@ func (f *fakeIngestorService) HandleTransfer(w http.ResponseWriter, r *http.Requ
 	return
 }
 
-func (f *fakeIngestorService) Shutdown() error {
+func (f *fakeIngestorService) Shutdown(ctx context.Context) error {
 	f.ShutdownCalled = true
 	return nil
 }
@@ -110,7 +110,7 @@ func (f *fakeIngestorService) Close() error {
 	return nil
 }
 
-func (f *fakeIngestorService) UploadSegments() error {
+func (f *fakeIngestorService) UploadSegments(ctx context.Context) error {
 	return nil
 }
 
