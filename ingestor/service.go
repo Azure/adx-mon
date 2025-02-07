@@ -36,7 +36,7 @@ type Interface interface {
 	Close() error
 	HandleReady(w http.ResponseWriter, r *http.Request)
 	HandleTransfer(w http.ResponseWriter, r *http.Request)
-	HandleShutdown() error
+	Shutdown() error
 	UploadSegments() error
 	DisableWrites() error
 }
