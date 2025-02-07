@@ -31,6 +31,8 @@ rules:
     verbs:
       - get
       - list
+      - update
+      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
@@ -38,6 +40,14 @@ rules:
     verbs:
       - update
       - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - functions/finalizers
+    verbs:
+      - get
+      - update
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

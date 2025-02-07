@@ -96,7 +96,10 @@ func InstallFunctionsCrd(ctx context.Context, k *k3s.K3sContainer) error {
 
 		if err := c.Get(context.Background(), client.ObjectKey{Name: obj.GetName()}, &obj); err != nil {
 			if apierrors.IsNotFound(err) {
-				return c.Create(context.Background(), &obj)
+				if err := c.Create(context.Background(), &obj); err != nil {
+					return fmt.Errorf("failed to create CRD: %w", err)
+				}
+				continue
 			}
 			return err
 		}
