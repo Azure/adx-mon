@@ -392,21 +392,14 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Shutdown() error {
-	if err := s.DisableWrites(); err != nil {
-		logger.Errorf("Failed to disable writes: %s", err.Error())
+	if err := s.metrics.Close(); err != nil {
 		return err
-
 	}
 
 	if err := s.UploadSegments(); err != nil {
-		logger.Errorf("Failed to upload segments: %s", err.Error())
-		return err
+		return fmt.Errorf("Failed to upload segments: %s", err.Error())
 	}
 
-	if err := s.Close(); err != nil {
-		logger.Errorf("Failed to close: %s", err.Error())
-		return err
-	}
 	return nil
 }
 
