@@ -86,13 +86,6 @@ var (
 		Help:      "Counter of the number of metrics uploaded to Kusto",
 	}, []string{"database", "table"})
 
-	LogsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "logs_received_total",
-		Help:      "Counter of the number of logs received",
-	}, []string{"database", "table"})
-
 	LogsUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -105,13 +98,6 @@ var (
 		Subsystem: "ingestor",
 		Name:      "invalid_logs_dropped",
 		Help:      "Counter of the number of invalid logs dropped",
-	}, []string{})
-
-	ValidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "valid_logs_dropped",
-		Help:      "Counter of the number of logs dropped due to ingestor errors",
 	}, []string{})
 
 	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -171,20 +157,6 @@ var (
 		Name:      "logs_uploaded_total",
 		Help:      "Counter of the number of logs uploaded",
 	}, []string{"database", "table"})
-
-	LogsProxyFailures = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "collector",
-		Name:      "logs_failures",
-		Help:      "Counter of the number of failures when proxying logs to the OTLP endpoints",
-	}, []string{"endpoint"})
-
-	LogsProxyPartialFailures = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "collector",
-		Name:      "logs_partial_failures",
-		Help:      "Counter of the number of partial failures when proxying logs to the OTLP endpoints",
-	}, []string{"endpoint"})
 
 	LogKeys = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,

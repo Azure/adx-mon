@@ -142,6 +142,14 @@ func TestExecuteParsers(t *testing.T) {
 			},
 		},
 		{
+			name:    "plain text, json should fail and body fall back to the message field",
+			parsers: []Parser{&JsonParser{}},
+			message: `Hello world`,
+			expectedBody: map[string]interface{}{
+				types.BodyKeyMessage: `Hello world`,
+			},
+		},
+		{
 			name:    "empty parser list",
 			parsers: []Parser{},
 			message: `{"a": 1, "b": "2", "c": {"d": 3}}`,
