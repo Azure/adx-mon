@@ -43,6 +43,11 @@ test:
 	INTEGRATION=1 go test -timeout 30m ./...
 .PHONY: test
 
+.PHONY: manifests
+manifests:
+	# go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+	controller-gen rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=kustomize/bases
+
 default:
 	@$(MAKE) test
 	@$(MAKE) build
