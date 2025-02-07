@@ -45,11 +45,19 @@ func TestInstallFunctionsCrd(t *testing.T) {
 		}
 
 		_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+		require.NoError(t, err)
 		patchBytes, err := json.Marshal(fn)
 		require.NoError(t, err)
 		err = ctrlCli.Patch(ctx, fn, ctrlclient.RawPatch(types.ApplyPatchType, patchBytes), &ctrlclient.PatchOptions{
 			FieldManager: "testcontainers",
 		})
 		require.NoError(t, err)
+	})
+
+	t.Run("ensure definition installed", func(t *testing.T) {
+		_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+		require.NoError(t, err)
+
+		require.NoError(t, ctrlCli.Get(ctx, types.NamespacedName{Name: "test", Namespace: "default"}, &adxmonv1.Function{}))
 	})
 }
