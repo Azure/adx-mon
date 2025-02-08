@@ -26,10 +26,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const (
-	shutdownTimeout = 5 * time.Minute
-)
-
 // invalidEntityCharacters is a regex that matches invalid characters for Kusto entities and segment files.
 // This is a subset of the invalid characters for Kusto entities and segment files naming patterns.  This should
 // match tranform.Normalize.
@@ -414,8 +410,6 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
 	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
-	defer cancel()
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
@@ -432,8 +426,8 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 			if len(s.replicator.TransferQueue()) != 0 {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 			}
-		case <-timeoutCtx.Done():
-			return fmt.Errorf("failed to upload segments after %v", shutdownTimeout)
+		case <-ctx.Done():
+			return fmt.Errorf("timed out to upload segments")
 		}
 	}
 }

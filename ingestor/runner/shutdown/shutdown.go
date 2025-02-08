@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -16,6 +17,7 @@ const (
 	namespace          = "adx-mon"
 	SHUTDOWN_COMPLETED = "shutdown-completed"
 	SHUTDOWN_REQUESTED = "shutdown-requested"
+	shutdownTimeout    = 5 * time.Minute
 )
 
 type ShutDownRunner struct {
@@ -52,9 +54,13 @@ func (r *ShutDownRunner) Run(ctx context.Context) error {
 		if err := r.httpServer.Close(); err != nil {
 			return fmt.Errorf("failed to close http server: %v", err)
 		}
-		if err := r.service.Shutdown(ctx); err != nil {
+		timeoutCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
+		defer cancel()
+
+		if err := r.service.Shutdown(timeoutCtx); err != nil {
 			return fmt.Errorf("failed to shutdown the service: %v", err)
 		}
+		
 		logger.Infof("Service shutdown completed")
 		//set shutdown-completed annotation
 		pod.Annotations[SHUTDOWN_COMPLETED] = "true"
