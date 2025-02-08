@@ -31,6 +31,16 @@ import (
 // match tranform.Normalize.
 var invalidEntityCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
+type Interface interface {
+	Open(ctx context.Context) error
+	Close() error
+	HandleReady(w http.ResponseWriter, r *http.Request)
+	HandleTransfer(w http.ResponseWriter, r *http.Request)
+	Shutdown(ctx context.Context) error
+	UploadSegments(ctx context.Context) error
+	DisableWrites() error
+}
+
 type Service struct {
 	walOpts wal.WALOpts
 	opts    ServiceOpts
@@ -381,7 +391,19 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Service) UploadSegments() error {
+func (s *Service) Shutdown(ctx context.Context) error {
+	if err := s.metrics.Close(); err != nil {
+		return err
+	}
+
+	if err := s.UploadSegments(ctx); err != nil {
+		return fmt.Errorf("Failed to upload segments: %s", err.Error())
+	}
+
+	return nil
+}
+
+func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
@@ -390,8 +412,6 @@ func (s *Service) UploadSegments() error {
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	timeout := time.NewTimer(30 * time.Second)
-	defer timeout.Stop()
 
 	for {
 		select {
@@ -406,8 +426,8 @@ func (s *Service) UploadSegments() error {
 			if len(s.replicator.TransferQueue()) != 0 {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 			}
-		case <-timeout.C:
-			return fmt.Errorf("failed to upload segments")
+		case <-ctx.Done():
+			return fmt.Errorf("timed out to upload segments")
 		}
 	}
 }

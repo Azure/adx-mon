@@ -24,6 +24,7 @@ rules:
       - get
       - list
       - watch
+      - update
   - apiGroups:
       - adx-mon.azure.com
     resources:
