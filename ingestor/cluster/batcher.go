@@ -374,7 +374,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have b node that's behind on uploading.
-			if b.maxTransferSize > 0 && time.Since(createdAt) > b.maxTransferAge {
+			if b.maxTransferAge > 0 && time.Since(createdAt) > b.maxTransferAge {
 				if logger.IsDebug() {
 					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
 				}
