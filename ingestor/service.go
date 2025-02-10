@@ -377,6 +377,11 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	} else if errors.Is(err, wal.ErrSegmentLocked) {
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
+	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
+		logger.Errorf("Transfer requested with checksum error %q", filename)
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		http.Error(w, "block checksum verification failed", http.StatusBadRequest)
+		return
 	} else if err != nil {
 		logger.Errorf("Failed to import %s: %s", filename, err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
