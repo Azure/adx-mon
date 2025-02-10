@@ -1,0 +1,33 @@
+domain: azure.com
+layout:
+- go.kubebuilder.io/v3
+projectName: adx-mon
+repo: github.com/Azure/adx-mon
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: azure.com
+  group: adx-mon
+  kind: AlertRule
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: azure.com
+  group: adx-mon
+  kind: Function
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: azure.com
+  group: adx-mon
+  kind: SummaryRule
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
+version: "3"
