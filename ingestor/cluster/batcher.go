@@ -279,6 +279,11 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			return n > 0
 		})
 
+		// If all the segments are already part of a batch, skip this prefix.
+		if len(b.tempSet) == 0 {
+			continue
+		}
+
 		groupSize = 0
 		var oldestSegment time.Time
 		for _, v := range b.tempSet {
@@ -311,9 +316,8 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		})
 
 		var (
-			batchSize    int64
-			batch        *Batch
-			directUpload bool
+			batchSize int64
+			batch     *Batch
 		)
 
 		db, table, _, _, err := wal.ParseFilename(v[0].Path)
@@ -352,7 +356,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 					batcher:  b,
 				}
 				batchSize = 0
-				directUpload = false
 				continue
 			}
 
@@ -360,7 +363,15 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				if logger.IsDebug() {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, b.maxTransferSize/1e6, batchSize)
 				}
-				directUpload = true
+
+				owned = append(owned, batch)
+				batch = &Batch{
+					Prefix:   prefix,
+					Database: db,
+					Table:    table,
+					batcher:  b,
+				}
+				batchSize = 0
 				continue
 			}
 
@@ -369,22 +380,24 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
 			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
 			// rather take that hit than have b node that's behind on uploading.
-			if b.maxTransferSize > 0 && time.Since(createdAt) > b.maxTransferAge {
+			if b.maxTransferAge > 0 && time.Since(createdAt) > b.maxTransferAge {
 				if logger.IsDebug() {
 					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
 				}
-				directUpload = true
+				owned = append(owned, batch)
+				batch = &Batch{
+					Prefix:   prefix,
+					Database: db,
+					Table:    table,
+					batcher:  b,
+				}
+				batchSize = 0
+				continue
+
 			}
 		}
 
 		if len(batch.Segments) == 0 {
-			continue
-		}
-
-		if directUpload {
-			owned = append(owned, batch)
-			batch = nil
-			batchSize = 0
 			continue
 		}
 

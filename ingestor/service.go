@@ -133,6 +133,9 @@ type ServiceOpts struct {
 	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
 	// keys are distributed.
 	PartitionSize int
+
+	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
+	MaxTransferConcurrency int
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -161,11 +164,12 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Hostname:           opts.Hostname,
-		Partitioner:        coord,
-		InsecureSkipVerify: opts.InsecureSkipVerify,
-		Health:             health,
-		SegmentRemover:     store,
+		Hostname:               opts.Hostname,
+		Partitioner:            coord,
+		InsecureSkipVerify:     opts.InsecureSkipVerify,
+		Health:                 health,
+		SegmentRemover:         store,
+		MaxTransferConcurrency: opts.MaxTransferConcurrency,
 	})
 	if err != nil {
 		return nil, err
@@ -376,6 +380,11 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if errors.Is(err, wal.ErrSegmentLocked) {
 		http.Error(w, err.Error(), http.StatusLocked)
+		return
+	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
+		logger.Errorf("Transfer requested with checksum error %q", filename)
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		http.Error(w, "block checksum verification failed", http.StatusBadRequest)
 		return
 	} else if err != nil {
 		logger.Errorf("Failed to import %s: %s", filename, err.Error())
