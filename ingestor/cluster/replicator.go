@@ -83,8 +83,8 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 
 func (r *replicator) Open(ctx context.Context) error {
 	ctx, r.closeFn = context.WithCancel(ctx)
-	r.wg.Add(5)
-	for i := 0; i < 5; i++ {
+	r.wg.Add(50)
+	for i := 0; i < 50; i++ {
 		go r.transfer(ctx)
 	}
 	return nil
