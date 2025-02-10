@@ -133,6 +133,9 @@ type ServiceOpts struct {
 	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
 	// keys are distributed.
 	PartitionSize int
+
+	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
+	MaxTransferConcurrency int
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -161,11 +164,12 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Hostname:           opts.Hostname,
-		Partitioner:        coord,
-		InsecureSkipVerify: opts.InsecureSkipVerify,
-		Health:             health,
-		SegmentRemover:     store,
+		Hostname:               opts.Hostname,
+		Partitioner:            coord,
+		InsecureSkipVerify:     opts.InsecureSkipVerify,
+		Health:                 health,
+		SegmentRemover:         store,
+		MaxTransferConcurrency: opts.MaxTransferConcurrency,
 	})
 	if err != nil {
 		return nil, err
