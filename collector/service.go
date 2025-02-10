@@ -121,6 +121,9 @@ type ServiceOpts struct {
 	// value results in more frequent disk IO and higher CPU usage but less data loss in the event of a crash.
 	// The default is 100ms and the value must be greater than 0.
 	WALFlushInterval time.Duration
+
+	// MaxTransferConcurrency is the maximum number of concurrent transfers to the ingestor.
+	MaxTransferConcurrency int
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -271,11 +274,12 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}
 
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-			Hostname:           opts.NodeName,
-			Partitioner:        partitioner,
-			Health:             health,
-			SegmentRemover:     store,
-			InsecureSkipVerify: opts.InsecureSkipVerify,
+			Hostname:               opts.NodeName,
+			Partitioner:            partitioner,
+			Health:                 health,
+			SegmentRemover:         store,
+			InsecureSkipVerify:     opts.InsecureSkipVerify,
+			MaxTransferConcurrency: opts.MaxTransferConcurrency,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)

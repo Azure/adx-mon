@@ -29,6 +29,10 @@ type ReplicatorOpts struct {
 
 	// Hostname is the name of the current node.
 	Hostname string
+
+	// MaxTransferConcurrency is the maximum number of concurrent transfer requests to in flight at a time.
+	// Default is 5.
+	MaxTransferConcurrency int
 }
 
 type SegmentRemover interface {
@@ -51,9 +55,10 @@ type replicator struct {
 	hostname string
 
 	// Partitioner is used to determine which node owns a given metric.
-	Partitioner    MetricPartitioner
-	Health         PeerHealthReporter
-	SegmentRemover SegmentRemover
+	Partitioner         MetricPartitioner
+	Health              PeerHealthReporter
+	SegmentRemover      SegmentRemover
+	transferConcurrency int
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
@@ -71,20 +76,28 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	transferConcurrency := 5
+	if opts.MaxTransferConcurrency > 0 {
+		transferConcurrency = opts.MaxTransferConcurrency
+	}
+
+
 	return &replicator{
-		queue:          make(chan *Batch, 10000),
-		cli:            cli,
-		hostname:       opts.Hostname,
-		Partitioner:    opts.Partitioner,
-		Health:         opts.Health,
-		SegmentRemover: opts.SegmentRemover,
+		queue:               make(chan *Batch, 10000),
+		cli:                 cli,
+		hostname:            opts.Hostname,
+		Partitioner:         opts.Partitioner,
+		Health:              opts.Health,
+		SegmentRemover:      opts.SegmentRemover,
+		transferConcurrency: transferConcurrency,
 	}, nil
 }
 
 func (r *replicator) Open(ctx context.Context) error {
 	ctx, r.closeFn = context.WithCancel(ctx)
-	r.wg.Add(50)
-	for i := 0; i < 50; i++ {
+	r.wg.Add(r.transferConcurrency)
+	for i := 0; i < r.transferConcurrency; i++ {
 		go r.transfer(ctx)
 	}
 	return nil
@@ -180,7 +193,8 @@ func (r *replicator) transfer(ctx context.Context) {
 						r.Health.SetPeerUnhealthy(owner)
 						return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
 					}
-					// Unknown error, assume it's transient and retry.
+					// Unknown error, assume it's transient and retry after some backoff.
+					r.Health.SetPeerUnhealthy(owner)
 					return err
 				}
 
