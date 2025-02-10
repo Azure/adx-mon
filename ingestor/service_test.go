@@ -3,6 +3,7 @@ package ingestor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -107,8 +108,34 @@ func TestService_HandleTransfer_ValidFilename(t *testing.T) {
 	}
 }
 
+func TestService_HandleTransfer_BlockChecksumFailed(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{
+			importFn: func(filename string, body io.ReadCloser) (int, error) {
+				return 0, fmt.Errorf("block checksum verification failed")
+			},
+		},
+	}
+	s.databases = make(map[string]struct{})
+	s.databases["testdb"] = struct{}{}
+
+	body := bytes.NewReader([]byte{})
+	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+
+	q := req.URL.Query()
+	q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
+	req.URL.RawQuery = q.Encode()
+	require.NoError(t, err)
+
+	resp := httptest.NewRecorder()
+	s.HandleTransfer(resp, req)
+	require.Equal(t, http.StatusBadRequest, resp.Code, resp.Body.String())
+}
+
 type fakeStore struct {
 	segements map[string]struct{}
+	importFn  func(filename string, body io.ReadCloser) (int, error)
 }
 
 func (f fakeStore) SegmentExists(filename string) bool {
@@ -141,5 +168,8 @@ func (f fakeStore) IsActiveSegment(path string) bool {
 }
 
 func (f fakeStore) Import(filename string, body io.ReadCloser) (int, error) {
+	if f.importFn != nil {
+		return f.importFn(filename, body)
+	}
 	return 0, nil
 }

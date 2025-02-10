@@ -276,7 +276,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 		storageDir:      dir,
 		maxTransferSize: 100 * 1024,
 		minUploadSize:   100 * 1024,
-		maxTransferAge:  time.Minute,
+		maxTransferAge:  1000 * 24 * time.Hour,
 		Partitioner:     &fakePartitioner{owner: "node1"},
 		Segmenter:       idx,
 		health:          fakeHealthChecker{healthy: true},

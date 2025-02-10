@@ -78,19 +78,8 @@ func (h *Health) IsHealthy() bool {
 }
 
 func (h *Health) UnhealthyReason() string {
-	uploadQueue := h.QueueSizer.UploadQueueSize()
-	transferQueue := h.QueueSizer.TransferQueueSize()
-
 	segmentsTotal := h.QueueSizer.SegmentsTotal()
 	segmentsSize := h.QueueSizer.SegmentsSize()
-
-	if uploadQueue >= 5000 {
-		return ReasonLargeUploadQueue
-	}
-
-	if transferQueue >= 5000 {
-		return ReasonLargeTransferQueue
-	}
 
 	if segmentsTotal >= h.opts.MaxSegmentCount {
 		return ReasonMaxSegmentsExceeded

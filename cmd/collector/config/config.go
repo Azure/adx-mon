@@ -82,6 +82,7 @@ type Config struct {
 	MaxSegmentSize               int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
 	MaxDiskUsage                 int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
 	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
+	MaxTransferConcurrency       int   `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
 
 	StorageDir  string `toml:"storage-dir,omitempty" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof,omitempty" comment:"Enable pprof endpoints."`

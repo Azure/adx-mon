@@ -31,6 +31,16 @@ import (
 // match tranform.Normalize.
 var invalidEntityCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
+type Interface interface {
+	Open(ctx context.Context) error
+	Close() error
+	HandleReady(w http.ResponseWriter, r *http.Request)
+	HandleTransfer(w http.ResponseWriter, r *http.Request)
+	Shutdown(ctx context.Context) error
+	UploadSegments(ctx context.Context) error
+	DisableWrites() error
+}
+
 type Service struct {
 	walOpts wal.WALOpts
 	opts    ServiceOpts
@@ -123,6 +133,9 @@ type ServiceOpts struct {
 	// PartitionSize is the max size of the group of nodes forming a partition.  A partition is a set of nodes where
 	// keys are distributed.
 	PartitionSize int
+
+	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
+	MaxTransferConcurrency int
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -151,11 +164,12 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Hostname:           opts.Hostname,
-		Partitioner:        coord,
-		InsecureSkipVerify: opts.InsecureSkipVerify,
-		Health:             health,
-		SegmentRemover:     store,
+		Hostname:               opts.Hostname,
+		Partitioner:            coord,
+		InsecureSkipVerify:     opts.InsecureSkipVerify,
+		Health:                 health,
+		SegmentRemover:         store,
+		MaxTransferConcurrency: opts.MaxTransferConcurrency,
 	})
 	if err != nil {
 		return nil, err
@@ -367,6 +381,11 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	} else if errors.Is(err, wal.ErrSegmentLocked) {
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
+	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
+		logger.Errorf("Transfer requested with checksum error %q", filename)
+		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+		http.Error(w, "block checksum verification failed", http.StatusBadRequest)
+		return
 	} else if err != nil {
 		logger.Errorf("Failed to import %s: %s", filename, err.Error())
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
@@ -381,7 +400,19 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Service) UploadSegments() error {
+func (s *Service) Shutdown(ctx context.Context) error {
+	if err := s.metrics.Close(); err != nil {
+		return err
+	}
+
+	if err := s.UploadSegments(ctx); err != nil {
+		return fmt.Errorf("Failed to upload segments: %s", err.Error())
+	}
+
+	return nil
+}
+
+func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
@@ -390,8 +421,6 @@ func (s *Service) UploadSegments() error {
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	timeout := time.NewTimer(30 * time.Second)
-	defer timeout.Stop()
 
 	for {
 		select {
@@ -406,8 +435,8 @@ func (s *Service) UploadSegments() error {
 			if len(s.replicator.TransferQueue()) != 0 {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
 			}
-		case <-timeout.C:
-			return fmt.Errorf("failed to upload segments")
+		case <-ctx.Done():
+			return fmt.Errorf("timed out to upload segments")
 		}
 	}
 }
