@@ -161,7 +161,7 @@ func (r *replicator) transfer(ctx context.Context) {
 						// If ingestor returns a bad request, we should drop the segments as it means we're sending something
 						// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
 						// and log the error.
-						logger.Errorf("Failed to transfer segment %s to %s: %s.  Dropping segments.", filename, addr, err)
+						logger.Errorf("Failed to transfer segment %s to %s@%s: %s.  Dropping segments.", filename, owner, addr, err)
 						if err := batch.Remove(); err != nil {
 							logger.Errorf("Failed to remove segment: %s", err)
 						}
