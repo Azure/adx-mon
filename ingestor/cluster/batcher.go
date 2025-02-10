@@ -279,6 +279,11 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			return n > 0
 		})
 
+		// If all the segments are already part of a batch, skip this prefix.
+		if len(b.tempSet) == 0 {
+			continue
+		}
+
 		groupSize = 0
 		var oldestSegment time.Time
 		for _, v := range b.tempSet {
