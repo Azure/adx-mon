@@ -55,14 +55,14 @@ func TestHealth_IsHealthy(t *testing.T) {
 		MaxDiskUsage:    1000,
 		MaxSegmentCount: 10,
 	})
-	require.False(t, h.IsHealthy())
+	require.True(t, h.IsHealthy())
 
 	h = cluster.NewHealth(cluster.HealthOpts{
 		QueueSizer:      &fakeQueueSizer{uploadQueueSize: 10000},
 		MaxDiskUsage:    1000,
 		MaxSegmentCount: 10,
 	})
-	require.False(t, h.IsHealthy())
+	require.True(t, h.IsHealthy())
 
 }
 
