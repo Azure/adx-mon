@@ -195,6 +195,12 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 		if resourceLog == nil {
 			continue
 		}
+
+		resourceAttributes := make(map[string]any)
+		if resourceLog.Resource != nil {
+			extractKeyValues(resourceLog.Resource.Attributes, resourceAttributes)
+		}
+
 		for _, scope := range resourceLog.ScopeLogs {
 			if scope == nil {
 				continue
@@ -224,8 +230,8 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 				extractKeyValues(record.Attributes, log.Attributes)
 				extractBody(record.Body, log.Body)
 
-				if resourceLog.Resource != nil {
-					extractKeyValues(resourceLog.Resource.Attributes, log.Resource)
+				for k, v := range resourceAttributes {
+					log.Resource[k] = v
 				}
 
 				log.Attributes[types.AttributeDatabaseName] = dbName
