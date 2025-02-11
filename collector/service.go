@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
+	"github.com/Azure/adx-mon/collector/logs/sinks"
 	metricsHandler "github.com/Azure/adx-mon/collector/metrics"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -212,9 +213,16 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		WALFlushInterval: opts.WALFlushInterval,
 	})
 
-	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
+	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
 		Store:         store,
 		AddAttributes: opts.AddAttributes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create store sink: %w", err)
+	}
+
+	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
+		Sink:          sink,
 		HealthChecker: health,
 	})
 

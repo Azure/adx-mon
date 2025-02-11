@@ -12,6 +12,7 @@ import (
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
+	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/golang/protobuf/proto"
@@ -141,8 +142,11 @@ func TestLogsService_Overloaded(t *testing.T) {
 
 	require.NoError(t, store.Open(context.Background()))
 	defer store.Close()
+
+	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
+	require.NoError(t, err)
 	s := NewLogsService(LogsServiceOpts{
-		Store:         store,
+		Sink:          sink,
 		HealthChecker: fakeHealthChecker{false},
 	})
 	require.NoError(t, s.Open(context.Background()))
@@ -178,8 +182,11 @@ func BenchmarkLogsService(b *testing.B) {
 
 	require.NoError(b, store.Open(context.Background()))
 	defer store.Close()
+
+	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
+	require.NoError(b, err)
 	s := NewLogsService(LogsServiceOpts{
-		Store:         store,
+		Sink:          sink,
 		HealthChecker: fakeHealthChecker{true},
 	})
 	require.NoError(b, s.Open(context.Background()))
@@ -448,8 +455,10 @@ func TestConvertToLogBatch(t *testing.T) {
 
 			require.NoError(t, store.Open(context.Background()))
 			defer store.Close()
+			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
+			require.NoError(t, err)
 			s := NewLogsService(LogsServiceOpts{
-				Store:         store,
+				Sink:          sink,
 				HealthChecker: fakeHealthChecker{false},
 			})
 			logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
@@ -1136,8 +1145,10 @@ func makeRequest(t *testing.T, msg *v1.ExportLogsServiceRequest) (*httptest.Resp
 
 	require.NoError(t, store.Open(context.Background()))
 	defer store.Close()
+	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
+	require.NoError(t, err)
 	s := NewLogsService(LogsServiceOpts{
-		Store:         store,
+		Sink:          sink,
 		HealthChecker: fakeHealthChecker{true},
 	})
 	require.NoError(t, s.Open(context.Background()))
