@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS builder
 
 # docker build --file tools/crdgen/Dockerfile --build-arg crd=TestTest -t my-crdgen .
 ARG crd
@@ -55,3 +55,22 @@ RUN if [ "$cmd" = "create" ]; then \
     fi && \
     controller-gen rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=config/crd/bases && \
     controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+
+# Copy generated files into the "bin" directory
+RUN mkdir -p /code/bin && \
+    if [ "$cmd" = "create" ]; then \
+        MY_CRD=$(echo ${crd} | tr A-Z a-z) && \
+        cp /code/api/v1/${MY_CRD}_types.go /code/bin/${MY_CRD}_types.go; \
+    fi && \
+    cp /code/api/v1/zz_generated.deepcopy.go /code/bin/zz_generated.deepcopy.go && \
+    cp /code/PROJECT /code/bin/PROJECT && \
+    for file in $(ls /code/config/crd/bases); do \
+        base=$(basename $file); \
+        rawname=$(echo $base | sed 's/^adx-mon\.azure\.com_//'); \
+        if echo $rawname | grep -q '_crd\.yaml$$'; then \
+            finalname=$rawname; \
+        else \
+            finalname=$(echo $rawname | sed -E 's/(\.yaml)$$/_crd\1/'); \
+        fi; \
+        cp /code/config/crd/bases/$file /code/bin/$finalname; \
+    done

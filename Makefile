@@ -53,29 +53,15 @@ test:
 # make generate-crd CMD=update
 generate-crd:
 	docker build --file tools/crdgen/Dockerfile --build-arg crd=$(CRD) --build-arg cmd=$(CMD) -t my-crdgen .
+	docker create --name my-crdgen-container my-crdgen
 
-	# run the container so we can copy
-	docker run -d --name temp-crdgen my-crdgen sleep infinity
+	docker cp my-crdgen-container:/code/bin/. $(shell pwd)/bin
+	docker rm my-crdgen-container
+	docker rmi my-crdgen
 
-	# copy the generated files in one shell block
-	@MY_CRD=$(shell echo $(CRD) | tr A-Z a-z); \
-	docker cp temp-crdgen:/code/api/v1/$${MY_CRD}_types.go ./api/v1/$${MY_CRD}_types.go; \
-	docker cp temp-crdgen:/code/api/v1/zz_generated.deepcopy.go ./api/v1/zz_generated.deepcopy.go
-	docker cp temp-crdgen:/code/PROJECT ./tools/crdgen/PROJECT
-
-	@(for file in $$(docker exec temp-crdgen ls /code/config/crd/bases); do \
-		base=$$(basename $$file); \
-		rawname=$$(echo $$base | sed 's/^adx-mon\.azure\.com_//'); \
-		if echo $$rawname | grep -q '_crd\.yaml$$'; then \
-			finalname=$$rawname; \
-		else \
-			finalname=$$(echo $$rawname | sed -E 's/(\.yaml)$$/_crd\1/'); \
-		fi; \
-		docker cp temp-crdgen:/code/config/crd/bases/$$file ./kustomize/bases/$$finalname; \
-	done)
-
-	# remove the running container
-	docker rm -f temp-crdgen
+	mv bin/*.yaml kustomize/bases/
+	mv bin/*.go api/v1/
+	mv bin/PROJECT tools/crdgen/PROJECT
 .PHONY: generate-crd
 
 default:

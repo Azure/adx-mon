@@ -3,7 +3,6 @@ package otlp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,12 +10,14 @@ import (
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/storage"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -113,35 +114,43 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		grouped := otlp.Group(msg, s.staticAttributes, s.logger)
-		for _, group := range grouped {
-			err := func(g *otlp.Logs) error {
-				if err := s.store.WriteOTLPLogs(r.Context(), g.Database, g.Table, g); err != nil {
-					return fmt.Errorf("failed to write to store: %w", err)
-				}
-				metrics.LogsProxyReceived.WithLabelValues(g.Database, g.Table).Add(float64(len(g.Logs)))
-				metrics.LogKeys.WithLabelValues(g.Database, g.Table).Add(float64(len(g.Logs)))
-				metrics.LogSize.WithLabelValues(g.Database, g.Table).Add(float64(sizeofLogsInGroup(g)))
-				return nil
-			}(group)
+		logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
+		logBatch.Reset()
 
-			// Serialize the logs into a WAL, grouped by Kusto destination database and table
-			if isUserError(err) {
-				s.logger.Error("Failed to serialize logs with user error", "Error", err)
-				w.WriteHeader(http.StatusBadRequest)
-				m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-				return
+		droppedLogMissingMetadata := s.convertToLogBatch(msg, logBatch)
+
+		err = s.store.WriteNativeLogs(r.Context(), logBatch)
+		for _, log := range logBatch.Logs {
+			types.LogPool.Put(log)
+		}
+		types.LogBatchPool.Put(logBatch)
+
+		if err != nil {
+			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			s.logger.Error("Failed to write to store", "Error", err)
+
+			w.WriteHeader(http.StatusInternalServerError)
+			ret := status.Status{
+				Message: "Failed to write logs",
 			}
-			if err != nil {
-				s.logger.Error("Failed to serialize logs with internal error", "Error", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-				return
+			respBodyBytes, err := proto.Marshal(&ret)
+			if err == nil {
+				w.Write(respBodyBytes)
 			}
+			return
 		}
 
 		// The logs have been committed by the OTLP endpoint
-		respBodyBytes, err := proto.Marshal(&v1.ExportLogsServiceResponse{})
+		resp := &v1.ExportLogsServiceResponse{}
+		if droppedLogMissingMetadata > 0 {
+			resp.SetPartialSuccess(&v1.ExportLogsPartialSuccess{
+				RejectedLogRecords: droppedLogMissingMetadata,
+				ErrorMessage:       "Logs lacking kube.database and kube.table attributes or body fields",
+			})
+			metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+		}
+
+		respBodyBytes, err := proto.Marshal(resp)
 		if err != nil {
 			s.logger.Error("Failed to marshal response", "Error", err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -175,29 +184,161 @@ var (
 	ErrMalformedLogs        = errors.New("malformed log records")
 )
 
-func isUserError(err error) bool {
-	if err == nil {
-		return false
+// convertToLogBatch populates the LogBatch with the logs from the OTLP message. Returns the number of logs that were lacking kusto routing metadata
+func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBatch *types.LogBatch) int64 {
+	if msg == nil {
+		return 0
 	}
 
-	if errors.Is(err, ErrMissingKustoMetadata) {
-		return true
-	}
-
-	if errors.Is(err, ErrMalformedLogs) {
-		return true
-	}
-
-	return false
-}
-
-func sizeofLogsInGroup(group *otlp.Logs) int {
-	var size int
-	for _, log := range group.Logs {
-		if log == nil {
+	var droppedLogMissingMetadata int64 = 0
+	for _, resourceLog := range msg.ResourceLogs {
+		if resourceLog == nil {
 			continue
 		}
-		size += proto.Size(log.GetBody())
+
+		resourceAttributes := make(map[string]any)
+		if resourceLog.Resource != nil {
+			extractKeyValues(resourceLog.Resource.Attributes, resourceAttributes)
+		}
+
+		for _, scope := range resourceLog.ScopeLogs {
+			if scope == nil {
+				continue
+			}
+			for _, record := range scope.LogRecords {
+				if record == nil {
+					continue
+				}
+
+				// Senders are required to include Kusto metadata in the attributes or body
+				// Must have kusto.database and kusto.table
+				dbName, tableName := otlp.KustoMetadata(record)
+				if dbName == "" || tableName == "" {
+					if logger.IsDebug() {
+						s.logger.Warn("Missing Kusto metadata", "Payload", record.String())
+					}
+
+					droppedLogMissingMetadata++
+					continue
+				}
+
+				log := types.LogPool.Get(1).(*types.Log)
+				log.Reset()
+
+				log.Timestamp = record.TimeUnixNano
+				log.ObservedTimestamp = record.ObservedTimeUnixNano
+				extractKeyValues(record.Attributes, log.Attributes)
+				extractBody(record.Body, log.Body)
+
+				for k, v := range resourceAttributes {
+					log.Resource[k] = v
+				}
+
+				log.Attributes[types.AttributeDatabaseName] = dbName
+				log.Attributes[types.AttributeTableName] = tableName
+
+				metrics.LogKeys.WithLabelValues(dbName, tableName).Inc()
+
+				logBatch.Logs = append(logBatch.Logs, log)
+			}
+		}
 	}
-	return size
+	return droppedLogMissingMetadata
+}
+
+const defaultMaxDepth = 20
+
+func extractBody(body *commonv1.AnyValue, dest map[string]any) {
+	if body == nil || !body.HasValue() {
+		return
+	}
+
+	if body.HasKvlistValue() {
+		kvList := body.GetKvlistValue()
+		if kvList == nil {
+			return
+		}
+
+		extractKeyValues(kvList.Values, dest)
+	} else {
+		vv, ok := extract(body, 0, defaultMaxDepth)
+		if ok {
+			dest[types.BodyKeyMessage] = vv
+		}
+	}
+}
+
+func extractKeyValues(kvs []*commonv1.KeyValue, dest map[string]any) {
+	if kvs == nil {
+		return
+	}
+
+	for _, kv := range kvs {
+		if kv == nil {
+			continue
+		}
+		vv, ok := extract(kv.Value, 0, defaultMaxDepth)
+		if !ok {
+			continue
+		}
+		dest[kv.Key] = vv
+	}
+}
+
+func extract(val *commonv1.AnyValue, depth int, maxdepth int) (value any, ok bool) {
+	if val == nil {
+		return nil, false
+	}
+
+	if depth > maxdepth {
+		return "...", true // Just cut off here.
+	}
+
+	switch val.Value.(type) {
+	case *commonv1.AnyValue_StringValue:
+		return val.GetStringValue(), true
+	case *commonv1.AnyValue_BoolValue:
+		return val.GetBoolValue(), true
+	case *commonv1.AnyValue_IntValue:
+		return val.GetIntValue(), true
+	case *commonv1.AnyValue_DoubleValue:
+		return val.GetDoubleValue(), true
+	case *commonv1.AnyValue_BytesValue:
+		return val.GetBytesValue(), true
+	case *commonv1.AnyValue_ArrayValue:
+		arrayValue := val.GetArrayValue()
+		if arrayValue == nil {
+			return nil, false
+		}
+
+		ret := make([]any, 0, len(arrayValue.Values))
+		for _, v := range arrayValue.Values {
+			vv, ok := extract(v, depth+1, maxdepth)
+			if !ok {
+				continue
+			}
+			ret = append(ret, vv)
+		}
+		return ret, true
+	case *commonv1.AnyValue_KvlistValue:
+		kvList := val.GetKvlistValue()
+		if kvList == nil {
+			return nil, false
+		}
+
+		ret := map[string]any{}
+		for _, kv := range kvList.Values {
+			if kv == nil || !kv.HasValue() {
+				continue
+			}
+			vv, ok := extract(kv.Value, depth+1, maxdepth)
+			if !ok {
+				continue
+			}
+			ret[kv.Key] = vv
+		}
+		return ret, true
+	default:
+		return nil, false
+	}
 }
