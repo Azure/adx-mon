@@ -12,6 +12,8 @@ type worker struct {
 	Input      <-chan *types.LogBatch
 	Transforms []types.Transformer
 	Sink       types.Sink
+	Database   string
+	Table      string
 }
 
 type WorkerCreatorFunc func(string, <-chan *types.LogBatch) *worker
@@ -53,7 +55,7 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 		// Nack batch?
 		return
 	}
-	metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, w.Sink.Name()).Add(float64(len(batch.Logs)))
+	metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, w.Sink.Name(), w.Database, w.Table).Add(float64(len(batch.Logs)))
 	disposeBatch(batch)
 }
 
