@@ -184,7 +184,7 @@ var (
 		Subsystem: "collector",
 		Name:      "logs_sent",
 		Help:      "Counter of the number of logs successfully sent by the collector",
-	}, []string{"source", "sink"})
+	}, []string{"source", "sink", "database", "table"})
 
 	LogsCollectorLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
