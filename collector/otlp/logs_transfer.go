@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/storage"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/status"
@@ -22,43 +21,26 @@ import (
 )
 
 type LogsServiceOpts struct {
-	Store         storage.Store
-	AddAttributes map[string]string
+	Sink          types.Sink
 	HealthChecker interface{ IsHealthy() bool }
 }
 
 type LogsService struct {
-	store         storage.Store
+	sink          types.Sink
 	logger        *slog.Logger
 	healthChecker interface{ IsHealthy() bool }
-
-	staticAttributes []*commonv1.KeyValue
 }
 
 func NewLogsService(opts LogsServiceOpts) *LogsService {
-	var add []*commonv1.KeyValue
-	for attribute, value := range opts.AddAttributes {
-		add = append(add, &commonv1.KeyValue{
-			Key: attribute,
-			Value: &commonv1.AnyValue{
-				Value: &commonv1.AnyValue_StringValue{
-					StringValue: value,
-				},
-			},
-		},
-		)
-	}
-
 	return &LogsService{
-		store: opts.Store,
+		sink: opts.Sink,
 		logger: slog.Default().With(
 			slog.Group(
 				"handler",
 				slog.String("protocol", "otlp"),
 			),
 		),
-		staticAttributes: add,
-		healthChecker:    opts.HealthChecker,
+		healthChecker: opts.HealthChecker,
 	}
 }
 
@@ -119,7 +101,7 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 
 		droppedLogMissingMetadata := s.convertToLogBatch(msg, logBatch)
 
-		err = s.store.WriteNativeLogs(r.Context(), logBatch)
+		err = s.sink.Send(r.Context(), logBatch)
 		for _, log := range logBatch.Logs {
 			types.LogPool.Put(log)
 		}
