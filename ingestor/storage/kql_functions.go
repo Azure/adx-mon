@@ -44,6 +44,7 @@ func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) err
 
 	if fn.Status.Status == adxmonv1.Success {
 		fn.Status.ObservedGeneration = fn.GetGeneration()
+		fn.Status.Error = ""
 
 		if !fn.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(fn, FinalizerName) {
 			// remove our finalizer from the list and update it.
