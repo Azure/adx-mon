@@ -115,6 +115,7 @@ func TestFunctions(t *testing.T) {
 		require.Equal(t, fn.Status.Status, adxmonv1.Success)
 		require.Equal(t, fn.Status.ObservedGeneration, fn.GetGeneration())
 		require.False(t, fn.Status.LastTimeReconciled.IsZero())
+		require.Empty(t, fn.Status.Error)
 
 		fns, err := functionStore.List(ctx)
 		require.NoError(t, err)
