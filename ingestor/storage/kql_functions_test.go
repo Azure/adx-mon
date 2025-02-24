@@ -156,6 +156,37 @@ func TestFunctions(t *testing.T) {
 		require.Empty(t, fns)
 	})
 
+	t.Run("Updates subresource", func(t *testing.T) {
+		fn := &adxmonv1.Function{}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
+
+		fn.Status.Status = adxmonv1.Success
+		require.NoError(t, functionStore.UpdateStatus(ctx, fn))
+
+		fn = &adxmonv1.Function{}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
+		require.Equal(t, fn.Status.Status, adxmonv1.Success)
+		require.Equal(t, fn.Status.ObservedGeneration, fn.GetGeneration())
+		require.False(t, fn.Status.LastTimeReconciled.IsZero())
+		require.Empty(t, fn.Status.Error)
+
+		fn.Status.Conditions = []metav1.Condition{
+			{
+				Type:               "Test",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: fn.GetGeneration(),
+				LastTransitionTime: metav1.Now(),
+				Reason:             "Test",
+				Message:            "Test",
+			},
+		}
+		require.NoError(t, functionStore.UpdateStatus(ctx, fn))
+
+		fns, err := functionStore.List(ctx)
+		require.NoError(t, err)
+		require.Empty(t, fns) // because the generation is up to date
+	})
+
 	t.Run("Can delete function", func(t *testing.T) {
 		fn := &adxmonv1.Function{}
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))

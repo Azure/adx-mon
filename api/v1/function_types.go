@@ -62,6 +62,9 @@ type FunctionStatus struct {
 	Status FunctionStatusEnum `json:"status"`
 	// Error is a string that communicates any error message if one exists
 	Error string `json:"error,omitempty"`
+	// Conditions is a list of conditions that apply to the Function
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
