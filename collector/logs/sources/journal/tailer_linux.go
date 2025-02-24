@@ -5,6 +5,7 @@ package journal
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
@@ -25,7 +26,7 @@ const (
 )
 
 type tailer struct {
-	reader         journalReader
+	matches        []string
 	database       string
 	table          string
 	cursorFilePath string
@@ -36,19 +37,46 @@ type tailer struct {
 	streamPartials map[string]string
 }
 
-// readFromJournal follows the flow described in the examples within `man 3 sd_journal_wait`.
-func (t *tailer) readFromJournal(ctx context.Context) {
-	t.seekCursorAtStart()
+// ReadFromJournal follows the flow described in the examples within `man 3 sd_journal_wait`.
+func (t *tailer) ReadFromJournal(ctx context.Context) {
+	// Must lock this goroutine (and lifecycle of sdjournal.Journal object which contains the sd_journal pointer) to the underlying OS thread.
+	// man 3 sd_journal under "NOTES"
+	// "given sd_journal pointer may only be used from one specific thread at all times (and it has to be the very same one during the entire lifetime of the object), but multiple, independent threads may use multiple, independent objects safely"
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	reader, err := sdjournal.NewJournal()
+	if err != nil {
+		logger.Errorf("failed to open journal tailer: %v", err)
+		return
+	}
+
+	for _, match := range t.matches {
+		if match == "+" {
+			err := reader.AddDisjunction()
+			if err != nil {
+				logger.Errorf("failed to create journal disjunction: %v", err)
+				return
+			}
+		}
+
+		if err := reader.AddMatch(match); err != nil {
+			logger.Errorf("failed to add journal match %s: %v", match, err)
+			return
+		}
+	}
+
+	t.seekCursorAtStart(reader)
 
 	for {
 		select {
 		case <-ctx.Done():
-			t.reader.Close()
+			reader.Close()
 			return
 		default:
 		}
 
-		ret, err := t.reader.Next()
+		ret, err := reader.Next()
 		if err != nil {
 			// Unclear how to handle these errors. The implementation of sd_journald_next returns errors
 			// when attempting to continue iteration. Suspect these are i/o related if there are issues.
@@ -59,7 +87,7 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 
 		if ret == 0 {
 			// Wait for entries
-			if err := t.waitForNewJournalEntries(ctx); err != nil {
+			if err := t.waitForNewJournalEntries(ctx, reader); err != nil {
 				logger.Errorf("failed to wait for new journal entries: %v", err)
 				t.backoff() // TODO: recreate reader?
 				continue
@@ -67,7 +95,7 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 			continue
 		}
 
-		entry, err := t.reader.GetEntry()
+		entry, err := reader.GetEntry()
 		if err != nil {
 			logger.Errorf("failed to get journal entry: %v", err)
 			t.backoff()
@@ -97,23 +125,23 @@ func (t *tailer) readFromJournal(ctx context.Context) {
 	}
 }
 
-func (t *tailer) seekCursorAtStart() {
+func (t *tailer) seekCursorAtStart(reader journalReader) {
 	existingCursor, err := readCursor(t.cursorFilePath)
 	if err != nil {
 		logger.Warnf("failed to read cursor %s: %v", t.cursorFilePath, err)
-		t.reader.SeekHead()
+		reader.SeekHead()
 	} else {
 		if logger.IsDebug() {
 			logger.Debugf("journal: found existing cursor in %q: %s", t.cursorFilePath, existingCursor)
 		}
 
-		err := t.reader.SeekCursor(existingCursor)
+		err := reader.SeekCursor(existingCursor)
 		if err != nil {
 			logger.Warnf("failed to seek to cursor %s: %v", existingCursor, err)
-			t.reader.SeekHead()
+			reader.SeekHead()
 		} else {
 			// Cursor points at the last read entry, so skip it
-			t.reader.NextSkip(1)
+			reader.NextSkip(1)
 		}
 	}
 }
@@ -122,7 +150,7 @@ func (t *tailer) backoff() {
 	time.Sleep(waittime)
 }
 
-func (t *tailer) waitForNewJournalEntries(ctx context.Context) error {
+func (t *tailer) waitForNewJournalEntries(ctx context.Context, reader journalReader) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -130,7 +158,7 @@ func (t *tailer) waitForNewJournalEntries(ctx context.Context) error {
 		default:
 		}
 
-		status := t.reader.Wait(waittime)
+		status := reader.Wait(waittime)
 		switch status {
 		case sdjournal.SD_JOURNAL_NOP:
 			continue

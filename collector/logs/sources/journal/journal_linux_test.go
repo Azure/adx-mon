@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/coreos/go-systemd/journal"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestJournalE2E(t *testing.T) {
@@ -127,13 +128,26 @@ func TestJournalMulipleSources(t *testing.T) {
 	matchTagOne := fmt.Sprintf("%s=%s", testtagOne, testValue)
 	matchTagTwo := fmt.Sprintf("%s=%s", testtagTwo, testValue)
 
-	numLogs := 1000
-	for i := 0; i < numLogs; i++ {
-		err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsOne)
-		require.NoError(t, err)
-		err = journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsTwo)
-		require.NoError(t, err)
-	}
+	numLogs := 5000
+	errgrp, _ := errgroup.WithContext(context.Background())
+	errgrp.Go(func() error {
+		for i := 0; i < numLogs; i++ {
+			err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsOne)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	errgrp.Go(func() error {
+		for i := 0; i < numLogs; i++ {
+			err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFieldsTwo)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 
 	sink := sinks.NewCountingSink(int64(numLogs * 2)) // both sources send numLogs
 	source := New(SourceConfig{
@@ -160,6 +174,10 @@ func TestJournalMulipleSources(t *testing.T) {
 	ctx := context.Background()
 	err := service.Open(ctx)
 	require.NoError(t, err)
+
+	err = errgrp.Wait()
+	require.NoError(t, err)
+
 	<-sink.DoneChan()
 	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), sink.Latest().Body[types.BodyKeyMessage])
