@@ -62,12 +62,17 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
+	transferConcurrency := 5
+	if opts.MaxTransferConcurrency > 0 {
+		transferConcurrency = opts.MaxTransferConcurrency
+	}
+
 	cli, err := NewClient(ClientOpts{
 		Timeout:               30 * time.Second,
 		InsecureSkipVerify:    opts.InsecureSkipVerify,
 		Close:                 false,
 		MaxIdleConnsPerHost:   1,
-		MaxIdleConns:          5,
+		MaxIdleConns:          transferConcurrency,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 20 * time.Second,
 		DisableHTTP2:          true,
@@ -76,12 +81,6 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	transferConcurrency := 5
-	if opts.MaxTransferConcurrency > 0 {
-		transferConcurrency = opts.MaxTransferConcurrency
-	}
-
 
 	return &replicator{
 		queue:               make(chan *Batch, 10000),
