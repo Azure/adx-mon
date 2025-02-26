@@ -75,6 +75,8 @@ Ingestor
 | where lvl == 'ERR'
 ```
 
+**Note** Only one Kusto View definition is supported per CRD
+
 ### Traces
 
 ### Continuous Profiling
