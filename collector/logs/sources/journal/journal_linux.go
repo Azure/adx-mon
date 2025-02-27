@@ -4,7 +4,6 @@ package journal
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -69,33 +68,12 @@ func (s *Source) Open(ctx context.Context) error {
 	tailers := make([]*tailer, 0, len(s.targets))
 	for _, target := range s.targets {
 		logger.Info("Opening journal source", "filters", target.Matches, "database", target.Database, "table", target.Table)
-		reader, err := sdjournal.NewJournal()
-		if err != nil {
-			s.Close()
-			return fmt.Errorf("journal source open: %v", err)
-		}
-
-		for _, match := range target.Matches {
-			if match == "+" {
-				err := reader.AddDisjunction()
-				if err != nil {
-					s.Close()
-					return fmt.Errorf("journal source open addDisjunction: %w", err)
-				}
-			}
-
-			if err := reader.AddMatch(match); err != nil {
-				s.Close()
-				return fmt.Errorf("journal source open addMatch %s: %w", match, err)
-			}
-		}
-
 		batchQueue := make(chan *types.Log, 512)
 		outputQueue := make(chan *types.LogBatch, 1)
 
 		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table)
 		tailer := &tailer{
-			reader:         reader,
+			matches:        target.Matches,
 			database:       target.Database,
 			table:          target.Table,
 			cursorFilePath: cPath,
@@ -108,7 +86,8 @@ func (s *Source) Open(ctx context.Context) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			tailer.readFromJournal(ctx)
+
+			tailer.ReadFromJournal(ctx)
 		}()
 
 		batchConfig := engine.BatchConfig{
