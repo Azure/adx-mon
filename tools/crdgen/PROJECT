@@ -30,4 +30,12 @@ resources:
   kind: SummaryRule
   path: github.com/Azure/adx-mon/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: azure.com
+  group: adx-mon
+  kind: ManagementCommand
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
 version: "3"
