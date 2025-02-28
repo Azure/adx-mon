@@ -284,7 +284,7 @@ func (n *uploader) upload(ctx context.Context) error {
 					}
 				}
 
-				mr := io.MultiReader(readers...)
+				mr := newCountingReader(io.MultiReader(readers...))
 
 				now := time.Now()
 				if err := n.uploadReader(mr, database, table, mapping); err != nil {
@@ -310,6 +310,8 @@ func (n *uploader) upload(ctx context.Context) error {
 						metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(sampleCount))
 					}
 				}
+
+				metrics.IngestorUploadedBytes.WithLabelValues(database, table).Add(float64(mr.Count()))
 			}()
 
 		}
@@ -387,4 +389,33 @@ type clusterDetails struct {
 	Reserved0              int       `kusto:"Reserved0"`
 	ClockDescription       string    `kusto:"ClockDescription"`
 	RuntimeDescription     string    `kusto:"RuntimeDescription"`
+}
+
+// countingReader wraps an io.Reader and counts bytes read without allocations.
+type countingReader struct {
+	reader io.Reader
+	count  int64
+}
+
+// Read implements io.Reader without allocations.
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.reader.Read(p)
+	c.count += int64(n)
+	return n, err
+}
+
+// Count returns the total bytes read.
+func (c *countingReader) Count() int64 {
+	return c.count
+}
+
+// newCountingReader returns a countingReader wrapping the provided reader.
+func newCountingReader(r io.Reader) *countingReader {
+	return &countingReader{reader: r}
+}
+
+// Reset allows reusing countingReader by resetting its internal state.
+func (c *countingReader) Reset(r io.Reader) {
+	c.reader = r
+	c.count = 0
 }

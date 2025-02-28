@@ -355,6 +355,8 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		if err := r.Body.Close(); err != nil {
 			logger.Errorf("close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
 		}
+
+		metrics.IngestorTransferBytes.Add(float64(r.ContentLength))
 	}()
 
 	if !s.health.IsHealthy() {

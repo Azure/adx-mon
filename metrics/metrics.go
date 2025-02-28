@@ -93,6 +93,20 @@ var (
 		Help:      "Counter of the number of logs uploaded to Kusto",
 	}, []string{"database", "table"})
 
+	IngestorUploadedBytes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "uploaded_size_bytes",
+		Help:      "Counter for the size of uploaded data to Kusto in bytes",
+	}, []string{"database", "table"})
+
+	IngestorTransferBytes = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "transferred_size_bytes",
+		Help:      "Counter for the size of transferred data to Kusto in bytes",
+	})
+
 	InvalidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",

@@ -1,7 +1,9 @@
 package adx
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
@@ -31,4 +33,21 @@ func TestClusterRequiresDirectIngest(t *testing.T) {
 	requiresDirectIngest, err := u.clusterRequiresDirectIngest(ctx)
 	require.NoError(t, err)
 	require.True(t, requiresDirectIngest)
+}
+
+func BenchmarkCountingReader(b *testing.B) {
+	data := bytes.Repeat([]byte("testdata"), 1024)
+	reader := bytes.NewReader(data)
+	countReader := newCountingReader(reader)
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		reader.Reset(data)
+		countReader.Reset(reader)
+
+		_, _ = io.Copy(io.Discard, countReader)
+		if countReader.Count() != int64(len(data)) {
+			b.Fatalf("expected %d bytes read, got %d", len(data), countReader.Count())
+		}
+	}
 }
