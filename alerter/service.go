@@ -82,6 +82,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
+		clients:   make(map[string]KustoClient),
 	}
 
 	if opts.MSIID != "" {
@@ -169,15 +170,6 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		Region:      opts.Region,
 		Tags:        opts.Tags,
 	})
-
-	go func() {
-		logger.Infof("Listening at :%d", opts.Port)
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", opts.Port), nil); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}()
 
 	executor.RunOnce(ctx)
 	if lint.HasFailedQueries() {
