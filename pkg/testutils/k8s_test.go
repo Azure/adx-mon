@@ -24,11 +24,11 @@ func TestInstallFunctionsCrd(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("install functions crd definition", func(t *testing.T) {
-		require.NoError(t, testutils.InstallFunctionsCrd(ctx, k3sContainer))
+		require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
 	})
 
 	t.Run("ensure idempotent", func(t *testing.T) {
-		require.NoError(t, testutils.InstallFunctionsCrd(ctx, k3sContainer))
+		require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
 	})
 
 	t.Run("install functions crd", func(t *testing.T) {

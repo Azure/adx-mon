@@ -127,7 +127,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to copy file to container: %w", err)
 					}
 
-					return testutils.InstallFunctionsCrd(ctx, k)
+					return testutils.InstallCrds(ctx, k)
 				},
 			},
 			PostCreates: []testcontainers.ContainerHook{
