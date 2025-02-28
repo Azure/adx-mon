@@ -28,37 +28,34 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 type fluentEncoder struct {
 	fluentExtTime *fluentExtTime
 	w             []byte
-	batchToSend   []*types.Log
+	batchToSend   []types.ROLog
+	tagAttribute  string
 }
 
-func newFluentEncoder() *fluentEncoder {
+func newFluentEncoder(tagAttribute string) *fluentEncoder {
 	return &fluentEncoder{
 		fluentExtTime: &fluentExtTime{},
+		tagAttribute:  tagAttribute,
 	}
 }
 
 // encode encodes a log batch into the fluentd forward format.
 // Not multi-goroutine safe. Returned bytes are only valid until the next call.
-func (e *fluentEncoder) encode(tagAttribute string, batch *types.LogBatch) ([]byte, error) {
+func (e *fluentEncoder) encode(batch types.ROLogBatch) ([]byte, error) {
 	// Copy logbatch elements into new slice so we can sort it without modifying the original,
 	// which is shared amongst other outputs.
 	e.batchToSend = e.batchToSend[:0]
-	for _, log := range batch.Logs {
-		_, ok := log.Attributes[tagAttribute].(string)
-		if !ok {
-			continue
-		}
-		e.batchToSend = append(e.batchToSend, log)
-	}
+
+	batch.ForEach(e.addBatchToSend)
 	if len(e.batchToSend) == 0 {
 		return nil, nil
 	}
 
 	// Sort based on tags. This allows us to create a message per tag.
-	slices.SortFunc(e.batchToSend, func(a, b *types.Log) int {
-		tagOne := a.Attributes[tagAttribute]
-		tagTwo := b.Attributes[tagAttribute]
-		return strings.Compare(tagOne.(string), tagTwo.(string))
+	slices.SortFunc(e.batchToSend, func(a, b types.ROLog) int {
+		tagOne := types.StringOrEmpty(a.GetAttributeValue(e.tagAttribute))
+		tagTwo := types.StringOrEmpty(b.GetAttributeValue(e.tagAttribute))
+		return strings.Compare(tagOne, tagTwo)
 	})
 
 	e.w = e.w[:0]
@@ -67,7 +64,7 @@ func (e *fluentEncoder) encode(tagAttribute string, batch *types.LogBatch) ([]by
 	activeTag := ""
 	activeTagStart := 0
 	for idx, log := range e.batchToSend {
-		currTag := log.Attributes[tagAttribute].(string)
+		currTag := types.StringOrEmpty(log.GetAttributeValue(e.tagAttribute))
 		if idx == 0 {
 			activeTag = currTag
 		}
@@ -75,16 +72,16 @@ func (e *fluentEncoder) encode(tagAttribute string, batch *types.LogBatch) ([]by
 		if idx == len(e.batchToSend)-1 {
 			err = e.appendMsg(e.batchToSend[activeTagStart:], activeTag)
 			if err != nil {
-				return nil, err // skip???
+				return nil, err // bail - message is now invalid.
 			}
 			return e.w, nil
 		}
 
-		peekTag := e.batchToSend[idx+1].Attributes[tagAttribute].(string)
+		peekTag := types.StringOrEmpty(e.batchToSend[idx+1].GetAttributeValue(e.tagAttribute))
 		if peekTag != activeTag {
 			err = e.appendMsg(e.batchToSend[activeTagStart:idx+1], activeTag)
 			if err != nil {
-				return nil, err // skip???
+				return nil, err // bail - message is now invalid.
 			}
 			activeTag = peekTag
 			activeTagStart = idx + 1
@@ -94,7 +91,15 @@ func (e *fluentEncoder) encode(tagAttribute string, batch *types.LogBatch) ([]by
 	return e.w, nil
 }
 
-func (e *fluentEncoder) appendMsg(batchToSend []*types.Log, tag string) error {
+func (e *fluentEncoder) addBatchToSend(log types.ROLog) {
+	attr := types.StringOrEmpty(log.GetAttributeValue(e.tagAttribute))
+	if attr == "" {
+		return
+	}
+	e.batchToSend = append(e.batchToSend, log)
+}
+
+func (e *fluentEncoder) appendMsg(batchToSend []types.ROLog, tag string) error {
 	// Write Forward mode. See https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1#forward-mode
 
 	// We use the []byte oriented API instead of the writer-oriented API from msgp.
@@ -106,16 +111,28 @@ func (e *fluentEncoder) appendMsg(batchToSend []*types.Log, tag string) error {
 	e.w = msgp.AppendArrayHeader(e.w, uint32(len(batchToSend))) // <entries>
 	for _, log := range batchToSend {
 		e.w = msgp.AppendArrayHeader(e.w, 2) // [<time>, <record>]
-		e.fluentExtTime.UnixTsNano = log.Timestamp
+		e.fluentExtTime.UnixTsNano = log.GetTimestamp()
 		e.w, err = msgp.AppendExtension(e.w, e.fluentExtTime) // <time>
 		if err != nil {
-			return err // TODO - skip???
+			return err // need to bail, message is now invalid.
 		}
-		// TODO - also put in resource/attributes?
-		e.w, err = msgp.AppendMapStrIntf(e.w, log.Body)
+
+		e.w = msgp.AppendMapHeader(e.w, uint32(log.BodyLen())) // <record>
+
+		err = log.ForEachBody(e.AppendMapElement)
 		if err != nil {
-			return err // TODO - skip???
+			return err // need to bail, message is now invalid.
 		}
+	}
+	return nil
+}
+
+func (e *fluentEncoder) AppendMapElement(key string, val any) error {
+	var err error
+	e.w = msgp.AppendString(e.w, key)
+	e.w, err = msgp.AppendIntf(e.w, val)
+	if err != nil {
+		return err
 	}
 	return nil
 }

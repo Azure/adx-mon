@@ -14,11 +14,11 @@ func BenchmarkMsgp(b *testing.B) {
 		Logs: testlogs,
 	}
 
-	e := newFluentEncoder()
+	e := newFluentEncoder("destTag")
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = e.encode("destTag", &logbatch)
+		_, _ = e.encode(&logbatch)
 	}
 }
 
@@ -27,8 +27,8 @@ func TestEncode(t *testing.T) {
 		Logs: testlogs,
 	}
 
-	e := newFluentEncoder()
-	b, err := e.encode("destTag", &logbatch)
+	e := newFluentEncoder("destTag")
+	b, err := e.encode(&logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
 
@@ -72,7 +72,7 @@ func TestEncode(t *testing.T) {
 		},
 	}
 
-	b, err = e.encode("destTag", &logbatch)
+	b, err = e.encode(&logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
 	rest = validateArrayHeaderForwardMode(t, b)
