@@ -254,6 +254,58 @@ func TestFunctions(t *testing.T) {
 			return !testutils.FunctionExists(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
 		}, 10*time.Minute, time.Second)
 	})
+
+	t.Run("Creates more than one function", func(t *testing.T) {
+		fn := &adxmonv1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "a-and-b",
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.FunctionSpec{
+				Body:     severalFunctions,
+				Database: executor.Database(),
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			return testutils.FunctionExists(ctx, t, executor.Database(), "a", kustoContainer.ConnectionUrl()) &&
+				testutils.FunctionExists(ctx, t, executor.Database(), "b", kustoContainer.ConnectionUrl())
+		}, 10*time.Minute, time.Second)
+	})
+
+	t.Run("Communicates invalid functions", func(t *testing.T) {
+		// To support more than one function in a single CRD, we execute the CRD body
+		// as a database script. By default, database scripts that contain error do
+		// not telegraph individual errors, only if the entire script fails. We set
+		// sufficient options to enable any failures within the script body to bubble
+		// back to the caller, so this test ensures that an invalid function body
+		// is communicated back to the caller.
+		resourceName := "invalid-function"
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: "default",
+		}
+		fn := &adxmonv1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      typeNamespacedName.Name,
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.FunctionSpec{
+				Body:     ".create-or-alter function() { MissingTable | count }",
+				Database: executor.Database(),
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			fnr := &adxmonv1.Function{}
+			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fnr))
+			return fnr.Status.Status == v1.PermanentFailure
+		}, 10*time.Minute, time.Second)
+	})
 }
 
 type KustoStatementExecutor struct {
@@ -268,3 +320,12 @@ func (k *KustoStatementExecutor) Database() string {
 func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
 	return k.client.Mgmt(ctx, k.database, query, options...)
 }
+
+var severalFunctions = `// function a
+.create-or-alter function a() {
+  print "a"
+}
+//
+.create-or-alter function b() {
+  print "b"
+}`
