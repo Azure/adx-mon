@@ -389,10 +389,11 @@ func (w *HostLog) Validate() error {
 }
 
 type JournalTarget struct {
-	Matches  []string `toml:"matches" comment:"Matches for the journal reader based on journalctl MATCHES. To select a systemd unit, use the field _SYSTEMD_UNIT. (e.g. '_SYSTEMD_UNIT=avahi-daemon.service' for selecting logs from the avahi-daemon service.)"`
-	Database string   `toml:"database" comment:"Database to store logs in."`
-	Table    string   `toml:"table" comment:"Table to store logs in."`
-	Parsers  []string `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+	Matches       []string `toml:"matches" comment:"Matches for the journal reader based on journalctl MATCHES. To select a systemd unit, use the field _SYSTEMD_UNIT. (e.g. '_SYSTEMD_UNIT=avahi-daemon.service' for selecting logs from the avahi-daemon service.)"`
+	Database      string   `toml:"database" comment:"Database to store logs in."`
+	Table         string   `toml:"table" comment:"Table to store logs in."`
+	Parsers       []string `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+	JournalFields []string `toml:"journal-fields" comment:"Optional journal metadata fields http://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html"`
 }
 
 func (j *JournalTarget) Validate() error {

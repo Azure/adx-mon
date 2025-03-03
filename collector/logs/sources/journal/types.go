@@ -12,6 +12,8 @@ type JournalTargetConfig struct {
 	Table    string
 	// LogLineParsers is a list of parsers to apply to each log line.
 	LogLineParsers []parser.Parser
+	// JournalFields is a list of journal fields to include in the log.
+	JournalFields []string
 }
 
 type SourceConfig struct {
