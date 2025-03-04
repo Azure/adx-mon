@@ -167,3 +167,21 @@ func TestLogBatch(t *testing.T) {
 	batch.Reset()
 	require.Empty(t, batch.Logs)
 }
+
+func BenchmarkLogWrites(b *testing.B) {
+	log := LogPool.Get(1).(*Log)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		log.Reset()
+		log.SetTimestamp(12345)
+		log.SetObservedTimestamp(67890)
+		log.SetBodyValue("key", "value")
+		log.SetAttributeValue("attr", "value")
+		log.SetResourcevalue("res", "value")
+		log.SetBodyValue("complicated", map[string]any{
+			"hello": "world",
+		})
+		log.Freeze()
+	}
+}
