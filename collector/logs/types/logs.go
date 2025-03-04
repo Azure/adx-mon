@@ -1,6 +1,11 @@
 package types
 
+import "sync/atomic"
+
 // Log represents a single log entry
+// It is not safe for concurrent updates
+// It is safe to read from multiple goroutines after all modifications have been completed.
+// Freeze is best effort and should be used to indicate that the log is no longer being modified.
 type Log struct {
 	// Timestamp of the event in nanoseconds since the unix epoch
 	Timestamp uint64
@@ -15,6 +20,10 @@ type Log struct {
 
 	// Resource that has collected the log
 	Resource map[string]any
+
+	// frozen tracks if this object should not be modified
+	// updated atomically
+	frozen uint32
 }
 
 func NewLog() *Log {
@@ -22,6 +31,7 @@ func NewLog() *Log {
 		Body:       map[string]any{},
 		Attributes: map[string]any{},
 		Resource:   map[string]any{},
+		frozen:     0,
 	}
 }
 
@@ -29,6 +39,7 @@ func (l *Log) Reset() {
 	clear(l.Body)
 	clear(l.Attributes)
 	clear(l.Resource)
+	atomic.StoreUint32(&l.frozen, 0)
 }
 
 // Copy returns a distinct copy of the log. This is useful for splitting logs.
@@ -47,6 +58,41 @@ func (l *Log) Copy() *Log {
 		copy.Resource[k] = v
 	}
 	return copy
+}
+
+func (l *Log) SetTimestamp(ts uint64) {
+	if atomic.LoadUint32(&l.frozen) == 1 {
+		panic("log is frozen")
+	}
+	l.Timestamp = ts
+}
+func (l *Log) SetObservedTimestamp(ts uint64) {
+	if atomic.LoadUint32(&l.frozen) == 1 {
+		panic("log is frozen")
+	}
+	l.ObservedTimestamp = ts
+}
+func (l *Log) SetAttributeValue(key string, value any) {
+	if atomic.LoadUint32(&l.frozen) == 1 {
+		panic("log is frozen")
+	}
+	l.Attributes[key] = value
+}
+func (l *Log) SetBodyValue(key string, value any) {
+	if atomic.LoadUint32(&l.frozen) == 1 {
+		panic("log is frozen")
+	}
+	l.Body[key] = value
+}
+func (l *Log) SetResourcevalue(key string, value any) {
+	if atomic.LoadUint32(&l.frozen) == 1 {
+		panic("log is frozen")
+	}
+	l.Resource[key] = value
+}
+
+func (l *Log) Freeze() {
+	atomic.StoreUint32(&l.frozen, 1)
 }
 
 func (l *Log) GetTimestamp() uint64 {
