@@ -190,11 +190,11 @@ func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.
 }
 
 type ManagementCommandTask struct {
-	store    storage.ManagementCommands
+	store    storage.CRDHandler
 	kustoCli StatementExecutor
 }
 
-func NewManagementCommandsTask(store storage.ManagementCommands, kustoCli StatementExecutor) *ManagementCommandTask {
+func NewManagementCommandsTask(store storage.CRDHandler, kustoCli StatementExecutor) *ManagementCommandTask {
 	return &ManagementCommandTask{
 		store:    store,
 		kustoCli: kustoCli,
@@ -202,11 +202,11 @@ func NewManagementCommandsTask(store storage.ManagementCommands, kustoCli Statem
 }
 
 func (t *ManagementCommandTask) Run(ctx context.Context) error {
-	managementCommands, err := t.store.List(ctx)
-	if err != nil {
+	managementCommands := &v1.ManagementCommandList{}
+	if err := t.store.List(ctx, managementCommands); err != nil {
 		return fmt.Errorf("failed to list management commands: %w", err)
 	}
-	for _, command := range managementCommands {
+	for _, command := range managementCommands.Items {
 		// ManagementCommands database is optional as not all commands are scoped at the database level
 		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
 			continue
@@ -215,13 +215,13 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		stmt := kql.New(".execute script<|").AddUnsafe(command.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
-			if err = t.store.UpdateStatus(ctx, command, err); err != nil {
+			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
 		}
 
 		logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
-		if err := t.store.UpdateStatus(ctx, command, nil); err != nil {
+		if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
 			logger.Errorf("Failed to update success status: %v", err)
 		}
 	}

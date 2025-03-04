@@ -317,7 +317,7 @@ func TestManagementCommands(t *testing.T) {
 		client:   kustoClient,
 	}
 
-	store := storage.NewManagementCommands(ctrlCli, nil)
+	store := storage.NewCRDHandler(ctrlCli, nil)
 	task := NewManagementCommandsTask(store, executor)
 
 	resourceName := "testtest"
@@ -346,7 +346,7 @@ func TestManagementCommands(t *testing.T) {
 
 			// wait for the command to be marked as owner completed successfully
 			for _, condition := range cmd.Status.Conditions {
-				if condition.Type == storage.ManagementCommandConditionOwner {
+				if condition.Type == adxmonv1.ManagementCommandConditionOwner {
 					return condition.Status == metav1.ConditionTrue
 				}
 			}

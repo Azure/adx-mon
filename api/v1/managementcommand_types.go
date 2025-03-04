@@ -1,11 +1,13 @@
 package v1
 
 import (
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const ManagementCommandConditionOwner = "managementcommand.adx-mon.azure.com"
 
 // ManagementCommandSpec defines the desired state of ManagementCommand
 type ManagementCommandSpec struct {
@@ -29,6 +31,27 @@ type ManagementCommandStatus struct {
 	// Conditions is a list of conditions that apply to the Function
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+func (m *ManagementCommand) GetCondition() *metav1.Condition {
+	return meta.FindStatusCondition(m.Status.Conditions, ManagementCommandConditionOwner)
+}
+
+func (m *ManagementCommand) SetCondition(c metav1.Condition) {
+	c.Type = ManagementCommandConditionOwner
+	c.LastTransitionTime = metav1.Now()
+
+	if c.ObservedGeneration == 0 {
+		c.Reason = "Created"
+	} else {
+		c.Reason = "Updated"
+	}
+	if c.Status == metav1.ConditionFalse {
+		c.Reason = "Failed"
+	}
+	c.ObservedGeneration = m.GetGeneration()
+
+	meta.SetStatusCondition(&m.Status.Conditions, c)
 }
 
 //+kubebuilder:object:root=true
