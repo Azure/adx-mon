@@ -45,8 +45,15 @@ type SummaryRule struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   SummaryRuleSpec `json:"spec,omitempty"`
-	Status FunctionStatus  `json:"status,omitempty"`
+	Spec   SummaryRuleSpec   `json:"spec,omitempty"`
+	Status SummaryRuleStatus `json:"status,omitempty"`
+}
+
+// SummaryRuleStatus defines the observed state of Function
+type SummaryRuleStatus struct {
+	// Conditions is an array of current observed SummaryRule conditions
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
