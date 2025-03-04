@@ -18,7 +18,7 @@ const (
 )
 
 // getFileTargets generates a list of FileTailTargets for the containers within a given pod
-func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
+func getFileTargets(pod *v1.Pod, nodeName string, staticPodTargets []*StaticPodTargets) []FileTailTarget {
 	// Only look for targets on our node
 	if pod.Spec.NodeName != nodeName {
 		return nil
@@ -27,8 +27,9 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 	if logger.IsDebug() {
 		logger.Debugf("Checking for targets for pod %s/%s", pod.Namespace, pod.Name)
 	}
-	// Skip the pod if it has not opted in to scraping
-	if !strings.EqualFold(getAnnotationOrDefault(pod, "adx-mon/scrape", "false"), "true") {
+	// Skip the pod if it has not opted in to scraping or are not static pods
+	staticPodTarget := getStaticPod(pod, staticPodTargets)
+	if !strings.EqualFold(getAnnotationOrDefault(pod, "adx-mon/scrape", "false"), "true") && staticPodTarget == nil {
 		if logger.IsDebug() {
 			logger.Debugf("Pod %s/%s has not opted in to scraping", pod.Namespace, pod.Name)
 		}
@@ -38,6 +39,10 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 	// Skip the pod if it does not have a log database or table configured
 	// Destination in form of "database:table"
 	dest := getAnnotationOrDefault(pod, AdxMonLogDestinationAnnotation, "")
+	if staticPodTarget != nil && dest == "" {
+		dest = staticPodTarget.Destination
+	}
+
 	destPair := strings.Split(dest, ":")
 	if len(destPair) != 2 {
 		if logger.IsDebug() {
@@ -56,6 +61,9 @@ func getFileTargets(pod *v1.Pod, nodeName string) []FileTailTarget {
 
 	parserList := []string{}
 	parsers := getAnnotationOrDefault(pod, AdxMonLogParsersAnnotation, "")
+	if staticPodTarget != nil && parsers == "" {
+		parsers = strings.Join(staticPodTarget.Parsers, ",")
+	}
 	if parsers != "" {
 		parserList = strings.Split(parsers, ",")
 		for _, currParser := range parserList {
@@ -177,4 +185,22 @@ func getContainerID(containerStatuses []v1.ContainerStatus, containerName string
 		}
 	}
 	return "", false
+}
+
+func getStaticPod(pod *v1.Pod, staticPodTargets []*StaticPodTargets) *StaticPodTargets {
+	for _, staticPod := range staticPodTargets {
+		if staticPod.Namespace != "" && pod.Namespace != staticPod.Namespace {
+			continue
+		}
+		if staticPod.Name != "" && pod.Name != staticPod.Name {
+			continue
+		}
+		for label, value := range staticPod.Labels {
+			if pod.Labels[label] != value {
+				continue
+			}
+		}
+		return staticPod
+	}
+	return nil
 }

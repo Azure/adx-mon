@@ -19,9 +19,10 @@ const (
 func TestGetFileTargets(t *testing.T) {
 	logger.SetLevel(slog.LevelDebug)
 	type testcase struct {
-		name     string
-		pod      *v1.Pod
-		expected []FileTailTarget
+		name             string
+		pod              *v1.Pod
+		staticPodTargets []*StaticPodTargets
+		expected         []FileTailTarget
 	}
 
 	ourNode := "node1"
@@ -78,6 +79,88 @@ func TestGetFileTargets(t *testing.T) {
 						"namespace":   "namespace1",
 						"container":   "container1",
 						"containerID": "docker://container1id",
+					},
+				},
+			},
+		},
+		{
+			name: "Pod is static",
+			pod:  genPod("pod1", "namespace1", ourNode, []string{"container1"}, map[string]string{}),
+			staticPodTargets: []*StaticPodTargets{
+				{
+					Namespace:   "namespace1",
+					Name:        "pod1",
+					Destination: "db1:table1",
+				},
+			},
+			expected: []FileTailTarget{
+				{
+					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
+					Database: "db1",
+					Table:    "table1",
+					LogType:  sourceparse.LogTypeKubernetes,
+					Parsers:  []string{},
+					Resources: map[string]interface{}{
+						"pod":         "pod1",
+						"namespace":   "namespace1",
+						"container":   "container1",
+						"containerID": "docker://container1id",
+					},
+				},
+			},
+		},
+		{
+			name: "Pod is static with label selector",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pod1",
+					Namespace: "namespace1",
+					Labels: map[string]string{
+						"app": "myapp",
+					},
+					UID: uid,
+				},
+				Spec: v1.PodSpec{
+					NodeName:   ourNode,
+					Containers: []v1.Container{{Name: "container1", Image: "image-container1"}},
+				},
+				Status: v1.PodStatus{
+					ContainerStatuses: []v1.ContainerStatus{
+						{
+							Name:        "container1",
+							ContainerID: "docker://container1id",
+							State: v1.ContainerState{
+								Running: &v1.ContainerStateRunning{},
+							},
+						},
+					},
+				},
+			},
+			staticPodTargets: []*StaticPodTargets{
+				{
+					Namespace:   "namespace1",
+					Labels:      map[string]string{"app": "myapp"},
+					Destination: "db1:table1",
+				},
+				{
+					Namespace:   "namespace2",
+					Labels:      map[string]string{"app": "myapp"},
+					Destination: "db1:table1",
+				},
+			},
+			expected: []FileTailTarget{
+				{
+					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
+					Database: "db1",
+					Table:    "table1",
+					LogType:  sourceparse.LogTypeKubernetes,
+					Parsers:  []string{},
+					Resources: map[string]interface{}{
+						"pod":         "pod1",
+						"namespace":   "namespace1",
+						"container":   "container1",
+						"containerID": "docker://container1id",
+						"label.app":   "myapp",
 					},
 				},
 			},
@@ -259,7 +342,7 @@ func TestGetFileTargets(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			targets := getFileTargets(test.pod, ourNode)
+			targets := getFileTargets(test.pod, ourNode, test.staticPodTargets)
 			require.ElementsMatch(t, test.expected, targets)
 		})
 	}
