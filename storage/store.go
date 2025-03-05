@@ -74,6 +74,7 @@ type StoreOpts struct {
 	LiftedAttributes []string
 	LiftedResources  []string
 	WALFlushInterval time.Duration
+	EnableWALFsync   bool
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
@@ -85,6 +86,7 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			SegmentMaxAge:    opts.SegmentMaxAge,
 			MaxDiskUsage:     opts.MaxDiskUsage,
 			WALFlushInterval: opts.WALFlushInterval,
+			EnableWALFsync:   opts.EnableWALFsync,
 		}),
 		metrics: make(map[string]prometheus.Counter),
 	}
