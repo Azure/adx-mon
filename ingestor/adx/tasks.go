@@ -139,7 +139,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			return nil
 		}
 
-		stmt := kql.New("").AddUnsafe(function.Spec.Body)
+		stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
