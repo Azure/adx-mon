@@ -15,8 +15,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+type ListFilterFunc func(client.Object) bool
+
+// FilterCompleted will filter out objects that are completed, as determined
+// by their Conditions being in a "True" state and the ObservedGeneration
+// matching the current generation of the object.
+func FilterCompleted(obj client.Object) bool {
+	statusObj, ok := obj.(adxmonv1.ConditionedObject)
+	if !ok {
+		return false
+	}
+
+	condition := statusObj.GetCondition()
+	return condition != nil && condition.Status == metav1.ConditionTrue && condition.ObservedGeneration == obj.GetGeneration()
+}
+
 type CRDHandler interface {
-	List(ctx context.Context, list client.ObjectList) error
+	List(ctx context.Context, list client.ObjectList, filters ...ListFilterFunc) error
 	UpdateStatus(ctx context.Context, obj client.Object, errStatus error) error
 }
 
@@ -32,37 +47,44 @@ func NewCRDHandler(client client.Client, elector scheduler.Elector) CRDHandler {
 	}
 }
 
-func (c *crdHandler) List(ctx context.Context, list client.ObjectList) error {
+func (c *crdHandler) List(ctx context.Context, list client.ObjectList, filters ...ListFilterFunc) error {
 	if c.Elector != nil && !c.Elector.IsLeader() {
 		return nil
 	}
+
+	// TODO (jesthom) Method is invoked for each database for each task, we probably want to
+	// switch to some sort of shared cache.
+	// controller-runtime implements such a caching mechanism
+	//
+	// mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{})
+	// then whenever you retrieve a client, you intherit the caching mechanism
+	// client := mgr.GetClient()
 
 	if c.Client == nil {
 		return errors.New("no client provided")
 	}
 
 	if err := c.Client.List(ctx, list); err != nil {
-		logger.Error("Failed to list CRDs: %v", err)
-		return err
+		return fmt.Errorf("failed to list CRDs: %w", err)
 	}
 
 	var filtered []runtime.Object
-	meta.EachListItem(list, func(item runtime.Object) error {
+	err := meta.EachListItem(list, func(item runtime.Object) error {
 		obj, ok := item.(client.Object)
 		if !ok {
 			return nil
 		}
-		statusObj, ok := obj.(adxmonv1.ConditionedObject)
-		if !ok {
-			return nil
-		}
-		condition := statusObj.GetCondition()
-		if condition != nil && condition.Status == metav1.ConditionTrue && condition.ObservedGeneration == obj.GetGeneration() {
-			return nil
+		for _, filter := range filters {
+			if filter(obj) {
+				return nil
+			}
 		}
 		filtered = append(filtered, obj)
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("failed to filter list items: %w", err)
+	}
 
 	meta.SetList(list, filtered)
 	return nil
@@ -88,18 +110,15 @@ func (c *crdHandler) UpdateStatus(ctx context.Context, obj client.Object, errSta
 	}
 
 	condition := metav1.Condition{
-		Status:             status,
-		ObservedGeneration: obj.GetGeneration(),
-		LastTransitionTime: metav1.Now(),
-		Message:            message,
+		Status:  status,
+		Message: message,
 	}
 
 	statusObj.SetCondition(condition)
 	logger.Infof("Updating status for %s/%s: %s", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), message)
 
 	if err := c.Client.Status().Update(ctx, obj); err != nil {
-		logger.Errorf("Failed to update status for %s/%s: %v", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
-		return err
+		return fmt.Errorf("failed to update status: %w", err)
 	}
 
 	return nil

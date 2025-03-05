@@ -51,7 +51,7 @@ func TestCRDs(t *testing.T) {
 
 	// List the SummaryRule objects. We expect to receive the one we just created
 	list := &adxmonv1.SummaryRuleList{}
-	require.NoError(t, store.List(ctx, list))
+	require.NoError(t, store.List(ctx, list, storage.FilterCompleted))
 	require.Len(t, list.Items, 1)
 
 	// Retrieve the SummaryRule object by its name and namespace as stored in k8s
@@ -60,7 +60,7 @@ func TestCRDs(t *testing.T) {
 
 	// There should be no objects returned by List because we set the status to success
 	list = &adxmonv1.SummaryRuleList{}
-	require.NoError(t, store.List(ctx, list))
+	require.NoError(t, store.List(ctx, list, storage.FilterCompleted))
 	require.Len(t, list.Items, 0)
 
 	// Get the SummaryRule object again and check its status
@@ -72,4 +72,9 @@ func TestCRDs(t *testing.T) {
 	require.Equal(t, metav1.ConditionTrue, cnd.Status)
 	require.Equal(t, sr.GetGeneration(), cnd.ObservedGeneration)
 	require.Equal(t, adxmonv1.SummaryRuleOwner, cnd.Type)
+
+	// There should be an object returned by List if no filter is set
+	list = &adxmonv1.SummaryRuleList{}
+	require.NoError(t, store.List(ctx, list))
+	require.Len(t, list.Items, 1)
 }

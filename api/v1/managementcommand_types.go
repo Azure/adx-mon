@@ -38,9 +38,6 @@ func (m *ManagementCommand) GetCondition() *metav1.Condition {
 }
 
 func (m *ManagementCommand) SetCondition(c metav1.Condition) {
-	c.Type = ManagementCommandConditionOwner
-	c.LastTransitionTime = metav1.Now()
-
 	if c.ObservedGeneration == 0 {
 		c.Reason = "Created"
 	} else {
@@ -50,6 +47,7 @@ func (m *ManagementCommand) SetCondition(c metav1.Condition) {
 		c.Reason = "Failed"
 	}
 	c.ObservedGeneration = m.GetGeneration()
+	c.Type = ManagementCommandConditionOwner
 
 	meta.SetStatusCondition(&m.Status.Conditions, c)
 }

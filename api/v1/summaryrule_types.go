@@ -17,11 +17,13 @@ limitations under the License.
 package v1
 
 import (
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
 
 // SummaryRuleSpec defines the desired state of SummaryRule
 type SummaryRuleSpec struct {
@@ -54,6 +56,25 @@ type SummaryRuleStatus struct {
 	// Conditions is an array of current observed SummaryRule conditions
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+func (s *SummaryRule) GetCondition() *metav1.Condition {
+	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOwner)
+}
+
+func (s *SummaryRule) SetCondition(c metav1.Condition) {
+	if c.ObservedGeneration == 0 {
+		c.Reason = "Created"
+	} else {
+		c.Reason = "Updated"
+	}
+	if c.Status == metav1.ConditionFalse {
+		c.Reason = "Failed"
+	}
+	c.ObservedGeneration = s.GetGeneration()
+	c.Type = SummaryRuleOwner
+
+	meta.SetStatusCondition(&s.Status.Conditions, c)
 }
 
 // +kubebuilder:object:root=true
