@@ -87,6 +87,9 @@ type WALOpts struct {
 
 	// WALFlushInterval is the interval at which the WAL should be flushed.
 	WALFlushInterval time.Duration
+
+	// EnableWALFsync enables fsync of the segment after every flush.
+	EnableWALFsync bool
 }
 
 type SampleType uint16
@@ -182,7 +185,9 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) er
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix)
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix,
+			WithFlushIntervale(w.opts.WALFlushInterval),
+			WithFsync(w.opts.EnableWALFsync))
 		if err != nil {
 			w.mu.Unlock()
 			return err
@@ -254,7 +259,9 @@ func (w *WAL) rotate(ctx context.Context) {
 
 				toClose = seg
 				var err error
-				w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix, WithFlushIntervale(w.opts.WALFlushInterval))
+				w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix,
+					WithFlushIntervale(w.opts.WALFlushInterval),
+					WithFsync(w.opts.EnableWALFsync))
 				if err != nil {
 					logger.Errorf("Failed to create new segment: %s", err.Error())
 					w.segment = nil
@@ -336,7 +343,9 @@ func (w *WAL) tryAppend(ctx context.Context, buf []byte) error {
 	w.mu.Lock()
 	if w.segment == nil {
 		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix, WithFlushIntervale(w.opts.WALFlushInterval))
+		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix,
+			WithFlushIntervale(w.opts.WALFlushInterval),
+			WithFsync(w.opts.EnableWALFsync))
 		if err != nil {
 			w.mu.Unlock()
 			return err
