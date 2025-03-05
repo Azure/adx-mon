@@ -446,7 +446,7 @@ github.com/power-devops/perfstat
 github.com/pquerna/ffjson/ffjson
 github.com/pquerna/ffjson/fflib/v1
 github.com/pquerna/ffjson/fflib/v1/internal
-# github.com/prometheus/client_golang v1.21.0
+# github.com/prometheus/client_golang v1.21.1
 ## explicit; go 1.21
 github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil
 github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil/header
@@ -576,8 +576,8 @@ go.opentelemetry.io/otel/trace/embedded
 # go.uber.org/multierr v1.11.0
 ## explicit; go 1.19
 go.uber.org/multierr
-# golang.org/x/crypto v0.33.0
-## explicit; go 1.20
+# golang.org/x/crypto v0.35.0
+## explicit; go 1.23.0
 golang.org/x/crypto/blowfish
 golang.org/x/crypto/chacha20
 golang.org/x/crypto/curve25519
@@ -590,8 +590,8 @@ golang.org/x/crypto/ssh/internal/bcrypt_pbkdf
 # golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
 ## explicit; go 1.20
 golang.org/x/exp/constraints
-# golang.org/x/net v0.35.0
-## explicit; go 1.18
+# golang.org/x/net v0.36.0
+## explicit; go 1.23.0
 golang.org/x/net/html
 golang.org/x/net/html/atom
 golang.org/x/net/http/httpguts
