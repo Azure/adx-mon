@@ -133,12 +133,11 @@ The query must return a table with the following columns:
 * `Title` - The title of the alert.
 * `Summary` - The summary of the alert.
 * `CorrelationId` - A unique ID to correlate alerts.  A correlation ID is necessary to prevent duplicate alerts from
-being sent to the destination.  If one is not specified, a new alert will be created each interval.
+being sent to the destination.  If one is not specified, a new alert will be created each interval and it cannot be automitigated. If specified, the `CorrelationId` will always receive a prefix of `${namespace}/${name}://${CorrelationId}`.
 
-Optionally, the query can return the following fields:
+Optionally, the alert definition can define the following fields:
 
-* `autoMitigateAfter` - The amount of time after the alert is triggered that it should be automatically mitigated if it
-has not correlated.  If a `CorrelationId` is specified, this field is ignored.
+* `autoMitigateAfter` - The amount of time after the alert is triggered that it should be automatically mitigated if it has not correlated. The automitigiation implementation is dependent on the alert destination implementation.
 * `criteria` - A list of criteria that must be met for the alert to trigger.  If not specified, the alert will trigger
 in all environments.  This is useful for alerts that should only trigger in a specific cloud or region.  The available
 criteria options are determined by the `alerter` tag settings.

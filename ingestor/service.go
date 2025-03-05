@@ -136,6 +136,9 @@ type ServiceOpts struct {
 
 	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
 	MaxTransferConcurrency int
+
+	// EnableWALFsync enables fsync of segments before closing the segment.
+	EnableWALFsync bool
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -143,6 +146,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
+		EnableWALFsync: opts.EnableWALFsync,
 		LiftedLabels:   opts.LiftedColumns,
 	})
 

@@ -45,6 +45,12 @@ func WithFlushIntervale(d time.Duration) SegmentOption {
 	}
 }
 
+func WithFsync(b bool) SegmentOption {
+	return func(s *segment) {
+		s.enableFsync = b
+	}
+}
+
 type Segment interface {
 	Append(ctx context.Context, buf []byte) error
 	Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
@@ -101,6 +107,11 @@ type segment struct {
 
 	flushCh       chan chan error
 	flushInterval time.Duration
+
+	// enableFsync enables fsyncing segments when closed.  In deployment with many segments and frequent flush intervals,
+	// this can increase disk IO and reduce performance.  If this is enabled, it may require more nodes
+	// to spread the IO load.
+	enableFsync bool
 }
 
 func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
@@ -405,10 +416,12 @@ func (s *segment) Close() error {
 	bwPool.Put(s.bw)
 	s.bw = nil
 
-	if err := s.w.Sync(); errors.Is(err, os.ErrClosed) {
-		return nil
-	} else if err != nil {
-		return err
+	if s.enableFsync {
+		if err := s.w.Sync(); errors.Is(err, os.ErrClosed) {
+			return nil
+		} else if err != nil {
+			return err
+		}
 	}
 
 	return s.w.Close()

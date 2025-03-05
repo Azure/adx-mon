@@ -62,6 +62,7 @@ func main() {
 			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
+			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
@@ -136,6 +137,7 @@ func realMain(ctx *cli.Context) error {
 	region := ctx.String("region")
 	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
 	maxTransferConcurrency := ctx.Int("max-transfer-concurrency")
+	enableWALFsync := ctx.Bool("enable-wal-fsync")
 
 	if namespace == "" {
 		nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -343,6 +345,7 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferAge:         maxTransferAge,
 		MaxSegmentCount:        maxSegmentCount,
 		MaxDiskUsage:           maxDiskUsage,
+		EnableWALFsync:         enableWALFsync,
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
 		LiftedColumns:          sortedLiftedLabels,
