@@ -268,14 +268,16 @@ func (w *WAL) rotate(ctx context.Context) {
 	}
 }
 
-func (w *WAL) rotateSegmentIfNecessary() {
-	if (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) >= w.opts.SegmentMaxSize) ||
-		(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) >= w.opts.SegmentMaxAge) {
+func (w *WAL) requiresRotation() bool {
+	return (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) >= w.opts.SegmentMaxSize) ||
+		(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) >= w.opts.SegmentMaxAge)
+}
 
+func (w *WAL) rotateSegmentIfNecessary() {
+	if w.requiresRotation() {
 		w.mu.Lock()
 		// Re-verify rotation is needed under write lock since the fast path check is racy
-		if (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) < w.opts.SegmentMaxSize) &&
-			(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) < w.opts.SegmentMaxAge) {
+		if !w.requiresRotation() {
 			w.mu.Unlock()
 			return
 		}

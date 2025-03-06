@@ -160,7 +160,7 @@ func TestWAL_MaxSegmentCount(t *testing.T) {
 			w, err := wal.NewWAL(wal.WALOpts{
 				Prefix:          "Foo",
 				StorageDir:      dir,
-				SegmentMaxSize:  1,
+				SegmentMaxSize:  1024,
 				MaxSegmentCount: 1,
 				Index:           idx,
 			})

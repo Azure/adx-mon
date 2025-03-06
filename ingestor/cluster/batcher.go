@@ -19,6 +19,9 @@ import (
 	"github.com/Azure/adx-mon/storage"
 )
 
+// DefaultMaxSegmentCount is the default maximum number of segments to include in a batch before creating a new batch.
+const DefaultMaxSegmentCount = 25
+
 type Segmenter interface {
 	Get(infos []wal.SegmentInfo, prefix string) []wal.SegmentInfo
 	PrefixesByAge() []string
@@ -153,7 +156,7 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		minUploadSize = 100 * 1024 * 1024 // This is the minimal "optimal" size for kusto uploads.
 	}
 
-	maxBatchSegments := 25
+	maxBatchSegments := DefaultMaxSegmentCount
 	if opts.MaxBatchSegments > 0 {
 		maxBatchSegments = opts.MaxBatchSegments
 	}
@@ -356,7 +359,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			})
 
 			// Prevent trying to combine an unbounded number of segments at once even if they are very small.  This
-			// can incur a log of CPU time and slower transfer when there are hundreds of segments that can be combined.
+			// can incur a lot of CPU time and slower transfers when there are hundreds of segments that can be combined.
 			if len(batch.Segments) >= b.maxBatchSegments {
 				if logger.IsDebug() {
 					logger.Debugf("Batch %s is merging more than %d segments, uploading directly", si.Path, 25)
