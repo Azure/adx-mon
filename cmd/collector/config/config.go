@@ -327,6 +327,7 @@ type HostLog struct {
 	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
 	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
+	StaticPodTargets     []*PodTarget      `toml:"static-pod-target" comment:"Defines a pod target to scrape."`
 	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
 	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
 }
@@ -444,6 +445,14 @@ type TailTarget struct {
 	Database string           `toml:"database" comment:"Database to store logs in."`
 	Table    string           `toml:"table" comment:"Table to store logs in."`
 	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+}
+
+type PodTarget struct {
+	Namespace    string            `toml:"namespace" comment:"The namespace of the pod to scrape."`
+	Name         string            `toml:"name" comment:"The name of the pod to scrape."`
+	LabelTargets map[string]string `toml:"label-targets" comment:"The labels to match on the pod.  If the pod has all of these labels, it will be scraped."`
+	Destination  string            `toml:"destination" comment:"The destination to send the logs to.  Syntax matches that of adx-mon/log-destination annotations."`
+	Parsers      []string          `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
 }
 
 type LogTransform struct {
