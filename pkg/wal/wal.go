@@ -324,17 +324,18 @@ func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	err := w.tryAppend(ctx, buf)
+	_, err := w.tryAppend(ctx, buf)
 	if errors.Is(err, ErrSegmentClosed) {
-		return w.tryAppend(ctx, buf)
+		_, err = w.tryAppend(ctx, buf)
+		return err
 	}
 	return err
 }
 
-func (w *WAL) tryAppend(ctx context.Context, buf []byte) error {
+func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {
 	var seg Segment
 	if err := w.validateLimits(); err != nil {
-		return err
+		return 0, err
 	}
 
 	// fast path
@@ -356,7 +357,7 @@ func (w *WAL) tryAppend(ctx context.Context, buf []byte) error {
 			WithFsync(w.opts.EnableWALFsync))
 		if err != nil {
 			w.mu.Unlock()
-			return err
+			return 0, err
 		}
 		w.segment = seg
 	}
