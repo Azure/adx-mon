@@ -4,21 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: functions.adx-mon.azure.com
+  name: managementcommands.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: Function
-    listKind: FunctionList
-    plural: functions
-    singular: function
+    kind: ManagementCommand
+    listKind: ManagementCommandList
+    plural: managementcommands
+    singular: managementcommand
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: Function defines a KQL function to be maintained in the Kusto
-          cluster
+        description: ManagementCommand is the Schema for the managementcommands API
         properties:
           apiVersion:
             description: |-
@@ -38,26 +37,21 @@ spec:
           metadata:
             type: object
           spec:
-            description: FunctionSpec defines the desired state of Function
+            description: ManagementCommandSpec defines the desired state of ManagementCommand
             properties:
               body:
-                description: Body is the KQL body of the function
+                description: Body is the management command to execute
                 type: string
-              database:
-                description: Database is the name of the database in which the function
-                  will be created
-                type: string
-              suspend:
+              foo:
                 description: |-
-                  This flag tells the controller to suspend subsequent executions, it does
-                  not apply to already started executions.  Defaults to false.
-                type: boolean
+                  Database is the target database for a management command. Not all management commands
+                  are database specific.
+                type: string
             required:
             - body
-            - database
             type: object
           status:
-            description: FunctionStatus defines the observed state of Function
+            description: ManagementCommandStatus defines the observed state of ManagementCommand
             properties:
               conditions:
                 description: Conditions is a list of conditions that apply to the
@@ -117,35 +111,6 @@ spec:
                   - type
                   type: object
                 type: array
-              error:
-                description: Error is a string that communicates any error message
-                  if one exists
-                type: string
-              lastTimeReconciled:
-                description: LastTimeReconciled is the last time the Function was
-                  reconciled
-                format: date-time
-                type: string
-              message:
-                description: Message is a human-readable message indicating details
-                  about the Function
-                type: string
-              observedGeneration:
-                description: ObservedGeneration is the most recent generation observed
-                  for this Function
-                format: int64
-                type: integer
-              reason:
-                description: Reason is a string that communicates the reason for a
-                  transition
-                type: string
-              status:
-                description: Status is an enum that represents the status of the Function
-                type: string
-            required:
-            - lastTimeReconciled
-            - observedGeneration
-            - status
             type: object
         type: object
     served: true

@@ -58,7 +58,7 @@ func GetKubeConfig(ctx context.Context, k *k3s.K3sContainer) (*rest.Config, ctrl
 	return restCfg, ctrlCli, err
 }
 
-func InstallFunctionsCrd(ctx context.Context, k *k3s.K3sContainer) error {
+func InstallCrds(ctx context.Context, k *k3s.K3sContainer) error {
 	restCfg, _, err := GetKubeConfig(ctx, k)
 	if err != nil {
 		return fmt.Errorf("failed to get kubeconfig: %w", err)

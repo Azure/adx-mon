@@ -115,7 +115,6 @@ func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor) *
 }
 
 func (t *SyncFunctionsTask) Run(ctx context.Context) error {
-
 	functions, err := t.store.List(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list functions: %w", err)
@@ -140,7 +139,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			return nil
 		}
 
-		stmt := kql.New("").AddUnsafe(function.Spec.Body)
+		stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			if !errors.Retry(err) {
 				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
@@ -187,5 +186,45 @@ func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("Failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
 	}
+	return nil
+}
+
+type ManagementCommandTask struct {
+	store    storage.ManagementCommands
+	kustoCli StatementExecutor
+}
+
+func NewManagementCommandsTask(store storage.ManagementCommands, kustoCli StatementExecutor) *ManagementCommandTask {
+	return &ManagementCommandTask{
+		store:    store,
+		kustoCli: kustoCli,
+	}
+}
+
+func (t *ManagementCommandTask) Run(ctx context.Context) error {
+	managementCommands, err := t.store.List(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list management commands: %w", err)
+	}
+	for _, command := range managementCommands {
+		// ManagementCommands database is optional as not all commands are scoped at the database level
+		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
+			continue
+		}
+
+		stmt := kql.New(".execute script<|").AddUnsafe(command.Spec.Body)
+		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
+			if err = t.store.UpdateStatus(ctx, command, err); err != nil {
+				logger.Errorf("Failed to update management command status: %v", err)
+			}
+		}
+
+		logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
+		if err := t.store.UpdateStatus(ctx, command, nil); err != nil {
+			logger.Errorf("Failed to update success status: %v", err)
+		}
+	}
+
 	return nil
 }

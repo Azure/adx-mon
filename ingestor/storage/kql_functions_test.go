@@ -3,7 +3,6 @@ package storage_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,9 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -31,23 +27,13 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
-	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
-	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))
-
 	ctx := context.Background()
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
-	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
-
-	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
-	require.NoError(t, err)
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	require.NoError(t, err)
-	config.WarningHandler = rest.NoWarnings{}
-	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{})
+	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -154,6 +140,37 @@ func TestFunctions(t *testing.T) {
 		fns, err = functionStore.List(ctx)
 		require.NoError(t, err)
 		require.Empty(t, fns)
+	})
+
+	t.Run("Updates subresource", func(t *testing.T) {
+		fn := &adxmonv1.Function{}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
+
+		fn.Status.Status = adxmonv1.Success
+		require.NoError(t, functionStore.UpdateStatus(ctx, fn))
+
+		fn = &adxmonv1.Function{}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
+		require.Equal(t, fn.Status.Status, adxmonv1.Success)
+		require.Equal(t, fn.Status.ObservedGeneration, fn.GetGeneration())
+		require.False(t, fn.Status.LastTimeReconciled.IsZero())
+		require.Empty(t, fn.Status.Error)
+
+		fn.Status.Conditions = []metav1.Condition{
+			{
+				Type:               "Test",
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: fn.GetGeneration(),
+				LastTransitionTime: metav1.Now(),
+				Reason:             "Test",
+				Message:            "Test",
+			},
+		}
+		require.NoError(t, functionStore.UpdateStatus(ctx, fn))
+
+		fns, err := functionStore.List(ctx)
+		require.NoError(t, err)
+		require.Empty(t, fns) // because the generation is up to date
 	})
 
 	t.Run("Can delete function", func(t *testing.T) {

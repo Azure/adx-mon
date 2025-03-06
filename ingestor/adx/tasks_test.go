@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,13 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type TestStatementExecutor struct {
@@ -156,21 +151,18 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
-	crdPath := filepath.Join(t.TempDir(), "crd.yaml")
-	require.NoError(t, testutils.CopyFile("../../kustomize/bases/functions_crd.yaml", crdPath))
-
 	ctx := context.Background()
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
-	require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
+	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
 
 	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
 
@@ -178,21 +170,6 @@ func TestFunctions(t *testing.T) {
 	kustoClient, err := kusto.New(cb)
 	require.NoError(t, err)
 	defer kustoClient.Close()
-
-	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
-	require.NoError(t, err)
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	require.NoError(t, err)
-	config.WarningHandler = rest.NoWarnings{}
-	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{})
-	require.NoError(t, err)
-
-	require.Eventually(t, func() bool {
-		crd := &adxmonv1.Function{}
-		err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: "default"}, crd)
-		return !errors.Is(err, &meta.NoKindMatchError{}) && !errors.Is(err, &meta.NoResourceMatchError{})
-	}, time.Minute, time.Second)
 
 	executor := &KustoStatementExecutor{
 		database: "NetDefaultDB",
@@ -254,6 +231,129 @@ func TestFunctions(t *testing.T) {
 			return !testutils.FunctionExists(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
 		}, 10*time.Minute, time.Second)
 	})
+
+	t.Run("Creates more than one function", func(t *testing.T) {
+		fn := &adxmonv1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "a-and-b",
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.FunctionSpec{
+				Body:     severalFunctions,
+				Database: executor.Database(),
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			return testutils.FunctionExists(ctx, t, executor.Database(), "a", kustoContainer.ConnectionUrl()) &&
+				testutils.FunctionExists(ctx, t, executor.Database(), "b", kustoContainer.ConnectionUrl())
+		}, 10*time.Minute, time.Second)
+	})
+
+	t.Run("Communicates invalid functions", func(t *testing.T) {
+		// To support more than one function in a single CRD, we execute the CRD body
+		// as a database script. By default, database scripts that contain error do
+		// not telegraph individual errors, only if the entire script fails. We set
+		// sufficient options to enable any failures within the script body to bubble
+		// back to the caller, so this test ensures that an invalid function body
+		// is communicated back to the caller.
+		resourceName := "invalid-function"
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: "default",
+		}
+		fn := &adxmonv1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      typeNamespacedName.Name,
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.FunctionSpec{
+				Body:     ".create-or-alter function() { MissingTable | count }",
+				Database: executor.Database(),
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			fnr := &adxmonv1.Function{}
+			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fnr))
+			return fnr.Status.Status == v1.PermanentFailure
+		}, 10*time.Minute, time.Second)
+	})
+}
+
+func TestManagementCommands(t *testing.T) {
+	testutils.IntegrationTest(t)
+
+	scheme := clientgoscheme.Scheme
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	ctx := context.Background()
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	testcontainers.CleanupContainer(t, k3sContainer)
+	require.NoError(t, err)
+
+	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
+
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	require.NoError(t, err)
+	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+
+	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	kustoClient, err := kusto.New(cb)
+	require.NoError(t, err)
+	defer kustoClient.Close()
+
+	executor := &KustoStatementExecutor{
+		database: "NetDefaultDB",
+		client:   kustoClient,
+	}
+
+	store := storage.NewManagementCommands(ctrlCli, nil)
+	task := NewManagementCommandsTask(store, executor)
+
+	resourceName := "testtest"
+	typeNamespacedName := types.NamespacedName{
+		Name:      resourceName,
+		Namespace: "default",
+	}
+
+	t.Run("Creates management commands", func(t *testing.T) {
+		fn := &adxmonv1.ManagementCommand{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      typeNamespacedName.Name,
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.ManagementCommandSpec{
+				Body:     ".clear database cache query_results",
+				Database: executor.Database(),
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			cmd := &adxmonv1.ManagementCommand{}
+			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, cmd))
+
+			// wait for the command to be marked as owner completed successfully
+			for _, condition := range cmd.Status.Conditions {
+				if condition.Type == storage.ManagementCommandConditionOwner {
+					return condition.Status == metav1.ConditionTrue
+				}
+			}
+
+			return false
+		}, 10*time.Minute, time.Second)
+	})
 }
 
 type KustoStatementExecutor struct {
@@ -268,3 +368,12 @@ func (k *KustoStatementExecutor) Database() string {
 func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
 	return k.client.Mgmt(ctx, k.database, query, options...)
 }
+
+var severalFunctions = `// function a
+.create-or-alter function a() {
+  print "a"
+}
+//
+.create-or-alter function b() {
+  print "b"
+}`

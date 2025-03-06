@@ -39,7 +39,7 @@ func NewFunctions(client client.Client, elector scheduler.Elector) *functions {
 
 func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error {
 	if f.Client == nil {
-		return fmt.Errorf("no client provided")
+		return errors.New("no client provided")
 	}
 
 	if fn.Status.Status == adxmonv1.Success {
