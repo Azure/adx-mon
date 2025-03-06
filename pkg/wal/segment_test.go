@@ -324,7 +324,7 @@ func TestSegment_Size(t *testing.T) {
 			// Force all buffered writes to disk.
 			require.NoError(t, s.Flush())
 
-			sz, err := s.Size()
+			sz := s.Size()
 			require.NoError(t, err)
 			info, err := s.Info()
 			require.NoError(t, err)

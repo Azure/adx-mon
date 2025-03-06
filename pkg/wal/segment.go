@@ -57,7 +57,7 @@ type Segment interface {
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
-	Size() (int64, error)
+	Size() int64
 	CreatedAt() time.Time
 	Reader() (io.ReadCloser, error)
 	Path() string
@@ -275,8 +275,8 @@ func (s *segment) CreatedAt() time.Time {
 }
 
 // Size returns the current size of the segment file on file.
-func (s *segment) Size() (int64, error) {
-	return int64(atomic.LoadUint64(&s.filePos)), nil
+func (s *segment) Size() int64 {
+	return int64(atomic.LoadUint64(&s.filePos))
 }
 
 // ID returns the ID of the segment.
@@ -292,10 +292,7 @@ func (s *segment) Info() (SegmentInfo, error) {
 		return SegmentInfo{}, ErrSegmentClosed
 	}
 
-	sz, err := s.Size()
-	if err != nil {
-		return SegmentInfo{}, err
-	}
+	sz := s.Size()
 
 	return SegmentInfo{
 		Prefix:    s.prefix,
