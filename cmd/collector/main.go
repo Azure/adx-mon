@@ -614,6 +614,7 @@ func realMain(ctx *cli.Context) error {
 						Database:       target.Database,
 						Table:          target.Table,
 						LogLineParsers: parsers,
+						JournalFields:  target.JournalFields,
 					})
 				}
 				journalConfig := journal.SourceConfig{

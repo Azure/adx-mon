@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/coreos/go-systemd/journal"
+	"github.com/coreos/go-systemd/sdjournal"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -84,9 +85,10 @@ func TestJournalE2E(t *testing.T) {
 	source = New(SourceConfig{
 		Targets: []JournalTargetConfig{
 			{
-				Matches:  []string{matchTag},
-				Database: "testdb",
-				Table:    "testtable",
+				Matches:       []string{matchTag},
+				Database:      "testdb",
+				Table:         "testtable",
+				JournalFields: []string{sdjournal.SD_JOURNAL_FIELD_EXE},
 			},
 		},
 		CursorDirectory: cursorDir,
@@ -103,6 +105,9 @@ func TestJournalE2E(t *testing.T) {
 	defer service.Close()
 	<-sink.DoneChan()
 	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), sink.Latest().Body[types.BodyKeyMessage])
+
+	// Ensure the systemd unit identifier is set
+	require.NotEmpty(t, sink.Latest().Resource[sdjournal.SD_JOURNAL_FIELD_EXE])
 }
 
 func TestJournalMulipleSources(t *testing.T) {
