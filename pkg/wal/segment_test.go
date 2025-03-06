@@ -298,7 +298,7 @@ func TestSegment_Closed(t *testing.T) {
 			_, err = s.Reader()
 			require.Equal(t, err, wal.ErrSegmentClosed)
 
-			_, err = s.Info()
+			_ = s.Info()
 			require.Equal(t, err, wal.ErrSegmentClosed)
 		})
 	}
@@ -324,9 +324,9 @@ func TestSegment_Size(t *testing.T) {
 			// Force all buffered writes to disk.
 			require.NoError(t, s.Flush())
 
-			sz, err := s.Size()
+			sz := s.Size()
 			require.NoError(t, err)
-			info, err := s.Info()
+			info := s.Info()
 			require.NoError(t, err)
 			require.NoError(t, s.Close())
 
