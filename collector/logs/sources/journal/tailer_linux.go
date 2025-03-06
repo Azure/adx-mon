@@ -29,6 +29,7 @@ type tailer struct {
 	matches        []string
 	database       string
 	table          string
+	journalFields  []string
 	cursorFilePath string
 	logLineParsers []parser.Parser
 	batchQueue     chan<- *types.Log
@@ -120,6 +121,12 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 		// Write after parsing to ensure these values are always set to values we need for acking.
 		log.Attributes[journald_cursor_attribute] = entry.Cursor
 		log.Attributes[journald_cursor_filename_attribute] = t.cursorFilePath
+
+		for _, field := range t.journalFields {
+			if value, ok := entry.Fields[field]; ok {
+				log.Resource[field] = value
+			}
+		}
 
 		t.batchQueue <- log
 	}
