@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -54,6 +55,10 @@ type WAL struct {
 	mu      sync.RWMutex
 	closed  bool
 	segment Segment
+
+	// inflightWriteBytes is the sum of bytes from goroutines with active writes in progress but not written
+	// to the active segment.
+	inflightWriteBytes int64
 }
 
 type SegmentInfo struct {
@@ -168,7 +173,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 
 func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) error {
 	var seg Segment
-	if err := w.validateLimits(buf); err != nil {
+	if err := w.validateLimits(); err != nil {
 		return err
 	}
 
@@ -200,14 +205,15 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) er
 	return seg.Write(ctx, buf, opts...)
 }
 
-func (w *WAL) validateLimits(buf []byte) error {
-	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+int64(len(buf)) > w.opts.MaxDiskUsage {
+func (w *WAL) validateLimits() error {
+	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+atomic.LoadInt64(&w.inflightWriteBytes) > w.opts.MaxDiskUsage {
 		return ErrMaxDiskUsageExceeded
 	}
 
 	if w.opts.MaxSegmentCount > 0 && w.index.TotalSegments() >= w.opts.MaxSegmentCount {
 		return ErrMaxSegmentsExceeded
 	}
+
 	return nil
 }
 
@@ -288,7 +294,6 @@ func (w *WAL) rotate(ctx context.Context) {
 				}
 			}
 		}
-
 	}
 }
 
@@ -316,6 +321,9 @@ func (w *WAL) Remove(path string) error {
 }
 
 func (w *WAL) Append(ctx context.Context, buf []byte) error {
+	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
+	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
+
 	err := w.tryAppend(ctx, buf)
 	if errors.Is(err, ErrSegmentClosed) {
 		return w.tryAppend(ctx, buf)
@@ -325,7 +333,7 @@ func (w *WAL) Append(ctx context.Context, buf []byte) error {
 
 func (w *WAL) tryAppend(ctx context.Context, buf []byte) error {
 	var seg Segment
-	if err := w.validateLimits(buf); err != nil {
+	if err := w.validateLimits(); err != nil {
 		return err
 	}
 
