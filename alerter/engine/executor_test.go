@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -152,6 +153,95 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 				require.ErrorContains(t, err, tt.err)
 				require.True(t, isUserError(err))
 			}
+		})
+	}
+}
+
+func TestExecutor_Handler_CorrelationId(t *testing.T) {
+	ruleNamespace := "rulesns"
+	ruleName := "rulename"
+	// NOTE: This prefix is used by rule destinations to automitigate rules.
+	// Do not change without consideration.
+	prefix := fmt.Sprintf("%s/%s://", ruleNamespace, ruleName)
+
+	testcases := []struct {
+		desc          string
+		columns       []table.Column
+		rows          value.Values
+		correlationId string
+	}{
+		{
+			desc: "normal correlation id",
+			columns: table.Columns{
+				{Name: "Title", Type: types.String},
+				{Name: "Severity", Type: types.Long},
+				{Name: "CorrelationId", Type: types.String}},
+			rows: value.Values{value.String{Value: "Title", Valid: true},
+				value.Long{Value: 1, Valid: false},
+				value.String{Value: "Fake CorrelationId", Valid: true}},
+			correlationId: fmt.Sprintf("%s%s", prefix, "Fake CorrelationId"),
+		},
+		{
+			desc: "correlation id already has prefix",
+			columns: table.Columns{
+				{Name: "Title", Type: types.String},
+				{Name: "Severity", Type: types.Long},
+				{Name: "CorrelationId", Type: types.String}},
+			rows: value.Values{value.String{Value: "Title", Valid: true},
+				value.Long{Value: 1, Valid: false},
+				value.String{Value: "rulesns/rulename://Fake Correlation Id", Valid: true}},
+			correlationId: fmt.Sprintf("%s%s", prefix, "Fake Correlation Id"),
+		},
+		{
+			desc: "empty correlation id",
+			columns: table.Columns{
+				{Name: "Title", Type: types.String},
+				{Name: "Severity", Type: types.Long},
+				{Name: "CorrelationId", Type: types.String}},
+			rows: value.Values{value.String{Value: "Title", Valid: true},
+				value.Long{Value: 1, Valid: false},
+				value.String{Value: "", Valid: true}},
+			correlationId: "",
+		},
+		{
+			desc: "no correlation id",
+			columns: table.Columns{
+				{Name: "Title", Type: types.String},
+				{Name: "Severity", Type: types.Long}},
+			rows: value.Values{value.String{Value: "Title", Valid: true},
+				value.Long{Value: 1, Valid: false}},
+			correlationId: "",
+		},
+	}
+
+	for _, tt := range testcases {
+		t.Run(tt.desc, func(t *testing.T) {
+			iter := &kusto.RowIterator{}
+
+			rows, err := kusto.NewMockRows(tt.columns)
+			require.NoError(t, err)
+
+			rows.Row(tt.rows)
+			require.NoError(t, iter.Mock(rows))
+
+			row, _, _ := iter.NextRowOrError()
+
+			client := &fakeAlertClient{}
+			e := Executor{
+				alertCli: client,
+			}
+
+			rule := &rules.Rule{
+				Name:      ruleName,
+				Namespace: ruleNamespace,
+			}
+			qc := &QueryContext{
+				Rule: rule,
+			}
+
+			err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
+			require.NoError(t, err)
+			require.Equal(t, tt.correlationId, client.alert.CorrelationID)
 		})
 	}
 }

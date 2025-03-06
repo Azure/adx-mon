@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -550,6 +551,13 @@ func TestSegment_Write_Concurrent(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func TestSegmentOptions(t *testing.T) {
+	_, err := wal.NewSegment(t.TempDir(), "Foo",
+		wal.WithFsync(true),
+		wal.WithFlushIntervale(time.Second))
+	require.NoError(t, err)
 }
 
 func BenchmarkSegment_Write(b *testing.B) {
