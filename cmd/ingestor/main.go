@@ -63,6 +63,7 @@ func main() {
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "drop-prefix", Usage: "Drop transfers that match the file prefix. Transfer filenames are in the form of DestinationDB_Table_..."},
+			&cli.IntFlag{Name: "max-batch-segments", Usage: "Maximum number of segments per batch", Value: 25},
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
@@ -129,6 +130,7 @@ func realMain(ctx *cli.Context) error {
 	maxSegmentCount := ctx.Int64("max-segment-count")
 	dropPrefixes := ctx.StringSlice("drop-prefix")
 	maxDiskUsage := ctx.Int64("max-disk-usage")
+	maxBatchSegments := ctx.Int("max-batch-segments")
 	partitionSize := ctx.Int("partition-size")
 	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
@@ -347,6 +349,7 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferAge:         maxTransferAge,
 		MaxSegmentCount:        maxSegmentCount,
 		MaxDiskUsage:           maxDiskUsage,
+		MaxBatchSegments:       maxBatchSegments,
 		EnableWALFsync:         enableWALFsync,
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
