@@ -532,7 +532,7 @@ github.com/tklauser/numcpus
 github.com/traefik/yaegi/internal/unsafe2
 github.com/traefik/yaegi/interp
 github.com/traefik/yaegi/stdlib
-# github.com/urfave/cli/v2 v2.27.5
+# github.com/urfave/cli/v2 v2.27.6
 ## explicit; go 1.18
 github.com/urfave/cli/v2
 # github.com/valyala/fastjson v1.6.4
