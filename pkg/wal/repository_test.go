@@ -83,7 +83,9 @@ func TestRepository_Remove(t *testing.T) {
 
 			// Add a closed segment for this WAL.
 			seg, err := wal.NewSegment(dir, "db_foo")
-			require.NoError(t, seg.Write(context.Background(), []byte("bar")))
+			n, err := seg.Write(context.Background(), []byte("bar"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, err)
 			require.NoError(t, seg.Close())
 
