@@ -146,8 +146,8 @@ type ServiceOpts struct {
 	DropFilePrefixes []string
 
 	// MaxBatchSegments is the maximum number of segments to include when transferring segments in a batch.  The segments
-	// are merged into a new segment.  A higher number takes longer to combine on the sending size and increases the
-	// size of segments on the receiving size.  A lower number creates more batches and high remote transfer calls.  If
+	// are merged into a new segment.  A higher number takes longer to combine on the sending side and increases the
+	// size of segments on the receiving side.  A lower number creates more batches and high remote transfer calls.  If
 	// not specified, the default is 25.
 	MaxBatchSegments int
 }
