@@ -32,6 +32,7 @@ type RepositoryOpts struct {
 	MaxDiskUsage     int64
 	MaxSegmentCount  int
 	WALFlushInterval time.Duration
+	EnableWALFsync   bool
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
@@ -177,6 +178,7 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 		MaxDiskUsage:     s.opts.MaxDiskUsage,
 		Index:            s.index,
 		WALFlushInterval: s.opts.WALFlushInterval,
+		EnableWALFsync:   s.opts.EnableWALFsync,
 	}
 
 	wal, err := NewWAL(walOpts)
