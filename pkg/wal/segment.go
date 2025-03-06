@@ -52,7 +52,7 @@ func WithFsync(b bool) SegmentOption {
 }
 
 type Segment interface {
-	Append(ctx context.Context, buf []byte) error
+	Append(ctx context.Context, buf []byte) (int, error)
 	Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 	Bytes() ([]byte, error)
 	Close() error
@@ -326,36 +326,36 @@ func (s *segment) Iterator() (Iterator, error) {
 
 // Append appends a raw blocks to the segment.  This is used for appending blocks that have already been compressed.
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
-func (s *segment) Append(ctx context.Context, buf []byte) error {
+func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Verify the block is valid before appending
 	if n, err := iter.Verify(); err != nil {
-		return err
+		return 0, err
 	} else if n == 0 {
-		return nil
+		return 0, nil
 	}
 
 	if s.mu.TryLock() {
 		defer s.mu.Unlock()
 	} else {
-		return ErrSegmentLocked
+		return 0, ErrSegmentLocked
 	}
 
 	if s.closed {
-		return ErrSegmentClosed
+		return 0, ErrSegmentClosed
 	}
 
 	// Strip off the header and append the block to the segment
 	n, err := s.appendBlocks(buf[8:])
 	if err != nil {
-		return err
+		return 0, err
 	}
 	atomic.AddUint64(&s.filePos, uint64(n))
-	return nil
+	return n, nil
 }
 
 // Write writes buf to the segment.
