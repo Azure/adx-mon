@@ -19,10 +19,11 @@ import (
 const DefaultIOBufSize = 4 * 1024
 
 var (
-	ErrMaxDiskUsageExceeded = fmt.Errorf("max disk usage exceeded")
-	ErrMaxSegmentsExceeded  = fmt.Errorf("max segments exceeded")
-	ErrSegmentClosed        = fmt.Errorf("segment closed")
-	ErrSegmentLocked        = fmt.Errorf("segment locked")
+	ErrMaxDiskUsageExceeded   = fmt.Errorf("max disk usage exceeded")
+	ErrMaxSegmentsExceeded    = fmt.Errorf("max segments exceeded")
+	ErrMaxSegmentSizeExceeded = fmt.Errorf("max segment size exceeded")
+	ErrSegmentClosed          = fmt.Errorf("segment closed")
+	ErrSegmentLocked          = fmt.Errorf("segment locked")
 
 	idgen *flake.Flake
 
@@ -59,6 +60,14 @@ type WAL struct {
 	// inflightWriteBytes is the sum of bytes from goroutines with active writes in progress but not written
 	// to the active segment.
 	inflightWriteBytes int64
+
+	// segmentSize tracks the size of the current segment.  This is tracked separately from Segment.Size() because
+	// the latter requires taking an RLock on the segments which creates lock contention.
+	segmentSize int64
+
+	// segmentCreatedAt is the unixtime when the current segment was created.  This is tracked separately from Segment
+	// itself to avoid lock contention.
+	segmentCreatedAt int64
 }
 
 type SegmentInfo struct {
@@ -145,11 +154,7 @@ func (w *WAL) Close() error {
 	w.closed = true
 
 	if w.segment != nil {
-		info, err := w.segment.Info()
-		if err != nil {
-			return err
-		}
-
+		info := w.segment.Info()
 		if err := w.segment.Close(); err != nil {
 			return err
 		}
@@ -206,12 +211,16 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) er
 }
 
 func (w *WAL) validateLimits() error {
-	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+atomic.LoadInt64(&w.inflightWriteBytes) > w.opts.MaxDiskUsage {
+	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.MaxDiskUsage {
 		return ErrMaxDiskUsageExceeded
 	}
 
 	if w.opts.MaxSegmentCount > 0 && w.index.TotalSegments() >= w.opts.MaxSegmentCount {
 		return ErrMaxSegmentsExceeded
+	}
+
+	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+		return ErrMaxSegmentSizeExceeded
 	}
 
 	return nil
@@ -243,55 +252,48 @@ func (w *WAL) rotate(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			w.rotateSegmentIfNecessary()
+		}
+	}
+}
 
-			w.mu.Lock()
-			if w.segment == nil {
-				w.mu.Unlock()
-				continue
-			}
+func (w *WAL) rotateSegmentIfNecessary() {
+	if (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) >= w.opts.SegmentMaxSize) ||
+		(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) >= w.opts.SegmentMaxAge) {
 
-			var toClose Segment
-			seg := w.segment
-			sz, err := seg.Size()
-			if err != nil {
-				w.mu.Unlock()
-				logger.Errorf("Failed segment size: %s %s", seg.Path(), err.Error())
-				continue
-			}
-
-			// Rotate the segment once it's past the max segment size
-			if (w.opts.SegmentMaxSize != 0 && sz >= w.opts.SegmentMaxSize) ||
-				(w.opts.SegmentMaxAge.Seconds() != 0 && time.Since(seg.CreatedAt()).Seconds() > w.opts.SegmentMaxAge.Seconds()) {
-
-				toClose = seg
-				var err error
-				w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix,
-					WithFlushIntervale(w.opts.WALFlushInterval),
-					WithFsync(w.opts.EnableWALFsync))
-				if err != nil {
-					logger.Errorf("Failed to create new segment: %s", err.Error())
-					w.segment = nil
-				}
-			}
+		w.mu.Lock()
+		// Re-verify rotation is needed under write lock since the fast path check is racy
+		if (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) < w.opts.SegmentMaxSize) &&
+			(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) < w.opts.SegmentMaxAge) {
 			w.mu.Unlock()
+			return
+		}
 
-			if toClose != nil {
-				// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
-				// delete it so that we don't end up uploading empty segments to Kusto.
-				if sz > 8 {
-					info, err := toClose.Info()
-					if err != nil {
-						logger.Errorf("Failed to get segment info: %s %s", toClose.Path(), err.Error())
-					} else {
-						w.index.Add(info)
-					}
-				} else {
-					_ = os.Remove(toClose.Path())
-				}
+		toClose := w.segment
+		var err error
+		w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix,
+			WithFlushIntervale(w.opts.WALFlushInterval),
+			WithFsync(w.opts.EnableWALFsync))
+		if err != nil {
+			logger.Errorf("Failed to create new segment: %s", err.Error())
+			w.segment = nil
+		}
+		atomic.StoreInt64(&w.segmentSize, w.segment.Size())
+		atomic.StoreInt64(&w.segmentCreatedAt, w.segment.CreatedAt().Unix())
+		w.mu.Unlock()
 
-				if err := toClose.Close(); err != nil {
-					logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
-				}
+		if toClose != nil {
+			// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
+			// delete it so that we don't end up uploading empty segments to Kusto.
+			if toClose.Size() > 8 {
+				info := toClose.Info()
+				w.index.Add(info)
+			} else {
+				_ = os.Remove(toClose.Path())
+			}
+
+			if err := toClose.Close(); err != nil {
+				logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
 			}
 		}
 	}
@@ -324,11 +326,18 @@ func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	_, err := w.tryAppend(ctx, buf)
-	if errors.Is(err, ErrSegmentClosed) {
-		_, err = w.tryAppend(ctx, buf)
+	n, err := w.tryAppend(ctx, buf)
+	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
+		w.rotateSegmentIfNecessary()
+		n, err = w.tryAppend(ctx, buf)
+		atomic.AddInt64(&w.segmentSize, int64(n))
+		return err
+	} else if errors.Is(err, ErrSegmentClosed) {
+		n, err = w.tryAppend(ctx, buf)
+		atomic.AddInt64(&w.segmentSize, int64(n))
 		return err
 	}
+	atomic.AddInt64(&w.segmentSize, int64(n))
 	return err
 }
 

@@ -57,13 +57,13 @@ type Segment interface {
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
-	Size() (int64, error)
+	Size() int64
 	CreatedAt() time.Time
 	Reader() (io.ReadCloser, error)
 	Path() string
 
 	Iterator() (Iterator, error)
-	Info() (SegmentInfo, error)
+	Info() SegmentInfo
 	Flush() error
 	// Repair truncates the last bytes in the segment if they are missing, corrupted or have extra data.  This
 	// repairs any corrupted segment that may not have fully flushed to disk safely.  The segment is truncated
@@ -275,8 +275,8 @@ func (s *segment) CreatedAt() time.Time {
 }
 
 // Size returns the current size of the segment file on file.
-func (s *segment) Size() (int64, error) {
-	return int64(atomic.LoadUint64(&s.filePos)), nil
+func (s *segment) Size() int64 {
+	return int64(atomic.LoadUint64(&s.filePos))
 }
 
 // ID returns the ID of the segment.
@@ -284,18 +284,11 @@ func (s *segment) ID() string {
 	return s.id
 }
 
-func (s *segment) Info() (SegmentInfo, error) {
+func (s *segment) Info() SegmentInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.closed {
-		return SegmentInfo{}, ErrSegmentClosed
-	}
-
-	sz, err := s.Size()
-	if err != nil {
-		return SegmentInfo{}, err
-	}
+	sz := s.Size()
 
 	return SegmentInfo{
 		Prefix:    s.prefix,
@@ -303,7 +296,7 @@ func (s *segment) Info() (SegmentInfo, error) {
 		Size:      sz,
 		CreatedAt: s.createdAt,
 		Path:      s.path,
-	}, nil
+	}
 }
 
 // Iterator returns an iterator to read values written to the segment.  Creating an iterator on a segment that is
