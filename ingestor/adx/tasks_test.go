@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	KERRS "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -317,7 +318,7 @@ func TestManagementCommands(t *testing.T) {
 		client:   kustoClient,
 	}
 
-	store := storage.NewManagementCommands(ctrlCli, nil)
+	store := storage.NewCRDHandler(ctrlCli, nil)
 	task := NewManagementCommandsTask(store, executor)
 
 	resourceName := "testtest"
@@ -346,7 +347,7 @@ func TestManagementCommands(t *testing.T) {
 
 			// wait for the command to be marked as owner completed successfully
 			for _, condition := range cmd.Status.Conditions {
-				if condition.Type == storage.ManagementCommandConditionOwner {
+				if condition.Type == adxmonv1.ManagementCommandConditionOwner {
 					return condition.Status == metav1.ConditionTrue
 				}
 			}
@@ -367,6 +368,102 @@ func (k *KustoStatementExecutor) Database() string {
 
 func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
 	return k.client.Mgmt(ctx, k.database, query, options...)
+}
+
+func TestSummaryRules(t *testing.T) {
+	testutils.IntegrationTest(t)
+
+	scheme := clientgoscheme.Scheme
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	ctx := context.Background()
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	testcontainers.CleanupContainer(t, k3sContainer)
+	require.NoError(t, err)
+
+	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
+
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	require.NoError(t, err)
+	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+
+	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	kustoClient, err := kusto.New(cb)
+	require.NoError(t, err)
+	defer kustoClient.Close()
+
+	databaseName := "NetDefaultDB"
+
+	// Create a source table
+	stmt := kql.New(".create table Source (Timestamp:datetime, col1: string, Value: int)")
+	_, err = kustoClient.Mgmt(ctx, databaseName, stmt)
+	require.NoError(t, err)
+
+	// Ingest some rows
+	for i := 0; i < 100; i++ {
+		stmt = kql.New(".ingest inline into table Source <| ").AddUnsafe(fmt.Sprintf("%s,a,%d", time.Now().Add(-time.Duration(i)*time.Minute).Format(time.RFC3339), i))
+		_, err = kustoClient.Mgmt(ctx, databaseName, stmt)
+		require.NoError(t, err)
+	}
+
+	executor := &KustoStatementExecutor{
+		database: databaseName,
+		client:   kustoClient,
+	}
+
+	store := storage.NewCRDHandler(ctrlCli, nil)
+	task := NewSummaryRuleTask(store, executor)
+
+	resourceName := "testtest"
+	typeNamespacedName := types.NamespacedName{
+		Name:      resourceName,
+		Namespace: "default",
+	}
+
+	// Create a SummaryRule
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
+		},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: databaseName,
+			Table:    "Destination",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "Source | where Timestamp between( _startTime .. _endTime) | summarize Avg = avg(Value) by bin(Timestamp, 5m)",
+		},
+	}
+	require.NoError(t, ctrlCli.Create(ctx, rule))
+
+	// Execute the rule
+	require.NoError(t, task.Run(ctx))
+
+	// Verify the rule's condition
+	rule = &adxmonv1.SummaryRule{}
+	require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+	cnd := rule.GetCondition()
+	require.NotNil(t, cnd)
+	require.Equal(t, metav1.ConditionTrue, cnd.Status)
+	require.NotZero(t, cnd.LastTransitionTime)
+
+	// Wait for the result table
+	require.Eventually(t, func() bool {
+		return testutils.TableExists(ctx, t, executor.Database(), "Destination", kustoContainer.ConnectionUrl())
+	}, 10*time.Minute, time.Second)
+
+	// Executing the rule again should have no effect because
+	// the interval hasn't yet elapsed
+	require.NoError(t, task.Run(ctx))
+	rule = &adxmonv1.SummaryRule{}
+	require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+	nextCnd := rule.GetCondition()
+	require.NotNil(t, nextCnd)
+	require.Equal(t, cnd.LastTransitionTime, nextCnd.LastTransitionTime)
 }
 
 var severalFunctions = `// function a

@@ -22,11 +22,7 @@ spec:
     | where Timestamp between (_startTime .. _endtime)
     | summarize avg(Value) by bin(Timestamp, 1h)
   table: SomeMetricHourlyAvg
-  interval: 1h
-status:
-  observedGeneration: 1
-  lastTimeReconciled: "2024-01-01T00:00:00Z"
-  status: "Success"`
+  interval: 1h`
 
 	var sr SummaryRule
 	err := yaml.Unmarshal([]byte(yamlStr), &sr)
@@ -36,6 +32,4 @@ status:
 	require.Equal(t, "adx-mon", sr.GetNamespace())
 	require.Equal(t, "SomeMetricHourlyAvg", sr.Spec.Table)
 	require.Equal(t, metav1.Duration{Duration: time.Hour}, sr.Spec.Interval)
-	require.Equal(t, 1, int(sr.Status.ObservedGeneration))
-	require.Equal(t, Success, sr.Status.Status)
 }

@@ -268,6 +268,7 @@ func (s *Service) Open(ctx context.Context) error {
 	})
 
 	fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
+	crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
 	for _, v := range s.opts.MetricsKustoCli {
 		t := adx.NewDropUnusedTablesTask(v)
 		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
@@ -278,12 +279,22 @@ func (s *Service) Open(ctx context.Context) error {
 		s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
+
+		m := adx.NewManagementCommandsTask(crdStore, v)
+		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
+			return m.Run(ctx)
+		})
 	}
 
 	for _, v := range s.opts.LogsKustoCli {
 		f := adx.NewSyncFunctionsTask(fnStore, v)
 		s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
+		})
+
+		m := adx.NewManagementCommandsTask(crdStore, v)
+		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
+			return m.Run(ctx)
 		})
 	}
 

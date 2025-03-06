@@ -5,7 +5,9 @@ import (
 	ERRS "errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/storage"
@@ -13,6 +15,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type TableDetail struct {
@@ -190,11 +193,11 @@ func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.
 }
 
 type ManagementCommandTask struct {
-	store    storage.ManagementCommands
+	store    storage.CRDHandler
 	kustoCli StatementExecutor
 }
 
-func NewManagementCommandsTask(store storage.ManagementCommands, kustoCli StatementExecutor) *ManagementCommandTask {
+func NewManagementCommandsTask(store storage.CRDHandler, kustoCli StatementExecutor) *ManagementCommandTask {
 	return &ManagementCommandTask{
 		store:    store,
 		kustoCli: kustoCli,
@@ -202,11 +205,11 @@ func NewManagementCommandsTask(store storage.ManagementCommands, kustoCli Statem
 }
 
 func (t *ManagementCommandTask) Run(ctx context.Context) error {
-	managementCommands, err := t.store.List(ctx)
-	if err != nil {
+	managementCommands := &v1.ManagementCommandList{}
+	if err := t.store.List(ctx, managementCommands, storage.FilterCompleted); err != nil {
 		return fmt.Errorf("failed to list management commands: %w", err)
 	}
-	for _, command := range managementCommands {
+	for _, command := range managementCommands.Items {
 		// ManagementCommands database is optional as not all commands are scoped at the database level
 		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
 			continue
@@ -215,16 +218,84 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		stmt := kql.New(".execute script<|").AddUnsafe(command.Spec.Body)
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
-			if err = t.store.UpdateStatus(ctx, command, err); err != nil {
+			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
 		}
 
 		logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
-		if err := t.store.UpdateStatus(ctx, command, nil); err != nil {
+		if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
 			logger.Errorf("Failed to update success status: %v", err)
 		}
 	}
 
+	return nil
+}
+
+type SummaryRuleTask struct {
+	store    storage.CRDHandler
+	kustoCli StatementExecutor
+}
+
+func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor) *SummaryRuleTask {
+	return &SummaryRuleTask{
+		store:    store,
+		kustoCli: kustoCli,
+	}
+}
+func (t *SummaryRuleTask) Run(ctx context.Context) error {
+	summaryRules := &v1.SummaryRuleList{}
+	if err := t.store.List(ctx, summaryRules); err != nil {
+		return fmt.Errorf("failed to list summary rules: %w", err)
+	}
+	for _, rule := range summaryRules.Items {
+		if rule.Spec.Database != t.kustoCli.Database() {
+			continue
+		}
+		if rule.DeletionTimestamp != nil {
+			// rule is being deleted, we might possibly want to delete the associated
+			// destination table, but there is a potential for unintended historical
+			// data loss if the user doesn't understand this consequence.
+			continue
+		}
+
+		cnd := rule.GetCondition()
+		if cnd != nil && cnd.Status == metav1.ConditionTrue && time.Since(cnd.LastTransitionTime.Time) < rule.Spec.Interval.Duration {
+			if logger.IsDebug() {
+				logger.Debugf("Skipping summary rule %s.%s as it was executed recently %s", rule.Spec.Database, rule.Name, cnd.LastTransitionTime)
+			}
+			continue
+		}
+
+		if cnd == nil {
+			cnd = &metav1.Condition{}
+		}
+
+		// Execution occurs asynchronously, so we don't have to concern ourselves with blocking
+		startTime := time.Now().Add(-rule.Spec.Interval.Duration).Truncate(time.Minute)
+		endTime := time.Now().Truncate(time.Minute)
+		if !cnd.LastTransitionTime.IsZero() {
+			startTime = cnd.LastTransitionTime.Time
+		}
+
+		// Save our endTime, which will become the next iteration's startTime
+		cnd.LastTransitionTime = metav1.Time{Time: endTime}
+		rule.SetCondition(*cnd)
+
+		// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
+		// preceding let-statements.
+		rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime.UTC().Format(time.RFC3339Nano)))
+		rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_endTime", fmt.Sprintf("datetime(%s)", endTime.UTC().Format(time.RFC3339Nano)))
+		// Execute asynchronously
+		stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(rule.Spec.Body)
+		_, err := t.kustoCli.Mgmt(ctx, stmt)
+		if err != nil {
+			logger.Errorf("Failed to execute summary rule %s.%s: %v", rule.Spec.Database, rule.Name, err)
+			continue
+		}
+		if err = t.store.UpdateStatus(ctx, &rule, err); err != nil {
+			logger.Errorf("Failed to update summary rule status: %v", err)
+		}
+	}
 	return nil
 }
