@@ -125,6 +125,12 @@ type ServiceOpts struct {
 
 	// MaxTransferConcurrency is the maximum number of concurrent transfers to the ingestor.
 	MaxTransferConcurrency int
+
+	// MaxBatchSegments is the maximum number of segments to include when transferring segments in a batch.  The segments
+	// are merged into a new segment.  A higher number takes longer to combine on the sending size and increases the
+	// size of segments on the receiving size.  A lower number creates more batches and high remote transfer calls.  If
+	// not specified, the default is 25.
+	MaxBatchSegments       int
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -311,6 +317,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		Partitioner:        partitioner,
 		Segmenter:          store.Index(),
 		MinUploadSize:      4 * 1024 * 1024,
+		MaxBatchSegments:   opts.MaxBatchSegments,
 		UploadQueue:        transferQueue,
 		TransferQueue:      transferQueue,
 		PeerHealthReporter: health,
