@@ -83,15 +83,16 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	idx.Add(f2)
 
 	a := &batcher{
-		hostname:        "node1",
-		storageDir:      dir,
-		maxTransferAge:  30 * time.Second,
-		maxTransferSize: 100 * 1024 * 1024,
-		minUploadSize:   100 * 1024 * 1024,
-		Partitioner:     &fakePartitioner{owner: "node2"},
-		Segmenter:       idx,
-		health:          &fakeHealthChecker{healthy: true},
-		segments:        partmap.NewMap[int](64),
+		hostname:         "node1",
+		storageDir:       dir,
+		maxTransferAge:   30 * time.Second,
+		maxTransferSize:  100 * 1024 * 1024,
+		minUploadSize:    100 * 1024 * 1024,
+		maxBatchSegments: 25,
+		Partitioner:      &fakePartitioner{owner: "node2"},
+		Segmenter:        idx,
+		health:           &fakeHealthChecker{healthy: true},
+		segments:         partmap.NewMap[int](64),
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -272,15 +273,16 @@ func TestBatcher_BigBatch(t *testing.T) {
 	idx.Add(f4)
 
 	a := &batcher{
-		hostname:        "node1",
-		storageDir:      dir,
-		maxTransferSize: 100 * 1024,
-		minUploadSize:   100 * 1024,
-		maxTransferAge:  1000 * 24 * time.Hour,
-		Partitioner:     &fakePartitioner{owner: "node1"},
-		Segmenter:       idx,
-		health:          fakeHealthChecker{healthy: true},
-		segments:        partmap.NewMap[int](64),
+		hostname:         "node1",
+		storageDir:       dir,
+		maxTransferSize:  100 * 1024,
+		minUploadSize:    100 * 1024,
+		maxTransferAge:   1000 * 24 * time.Hour,
+		maxBatchSegments: 25,
+		Partitioner:      &fakePartitioner{owner: "node1"},
+		Segmenter:        idx,
+		health:           fakeHealthChecker{healthy: true},
+		segments:         partmap.NewMap[int](64),
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -291,6 +293,85 @@ func TestBatcher_BigBatch(t *testing.T) {
 	require.Equal(t, []string{f1.Path, f2.Path}, owned[0].Paths())
 	require.Equal(t, []string{f3.Path}, owned[1].Paths())
 	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owned[2].Paths())
+
+	requireValidBatch(t, owned)
+	requireValidBatch(t, notOwned)
+}
+
+func TestBatcher_MaxSegmentCount(t *testing.T) {
+	dir := t.TempDir()
+
+	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
+	require.NoError(t, err)
+
+	idx := wal.NewIndex()
+	f1 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac8d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
+		Size:      50 * 1024,
+		CreatedAt: created,
+	}
+	idx.Add(f1)
+
+	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
+	require.NoError(t, err)
+
+	f2 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdac9d6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
+		Size:      50 * 1024,
+		CreatedAt: created,
+	}
+	idx.Add(f2)
+
+	created, err = flakeutil.ParseFlakeID("2359cdacad6f0001")
+	require.NoError(t, err)
+
+	f3 := wal.SegmentInfo{
+		Prefix:    "db_Cpu",
+		Ulid:      "2359cdacad6f0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdacad6f0001")),
+		Size:      1024,
+		CreatedAt: created,
+	}
+	idx.Add(f3)
+
+	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
+	require.NoError(t, err)
+
+	f4 := wal.SegmentInfo{
+		Prefix:    "db_Disk",
+		Ulid:      "2359cd7e3aef0001",
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
+		Size:      100,
+		CreatedAt: created,
+	}
+	idx.Add(f4)
+
+	a := &batcher{
+		hostname:         "node1",
+		storageDir:       dir,
+		maxTransferSize:  100 * 1024,
+		minUploadSize:    100 * 1024,
+		maxTransferAge:   1000 * 24 * time.Hour,
+		maxBatchSegments: 1,
+		Partitioner:      &fakePartitioner{owner: "node1"},
+		Segmenter:        idx,
+		health:           fakeHealthChecker{healthy: true},
+		segments:         partmap.NewMap[int](64),
+	}
+	owned, notOwned, err := a.processSegments()
+
+	require.NoError(t, err)
+	require.Equal(t, 4, len(owned))
+	require.Equal(t, 0, len(notOwned))
+
+	require.Equal(t, []string{f1.Path}, owned[0].Paths())
+	require.Equal(t, []string{f2.Path}, owned[1].Paths())
+	require.Equal(t, []string{f3.Path}, owned[2].Paths())
+	require.Equal(t, []string{f4.Path}, owned[3].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)

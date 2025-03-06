@@ -139,6 +139,12 @@ type ServiceOpts struct {
 
 	// EnableWALFsync enables fsync of segments before closing the segment.
 	EnableWALFsync bool
+
+	// MaxBatchSegments is the maximum number of segments to include when transferring segments in a batch.  The segments
+	// are merged into a new segment.  A higher number takes longer to combine on the sending size and increases the
+	// size of segments on the receiving size.  A lower number creates more batches and high remote transfer calls.  If
+	// not specified, the default is 25.
+	MaxBatchSegments int
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -184,6 +190,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxSegmentAge:      opts.MaxSegmentAge,
 		MaxTransferSize:    opts.MaxTransferSize,
 		MaxTransferAge:     opts.MaxTransferAge,
+		MaxBatchSegments:   opts.MaxBatchSegments,
 		Partitioner:        coord,
 		Segmenter:          store.Index(),
 		UploadQueue:        opts.Uploader.UploadQueue(),
