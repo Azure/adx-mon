@@ -167,19 +167,30 @@ func (w *WAL) Close() error {
 }
 
 func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
+	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
+	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
+
 	// Optimistically try to write, but the segment might rotate in the meantime.
 	// If it does, retry the write one more time.
-	err := w.tryWrite(ctx, buf, opts...)
-	if errors.Is(err, ErrSegmentClosed) {
-		return w.tryWrite(ctx, buf, opts...)
+	n, err := w.tryWrite(ctx, buf, opts...)
+	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
+		w.rotateSegmentIfNecessary()
+		n, err = w.tryWrite(ctx, buf)
+		atomic.AddInt64(&w.segmentSize, int64(n))
+		return err
+	} else if errors.Is(err, ErrSegmentClosed) {
+		n, err = w.tryWrite(ctx, buf, opts...)
+		atomic.AddInt64(&w.segmentSize, int64(n))
+		return err
 	}
+	atomic.AddInt64(&w.segmentSize, int64(n))
 	return err
 }
 
-func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) error {
+func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error) {
 	var seg Segment
 	if err := w.validateLimits(); err != nil {
-		return err
+		return 0, err
 	}
 
 	// fast path
@@ -200,7 +211,7 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) er
 			WithFsync(w.opts.EnableWALFsync))
 		if err != nil {
 			w.mu.Unlock()
-			return err
+			return 0, err
 		}
 		w.segment = seg
 	}
