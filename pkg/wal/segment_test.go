@@ -288,7 +288,9 @@ func TestSegment_Closed(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, s.Close())
 			require.Equal(t, wal.ErrSegmentClosed, s.Write(context.Background(), []byte("test")))
-			require.Equal(t, wal.ErrSegmentClosed, s.Append(context.Background(), buf))
+			n, err := s.Append(context.Background(), buf)
+			require.Equal(t, wal.ErrSegmentClosed, err)
+			require.Equal(t, 0, n)
 
 			_, err = s.Iterator()
 			require.Equal(t, err, wal.ErrSegmentClosed)
@@ -365,8 +367,12 @@ func TestSegment_Append(t *testing.T) {
 
 			s, err = wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Append(context.Background(), b))
-			require.NoError(t, s.Append(context.Background(), b))
+			n, err := s.Append(context.Background(), b)
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Append(context.Background(), b)
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Flush())
 
 			f, err = os.Open(s.Path())
@@ -413,7 +419,9 @@ func TestSegment_Append_Corrupted(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.Error(t, s.Append(context.Background(), []byte("test")))
+			n, err := s.Append(context.Background(), []byte("test"))
+			require.Error(t, err)
+			require.Equal(t, 0, n)
 			require.NoError(t, s.Close())
 		})
 	}
