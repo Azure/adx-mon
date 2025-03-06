@@ -53,7 +53,7 @@ func WithFsync(b bool) SegmentOption {
 
 type Segment interface {
 	Append(ctx context.Context, buf []byte) (int, error)
-	Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
+	Write(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error)
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
@@ -352,21 +352,21 @@ func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 }
 
 // Write writes buf to the segment.
-func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
+func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
-		return ErrSegmentClosed
+		return 0, ErrSegmentClosed
 	}
 	s.mu.RUnlock()
 
 	written, err := s.blockWrite(s.bw, buf, opts...)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	atomic.AddUint64(&s.filePos, uint64(written))
-	return err
+	return written, err
 }
 
 // Bytes returns full segment file as byte slice.
