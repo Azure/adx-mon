@@ -49,6 +49,85 @@ func (l *Log) Copy() *Log {
 	return copy
 }
 
+func (l *Log) GetTimestamp() uint64 {
+	return l.Timestamp
+}
+
+func (l *Log) GetObservedTimestamp() uint64 {
+	return l.ObservedTimestamp
+}
+
+func (l *Log) GetAttributeValue(key string) (any, bool) {
+	v, ok := l.Attributes[key]
+	return v, ok
+}
+
+func (l *Log) GetBodyValue(key string) (any, bool) {
+	v, ok := l.Body[key]
+	return v, ok
+}
+
+func (l *Log) GetResourceValue(key string) (any, bool) {
+	v, ok := l.Resource[key]
+	return v, ok
+}
+
+func (l *Log) ForEachAttribute(f func(string, any) error) error {
+	for k, v := range l.Attributes {
+		if err := f(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *Log) ForEachBody(f func(string, any) error) error {
+	for k, v := range l.Body {
+		if err := f(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *Log) ForEachResource(f func(string, any) error) error {
+	for k, v := range l.Resource {
+		if err := f(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *Log) AttributeLen() int {
+	return len(l.Attributes)
+}
+
+func (l *Log) BodyLen() int {
+	return len(l.Body)
+}
+
+func (l *Log) ResourceLen() int {
+	return len(l.Resource)
+}
+
+// ROLog is a read-only view of a log
+// Do not modify any values stored within attributes, body, or resource unless copied
+type ROLog interface {
+	GetTimestamp() uint64
+	GetObservedTimestamp() uint64
+	GetAttributeValue(string) (any, bool)
+	GetBodyValue(string) (any, bool)
+	GetResourceValue(string) (any, bool)
+	ForEachAttribute(func(string, any) error) error
+	ForEachBody(func(string, any) error) error
+	ForEachResource(func(string, any) error) error
+	AttributeLen() int
+	BodyLen() int
+	ResourceLen() int
+	Copy() *Log
+}
+
 // LogBatch represents a batch of logs
 type LogBatch struct {
 	Logs []*Log
@@ -61,6 +140,16 @@ func (l *LogBatch) Reset() {
 	}
 	l.Logs = l.Logs[:0]
 	l.Ack = noop
+}
+
+func (l *LogBatch) ForEach(f func(ROLog)) {
+	for _, log := range l.Logs {
+		f(log)
+	}
+}
+
+type ROLogBatch interface {
+	ForEach(func(ROLog))
 }
 
 func noop() {}
