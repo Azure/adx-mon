@@ -371,7 +371,7 @@ func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement
 }
 
 func TestSummaryRules(t *testing.T) {
-	testutils.IntegrationTest(t)
+	// testutils.IntegrationTest(t)
 
 	scheme := clientgoscheme.Scheme
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
@@ -464,6 +464,32 @@ func TestSummaryRules(t *testing.T) {
 	nextCnd := rule.GetCondition()
 	require.NotNil(t, nextCnd)
 	require.Equal(t, cnd.LastTransitionTime, nextCnd.LastTransitionTime)
+
+	// Verify async operation handling
+	asyncOps := rule.GetAsyncOperations()
+	require.Equal(t, 1, len(asyncOps))
+
+	// Wait for the rule to execute in Kusto
+	require.Eventually(t, func() bool {
+		ops, err := task.GetOperations(ctx)
+		if err != nil {
+			return false
+		}
+		for _, op := range ops {
+			if op.OperationId == asyncOps[0].OperationId {
+				return IsKustoAsyncOperationStateCompleted(op.State)
+			}
+		}
+		return false
+	}, 10*time.Minute, time.Second)
+
+	// Executing the rule should remove the succeeded async operation
+	require.NoError(t, task.Run(ctx))
+	require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+	nextCnd = rule.GetCondition()
+	require.NotNil(t, nextCnd)
+	asyncOps = rule.GetAsyncOperations()
+	require.Equal(t, 0, len(asyncOps))
 }
 
 var severalFunctions = `// function a
