@@ -76,6 +76,7 @@ func (s *Source) Open(ctx context.Context) error {
 			matches:        target.Matches,
 			database:       target.Database,
 			table:          target.Table,
+			journalFields:  target.JournalFields,
 			cursorFilePath: cPath,
 			logLineParsers: target.LogLineParsers,
 			batchQueue:     batchQueue,

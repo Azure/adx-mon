@@ -24,12 +24,22 @@ type TailerSourceInterface interface {
 }
 
 type PodDiscoveryOpts struct {
-	NodeName    string
-	PodInformer *k8s.PodInformer
+	NodeName         string
+	PodInformer      *k8s.PodInformer
+	StaticPodTargets []*StaticPodTargets
+}
+
+type StaticPodTargets struct {
+	Namespace   string
+	Name        string
+	Labels      map[string]string
+	Parsers     []string
+	Destination string
 }
 
 type PodDiscovery struct {
-	NodeName string
+	NodeName         string
+	staticPodTargets []*StaticPodTargets
 
 	nowFunc func() time.Time
 
@@ -46,11 +56,12 @@ type PodDiscovery struct {
 
 func NewPodDiscovery(opts PodDiscoveryOpts, tailsource TailerSourceInterface) *PodDiscovery {
 	return &PodDiscovery{
-		nowFunc:        time.Now,
-		NodeName:       opts.NodeName,
-		podInformer:    opts.PodInformer,
-		tailsource:     tailsource,
-		podidToTargets: make(map[string]map[string]*currenttarget),
+		nowFunc:          time.Now,
+		NodeName:         opts.NodeName,
+		podInformer:      opts.PodInformer,
+		tailsource:       tailsource,
+		podidToTargets:   make(map[string]map[string]*currenttarget),
+		staticPodTargets: opts.StaticPodTargets,
 	}
 }
 
@@ -97,7 +108,7 @@ func (i *PodDiscovery) OnAdd(obj interface{}, isInitialList bool) {
 		return
 	}
 
-	targets := getFileTargets(pod, i.NodeName)
+	targets := getFileTargets(pod, i.NodeName, i.staticPodTargets)
 
 	i.mut.Lock()
 	defer i.mut.Unlock()
