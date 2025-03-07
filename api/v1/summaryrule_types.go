@@ -17,13 +17,24 @@ limitations under the License.
 package v1
 
 import (
+	"time"
+
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-const SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
+const (
+	// SummaryRuleOwner is the owner of the summary rule
+	SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
+	// SummaryRuleOperationIdOwner is the owner of the summary rule operation id
+	SummaryRuleOperationIdOwner = "summaryrule.adx-mon.azure.com/OperationId"
+	// SummaryRuleAsyncOperationPollInterval acts as a cooldown period between checking
+	// the status of an async operation. This value is somewhat arbitrary, but the intent
+	// is to not overwhelm the service with requests.
+	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
+)
 
 // SummaryRuleSpec defines the desired state of SummaryRule
 type SummaryRuleSpec struct {
@@ -73,6 +84,18 @@ func (s *SummaryRule) SetCondition(c metav1.Condition) {
 	}
 	c.ObservedGeneration = s.GetGeneration()
 	c.Type = SummaryRuleOwner
+
+	meta.SetStatusCondition(&s.Status.Conditions, c)
+}
+
+func (s *SummaryRule) GetOperationIDCondition() *metav1.Condition {
+	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOperationIdOwner)
+}
+
+func (s *SummaryRule) SetOperationIDCondition(c metav1.Condition) {
+	c.LastTransitionTime = metav1.Now()
+	c.ObservedGeneration = s.GetGeneration()
+	c.Type = SummaryRuleOperationIdOwner
 
 	meta.SetStatusCondition(&s.Status.Conditions, c)
 }

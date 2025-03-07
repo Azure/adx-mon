@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -464,6 +465,32 @@ func TestSummaryRules(t *testing.T) {
 	nextCnd := rule.GetCondition()
 	require.NotNil(t, nextCnd)
 	require.Equal(t, cnd.LastTransitionTime, nextCnd.LastTransitionTime)
+
+	// Override the async operation's LastTransitionTime so we can
+	// pass the predicate's cooldown check.
+	asyncCnd := rule.GetOperationIDCondition()
+	require.NotNil(t, asyncCnd)
+	asyncCnd.LastTransitionTime = metav1.Time{Time: time.Now().Add(-time.Hour)}
+	meta.SetStatusCondition(&rule.Status.Conditions, *asyncCnd)
+	require.NoError(t, ctrlCli.Status().Update(ctx, rule))
+
+	// Wait for the async operation to complete
+	require.Eventually(t, func() bool {
+		// Run the task in order to poll async operation status
+		require.NoError(t, task.Run(ctx))
+
+		// Check if the async operation status has been updated
+		rule = &adxmonv1.SummaryRule{}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+		cnd := rule.GetOperationIDCondition()
+		if cnd == nil {
+			return false
+		}
+		if cnd.Status != metav1.ConditionUnknown {
+			return true
+		}
+		return false
+	}, 10*time.Minute, time.Second)
 }
 
 var severalFunctions = `// function a

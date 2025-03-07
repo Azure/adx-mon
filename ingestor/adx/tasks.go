@@ -252,17 +252,23 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		if rule.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
-		if rule.DeletionTimestamp != nil {
-			// rule is being deleted, we might possibly want to delete the associated
-			// destination table, but there is a potential for unintended historical
-			// data loss if the user doesn't understand this consequence.
-			continue
-		}
 
 		cnd := rule.GetCondition()
-		if cnd != nil && cnd.Status == metav1.ConditionTrue && time.Since(cnd.LastTransitionTime.Time) < rule.Spec.Interval.Duration {
+		if !ShouldSummaryRule(cnd, rule) {
+			// If we do not need to execute the SummaryRule as determined
+			// by the predicate, we know the SummaryRule has successfully
+			// been submitted to Kusto and is up-to-date as determined
+			// by the CRD's execution interval.
 			if logger.IsDebug() {
 				logger.Debugf("Skipping summary rule %s.%s as it was executed recently %s", rule.Spec.Database, rule.Name, cnd.LastTransitionTime)
+			}
+
+			// At this point the SummaryRule has successfully been submitted to
+			// Kuto, now we check if it's necessary to poll the async operation.
+			if ShouldSummaryRuleAsync(rule) {
+				if err := t.pollAsyncOperation(ctx, rule); err != nil {
+					logger.Errorf("Failed to poll async operation for summary rule %s.%s: %v", rule.Spec.Database, rule.Name, err)
+				}
 			}
 			continue
 		}
@@ -288,14 +294,274 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_endTime", fmt.Sprintf("datetime(%s)", endTime.UTC().Format(time.RFC3339Nano)))
 		// Execute asynchronously
 		stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(rule.Spec.Body)
-		_, err := t.kustoCli.Mgmt(ctx, stmt)
+		res, err := t.kustoCli.Mgmt(ctx, stmt)
 		if err != nil {
 			logger.Errorf("Failed to execute summary rule %s.%s: %v", rule.Spec.Database, rule.Name, err)
 			continue
 		}
+
+		// We store the async operation's ID as a subcondition and periodically poll its
+		// status before setting the async operation's final result. The subcondition is
+		// stored on the CRD when UpdateStatus is invoked.
+		operationId, err := operationIDFromResult(res)
+		if err != nil {
+			logger.Errorf("Failed to retrieve operation ID for summary rule %s.%s: %v", rule.Spec.Database, rule.Name, err)
+			continue
+		}
+		opcnd := metav1.Condition{
+			Status:  metav1.ConditionUnknown,
+			Reason:  "Created",
+			Message: operationId,
+		}
+		rule.SetOperationIDCondition(opcnd)
+
+		// Persist the task's status, both for the async operation and the immediate
+		// acceptance of the management command.
 		if err = t.store.UpdateStatus(ctx, &rule, err); err != nil {
 			logger.Errorf("Failed to update summary rule status: %v", err)
 		}
 	}
 	return nil
+}
+
+func (t *SummaryRuleTask) pollAsyncOperation(ctx context.Context, rule v1.SummaryRule) error {
+	cnd := rule.GetOperationIDCondition()
+	if cnd == nil {
+		// We shouldn't ever hit this unless the ShouldSummaryRuleAsync predicate is incorrect.
+		return fmt.Errorf("no operation ID condition found for summary rule %s.%s", rule.Spec.Database, rule.Name)
+	}
+
+	stmt := kql.New(".show operations").
+		AddLiteral(" | where StartedOn > ").AddUnsafe(fmt.Sprintf("datetime(%s)", cnd.LastTransitionTime.UTC().Format(time.RFC3339Nano))).
+		AddLiteral(" | where OperationId == ").AddString(cnd.Message).
+		AddLiteral(" | summarize arg_max(LastUpdatedOn, State)")
+	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	if err != nil {
+		return fmt.Errorf("failed to poll async operation %s: %w", cnd.Message, err)
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return fmt.Errorf("failed to retrieve async operation %s: %v", cnd.Message, errFinal)
+		}
+
+		var status AsyncOperationStatus
+		if err := row.ToStruct(&status); err != nil {
+			return fmt.Errorf("failed to parse async operation %s: %v", cnd.Message, err)
+		}
+		if status.State == "" {
+			continue
+		}
+
+		status.ShouldRetry, err = t.shouldRetryTask(ctx, cnd.Message, status.State)
+		if err != nil {
+			return fmt.Errorf("failed to check async operation %s: %w", cnd.Message, err)
+		}
+
+		// We're only interested in the most recent operation status.
+		// Possible values for State are:
+		// https://learn.microsoft.com/en-us/kusto/management/show-operations
+		switch status.State {
+		case "Completed":
+			// Operation succeeded
+			cnd.Status = metav1.ConditionTrue
+			cnd.Reason = "Succeeded"
+		case "Failed":
+			// If the operation failed, we need to check if we should retry
+			if status.ShouldRetry {
+				// Kuso thinks it's worth retrying. We'll set the management submission
+				// condition to False, which will have the effect of re-submitting the command.
+				cmdCnd := rule.GetCondition()
+				if cmdCnd != nil {
+					cmdCnd.Status = metav1.ConditionFalse
+					cmdCnd.Reason = "Failed"
+					cmdCnd.Message = "Async operation failed, but should be retried"
+					cmdCnd.LastTransitionTime = metav1.Time{Time: time.Now()}
+					rule.SetCondition(*cmdCnd)
+				}
+
+				// We're going to resubmit this task, so we can keep the async
+				// operation's status as Unknown, though we'll update the Reason.
+				cnd.Reason = "Retry"
+			} else {
+				// This is a terminal failure, so we'll update the condition accordingly.
+				cnd.Status = metav1.ConditionFalse
+				cnd.Reason = "Failed"
+			}
+
+		case "Scheduled", "InProgress":
+			// Just record what's happening and we'll check again later.
+			cnd.Reason = status.State
+
+		case "Throttled":
+			// NOTE:
+			// We're being throttled, so this async operation will not be retried
+			// and we shouldn't retry either. We need to log this and set the status.
+			// This should be an actionable state. Triage should occur to determine
+			// if we're doing something too aggressively or if we need to scale out
+			// to accommodate the load.
+			logger.Errorf("Kusto operations are being throttled: %s", t.kustoCli.Database())
+			cnd.Reason = status.State
+			cnd.Status = metav1.ConditionFalse
+
+		default:
+			// All other reasons are non-actionable. We simply record what has occured
+			// and move on. In all cases, the async operation is considered to be failed
+			// since it's in a non-actionable non-succeeding state.
+			cnd.Reason = status.State
+			cnd.Status = metav1.ConditionFalse
+		}
+
+		rule.SetOperationIDCondition(*cnd)
+		if err = t.store.UpdateStatus(ctx, &rule, err); err != nil {
+			return fmt.Errorf("failed to update summary rule status: %w", err)
+		}
+
+		return nil
+	}
+
+	return nil
+}
+
+func (t *SummaryRuleTask) shouldRetryTask(ctx context.Context, operationId, state string) (bool, error) {
+	// For reasons I don't understand, the GO SDK is not able to execute the query
+	// `.show operations | where OperationId == "operationId" | summarize arg_max(LastUpdatedOn, State, ShouldRetry)`.
+	// The client library itself throws an error stating that ShouldRetry should be a bool but is a float64.
+	// Even if I cast ShouldRetry to a bool, the error persists.
+	//
+	// This method is a work-around where we query if the operation should be retried.
+	// `.show operations | where OperationId == "operationId" | where State == "state" | where ShouldRetry == true | count`
+	// If the value is non zero, we should retry.
+	stmt := kql.New(".show operations").
+		AddLiteral(" | where OperationId == ").AddString(operationId).
+		AddLiteral(" | where State == ").AddString(state).
+		AddLiteral(" | where ShouldRetry == true | count")
+	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	if err != nil {
+		return false, fmt.Errorf("failed to check async operation retry %s: %w", operationId, err)
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to check if operation should be retried: %v", errFinal)
+		}
+
+		// The query returns a single row with a single "Count" column
+		if len(row.Values) != 1 {
+			return false, fmt.Errorf("unexpected number of values in row: %d", len(row.Values))
+		}
+		return row.Values[0].String() != "0", nil
+	}
+
+	return false, nil
+}
+
+// ShouldSummaryRule returns true if the SummaryRule should be executed
+func ShouldSummaryRule(cnd *metav1.Condition, rule v1.SummaryRule) bool {
+	// If a status condition isn't yet set, it means this SummaryRule
+	// hasn't yet executed.
+	if cnd == nil {
+		return true
+	}
+	// If the rule is being deleted, we don't need to execute it.
+	if rule.DeletionTimestamp != nil {
+		return false
+	}
+	// We know the rule has been updated and therfore needs
+	// execution if our observed generation is different from the
+	// SummaryRule's generation.
+	if rule.GetGeneration() != cnd.ObservedGeneration {
+		return true
+	}
+	// If the SummaryRule is in a failed state.
+	if cnd.Status == metav1.ConditionFalse {
+		return true
+	}
+	// If the SummaryRule is in a succeeded state, we need to check
+	// if the interval has passed since the last execution.
+	if time.Since(cnd.LastTransitionTime.Time) > rule.Spec.Interval.Duration {
+		return true
+	}
+	return false
+}
+
+// ShouldSummaryRuleAsync returns true if the SummaryRule's async operation
+// is still pending. This is used to determine if we should poll the
+// operation's status.
+func ShouldSummaryRuleAsync(rule v1.SummaryRule) bool {
+	cnd := rule.GetOperationIDCondition()
+	// If no condition exists, there's nothing to check.
+	if cnd == nil {
+		return false
+	}
+	// If the rule is being deleted, there's no need to poll the async operation.
+	if rule.DeletionTimestamp != nil {
+		return false
+	}
+	// If there is a new rule generation, it doesn't make sense to
+	// poll for the previous rule's async operation as its meaning
+	// is ambiguous.
+	if rule.GetGeneration() != cnd.ObservedGeneration {
+		return false
+	}
+	// If the async operation has completed and we've stored
+	// that state, pass or fail, there's nothing for us to do.
+	if cnd.Status == metav1.ConditionFalse || cnd.Status == metav1.ConditionTrue {
+		return false
+	}
+	// If the async operation is still pending, we need to
+	// poll its status. In addition, we need to check if the
+	// async operation has already recently been checked and
+	// if so wait for some time before checking again.
+	if cnd.Status == metav1.ConditionUnknown && time.Since(cnd.LastTransitionTime.Time) > v1.SummaryRuleAsyncOperationPollInterval {
+		return true
+	}
+	return false
+}
+
+func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
+	defer iter.Stop()
+
+	for {
+		row, errInline, errFinal := iter.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return "", fmt.Errorf("failed to retrieve operation ID: %v", errFinal)
+		}
+
+		if len(row.Values) != 1 {
+			return "", fmt.Errorf("unexpected number of values in row: %d", len(row.Values))
+		}
+
+		return row.Values[0].String(), nil
+	}
+
+	return "", nil
+}
+
+type AsyncOperationStatus struct {
+	LastUpdatedOn time.Time `kusto:"LastUpdatedOn"`
+	State         string    `kusto:"State"`
+	ShouldRetry   bool      `kusto:"ShouldRetry"`
 }
