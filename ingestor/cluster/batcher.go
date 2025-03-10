@@ -270,6 +270,8 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		totalFiles, totalSize int64
 	)
 
+	b.maxSegmentAge = 0
+
 	for _, prefix := range byAge {
 		b.tempSet = b.Segmenter.Get(b.tempSet[:0], prefix)
 
@@ -299,7 +301,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
 		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
 		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
-		b.maxSegmentAge = time.Since(oldestSegment)
+		if v := time.Since(oldestSegment); v > b.maxSegmentAge {
+			b.maxSegmentAge = v
+		}
 		groups[prefix] = append(groups[prefix], b.tempSet...)
 	}
 
