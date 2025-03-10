@@ -33,8 +33,12 @@ func TestSegmentIterator_Verify(t *testing.T) {
 
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
-			require.NoError(t, s.Write(context.Background(), []byte("test1")))
+			n, err = s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Write(context.Background(), []byte("test1"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Flush())
 
 			f, err := os.Open(s.Path())
@@ -74,8 +78,12 @@ func TestSegmentIterator_Verify_TrailingBytes(t *testing.T) {
 
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
-			require.NoError(t, s.Write(context.Background(), []byte("test1")))
+			n, err = s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Write(context.Background(), []byte("test1"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Flush())
 
 			f, err := os.OpenFile(s.Path(), os.O_RDWR, 0644)
