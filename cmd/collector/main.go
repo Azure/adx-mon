@@ -523,9 +523,21 @@ func realMain(ctx *cli.Context) error {
 				return fmt.Errorf("failed to get informer for tail: %w", err)
 			}
 
+			var staticPodTargets []*tail.StaticPodTargets
+			for _, target := range v.StaticPodTargets {
+				staticPodTargets = append(staticPodTargets, &tail.StaticPodTargets{
+					Namespace:   target.Namespace,
+					Name:        target.Name,
+					Labels:      target.LabelTargets,
+					Parsers:     target.Parsers,
+					Destination: target.Destination,
+				})
+			}
+
 			tailSourceConfig.PodDiscoveryOpts = &tail.PodDiscoveryOpts{
-				NodeName:    hostname,
-				PodInformer: informer,
+				NodeName:         hostname,
+				PodInformer:      informer,
+				StaticPodTargets: staticPodTargets,
 			}
 		}
 
