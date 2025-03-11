@@ -38,6 +38,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -477,12 +478,14 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 		return nil, nil, nil, fmt.Errorf("unable to build dynamic client: %v", err)
 	}
 
-	ctrlCli, err := ctrlclient.New(config, ctrlclient.Options{})
+	// Manager implements a cache such that many requests to ctrlClient.List will
+	// reduce hits to the API server.
+	mgr, err := ctrl.NewManager(config, ctrl.Options{})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("unable to build controller manager: %v", err)
 	}
 
-	return dyCli, client, ctrlCli, nil
+	return dyCli, client, mgr.GetClient(), nil
 }
 
 func newKustoClient(endpoint string) (*kusto.Client, error) {
