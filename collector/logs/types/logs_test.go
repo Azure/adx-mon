@@ -9,8 +9,8 @@ import (
 
 func TestCopy(t *testing.T) {
 	log := &Log{
-		Timestamp:         1,
-		ObservedTimestamp: 2,
+		timestamp:         1,
+		observedTimestamp: 2,
 		Body: map[string]any{
 			"key": "value",
 			"complicated": map[string]any{
@@ -42,8 +42,8 @@ func TestCopy(t *testing.T) {
 
 func TestROLogInterface(t *testing.T) {
 	l := &Log{
-		Timestamp:         12345,
-		ObservedTimestamp: 67890,
+		timestamp:         12345,
+		observedTimestamp: 67890,
 		Body: map[string]any{
 			"bodyKey":    "bodyVal",
 			"bodyKeyTwo": "bodyValTwo",
@@ -121,19 +121,19 @@ func TestROLogInterface(t *testing.T) {
 	// Check Copy
 	cp := l.Copy()
 	require.NotSame(t, l, cp)
-	require.Equal(t, l.Timestamp, cp.Timestamp)
-	require.Equal(t, l.ObservedTimestamp, cp.ObservedTimestamp)
+	require.Equal(t, l.timestamp, cp.timestamp)
+	require.Equal(t, l.observedTimestamp, cp.observedTimestamp)
 	require.Equal(t, l.Attributes, cp.Attributes)
 	require.Equal(t, l.Body, cp.Body)
 	require.Equal(t, l.Resource, cp.Resource)
 
-	l.Timestamp = 235325235
-	l.ObservedTimestamp = 423423423
+	l.timestamp = 235325235
+	l.observedTimestamp = 423423423
 	l.Attributes["attrKey"] = "newVal"
 	l.Body["bodyKey"] = "newVal"
 	l.Resource["resKey"] = "newVal"
-	require.NotEqual(t, l.Timestamp, cp.Timestamp)
-	require.NotEqual(t, l.ObservedTimestamp, cp.ObservedTimestamp)
+	require.NotEqual(t, l.timestamp, cp.timestamp)
+	require.NotEqual(t, l.observedTimestamp, cp.observedTimestamp)
 	require.NotEqual(t, l.Attributes, cp.Attributes)
 	require.NotEqual(t, l.Body, cp.Body)
 	require.NotEqual(t, l.Resource, cp.Resource)
@@ -143,8 +143,8 @@ func TestLogBatch(t *testing.T) {
 	ackCalled := false
 	batch := &LogBatch{
 		Logs: []*Log{
-			{Timestamp: 100},
-			{Timestamp: 200},
+			{timestamp: 100},
+			{timestamp: 200},
 		},
 		Ack: func() {
 			ackCalled = true

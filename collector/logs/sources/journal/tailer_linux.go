@@ -111,8 +111,8 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 
 		log := types.LogPool.Get(1).(*types.Log)
 		log.Reset()
-		log.Timestamp = uint64(entry.RealtimeTimestamp) * 1000 // microseconds -> nanoseconds
-		log.ObservedTimestamp = uint64(time.Now().UnixNano())
+		log.SetTimestamp(uint64(entry.RealtimeTimestamp) * 1000) // microseconds -> nanoseconds
+		log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
 		log.Attributes[types.AttributeDatabaseName] = t.database
 		log.Attributes[types.AttributeTableName] = t.table
 

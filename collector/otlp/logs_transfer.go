@@ -207,8 +207,8 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 				log := types.LogPool.Get(1).(*types.Log)
 				log.Reset()
 
-				log.Timestamp = record.TimeUnixNano
-				log.ObservedTimestamp = record.ObservedTimeUnixNano
+				log.SetTimestamp(record.TimeUnixNano)
+				log.SetObservedTimestamp(record.ObservedTimeUnixNano)
 				extractKeyValues(record.Attributes, log.Attributes)
 				extractBody(record.Body, log.Body)
 

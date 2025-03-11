@@ -2,15 +2,43 @@ package types
 
 import "sync/atomic"
 
+// LogLiteral is a struct that is easily converted to Log.
+type LogLiteral struct {
+	// Timestamp of the event in nanoseconds since the unix epoch
+	Timestamp uint64
+	// Timestamp when this event was ingested in nanoseconds since the unix epoch
+	ObservedTimestamp uint64
+
+	// Body of the log entry
+	Body map[string]any
+
+	// Attributes of the log entry, not included in the log body.
+	Attributes map[string]any
+
+	// Resource that has collected the log
+	Resource map[string]any
+}
+
+func (l *LogLiteral) ToLog() *Log {
+	return &Log{
+		timestamp:         l.Timestamp,
+		observedTimestamp: l.ObservedTimestamp,
+		Body:              l.Body,
+		Attributes:        l.Attributes,
+		Resource:          l.Resource,
+		frozen:            0,
+	}
+}
+
 // Log represents a single log entry
 // It is not safe for concurrent updates
 // It is safe to read from multiple goroutines after all modifications have been completed.
 // Freeze is best effort and should be used to indicate that the log is no longer being modified.
 type Log struct {
 	// Timestamp of the event in nanoseconds since the unix epoch
-	Timestamp uint64
+	timestamp uint64
 	// Timestamp when this event was ingested in nanoseconds since the unix epoch
-	ObservedTimestamp uint64
+	observedTimestamp uint64
 
 	// Body of the log entry
 	Body map[string]any
@@ -46,8 +74,8 @@ func (l *Log) Reset() {
 func (l *Log) Copy() *Log {
 	copy := LogPool.Get(1).(*Log)
 	copy.Reset()
-	copy.Timestamp = l.Timestamp
-	copy.ObservedTimestamp = l.ObservedTimestamp
+	copy.timestamp = l.timestamp
+	copy.observedTimestamp = l.observedTimestamp
 	for k, v := range l.Attributes {
 		copy.Attributes[k] = v
 	}
@@ -64,13 +92,13 @@ func (l *Log) SetTimestamp(ts uint64) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.Timestamp = ts
+	l.timestamp = ts
 }
 func (l *Log) SetObservedTimestamp(ts uint64) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.ObservedTimestamp = ts
+	l.observedTimestamp = ts
 }
 func (l *Log) SetAttributeValue(key string, value any) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
@@ -96,11 +124,11 @@ func (l *Log) Freeze() {
 }
 
 func (l *Log) GetTimestamp() uint64 {
-	return l.Timestamp
+	return l.timestamp
 }
 
 func (l *Log) GetObservedTimestamp() uint64 {
-	return l.ObservedTimestamp
+	return l.observedTimestamp
 }
 
 func (l *Log) GetAttributeValue(key string) (any, bool) {
@@ -178,6 +206,13 @@ type ROLog interface {
 type LogBatch struct {
 	Logs []*Log
 	Ack  func()
+}
+
+func (l *LogBatch) AddLiterals(literals []*LogLiteral) {
+	for _, literal := range literals {
+		log := literal.ToLog()
+		l.Logs = append(l.Logs, log)
+	}
 }
 
 func (l *LogBatch) Reset() {
