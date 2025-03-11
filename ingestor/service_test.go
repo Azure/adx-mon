@@ -23,9 +23,39 @@ func (f *fakeHealthChecker) IsHealthy() bool {
 	return f.healthy
 }
 
+func TestService_HandleTransfer_DroppedPrefix(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store:  &fakeStore{},
+		dropFilePrefixes: []string{
+			"testdb_foo",
+			"testdb_bar",
+		},
+	}
+	s.databases = make(map[string]struct{})
+	s.databases["testdb"] = struct{}{}
+
+	body := bytes.NewReader([]byte{0xde, 0xad, 0xbe, 0xef})
+	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+	require.NoError(t, err)
+
+	q := req.URL.Query()
+	q.Add("filename", "testdb_bar_baz.wal")
+	req.URL.RawQuery = q.Encode()
+
+	// Silently dropped
+	resp := httptest.NewRecorder()
+	s.HandleTransfer(resp, req)
+	require.Equal(t, http.StatusAccepted, resp.Code)
+}
+
 func TestService_HandleTransfer_MissingFilename(t *testing.T) {
 	s := &Service{
 		health: &fakeHealthChecker{healthy: true},
+		dropFilePrefixes: []string{
+			"testdb_willnotgetthistable",
+			"testdb_willnotgetthisothertable",
+		},
 	}
 
 	body := bytes.NewReader([]byte{})
@@ -57,6 +87,10 @@ func TestService_HandleTransfer_InvalidFilename(t *testing.T) {
 	s := &Service{
 		health: &fakeHealthChecker{healthy: true},
 		store:  &fakeStore{},
+		dropFilePrefixes: []string{
+			"testdb_willnotgetthistable",
+			"testdb_willnotgetthisothertable",
+		},
 	}
 
 	for _, tt := range tests {
@@ -87,6 +121,10 @@ func TestService_HandleTransfer_ValidFilename(t *testing.T) {
 	s := &Service{
 		health: &fakeHealthChecker{healthy: true},
 		store:  &fakeStore{},
+		dropFilePrefixes: []string{
+			"testdb_willnotgetthistable",
+			"testdb_willnotgetthisothertable",
+		},
 	}
 	s.databases = make(map[string]struct{})
 	s.databases["testdb"] = struct{}{}
