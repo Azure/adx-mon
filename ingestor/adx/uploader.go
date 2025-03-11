@@ -274,12 +274,23 @@ func (n *uploader) upload(ctx context.Context) error {
 					header, err = n.extractSchema(samplePath)
 					if err != nil {
 						logger.Errorf("Failed to extract schema: %s: %s", samplePath, err.Error())
+
+						// This batch is invalid, remove it.
+						if err := batch.Remove(); err != nil {
+							logger.Errorf("Failed to remove batch: %s", err.Error())
+						}
+
 						return
 					}
 
 					mapping, err = adxschema.UnmarshalSchema(header)
 					if err != nil {
 						logger.Errorf("Failed to unmarshal schema: %s: %s", samplePath, err.Error())
+
+						// This batch is invalid, remove it.
+						if err := batch.Remove(); err != nil {
+							logger.Errorf("Failed to remove batch: %s", err.Error())
+						}
 						return
 					}
 				}
