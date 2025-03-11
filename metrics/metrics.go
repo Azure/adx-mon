@@ -23,6 +23,13 @@ var (
 		Help:      "Counter of requests received from an ingestor instance",
 	}, []string{"path", "code"})
 
+	IngestorDroppedPrefixes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "dropped_prefixes_total",
+		Help:      "Counter of dropped prefixes for an ingestor instance",
+	}, []string{"prefix"})
+
 	SamplesStored = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",

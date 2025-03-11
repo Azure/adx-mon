@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"regexp"
@@ -59,8 +60,9 @@ type Service struct {
 
 	scheduler *scheduler.Periodic
 
-	requestFilter *transform.RequestTransformer
-	health        interface{ IsHealthy() bool }
+	requestFilter    *transform.RequestTransformer
+	dropFilePrefixes []string
+	health           interface{ IsHealthy() bool }
 }
 
 type ServiceOpts struct {
@@ -139,6 +141,9 @@ type ServiceOpts struct {
 
 	// EnableWALFsync enables fsync of segments before closing the segment.
 	EnableWALFsync bool
+
+	// DropFilePrefixes is a slice of prefixes that will be dropped when importing segments.
+	DropFilePrefixes []string
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -231,6 +236,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 			DropMetrics: opts.DropMetrics,
 			DropLabels:  opts.DropLabels,
 		},
+		dropFilePrefixes: opts.DropFilePrefixes,
 	}, nil
 }
 
@@ -371,6 +377,16 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 			logger.Errorf("close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
 		}
 	}()
+
+	for _, prefix := range s.dropFilePrefixes {
+		if strings.HasPrefix(filename, prefix) {
+			io.Copy(io.Discard, r.Body)
+			metrics.IngestorDroppedPrefixes.WithLabelValues(prefix).Inc()
+			m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+	}
 
 	if !s.health.IsHealthy() {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
