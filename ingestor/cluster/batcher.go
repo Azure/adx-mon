@@ -462,12 +462,12 @@ func (b *batcher) Release(batch *Batch) {
 
 func (b *batcher) Remove(batch *Batch) error {
 	for _, si := range batch.Segments {
+		b.Segmenter.Remove(si)
 		err := os.Remove(si.Path)
 		if err != nil && !os.IsNotExist(err) {
 			logger.Errorf("Failed to remove segment %s: %s", si.Path, err)
 			continue
 		}
-		b.Segmenter.Remove(si)
 	}
 	return nil
 }

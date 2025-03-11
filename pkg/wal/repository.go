@@ -83,7 +83,7 @@ func (s *Repository) Open(ctx context.Context) error {
 			// expected format.  In the future, we will have a versioned segment file format to avoid this.
 			if !IsSegment(path) {
 				logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
-				if err := os.Remove(path); err != nil {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 					logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
 				}
 				continue

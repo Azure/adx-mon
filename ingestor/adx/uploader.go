@@ -259,10 +259,13 @@ func (n *uploader) upload(ctx context.Context) error {
 				}(segmentReaders)
 
 				if len(segmentReaders) == 0 {
+					if err := batch.Remove(); err != nil {
+						logger.Errorf("Failed to remove batch: %s", err.Error())
+					}
 					return
 				}
 
-				samplePath := segments[0].Path
+				samplePath := segmentReaders[0].Path()
 				database, table, schema, _, err = wal.ParseFilename(samplePath)
 				if err != nil {
 					logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
