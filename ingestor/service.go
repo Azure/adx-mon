@@ -364,18 +364,18 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer func() {
-		xff := r.Header.Get("X-Forwarded-For")
-		// If the header is present, split it by comma and take the first IP address
-		var originalIP string
-		if xff != "" {
-			ips := strings.Split(xff, ",")
-			originalIP = strings.TrimSpace(ips[0])
-		} else {
-			// If the header is not present, use the remote address
-			originalIP = r.RemoteAddr
-		}
+	xff := r.Header.Get("X-Forwarded-For")
+	// If the header is present, split it by comma and take the first IP address
+	var originalIP string
+	if xff != "" {
+		ips := strings.Split(xff, ",")
+		originalIP = strings.TrimSpace(ips[0])
+	} else {
+		// If the header is not present, use the remote address
+		originalIP = r.RemoteAddr
+	}
 
+	defer func() {
 		dur := time.Since(start)
 		if dur.Seconds() > 10 {
 			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, r.ContentLength, filename)
@@ -420,12 +420,12 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
 	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
-		logger.Errorf("Transfer requested with checksum error %q", filename)
+		logger.Errorf("Transfer requested with checksum error %q from=%s", filename, originalIP)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "block checksum verification failed", http.StatusBadRequest)
 		return
 	} else if err != nil {
-		logger.Errorf("Failed to import %s: %s", filename, err.Error())
+		logger.Errorf("Failed to import %s: %s from=%s", filename, err.Error(), originalIP)
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
