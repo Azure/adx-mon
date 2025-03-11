@@ -9,50 +9,50 @@ import (
 
 func TestCopy(t *testing.T) {
 	log := &Log{
-		Timestamp:         1,
-		ObservedTimestamp: 2,
-		Body: map[string]any{
+		timestamp:         1,
+		observedTimestamp: 2,
+		body: map[string]any{
 			"key": "value",
 			"complicated": map[string]any{
 				"hello": "world",
 			},
 		},
-		Attributes: map[string]any{
+		attributes: map[string]any{
 			"destination": "first_destination",
 			"k8s.pod.labels": map[string]string{
 				"app": "myapp",
 			},
 		},
-		Resource: map[string]any{
+		resource: map[string]any{
 			"resource.key": "resource.value",
 		},
 	}
 
 	copy := log.Copy()
-	copy.Attributes["destination"] = "second_destination"
+	copy.attributes["destination"] = "second_destination"
 
-	require.Equal(t, "first_destination", log.Attributes["destination"])
-	require.Equal(t, "myapp", log.Attributes["k8s.pod.labels"].(map[string]string)["app"])
-	require.Equal(t, "second_destination", copy.Attributes["destination"])
-	require.Equal(t, "myapp", copy.Attributes["k8s.pod.labels"].(map[string]string)["app"])
-	require.Equal(t, "value", copy.Body["key"].(string))
-	require.Equal(t, "world", copy.Body["complicated"].(map[string]any)["hello"])
-	require.Equal(t, "resource.value", copy.Resource["resource.key"].(string))
+	require.Equal(t, "first_destination", log.attributes["destination"])
+	require.Equal(t, "myapp", log.attributes["k8s.pod.labels"].(map[string]string)["app"])
+	require.Equal(t, "second_destination", copy.attributes["destination"])
+	require.Equal(t, "myapp", copy.attributes["k8s.pod.labels"].(map[string]string)["app"])
+	require.Equal(t, "value", copy.body["key"].(string))
+	require.Equal(t, "world", copy.body["complicated"].(map[string]any)["hello"])
+	require.Equal(t, "resource.value", copy.resource["resource.key"].(string))
 }
 
 func TestROLogInterface(t *testing.T) {
 	l := &Log{
-		Timestamp:         12345,
-		ObservedTimestamp: 67890,
-		Body: map[string]any{
+		timestamp:         12345,
+		observedTimestamp: 67890,
+		body: map[string]any{
 			"bodyKey":    "bodyVal",
 			"bodyKeyTwo": "bodyValTwo",
 		},
-		Attributes: map[string]any{
+		attributes: map[string]any{
 			"attrKey":    "attrVal",
 			"attrKeyTwo": "attrValTwo",
 		},
-		Resource: map[string]any{
+		resource: map[string]any{
 			"resKey":    "resVal",
 			"resKeyTwo": false,
 		},
@@ -81,7 +81,7 @@ func TestROLogInterface(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.Equal(t, vals, l.Attributes)
+	require.Equal(t, vals, l.attributes)
 
 	err = l.ForEachAttribute(func(k string, v any) error {
 		return errors.New("test")
@@ -94,7 +94,7 @@ func TestROLogInterface(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.Equal(t, vals, l.Body)
+	require.Equal(t, vals, l.body)
 
 	err = l.ForEachBody(func(k string, v any) error {
 		return errors.New("test")
@@ -107,7 +107,7 @@ func TestROLogInterface(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	require.Equal(t, vals, l.Resource)
+	require.Equal(t, vals, l.resource)
 
 	err = l.ForEachResource(func(k string, v any) error {
 		return errors.New("test")
@@ -121,30 +121,30 @@ func TestROLogInterface(t *testing.T) {
 	// Check Copy
 	cp := l.Copy()
 	require.NotSame(t, l, cp)
-	require.Equal(t, l.Timestamp, cp.Timestamp)
-	require.Equal(t, l.ObservedTimestamp, cp.ObservedTimestamp)
-	require.Equal(t, l.Attributes, cp.Attributes)
-	require.Equal(t, l.Body, cp.Body)
-	require.Equal(t, l.Resource, cp.Resource)
+	require.Equal(t, l.timestamp, cp.timestamp)
+	require.Equal(t, l.observedTimestamp, cp.observedTimestamp)
+	require.Equal(t, l.attributes, cp.attributes)
+	require.Equal(t, l.body, cp.body)
+	require.Equal(t, l.resource, cp.resource)
 
-	l.Timestamp = 235325235
-	l.ObservedTimestamp = 423423423
-	l.Attributes["attrKey"] = "newVal"
-	l.Body["bodyKey"] = "newVal"
-	l.Resource["resKey"] = "newVal"
-	require.NotEqual(t, l.Timestamp, cp.Timestamp)
-	require.NotEqual(t, l.ObservedTimestamp, cp.ObservedTimestamp)
-	require.NotEqual(t, l.Attributes, cp.Attributes)
-	require.NotEqual(t, l.Body, cp.Body)
-	require.NotEqual(t, l.Resource, cp.Resource)
+	l.timestamp = 235325235
+	l.observedTimestamp = 423423423
+	l.attributes["attrKey"] = "newVal"
+	l.body["bodyKey"] = "newVal"
+	l.resource["resKey"] = "newVal"
+	require.NotEqual(t, l.timestamp, cp.timestamp)
+	require.NotEqual(t, l.observedTimestamp, cp.observedTimestamp)
+	require.NotEqual(t, l.attributes, cp.attributes)
+	require.NotEqual(t, l.body, cp.body)
+	require.NotEqual(t, l.resource, cp.resource)
 }
 
 func TestLogBatch(t *testing.T) {
 	ackCalled := false
 	batch := &LogBatch{
 		Logs: []*Log{
-			{Timestamp: 100},
-			{Timestamp: 200},
+			{timestamp: 100},
+			{timestamp: 200},
 		},
 		Ack: func() {
 			ackCalled = true
@@ -178,7 +178,7 @@ func BenchmarkLogWrites(b *testing.B) {
 		log.SetObservedTimestamp(67890)
 		log.SetBodyValue("key", "value")
 		log.SetAttributeValue("attr", "value")
-		log.SetResourcevalue("res", "value")
+		log.SetResourceValue("res", "value")
 		log.SetBodyValue("complicated", map[string]any{
 			"hello": "world",
 		})

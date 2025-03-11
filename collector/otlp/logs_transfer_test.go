@@ -290,17 +290,13 @@ func TestConvertToLogBatch(t *testing.T) {
 				log := types.LogPool.Get(1).(*types.Log)
 				log.Reset()
 
-				log.Timestamp = 1
-				log.ObservedTimestamp = 2
-				log.Body = map[string]any{
-					"message":        "message",
-					"kusto.database": "ADatabase",
-					"kusto.table":    "BTable",
-				}
-				log.Attributes = map[string]any{
-					"adxmon_destination_database": "ADatabase",
-					"adxmon_destination_table":    "BTable",
-				}
+				log.SetTimestamp(1)
+				log.SetObservedTimestamp(2)
+				log.SetBodyValue("message", "message")
+				log.SetBodyValue("kusto.database", "ADatabase")
+				log.SetBodyValue("kusto.table", "BTable")
+				log.SetAttributeValue("adxmon_destination_database", "ADatabase")
+				log.SetAttributeValue("adxmon_destination_table", "BTable")
 
 				batch.Logs = append(batch.Logs, log)
 				return batch
@@ -367,20 +363,14 @@ func TestConvertToLogBatch(t *testing.T) {
 				log := types.LogPool.Get(1).(*types.Log)
 				log.Reset()
 
-				log.Timestamp = 1
-				log.ObservedTimestamp = 2
-				log.Body = map[string]any{
-					"message":        "message",
-					"kusto.database": "ADatabase",
-					"kusto.table":    "BTable",
-				}
-				log.Attributes = map[string]any{
-					"adxmon_destination_database": "ADatabase",
-					"adxmon_destination_table":    "BTable",
-				}
-				log.Resource = map[string]any{
-					"hello": "world",
-				}
+				log.SetTimestamp(1)
+				log.SetObservedTimestamp(2)
+				log.SetBodyValue("message", "message")
+				log.SetBodyValue("kusto.database", "ADatabase")
+				log.SetBodyValue("kusto.table", "BTable")
+				log.SetAttributeValue("adxmon_destination_database", "ADatabase")
+				log.SetAttributeValue("adxmon_destination_table", "BTable")
+				log.SetResourceValue("hello", "world")
 
 				batch.Logs = append(batch.Logs, log)
 				return batch
@@ -567,7 +557,9 @@ func TestExtractBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dest := make(map[string]any)
-			extractBody(tt.body, dest)
+			extractBody(tt.body, func(k string, v any) {
+				dest[k] = v
+			})
 			require.Equal(t, tt.expected, dest)
 		})
 	}
@@ -696,7 +688,9 @@ func TestExtractKeyValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dest := make(map[string]any)
-			extractKeyValues(tt.attrs, dest)
+			extractKeyValues(tt.attrs, func(k string, v any) {
+				dest[k] = v
+			})
 			require.Equal(t, tt.expected, dest)
 		})
 	}

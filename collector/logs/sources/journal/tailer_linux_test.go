@@ -40,7 +40,7 @@ func TestReadFile(t *testing.T) {
 	}()
 
 	for msg := range queue {
-		if msg.Body[types.BodyKeyMessage] == "4999" { // managed to get to the end
+		if val, _ := msg.GetBodyValue(types.BodyKeyMessage); val == "4999" { // managed to get to the end
 			break
 		}
 	}
