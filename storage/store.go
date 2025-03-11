@@ -204,8 +204,8 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 	for _, log := range logs.Logs {
 		// If we don't have a destination, we can't do anything with the log.
 		// Skip instead of trying again, which will just repeat the same error.
-		database, ok := log.Attributes[types.AttributeDatabaseName].(string)
-		if !ok || database == "" {
+		database := types.StringOrEmpty(log.GetAttributeValue(types.AttributeDatabaseName))
+		if database == "" {
 			noDestinationCount++
 			continue
 		}
@@ -215,8 +215,8 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 			continue
 		}
 
-		table, ok := log.Attributes[types.AttributeTableName].(string)
-		if !ok || table == "" {
+		table := types.StringOrEmpty(log.GetAttributeValue(types.AttributeTableName))
+		if table == "" {
 			noDestinationCount++
 			continue
 		}

@@ -2,11 +2,8 @@ package types
 
 import "sync/atomic"
 
-// Log represents a single log entry
-// It is not safe for concurrent updates
-// It is safe to read from multiple goroutines after all modifications have been completed.
-// Freeze is best effort and should be used to indicate that the log is no longer being modified.
-type Log struct {
+// LogLiteral is a struct that is easily converted to Log.
+type LogLiteral struct {
 	// Timestamp of the event in nanoseconds since the unix epoch
 	Timestamp uint64
 	// Timestamp when this event was ingested in nanoseconds since the unix epoch
@@ -20,6 +17,37 @@ type Log struct {
 
 	// Resource that has collected the log
 	Resource map[string]any
+}
+
+func (l *LogLiteral) ToLog() *Log {
+	return &Log{
+		timestamp:         l.Timestamp,
+		observedTimestamp: l.ObservedTimestamp,
+		body:              l.Body,
+		attributes:        l.Attributes,
+		resource:          l.Resource,
+		frozen:            0,
+	}
+}
+
+// Log represents a single log entry
+// It is not safe for concurrent updates
+// It is safe to read from multiple goroutines after all modifications have been completed.
+// Freeze is best effort and should be used to indicate that the log is no longer being modified.
+type Log struct {
+	// Timestamp of the event in nanoseconds since the unix epoch
+	timestamp uint64
+	// Timestamp when this event was ingested in nanoseconds since the unix epoch
+	observedTimestamp uint64
+
+	// body of the log entry
+	body map[string]any
+
+	// attributes of the log entry, not included in the log body.
+	attributes map[string]any
+
+	// resource that has collected the log
+	resource map[string]any
 
 	// frozen tracks if this object should not be modified
 	// updated atomically
@@ -28,17 +56,17 @@ type Log struct {
 
 func NewLog() *Log {
 	return &Log{
-		Body:       map[string]any{},
-		Attributes: map[string]any{},
-		Resource:   map[string]any{},
+		body:       map[string]any{},
+		attributes: map[string]any{},
+		resource:   map[string]any{},
 		frozen:     0,
 	}
 }
 
 func (l *Log) Reset() {
-	clear(l.Body)
-	clear(l.Attributes)
-	clear(l.Resource)
+	clear(l.body)
+	clear(l.attributes)
+	clear(l.resource)
 	atomic.StoreUint32(&l.frozen, 0)
 }
 
@@ -46,16 +74,16 @@ func (l *Log) Reset() {
 func (l *Log) Copy() *Log {
 	copy := LogPool.Get(1).(*Log)
 	copy.Reset()
-	copy.Timestamp = l.Timestamp
-	copy.ObservedTimestamp = l.ObservedTimestamp
-	for k, v := range l.Attributes {
-		copy.Attributes[k] = v
+	copy.timestamp = l.timestamp
+	copy.observedTimestamp = l.observedTimestamp
+	for k, v := range l.attributes {
+		copy.attributes[k] = v
 	}
-	for k, v := range l.Body {
-		copy.Body[k] = v
+	for k, v := range l.body {
+		copy.body[k] = v
 	}
-	for k, v := range l.Resource {
-		copy.Resource[k] = v
+	for k, v := range l.resource {
+		copy.resource[k] = v
 	}
 	return copy
 }
@@ -64,31 +92,31 @@ func (l *Log) SetTimestamp(ts uint64) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.Timestamp = ts
+	l.timestamp = ts
 }
 func (l *Log) SetObservedTimestamp(ts uint64) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.ObservedTimestamp = ts
+	l.observedTimestamp = ts
 }
 func (l *Log) SetAttributeValue(key string, value any) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.Attributes[key] = value
+	l.attributes[key] = value
 }
 func (l *Log) SetBodyValue(key string, value any) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.Body[key] = value
+	l.body[key] = value
 }
-func (l *Log) SetResourcevalue(key string, value any) {
+func (l *Log) SetResourceValue(key string, value any) {
 	if atomic.LoadUint32(&l.frozen) == 1 {
 		panic("log is frozen")
 	}
-	l.Resource[key] = value
+	l.resource[key] = value
 }
 
 func (l *Log) Freeze() {
@@ -96,30 +124,30 @@ func (l *Log) Freeze() {
 }
 
 func (l *Log) GetTimestamp() uint64 {
-	return l.Timestamp
+	return l.timestamp
 }
 
 func (l *Log) GetObservedTimestamp() uint64 {
-	return l.ObservedTimestamp
+	return l.observedTimestamp
 }
 
 func (l *Log) GetAttributeValue(key string) (any, bool) {
-	v, ok := l.Attributes[key]
+	v, ok := l.attributes[key]
 	return v, ok
 }
 
 func (l *Log) GetBodyValue(key string) (any, bool) {
-	v, ok := l.Body[key]
+	v, ok := l.body[key]
 	return v, ok
 }
 
 func (l *Log) GetResourceValue(key string) (any, bool) {
-	v, ok := l.Resource[key]
+	v, ok := l.resource[key]
 	return v, ok
 }
 
 func (l *Log) ForEachAttribute(f func(string, any) error) error {
-	for k, v := range l.Attributes {
+	for k, v := range l.attributes {
 		if err := f(k, v); err != nil {
 			return err
 		}
@@ -128,7 +156,7 @@ func (l *Log) ForEachAttribute(f func(string, any) error) error {
 }
 
 func (l *Log) ForEachBody(f func(string, any) error) error {
-	for k, v := range l.Body {
+	for k, v := range l.body {
 		if err := f(k, v); err != nil {
 			return err
 		}
@@ -137,7 +165,7 @@ func (l *Log) ForEachBody(f func(string, any) error) error {
 }
 
 func (l *Log) ForEachResource(f func(string, any) error) error {
-	for k, v := range l.Resource {
+	for k, v := range l.resource {
 		if err := f(k, v); err != nil {
 			return err
 		}
@@ -146,15 +174,42 @@ func (l *Log) ForEachResource(f func(string, any) error) error {
 }
 
 func (l *Log) AttributeLen() int {
-	return len(l.Attributes)
+	return len(l.attributes)
 }
 
 func (l *Log) BodyLen() int {
-	return len(l.Body)
+	return len(l.body)
 }
 
 func (l *Log) ResourceLen() int {
-	return len(l.Resource)
+	return len(l.resource)
+}
+
+// GetAttributes returns a copy of the attributes map for read-only access
+func (l *Log) GetAttributes() map[string]any {
+	result := make(map[string]any, len(l.attributes))
+	for k, v := range l.attributes {
+		result[k] = v
+	}
+	return result
+}
+
+// GetBody returns a copy of the body map for read-only access
+func (l *Log) GetBody() map[string]any {
+	result := make(map[string]any, len(l.body))
+	for k, v := range l.body {
+		result[k] = v
+	}
+	return result
+}
+
+// GetResource returns a copy of the resource map for read-only access
+func (l *Log) GetResource() map[string]any {
+	result := make(map[string]any, len(l.resource))
+	for k, v := range l.resource {
+		result[k] = v
+	}
+	return result
 }
 
 // ROLog is a read-only view of a log
@@ -172,12 +227,22 @@ type ROLog interface {
 	BodyLen() int
 	ResourceLen() int
 	Copy() *Log
+	GetAttributes() map[string]any
+	GetBody() map[string]any
+	GetResource() map[string]any
 }
 
 // LogBatch represents a batch of logs
 type LogBatch struct {
 	Logs []*Log
 	Ack  func()
+}
+
+func (l *LogBatch) AddLiterals(literals []*LogLiteral) {
+	for _, literal := range literals {
+		log := literal.ToLog()
+		l.Logs = append(l.Logs, log)
+	}
 }
 
 func (l *LogBatch) Reset() {

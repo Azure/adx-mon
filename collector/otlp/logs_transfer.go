@@ -180,7 +180,9 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 
 		resourceAttributes := make(map[string]any)
 		if resourceLog.Resource != nil {
-			extractKeyValues(resourceLog.Resource.Attributes, resourceAttributes)
+			extractKeyValues(resourceLog.Resource.Attributes, func(k string, v any) {
+				resourceAttributes[k] = v
+			})
 		}
 
 		for _, scope := range resourceLog.ScopeLogs {
@@ -207,17 +209,17 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 				log := types.LogPool.Get(1).(*types.Log)
 				log.Reset()
 
-				log.Timestamp = record.TimeUnixNano
-				log.ObservedTimestamp = record.ObservedTimeUnixNano
-				extractKeyValues(record.Attributes, log.Attributes)
-				extractBody(record.Body, log.Body)
+				log.SetTimestamp(record.TimeUnixNano)
+				log.SetObservedTimestamp(record.ObservedTimeUnixNano)
+				extractKeyValues(record.Attributes, log.SetAttributeValue)
+				extractBody(record.Body, log.SetBodyValue)
 
 				for k, v := range resourceAttributes {
-					log.Resource[k] = v
+					log.SetResourceValue(k, v)
 				}
 
-				log.Attributes[types.AttributeDatabaseName] = dbName
-				log.Attributes[types.AttributeTableName] = tableName
+				log.SetAttributeValue(types.AttributeDatabaseName, dbName)
+				log.SetAttributeValue(types.AttributeTableName, tableName)
 
 				metrics.LogKeys.WithLabelValues(dbName, tableName).Inc()
 
@@ -230,7 +232,7 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 
 const defaultMaxDepth = 20
 
-func extractBody(body *commonv1.AnyValue, dest map[string]any) {
+func extractBody(body *commonv1.AnyValue, dest func(k string, v any)) {
 	if body == nil || !body.HasValue() {
 		return
 	}
@@ -245,12 +247,12 @@ func extractBody(body *commonv1.AnyValue, dest map[string]any) {
 	} else {
 		vv, ok := extract(body, 0, defaultMaxDepth)
 		if ok {
-			dest[types.BodyKeyMessage] = vv
+			dest(types.BodyKeyMessage, vv)
 		}
 	}
 }
 
-func extractKeyValues(kvs []*commonv1.KeyValue, dest map[string]any) {
+func extractKeyValues(kvs []*commonv1.KeyValue, dest func(k string, v any)) {
 	if kvs == nil {
 		return
 	}
@@ -263,7 +265,7 @@ func extractKeyValues(kvs []*commonv1.KeyValue, dest map[string]any) {
 		if !ok {
 			continue
 		}
-		dest[kv.Key] = vv
+		dest(kv.Key, vv)
 	}
 }
 

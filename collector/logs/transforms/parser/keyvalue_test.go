@@ -96,7 +96,7 @@ func TestParseToJSON(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			log := types.NewLog()
 			require.NoError(t, parser.Parse(log, tt.input))
-			require.Equal(t, tt.expected, log.Body)
+			require.Equal(t, tt.expected, log.GetBody())
 		})
 	}
 }
@@ -140,7 +140,7 @@ func TestParseToJSON_EdgeCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			log := types.NewLog()
 			require.NoError(t, parser.Parse(log, tt.input))
-			require.Equal(t, tt.expected, log.Body)
+			require.Equal(t, tt.expected, log.GetBody())
 		})
 	}
 }
