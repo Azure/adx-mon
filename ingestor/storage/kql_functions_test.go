@@ -42,7 +42,7 @@ func TestFunctions(t *testing.T) {
 		return !errors.Is(err, &meta.NoKindMatchError{}) && !errors.Is(err, &meta.NoResourceMatchError{})
 	}, time.Minute, time.Second)
 
-	functionStore := storage.NewFunctions(ctrlCli, nil)
+	functionStore := storage.NewFunctions(ctrlCli)
 
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
@@ -120,26 +120,6 @@ func TestFunctions(t *testing.T) {
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
 		require.Equal(t, fn.Status.Status, adxmonv1.Failed)
 		require.Equal(t, currentGeneration, fn.GetGeneration())
-	})
-
-	t.Run("Respects leader election", func(t *testing.T) {
-		coord := &elector{isLeader: true}
-		functionStore := storage.NewFunctions(ctrlCli, coord)
-
-		// Update the function to ensure the generation is updated
-		fn := &adxmonv1.Function{}
-		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
-		fn.Spec.Database = "some-other-database"
-		require.NoError(t, ctrlCli.Update(ctx, fn))
-
-		fns, err := functionStore.List(ctx)
-		require.NoError(t, err)
-		require.Len(t, fns, 1)
-
-		coord.isLeader = false
-		fns, err = functionStore.List(ctx)
-		require.NoError(t, err)
-		require.Empty(t, fns)
 	})
 
 	t.Run("Updates subresource", func(t *testing.T) {

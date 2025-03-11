@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func TestCRDs(t *testing.T) {
 	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 
-	store := storage.NewCRDHandler(ctrlCli, nil)
+	store := storage.NewCRDHandler(ctrlCli)
 
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
@@ -77,4 +78,85 @@ func TestCRDs(t *testing.T) {
 	list = &adxmonv1.SummaryRuleList{}
 	require.NoError(t, store.List(ctx, list))
 	require.Len(t, list.Items, 1)
+}
+
+func TestOwnership(t *testing.T) {
+	testutils.IntegrationTest(t)
+
+	scheme := clientgoscheme.Scheme
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	ctx := context.Background()
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	testcontainers.CleanupContainer(t, k3sContainer)
+	require.NoError(t, err)
+
+	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	require.NoError(t, err)
+
+	store := storage.NewCRDHandler(ctrlCli)
+
+	resourceName := "testtest"
+	typeNamespacedName := types.NamespacedName{
+		Name:      resourceName,
+		Namespace: "default",
+	}
+
+	// Create a SummaryRule object
+	sr := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      typeNamespacedName.Name,
+			Namespace: typeNamespacedName.Namespace,
+		},
+	}
+	require.NoError(t, ctrlCli.Create(ctx, sr))
+
+	// List the SummaryRule objects. We expect to receive the one we just created
+	list := &adxmonv1.SummaryRuleList{}
+	require.NoError(t, store.List(ctx, list, storage.FilterCompleted))
+	require.Len(t, list.Items, 1)
+
+	// Retrieve the SummaryRule object by its name and namespace as stored in k8s
+	require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, sr))
+	require.NoError(t, store.UpdateStatus(ctx, sr, nil))
+
+	// Ensure ownership is set correctly
+	require.NotEmpty(t, sr.Annotations)
+	require.NotEmpty(t, sr.Annotations[adxmonv1.ControllerOwnerKey])
+	require.NotEmpty(t, sr.Annotations[adxmonv1.LastUpdatedKey])
+
+	// Modify ownershiop to be owned by someone else
+	controllerId := sr.Annotations[adxmonv1.ControllerOwnerKey]
+	sr.Annotations[adxmonv1.ControllerOwnerKey] = "other-controller"
+	require.NoError(t, ctrlCli.Update(ctx, sr))
+
+	// List the SummaryRule objects. We expect to receive no results because
+	// the instance is now owned by someone else
+	list = &adxmonv1.SummaryRuleList{}
+	require.NoError(t, store.List(ctx, list))
+	require.Len(t, list.Items, 0)
+
+	// Reclaim ownership
+	sr.Annotations[adxmonv1.ControllerOwnerKey] = controllerId
+	require.NoError(t, ctrlCli.Update(ctx, sr))
+
+	// List again, we expect a result since we are the owner
+	list = &adxmonv1.SummaryRuleList{}
+	require.NoError(t, store.List(ctx, list))
+	require.Len(t, list.Items, 1)
+
+	// Now reassign ownership and advance time a bit, indicating staleness
+	require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, sr))
+	sr.Annotations[adxmonv1.ControllerOwnerKey] = "other-controller"
+	sr.Annotations[adxmonv1.LastUpdatedKey] = metav1.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+	require.NoError(t, ctrlCli.Update(ctx, sr))
+
+	// List resource, we should get a result because the resource is stale
+	list = &adxmonv1.SummaryRuleList{}
+	require.NoError(t, store.List(ctx, list))
+	require.Len(t, list.Items, 1)
+	// Check the owner
+	require.Equal(t, controllerId, list.Items[0].GetAnnotations()[adxmonv1.ControllerOwnerKey])
 }

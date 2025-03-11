@@ -267,8 +267,8 @@ func (s *Service) Open(ctx context.Context) error {
 		return nil
 	})
 
-	fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
-	crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
+	fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli)
+	crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli)
 	for _, v := range s.opts.MetricsKustoCli {
 		t := adx.NewDropUnusedTablesTask(v)
 		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {

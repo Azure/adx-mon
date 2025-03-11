@@ -31,6 +31,16 @@ var (
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 
+	// ControllerOwnerKey is the annotation key used to identify the owner of a controller.
+	// Enables distributed ownership of resources, allowing multiple controllers to
+	// manage the same resource type.
+	ControllerOwnerKey = "controller.adx-mon.azure.com/owner"
+
+	// LastUpdatedKey is the annotation key used to track the last update time of a resource
+	// in an effort to detect staleness or a controller owner that no longer exists or has
+	// failed to make forward progress.
+	LastUpdatedKey = "controller.adx-mon.azure.com/last-updated"
+
 	// AddToScheme adds the types in this group-version to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
 )
