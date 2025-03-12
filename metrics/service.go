@@ -104,6 +104,23 @@ func (s *service) collect(ctx context.Context) {
 							iter.Stop()
 						}
 					}
+
+					stmt = kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+						".set-or-append async AdxmonIngestorTableSize <| .show tables details" +
+							"| extend PreciseTimeStamp = now() " +
+							"| project PreciseTimeStamp, DatabaseName, TableName, TotalExtents, TotalExtentSize, TotalOriginalSize, TotalRowCount, HotExtents, HotExtentSize, HotOriginalSize," +
+							"HotRowCount, RetentionPolicy, CachingPolicy, ShardingPolicy, MergePolicy, IngestionBatchingPolicy, MinExtentsCreationTime, MaxExtentsCreationTime, TableId",
+					)
+
+					for _, cli := range s.kustoClis {
+						iter, err := cli.Mgmt(ctx, stmt)
+						if err != nil {
+							logger.Errorf("Failed to execute table sizes: %s", err)
+						} else {
+							iter.Stop()
+						}
+					}
+
 				}
 			}
 
