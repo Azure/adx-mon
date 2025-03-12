@@ -41,9 +41,9 @@ require (
 	golang.org/x/sys v0.31.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7
 	google.golang.org/protobuf v1.36.5
-	k8s.io/api v0.32.2
+	k8s.io/api v0.32.3
 	k8s.io/apimachinery v0.32.3
-	k8s.io/client-go v0.32.2
+	k8s.io/client-go v0.32.3
 	k8s.io/utils v0.0.0-20241210054802-24370beab758
 	sigs.k8s.io/controller-runtime v0.20.3
 	sigs.k8s.io/yaml v1.4.0
