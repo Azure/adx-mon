@@ -11,7 +11,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -68,8 +67,6 @@ func main() {
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
 			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
-			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
 			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns. Format is <label>[=<column name>]"},
 
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
@@ -242,37 +239,6 @@ func realMain(ctx *cli.Context) error {
 	// Update the default mapping so pooled csv encoders can use the lifted columns
 	schema.DefaultMetricsMapping = defaultMapping
 
-	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-	for _, v := range ctx.StringSlice("drop-labels") {
-		// The format is <metrics region>=<label regex>
-		fields := strings.Split(v, "=")
-		if len(fields) > 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		metricRegex, err := regexp.Compile(fields[0])
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		labelRegex, err := regexp.Compile(fields[1])
-		if err != nil {
-			logger.Fatalf("invalid label regex: %s", err)
-		}
-
-		dropLabels[metricRegex] = labelRegex
-	}
-
-	dropMetrics := []*regexp.Regexp{}
-	for _, v := range ctx.StringSlice("drop-metrics") {
-		metricRegex, err := regexp.Compile(v)
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		dropMetrics = append(dropMetrics, metricRegex)
-	}
-
 	var (
 		allowedDatabases                []string
 		metricsUploaders, logsUploaders []adx.Uploader
@@ -354,8 +320,6 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
 		LiftedColumns:          sortedLiftedLabels,
-		DropLabels:             dropLabels,
-		DropMetrics:            dropMetrics,
 		DropFilePrefixes:       dropPrefixes,
 	})
 	if err != nil {

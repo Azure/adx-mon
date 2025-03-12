@@ -21,7 +21,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -60,7 +59,6 @@ type Service struct {
 
 	scheduler *scheduler.Periodic
 
-	requestFilter    *transform.RequestTransformer
 	dropFilePrefixes []string
 	health           interface{ IsHealthy() bool }
 }
@@ -76,13 +74,6 @@ type ServiceOpts struct {
 
 	// LiftedColumns is a slice of label names where each element will be added as a column if the label exists.
 	LiftedColumns []string
-
-	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
-	DropLabels map[*regexp.Regexp]*regexp.Regexp
-
-	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
-	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
-	DropMetrics []*regexp.Regexp
 
 	K8sCli     kubernetes.Interface
 	K8sCtrlCli client.Client
@@ -229,20 +220,16 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	sched := scheduler.NewScheduler(coord)
 
 	return &Service{
-		opts:        opts,
-		databases:   databases,
-		uploader:    opts.Uploader,
-		replicator:  repl,
-		store:       store,
-		coordinator: coord,
-		batcher:     batcher,
-		metrics:     metricsSvc,
-		health:      health,
-		scheduler:   sched,
-		requestFilter: &transform.RequestTransformer{
-			DropMetrics: opts.DropMetrics,
-			DropLabels:  opts.DropLabels,
-		},
+		opts:             opts,
+		databases:        databases,
+		uploader:         opts.Uploader,
+		replicator:       repl,
+		store:            store,
+		coordinator:      coord,
+		batcher:          batcher,
+		metrics:          metricsSvc,
+		health:           health,
+		scheduler:        sched,
 		dropFilePrefixes: opts.DropFilePrefixes,
 	}, nil
 }
