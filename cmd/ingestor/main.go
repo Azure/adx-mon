@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -66,8 +65,6 @@ func main() {
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
-			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
-			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns. Format is <label>[=<column name>]"},
 
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
@@ -206,39 +203,6 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatalf("--storage-dir is required")
 	}
 
-	defaultMapping := schema.DefaultMetricsMapping
-	for _, v := range ctx.StringSlice("add-labels") {
-		fields := strings.Split(v, "=")
-		if len(fields) != 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		defaultMapping = defaultMapping.AddConstMapping(fields[0], fields[1])
-	}
-
-	liftedLabels := ctx.StringSlice("lift-label")
-	sort.Strings(liftedLabels)
-
-	var sortedLiftedLabels []string
-	for _, v := range liftedLabels {
-		// The format is <label>[=<column name>] where the column name is optional.  If not specified, the label name is used.
-		fields := strings.Split(v, "=")
-		if len(fields) > 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		sortedLiftedLabels = append(sortedLiftedLabels, fields[0])
-
-		if len(fields) == 2 {
-			defaultMapping = defaultMapping.AddStringMapping(fields[1])
-			continue
-		}
-
-		defaultMapping = defaultMapping.AddStringMapping(v)
-	}
-	// Update the default mapping so pooled csv encoders can use the lifted columns
-	schema.DefaultMetricsMapping = defaultMapping
-
 	var (
 		allowedDatabases                []string
 		metricsUploaders, logsUploaders []adx.Uploader
@@ -249,7 +213,7 @@ func realMain(ctx *cli.Context) error {
 	if len(metricsKusto) > 0 {
 		metricsUploaders, metricsDatabases, err = newUploaders(
 			metricsKusto, storageDir, concurrentUploads,
-			defaultMapping, adx.PromMetrics)
+			schema.DefaultMetricsMapping, adx.PromMetrics)
 		if err != nil {
 			logger.Fatalf("Failed to create uploader: %s", err)
 		}
@@ -319,7 +283,6 @@ func realMain(ctx *cli.Context) error {
 		EnableWALFsync:         enableWALFsync,
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
-		LiftedColumns:          sortedLiftedLabels,
 		DropFilePrefixes:       dropPrefixes,
 	})
 	if err != nil {

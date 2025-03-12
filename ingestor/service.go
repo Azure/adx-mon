@@ -69,12 +69,6 @@ type ServiceOpts struct {
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
 
-	// StaticColumns is a slice of column=value elements where each element will be added all rows.
-	StaticColumns []string
-
-	// LiftedColumns is a slice of label names where each element will be added as a column if the label exists.
-	LiftedColumns []string
-
 	K8sCli     kubernetes.Interface
 	K8sCtrlCli client.Client
 
@@ -149,7 +143,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
 		EnableWALFsync: opts.EnableWALFsync,
-		LiftedLabels:   opts.LiftedColumns,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
