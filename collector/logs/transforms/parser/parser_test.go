@@ -16,8 +16,8 @@ func TestNewParsers(t *testing.T) {
 	}{
 		{
 			name:     "valid parser",
-			input:    []string{"json"},
-			expected: []Parser{&JsonParser{}},
+			input:    []string{"json", "keyvalue"},
+			expected: []Parser{&JsonParser{}, &KeyValueParser{}},
 		},
 		{
 			name:     "empty",
@@ -54,8 +54,13 @@ func TestIsValidParser(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "valid",
+			name:     "valid json",
 			input:    "json",
+			expected: true,
+		},
+		{
+			name:     "valid keyvalue",
+			input:    "keyvalue",
 			expected: true,
 		},
 		{
@@ -108,6 +113,17 @@ func TestExecuteParsers(t *testing.T) {
 			},
 		},
 		{
+			name:    "successful keyvalue parse",
+			parsers: []Parser{&KeyValueParser{}},
+			message: `a=1.1 b="abc" c=true message="hello"`,
+			expectedBody: map[string]interface{}{
+				"a":       1.1,
+				"b":       "abc",
+				"c":       true,
+				"message": "hello",
+			},
+		},
+		{
 			name:    "skips failing parser",
 			parsers: []Parser{&alwaysFailingParser{}, &JsonParser{}},
 			message: `{"a": 1, "b": "2", "c": {"d": 3}}`,
@@ -155,6 +171,15 @@ func TestExecuteParsers(t *testing.T) {
 			message: `{"a": 1, "b": "2", "c": {"d": 3}}`,
 			expectedBody: map[string]interface{}{
 				types.BodyKeyMessage: `{"a": 1, "b": "2", "c": {"d": 3}}`,
+			},
+		},
+		{
+			name:    "json and keyvalue parsers",
+			parsers: []Parser{&JsonParser{}, &KeyValueParser{}},
+			message: `a=b c=d`,
+			expectedBody: map[string]interface{}{
+				"a": "b",
+				"c": "d",
 			},
 		},
 	}
