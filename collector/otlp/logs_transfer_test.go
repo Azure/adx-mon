@@ -290,8 +290,8 @@ func TestConvertToLogBatch(t *testing.T) {
 				log := types.LogPool.Get(1).(*types.Log)
 				log.Reset()
 
-				log.Timestamp = 1
-				log.ObservedTimestamp = 2
+				log.SetTimestamp(1)
+				log.SetObservedTimestamp(2)
 				log.Body = map[string]any{
 					"message":        "message",
 					"kusto.database": "ADatabase",
@@ -367,8 +367,8 @@ func TestConvertToLogBatch(t *testing.T) {
 				log := types.LogPool.Get(1).(*types.Log)
 				log.Reset()
 
-				log.Timestamp = 1
-				log.ObservedTimestamp = 2
+				log.SetTimestamp(1)
+				log.SetObservedTimestamp(2)
 				log.Body = map[string]any{
 					"message":        "message",
 					"kusto.database": "ADatabase",

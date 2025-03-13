@@ -10,25 +10,23 @@ import (
 )
 
 func BenchmarkMsgp(b *testing.B) {
-	logbatch := types.LogBatch{
-		Logs: testlogs,
-	}
+	logbatch := types.LogBatch{}
+	logbatch.AddLiterals(testlogs)
 
-	e := newFluentEncoder()
+	e := newFluentEncoder("destTag")
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, _ = e.encode("destTag", &logbatch)
+		_, _ = e.encode(&logbatch)
 	}
 }
 
 func TestEncode(t *testing.T) {
-	logbatch := types.LogBatch{
-		Logs: testlogs,
-	}
+	logbatch := types.LogBatch{}
+	logbatch.AddLiterals(testlogs)
 
-	e := newFluentEncoder()
-	b, err := e.encode("destTag", &logbatch)
+	e := newFluentEncoder("destTag")
+	b, err := e.encode(&logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
 
@@ -60,7 +58,7 @@ func TestEncode(t *testing.T) {
 	// nothing more to read
 	require.Equal(t, 0, len(rest))
 
-	logbatch.Logs = []*types.Log{
+	newLogs := []*types.LogLiteral{
 		{
 			Timestamp: timeTwo,
 			Attributes: map[string]interface{}{
@@ -71,8 +69,10 @@ func TestEncode(t *testing.T) {
 			},
 		},
 	}
+	logbatch.Reset()
+	logbatch.AddLiterals(newLogs)
 
-	b, err = e.encode("destTag", &logbatch)
+	b, err = e.encode(&logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
 	rest = validateArrayHeaderForwardMode(t, b)
@@ -122,7 +122,7 @@ var timeOne uint64
 var timeTwo uint64
 var timeThree uint64 = uint64(1740529377*1e9 + 123456789)
 
-var testlogs []*types.Log
+var testlogs []*types.LogLiteral
 
 func init() {
 	val, err := time.Parse(time.RFC3339Nano, "2022-06-01T12:34:56.789012345Z")
@@ -137,7 +137,7 @@ func init() {
 	}
 	timeTwo = uint64(val.UnixNano())
 
-	testlogs = []*types.Log{
+	testlogs = []*types.LogLiteral{
 		{
 			Timestamp: timeOne,
 			Attributes: map[string]interface{}{

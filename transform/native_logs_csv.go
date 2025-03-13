@@ -86,11 +86,11 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	// Reset fields
 	fields = fields[:0]
 	// Timestamp
-	fields = append(fields, otlpTSToUTC(int64(log.Timestamp)))
+	fields = append(fields, otlpTSToUTC(int64(log.GetTimestamp())))
 	// ObservedTimestamp
-	if v := log.ObservedTimestamp; v > 0 {
+	if v := log.GetObservedTimestamp(); v > 0 {
 		// Some clients don't set this value.
-		fields = append(fields, otlpTSToUTC(int64(log.ObservedTimestamp)))
+		fields = append(fields, otlpTSToUTC(int64(log.GetObservedTimestamp())))
 	} else {
 		fields = append(fields, time.Now().UTC().Format(time.RFC3339Nano))
 	}
