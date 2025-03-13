@@ -190,10 +190,15 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	health.QueueSizer = batcher
 
+	allKustoCli := make([]metrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
+	allKustoCli = append(allKustoCli, opts.MetricsKustoCli...)
+	allKustoCli = append(allKustoCli, opts.LogsKustoCli...)
+
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{
 		Hostname:         opts.Hostname,
 		Elector:          coord,
-		KustoCli:         opts.MetricsKustoCli,
+		MetricsKustoCli:  opts.MetricsKustoCli,
+		KustoCli:         allKustoCli,
 		PeerHealthReport: health,
 	})
 
