@@ -24,6 +24,8 @@ func newParser(parserType ParserType) (Parser, error) {
 	switch parserType {
 	case ParserTypeJson:
 		return NewJsonParser(JsonParserConfig{})
+	case ParserTypeKeyValue:
+		return NewKeyValueParser(KeyValueParserConfig{})
 	default:
 		return nil, fmt.Errorf("unknown parser type: %s", parserType)
 	}
@@ -47,6 +49,8 @@ func NewParsers(parserTypes []string, source string) []Parser {
 func IsValidParser(parserType string) bool {
 	switch parserType {
 	case string(ParserTypeJson):
+		return true
+	case string(ParserTypeKeyValue):
 		return true
 	default:
 		return false
