@@ -42,8 +42,13 @@ type Service interface {
 }
 
 type ServiceOpts struct {
-	Hostname         string
-	Elector          Elector
+	Hostname string
+	Elector  Elector
+
+	// MetricsKustoCli is the Kusto clients for metrics clusters.
+	MetricsKustoCli []StatementExecutor
+
+	// KustoCli is the Kusto clients for all clusters.
 	KustoCli         []StatementExecutor
 	PeerHealthReport HealthReporter
 }
@@ -52,18 +57,20 @@ type ServiceOpts struct {
 type service struct {
 	closeFn context.CancelFunc
 
-	hostname  string
-	elector   Elector
-	kustoClis []StatementExecutor
-	health    HealthReporter
+	hostname        string
+	elector         Elector
+	metricsKustoCli []StatementExecutor
+	allKustoClis    []StatementExecutor
+	health          HealthReporter
 }
 
 func NewService(opts ServiceOpts) Service {
 	return &service{
-		elector:   opts.Elector,
-		kustoClis: opts.KustoCli,
-		hostname:  opts.Hostname,
-		health:    opts.PeerHealthReport,
+		elector:         opts.Elector,
+		metricsKustoCli: opts.MetricsKustoCli,
+		allKustoClis:    opts.KustoCli,
+		hostname:        opts.Hostname,
+		health:          opts.PeerHealthReport,
 	}
 }
 
@@ -91,33 +98,37 @@ func (s *service) collect(ctx context.Context) {
 			// This is only set when running on ingestor currently.
 			if s.elector != nil {
 				// Only one node should execute the cardinality counts so see if we are the owner.
-				if len(s.kustoClis) > 0 && s.elector.IsLeader() {
-					stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-						".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
-					)
+				if s.elector.IsLeader() {
+					if len(s.metricsKustoCli) > 0 {
+						stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+							".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
+						)
 
-					for _, cli := range s.kustoClis {
-						iter, err := cli.Mgmt(ctx, stmt)
-						if err != nil {
-							logger.Errorf("Failed to execute cardinality counts: %s", err)
-						} else {
-							iter.Stop()
+						for _, cli := range s.metricsKustoCli {
+							iter, err := cli.Mgmt(ctx, stmt)
+							if err != nil {
+								logger.Errorf("Failed to execute cardinality counts: %s", err)
+							} else {
+								iter.Stop()
+							}
 						}
 					}
 
-					stmt = kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-						".set-or-append async AdxmonIngestorTableSize <| .show tables details" +
-							"| extend PreciseTimeStamp = now() " +
-							"| project PreciseTimeStamp, DatabaseName, TableName, TotalExtents, TotalExtentSize, TotalOriginalSize, TotalRowCount, HotExtents, HotExtentSize, HotOriginalSize," +
-							"HotRowCount, RetentionPolicy, CachingPolicy, ShardingPolicy, MergePolicy, IngestionBatchingPolicy, MinExtentsCreationTime, MaxExtentsCreationTime, TableId",
-					)
+					if len(s.allKustoClis) > 0 {
+						stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+							".set-or-append async AdxmonIngestorTableDetails <| .show tables details" +
+								"| extend PreciseTimeStamp = now() " +
+								"| project PreciseTimeStamp, DatabaseName, TableName, TotalExtents, TotalExtentSize, TotalOriginalSize, TotalRowCount, HotExtents, HotExtentSize, HotOriginalSize," +
+								"HotRowCount, RetentionPolicy, CachingPolicy, ShardingPolicy, MergePolicy, IngestionBatchingPolicy, MinExtentsCreationTime, MaxExtentsCreationTime, TableId",
+						)
 
-					for _, cli := range s.kustoClis {
-						iter, err := cli.Mgmt(ctx, stmt)
-						if err != nil {
-							logger.Errorf("Failed to execute table sizes: %s", err)
-						} else {
-							iter.Stop()
+						for _, cli := range s.allKustoClis {
+							iter, err := cli.Mgmt(ctx, stmt)
+							if err != nil {
+								logger.Errorf("Failed to execute table sizes: %s", err)
+							} else {
+								iter.Stop()
+							}
 						}
 					}
 
