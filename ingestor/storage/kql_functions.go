@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/scheduler"
+	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,14 +26,14 @@ type Functions interface {
 }
 
 type functions struct {
-	Client  client.Client
-	Elector scheduler.Elector
+	Client       client.Client
+	ControllerId string
 }
 
-func NewFunctions(client client.Client, elector scheduler.Elector) *functions {
+func NewFunctions(client client.Client) *functions {
 	return &functions{
-		Client:  client,
-		Elector: elector,
+		Client:       client,
+		ControllerId: "controller-" + uuid.NewString(),
 	}
 }
 
@@ -65,10 +65,6 @@ func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) err
 func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 	if f.Client == nil {
 		return nil, fmt.Errorf("no client provided")
-	}
-
-	if f.Elector != nil && !f.Elector.IsLeader() {
-		return nil, nil
 	}
 
 	list := &adxmonv1.FunctionList{}
@@ -106,6 +102,13 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 			if err := f.ensureFinalizer(ctx, &fn); err != nil {
 				logger.Errorf("Failed to ensure finalizer for function %s: %v", fn.Name, err)
 			}
+		}
+
+		if !CheckOwnership(ctx, &fn, f.Client, f.ControllerId) {
+			if logger.IsDebug() {
+				logger.Debugf("Skipping %s/%s, not owned by this controller", fn.GetNamespace(), fn.GetName())
+			}
+			continue
 		}
 
 		fns = append(fns, &fn)
