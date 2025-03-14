@@ -77,6 +77,10 @@ var (
 	// Fatal defined below
 )
 
+func Logger() *slog.Logger {
+	return slog.Default()
+}
+
 // For these wrappers, we need to capture the caller's PC to allow source line functionality to work.
 // This does not add any allocs and does not affect performance.
 
