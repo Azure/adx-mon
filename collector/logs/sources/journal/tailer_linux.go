@@ -5,6 +5,7 @@ package journal
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"time"
 
@@ -15,14 +16,25 @@ import (
 )
 
 const (
-	waittime = 100 * time.Millisecond
+	waittime = 500 * time.Millisecond
 
-	journald_line_break_field = "_LINE_BREAK"
-	journald_stream_id_field  = "_STREAM_ID"
+	journaldLineBreakField = "_LINE_BREAK"
+	journaldStreamIdField  = "_STREAM_ID"
 
 	// Indicates the log message was split due to the line-max configuration
 	// By default, is 48k but is configured with LineMax in journald.conf
 	journald_line_break_value_line_max = "line-max"
+)
+
+type openmode string
+
+// constants for the mode we're opening the journal in
+const (
+	// journalOpenModeStartup is the initial path we use for opening. Attempts to seek to the last read entry, or to the head if no cursor is found.
+	journalOpenModeStartup openmode = "startup"
+
+	// journalOpenModeRecover is the recovery path. Attempts to seek to the bottom of the journal to try to skip whatever corrupt entries may be causing errors.
+	journalOpenModeRecover openmode = "recover"
 )
 
 type tailer struct {
@@ -34,40 +46,35 @@ type tailer struct {
 	logLineParsers []parser.Parser
 	batchQueue     chan<- *types.Log
 
+	// journalFile is the path to journal files. This is used for testing purposes.
+	journalFiles []string
+
 	// streamPartials maps _STREAM_ID to the accumulated partial log messages
 	streamPartials map[string]string
+
+	logger *slog.Logger
 }
 
 // ReadFromJournal follows the flow described in the examples within `man 3 sd_journal_wait`.
 func (t *tailer) ReadFromJournal(ctx context.Context) {
+	t.logger = logger.Logger().With(
+		slog.String("source", "journal"),
+		slog.String("database", t.database),
+		slog.String("table", t.table),
+		slog.Any("matches", t.matches),
+	)
+
 	// Must lock this goroutine (and lifecycle of sdjournal.Journal object which contains the sd_journal pointer) to the underlying OS thread.
 	// man 3 sd_journal under "NOTES"
 	// "given sd_journal pointer may only be used from one specific thread at all times (and it has to be the very same one during the entire lifetime of the object), but multiple, independent threads may use multiple, independent objects safely"
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	reader, err := sdjournal.NewJournal()
+	reader, err := t.openJournal(journalOpenModeStartup)
 	if err != nil {
-		logger.Errorf("failed to open journal tailer: %v", err)
+		t.logger.Error("Failed to open journal tailer. Exiting.", "err", err)
 		return
 	}
-
-	for _, match := range t.matches {
-		if match == "+" {
-			err := reader.AddDisjunction()
-			if err != nil {
-				logger.Errorf("failed to create journal disjunction: %v", err)
-				return
-			}
-		}
-
-		if err := reader.AddMatch(match); err != nil {
-			logger.Errorf("failed to add journal match %s: %v", match, err)
-			return
-		}
-	}
-
-	t.seekCursorAtStart(reader)
 
 	for {
 		select {
@@ -79,18 +86,26 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 
 		ret, err := reader.Next()
 		if err != nil {
-			// Unclear how to handle these errors. The implementation of sd_journald_next returns errors
-			// when attempting to continue iteration. Suspect these are i/o related if there are issues.
-			logger.Errorf("failed to advance in journal: %v", err)
-			t.backoff() // TODO: recreate reader?
+			t.logger.Error("Failed to advance in journal", "err", err)
+
+			reader, err = t.recoverJournal(reader)
+			if err != nil {
+				return // Recovery failed. Exit.
+			}
+
 			continue
 		}
 
 		if ret == 0 {
 			// Wait for entries
 			if err := t.waitForNewJournalEntries(ctx, reader); err != nil {
-				logger.Errorf("failed to wait for new journal entries: %v", err)
-				t.backoff() // TODO: recreate reader?
+				t.logger.Error("Failed to wait for new journal entries", "err", err)
+
+				reader, err = t.recoverJournal(reader)
+				if err != nil {
+					return // Recovery failed. Exit.
+				}
+
 				continue
 			}
 			continue
@@ -98,8 +113,13 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 
 		entry, err := reader.GetEntry()
 		if err != nil {
-			logger.Errorf("failed to get journal entry: %v", err)
-			t.backoff()
+			t.logger.Error("Failed to get journal entry", "err", err)
+
+			reader, err = t.recoverJournal(reader)
+			if err != nil {
+				return // Recovery failed. Exit.
+			}
+
 			continue
 		}
 
@@ -132,19 +152,69 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 	}
 }
 
+func (t *tailer) openJournal(mode openmode) (*sdjournal.Journal, error) {
+	var reader *sdjournal.Journal
+	var err error
+	if len(t.journalFiles) == 0 {
+		reader, err = sdjournal.NewJournal()
+	} else {
+		reader, err = sdjournal.NewJournalFromFiles(t.journalFiles...)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to open journal: %w", err)
+	}
+
+	for _, match := range t.matches {
+		if match == "+" {
+			err := reader.AddDisjunction()
+			if err != nil {
+				return nil, fmt.Errorf("failed to create journal disjunction: %w", err)
+			}
+		}
+
+		if err := reader.AddMatch(match); err != nil {
+			return nil, fmt.Errorf("failed to add journal match %s: %w", match, err)
+		}
+	}
+
+	if mode == journalOpenModeStartup {
+		t.seekCursorAtStart(reader)
+	} else {
+		// If we are recovering, we want to start at the end of the journal to attempt to skip any corrupt entries.
+		// This is a best effort attempt to skip over the corrupt entries.
+		reader.SeekTail()
+	}
+
+	return reader, nil
+}
+
+// recoverJournal closes the current journal reader and opens a new one in an attempt to recover from a syscall error.
+func (t *tailer) recoverJournal(reader *sdjournal.Journal) (*sdjournal.Journal, error) {
+	t.logger.Info("Restarting journal tailer after error. Opening and seeking to end to attempt to skip corrupt entries.")
+	reader.Close()
+	t.backoff()
+	reader, err := t.openJournal(journalOpenModeRecover)
+	if err != nil {
+		t.logger.Error("Unable to recover journal tailer, exiting. Failed to open journal tailer.", "err", err)
+		return nil, err
+	}
+	return reader, nil
+}
+
 func (t *tailer) seekCursorAtStart(reader journalReader) {
 	existingCursor, err := readCursor(t.cursorFilePath)
 	if err != nil {
-		logger.Warnf("failed to read cursor %s: %v", t.cursorFilePath, err)
+		t.logger.Warn(fmt.Sprintf("failed to read cursor %s", t.cursorFilePath), "err", err)
 		reader.SeekHead()
 	} else {
 		if logger.IsDebug() {
-			logger.Debugf("journal: found existing cursor in %q: %s", t.cursorFilePath, existingCursor)
+			t.logger.Debug(fmt.Sprintf("journal: found existing cursor in %q: %s", t.cursorFilePath, existingCursor))
 		}
 
 		err := reader.SeekCursor(existingCursor)
 		if err != nil {
-			logger.Warnf("failed to seek to cursor %s: %v", existingCursor, err)
+			t.logger.Warn(fmt.Sprintf("failed to seek to cursor %s", existingCursor), "err", err)
 			reader.SeekHead()
 		} else {
 			// Cursor points at the last read entry, so skip it
@@ -181,11 +251,11 @@ func (t *tailer) waitForNewJournalEntries(ctx context.Context, reader journalRea
 
 // combinePartialMessages combines partial log messages that have been split by journald due to the line-max configuration.
 func (j *tailer) combinePartialMessages(entry *sdjournal.JournalEntry) (string, bool) {
-	isPartial := entry.Fields[journald_line_break_field] == journald_line_break_value_line_max
+	isPartial := entry.Fields[journaldLineBreakField] == journald_line_break_value_line_max
 
 	currentLogMsg := entry.Fields[sdjournal.SD_JOURNAL_FIELD_MESSAGE]
 
-	streamID := entry.Fields[journald_stream_id_field]
+	streamID := entry.Fields[journaldStreamIdField]
 	previousLog, hasPreviousLog := j.streamPartials[streamID]
 	if hasPreviousLog {
 		currentLogMsg = previousLog + currentLogMsg
