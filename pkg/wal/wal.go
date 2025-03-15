@@ -269,7 +269,7 @@ func (w *WAL) rotate(ctx context.Context) {
 }
 
 func (w *WAL) requiresRotation() bool {
-	return (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) >= w.opts.SegmentMaxSize) ||
+	return (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize) ||
 		(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) >= w.opts.SegmentMaxAge)
 }
 
