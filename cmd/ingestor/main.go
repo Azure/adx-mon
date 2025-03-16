@@ -65,6 +65,7 @@ func main() {
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
+			&cli.DurationFlag{Name: "slow-request-threshold", Usage: "Threshold for slow requests. Set to 0 to disable.", Value: 10 * time.Second},
 
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
@@ -136,6 +137,7 @@ func realMain(ctx *cli.Context) error {
 	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
 	maxTransferConcurrency := ctx.Int("max-transfer-concurrency")
 	enableWALFsync := ctx.Bool("enable-wal-fsync")
+	slowRequestThreshold := ctx.Duration("slow-request-threshold")
 
 	if namespace == "" {
 		nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -284,6 +286,7 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
 		DropFilePrefixes:       dropPrefixes,
+		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)

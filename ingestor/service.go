@@ -134,7 +134,10 @@ type ServiceOpts struct {
 	// are merged into a new segment.  A higher number takes longer to combine on the sending side and increases the
 	// size of segments on the receiving side.  A lower number creates more batches and high remote transfer calls.  If
 	// not specified, the default is 25.
-	MaxBatchSegments int
+	MaxBatchSegments     int
+
+	// SlowRequestThreshold is the threshold for logging slow requests.
+	SlowRequestThreshold float64
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -362,7 +365,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		dur := time.Since(start)
-		if dur.Seconds() > 10 {
+		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
 			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, r.ContentLength, filename)
 		}
 		if err := r.Body.Close(); err != nil {
