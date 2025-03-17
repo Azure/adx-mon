@@ -16,6 +16,7 @@ import (
 // Can view in journalctl with journalctl --file test_file.journal
 
 func TestReadFile(t *testing.T) {
+	t.Skip("skipping test because of inconsistent journalctl feature support in some build containers. Some will error out with 'protocol not supported' based on compiled features.")
 	tmpdir := t.TempDir()
 	cursorPath := cursorPath(tmpdir, []string{"test"}, "testdb", "testtable")
 	queue := make(chan *types.Log, 1000)
