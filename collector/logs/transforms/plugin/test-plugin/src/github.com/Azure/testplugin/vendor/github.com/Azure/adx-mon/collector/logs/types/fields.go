@@ -11,3 +11,13 @@ const (
 	// AttributeTableName is the name of the ADX table that the log should be sent to.
 	AttributeTableName = "adxmon_destination_table"
 )
+
+func StringOrEmpty(val any, ok bool) string {
+	if !ok {
+		return ""
+	}
+	if str, ok := val.(string); ok {
+		return str
+	}
+	return ""
+}
