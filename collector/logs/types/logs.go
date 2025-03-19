@@ -1,6 +1,17 @@
 package types
 
-import "sync/atomic"
+import (
+	"os"
+	"sync"
+	"sync/atomic"
+
+	"github.com/Azure/adx-mon/pkg/logger"
+)
+
+var assertionsEnabled = sync.OnceValue(func() bool {
+	enableAssertions := os.Getenv("ENABLE_ASSERTIONS")
+	return enableAssertions == "true"
+})
 
 // LogLiteral is a struct that is easily converted to Log.
 type LogLiteral struct {
@@ -64,6 +75,8 @@ func NewLog() *Log {
 }
 
 func (l *Log) Reset() {
+	l.timestamp = 0
+	l.observedTimestamp = 0
 	clear(l.body)
 	clear(l.attributes)
 	clear(l.resource)
@@ -89,34 +102,38 @@ func (l *Log) Copy() *Log {
 }
 
 func (l *Log) SetTimestamp(ts uint64) {
-	if atomic.LoadUint32(&l.frozen) == 1 {
-		panic("log is frozen")
-	}
+	l.checkWrite()
 	l.timestamp = ts
 }
+
 func (l *Log) SetObservedTimestamp(ts uint64) {
-	if atomic.LoadUint32(&l.frozen) == 1 {
-		panic("log is frozen")
-	}
+	l.checkWrite()
 	l.observedTimestamp = ts
 }
+
 func (l *Log) SetAttributeValue(key string, value any) {
-	if atomic.LoadUint32(&l.frozen) == 1 {
-		panic("log is frozen")
-	}
+	l.checkWrite()
 	l.attributes[key] = value
 }
+
 func (l *Log) SetBodyValue(key string, value any) {
-	if atomic.LoadUint32(&l.frozen) == 1 {
-		panic("log is frozen")
-	}
+	l.checkWrite()
 	l.body[key] = value
 }
+
 func (l *Log) SetResourceValue(key string, value any) {
-	if atomic.LoadUint32(&l.frozen) == 1 {
-		panic("log is frozen")
-	}
+	l.checkWrite()
 	l.resource[key] = value
+}
+
+func (l *Log) checkWrite() {
+	if atomic.LoadUint32(&l.frozen) == 1 {
+		if assertionsEnabled() {
+			panic("write to frozen log - not safe for updates")
+		} else {
+			logger.Error("write to frozen log - not safe for updates")
+		}
+	}
 }
 
 func (l *Log) Freeze() {
