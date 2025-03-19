@@ -40,7 +40,7 @@ clean:
 .PHONY: clean
 
 test:
-	INTEGRATION=1 go test -timeout 30m ./...
+	ENABLE_ASSERTIONS=true INTEGRATION=1 go test -timeout 30m ./...
 .PHONY: test
 
 # Generate CRDs, replacing MY_CRD with the _kind_ of the CRD you want to create
