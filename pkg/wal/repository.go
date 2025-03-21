@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"text/tabwriter"
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
@@ -248,9 +249,22 @@ func (s *Repository) PrefixesByAge() []string {
 }
 
 func (s *Repository) WriteDebug(w io.Writer) error {
-	_, _ = fmt.Fprintf(w, "Index: Disk Usage: %d, Segments: %d, Prefixes: %d\n\n", s.Index().TotalSize(), s.Index().TotalSegments(), s.Index().TotalPrefixes())
-	return s.wals.Each(func(key string, value *WAL) error {
-		_, _ = fmt.Fprintf(w, "├ Prefix: %s, Path: %s, Disk Usage: %d\n", key, value.Path(), value.Size())
+	if err := s.index.WriteDebug(w); err != nil {
+		return err
+	}
+
+	tw := tabwriter.NewWriter(w, 4, 0, 2, ' ', 0)
+	_, _ = tw.Write([]byte("Prefix\tPath\tDisk Usage\n"))
+
+	var walsSize, count int
+	if err := s.wals.Each(func(key string, value *WAL) error {
+		walsSize += value.Size()
+		count++
+		tw.Write([]byte(fmt.Sprintf("%s\t%s\t%d\n", key, value.Path(), value.Size())))
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(w, "\nWAL: Disk Usage: %d, Segments: %d\n", walsSize, count)
+	return tw.Flush()
 }
