@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	ingestorstorage "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/debug"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/reader"
@@ -327,6 +328,18 @@ func (s *Service) Close() error {
 	}
 
 	return s.store.Close()
+}
+
+func (s *Service) HandleDebugStore(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	if debugWriter, ok := s.store.(debug.DebugWriter); ok {
+		if err := debugWriter.WriteDebug(w); err != nil {
+			logger.Errorf("Failed to write debug info: %s", err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		return
+	}
 }
 
 // HandleReady handles the readiness probe.

@@ -246,3 +246,11 @@ func (s *Repository) RemoveSegment(si SegmentInfo) {
 func (s *Repository) PrefixesByAge() []string {
 	return s.index.PrefixesByAge()
 }
+
+func (s *Repository) WriteDebug(w io.Writer) error {
+	_, _ = fmt.Fprintf(w, "Index: Disk Usage: %d, Segments: %d, Prefixes: %d\n\n", s.Index().TotalSize(), s.Index().TotalSegments(), s.Index().TotalPrefixes())
+	return s.wals.Each(func(key string, value *WAL) error {
+		_, _ = fmt.Fprintf(w, "├ Prefix: %s, Path: %s, Disk Usage: %d\n", key, value.Path(), value.Size())
+		return nil
+	})
+}

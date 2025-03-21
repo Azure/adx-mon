@@ -243,7 +243,7 @@ func (w *WAL) Size() int {
 	if w.segment == nil {
 		return 0
 	}
-	return 1
+	return int(w.segment.Size())
 }
 
 func (w *WAL) Segment() Segment {
