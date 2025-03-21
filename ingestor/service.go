@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/reader"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
@@ -134,7 +135,7 @@ type ServiceOpts struct {
 	// are merged into a new segment.  A higher number takes longer to combine on the sending side and increases the
 	// size of segments on the receiving side.  A lower number creates more batches and high remote transfer calls.  If
 	// not specified, the default is 25.
-	MaxBatchSegments     int
+	MaxBatchSegments int
 
 	// SlowRequestThreshold is the threshold for logging slow requests.
 	SlowRequestThreshold float64
@@ -363,19 +364,21 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		originalIP = r.RemoteAddr
 	}
 
+	body := reader.NewCounterReader(r.Body)
 	defer func() {
 		dur := time.Since(start)
 		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
-			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, r.ContentLength, filename)
+			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, body.Count(), filename)
 		}
-		if err := r.Body.Close(); err != nil {
+		io.Copy(io.Discard, body)
+		if err := body.Close(); err != nil {
 			logger.Errorf("close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
 		}
 	}()
 
 	for _, prefix := range s.dropFilePrefixes {
 		if strings.HasPrefix(filename, prefix) {
-			io.Copy(io.Discard, r.Body)
+			io.Copy(io.Discard, body)
 			metrics.IngestorDroppedPrefixes.WithLabelValues(prefix).Inc()
 			m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
 			w.WriteHeader(http.StatusAccepted)
@@ -399,7 +402,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := s.store.Import(f, r.Body)
+	n, err := s.store.Import(f, body)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
