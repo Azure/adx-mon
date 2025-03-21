@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -343,13 +344,17 @@ func (s *LocalStore) WriteDebug(w io.Writer) error {
 		return err
 	}
 
+	w.Write([]byte("\nSegments On Disk:\n"))
+	tw := tabwriter.NewWriter(w, 0, 8, 1, ' ', 0)
+
+	tw.Write([]byte("Path\tSize\tCreatedAt\n"))
 	var totalSize, totalSegments int64
 	if err := filepath.Walk(s.opts.StorageDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() {
-			fmt.Fprintf(w, "File: %s, Size: %d bytes\n", path, info.Size())
+			tw.Write([]byte(fmt.Sprintf("%s\t%d\t%s\n", path, info.Size(), info.ModTime().Format(time.RFC3339))))
 			totalSize += info.Size()
 			totalSegments += 1
 		}
@@ -357,8 +362,8 @@ func (s *LocalStore) WriteDebug(w io.Writer) error {
 	}); err != nil {
 		return err
 	}
-
 	fmt.Fprintf(w, "Actual: Disk Usage: %d, Segments: %d\n", totalSize, totalSegments)
+	tw.Flush()
 
 	return nil
 }
