@@ -177,7 +177,7 @@ func TestFunctions(t *testing.T) {
 		client:   kustoClient,
 	}
 
-	functionStore := storage.NewFunctions(ctrlCli, nil)
+	functionStore := storage.NewFunctions(ctrlCli)
 	task := NewSyncFunctionsTask(functionStore, executor)
 
 	resourceName := "testtest"
@@ -318,7 +318,7 @@ func TestManagementCommands(t *testing.T) {
 		client:   kustoClient,
 	}
 
-	store := storage.NewCRDHandler(ctrlCli, nil)
+	store := storage.NewCRDHandler(ctrlCli)
 	task := NewManagementCommandsTask(store, executor)
 
 	resourceName := "testtest"
@@ -416,7 +416,7 @@ func TestSummaryRules(t *testing.T) {
 		client:   kustoClient,
 	}
 
-	store := storage.NewCRDHandler(ctrlCli, nil)
+	store := storage.NewCRDHandler(ctrlCli)
 	task := NewSummaryRuleTask(store, executor)
 
 	resourceName := "testtest"
