@@ -210,15 +210,12 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 	defer s.Close()
 	require.Equal(t, 0, s.WALCount())
 
+	log := types.NewLog()
+	log.SetAttributeValue(types.AttributeDatabaseName, database)
+	log.SetAttributeValue(types.AttributeTableName, "foo")
+
 	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
-		Logs: []*types.Log{
-			{
-				Attributes: map[string]any{
-					types.AttributeDatabaseName: database,
-					types.AttributeTableName:    "foo",
-				},
-			},
-		},
+		Logs: []*types.Log{log},
 	}))
 	time.Sleep(200 * time.Millisecond)
 	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))

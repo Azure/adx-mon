@@ -61,9 +61,9 @@ func (p *CriParser) Parse(line string, log *types.Log) (message string, isPartia
 		return "", false, fmt.Errorf("parseCriLog time.Parse: %w", err)
 	}
 
-	log.Timestamp = uint64(parsedTimestamp.UnixNano())
-	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body["stream"] = stream
+	log.SetTimestamp(uint64(parsedTimestamp.UnixNano()))
+	log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
+	log.SetBodyValue("stream", stream)
 
 	return currentLogMsg, false, nil
 }

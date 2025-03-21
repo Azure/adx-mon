@@ -86,9 +86,7 @@ func (p *alwaysFailingParser) Parse(*types.Log, string) error {
 type alwaysSetsAFieldParser struct{}
 
 func (p *alwaysSetsAFieldParser) Parse(log *types.Log, message string) error {
-	log.Body = map[string]interface{}{
-		"some-field": message,
-	}
+	log.SetBodyValue("some-field", message)
 	return nil
 }
 
@@ -188,7 +186,7 @@ func TestExecuteParsers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			log := types.NewLog()
 			ExecuteParsers(tt.parsers, log, tt.message, "test")
-			require.Equal(t, tt.expectedBody, log.Body)
+			require.Equal(t, tt.expectedBody, log.GetBody())
 		})
 	}
 }

@@ -58,8 +58,11 @@ func (s *Source) Open(ctx context.Context) error {
 	if s.cursorDirectory != "" {
 		ackGenerator = func(log *types.Log) func() {
 			return func() {
-				cursorFilePath := log.Attributes[journald_cursor_filename_attribute].(string)
-				cursorValue := log.Attributes[journald_cursor_attribute].(string)
+				cursorFilePath := types.StringOrEmpty(log.GetAttributeValue(journald_cursor_filename_attribute))
+				cursorValue := types.StringOrEmpty(log.GetAttributeValue(journald_cursor_attribute))
+				if cursorFilePath == "" || cursorValue == "" {
+					return
+				}
 				writeCursor(cursorFilePath, cursorValue)
 			}
 		}

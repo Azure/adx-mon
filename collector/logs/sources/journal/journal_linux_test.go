@@ -66,7 +66,7 @@ func TestJournalE2E(t *testing.T) {
 	require.NoError(t, err)
 	<-sink.DoneChan()
 	service.Close()
-	require.Equal(t, fmt.Sprintf("%d", numLogs-1), sink.Latest().Body[types.BodyKeyMessage])
+	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Start next batch with same tag, offset from the last log
 	for i := numLogs; i < numLogs*2; i++ {
@@ -104,10 +104,12 @@ func TestJournalE2E(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 	<-sink.DoneChan()
-	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), sink.Latest().Body[types.BodyKeyMessage])
+	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Ensure the systemd unit identifier is set
-	require.NotEmpty(t, sink.Latest().Resource[sdjournal.SD_JOURNAL_FIELD_EXE])
+	resource, ok := sink.Latest().GetResourceValue(sdjournal.SD_JOURNAL_FIELD_EXE)
+	require.True(t, ok)
+	require.NotEmpty(t, resource)
 }
 
 func TestJournalMulipleSources(t *testing.T) {
@@ -185,5 +187,5 @@ func TestJournalMulipleSources(t *testing.T) {
 
 	<-sink.DoneChan()
 	service.Close()
-	require.Equal(t, fmt.Sprintf("%d", numLogs-1), sink.Latest().Body[types.BodyKeyMessage])
+	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 }

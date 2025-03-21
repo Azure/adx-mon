@@ -169,19 +169,19 @@ func readLines(tailer *Tailer, updateChannel <-chan FileTailTarget, outputQueue 
 
 			position := line.Offset
 			currentFileId := line.FileIdentifier
-			log.Attributes[types.AttributeDatabaseName] = tailer.database
-			log.Attributes[types.AttributeTableName] = tailer.table
+			log.SetAttributeValue(types.AttributeDatabaseName, tailer.database)
+			log.SetAttributeValue(types.AttributeTableName, tailer.table)
 
 			for k, v := range tailer.resources {
-				log.Resource[k] = v
+				log.SetResourceValue(k, v)
 			}
 
 			parser.ExecuteParsers(tailer.logLineParsers, log, message, tailer.tail.Filename)
 
 			// Write after parsing to ensure these values are always set to values we need for acking.
-			log.Attributes[cursor_position] = position
-			log.Attributes[cursor_file_id] = currentFileId
-			log.Attributes[cursor_file_name] = tailer.tail.Filename
+			log.SetAttributeValue(cursor_position, position)
+			log.SetAttributeValue(cursor_file_id, currentFileId)
+			log.SetAttributeValue(cursor_file_name, tailer.tail.Filename)
 
 			outputQueue <- log
 		}

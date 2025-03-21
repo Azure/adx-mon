@@ -31,7 +31,7 @@ func (s *StoreSink) Open(ctx context.Context) error {
 func (s *StoreSink) Send(ctx context.Context, batch *types.LogBatch) error {
 	for _, l := range batch.Logs {
 		for k, v := range s.addAttributes {
-			l.Resource[k] = v
+			l.SetResourceValue(k, v)
 		}
 	}
 	err := s.store.WriteNativeLogs(ctx, batch)

@@ -42,9 +42,9 @@ func (p *KeyValueParser) Parse(log *types.Log, msg string) error {
 		parts := strings.SplitN(token, "=", 2)
 		if len(parts) == 2 {
 			key, value := parts[0], unquote(parts[1])
-			log.Body[key] = reflectValue(value)
+			log.SetBodyValue(key, reflectValue(value))
 		} else {
-			log.Body[parts[0]] = ""
+			log.SetBodyValue(parts[0], "")
 		}
 	}
 

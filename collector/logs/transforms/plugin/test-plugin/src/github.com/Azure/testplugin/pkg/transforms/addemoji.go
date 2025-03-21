@@ -20,7 +20,7 @@ func (t *AddEmoji) Open(ctx context.Context) error {
 
 func (t *AddEmoji) Transform(ctx context.Context, batch *types.LogBatch) (*types.LogBatch, error) {
 	for _, log := range batch.Logs {
-		message, ok := log.Body["message"]
+		message, ok := log.GetBodyValue("message")
 		if !ok {
 			continue
 		}
@@ -28,7 +28,7 @@ func (t *AddEmoji) Transform(ctx context.Context, batch *types.LogBatch) (*types
 		if !ok {
 			continue
 		}
-		log.Body[types.BodyKeyMessage] = mapping.Map(messageStr)
+		log.SetBodyValue(types.BodyKeyMessage, mapping.Map(messageStr))
 	}
 	return batch, nil
 }

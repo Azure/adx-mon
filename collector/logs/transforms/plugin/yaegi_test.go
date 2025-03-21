@@ -16,7 +16,7 @@ func TestYaegi(t *testing.T) {
 	require.NoError(t, err)
 
 	messageOne := types.NewLog()
-	messageOne.Body["message"] = "Hello"
+	messageOne.SetBodyValue("message", "Hello")
 	messageTwo := types.NewLog()
 	logBatch := &types.LogBatch{
 		Logs: []*types.Log{

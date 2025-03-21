@@ -72,9 +72,9 @@ func (p *DockerParser) Parse(line string, log *types.Log) (message string, isPar
 	if err != nil {
 		parsedTime = time.Now()
 	}
-	log.Timestamp = uint64(parsedTime.UnixNano())
-	log.ObservedTimestamp = uint64(time.Now().UnixNano())
-	log.Body["stream"] = p.parsed.Stream
+	log.SetTimestamp(uint64(parsedTime.UnixNano()))
+	log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
+	log.SetBodyValue("stream", p.parsed.Stream)
 	// Strip trailing newline
 	msg := currentLogMsg[:len(currentLogMsg)-dockerCompleteLogSuffixLength]
 

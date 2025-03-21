@@ -86,11 +86,11 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	// Reset fields
 	fields = fields[:0]
 	// Timestamp
-	fields = append(fields, otlpTSToUTC(int64(log.Timestamp)))
+	fields = append(fields, otlpTSToUTC(int64(log.GetTimestamp())))
 	// ObservedTimestamp
-	if v := log.ObservedTimestamp; v > 0 {
+	if v := log.GetObservedTimestamp(); v > 0 {
 		// Some clients don't set this value.
-		fields = append(fields, otlpTSToUTC(int64(log.ObservedTimestamp)))
+		fields = append(fields, otlpTSToUTC(int64(log.GetObservedTimestamp())))
 	} else {
 		fields = append(fields, time.Now().UTC().Format(time.RFC3339Nano))
 	}
@@ -107,10 +107,11 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.Reset()
 	buf.WriteByte('{')
 	hasPrevField := false
-	for k, v := range log.Body {
+
+	err := log.ForEachBody(func(k string, v any) error {
 		val, err := ffjson.Marshal(v)
 		if err != nil {
-			continue
+			return nil // Just skip this one
 		}
 
 		if hasPrevField {
@@ -122,7 +123,13 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 		buf.WriteByte(':')
 		buf.Write(val) // Already marshalled into json. Don't escape it again.
 		ffjson.Pool(val)
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
+
 	buf.WriteByte('}')
 	fields = append(fields, buf.String())
 
@@ -130,17 +137,17 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.Reset()
 	buf.WriteByte('{')
 	hasPrevField = false
-	for k, v := range log.Resource {
+	err = log.ForEachResource(func(k string, v any) error {
 		_, lifted := w.fieldLookup[k]
 
 		// These are added by collector and used internally.  Don't store them in the final table.
 		if strings.HasPrefix(k, "adxmon_") || strings.HasPrefix(k, "label.") || strings.HasPrefix(k, "annotation.") || lifted {
-			continue
+			return nil
 		}
 
 		val, err := ffjson.Marshal(v)
 		if err != nil {
-			continue
+			return nil // Just skip this one
 		}
 
 		if hasPrevField {
@@ -152,7 +159,13 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 		buf.WriteByte(':')
 		buf.Write(val) // Already marshalled into json. Don't escape it again.
 		ffjson.Pool(val)
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
+
 	buf.WriteByte('}')
 	fields = append(fields, buf.String())
 
@@ -161,14 +174,14 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 	buf.WriteByte('{')
 	hasPrevField = false
 
-	for k, v := range log.Attributes {
+	err = log.ForEachAttribute(func(k string, v any) error {
 		if strings.HasPrefix(k, "adxmon_") {
-			continue
+			return nil
 		}
 
 		val, err := ffjson.Marshal(v)
 		if err != nil {
-			continue
+			return nil // Just skip this one
 		}
 
 		if hasPrevField {
@@ -180,12 +193,18 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 		buf.WriteByte(':')
 		buf.Write(val) // Already marshalled into json. Don't escape it again.
 		ffjson.Pool(val)
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
+
 	buf.WriteByte('}')
 	fields = append(fields, buf.String())
 
 	for _, v := range w.columns {
-		if val, ok := log.Resource[string(v)]; ok {
+		if val, ok := log.GetResourceValue(string(v)); ok {
 			if s, ok := val.(string); ok {
 				fields = append(fields, s)
 			} else {

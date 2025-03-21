@@ -22,7 +22,8 @@ const (
 )
 
 var (
-	noopAckGenerator = func(*types.Log) func() { return func() {} }
+	noopAck          = func() {}
+	noopAckGenerator = func(*types.Log) func() { return noopAck }
 )
 
 // FileTailTarget describes a file to tail, how to parse it, and the destination for the parsed logs.
@@ -96,9 +97,18 @@ func (s *TailSource) Open(ctx context.Context) error {
 	s.ackGenerator = noopAckGenerator
 	if s.cursorDirectory != "" {
 		s.ackGenerator = func(log *types.Log) func() {
-			cursorFileName := log.Attributes[cursor_file_name].(string)
-			cursorFileId := log.Attributes[cursor_file_id].(string)
-			cursorPosition := log.Attributes[cursor_position].(int64)
+			cursorFileName := types.StringOrEmpty(log.GetAttributeValue(cursor_file_name))
+			cursorFileId := types.StringOrEmpty(log.GetAttributeValue(cursor_file_id))
+			cursorPositionVal, ok := log.GetAttributeValue(cursor_position)
+
+			if !ok || cursorFileName == "" || cursorFileId == "" {
+				return noopAck
+			}
+			cursorPosition, ok := cursorPositionVal.(int64)
+			if !ok {
+				return noopAck
+			}
+
 			return func() {
 				s.ackBatch(cursorFileName, cursorFileId, cursorPosition)
 			}

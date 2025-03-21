@@ -71,6 +71,6 @@ func ExecuteParsers(parsers []Parser, log *types.Log, message string, name strin
 
 	if !successfulParse {
 		// Unsuccessful parse, add the raw message
-		log.Body[types.BodyKeyMessage] = message
+		log.SetBodyValue(types.BodyKeyMessage, message)
 	}
 }

@@ -51,7 +51,7 @@ func TestJsonParse(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, tt.expectedBody, log.Body)
+				require.Equal(t, tt.expectedBody, log.GetBody())
 			}
 		})
 	}

@@ -38,7 +38,7 @@ func (p *JsonParser) Parse(log *types.Log, msg string) error {
 	}
 
 	for k, v := range p.parsed {
-		log.Body[k] = v
+		log.SetBodyValue(k, v)
 	}
 
 	return nil

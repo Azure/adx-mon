@@ -131,20 +131,20 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 
 		log := types.LogPool.Get(1).(*types.Log)
 		log.Reset()
-		log.Timestamp = uint64(entry.RealtimeTimestamp) * 1000 // microseconds -> nanoseconds
-		log.ObservedTimestamp = uint64(time.Now().UnixNano())
-		log.Attributes[types.AttributeDatabaseName] = t.database
-		log.Attributes[types.AttributeTableName] = t.table
+		log.SetTimestamp(uint64(entry.RealtimeTimestamp) * 1000) // microseconds -> nanoseconds
+		log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
+		log.SetAttributeValue(types.AttributeDatabaseName, t.database)
+		log.SetAttributeValue(types.AttributeTableName, t.table)
 
 		parser.ExecuteParsers(t.logLineParsers, log, message, "journald")
 
 		// Write after parsing to ensure these values are always set to values we need for acking.
-		log.Attributes[journald_cursor_attribute] = entry.Cursor
-		log.Attributes[journald_cursor_filename_attribute] = t.cursorFilePath
+		log.SetAttributeValue(journald_cursor_attribute, entry.Cursor)
+		log.SetAttributeValue(journald_cursor_filename_attribute, t.cursorFilePath)
 
 		for _, field := range t.journalFields {
 			if value, ok := entry.Fields[field]; ok {
-				log.Resource[field] = value
+				log.SetResourceValue(field, value)
 			}
 		}
 
