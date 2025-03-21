@@ -318,6 +318,7 @@ func realMain(ctx *cli.Context) error {
 	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	metricsMux.HandleFunc("/debug/store", svc.HandleDebugStore)
 
 	srv := &http.Server{
 		Handler: mux,
@@ -381,10 +382,13 @@ func realMain(ctx *cli.Context) error {
 		}
 	}()
 
-	go func() {
-		sd := runner.NewShutDownRunner(k8scli, srv, svc)
-		scheduler.RunForever(svcCtx, time.Minute, sd)
-	}()
+	// Only start the shutdown runner if running in a cluster
+	if _, err := rest.InClusterConfig(); err == nil {
+		go func() {
+			sd := runner.NewShutDownRunner(k8scli, srv, svc)
+			scheduler.RunForever(svcCtx, time.Minute, sd)
+		}()
+	}
 
 	<-svcCtx.Done()
 	return nil
