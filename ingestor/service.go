@@ -371,10 +371,10 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		metrics.RequestsBytesReceived.Add(float64(body.Count()))
 		dur := time.Since(start)
 		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
-			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, body.Count(), filename)
+			logger.Warnf("Slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, body.Count(), filename)
 		}
 		if err := body.Close(); err != nil {
-			logger.Errorf("close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
+			logger.Errorf("Close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
 		}
 	}()
 
