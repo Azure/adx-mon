@@ -33,14 +33,18 @@ func TestNewSegment(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 
 			require.NotEmpty(t, s.Path())
 			epoch := s.ID()
 
 			s, err = wal.Open(s.Path())
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test2")))
+			n, err = s.Write(context.Background(), []byte("test2"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 
 			require.NotEmpty(t, s.Path())
 			require.Equal(t, epoch, s.ID())
@@ -121,7 +125,9 @@ func TestSegment_Corrupted(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Close())
 
 			f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
@@ -153,7 +159,9 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Close())
 
 			f, err := os.OpenFile(s.Path(), os.O_APPEND|os.O_RDWR, 0600)
@@ -171,7 +179,9 @@ func TestSegment_Corrupted_BigFile(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, uint8('t'), b[len(b)-1])
 
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			n, err = s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			b, err = s.Bytes()
 			require.NoError(t, err)
 			require.Equal(t, "test", string(b[len(b)-4:]))
@@ -191,9 +201,15 @@ func TestSegment_Iterator(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
-			require.NoError(t, s.Write(context.Background(), []byte("test1")))
-			require.NoError(t, s.Write(context.Background(), []byte("test2")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Write(context.Background(), []byte("test1"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Write(context.Background(), []byte("test2"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Close())
 
 			s, err = wal.Open(s.Path())
@@ -236,7 +252,9 @@ func TestSegment_LargeSegments(t *testing.T) {
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
 			for i := 0; i < 100000; i++ {
-				require.NoError(t, s.Write(context.Background(), []byte(fmt.Sprintf("test%d %s\n", i, strings.Repeat("a", 1024)))))
+				n, err := s.Write(context.Background(), []byte(fmt.Sprintf("test%d %s\n", i, strings.Repeat("a", 1024))))
+				require.NoError(t, err)
+				require.True(t, n > 0)
 			}
 			require.NoError(t, s.Close())
 
@@ -278,7 +296,9 @@ func TestSegment_Closed(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo1")
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			p := s.Path()
 			require.NoError(t, s.Close())
 			buf, err := os.ReadFile(p)
@@ -287,8 +307,12 @@ func TestSegment_Closed(t *testing.T) {
 			s, err = wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
 			require.NoError(t, s.Close())
-			require.Equal(t, wal.ErrSegmentClosed, s.Write(context.Background(), []byte("test")))
-			require.Equal(t, wal.ErrSegmentClosed, s.Append(context.Background(), buf))
+			n, err = s.Write(context.Background(), []byte("test"))
+			require.Equal(t, wal.ErrSegmentClosed, err)
+			require.Equal(t, 0, n)
+			n, err = s.Append(context.Background(), buf)
+			require.Equal(t, wal.ErrSegmentClosed, err)
+			require.Equal(t, 0, n)
 
 			_, err = s.Iterator()
 			require.Equal(t, err, wal.ErrSegmentClosed)
@@ -296,7 +320,7 @@ func TestSegment_Closed(t *testing.T) {
 			_, err = s.Reader()
 			require.Equal(t, err, wal.ErrSegmentClosed)
 
-			_, err = s.Info()
+			_ = s.Info()
 			require.Equal(t, err, wal.ErrSegmentClosed)
 		})
 	}
@@ -316,15 +340,17 @@ func TestSegment_Size(t *testing.T) {
 			require.NoError(t, err)
 
 			for i := 0; i < 100; i++ {
-				require.NoError(t, s.Write(context.Background(), []byte(strings.Repeat("a", rand.Intn(8*1024)))))
+				n, err := s.Write(context.Background(), []byte(strings.Repeat("a", rand.Intn(8*1024))))
+				require.NoError(t, err)
+				require.True(t, n > 0)
 			}
 
 			// Force all buffered writes to disk.
 			require.NoError(t, s.Flush())
 
-			sz, err := s.Size()
+			sz := s.Size()
 			require.NoError(t, err)
-			info, err := s.Info()
+			info := s.Info()
 			require.NoError(t, err)
 			require.NoError(t, s.Close())
 
@@ -354,8 +380,12 @@ func TestSegment_Append(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
-			require.NoError(t, s.Write(context.Background(), []byte("test1")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Write(context.Background(), []byte("test1"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Flush())
 			require.NoError(t, s.Close())
 			f, err := os.Open(s.Path())
@@ -365,8 +395,12 @@ func TestSegment_Append(t *testing.T) {
 
 			s, err = wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Append(context.Background(), b))
-			require.NoError(t, s.Append(context.Background(), b))
+			n, err = s.Append(context.Background(), b)
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Append(context.Background(), b)
+			require.NoError(t, err)
+			require.True(t, n > 0)
 			require.NoError(t, s.Flush())
 
 			f, err = os.Open(s.Path())
@@ -413,7 +447,9 @@ func TestSegment_Append_Corrupted(t *testing.T) {
 			dir := t.TempDir()
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.Error(t, s.Append(context.Background(), []byte("test")))
+			n, err := s.Append(context.Background(), []byte("test"))
+			require.Error(t, err)
+			require.Equal(t, 0, n)
 			require.NoError(t, s.Close())
 		})
 	}
@@ -432,8 +468,11 @@ func TestSegment_Write(t *testing.T) {
 
 			s, err := wal.NewSegment(dir, "Foo")
 			require.NoError(t, err)
-			require.NoError(t, s.Write(context.Background(), []byte("test")))
-			require.NoError(t, s.Write(context.Background(), []byte("test1")))
+			n, err := s.Write(context.Background(), []byte("test"))
+			require.NoError(t, err)
+			require.True(t, n > 0)
+			n, err = s.Write(context.Background(), []byte("test1"))
+			require.NoError(t, err)
 			require.NoError(t, s.Flush())
 
 			b, err := s.Bytes()
@@ -468,8 +507,12 @@ func TestSegmentIterator_Metadata(t *testing.T) {
 	dir := t.TempDir()
 	s, err := wal.NewSegment(dir, "Foo")
 	require.NoError(t, err)
-	require.NoError(t, s.Write(context.Background(), []byte("test"), wal.WithSampleMetadata(wal.MetricSampleType, 1)))
-	require.NoError(t, s.Write(context.Background(), []byte("test1"), wal.WithSampleMetadata(wal.MetricSampleType, 1)))
+	n, err := s.Write(context.Background(), []byte("test"), wal.WithSampleMetadata(wal.MetricSampleType, 1))
+	require.NoError(t, err)
+	require.True(t, n > 0)
+	n, err = s.Write(context.Background(), []byte("test1"), wal.WithSampleMetadata(wal.MetricSampleType, 1))
+	require.NoError(t, err)
+	require.True(t, n > 0)
 	require.NoError(t, s.Flush())
 	require.NoError(t, s.Close())
 
@@ -493,8 +536,12 @@ func TestSegment_Metadata(t *testing.T) {
 	dir := t.TempDir()
 	s, err := wal.NewSegment(dir, "Foo")
 	require.NoError(t, err)
-	require.NoError(t, s.Write(context.Background(), bytes.Repeat([]byte("test"), 100), wal.WithSampleMetadata(wal.LogSampleType, 100)))
-	require.NoError(t, s.Write(context.Background(), bytes.Repeat([]byte("test1"), 200), wal.WithSampleMetadata(wal.LogSampleType, 200)))
+	n, err := s.Write(context.Background(), bytes.Repeat([]byte("test"), 100), wal.WithSampleMetadata(wal.LogSampleType, 100))
+	require.NoError(t, err)
+	require.True(t, n > 0)
+	n, err = s.Write(context.Background(), bytes.Repeat([]byte("test1"), 200), wal.WithSampleMetadata(wal.LogSampleType, 200))
+	require.NoError(t, err)
+	require.True(t, n > 0)
 	require.NoError(t, s.Flush())
 	require.NoError(t, s.Close())
 
@@ -526,7 +573,9 @@ func TestSegment_Write_Concurrent(t *testing.T) {
 					strings.Repeat("b", rand.Intn(1024)) + "," +
 					strings.Repeat("c", rand.Intn(1024)) + "\n"
 
-				require.NoError(t, s.Write(ctx, []byte(val)))
+				n, err := s.Write(ctx, []byte(val))
+				require.NoError(t, err)
+				require.True(t, n > 0)
 			}
 			return nil
 		})
@@ -569,6 +618,8 @@ func BenchmarkSegment_Write(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		require.NoError(b, s.Write(context.Background(), buf))
+		n, err := s.Write(context.Background(), buf)
+		require.NoError(b, err)
+		require.True(b, n > 0)
 	}
 }

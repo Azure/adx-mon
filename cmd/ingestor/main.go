@@ -11,9 +11,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -62,13 +60,12 @@ func main() {
 			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
+			&cli.StringSliceFlag{Name: "drop-prefix", Usage: "Drop transfers that match the file prefix. Transfer filenames are in the form of DestinationDB_Table_..."},
+			&cli.IntFlag{Name: "max-batch-segments", Usage: "Maximum number of segments per batch", Value: 25},
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
 			&cli.IntFlag{Name: "max-transfer-concurrency", Usage: "Maximum transfer requests in flight", Value: 50},
 			&cli.IntFlag{Name: "partition-size", Usage: "Maximum number of nodes in a partition", Value: 25},
-			&cli.StringSliceFlag{Name: "add-labels", Usage: "Static labels in the format of <name>=<value> applied to all metrics"},
-			&cli.StringSliceFlag{Name: "drop-labels", Usage: "Labels to drop if they match a metrics regex in the format <metrics regex=<label name>.  These are dropped from all metrics collected by this agent"},
-			&cli.StringSliceFlag{Name: "drop-metrics", Usage: "Metrics to drop if they match the regex."},
-			&cli.StringSliceFlag{Name: "lift-label", Usage: "Labels to lift from the metric to columns. Format is <label>[=<column name>]"},
+			&cli.DurationFlag{Name: "slow-request-threshold", Usage: "Threshold for slow requests. Set to 0 to disable.", Value: 10 * time.Second},
 
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
@@ -126,7 +123,9 @@ func realMain(ctx *cli.Context) error {
 	maxTransferSize = ctx.Int64("max-transfer-size")
 	maxTransferAge = ctx.Duration("max-transfer-age")
 	maxSegmentCount := ctx.Int64("max-segment-count")
+	dropPrefixes := ctx.StringSlice("drop-prefix")
 	maxDiskUsage := ctx.Int64("max-disk-usage")
+	maxBatchSegments := ctx.Int("max-batch-segments")
 	partitionSize := ctx.Int("partition-size")
 	maxConns = int(ctx.Uint("max-connections"))
 	cacert = ctx.String("ca-cert")
@@ -138,6 +137,7 @@ func realMain(ctx *cli.Context) error {
 	disablePeerTransfer = ctx.Bool("disable-peer-transfer")
 	maxTransferConcurrency := ctx.Int("max-transfer-concurrency")
 	enableWALFsync := ctx.Bool("enable-wal-fsync")
+	slowRequestThreshold := ctx.Duration("slow-request-threshold")
 
 	if namespace == "" {
 		nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -205,70 +205,6 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatalf("--storage-dir is required")
 	}
 
-	defaultMapping := schema.DefaultMetricsMapping
-	for _, v := range ctx.StringSlice("add-labels") {
-		fields := strings.Split(v, "=")
-		if len(fields) != 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		defaultMapping = defaultMapping.AddConstMapping(fields[0], fields[1])
-	}
-
-	liftedLabels := ctx.StringSlice("lift-label")
-	sort.Strings(liftedLabels)
-
-	var sortedLiftedLabels []string
-	for _, v := range liftedLabels {
-		// The format is <label>[=<column name>] where the column name is optional.  If not specified, the label name is used.
-		fields := strings.Split(v, "=")
-		if len(fields) > 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		sortedLiftedLabels = append(sortedLiftedLabels, fields[0])
-
-		if len(fields) == 2 {
-			defaultMapping = defaultMapping.AddStringMapping(fields[1])
-			continue
-		}
-
-		defaultMapping = defaultMapping.AddStringMapping(v)
-	}
-	// Update the default mapping so pooled csv encoders can use the lifted columns
-	schema.DefaultMetricsMapping = defaultMapping
-
-	dropLabels := make(map[*regexp.Regexp]*regexp.Regexp)
-	for _, v := range ctx.StringSlice("drop-labels") {
-		// The format is <metrics region>=<label regex>
-		fields := strings.Split(v, "=")
-		if len(fields) > 2 {
-			logger.Fatalf("invalid dimension: %s", v)
-		}
-
-		metricRegex, err := regexp.Compile(fields[0])
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		labelRegex, err := regexp.Compile(fields[1])
-		if err != nil {
-			logger.Fatalf("invalid label regex: %s", err)
-		}
-
-		dropLabels[metricRegex] = labelRegex
-	}
-
-	dropMetrics := []*regexp.Regexp{}
-	for _, v := range ctx.StringSlice("drop-metrics") {
-		metricRegex, err := regexp.Compile(v)
-		if err != nil {
-			logger.Fatalf("invalid metric regex: %s", err)
-		}
-
-		dropMetrics = append(dropMetrics, metricRegex)
-	}
-
 	var (
 		allowedDatabases                []string
 		metricsUploaders, logsUploaders []adx.Uploader
@@ -279,7 +215,7 @@ func realMain(ctx *cli.Context) error {
 	if len(metricsKusto) > 0 {
 		metricsUploaders, metricsDatabases, err = newUploaders(
 			metricsKusto, storageDir, concurrentUploads,
-			defaultMapping, adx.PromMetrics)
+			schema.DefaultMetricsMapping, adx.PromMetrics)
 		if err != nil {
 			logger.Fatalf("Failed to create uploader: %s", err)
 		}
@@ -345,12 +281,12 @@ func realMain(ctx *cli.Context) error {
 		MaxTransferAge:         maxTransferAge,
 		MaxSegmentCount:        maxSegmentCount,
 		MaxDiskUsage:           maxDiskUsage,
+		MaxBatchSegments:       maxBatchSegments,
 		EnableWALFsync:         enableWALFsync,
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
-		LiftedColumns:          sortedLiftedLabels,
-		DropLabels:             dropLabels,
-		DropMetrics:            dropMetrics,
+		DropFilePrefixes:       dropPrefixes,
+		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
@@ -382,6 +318,7 @@ func realMain(ctx *cli.Context) error {
 	metricsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	metricsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	metricsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	metricsMux.HandleFunc("/debug/store", svc.HandleDebugStore)
 
 	srv := &http.Server{
 		Handler: mux,
@@ -445,10 +382,13 @@ func realMain(ctx *cli.Context) error {
 		}
 	}()
 
-	go func() {
-		sd := runner.NewShutDownRunner(k8scli, srv, svc)
-		scheduler.RunForever(svcCtx, time.Minute, sd)
-	}()
+	// Only start the shutdown runner if running in a cluster
+	if _, err := rest.InClusterConfig(); err == nil {
+		go func() {
+			sd := runner.NewShutDownRunner(k8scli, srv, svc)
+			scheduler.RunForever(svcCtx, time.Minute, sd)
+		}()
+	}
 
 	<-svcCtx.Done()
 	return nil

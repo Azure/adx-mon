@@ -19,6 +19,9 @@ import (
 	"github.com/Azure/adx-mon/storage"
 )
 
+// DefaultMaxSegmentCount is the default maximum number of segments to include in a batch before creating a new batch.
+const DefaultMaxSegmentCount = 25
+
 type Segmenter interface {
 	Get(infos []wal.SegmentInfo, prefix string) []wal.SegmentInfo
 	PrefixesByAge() []string
@@ -26,11 +29,12 @@ type Segmenter interface {
 }
 
 type BatcherOpts struct {
-	StorageDir      string
-	MinUploadSize   int64
-	MaxSegmentAge   time.Duration
-	MaxTransferSize int64
-	MaxTransferAge  time.Duration
+	StorageDir       string
+	MinUploadSize    int64
+	MaxSegmentAge    time.Duration
+	MaxTransferSize  int64
+	MaxTransferAge   time.Duration
+	MaxBatchSegments int
 
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
@@ -131,14 +135,15 @@ type batcher struct {
 	closeFn    context.CancelFunc
 	storageDir string
 
-	Partitioner     MetricPartitioner
-	Segmenter       Segmenter
-	health          PeerHealthReporter
-	hostname        string
-	maxTransferAge  time.Duration
-	maxTransferSize int64
-	minUploadSize   int64
-	maxSegmentAge   time.Duration
+	Partitioner      MetricPartitioner
+	Segmenter        Segmenter
+	health           PeerHealthReporter
+	hostname         string
+	maxTransferAge   time.Duration
+	maxTransferSize  int64
+	minUploadSize    int64
+	maxSegmentAge    time.Duration
+	maxBatchSegments int
 
 	tempSet []wal.SegmentInfo
 
@@ -150,11 +155,18 @@ func NewBatcher(opts BatcherOpts) Batcher {
 	if minUploadSize == 0 {
 		minUploadSize = 100 * 1024 * 1024 // This is the minimal "optimal" size for kusto uploads.
 	}
+
+	maxBatchSegments := DefaultMaxSegmentCount
+	if opts.MaxBatchSegments > 0 {
+		maxBatchSegments = opts.MaxBatchSegments
+	}
+
 	return &batcher{
 		storageDir:       opts.StorageDir,
 		maxTransferAge:   opts.MaxTransferAge,
 		maxTransferSize:  opts.MaxTransferSize,
-		minUploadSize:    minUploadSize, // This is the minimal "optimal" size for kusto uploads.
+		minUploadSize:    minUploadSize,    // This is the minimal "optimal" size for kusto uploads.
+		maxBatchSegments: maxBatchSegments, // The maximum number of segments to include in a merged batch
 		Partitioner:      opts.Partitioner,
 		Segmenter:        opts.Segmenter,
 		uploadQueue:      opts.UploadQueue,
@@ -270,6 +282,8 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		totalFiles, totalSize int64
 	)
 
+	b.maxSegmentAge = 0
+
 	for _, prefix := range byAge {
 		b.tempSet = b.Segmenter.Get(b.tempSet[:0], prefix)
 
@@ -299,7 +313,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
 		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
 		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
-		b.maxSegmentAge = time.Since(oldestSegment)
+		if v := time.Since(oldestSegment); v > b.maxSegmentAge {
+			b.maxSegmentAge = v
+		}
 		groups[prefix] = append(groups[prefix], b.tempSet...)
 	}
 
@@ -342,7 +358,25 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				return n + 1, nil
 			})
 
-			// The batch is at the optimal size for uploading to kusto, upload directly and start b new batch.
+			// Prevent trying to combine an unbounded number of segments at once even if they are very small.  This
+			// can incur a lot of CPU time and slower transfers when there are hundreds of segments that can be combined.
+			if len(batch.Segments) >= b.maxBatchSegments {
+				if logger.IsDebug() {
+					logger.Debugf("Batch %s is merging more than %d segments, uploading directly", si.Path, 25)
+				}
+
+				owned = append(owned, batch)
+				batch = &Batch{
+					Prefix:   prefix,
+					Database: db,
+					Table:    table,
+					batcher:  b,
+				}
+				batchSize = 0
+				continue
+			}
+
+			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
 			if b.minUploadSize > 0 && batchSize >= b.minUploadSize {
 				if logger.IsDebug() {
 					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
@@ -428,12 +462,12 @@ func (b *batcher) Release(batch *Batch) {
 
 func (b *batcher) Remove(batch *Batch) error {
 	for _, si := range batch.Segments {
+		b.Segmenter.Remove(si)
 		err := os.Remove(si.Path)
 		if err != nil && !os.IsNotExist(err) {
 			logger.Errorf("Failed to remove segment %s: %s", si.Path, err)
 			continue
 		}
-		b.Segmenter.Remove(si)
 	}
 	return nil
 }

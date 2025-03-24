@@ -50,9 +50,10 @@ func (i *Index) Remove(s SegmentInfo) {
 	for idx, seg := range segments {
 		if seg.Path == s.Path {
 			segments = append(segments[:idx], segments[idx+1:]...)
+			atomic.AddInt64(&i.totalSize, -s.Size)
+
 			if len(segments) == 0 {
 				delete(i.segments, s.Prefix)
-				atomic.AddInt64(&i.totalSize, -s.Size)
 				break
 			}
 			i.segments[s.Prefix] = segments

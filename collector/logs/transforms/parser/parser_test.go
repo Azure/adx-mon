@@ -16,8 +16,8 @@ func TestNewParsers(t *testing.T) {
 	}{
 		{
 			name:     "valid parser",
-			input:    []string{"json"},
-			expected: []Parser{&JsonParser{}},
+			input:    []string{"json", "keyvalue"},
+			expected: []Parser{&JsonParser{}, &KeyValueParser{}},
 		},
 		{
 			name:     "empty",
@@ -54,8 +54,13 @@ func TestIsValidParser(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "valid",
+			name:     "valid json",
 			input:    "json",
+			expected: true,
+		},
+		{
+			name:     "valid keyvalue",
+			input:    "keyvalue",
 			expected: true,
 		},
 		{
@@ -81,9 +86,7 @@ func (p *alwaysFailingParser) Parse(*types.Log, string) error {
 type alwaysSetsAFieldParser struct{}
 
 func (p *alwaysSetsAFieldParser) Parse(log *types.Log, message string) error {
-	log.Body = map[string]interface{}{
-		"some-field": message,
-	}
+	log.SetBodyValue("some-field", message)
 	return nil
 }
 
@@ -104,6 +107,17 @@ func TestExecuteParsers(t *testing.T) {
 				"c": map[string]interface{}{
 					"d": 3.0,
 				},
+				"message": "hello",
+			},
+		},
+		{
+			name:    "successful keyvalue parse",
+			parsers: []Parser{&KeyValueParser{}},
+			message: `a=1.1 b="abc" c=true message="hello"`,
+			expectedBody: map[string]interface{}{
+				"a":       1.1,
+				"b":       "abc",
+				"c":       true,
 				"message": "hello",
 			},
 		},
@@ -157,13 +171,22 @@ func TestExecuteParsers(t *testing.T) {
 				types.BodyKeyMessage: `{"a": 1, "b": "2", "c": {"d": 3}}`,
 			},
 		},
+		{
+			name:    "json and keyvalue parsers",
+			parsers: []Parser{&JsonParser{}, &KeyValueParser{}},
+			message: `a=b c=d`,
+			expectedBody: map[string]interface{}{
+				"a": "b",
+				"c": "d",
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			log := types.NewLog()
 			ExecuteParsers(tt.parsers, log, tt.message, "test")
-			require.Equal(t, tt.expectedBody, log.Body)
+			require.Equal(t, tt.expectedBody, log.GetBody())
 		})
 	}
 }

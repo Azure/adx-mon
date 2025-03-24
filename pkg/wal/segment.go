@@ -52,18 +52,18 @@ func WithFsync(b bool) SegmentOption {
 }
 
 type Segment interface {
-	Append(ctx context.Context, buf []byte) error
-	Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
+	Append(ctx context.Context, buf []byte) (int, error)
+	Write(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error)
 	Bytes() ([]byte, error)
 	Close() error
 	ID() string
-	Size() (int64, error)
+	Size() int64
 	CreatedAt() time.Time
 	Reader() (io.ReadCloser, error)
 	Path() string
 
 	Iterator() (Iterator, error)
-	Info() (SegmentInfo, error)
+	Info() SegmentInfo
 	Flush() error
 	// Repair truncates the last bytes in the segment if they are missing, corrupted or have extra data.  This
 	// repairs any corrupted segment that may not have fully flushed to disk safely.  The segment is truncated
@@ -275,8 +275,8 @@ func (s *segment) CreatedAt() time.Time {
 }
 
 // Size returns the current size of the segment file on file.
-func (s *segment) Size() (int64, error) {
-	return int64(atomic.LoadUint64(&s.filePos)), nil
+func (s *segment) Size() int64 {
+	return int64(atomic.LoadUint64(&s.filePos))
 }
 
 // ID returns the ID of the segment.
@@ -284,18 +284,11 @@ func (s *segment) ID() string {
 	return s.id
 }
 
-func (s *segment) Info() (SegmentInfo, error) {
+func (s *segment) Info() SegmentInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.closed {
-		return SegmentInfo{}, ErrSegmentClosed
-	}
-
-	sz, err := s.Size()
-	if err != nil {
-		return SegmentInfo{}, err
-	}
+	sz := s.Size()
 
 	return SegmentInfo{
 		Prefix:    s.prefix,
@@ -303,7 +296,7 @@ func (s *segment) Info() (SegmentInfo, error) {
 		Size:      sz,
 		CreatedAt: s.createdAt,
 		Path:      s.path,
-	}, nil
+	}
 }
 
 // Iterator returns an iterator to read values written to the segment.  Creating an iterator on a segment that is
@@ -326,54 +319,54 @@ func (s *segment) Iterator() (Iterator, error) {
 
 // Append appends a raw blocks to the segment.  This is used for appending blocks that have already been compressed.
 // Misuse of this func could lead to data corruption.  In general, you probably want to use Write instead.
-func (s *segment) Append(ctx context.Context, buf []byte) error {
+func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 	iter, err := NewSegmentIterator(io.NopCloser(bytes.NewReader(buf)))
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Verify the block is valid before appending
 	if n, err := iter.Verify(); err != nil {
-		return err
+		return 0, err
 	} else if n == 0 {
-		return nil
+		return 0, nil
 	}
 
 	if s.mu.TryLock() {
 		defer s.mu.Unlock()
 	} else {
-		return ErrSegmentLocked
+		return 0, ErrSegmentLocked
 	}
 
 	if s.closed {
-		return ErrSegmentClosed
+		return 0, ErrSegmentClosed
 	}
 
 	// Strip off the header and append the block to the segment
 	n, err := s.appendBlocks(buf[8:])
 	if err != nil {
-		return err
+		return 0, err
 	}
 	atomic.AddUint64(&s.filePos, uint64(n))
-	return nil
+	return n, nil
 }
 
 // Write writes buf to the segment.
-func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
+func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
-		return ErrSegmentClosed
+		return 0, ErrSegmentClosed
 	}
 	s.mu.RUnlock()
 
 	written, err := s.blockWrite(s.bw, buf, opts...)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	atomic.AddUint64(&s.filePos, uint64(written))
-	return err
+	return written, err
 }
 
 // Bytes returns full segment file as byte slice.

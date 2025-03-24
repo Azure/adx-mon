@@ -14,10 +14,10 @@ func TestAddEmoji(t *testing.T) {
 	}
 
 	logWithMessage := types.NewLog()
-	logWithMessage.Body["message"] = "Hello World"
+	logWithMessage.SetBodyValue("message", "Hello World")
 	logWithoutMessage := types.NewLog()
 	logWithMessageOfNonStringType := types.NewLog()
-	logWithMessageOfNonStringType.Body["message"] = 123
+	logWithMessageOfNonStringType.SetBodyValue("message", 123)
 	batch := &types.LogBatch{
 		Logs: []*types.Log{
 			logWithMessage,
@@ -35,7 +35,8 @@ func TestAddEmoji(t *testing.T) {
 	if len(transformedBatch.Logs) != 3 {
 		t.Errorf("Expected 3 log, got %d", len(transformedBatch.Logs))
 	}
-	if transformedBatch.Logs[0].Body["message"] != "Hello World 😃" {
-		t.Errorf("Expected message to be Hello World 😃, got %s", transformedBatch.Logs[0].Body["message"])
+	message := types.StringOrEmpty(transformedBatch.Logs[0].GetBodyValue("message"))
+	if message != "Hello World 😃" {
+		t.Errorf("Expected message to be Hello World 😃, got %s", message)
 	}
 }

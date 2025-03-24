@@ -83,9 +83,9 @@ func (s *ConstSource) generate(ctx context.Context) {
 	for {
 		log := types.LogPool.Get(1).(*types.Log)
 		log.Reset()
-		log.Timestamp = uint64(time.Now().UnixNano())
-		log.ObservedTimestamp = uint64(time.Now().UnixNano())
-		log.Body["message"] = s.Value
+		log.SetTimestamp(uint64(time.Now().UnixNano()))
+		log.SetObservedTimestamp(uint64(time.Now().UnixNano()))
+		log.SetBodyValue("message", s.Value)
 
 		select {
 		case <-ctx.Done():

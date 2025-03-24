@@ -72,3 +72,7 @@ func (s *SegmentReader) Close() error {
 func (s *SegmentReader) SampleMetadata() (t SampleType, sampleCount uint32) {
 	return s.iter.Metadata()
 }
+
+func (s *SegmentReader) Path() string {
+	return s.f.Name()
+}

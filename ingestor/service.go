@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"regexp"
@@ -15,12 +16,13 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	ingestorstorage "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/debug"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/reader"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,8 +61,8 @@ type Service struct {
 
 	scheduler *scheduler.Periodic
 
-	requestFilter *transform.RequestTransformer
-	health        interface{ IsHealthy() bool }
+	dropFilePrefixes []string
+	health           interface{ IsHealthy() bool }
 }
 
 type ServiceOpts struct {
@@ -68,19 +70,6 @@ type ServiceOpts struct {
 	Uploader       adx.Uploader
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
-
-	// StaticColumns is a slice of column=value elements where each element will be added all rows.
-	StaticColumns []string
-
-	// LiftedColumns is a slice of label names where each element will be added as a column if the label exists.
-	LiftedColumns []string
-
-	// DropLabels is a map of metric names regexes to label name regexes.  When both match, the label will be dropped.
-	DropLabels map[*regexp.Regexp]*regexp.Regexp
-
-	// DropMetrics is a slice of regexes that drops metrics when the metric name matches.  The metric name format
-	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
-	DropMetrics []*regexp.Regexp
 
 	K8sCli     kubernetes.Interface
 	K8sCtrlCli client.Client
@@ -139,6 +128,18 @@ type ServiceOpts struct {
 
 	// EnableWALFsync enables fsync of segments before closing the segment.
 	EnableWALFsync bool
+
+	// DropFilePrefixes is a slice of prefixes that will be dropped when importing segments.
+	DropFilePrefixes []string
+
+	// MaxBatchSegments is the maximum number of segments to include when transferring segments in a batch.  The segments
+	// are merged into a new segment.  A higher number takes longer to combine on the sending side and increases the
+	// size of segments on the receiving side.  A lower number creates more batches and high remote transfer calls.  If
+	// not specified, the default is 25.
+	MaxBatchSegments int
+
+	// SlowRequestThreshold is the threshold for logging slow requests.
+	SlowRequestThreshold float64
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -147,7 +148,6 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
 		EnableWALFsync: opts.EnableWALFsync,
-		LiftedLabels:   opts.LiftedColumns,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
@@ -184,6 +184,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxSegmentAge:      opts.MaxSegmentAge,
 		MaxTransferSize:    opts.MaxTransferSize,
 		MaxTransferAge:     opts.MaxTransferAge,
+		MaxBatchSegments:   opts.MaxBatchSegments,
 		Partitioner:        coord,
 		Segmenter:          store.Index(),
 		UploadQueue:        opts.Uploader.UploadQueue(),
@@ -194,10 +195,15 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	health.QueueSizer = batcher
 
+	allKustoCli := make([]metrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
+	allKustoCli = append(allKustoCli, opts.MetricsKustoCli...)
+	allKustoCli = append(allKustoCli, opts.LogsKustoCli...)
+
 	metricsSvc := metrics.NewService(metrics.ServiceOpts{
 		Hostname:         opts.Hostname,
 		Elector:          coord,
-		KustoCli:         opts.MetricsKustoCli,
+		MetricsKustoCli:  opts.MetricsKustoCli,
+		KustoCli:         allKustoCli,
 		PeerHealthReport: health,
 	})
 
@@ -217,20 +223,17 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	sched := scheduler.NewScheduler(coord)
 
 	return &Service{
-		opts:        opts,
-		databases:   databases,
-		uploader:    opts.Uploader,
-		replicator:  repl,
-		store:       store,
-		coordinator: coord,
-		batcher:     batcher,
-		metrics:     metricsSvc,
-		health:      health,
-		scheduler:   sched,
-		requestFilter: &transform.RequestTransformer{
-			DropMetrics: opts.DropMetrics,
-			DropLabels:  opts.DropLabels,
-		},
+		opts:             opts,
+		databases:        databases,
+		uploader:         opts.Uploader,
+		replicator:       repl,
+		store:            store,
+		coordinator:      coord,
+		batcher:          batcher,
+		metrics:          metricsSvc,
+		health:           health,
+		scheduler:        sched,
+		dropFilePrefixes: opts.DropFilePrefixes,
 	}, nil
 }
 
@@ -327,6 +330,18 @@ func (s *Service) Close() error {
 	return s.store.Close()
 }
 
+func (s *Service) HandleDebugStore(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	if debugWriter, ok := s.store.(debug.DebugWriter); ok {
+		if err := debugWriter.WriteDebug(w); err != nil {
+			logger.Errorf("Failed to write debug info: %s", err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		return
+	}
+}
+
 // HandleReady handles the readiness probe.
 func (s *Service) HandleReady(w http.ResponseWriter, r *http.Request) {
 	if s.health.IsHealthy() {
@@ -351,26 +366,40 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer func() {
-		xff := r.Header.Get("X-Forwarded-For")
-		// If the header is present, split it by comma and take the first IP address
-		var originalIP string
-		if xff != "" {
-			ips := strings.Split(xff, ",")
-			originalIP = strings.TrimSpace(ips[0])
-		} else {
-			// If the header is not present, use the remote address
-			originalIP = r.RemoteAddr
-		}
+	xff := r.Header.Get("X-Forwarded-For")
+	// If the header is present, split it by comma and take the first IP address
+	var originalIP string
+	if xff != "" {
+		ips := strings.Split(xff, ",")
+		originalIP = strings.TrimSpace(ips[0])
+	} else {
+		// If the header is not present, use the remote address
+		originalIP = r.RemoteAddr
+	}
 
+	body := reader.NewCounterReader(r.Body)
+	defer func() {
+		io.Copy(io.Discard, body)
+
+		metrics.RequestsBytesReceived.Add(float64(body.Count()))
 		dur := time.Since(start)
-		if dur.Seconds() > 10 {
-			logger.Warnf("slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, r.ContentLength, filename)
+		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
+			logger.Warnf("Slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, body.Count(), filename)
 		}
-		if err := r.Body.Close(); err != nil {
-			logger.Errorf("close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
+		if err := body.Close(); err != nil {
+			logger.Errorf("Close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
 		}
 	}()
+
+	for _, prefix := range s.dropFilePrefixes {
+		if strings.HasPrefix(filename, prefix) {
+			io.Copy(io.Discard, body)
+			metrics.IngestorDroppedPrefixes.WithLabelValues(prefix).Inc()
+			m.WithLabelValues(strconv.Itoa(http.StatusAccepted)).Inc()
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+	}
 
 	if !s.health.IsHealthy() {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
@@ -388,7 +417,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := s.store.Import(f, r.Body)
+	n, err := s.store.Import(f, body)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
@@ -397,12 +426,12 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
 	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
-		logger.Errorf("Transfer requested with checksum error %q", filename)
+		logger.Errorf("Transfer requested with checksum error %q from=%s", filename, originalIP)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "block checksum verification failed", http.StatusBadRequest)
 		return
 	} else if err != nil {
-		logger.Errorf("Failed to import %s: %s", filename, err.Error())
+		logger.Errorf("Failed to import %s: %s from=%s", filename, err.Error(), originalIP)
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

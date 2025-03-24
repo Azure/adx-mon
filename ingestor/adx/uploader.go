@@ -259,13 +259,16 @@ func (n *uploader) upload(ctx context.Context) error {
 				}(segmentReaders)
 
 				if len(segmentReaders) == 0 {
+					if err := batch.Remove(); err != nil {
+						logger.Errorf("Failed to remove batch: %s", err.Error())
+					}
 					return
 				}
 
-				samplePath := segments[0].Path
+				samplePath := segmentReaders[0].Path()
 				database, table, schema, _, err = wal.ParseFilename(samplePath)
 				if err != nil {
-					logger.Errorf("Failed to parse file: %s", err.Error())
+					logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
 					return
 				}
 
@@ -273,13 +276,24 @@ func (n *uploader) upload(ctx context.Context) error {
 				if schema != "" {
 					header, err = n.extractSchema(samplePath)
 					if err != nil {
-						logger.Errorf("Failed to extract schema: %s", err.Error())
+						logger.Errorf("Failed to extract schema: %s: %s", samplePath, err.Error())
+
+						// This batch is invalid, remove it.
+						if err := batch.Remove(); err != nil {
+							logger.Errorf("Failed to remove batch: %s", err.Error())
+						}
+
 						return
 					}
 
 					mapping, err = adxschema.UnmarshalSchema(header)
 					if err != nil {
-						logger.Errorf("Failed to unmarshal schema: %s", err.Error())
+						logger.Errorf("Failed to unmarshal schema: %s: %s", samplePath, err.Error())
+
+						// This batch is invalid, remove it.
+						if err := batch.Remove(); err != nil {
+							logger.Errorf("Failed to remove batch: %s", err.Error())
+						}
 						return
 					}
 				}

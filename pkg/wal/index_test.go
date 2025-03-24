@@ -170,16 +170,21 @@ func TestIndex_TotalSize(t *testing.T) {
 
 	require.Equal(t, int64(0), i.TotalSize())
 	i.Add(SegmentInfo{Prefix: "test", Ulid: "test", Path: "/test", Size: 1, CreatedAt: time.Unix(1, 0)})
-
 	require.Equal(t, int64(1), i.TotalSize())
+	remove1 := SegmentInfo{Prefix: "test", Ulid: "test1", Path: "/test1", Size: 1, CreatedAt: time.Unix(1, 0)}
+	i.Add(remove1)
+
+	require.Equal(t, int64(2), i.TotalSize())
 
 	info := SegmentInfo{Prefix: "test1", Ulid: "test", Path: "/test1", Size: 2, CreatedAt: time.Unix(2, 0)}
 	i.Add(info)
-	require.Equal(t, int64(3), i.TotalSize())
+	require.Equal(t, int64(4), i.TotalSize())
 
 	i.Add(SegmentInfo{Prefix: "test2", Ulid: "test", Path: "/test2", Size: 3, CreatedAt: time.Unix(0, 0)})
-	require.Equal(t, int64(6), i.TotalSize())
+	require.Equal(t, int64(7), i.TotalSize())
 
 	i.Remove(info)
+	require.Equal(t, int64(5), i.TotalSize())
+	i.Remove(remove1)
 	require.Equal(t, int64(4), i.TotalSize())
 }

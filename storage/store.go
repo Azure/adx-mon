@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -202,8 +204,8 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 	for _, log := range logs.Logs {
 		// If we don't have a destination, we can't do anything with the log.
 		// Skip instead of trying again, which will just repeat the same error.
-		database, ok := log.Attributes[types.AttributeDatabaseName].(string)
-		if !ok || database == "" {
+		database := types.StringOrEmpty(log.GetAttributeValue(types.AttributeDatabaseName))
+		if database == "" {
 			noDestinationCount++
 			continue
 		}
@@ -213,8 +215,8 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 			continue
 		}
 
-		table, ok := log.Attributes[types.AttributeTableName].(string)
-		if !ok || table == "" {
+		table := types.StringOrEmpty(log.GetAttributeValue(types.AttributeTableName))
+		if table == "" {
 			noDestinationCount++
 			continue
 		}
@@ -333,6 +335,32 @@ func (s *LocalStore) incMetrics(value []byte, n int) {
 
 func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
+}
+
+// WriteDebug writes debug information to the given writer.
+func (s *LocalStore) WriteDebug(w io.Writer) error {
+	if err := s.repository.WriteDebug(w); err != nil {
+		return err
+	}
+
+	var totalSize, totalSegments int64
+	if err := filepath.Walk(s.opts.StorageDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			fmt.Fprintf(w, "File: %s, Size: %d bytes\n", path, info.Size())
+			totalSize += info.Size()
+			totalSegments += 1
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(w, "Actual: Disk Usage: %d, Segments: %d\n", totalSize, totalSegments)
+
+	return nil
 }
 
 func SegmentKey(dst []byte, labels []*prompb.Label, hash uint64) ([]byte, error) {

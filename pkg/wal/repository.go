@@ -83,7 +83,7 @@ func (s *Repository) Open(ctx context.Context) error {
 			// expected format.  In the future, we will have a versioned segment file format to avoid this.
 			if !IsSegment(path) {
 				logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
-				if err := os.Remove(path); err != nil {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 					logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
 				}
 				continue
@@ -245,4 +245,12 @@ func (s *Repository) RemoveSegment(si SegmentInfo) {
 
 func (s *Repository) PrefixesByAge() []string {
 	return s.index.PrefixesByAge()
+}
+
+func (s *Repository) WriteDebug(w io.Writer) error {
+	_, _ = fmt.Fprintf(w, "Index: Disk Usage: %d, Segments: %d, Prefixes: %d\n\n", s.Index().TotalSize(), s.Index().TotalSegments(), s.Index().TotalPrefixes())
+	return s.wals.Each(func(key string, value *WAL) error {
+		_, _ = fmt.Fprintf(w, "├ Prefix: %s, Path: %s, Disk Usage: %d\n", key, value.Path(), value.Size())
+		return nil
+	})
 }
