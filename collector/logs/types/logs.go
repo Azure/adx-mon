@@ -1,17 +1,21 @@
 package types
 
 import (
+	"fmt"
 	"os"
-	"sync"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 )
 
-var assertionsEnabled = sync.OnceValue(func() bool {
-	enableAssertions := os.Getenv("ENABLE_ASSERTIONS")
-	return enableAssertions == "true"
-})
+var assertionsEnabledValue bool = false
+
+func init() {
+	if os.Getenv("ENABLE_ASSERTIONS") == "true" {
+		assertionsEnabledValue = true
+	}
+}
 
 // LogLiteral is a struct that is easily converted to Log.
 type LogLiteral struct {
@@ -128,10 +132,15 @@ func (l *Log) SetResourceValue(key string, value any) {
 
 func (l *Log) checkWrite() {
 	if atomic.LoadUint32(&l.frozen) == 1 {
-		if assertionsEnabled() {
+		if assertionsEnabledValue {
 			panic("write to frozen log - not safe for updates")
 		} else {
-			logger.Error("write to frozen log - not safe for updates")
+			var pcs [1]uintptr
+			n := runtime.Callers(3, pcs[:]) // Skip 3 frames to get to the caller of the write method
+			frames := runtime.CallersFrames(pcs[:n])
+			frame, _ := frames.Next()
+			logger.Error("write to frozen log - not safe for updates",
+				"caller", fmt.Sprintf("%s:%d", frame.Function, frame.Line))
 		}
 	}
 }
@@ -203,6 +212,7 @@ func (l *Log) ResourceLen() int {
 }
 
 // GetAttributes returns a copy of the attributes map for read-only access
+// This creates a shallow copy of the map elements. The map is safe to modify, but most elements are not.
 func (l *Log) GetAttributes() map[string]any {
 	result := make(map[string]any, len(l.attributes))
 	for k, v := range l.attributes {
@@ -212,6 +222,7 @@ func (l *Log) GetAttributes() map[string]any {
 }
 
 // GetBody returns a copy of the body map for read-only access
+// This creates a shallow copy of the map elements. The map is safe to modify, but most elements are not.
 func (l *Log) GetBody() map[string]any {
 	result := make(map[string]any, len(l.body))
 	for k, v := range l.body {
@@ -221,6 +232,7 @@ func (l *Log) GetBody() map[string]any {
 }
 
 // GetResource returns a copy of the resource map for read-only access
+// This creates a shallow copy of the map elements. The map is safe to modify, but most elements are not.
 func (l *Log) GetResource() map[string]any {
 	result := make(map[string]any, len(l.resource))
 	for k, v := range l.resource {
