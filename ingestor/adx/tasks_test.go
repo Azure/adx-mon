@@ -321,13 +321,13 @@ func TestManagementCommands(t *testing.T) {
 	store := storage.NewCRDHandler(ctrlCli, nil)
 	task := NewManagementCommandsTask(store, executor)
 
-	resourceName := "testtest"
-	typeNamespacedName := types.NamespacedName{
-		Name:      resourceName,
-		Namespace: "default",
-	}
+	t.Run("Creates database management commands", func(t *testing.T) {
+		resourceName := "testtest"
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: "default",
+		}
 
-	t.Run("Creates management commands", func(t *testing.T) {
 		fn := &adxmonv1.ManagementCommand{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      typeNamespacedName.Name,
@@ -336,6 +336,43 @@ func TestManagementCommands(t *testing.T) {
 			Spec: adxmonv1.ManagementCommandSpec{
 				Body:     ".clear database cache query_results",
 				Database: executor.Database(),
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			cmd := &adxmonv1.ManagementCommand{}
+			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, cmd))
+
+			// wait for the command to be marked as owner completed successfully
+			for _, condition := range cmd.Status.Conditions {
+				if condition.Type == adxmonv1.ManagementCommandConditionOwner {
+					return condition.Status == metav1.ConditionTrue
+				}
+			}
+
+			return false
+		}, 10*time.Minute, time.Second)
+	})
+
+	t.Run("Creates cluster management commands", func(t *testing.T) {
+		resourceName := "testtesttest"
+		typeNamespacedName := types.NamespacedName{
+			Name:      resourceName,
+			Namespace: "default",
+		}
+
+		fn := &adxmonv1.ManagementCommand{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      typeNamespacedName.Name,
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.ManagementCommandSpec{
+				Body: `.alter cluster policy request_classification '{"IsEnabled":true}' <|
+    iff(request_properties.current_application == "Kusto.Explorer" and request_properties.request_type == "Query",
+        "Ad-hoc queries",
+        "default")`,
 			},
 		}
 		require.NoError(t, ctrlCli.Create(ctx, fn))

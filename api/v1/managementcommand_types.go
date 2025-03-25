@@ -17,7 +17,7 @@ type ManagementCommandSpec struct {
 	// Database is the target database for a management command. Not all management commands
 	// are database specific.
 	// +kubebuilder:validation:Optional
-	Database string `json:"foo,omitempty"`
+	Database string `json:"database,omitempty"`
 
 	// Body is the management command to execute
 	Body string `json:"body"`
