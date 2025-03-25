@@ -42,7 +42,7 @@ spec:
               body:
                 description: Body is the management command to execute
                 type: string
-              foo:
+              database:
                 description: |-
                   Database is the target database for a management command. Not all management commands
                   are database specific.
