@@ -215,7 +215,12 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 			continue
 		}
 
-		stmt := kql.New(".execute script<|").AddUnsafe(command.Spec.Body)
+		var stmt *kql.Builder
+		if command.Spec.Database == "" {
+			stmt = kql.New(".execute cluster script <|").AddUnsafe(command.Spec.Body)
+		} else {
+			stmt = kql.New(".execute database script <|").AddUnsafe(command.Spec.Body)
+		}
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
 			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
