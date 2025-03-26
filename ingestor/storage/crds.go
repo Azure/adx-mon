@@ -7,7 +7,6 @@ import (
 	"reflect"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -115,7 +114,6 @@ func (c *crdHandler) UpdateStatus(ctx context.Context, obj client.Object, errSta
 	}
 
 	statusObj.SetCondition(condition)
-	logger.Infof("Updating status for %s/%s: %s", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), message)
 
 	if err := c.Client.Status().Update(ctx, obj); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
