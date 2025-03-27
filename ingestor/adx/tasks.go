@@ -124,7 +124,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	}
 	for _, function := range functions {
 
-		if function.Spec.Database != t.kustoCli.Database() {
+		if function.Spec.Database != v1.AllDatabases && function.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
 

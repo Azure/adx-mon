@@ -23,6 +23,10 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// AllDatabases is a special value that indicates all databases
+// +k8s:deepcopy-gen=false
+const AllDatabases = "*"
+
 // FunctionSpec defines the desired state of Function
 type FunctionSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
