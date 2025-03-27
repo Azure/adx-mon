@@ -29,6 +29,8 @@ rules:
       - adx-mon.azure.com
     resources:
       - functions
+      - managementcommands
+      - summaryrules
     verbs:
       - get
       - list
@@ -45,6 +47,8 @@ rules:
       - adx-mon.azure.com
     resources:
       - functions/finalizers
+      - managementcommands/finalizers
+      - summaryrules/finalizers
     verbs:
       - get
       - update

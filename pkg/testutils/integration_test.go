@@ -1,9 +1,12 @@
 package testutils_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func TestIntegration(t *testing.T) {
@@ -186,6 +192,72 @@ func VerifyAlerts(ctx context.Context, t *testing.T, kustainerUrl string, k3sCon
 	})
 }
 
+func TestDiskFull(t *testing.T) {
+	testutils.IntegrationTest(t)
+
+	// Create our k3s and Kusto cluster
+	ctx := context.Background()
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	testcontainers.CleanupContainer(t, k3sContainer)
+	require.NoError(t, err)
+
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	require.NoError(t, err)
+	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+
+	// Create the databases in Kusto that Ingestor is expecting
+	opts := kustainer.IngestionBatchingPolicy{
+		MaximumBatchingTimeSpan: 30 * time.Second,
+	}
+	for _, dbName := range []string{"Metrics", "Logs"} {
+		require.NoError(t, kustoContainer.CreateDatabase(ctx, dbName))
+		require.NoError(t, kustoContainer.SetIngestionBatchingPolicy(ctx, dbName, opts))
+	}
+
+	// Write the kubeconfig for triage purposes
+	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
+	require.NoError(t, err)
+	t.Logf("Kubeconfig: %s", kubeconfig)
+	t.Logf("Kustainer: %s", kustoContainer.ConnectionUrl())
+
+	ingestorContainer, err := ingestor.Run(
+		ctx,
+		"",
+		ingestor.WithTmpfsMount(1024*1024), // 1MB in bytes
+		ingestor.WithCluster(ctx, k3sContainer),
+	)
+	testcontainers.CleanupContainer(t, ingestorContainer)
+	require.NoError(t, err)
+
+	// Start Collector so it can begin transferring data to Ingestor
+	collectorContainer, err := collector.Run(ctx, "ghcr.io/azure/adx-mon/collector:latest", collector.WithCluster(ctx, k3sContainer))
+	testcontainers.CleanupContainer(t, collectorContainer)
+	require.NoError(t, err)
+
+	// Verify Ingestor emits disk full error
+	require.Eventually(t, func() bool {
+		found, err := WaitForNoSpaceLeftError(ctx, restConfig, 5*time.Second, 500*time.Millisecond)
+		if err != nil {
+			t.Logf("Error checking for disk full: %v", err)
+			return false
+		}
+		return found
+	}, 10*time.Minute, time.Second, "Expected to find 'no space left on device' error in ingestor logs")
+
+	// Now verify that Ingestor remains running
+	isRunning, _, err := ingestor.VerifyIngestorRunning(ctx, restConfig)
+	require.NoError(t, err)
+	require.True(t, isRunning)
+
+	// (jesthom) It would be useful to continue validation where we exec into
+	// our filler-container and delete all the filler files in /mnt/data then
+	// verify that Ingestor is able to make forward progress.
+}
+
 func VerifyLogs(ctx context.Context, t *testing.T, kustainerUrl string) {
 	t.Helper()
 	var (
@@ -246,4 +318,68 @@ func VerifyMetrics(ctx context.Context, t *testing.T, kustainerUrl string) {
 
 type KustoCountResult struct {
 	Count int64 `kusto:"Count"`
+}
+
+// WaitForNoSpaceLeftError polls ingestor pods until it finds logs containing "no space left on device"
+func WaitForNoSpaceLeftError(ctx context.Context, restConfig *rest.Config, timeout, interval time.Duration) (bool, error) {
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return false, fmt.Errorf("failed to create kubernetes clientset: %w", err)
+	}
+
+	namespace := "adx-mon" // Namespace where ingestor is deployed
+	labelSelector := "app=ingestor"
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+			// List pods with the ingestor label
+			pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: labelSelector,
+			})
+			if err != nil {
+				return false, fmt.Errorf("failed to list ingestor pods: %w", err)
+			}
+
+			// Check each pod's logs
+			for _, pod := range pods.Items {
+				if pod.Status.Phase != corev1.PodRunning {
+					continue
+				}
+
+				// Get logs for the main ingestor container
+				req := clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+					Container: "ingestor", // Main container
+				})
+
+				stream, err := req.Stream(ctx)
+				if err != nil {
+					// Log and continue if we can't get logs from this pod
+					fmt.Printf("Error getting logs from pod %s: %v\n", pod.Name, err)
+					continue
+				}
+
+				buf := new(bytes.Buffer)
+				_, err = io.Copy(buf, stream)
+				stream.Close()
+
+				if err != nil {
+					return false, fmt.Errorf("error reading logs: %w", err)
+				}
+
+				// Check if logs contain the error message
+				if strings.Contains(strings.ToLower(buf.String()), "no space left on device") {
+					return true, nil
+				}
+			}
+
+			// Wait before polling again
+			time.Sleep(interval)
+		}
+	}
+
+	return false, fmt.Errorf("timeout waiting for 'no space left on device' error")
 }
