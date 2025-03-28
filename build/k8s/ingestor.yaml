@@ -135,11 +135,6 @@ spec:
             - "--max-transfer-size=10485760"
             - "--max-connections=1000"
             - "--insecure-skip-verify"
-            - "--lift-label=host"
-            - "--lift-label=cluster"
-            - "--lift-label=adxmon_namespace=Namespace"
-            - "--lift-label=adxmon_pod=Pod"
-            - "--lift-label=adxmon_container=Container"
             - "--metrics-kusto-endpoints=Metrics=$ADX_URL"
             - "--logs-kusto-endpoints=Logs=$ADX_URL"
           volumeMounts:
