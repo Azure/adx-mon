@@ -37,7 +37,7 @@ require (
 	github.com/urfave/cli/v2 v2.27.6
 	github.com/valyala/fastjson v1.6.4
 	go.uber.org/multierr v1.11.0
-	golang.org/x/net v0.37.0
+	golang.org/x/net v0.38.0
 	golang.org/x/sync v0.12.0
 	golang.org/x/sys v0.31.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7
