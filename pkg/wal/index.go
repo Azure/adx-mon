@@ -1,9 +1,12 @@
 package wal
 
 import (
+	"fmt"
+	"io"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"text/tabwriter"
 	"time"
 )
 
@@ -238,4 +241,22 @@ func (i *Index) PrefixesByCount() []string {
 
 func (i *Index) TotalSize() int64 {
 	return atomic.LoadInt64(&i.totalSize)
+}
+
+func (i *Index) WriteDebug(w io.Writer) error {
+	_, _ = fmt.Fprintf(w, "Index: Disk Usage: %d, Segments: %d, Prefixes: %d\n\n", i.TotalSize(), i.TotalSegments(), i.TotalPrefixes())
+	tw := tabwriter.NewWriter(w, 4, 0, 2, ' ', 0)
+	tw.Write([]byte("Prefix\tSegments\tSize\tCreatedAt\n"))
+	i.mu.RLock()
+	for prefix, segments := range i.segments {
+		var size int64
+		for _, seg := range segments {
+			size += seg.Size
+		}
+		tw.Write([]byte(fmt.Sprintf("%s\t%d\t%d\t%s\n", prefix, len(segments), size, segments[0].CreatedAt.Format(time.RFC3339))))
+	}
+	i.mu.RUnlock()
+	tw.Flush()
+	w.Write([]byte("\n"))
+	return nil
 }

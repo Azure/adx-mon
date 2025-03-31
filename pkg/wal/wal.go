@@ -290,9 +290,12 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		if err != nil {
 			logger.Errorf("Failed to create new segment: %s", err.Error())
 			w.segment = nil
+			atomic.StoreInt64(&w.segmentSize, 0)
+			atomic.StoreInt64(&w.segmentCreatedAt, 0)
+		} else {
+			atomic.StoreInt64(&w.segmentSize, w.segment.Size())
+			atomic.StoreInt64(&w.segmentCreatedAt, w.segment.CreatedAt().Unix())
 		}
-		atomic.StoreInt64(&w.segmentSize, w.segment.Size())
-		atomic.StoreInt64(&w.segmentCreatedAt, w.segment.CreatedAt().Unix())
 		w.mu.Unlock()
 
 		if toClose != nil {
