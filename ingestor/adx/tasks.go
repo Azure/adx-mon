@@ -124,7 +124,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	}
 	for _, function := range functions {
 
-		if function.Spec.Database != t.kustoCli.Database() {
+		if function.Spec.Database != v1.AllDatabases && function.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
 
@@ -391,7 +391,7 @@ func (t *SummaryRuleTask) SubmitRule(ctx context.Context, rule v1.SummaryRule, s
 func (t *SummaryRuleTask) GetOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
-	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry)")
+	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry) | sort by LastUpdatedOn asc")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve async operations: %w", err)

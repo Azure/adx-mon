@@ -206,6 +206,27 @@ func TestFunctions(t *testing.T) {
 		}, 10*time.Minute, time.Second)
 	})
 
+	t.Run("Creates functions for all databases", func(t *testing.T) {
+		resourceName := "testalldb"
+		fn := &adxmonv1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      resourceName,
+				Namespace: typeNamespacedName.Namespace,
+			},
+			Spec: adxmonv1.FunctionSpec{
+				Body:     fmt.Sprintf(".create-or-alter function %s() { print 'Hello World' }", resourceName),
+				Database: v1.AllDatabases,
+			},
+		}
+		require.NoError(t, ctrlCli.Create(ctx, fn))
+
+		require.NoError(t, task.Run(ctx))
+
+		require.Eventually(t, func() bool {
+			return testutils.FunctionExists(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
+		}, 10*time.Minute, time.Second)
+	})
+
 	t.Run("Updates functions", func(t *testing.T) {
 		fn := &adxmonv1.Function{}
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
@@ -408,7 +429,7 @@ func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement
 }
 
 func TestSummaryRules(t *testing.T) {
-	// testutils.IntegrationTest(t)
+	testutils.IntegrationTest(t)
 
 	scheme := clientgoscheme.Scheme
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
