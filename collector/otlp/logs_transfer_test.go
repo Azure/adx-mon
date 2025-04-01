@@ -12,6 +12,7 @@ import (
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	resourcev1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1"
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/storage"
@@ -146,7 +147,7 @@ func TestLogsService_Overloaded(t *testing.T) {
 	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
 	require.NoError(t, err)
 	s := NewLogsService(LogsServiceOpts{
-		Sink:          sink,
+		WorkerCreator: engine.WorkerCreator(nil, sink),
 		HealthChecker: fakeHealthChecker{false},
 	})
 	require.NoError(t, s.Open(context.Background()))
@@ -186,7 +187,7 @@ func BenchmarkLogsService(b *testing.B) {
 	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
 	require.NoError(b, err)
 	s := NewLogsService(LogsServiceOpts{
-		Sink:          sink,
+		WorkerCreator: engine.WorkerCreator(nil, sink),
 		HealthChecker: fakeHealthChecker{true},
 	})
 	require.NoError(b, s.Open(context.Background()))
@@ -448,7 +449,7 @@ func TestConvertToLogBatch(t *testing.T) {
 			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
 			require.NoError(t, err)
 			s := NewLogsService(LogsServiceOpts{
-				Sink:          sink,
+				WorkerCreator: engine.WorkerCreator(nil, sink),
 				HealthChecker: fakeHealthChecker{false},
 			})
 			logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
@@ -1142,7 +1143,7 @@ func makeRequest(t *testing.T, msg *v1.ExportLogsServiceRequest) (*httptest.Resp
 	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
 	require.NoError(t, err)
 	s := NewLogsService(LogsServiceOpts{
-		Sink:          sink,
+		WorkerCreator: engine.WorkerCreator(nil, sink),
 		HealthChecker: fakeHealthChecker{true},
 	})
 	require.NoError(t, s.Open(context.Background()))

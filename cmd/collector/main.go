@@ -24,6 +24,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -569,9 +570,14 @@ func realMain(ctx *cli.Context) error {
 				transformers = append(transformers, transform)
 			}
 
+			if len(addAttributes) > 0 {
+				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+					ResourceValues: addAttributes,
+				}))
+			}
+
 			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-				Store:         store,
-				AddAttributes: addAttributes,
+				Store: store,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("create sink for tailsource: %w", err)
@@ -601,12 +607,16 @@ func realMain(ctx *cli.Context) error {
 				addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes)
 
 				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-					Store:         store,
-					AddAttributes: addAttributes,
+					Store: store,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("create sink for tailsource: %w", err)
 				}
+
+				attributeTransform := addattributes.NewTransform(addattributes.Config{
+					ResourceValues: addAttributes,
+				})
+				transforms := []types.Transformer{attributeTransform}
 
 				var targets []kernel.KernelTargetConfig
 				for _, target := range v.KernelTargets {
@@ -618,7 +628,7 @@ func realMain(ctx *cli.Context) error {
 				}
 
 				kernelSourceConfig := kernel.KernelSourceConfig{
-					WorkerCreator:   engine.WorkerCreator([]types.Transformer{}, sink),
+					WorkerCreator:   engine.WorkerCreator(transforms, sink),
 					CursorDirectory: cfg.StorageDir,
 					Targets:         targets,
 				}
@@ -652,9 +662,14 @@ func realMain(ctx *cli.Context) error {
 					transformers = append(transformers, transform)
 				}
 
+				if len(addAttributes) > 0 {
+					transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+						ResourceValues: addAttributes,
+					}))
+				}
+
 				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-					Store:         store,
-					AddAttributes: addAttributes,
+					Store: store,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("create sink for tailsource: %w", err)
