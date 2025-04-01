@@ -10,6 +10,7 @@ import (
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -21,6 +22,7 @@ import (
 )
 
 type LogsServiceOpts struct {
+	WorkerCreator engine.WorkerCreatorFunc
 	Sink          types.Sink
 	HealthChecker interface{ IsHealthy() bool }
 }
