@@ -370,6 +370,10 @@ disable-metrics-forwarding = false
     # See examples under man 1 journalctl
     { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
   ]
+
+  kernel-target = [
+    { database = 'Logs', table = 'Kernel', priority = 'warning' }
+  ]
 `,
 	},
 }
