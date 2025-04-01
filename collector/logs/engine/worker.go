@@ -47,6 +47,11 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 			return
 		}
 	}
+
+	// Freeze the logs in the batch to prevent further modifications
+	for _, log := range batch.Logs {
+		log.Freeze()
+	}
 	err = w.Sink.Send(ctx, batch)
 	if err != nil {
 		metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, w.Sink.Name()).Add(float64(len(batch.Logs)))
