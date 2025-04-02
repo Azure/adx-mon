@@ -1,0 +1,4 @@
+---
+kind: service.CodeCov
+spec:
+  targetThreshold: 30
