@@ -241,26 +241,6 @@ func (l *Log) GetResource() map[string]any {
 	return result
 }
 
-// ROLog is a read-only view of a log
-// Do not modify any values stored within attributes, body, or resource unless copied
-type ROLog interface {
-	GetTimestamp() uint64
-	GetObservedTimestamp() uint64
-	GetAttributeValue(string) (any, bool)
-	GetBodyValue(string) (any, bool)
-	GetResourceValue(string) (any, bool)
-	ForEachAttribute(func(string, any) error) error
-	ForEachBody(func(string, any) error) error
-	ForEachResource(func(string, any) error) error
-	AttributeLen() int
-	BodyLen() int
-	ResourceLen() int
-	Copy() *Log
-	GetAttributes() map[string]any
-	GetBody() map[string]any
-	GetResource() map[string]any
-}
-
 // LogBatch represents a batch of logs
 type LogBatch struct {
 	Logs []*Log
@@ -280,16 +260,6 @@ func (l *LogBatch) Reset() {
 	}
 	l.Logs = l.Logs[:0]
 	l.Ack = noop
-}
-
-func (l *LogBatch) ForEach(f func(ROLog)) {
-	for _, log := range l.Logs {
-		f(log)
-	}
-}
-
-type ROLogBatch interface {
-	ForEach(func(ROLog))
 }
 
 func noop() {}
