@@ -28,7 +28,7 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 type fluentEncoder struct {
 	fluentExtTime *fluentExtTime
 	w             []byte
-	batchToSend   []types.ROLog
+	batchToSend   []*types.Log
 	tagAttribute  string
 }
 
@@ -41,18 +41,20 @@ func newFluentEncoder(tagAttribute string) *fluentEncoder {
 
 // encode encodes a log batch into the fluentd forward format.
 // Not multi-goroutine safe. Returned bytes are only valid until the next call.
-func (e *fluentEncoder) encode(batch types.ROLogBatch) ([]byte, error) {
+func (e *fluentEncoder) encode(batch *types.LogBatch) ([]byte, error) {
 	// Copy logbatch elements into new slice so we can sort it without modifying the original,
 	// which is shared amongst other outputs.
 	e.batchToSend = e.batchToSend[:0]
 
-	batch.ForEach(e.addBatchToSend)
+	for _, log := range batch.Logs {
+		e.addBatchToSend(log)
+	}
 	if len(e.batchToSend) == 0 {
 		return nil, nil
 	}
 
 	// Sort based on tags. This allows us to create a message per tag.
-	slices.SortFunc(e.batchToSend, func(a, b types.ROLog) int {
+	slices.SortFunc(e.batchToSend, func(a, b *types.Log) int {
 		tagOne := types.StringOrEmpty(a.GetAttributeValue(e.tagAttribute))
 		tagTwo := types.StringOrEmpty(b.GetAttributeValue(e.tagAttribute))
 		return strings.Compare(tagOne, tagTwo)
@@ -91,7 +93,7 @@ func (e *fluentEncoder) encode(batch types.ROLogBatch) ([]byte, error) {
 	return e.w, nil
 }
 
-func (e *fluentEncoder) addBatchToSend(log types.ROLog) {
+func (e *fluentEncoder) addBatchToSend(log *types.Log) {
 	attr := types.StringOrEmpty(log.GetAttributeValue(e.tagAttribute))
 	if attr == "" {
 		return
@@ -99,7 +101,7 @@ func (e *fluentEncoder) addBatchToSend(log types.ROLog) {
 	e.batchToSend = append(e.batchToSend, log)
 }
 
-func (e *fluentEncoder) appendMsg(batchToSend []types.ROLog, tag string) error {
+func (e *fluentEncoder) appendMsg(batchToSend []*types.Log, tag string) error {
 	// Write Forward mode. See https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1#forward-mode
 
 	// We use the []byte oriented API instead of the writer-oriented API from msgp.

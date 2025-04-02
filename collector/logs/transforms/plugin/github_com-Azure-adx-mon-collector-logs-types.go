@@ -25,95 +25,15 @@ func init() {
 		"Log":         reflect.ValueOf((*types.Log)(nil)),
 		"LogBatch":    reflect.ValueOf((*types.LogBatch)(nil)),
 		"LogLiteral":  reflect.ValueOf((*types.LogLiteral)(nil)),
-		"ROLog":       reflect.ValueOf((*types.ROLog)(nil)),
-		"ROLogBatch":  reflect.ValueOf((*types.ROLogBatch)(nil)),
 		"Sink":        reflect.ValueOf((*types.Sink)(nil)),
 		"Source":      reflect.ValueOf((*types.Source)(nil)),
 		"Transformer": reflect.ValueOf((*types.Transformer)(nil)),
 
 		// interface wrapper definitions
-		"_ROLog":       reflect.ValueOf((*_github_com_Azure_adx_mon_collector_logs_types_ROLog)(nil)),
-		"_ROLogBatch":  reflect.ValueOf((*_github_com_Azure_adx_mon_collector_logs_types_ROLogBatch)(nil)),
 		"_Sink":        reflect.ValueOf((*_github_com_Azure_adx_mon_collector_logs_types_Sink)(nil)),
 		"_Source":      reflect.ValueOf((*_github_com_Azure_adx_mon_collector_logs_types_Source)(nil)),
 		"_Transformer": reflect.ValueOf((*_github_com_Azure_adx_mon_collector_logs_types_Transformer)(nil)),
 	}
-}
-
-// _github_com_Azure_adx_mon_collector_logs_types_ROLog is an interface wrapper for ROLog type
-type _github_com_Azure_adx_mon_collector_logs_types_ROLog struct {
-	IValue                interface{}
-	WAttributeLen         func() int
-	WBodyLen              func() int
-	WCopy                 func() *types.Log
-	WForEachAttribute     func(a0 func(string, any) error) error
-	WForEachBody          func(a0 func(string, any) error) error
-	WForEachResource      func(a0 func(string, any) error) error
-	WGetAttributeValue    func(a0 string) (any, bool)
-	WGetAttributes        func() map[string]any
-	WGetBody              func() map[string]any
-	WGetBodyValue         func(a0 string) (any, bool)
-	WGetObservedTimestamp func() uint64
-	WGetResource          func() map[string]any
-	WGetResourceValue     func(a0 string) (any, bool)
-	WGetTimestamp         func() uint64
-	WResourceLen          func() int
-}
-
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) AttributeLen() int {
-	return W.WAttributeLen()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) BodyLen() int {
-	return W.WBodyLen()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) Copy() *types.Log {
-	return W.WCopy()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) ForEachAttribute(a0 func(string, any) error) error {
-	return W.WForEachAttribute(a0)
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) ForEachBody(a0 func(string, any) error) error {
-	return W.WForEachBody(a0)
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) ForEachResource(a0 func(string, any) error) error {
-	return W.WForEachResource(a0)
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetAttributeValue(a0 string) (any, bool) {
-	return W.WGetAttributeValue(a0)
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetAttributes() map[string]any {
-	return W.WGetAttributes()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetBody() map[string]any {
-	return W.WGetBody()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetBodyValue(a0 string) (any, bool) {
-	return W.WGetBodyValue(a0)
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetObservedTimestamp() uint64 {
-	return W.WGetObservedTimestamp()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetResource() map[string]any {
-	return W.WGetResource()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetResourceValue(a0 string) (any, bool) {
-	return W.WGetResourceValue(a0)
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) GetTimestamp() uint64 {
-	return W.WGetTimestamp()
-}
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLog) ResourceLen() int {
-	return W.WResourceLen()
-}
-
-// _github_com_Azure_adx_mon_collector_logs_types_ROLogBatch is an interface wrapper for ROLogBatch type
-type _github_com_Azure_adx_mon_collector_logs_types_ROLogBatch struct {
-	IValue   interface{}
-	WForEach func(a0 func(types.ROLog))
-}
-
-func (W _github_com_Azure_adx_mon_collector_logs_types_ROLogBatch) ForEach(a0 func(types.ROLog)) {
-	W.WForEach(a0)
 }
 
 // _github_com_Azure_adx_mon_collector_logs_types_Sink is an interface wrapper for Sink type
