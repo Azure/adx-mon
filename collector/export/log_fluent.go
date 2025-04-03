@@ -4,24 +4,100 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/tinylib/msgp/msgp"
 )
 
+type LogToFluentExporterOpts struct {
+	// Destination is the fluent protocol destination.
+	// It is a string of the form "host:port" or "unix:///path/to/socket"
+	Destination string
+
+	// TagAttribute is the attribute key to extract the fluent tag from.
+	// If the attribute within a log is not set, the log will be ignored.
+	TagAttribute string
+}
+
 // LogToFluentExporter exports logs using the fluent-forward protocol
 type LogToFluentExporter struct {
 	destination string
+	encoderPool *sync.Pool
+
+	conn net.Conn
 }
 
-type LogToFluentExporterOpts struct {
-	Destination string
+func NewLogToFluentExporter(opts LogToFluentExporterOpts) *LogToFluentExporter {
+	return &LogToFluentExporter{
+		destination: opts.Destination,
+		encoderPool: &sync.Pool{
+			New: func() interface{} {
+				return newFluentEncoder(opts.TagAttribute)
+			},
+		},
+	}
+}
+
+func (e *LogToFluentExporter) Open(ctx context.Context) error {
+	return nil
+}
+
+func (e *LogToFluentExporter) Close() error {
+	return nil
 }
 
 func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) error {
-	panic("not implemented")
+	encoder := e.encoderPool.Get().(*fluentEncoder)
+	defer e.encoderPool.Put(encoder)
+
+	data, err := encoder.encode(batch)
+	if err != nil {
+		return err
+	}
+
+	if len(data) == 0 {
+		return nil // No logs to send
+	}
+
+	conn, err := e.dial(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to connect to %s: %w", e.destination, err)
+	}
+	defer conn.Close()
+
+	// Set write deadline
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetWriteDeadline(deadline)
+	} else {
+		conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	}
+
+	// Write the data
+	_, err = conn.Write(data)
+	return err
+}
+
+func (e *LogToFluentExporter) dial(ctx context.Context) (net.Conn, error) {
+	var d net.Dialer
+	d.Timeout = 10 * time.Second // Adjust timeout as needed
+
+	// Check if destination starts with "unix://" for Unix domain socket
+	if strings.HasPrefix(e.destination, "unix://") {
+		socketPath := strings.TrimPrefix(e.destination, "unix://")
+		return d.DialContext(ctx, "unix", socketPath)
+	}
+
+	// Default to TCP
+	return d.DialContext(ctx, "tcp", e.destination)
+}
+
+func (e *LogToFluentExporter) Name() string {
+	return "LogToFluentExporter"
 }
 
 // fluentEncoder encodes logs in the fluentd forward format
