@@ -39,28 +39,31 @@ type worker struct {
 
 func (e *worker) Run(ctx context.Context) {
 	e.wg.Add(1)
-	defer e.wg.Done()
 
 	e.mu.Lock()
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.mu.Unlock()
 
-	logger.Infof("Creating query executor for %s/%s in %s executing every %s",
-		e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
+	go func() {
+		defer e.wg.Done()
 
-	// do-while
-	e.ExecuteQuery(ctx)
+		logger.Infof("Creating query executor for %s/%s in %s executing every %s",
+			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
 
-	ticker := time.NewTicker(e.rule.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			e.ExecuteQuery(ctx)
+		// do-while
+		e.ExecuteQuery(ctx)
+
+		ticker := time.NewTicker(e.rule.Interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				e.ExecuteQuery(ctx)
+			}
 		}
-	}
+	}()
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
