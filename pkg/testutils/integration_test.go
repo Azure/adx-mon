@@ -242,7 +242,6 @@ func TestDiskFull(t *testing.T) {
 	require.Eventually(t, func() bool {
 		found, err := WaitForNoSpaceLeftError(ctx, restConfig, 5*time.Second, 500*time.Millisecond)
 		if err != nil {
-			t.Logf("Error checking for disk full: %v", err)
 			return false
 		}
 		return found
