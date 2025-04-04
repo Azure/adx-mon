@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
+	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
@@ -49,11 +50,7 @@ type Service struct {
 	// scraper is the metrics scraper that scrapes metrics from the local node.
 	scraper *Scraper
 
-	// otelLogsSvc is the OpenTelemetry logs service that receives OTLP/HTTP Logs requests and stores
-	// in the local WAL.
-	otelLogsSvc *otlp.LogsService
-
-	// httpHandlers are the write endpoints that receive metrics from Prometheus and Otel clients over HTTP.
+	// httpHandlers are the write endpoints that receive from Prometheus and Otel clients over HTTP.
 	httpHandlers []*http.HttpHandler
 
 	// grpcHandlers are the write endpoints that receive calls over GRPC
@@ -222,28 +219,17 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		WALFlushInterval: opts.WALFlushInterval,
 	})
 
-	transformers := []types.Transformer{}
-	if opts.AddAttributes != nil {
-		transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
-			ResourceValues: opts.AddAttributes,
-		}))
-	}
-
-	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-		Store: store,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create store sink: %w", err)
-	}
-
-	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
-		WorkerCreator: engine.WorkerCreator(transformers, sink),
-		HealthChecker: health,
-	})
-
-	var metricHttpHandlers []*http.HttpHandler
+	var httpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
+
+	otelLogSvc, httpHandler, err := createOtelLogs(opts, store, health)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create otel logs service: %w", err)
+	}
+	workerSvcs = append(workerSvcs, otelLogSvc)
+	httpHandlers = append(httpHandlers, httpHandler)
+
 	for _, handlerOpts := range opts.PromMetricsHandlers {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{
 			Path:               handlerOpts.Path,
@@ -251,7 +237,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			RequestWriters:     append(handlerOpts.MetricOpts.RemoteWriteClients, &StoreRequestWriter{store}),
 			HealthChecker:      health,
 		})
-		metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
+		httpHandlers = append(httpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
 		})
@@ -267,7 +253,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		})
 		oltpMetricsService := otlp.NewMetricsService(writer, handlerOpts.Path, handlerOpts.GrpcPort)
 		if handlerOpts.Path != "" {
-			metricHttpHandlers = append(metricHttpHandlers, &http.HttpHandler{
+			httpHandlers = append(httpHandlers, &http.HttpHandler{
 				Path:    handlerOpts.Path,
 				Handler: oltpMetricsService.Handler,
 			})
@@ -360,8 +346,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		store:        store,
 		scraper:      scraper,
 		workerSvcs:   workerSvcs,
-		otelLogsSvc:  logsSvc,
-		httpHandlers: metricHttpHandlers,
+		httpHandlers: httpHandlers,
 		grpcHandlers: grpcHandlers,
 		batcher:      batcher,
 		replicator:   replicator,
@@ -392,10 +377,6 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	if err := s.batcher.Open(ctx); err != nil {
-		return err
-	}
-
-	if err := s.otelLogsSvc.Open(ctx); err != nil {
 		return err
 	}
 
@@ -439,8 +420,6 @@ func (s *Service) Open(ctx context.Context) error {
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/symbol", pprof.Symbol)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/trace", pprof.Trace)
 	}
-
-	primaryHttp.RegisterHandlerFunc("/v1/logs", s.otelLogsSvc.Handler)
 
 	for _, handler := range s.httpHandlers {
 		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
@@ -555,4 +534,36 @@ func (s *StoreRemoteClient) Write(ctx context.Context, wr *prompb.WriteRequest) 
 }
 
 func (s *StoreRemoteClient) CloseIdleConnections() {
+}
+
+func createOtelLogs(opts *ServiceOpts, store storage.Store, health *cluster.Health) (service.Component, *http.HttpHandler, error) {
+	transformers := []types.Transformer{}
+	if opts.AddAttributes != nil {
+		transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+			ResourceValues: opts.AddAttributes,
+		}))
+	}
+
+	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
+		Store: store,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create store sink: %w", err)
+	}
+
+	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
+		WorkerCreator: engine.WorkerCreator(transformers, sink),
+		HealthChecker: health,
+	})
+
+	workerSvc := &logs.Service{
+		Source:     logsSvc,
+		Transforms: transformers,
+		Sink:       sink,
+	}
+	httpHandler := &http.HttpHandler{
+		Path:    "/v1/logs",
+		Handler: logsSvc.Handler,
+	}
+	return workerSvc, httpHandler, nil
 }

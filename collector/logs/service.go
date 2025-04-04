@@ -5,10 +5,11 @@ import (
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 )
 
 type Service struct {
-	Source     types.Source
+	Source     service.Component
 	Transforms []types.Transformer
 	Sink       types.Sink
 
@@ -22,13 +23,11 @@ func (s *Service) Open(ctx context.Context) error {
 	if err := s.Sink.Open(ctx); err != nil {
 		return err
 	}
-	defer s.Sink.Close()
 
 	for i := len(s.Transforms) - 1; i >= 0; i-- {
 		if err := s.Transforms[i].Open(ctx); err != nil {
 			return err
 		}
-		defer s.Transforms[i].Close()
 	}
 
 	if err := s.Source.Open(ctx); err != nil {
