@@ -593,8 +593,9 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			return &logs.Service{
-				Source: source,
-				Sink:   sink,
+				Source:     source,
+				Transforms: transformers,
+				Sink:       sink,
 			}, nil
 		}
 
@@ -639,8 +640,9 @@ func realMain(ctx *cli.Context) error {
 				}
 
 				return &logs.Service{
-					Source: source,
-					Sink:   sink,
+					Source:     source,
+					Transforms: transforms,
+					Sink:       sink,
 				}, nil
 			}
 			opts.LogCollectionHandlers = append(opts.LogCollectionHandlers, collector.LogCollectorOpts{
@@ -696,8 +698,9 @@ func realMain(ctx *cli.Context) error {
 				source := journal.New(journalConfig)
 
 				return &logs.Service{
-					Source: source,
-					Sink:   sink,
+					Source:     source,
+					Transforms: transformers,
+					Sink:       sink,
 				}, nil
 			}
 

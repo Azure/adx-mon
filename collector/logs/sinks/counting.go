@@ -2,11 +2,13 @@ package sinks
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 )
 
+// CountingSink is intended for testing purposes to consume at least n logs, then close the Done channel.
 type CountingSink struct {
 	expectedCount int64
 	currentCount  int64
@@ -15,6 +17,7 @@ type CountingSink struct {
 	lock        sync.Mutex
 	done        bool
 	doneChannel chan int64
+	closed      bool
 }
 
 func NewCountingSink(expectedCount int64) *CountingSink {
@@ -24,6 +27,7 @@ func NewCountingSink(expectedCount int64) *CountingSink {
 		latest:        nil,
 		done:          false,
 		doneChannel:   make(chan int64, 1),
+		closed:        false,
 	}
 }
 
@@ -33,6 +37,11 @@ func (s *CountingSink) Open(ctx context.Context) error {
 
 func (s *CountingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.closed {
+		return fmt.Errorf("CountingSink is closed")
+	}
+
 	s.currentCount += int64(len(batch.Logs))
 	s.latest = batch.Logs[len(batch.Logs)-1]
 	batch.Ack()
@@ -41,11 +50,16 @@ func (s *CountingSink) Send(ctx context.Context, batch *types.LogBatch) error {
 		s.doneChannel <- s.currentCount
 		close(s.doneChannel)
 	}
-	s.lock.Unlock()
 	return nil
 }
 
 func (s *CountingSink) Close() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.closed {
+		return fmt.Errorf("CountingSink is already closed")
+	}
+	s.closed = true
 	return nil
 }
 
