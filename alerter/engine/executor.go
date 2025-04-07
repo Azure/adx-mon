@@ -229,7 +229,7 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 		if !ok {
 			logger.Infof("Starting new worker for %s", id)
 			worker := e.newWorker(r)
-			go worker.Run(ctx)
+			worker.Run(ctx)
 			e.workers[id] = worker
 			continue
 		}
@@ -244,7 +244,7 @@ func (e *Executor) syncWorkers(ctx context.Context) {
 		delete(e.workers, id)
 		w = e.newWorker(r)
 		e.workers[id] = w
-		go w.Run(ctx)
+		w.Run(ctx)
 	}
 
 	// Shutdown any workers that no longer exist

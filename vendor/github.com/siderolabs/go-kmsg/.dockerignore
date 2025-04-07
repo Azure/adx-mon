@@ -1,0 +1,19 @@
+# THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
+#
+# Generated on 2024-01-11T19:00:51Z by kres latest.
+
+*
+!kmsg.go
+!message.go
+!message_test.go
+!reader.go
+!reader_test.go
+!utils_bsd.go
+!utils_linux.go
+!writer.go
+!writer_test.go
+!go.mod
+!go.sum
+!.golangci.yml
+!README.md
+!.markdownlint.json

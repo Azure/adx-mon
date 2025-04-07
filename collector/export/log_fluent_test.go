@@ -22,11 +22,12 @@ func BenchmarkMsgp(b *testing.B) {
 }
 
 func TestEncode(t *testing.T) {
-	logbatch := types.LogBatch{}
+	logbatch := &types.LogBatch{}
 	logbatch.AddLiterals(testlogs)
+	freezeLogsInBatch(logbatch)
 
 	e := newFluentEncoder("destTag")
-	b, err := e.encode(&logbatch)
+	b, err := e.encode(logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
 
@@ -71,8 +72,9 @@ func TestEncode(t *testing.T) {
 	}
 	logbatch.Reset()
 	logbatch.AddLiterals(newLogs)
+	freezeLogsInBatch(logbatch)
 
-	b, err = e.encode(&logbatch)
+	b, err = e.encode(logbatch)
 	require.NoError(t, err)
 	require.Greater(t, len(b), 0)
 	rest = validateArrayHeaderForwardMode(t, b)
@@ -285,4 +287,10 @@ func validateEntries(t *testing.T, entries []entrytuple, expectedentries []entry
 
 	// Compare the slices ignoring their order
 	require.ElementsMatch(t, expectedentries, entries, "entries differ ignoring order")
+}
+
+func freezeLogsInBatch(logBatch *types.LogBatch) {
+	for _, log := range logBatch.Logs {
+		log.Freeze()
+	}
 }

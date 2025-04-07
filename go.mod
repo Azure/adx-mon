@@ -1,6 +1,7 @@
 module github.com/Azure/adx-mon
 
 go 1.23.5
+
 toolchain go1.24.1
 
 require (
@@ -28,6 +29,7 @@ require (
 	github.com/prometheus/client_golang v1.21.1
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.63.0
+	github.com/siderolabs/go-kmsg v0.1.4
 	github.com/stretchr/testify v1.10.0
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/testcontainers/testcontainers-go v0.36.0
@@ -39,7 +41,7 @@ require (
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.38.0
 	golang.org/x/sync v0.12.0
-	golang.org/x/sys v0.31.0
+	golang.org/x/sys v0.32.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7
 	google.golang.org/protobuf v1.36.6
 	k8s.io/api v0.32.3
@@ -130,6 +132,7 @@ require (
 	github.com/samber/lo v1.38.1 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.1 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
+	github.com/siderolabs/gen v0.4.7 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect

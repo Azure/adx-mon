@@ -7,33 +7,38 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 type LogsServiceOpts struct {
-	Sink          types.Sink
+	WorkerCreator engine.WorkerCreatorFunc
 	HealthChecker interface{ IsHealthy() bool }
 }
 
 type LogsService struct {
-	sink          types.Sink
+	workerCreator engine.WorkerCreatorFunc
+	outputQueue   chan *types.LogBatch
 	logger        *slog.Logger
 	healthChecker interface{ IsHealthy() bool }
+
+	wg sync.WaitGroup
 }
 
 func NewLogsService(opts LogsServiceOpts) *LogsService {
 	return &LogsService{
-		sink: opts.Sink,
+		workerCreator: opts.WorkerCreator,
+		outputQueue:   make(chan *types.LogBatch, 16),
 		logger: slog.Default().With(
 			slog.Group(
 				"handler",
@@ -45,10 +50,18 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 }
 
 func (s *LogsService) Open(ctx context.Context) error {
+	worker := s.workerCreator("otlp-logs", s.outputQueue)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		worker.Run()
+	}()
 	return nil
 }
 
 func (s *LogsService) Close() error {
+	close(s.outputQueue)
+	s.wg.Wait()
 	return nil
 }
 
@@ -101,26 +114,7 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 
 		droppedLogMissingMetadata := s.convertToLogBatch(msg, logBatch)
 
-		err = s.sink.Send(r.Context(), logBatch)
-		for _, log := range logBatch.Logs {
-			types.LogPool.Put(log)
-		}
-		types.LogBatchPool.Put(logBatch)
-
-		if err != nil {
-			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-			s.logger.Error("Failed to write to store", "Error", err)
-
-			w.WriteHeader(http.StatusInternalServerError)
-			ret := status.Status{
-				Message: "Failed to write logs",
-			}
-			respBodyBytes, err := proto.Marshal(&ret)
-			if err == nil {
-				w.Write(respBodyBytes)
-			}
-			return
-		}
+		s.outputQueue <- logBatch
 
 		// The logs have been committed by the OTLP endpoint
 		resp := &v1.ExportLogsServiceResponse{}

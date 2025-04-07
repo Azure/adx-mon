@@ -178,6 +178,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to wait for namespace: %w", err)
 					}
 
+					collectorConfigMap := makeCollectorConfigMap()
 					patchBytes, err := json.Marshal(collectorConfigMap)
 					if err != nil {
 						return fmt.Errorf("failed to marshal configmap: %w", err)
@@ -200,6 +201,8 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to patch daemonset: %w", err)
 					}
 
+					// create new function instance since Create will modify the passed-in object
+					collectorFunction := makeCollectorFunction()
 					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: collectorFunction.Namespace, Name: collectorFunction.Name}, collectorFunction); err != nil {
 						if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
 							return fmt.Errorf("failed to create function: %w", err)
@@ -233,18 +236,19 @@ func (k *KustoTableSchema) CslColumns() []string {
 	}
 }
 
-var collectorFunction = &adxmonv1.Function{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: "adx-mon.azure.com/v1",
-		Kind:       "Function",
-	},
-	ObjectMeta: metav1.ObjectMeta{
-		Name:      "collector",
-		Namespace: "adx-mon",
-	},
-	Spec: adxmonv1.FunctionSpec{
-		Database: "Logs",
-		Body: `.create-or-alter function with (view=true, folder='views') Collector () {
+func makeCollectorFunction() *adxmonv1.Function {
+	return &adxmonv1.Function{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Function",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "collector",
+			Namespace: "adx-mon",
+		},
+		Spec: adxmonv1.FunctionSpec{
+			Database: "Logs",
+			Body: `.create-or-alter function with (view=true, folder='views') Collector () {
   table('Collector')
   | extend msg = tostring(Body.msg),
 		   lvl = tostring(Body.lvl),
@@ -255,21 +259,23 @@ var collectorFunction = &adxmonv1.Function{
 		   host = tostring(Resource.host)
   | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
 }`,
-	},
+		},
+	}
 }
 
 // collectorConfigMap is a minimal config suitable for use by kustainer
-var collectorConfigMap = &corev1.ConfigMap{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: "v1",
-		Kind:       "ConfigMap",
-	},
-	ObjectMeta: metav1.ObjectMeta{
-		Name:      "collector-config",
-		Namespace: "adx-mon",
-	},
-	Data: map[string]string{
-		"config.toml": `
+func makeCollectorConfigMap() *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "collector-config",
+			Namespace: "adx-mon",
+		},
+		Data: map[string]string{
+			"config.toml": `
 # We have to keep our scape targets very light due to the capacity
 # constraints of kustainer
 
@@ -370,6 +376,11 @@ disable-metrics-forwarding = false
     # See examples under man 1 journalctl
     { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
   ]
+
+  kernel-target = [
+    { database = 'Logs', table = 'Kernel', priority = 'warning' }
+  ]
 `,
-	},
+		},
+	}
 }

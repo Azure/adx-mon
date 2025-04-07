@@ -20,9 +20,11 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/journal"
+	"github.com/Azure/adx-mon/collector/logs/sources/kernel"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -568,9 +570,14 @@ func realMain(ctx *cli.Context) error {
 				transformers = append(transformers, transform)
 			}
 
+			if len(addAttributes) > 0 {
+				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+					ResourceValues: addAttributes,
+				}))
+			}
+
 			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-				Store:         store,
-				AddAttributes: addAttributes,
+				Store: store,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("create sink for tailsource: %w", err)
@@ -595,6 +602,52 @@ func realMain(ctx *cli.Context) error {
 			Create: createFunc,
 		})
 
+		if len(v.KernelTargets) > 0 {
+			kernelCreateFunction := func(store storage.Store) (*logs.Service, error) {
+				addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes)
+
+				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
+					Store: store,
+				})
+				if err != nil {
+					return nil, fmt.Errorf("create sink for tailsource: %w", err)
+				}
+
+				attributeTransform := addattributes.NewTransform(addattributes.Config{
+					ResourceValues: addAttributes,
+				})
+				transforms := []types.Transformer{attributeTransform}
+
+				var targets []kernel.KernelTargetConfig
+				for _, target := range v.KernelTargets {
+					targets = append(targets, kernel.KernelTargetConfig{
+						Database:       target.Database,
+						Table:          target.Table,
+						PriorityFilter: target.Priority,
+					})
+				}
+
+				kernelSourceConfig := kernel.KernelSourceConfig{
+					WorkerCreator:   engine.WorkerCreator(transforms, sink),
+					CursorDirectory: cfg.StorageDir,
+					Targets:         targets,
+				}
+
+				source, err := kernel.NewKernelSource(kernelSourceConfig)
+				if err != nil {
+					return nil, fmt.Errorf("create kernel source: %w", err)
+				}
+
+				return &logs.Service{
+					Source: source,
+					Sink:   sink,
+				}, nil
+			}
+			opts.LogCollectionHandlers = append(opts.LogCollectionHandlers, collector.LogCollectorOpts{
+				Create: kernelCreateFunction,
+			})
+		}
+
 		if len(v.JournalTargets) > 0 {
 			journalCreateFunction := func(store storage.Store) (*logs.Service, error) {
 				addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes)
@@ -609,9 +662,14 @@ func realMain(ctx *cli.Context) error {
 					transformers = append(transformers, transform)
 				}
 
+				if len(addAttributes) > 0 {
+					transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+						ResourceValues: addAttributes,
+					}))
+				}
+
 				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-					Store:         store,
-					AddAttributes: addAttributes,
+					Store: store,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("create sink for tailsource: %w", err)

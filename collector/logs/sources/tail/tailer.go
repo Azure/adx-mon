@@ -100,8 +100,6 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 	}()
 
 	worker := config.WorkerCreator(config.WorkerName, outputQueue)
-	worker.Database = config.Target.Database
-	worker.Table = config.Target.Table
 	tailer.wg.Add(1)
 	go func() {
 		defer tailer.wg.Done()

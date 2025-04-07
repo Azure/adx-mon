@@ -8,19 +8,16 @@ import (
 )
 
 type StoreSinkConfig struct {
-	Store         storage.Store
-	AddAttributes map[string]string
+	Store storage.Store
 }
 
 type StoreSink struct {
-	store         storage.Store
-	addAttributes map[string]string
+	store storage.Store
 }
 
 func NewStoreSink(config StoreSinkConfig) (*StoreSink, error) {
 	return &StoreSink{
-		store:         config.Store,
-		addAttributes: config.AddAttributes,
+		store: config.Store,
 	}, nil
 }
 
@@ -29,11 +26,6 @@ func (s *StoreSink) Open(ctx context.Context) error {
 }
 
 func (s *StoreSink) Send(ctx context.Context, batch *types.LogBatch) error {
-	for _, l := range batch.Logs {
-		for k, v := range s.addAttributes {
-			l.SetResourceValue(k, v)
-		}
-	}
 	err := s.store.WriteNativeLogs(ctx, batch)
 	if err != nil {
 		return err

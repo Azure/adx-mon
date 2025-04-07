@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/siderolabs/go-kmsg"
 )
 
 var (
@@ -329,6 +330,7 @@ type HostLog struct {
 	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
 	StaticPodTargets     []*PodTarget      `toml:"static-pod-target" comment:"Defines a pod target to scrape."`
 	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
+	KernelTargets        []*KernelTarget   `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
 	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
 }
 
@@ -377,6 +379,12 @@ func (w *HostLog) Validate() error {
 	for _, v := range w.JournalTargets {
 		if err := v.Validate(); err != nil {
 			return fmt.Errorf("host-log.journal-target.%w", err)
+		}
+	}
+
+	for _, v := range w.KernelTargets {
+		if err := v.Validate(); err != nil {
+			return fmt.Errorf("host-log.kernel-target.%w", err)
 		}
 	}
 
@@ -446,6 +454,35 @@ type TailTarget struct {
 	Database string           `toml:"database" comment:"Database to store logs in."`
 	Table    string           `toml:"table" comment:"Table to store logs in."`
 	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
+}
+
+type KernelTarget struct {
+	Database string `toml:"database" comment:"Database to store logs in."`
+	Table    string `toml:"table" comment:"Table to store logs in."`
+	Priority string `toml:"priority" comment:"One of emerg, alert, crit, err, warning, notice, info, debug, default is info."`
+}
+
+func (k *KernelTarget) Validate() error {
+	if k.Database == "" {
+		return errors.New("database must be set")
+	}
+	if k.Table == "" {
+		return errors.New("table must be set")
+	}
+	if k.Priority == "" {
+		k.Priority = "info"
+	}
+	// Create a map of valid priorities from the kmsg package
+	validPriorities := make(map[string]bool)
+	for i := kmsg.Emerg; i <= kmsg.Debug; i++ {
+		validPriorities[i.String()] = true
+	}
+
+	if !validPriorities[k.Priority] {
+		return fmt.Errorf("priority %q is not valid, must be one of: emerg, alert, crit, err, warning, notice, info, debug",
+			k.Priority)
+	}
+	return nil
 }
 
 type PodTarget struct {

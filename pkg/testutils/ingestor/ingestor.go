@@ -310,6 +310,8 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 						return fmt.Errorf("failed to create statefulset: %w", err)
 					}
 
+					// create new function instance since Create will modify the passed-in object
+					ingestorFunction := makeIngestorFunction()
 					// Continue with Function creation...
 					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: ingestorFunction.Namespace, Name: ingestorFunction.Name}, ingestorFunction); err != nil {
 						if apimacherrors.IsNotFound(err) {
@@ -465,18 +467,19 @@ func (k *KustoTableSchema) CslColumns() []string {
 	}
 }
 
-var ingestorFunction = &adxmonv1.Function{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: "adx-mon.azure.com/v1",
-		Kind:       "Function",
-	},
-	ObjectMeta: metav1.ObjectMeta{
-		Name:      "ingestor",
-		Namespace: "adx-mon",
-	},
-	Spec: adxmonv1.FunctionSpec{
-		Database: "Logs",
-		Body: `.create-or-alter function with (view=true, folder='views') Ingestor () {
+func makeIngestorFunction() *adxmonv1.Function {
+	return &adxmonv1.Function{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Function",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ingestor",
+			Namespace: "adx-mon",
+		},
+		Spec: adxmonv1.FunctionSpec{
+			Database: "Logs",
+			Body: `.create-or-alter function with (view=true, folder='views') Ingestor () {
   table('Ingestor')
   | extend msg = tostring(Body.msg),
 		   lvl = tostring(Body.lvl),
@@ -487,5 +490,6 @@ var ingestorFunction = &adxmonv1.Function{
 		   host = tostring(Resource.host)
   | project-away Timestamp, ObservedTimestamp, TraceId, SpanId, SeverityText, SeverityNumber, Body, Resource, Attributes
 }`,
-	},
+		},
+	}
 }

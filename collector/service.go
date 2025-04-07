@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
+	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	metricsHandler "github.com/Azure/adx-mon/collector/metrics"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -130,7 +133,7 @@ type ServiceOpts struct {
 	// are merged into a new segment.  A higher number takes longer to combine on the sending size and increases the
 	// size of segments on the receiving size.  A lower number creates more batches and high remote transfer calls.  If
 	// not specified, the default is 25.
-	MaxBatchSegments       int
+	MaxBatchSegments int
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -219,16 +222,22 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		WALFlushInterval: opts.WALFlushInterval,
 	})
 
+	transformers := []types.Transformer{}
+	if opts.AddAttributes != nil {
+		transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+			ResourceValues: opts.AddAttributes,
+		}))
+	}
+
 	sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-		Store:         store,
-		AddAttributes: opts.AddAttributes,
+		Store: store,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create store sink: %w", err)
 	}
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
-		Sink:          sink,
+		WorkerCreator: engine.WorkerCreator(transformers, sink),
 		HealthChecker: health,
 	})
 

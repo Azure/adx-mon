@@ -12,8 +12,6 @@ type worker struct {
 	Input      <-chan *types.LogBatch
 	Transforms []types.Transformer
 	Sink       types.Sink
-	Database   string
-	Table      string
 }
 
 type WorkerCreatorFunc func(string, <-chan *types.LogBatch) *worker
@@ -29,6 +27,8 @@ func WorkerCreator(transforms []types.Transformer, sink types.Sink) func(string,
 	}
 }
 
+// Run starts the worker and processes incoming log batches.
+// It will block until the input channel is closed.
 func (w *worker) Run() {
 	for msg := range w.Input {
 		w.processBatch(context.Background(), msg)
@@ -47,6 +47,11 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 			return
 		}
 	}
+
+	// Freeze the logs in the batch to prevent further modifications
+	for _, log := range batch.Logs {
+		log.Freeze()
+	}
 	err = w.Sink.Send(ctx, batch)
 	if err != nil {
 		metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, w.Sink.Name()).Add(float64(len(batch.Logs)))
@@ -55,7 +60,7 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 		// Nack batch?
 		return
 	}
-	metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, w.Sink.Name(), w.Database, w.Table).Add(float64(len(batch.Logs)))
+	metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, w.Sink.Name()).Add(float64(len(batch.Logs)))
 	disposeBatch(batch)
 }
 
