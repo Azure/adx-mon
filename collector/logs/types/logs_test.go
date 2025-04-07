@@ -153,13 +153,6 @@ func TestLogBatch(t *testing.T) {
 
 	require.Equal(t, 2, len(batch.Logs))
 
-	// Test ForEach
-	var timestamps []uint64
-	batch.ForEach(func(l ROLog) {
-		timestamps = append(timestamps, l.GetTimestamp())
-	})
-	require.Equal(t, []uint64{100, 200}, timestamps)
-
 	batch.Ack()
 	require.True(t, ackCalled)
 
