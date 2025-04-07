@@ -314,8 +314,12 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					ingestorFunction := makeIngestorFunction()
 					// Continue with Function creation...
 					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: ingestorFunction.Namespace, Name: ingestorFunction.Name}, ingestorFunction); err != nil {
-						if err := ctrlCli.Create(ctx, ingestorFunction); err != nil {
-							return fmt.Errorf("failed to create function: %w", err)
+						if apimacherrors.IsNotFound(err) {
+							if err := ctrlCli.Create(ctx, ingestorFunction); err != nil {
+								return fmt.Errorf("failed to create function: %w", err)
+							}
+						} else {
+							return fmt.Errorf("failed to get function: %w", err)
 						}
 					}
 
