@@ -296,6 +296,20 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
 
 The host log config configures file and journald log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.
 
+### Log Parsers
+
+Parsers are used within `file-target` and `journal-target` configurations to process the raw log message extracted from the source (e.g., a file line or a journald entry). They are defined in the `parsers` array and are applied sequentially.
+
+The `parsers` array accepts a list of strings, each specifying a parser type. The collector attempts to apply each parser in the order they are listed. The first parser that successfully processes the log message stops the parsing process for that message. If a parser succeeds, the resulting fields are added to the log's body.
+
+If no parser in the list succeeds, the original raw log message is kept in the `message` field of the log body.
+
+Available parser types:
+
+*   **`json`**: Attempts to parse the entire log message string as a JSON object. If successful, the key-value pairs from the JSON object are merged into the log body. The original `message` field is typically removed or overwritten by a field from the JSON payload if one exists with the key "message".
+*   **`keyvalue`**: Parses log messages formatted as `key1=value1 key2="quoted value" key3=value3 ...`. It extracts these key-value pairs and adds them to the log body. Keys and values are strings. Values containing spaces should be quoted.
+*   **`space`**: Splits the log message string by whitespace (using `strings.Fields`, which handles multiple spaces, tabs, etc.). Each resulting part is added to the log body with keys named sequentially: `field0`, `field1`, `field2`, and so on. All resulting fields are strings.
+
 ```toml
 # Defines a host log scraper.
 [[host-log]]
