@@ -26,6 +26,8 @@ func newParser(parserType ParserType) (Parser, error) {
 		return NewJsonParser(JsonParserConfig{})
 	case ParserTypeKeyValue:
 		return NewKeyValueParser(KeyValueParserConfig{})
+	case ParserTypeSpace:
+		return NewSpaceParser(SpaceParserConfig{})
 	default:
 		return nil, fmt.Errorf("unknown parser type: %s", parserType)
 	}
@@ -51,6 +53,8 @@ func IsValidParser(parserType string) bool {
 	case string(ParserTypeJson):
 		return true
 	case string(ParserTypeKeyValue):
+		return true
+	case string(ParserTypeSpace):
 		return true
 	default:
 		return false
