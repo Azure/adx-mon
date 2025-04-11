@@ -9,6 +9,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/siderolabs/go-kmsg"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +44,9 @@ func TestKernelSource(t *testing.T) {
 
 	// Set up source with mock reader
 	sink := sinks.NewCountingSink(numLogs)
+	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
 	source, err := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   workerCreator,
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -106,8 +108,9 @@ func TestKernelSourceWithOffset(t *testing.T) {
 
 	// Set up source with mock reader
 	sink := sinks.NewCountingSink(int64(processed))
+	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
 	source, err := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   workerCreator,
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -186,8 +189,9 @@ func TestKernelSourceWithMultipleTargets(t *testing.T) {
 
 	// Set up source with mock reader
 	sink := sinks.NewCountingSink(3)
+	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
 	source, err := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   workerCreator,
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -229,8 +233,9 @@ func BenchmarkKernelSource(b *testing.B) {
 	}
 
 	sink := sinks.NewCountingSink(int64(b.N))
+	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
 	source, _ := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   workerCreator,
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{

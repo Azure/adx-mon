@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sinks"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,7 +50,7 @@ func TestTailSourceStaticTargets(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 	require.NoError(t, err)
 
@@ -112,7 +113,7 @@ func TestTailSourcePartialLogs(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 	require.NoError(t, err)
 
@@ -148,7 +149,7 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets:   []FileTailTarget{},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 	require.NoError(t, err)
 
@@ -230,7 +231,7 @@ func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets:   []FileTailTarget{},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 	require.NoError(t, err)
 
@@ -266,7 +267,7 @@ func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
 	tailSource, err = NewTailSource(TailSourceConfig{
 		StaticTargets:   []FileTailTarget{},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 	require.NoError(t, err)
 
@@ -314,7 +315,7 @@ func BenchmarkTailSource(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
-			WorkerCreator:   engine.WorkerCreator(nil, sink),
+			WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 		})
 		require.NoError(b, err)
 
@@ -359,7 +360,7 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
-			WorkerCreator:   engine.WorkerCreator(nil, sink),
+			WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 		})
 		require.NoError(b, err)
 

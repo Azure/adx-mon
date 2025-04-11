@@ -54,7 +54,7 @@ func TestJournalE2E(t *testing.T) {
 			},
 		},
 		CursorDirectory: cursorDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 
 	service := &logs.Service{
@@ -92,7 +92,7 @@ func TestJournalE2E(t *testing.T) {
 			},
 		},
 		CursorDirectory: cursorDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 
 	service = &logs.Service{
@@ -171,7 +171,7 @@ func TestJournalMulipleSources(t *testing.T) {
 			},
 		},
 		CursorDirectory: cursorDir,
-		WorkerCreator:   engine.WorkerCreator(nil, sink),
+		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
 	})
 
 	service := &logs.Service{

@@ -2,27 +2,32 @@ package engine
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/logger"
 )
 
 type worker struct {
-	SourceName string
-	Input      <-chan *types.LogBatch
-	Transforms []types.Transformer
-	Sink       types.Sink
+	SourceName   string
+	Input        <-chan *types.LogBatch
+	Transforms   []types.Transformer
+	Sinks        []types.Sink
+	BatchTimeout time.Duration
 }
 
 type WorkerCreatorFunc func(string, <-chan *types.LogBatch) *worker
 
-func WorkerCreator(transforms []types.Transformer, sink types.Sink) func(string, <-chan *types.LogBatch) *worker {
+func WorkerCreator(transforms []types.Transformer, sinks []types.Sink) func(string, <-chan *types.LogBatch) *worker {
 	return func(sourceName string, input <-chan *types.LogBatch) *worker {
 		return &worker{
-			SourceName: sourceName,
-			Input:      input,
-			Transforms: transforms,
-			Sink:       sink,
+			SourceName:   sourceName,
+			Input:        input,
+			Transforms:   transforms,
+			Sinks:        sinks,
+			BatchTimeout: 10 * time.Second,
 		}
 	}
 }
@@ -31,7 +36,9 @@ func WorkerCreator(transforms []types.Transformer, sink types.Sink) func(string,
 // It will block until the input channel is closed.
 func (w *worker) Run() {
 	for msg := range w.Input {
-		w.processBatch(context.Background(), msg)
+		ctx, cancel := context.WithTimeout(context.Background(), w.BatchTimeout)
+		w.processBatch(ctx, msg)
+		cancel()
 	}
 }
 
@@ -40,10 +47,9 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 	for _, transform := range w.Transforms {
 		batch, err = transform.Transform(ctx, batch)
 		if err != nil {
+			logger.Warnf("Failed to transform logs from source %s -> %s: %v", w.SourceName, transform.Name(), err)
 			metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, transform.Name()).Add(float64(len(batch.Logs)))
 			disposeBatch(batch)
-			// TODO skip batch if error is not recoverable
-			// Nack batch?
 			return
 		}
 	}
@@ -52,15 +58,23 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 	for _, log := range batch.Logs {
 		log.Freeze()
 	}
-	err = w.Sink.Send(ctx, batch)
-	if err != nil {
-		metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, w.Sink.Name()).Add(float64(len(batch.Logs)))
-		disposeBatch(batch)
-		// TODO skip batch if error is not recoverable
-		// Nack batch?
-		return
+
+	var wg sync.WaitGroup
+	wg.Add(len(w.Sinks))
+	for _, sink := range w.Sinks {
+		go func(sink types.Sink) {
+			defer wg.Done()
+
+			err = sink.Send(ctx, batch)
+			if err != nil {
+				logger.Warnf("Failed to send logs to sink %s -> %s: %v", w.SourceName, sink.Name(), err)
+				metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, sink.Name()).Add(float64(len(batch.Logs)))
+				return
+			}
+			metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, sink.Name()).Add(float64(len(batch.Logs)))
+		}(sink)
 	}
-	metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, w.Sink.Name()).Add(float64(len(batch.Logs)))
+	wg.Wait()
 	disposeBatch(batch)
 }
 
