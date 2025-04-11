@@ -225,6 +225,27 @@ spec:
   destination: "peoplewhocare"
 `
 
+var invalidNameTooLongExample = `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: an-alert-name-that-is-too-long-and-should-be-invalid-because-it-exceeds-the-maximum-length-of-63-characters
+  namespace: foo
+spec:
+  database: SomeDB
+  interval: 1h
+  query: |
+    BadThings
+    | where stuff  > 1
+    | summarize count() by region
+    | extend Severity=3
+    | extend  Title = "Bad Things!"
+    | extend  Summary  =  "Bad Things! Oh no"
+    | extend CorrelationId = region
+    | extend TSG="http://gofixit.com"
+  autoMitigateAfter: 2h
+  destination: "peoplewhocare"
+`
+
 func TestFromPath(t *testing.T) {
 	validFileDirectory := t.TempDir()
 	testfile := filepath.Join(validFileDirectory, "test.yaml")
@@ -263,6 +284,11 @@ func TestFromPath(t *testing.T) {
 	invalidAnnotationFileDirectory := t.TempDir()
 	invalidAnnotationTestfile := filepath.Join(invalidAnnotationFileDirectory, "invalidAnnotation.yaml")
 	err = os.WriteFile(invalidAnnotationTestfile, []byte(invalidAnnotationExample), 0644)
+	require.NoError(t, err)
+
+	invalidNameTooLongFileDirectory := t.TempDir()
+	invalidNameTooLongTestfile := filepath.Join(invalidNameTooLongFileDirectory, "invalidNameTooLong.yaml")
+	err = os.WriteFile(invalidNameTooLongTestfile, []byte(invalidNameTooLongExample), 0644)
 	require.NoError(t, err)
 
 	type testcase struct {
@@ -310,6 +336,11 @@ func TestFromPath(t *testing.T) {
 		{
 			name:      "dupe namespace/name in dir should return error",
 			path:      dupeRuleDirectory,
+			expectErr: true,
+		},
+		{
+			name:      "invalid name too long in yaml should return error",
+			path:      invalidNameTooLongFileDirectory,
 			expectErr: true,
 		},
 	}
