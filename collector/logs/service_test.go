@@ -22,7 +22,7 @@ const sourceName = "ConstSource"
 func BenchmarkPipeline(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sink := sinks.NewCountingSink(10000)
-		source := sources.NewConstSource("test-val", 1*time.Second, 1000, engine.WorkerCreator(nil, sink))
+		source := sources.NewConstSource("test-val", 1*time.Second, 1000, engine.WorkerCreator(nil, []types.Sink{sink}))
 
 		service := &logs.Service{
 			Source: source,
@@ -40,7 +40,7 @@ func TestPipeline(t *testing.T) {
 	// Ensure we can send 10k logs through the pipeline.
 	numLogs := int64(10000)
 	sink := sinks.NewCountingSink(numLogs)
-	source := sources.NewConstSource("test-val", 1*time.Second, 1000, engine.WorkerCreator(nil, sink))
+	source := sources.NewConstSource("test-val", 1*time.Second, 1000, engine.WorkerCreator(nil, []types.Sink{sink}))
 
 	service := &logs.Service{
 		Source: source,
@@ -66,7 +66,11 @@ func TestLifecycle(t *testing.T) {
 	sink := sinks.NewCountingSink(1)
 	transform := &transformerpanicifclosed{}
 	transforms := []types.Transformer{transform}
-	source := newSourceSendOnClose(engine.WorkerCreator(transforms, sink))
+	workerCreator := engine.WorkerCreator(
+		transforms,
+		[]types.Sink{sink},
+	)
+	source := newSourceSendOnClose(workerCreator)
 
 	service := &logs.Service{
 		Source:     source,

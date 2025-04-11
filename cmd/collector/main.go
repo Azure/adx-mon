@@ -585,7 +585,11 @@ func realMain(ctx *cli.Context) error {
 
 			tailSourceConfig.StaticTargets = staticTargets
 			tailSourceConfig.CursorDirectory = cfg.StorageDir
-			tailSourceConfig.WorkerCreator = engine.WorkerCreator(transformers, sink)
+			workerCreator := engine.WorkerCreator(
+				transformers,
+				[]types.Sink{sink},
+			)
+			tailSourceConfig.WorkerCreator = workerCreator
 
 			source, err := tail.NewTailSource(tailSourceConfig)
 			if err != nil {
@@ -629,7 +633,7 @@ func realMain(ctx *cli.Context) error {
 				}
 
 				kernelSourceConfig := kernel.KernelSourceConfig{
-					WorkerCreator:   engine.WorkerCreator(transforms, sink),
+					WorkerCreator:   engine.WorkerCreator(transforms, []types.Sink{sink}),
 					CursorDirectory: cfg.StorageDir,
 					Targets:         targets,
 				}
@@ -692,7 +696,7 @@ func realMain(ctx *cli.Context) error {
 				journalConfig := journal.SourceConfig{
 					Targets:         targets,
 					CursorDirectory: cfg.StorageDir,
-					WorkerCreator:   engine.WorkerCreator(transformers, sink),
+					WorkerCreator:   engine.WorkerCreator(transformers, []types.Sink{sink}),
 				}
 
 				source := journal.New(journalConfig)

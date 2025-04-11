@@ -552,7 +552,7 @@ func createOtelLogs(opts *ServiceOpts, store storage.Store, health *cluster.Heal
 	}
 
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
-		WorkerCreator: engine.WorkerCreator(transformers, sink),
+		WorkerCreator: engine.WorkerCreator(transformers, []types.Sink{sink}),
 		HealthChecker: health,
 	})
 
