@@ -33,6 +33,7 @@ func TestTailSourceStaticTargets(t *testing.T) {
 
 	// Expect 2x numLogs, for both files
 	sink := sinks.NewCountingSink(int64(numLogs * 2))
+	allSinks := []types.Sink{sink}
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets: []FileTailTarget{
 			{
@@ -50,13 +51,13 @@ func TestTailSourceStaticTargets(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 	require.NoError(t, err)
 
 	service := &logs.Service{
 		Source: tailSource,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	context := context.Background()
 
@@ -102,6 +103,7 @@ func TestTailSourcePartialLogs(t *testing.T) {
 	file.Close()
 
 	sink := sinks.NewCountingSink(int64(5))
+	allSinks := []types.Sink{sink}
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets: []FileTailTarget{
 			{
@@ -113,13 +115,13 @@ func TestTailSourcePartialLogs(t *testing.T) {
 			},
 		},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 	require.NoError(t, err)
 
 	service := &logs.Service{
 		Source: tailSource,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	context := context.Background()
 
@@ -146,16 +148,17 @@ func TestTailSourceDynamicTargets(t *testing.T) {
 
 	// Expect 2x numLogs, for both files
 	sink := sinks.NewCountingSink(int64(numLogs * 2))
+	allSinks := []types.Sink{sink}
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets:   []FileTailTarget{},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 	require.NoError(t, err)
 
 	service := &logs.Service{
 		Source: tailSource,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	context := context.Background()
 
@@ -228,16 +231,17 @@ func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
 
 	// -------- Setup first run, reading the first half of the logs --------
 	sink := sinks.NewCountingSink(int64(numLogs))
+	allSinks := []types.Sink{sink}
 	tailSource, err := NewTailSource(TailSourceConfig{
 		StaticTargets:   []FileTailTarget{},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 	require.NoError(t, err)
 
 	service := &logs.Service{
 		Source: tailSource,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	ctx := context.Background()
 
@@ -264,16 +268,17 @@ func TestTailSourceDynamicUtilizesCursors(t *testing.T) {
 	defer f.Close()
 	writeLogs(t, f, numLogsTwo, generatedLogStartTime, time.Millisecond*10)
 	sink = sinks.NewCountingSink(int64(numLogsTwo))
+	allSinks = []types.Sink{sink}
 	tailSource, err = NewTailSource(TailSourceConfig{
 		StaticTargets:   []FileTailTarget{},
 		CursorDirectory: testDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 	require.NoError(t, err)
 
 	service = &logs.Service{
 		Source: tailSource,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	ctx = context.Background()
 
@@ -305,6 +310,7 @@ func BenchmarkTailSource(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		sink := sinks.NewCountingSink(int64(numLogs))
+		allSinks := []types.Sink{sink}
 		tailSource, err := NewTailSource(TailSourceConfig{
 			StaticTargets: []FileTailTarget{
 				{
@@ -315,13 +321,13 @@ func BenchmarkTailSource(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
-			WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+			WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 		})
 		require.NoError(b, err)
 
 		service := &logs.Service{
 			Source: tailSource,
-			Sink:   sink,
+			Sinks:  allSinks,
 		}
 		context := context.Background()
 
@@ -344,6 +350,7 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Expect 2x numLogs, for both files
 		sink := sinks.NewCountingSink(int64(numLogs * 2))
+		allSinks := []types.Sink{sink}
 		tailSource, err := NewTailSource(TailSourceConfig{
 			StaticTargets: []FileTailTarget{
 				{
@@ -360,13 +367,13 @@ func BenchmarkTailSourceMultipleSources(b *testing.B) {
 				},
 			},
 			CursorDirectory: b.TempDir(),
-			WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+			WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 		})
 		require.NoError(b, err)
 
 		service := &logs.Service{
 			Source: tailSource,
-			Sink:   sink,
+			Sinks:  allSinks,
 		}
 		context := context.Background()
 

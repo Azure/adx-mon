@@ -585,9 +585,10 @@ func realMain(ctx *cli.Context) error {
 
 			tailSourceConfig.StaticTargets = staticTargets
 			tailSourceConfig.CursorDirectory = cfg.StorageDir
+			sinks := []types.Sink{sink}
 			workerCreator := engine.WorkerCreator(
 				transformers,
-				[]types.Sink{sink},
+				sinks,
 			)
 			tailSourceConfig.WorkerCreator = workerCreator
 
@@ -599,7 +600,7 @@ func realMain(ctx *cli.Context) error {
 			return &logs.Service{
 				Source:     source,
 				Transforms: transformers,
-				Sink:       sink,
+				Sinks:      sinks,
 			}, nil
 		}
 
@@ -632,8 +633,9 @@ func realMain(ctx *cli.Context) error {
 					})
 				}
 
+				sinks := []types.Sink{sink}
 				kernelSourceConfig := kernel.KernelSourceConfig{
-					WorkerCreator:   engine.WorkerCreator(transforms, []types.Sink{sink}),
+					WorkerCreator:   engine.WorkerCreator(transforms, sinks),
 					CursorDirectory: cfg.StorageDir,
 					Targets:         targets,
 				}
@@ -646,7 +648,7 @@ func realMain(ctx *cli.Context) error {
 				return &logs.Service{
 					Source:     source,
 					Transforms: transforms,
-					Sink:       sink,
+					Sinks:      sinks,
 				}, nil
 			}
 			opts.LogCollectionHandlers = append(opts.LogCollectionHandlers, collector.LogCollectorOpts{
@@ -693,10 +695,12 @@ func realMain(ctx *cli.Context) error {
 						JournalFields:  target.JournalFields,
 					})
 				}
+
+				sinks := []types.Sink{sink}
 				journalConfig := journal.SourceConfig{
 					Targets:         targets,
 					CursorDirectory: cfg.StorageDir,
-					WorkerCreator:   engine.WorkerCreator(transformers, []types.Sink{sink}),
+					WorkerCreator:   engine.WorkerCreator(transformers, sinks),
 				}
 
 				source := journal.New(journalConfig)
@@ -704,7 +708,7 @@ func realMain(ctx *cli.Context) error {
 				return &logs.Service{
 					Source:     source,
 					Transforms: transformers,
-					Sink:       sink,
+					Sinks:      sinks,
 				}, nil
 			}
 

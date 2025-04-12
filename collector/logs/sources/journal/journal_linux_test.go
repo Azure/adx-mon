@@ -45,6 +45,7 @@ func TestJournalE2E(t *testing.T) {
 	}
 
 	sink := sinks.NewCountingSink(int64(numLogs))
+	allSinks := []types.Sink{sink}
 	source := New(SourceConfig{
 		Targets: []JournalTargetConfig{
 			{
@@ -54,12 +55,12 @@ func TestJournalE2E(t *testing.T) {
 			},
 		},
 		CursorDirectory: cursorDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	ctx := context.Background()
 	err := service.Open(ctx)
@@ -81,7 +82,8 @@ func TestJournalE2E(t *testing.T) {
 	}
 
 	// Expect numLogs more logs
-	sink = sinks.NewCountingSink(int64(numLogs))
+	newSink := sinks.NewCountingSink(int64(numLogs))
+	newAllSinks := []types.Sink{newSink}
 	source = New(SourceConfig{
 		Targets: []JournalTargetConfig{
 			{
@@ -92,22 +94,22 @@ func TestJournalE2E(t *testing.T) {
 			},
 		},
 		CursorDirectory: cursorDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, newAllSinks),
 	})
 
 	service = &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  newAllSinks,
 	}
 	ctx = context.Background()
 	err = service.Open(ctx)
 	require.NoError(t, err)
 	defer service.Close()
-	<-sink.DoneChan()
-	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
+	<-newSink.DoneChan()
+	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), types.StringOrEmpty(newSink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Ensure the systemd unit identifier is set
-	resource, ok := sink.Latest().GetResourceValue(sdjournal.SD_JOURNAL_FIELD_EXE)
+	resource, ok := newSink.Latest().GetResourceValue(sdjournal.SD_JOURNAL_FIELD_EXE)
 	require.True(t, ok)
 	require.NotEmpty(t, resource)
 }
@@ -157,6 +159,7 @@ func TestJournalMulipleSources(t *testing.T) {
 	})
 
 	sink := sinks.NewCountingSink(int64(numLogs * 2)) // both sources send numLogs
+	allSinks := []types.Sink{sink}
 	source := New(SourceConfig{
 		Targets: []JournalTargetConfig{
 			{
@@ -171,12 +174,12 @@ func TestJournalMulipleSources(t *testing.T) {
 			},
 		},
 		CursorDirectory: cursorDir,
-		WorkerCreator:   engine.WorkerCreator(nil, []types.Sink{sink}),
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 	})
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 	ctx := context.Background()
 	err := service.Open(ctx)
