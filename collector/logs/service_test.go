@@ -26,7 +26,7 @@ func BenchmarkPipeline(b *testing.B) {
 
 		service := &logs.Service{
 			Source: source,
-			Sink:   sink,
+			Sinks:  []types.Sink{sink},
 		}
 		context := context.Background()
 
@@ -44,7 +44,7 @@ func TestPipeline(t *testing.T) {
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  []types.Sink{sink},
 	}
 	context := context.Background()
 
@@ -75,7 +75,7 @@ func TestLifecycle(t *testing.T) {
 	service := &logs.Service{
 		Source:     source,
 		Transforms: transforms,
-		Sink:       sink,
+		Sinks:      []types.Sink{sink},
 	}
 	context := context.Background()
 
@@ -156,7 +156,6 @@ func (s *sourceSendOnClose) Close() error {
 	})
 	s.outputQueue <- batch
 	close(s.outputQueue)
-
 	s.wg.Wait()
 	return nil
 }

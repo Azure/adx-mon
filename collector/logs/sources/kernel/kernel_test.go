@@ -44,9 +44,9 @@ func TestKernelSource(t *testing.T) {
 
 	// Set up source with mock reader
 	sink := sinks.NewCountingSink(numLogs)
-	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
+	allSinks := []types.Sink{sink}
 	source, err := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   workerCreator,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -60,7 +60,7 @@ func TestKernelSource(t *testing.T) {
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 
 	ctx := context.Background()
@@ -108,9 +108,9 @@ func TestKernelSourceWithOffset(t *testing.T) {
 
 	// Set up source with mock reader
 	sink := sinks.NewCountingSink(int64(processed))
-	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
+	allSinks := []types.Sink{sink}
 	source, err := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   workerCreator,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -124,7 +124,7 @@ func TestKernelSourceWithOffset(t *testing.T) {
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 
 	ctx := context.Background()
@@ -189,9 +189,9 @@ func TestKernelSourceWithMultipleTargets(t *testing.T) {
 
 	// Set up source with mock reader
 	sink := sinks.NewCountingSink(3)
-	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
+	allSinks := []types.Sink{sink}
 	source, err := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   workerCreator,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -210,7 +210,7 @@ func TestKernelSourceWithMultipleTargets(t *testing.T) {
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 
 	ctx := context.Background()
@@ -233,9 +233,9 @@ func BenchmarkKernelSource(b *testing.B) {
 	}
 
 	sink := sinks.NewCountingSink(int64(b.N))
-	workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
+	allSinks := []types.Sink{sink}
 	source, _ := NewKernelSource(KernelSourceConfig{
-		WorkerCreator:   workerCreator,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
 		CursorDirectory: testDir,
 		Targets: []KernelTargetConfig{
 			{
@@ -248,7 +248,7 @@ func BenchmarkKernelSource(b *testing.B) {
 
 	service := &logs.Service{
 		Source: source,
-		Sink:   sink,
+		Sinks:  allSinks,
 	}
 
 	ctx := context.Background()

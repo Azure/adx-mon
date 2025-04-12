@@ -551,15 +551,16 @@ func createOtelLogs(opts *ServiceOpts, store storage.Store, health *cluster.Heal
 		return nil, nil, fmt.Errorf("failed to create store sink: %w", err)
 	}
 
+	sinks := []types.Sink{sink}
 	logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
-		WorkerCreator: engine.WorkerCreator(transformers, []types.Sink{sink}),
+		WorkerCreator: engine.WorkerCreator(transformers, sinks),
 		HealthChecker: health,
 	})
 
 	workerSvc := &logs.Service{
 		Source:     logsSvc,
 		Transforms: transformers,
-		Sink:       sink,
+		Sinks:      sinks,
 	}
 	httpHandler := &http.HttpHandler{
 		Path:    "/v1/logs",
