@@ -64,18 +64,22 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 	for _, sink := range w.Sinks {
 		go func(sink types.Sink) {
 			defer wg.Done()
-
-			err = sink.Send(ctx, batch)
-			if err != nil {
-				logger.Warnf("Failed to send logs to sink %s -> %s: %v", w.SourceName, sink.Name(), err)
-				metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, sink.Name()).Add(float64(len(batch.Logs)))
-				return
-			}
-			metrics.LogsCollectorLogsSent.WithLabelValues(w.SourceName, sink.Name()).Add(float64(len(batch.Logs)))
+			sendToSink(ctx, sink, batch, w.SourceName)
 		}(sink)
 	}
+
 	wg.Wait()
 	disposeBatch(batch)
+}
+
+func sendToSink(ctx context.Context, sink types.Sink, batch *types.LogBatch, sourceName string) {
+	err := sink.Send(ctx, batch)
+	if err != nil {
+		logger.Warnf("Failed to send logs to sink %s -> %s: %v", sourceName, sink.Name(), err)
+		metrics.LogsCollectorLogsDropped.WithLabelValues(sourceName, sink.Name()).Add(float64(len(batch.Logs)))
+		return
+	}
+	metrics.LogsCollectorLogsSent.WithLabelValues(sourceName, sink.Name()).Add(float64(len(batch.Logs)))
 }
 
 func disposeBatch(batch *types.LogBatch) {
