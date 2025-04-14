@@ -340,7 +340,8 @@ func TestSegment_Size(t *testing.T) {
 			require.NoError(t, err)
 
 			for i := 0; i < 100; i++ {
-				n, err := s.Write(context.Background(), []byte(strings.Repeat("a", rand.Intn(8*1024))))
+				// Write random data to the segment, between 1 and 8k+1
+				n, err := s.Write(context.Background(), []byte(strings.Repeat("a", rand.Intn(8*1024)+1)))
 				require.NoError(t, err)
 				require.True(t, n > 0)
 			}
