@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
+	gzip "github.com/klauspost/pgzip"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -377,14 +378,15 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		originalIP = r.RemoteAddr
 	}
 
-	body := reader.NewCounterReader(r.Body)
+	cr := reader.NewCounterReader(r.Body)
+	var body io.ReadCloser = cr
 	defer func() {
 		io.Copy(io.Discard, body)
 
-		metrics.RequestsBytesReceived.Add(float64(body.Count()))
+		metrics.RequestsBytesReceived.Add(float64(cr.Count()))
 		dur := time.Since(start)
 		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
-			logger.Warnf("Slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, body.Count(), filename)
+			logger.Warnf("Slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, cr.Count(), filename)
 		}
 		if err := body.Close(); err != nil {
 			logger.Errorf("Close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
@@ -415,6 +417,18 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "filename is invalid", http.StatusBadRequest)
 		return
+	}
+
+	// If the request is gzipped, create a gzip reader to decompress the body.
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(body)
+		if err != nil {
+			logger.Errorf("Failed to create gzip reader: %s", err.Error())
+			http.Error(w, "Invalid gzip encoding", http.StatusBadRequest)
+			return
+		}
+		defer gzipReader.Close()
+		body = gzipReader
 	}
 
 	n, err := s.store.Import(f, body)

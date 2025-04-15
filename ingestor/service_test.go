@@ -2,6 +2,7 @@ package ingestor
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -169,6 +170,108 @@ func TestService_HandleTransfer_BlockChecksumFailed(t *testing.T) {
 	resp := httptest.NewRecorder()
 	s.HandleTransfer(resp, req)
 	require.Equal(t, http.StatusBadRequest, resp.Code, resp.Body.String())
+}
+
+func TestService_HandleTransfer_GzipEncodedBody(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{
+			importFn: func(filename string, body io.ReadCloser) (int, error) {
+				defer body.Close()
+				data, err := io.ReadAll(body)
+				require.Equal(t, "test data", string(data))
+				if err != nil {
+					return 0, err
+				}
+				if len(data) == 0 {
+					return 0, fmt.Errorf("empty data")
+				}
+				return len(data), nil
+			},
+		},
+	}
+	s.databases = make(map[string]struct{})
+	s.databases["testdb"] = struct{}{}
+
+	data := []byte("test data")
+	var compressedData bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressedData)
+	_, err := gzipWriter.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, gzipWriter.Close())
+
+	body := bytes.NewReader(compressedData.Bytes())
+	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Encoding", "gzip")
+
+	q := req.URL.Query()
+	q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
+	req.URL.RawQuery = q.Encode()
+
+	resp := httptest.NewRecorder()
+
+	s.HandleTransfer(resp, req)
+
+	require.Equal(t, http.StatusAccepted, resp.Code)
+
+}
+
+func TestService_HandleTransfer_InvalidGzipEncoding(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store:  &fakeStore{},
+	}
+	s.databases = make(map[string]struct{})
+	s.databases["testdb"] = struct{}{}
+
+	body := bytes.NewReader([]byte("invalid gzip data"))
+	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Encoding", "gzip")
+
+	q := req.URL.Query()
+	q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
+	req.URL.RawQuery = q.Encode()
+
+	resp := httptest.NewRecorder()
+	s.HandleTransfer(resp, req)
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Contains(t, resp.Body.String(), "Invalid gzip encoding")
+}
+
+func TestService_HandleTransfer_NoGzipHeader(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{healthy: true},
+		store: &fakeStore{
+			importFn: func(filename string, body io.ReadCloser) (int, error) {
+				defer body.Close()
+				data, err := io.ReadAll(body)
+				require.Equal(t, "test data", string(data))
+				if err != nil {
+					return 0, err
+				}
+				if len(data) == 0 {
+					return 0, fmt.Errorf("empty data")
+				}
+				return len(data), nil
+			},
+		},
+	}
+	s.databases = make(map[string]struct{})
+	s.databases["testdb"] = struct{}{}
+
+	body := bytes.NewReader([]byte("test data"))
+	req, err := http.NewRequest("POST", "http://localhost:8080/transfer", body)
+	require.NoError(t, err)
+
+	q := req.URL.Query()
+	q.Add("filename", "testdb_testtable_testschema_1234567890.wal")
+	req.URL.RawQuery = q.Encode()
+
+	resp := httptest.NewRecorder()
+	s.HandleTransfer(resp, req)
+	require.Equal(t, http.StatusAccepted, resp.Code)
 }
 
 type fakeStore struct {
