@@ -26,6 +26,7 @@ func TestService_Open(t *testing.T) {
 			PodInformer:    informer,
 			ScrapeInterval: 10 * time.Second,
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -51,6 +52,7 @@ func TestService_Open_Static(t *testing.T) {
 				{Addr: "http://localhost:8080/metrics"},
 			},
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -77,6 +79,7 @@ func TestService_Open_NoMatchingHost(t *testing.T) {
 				{Addr: "http://localhost:8080/metrics"},
 			},
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -103,6 +106,7 @@ func TestService_Open_NoMetricsAnnotations(t *testing.T) {
 				{Addr: "http://localhost:8080/metrics"},
 			},
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -149,6 +153,7 @@ func TestService_Open_Matching(t *testing.T) {
 				},
 			},
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -205,6 +210,7 @@ func TestService_Open_HostPort(t *testing.T) {
 			NodeName:       "ks8-master-123",
 			ScrapeInterval: 10 * time.Second,
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))
@@ -252,6 +258,7 @@ func TestService_Open_MatchingPort(t *testing.T) {
 				{Addr: "http://localhost:8080/metrics"},
 			},
 		},
+		DisableGzip: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.Open(context.Background()))

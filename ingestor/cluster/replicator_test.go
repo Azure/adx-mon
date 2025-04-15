@@ -25,6 +25,7 @@ func TestReplicator_SuccessfulTransfer(t *testing.T) {
 		SegmentRemover:     &fakeSegmentRemover{},
 		InsecureSkipVerify: true,
 		Hostname:           "node1",
+		DisableGzip:        true,
 	}
 
 	rep, err := NewReplicator(opts)
@@ -68,6 +69,7 @@ func TestReplicator_BadRequestError(t *testing.T) {
 		SegmentRemover:     &fakeSegmentRemover{},
 		InsecureSkipVerify: true,
 		Hostname:           "node1",
+		DisableGzip:        true,
 	}
 
 	rep, err := NewReplicator(opts)
@@ -110,6 +112,7 @@ func TestReplicator_SegmentExistsError(t *testing.T) {
 		SegmentRemover:     &fakeSegmentRemover{},
 		InsecureSkipVerify: true,
 		Hostname:           "node1",
+		DisableGzip:        true,
 	}
 
 	rep, err := NewReplicator(opts)
@@ -152,6 +155,7 @@ func TestReplicator_PeerOverloadedError(t *testing.T) {
 		SegmentRemover:     &fakeSegmentRemover{},
 		InsecureSkipVerify: true,
 		Hostname:           "node1",
+		DisableGzip:        true,
 	}
 
 	rep, err := NewReplicator(opts)
@@ -196,6 +200,7 @@ func TestReplicator_UnknownError(t *testing.T) {
 		SegmentRemover:     &fakeSegmentRemover{},
 		InsecureSkipVerify: true,
 		Hostname:           "node1",
+		DisableGzip:        true,
 	}
 
 	rep, err := NewReplicator(opts)

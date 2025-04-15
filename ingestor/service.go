@@ -23,7 +23,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
-	gzip "github.com/klauspost/pgzip"
+	"github.com/klauspost/compress/gzip"
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -175,6 +175,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Health:                 health,
 		SegmentRemover:         store,
 		MaxTransferConcurrency: opts.MaxTransferConcurrency,
+		DisableGzip:            true,
 	})
 	if err != nil {
 		return nil, err

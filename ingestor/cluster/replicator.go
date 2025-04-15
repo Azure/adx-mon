@@ -33,6 +33,9 @@ type ReplicatorOpts struct {
 	// MaxTransferConcurrency is the maximum number of concurrent transfer requests to in flight at a time.
 	// Default is 5.
 	MaxTransferConcurrency int
+
+	// DisableGzip controls whether the client uses gzip compression for transfer requests.
+	DisableGzip bool
 }
 
 type SegmentRemover interface {
@@ -77,6 +80,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		ResponseHeaderTimeout: 20 * time.Second,
 		DisableHTTP2:          true,
 		DisableKeepAlives:     false,
+		DisableGzip:           opts.DisableGzip,
 	})
 	if err != nil {
 		return nil, err

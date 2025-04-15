@@ -131,6 +131,9 @@ type ServiceOpts struct {
 	// size of segments on the receiving size.  A lower number creates more batches and high remote transfer calls.  If
 	// not specified, the default is 25.
 	MaxBatchSegments int
+
+	// DisableGzip disables gzip compression for the transfer endpoint.
+	DisableGzip bool
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -289,6 +292,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			SegmentRemover:         store,
 			InsecureSkipVerify:     opts.InsecureSkipVerify,
 			MaxTransferConcurrency: opts.MaxTransferConcurrency,
+			DisableGzip:            opts.DisableGzip,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)

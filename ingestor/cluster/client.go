@@ -10,6 +10,8 @@ import (
 	"time"
 
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/klauspost/compress/gzip"
 )
 
 var (
@@ -70,6 +72,9 @@ type ClientOpts struct {
 
 	// DisableKeepAlives controls whether the client disables HTTP keep-alives.
 	DisableKeepAlives bool
+
+	// DisableGzip controls whether the client disables gzip compression.
+	DisableGzip bool
 }
 
 func (c ClientOpts) WithDefaults() ClientOpts {
@@ -130,6 +135,21 @@ func NewClient(opts ClientOpts) (*Client, error) {
 func (c *Client) Write(ctx context.Context, endpoint string, filename string, body io.Reader) error {
 
 	br := bufio.NewReaderSize(body, 4*1024)
+	// Send the body with gzip compression unless the client has that option disabled.
+	if !c.opts.DisableGzip {
+		gzipReader, gzipWriter := io.Pipe()
+		go func() {
+			defer gzipWriter.Close()
+			gzipCompressor := gzip.NewWriter(gzipWriter)
+			defer gzipCompressor.Close()
+			if _, err := io.Copy(gzipCompressor, body); err != nil {
+				if err := gzipWriter.CloseWithError(err); err != nil {
+					logger.Errorf("failed to close gzip writer: %v", err)
+				}
+			}
+		}()
+		br.Reset(gzipReader)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/transfer", endpoint), br)
 	if err != nil {
@@ -138,6 +158,10 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 	params := req.URL.Query()
 	params.Add("filename", filename)
 	req.URL.RawQuery = params.Encode()
+
+	if !c.opts.DisableGzip {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 
 	req.Header.Set("Content-Type", "text/csv")
 	req.Header.Set("User-Agent", "adx-mon")
