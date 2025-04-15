@@ -98,6 +98,7 @@ type Config struct {
 	LiftLabels                []*LiftLabel      `toml:"lift-labels,omitempty" comment:"Global labels to lift from the metric to top level columns"`
 
 	DisableMetricsForwarding bool `toml:"disable-metrics-forwarding,omitempty" comment:"Disable metrics forwarding to endpoints."`
+	DisableGzip              bool `toml:"disable-gzip,omitempty" comment:"Disable gzip compression for transferring segments."`
 
 	// These are global config options that apply to all endpoints.
 	AddAttributes  map[string]string `toml:"add-attributes,omitempty" comment:"Key/value pairs of attributes to add to all logs."`

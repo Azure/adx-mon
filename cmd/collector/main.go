@@ -312,6 +312,7 @@ func realMain(ctx *cli.Context) error {
 		ListenAddr:             cfg.ListenAddr,
 		NodeName:               hostname,
 		Endpoint:               endpoint,
+		DisableGzip:            cfg.DisableGzip,
 		LiftLabels:             sortedLiftedLabels,
 		AddAttributes:          addAttributes,
 		LiftAttributes:         liftAttributes,
