@@ -81,7 +81,8 @@ func TestShutDownRunner_ShutdownNotCalledIfAnnotated(t *testing.T) {
 	assert.True(t, service.ShutdownCalled)
 
 	updatedPod, err := client.CoreV1().Pods(namespace).Get(context.Background(), "test-pod", metav1.GetOptions{})
-	assert.Equal(t, "true", updatedPod.Annotations[SHUTDOWN_COMPLETED])
+	_, ok := updatedPod.Annotations[SHUTDOWN_COMPLETED]
+	assert.Equal(t, true, ok)
 
 }
 

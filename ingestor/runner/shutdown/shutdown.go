@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/types"
 	"net/http"
 	"os"
 	"time"
@@ -60,12 +61,12 @@ func (r *ShutDownRunner) Run(ctx context.Context) error {
 		if err := r.service.Shutdown(timeoutCtx); err != nil {
 			return fmt.Errorf("failed to shutdown the service: %v", err)
 		}
-		
+
 		logger.Infof("Service shutdown completed")
-		//set shutdown-completed annotation
-		pod.Annotations[SHUTDOWN_COMPLETED] = "true"
-		if _, err := r.k8sClient.CoreV1().Pods(namespace).Update(ctx, pod, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("failed to set shutdown-completed annotation: %v", err)
+		// Create a patch to set the shutdown-completed annotation
+		patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, SHUTDOWN_COMPLETED, time.Now().Format(time.RFC3339)))
+		if _, err := r.k8sClient.CoreV1().Pods(namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("failed to patch shutdown-completed annotation: %v", err)
 		}
 	}
 
