@@ -416,7 +416,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	if f == "" {
 		logger.Errorf("Transfer requested with an invalid filename %q", filename)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		http.Error(w, "filename is invalid", http.StatusBadRequest)
+		http.Error(w, "Filename is invalid", http.StatusBadRequest)
 		return
 	}
 
@@ -425,6 +425,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		gzipReader, err := gzip.NewReader(body)
 		if err != nil {
 			logger.Errorf("Failed to create gzip reader: %s", err.Error())
+			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 			http.Error(w, "Invalid gzip encoding", http.StatusBadRequest)
 			return
 		}
@@ -443,7 +444,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
 		logger.Errorf("Transfer requested with checksum error %q from=%s", filename, originalIP)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		http.Error(w, "block checksum verification failed", http.StatusBadRequest)
+		http.Error(w, "Block checksum verification failed", http.StatusBadRequest)
 		return
 	} else if err != nil {
 		logger.Errorf("Failed to import %s: %s from=%s", filename, err.Error(), originalIP)
