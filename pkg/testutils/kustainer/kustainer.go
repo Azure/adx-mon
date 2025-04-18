@@ -250,7 +250,7 @@ func (c *KustainerContainer) ConnectionUrl() string {
 }
 
 func (c *KustainerContainer) CreateDatabase(ctx context.Context, dbName string) error {
-	cb := kusto.NewConnectionStringBuilder(c.endpoint)
+	cb := kusto.NewConnectionStringBuilder(c.ConnectionUrl())
 	client, err := kusto.New(cb)
 	if err != nil {
 		return fmt.Errorf("new kusto client: %w", err)
@@ -309,7 +309,7 @@ func (p IngestionBatchingPolicy) String() string {
 }
 
 func (c *KustainerContainer) SetIngestionBatchingPolicy(ctx context.Context, dbName string, p IngestionBatchingPolicy) error {
-	cb := kusto.NewConnectionStringBuilder(c.endpoint)
+	cb := kusto.NewConnectionStringBuilder(c.ConnectionUrl())
 	client, err := kusto.New(cb)
 	if err != nil {
 		return fmt.Errorf("new kusto client: %w", err)
