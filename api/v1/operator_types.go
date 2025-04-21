@@ -35,26 +35,29 @@ type ADXClusterSpec struct {
 	// +kubebuilder:validation:Required
 	Endpoint string `json:"endpoint"`
 
-	// Connection information for the ADX cluster.
-	// +kubebuilder:validation:Optional
-	Connection *ADXConnectionSpec `json:"connection,omitempty"`
-
 	// Databases in this cluster.
 	// +kubebuilder:validation:Required
 	Databases []ADXDatabaseSpec `json:"databases"`
+
+	// Provision contains configuration for provisioning the Kusto cluster (optional)
+	// +kubebuilder:validation:Optional
+	Provision *ADXClusterProvisionSpec `json:"provision,omitempty"`
 }
 
-// ADXConnectionSpec describes how to connect to an ADX cluster.
-type ADXConnectionSpec struct {
-	// Type of authentication. E.g., "MSI", "token", "key"
-	// +kubebuilder:validation:Enum=MSI;token;key
-	Type string `json:"type"`
-
-	// ClientId for MSI authentication (optional)
-	ClientId string `json:"clientId,omitempty"`
-
-	// TokenSecretRef for token/key authentication (optional)
-	TokenSecretRef *SecretKeyRef `json:"tokenSecretRef,omitempty"`
+// ADXClusterProvisionSpec describes how to provision a Kusto cluster.
+type ADXClusterProvisionSpec struct {
+	// Azure Subscription ID
+	SubscriptionID string `json:"subscriptionId"`
+	// Azure Resource Group
+	ResourceGroup string `json:"resourceGroup"`
+	// Azure Region
+	Region string `json:"region"`
+	// SKU name (e.g. Standard_L8as_v3)
+	SKU string `json:"sku"`
+	// Tier (e.g. Standard)
+	Tier string `json:"tier"`
+	// Managed Identity Client ID for admin assignment (optional)
+	ManagedIdentityClientID string `json:"managedIdentityClientId,omitempty"`
 }
 
 // SecretKeyRef references a key in a Kubernetes Secret.
@@ -123,10 +126,24 @@ type AlerterConfig struct {
 
 const (
 	OperatorCommandConditionOwner  = "operator.adx-mon.azure.com"
+	InitConditionOwner             = "init.adx-mon.azure.com"
 	ADXClusterConditionOwner       = "adxcluster.adx-mon.azure.com"
 	IngestorClusterConditionOwner  = "ingestorcluster.adx-mon.azure.com"
 	CollectorClusterConditionOwner = "collectorcluster.adx-mon.azure.com"
 	AlerterClusterConditionOwner   = "alertercluster.adx-mon.azure.com"
+)
+
+// OperatorServiceReason is the reason for a service's current condition (shared by all managed services)
+type OperatorServiceReason string
+
+const (
+	OperatorServiceReasonNotInstalled OperatorServiceReason = "NotInstalled"
+	OperatorServiceReasonInstalling   OperatorServiceReason = "Installing"
+	OperatorServiceReasonInstalled    OperatorServiceReason = "Installed"
+	OperatorServiceReasonDrifted      OperatorServiceReason = "Drifted"
+	OperatorServiceTerminalError      OperatorServiceReason = "TerminalError"
+	OperatorServiceReasonUnknown      OperatorServiceReason = "Unknown"
+	OperatorServiceReasonNotReady     OperatorServiceReason = "NotReady"
 )
 
 // OperatorStatus defines the observed state of Operator

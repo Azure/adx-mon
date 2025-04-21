@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "clusterName": {
+      "type": "string",
+      "defaultValue": "{{ .Name }}"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.Region }}"
+    },
+    "skuName": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.SKU }}"
+    },
+    "skuTier": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.Tier }}"
+    },
+    "resourceGroup": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.ResourceGroup }}"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.SubscriptionID }}"
+    },
+    "managedIdentityClientId": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.ManagedIdentityClientID }}"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Kusto/clusters",
+      "apiVersion": "2023-01-01",
+      "name": "[parameters('clusterName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('skuName')]",
+        "tier": "[parameters('skuTier')]"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "enableStreamingIngest": false,
+        "enableDiskEncryption": false,
+        "enablePurge": false,
+        "enableSoftDelete": true,
+        "softDeletePeriod": "P7D",
+        "publicNetworkAccess": "Disabled",
+        "virtualNetworkConfiguration": {
+          "subnetId": "[resourceId(parameters('resourceGroup'), 'Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('subnetName'))]"
+        },
+        "managedIdentityClientId": "[parameters('managedIdentityClientId')]"
+      }
+    }
+  ],
+  "outputs": {
+    "clusterFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Kusto/clusters', parameters('clusterName'))).uri]"
+    }
+  }
+}

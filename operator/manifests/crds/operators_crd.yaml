@@ -46,35 +46,6 @@ spec:
                     items:
                       description: ADXClusterSpec describes a single ADX cluster.
                       properties:
-                        connection:
-                          description: Connection information for the ADX cluster.
-                          properties:
-                            clientId:
-                              description: ClientId for MSI authentication (optional)
-                              type: string
-                            tokenSecretRef:
-                              description: TokenSecretRef for token/key authentication
-                                (optional)
-                              properties:
-                                key:
-                                  type: string
-                                name:
-                                  type: string
-                              required:
-                              - key
-                              - name
-                              type: object
-                            type:
-                              description: Type of authentication. E.g., "MSI", "token",
-                                "key"
-                              enum:
-                              - MSI
-                              - token
-                              - key
-                              type: string
-                          required:
-                          - type
-                          type: object
                         databases:
                           description: Databases in this cluster.
                           items:
@@ -107,6 +78,36 @@ spec:
                           description: Name of the ADX cluster.
                           pattern: ^[a-zA-Z0-9_-]+$
                           type: string
+                        provision:
+                          description: Provision contains configuration for provisioning
+                            the Kusto cluster (optional)
+                          properties:
+                            managedIdentityClientId:
+                              description: Managed Identity Client ID for admin assignment
+                                (optional)
+                              type: string
+                            region:
+                              description: Azure Region
+                              type: string
+                            resourceGroup:
+                              description: Azure Resource Group
+                              type: string
+                            sku:
+                              description: SKU name (e.g. Standard_L8as_v3)
+                              type: string
+                            subscriptionId:
+                              description: Azure Subscription ID
+                              type: string
+                            tier:
+                              description: Tier (e.g. Standard)
+                              type: string
+                          required:
+                          - region
+                          - resourceGroup
+                          - sku
+                          - subscriptionId
+                          - tier
+                          type: object
                       required:
                       - databases
                       - endpoint

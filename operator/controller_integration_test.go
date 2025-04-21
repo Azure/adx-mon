@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	corev1 "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -21,7 +22,7 @@ import (
 )
 
 func TestOperatorCRDPhases(t *testing.T) {
-	testutils.IntegrationTest(t)
+	// testutils.IntegrationTest(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -64,17 +65,26 @@ func TestOperatorCRDPhases(t *testing.T) {
 		cancel() // Stop the manager
 		<-done   // Wait for the goroutine to finish
 	})
-	time.Sleep(2 * time.Second)
+	// Wait for cache to sync
+	require.True(t, mgr.GetCache().WaitForCacheSync(ctx), "failed to sync cache")
+
+	// Create namespace first
+	namespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "adx-mon",
+		},
+	}
 
 	// Create a minimal Operator CRD
 	operator := &adxmonv1.Operator{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-operator",
-			Namespace: "default",
+			Name:      "operator",
+			Namespace: "adx-mon",
 		},
 	}
 
 	ctrlClient := mgr.GetClient()
+	require.NoError(t, ctrlClient.Create(ctx, namespace))
 	require.NoError(t, ctrlClient.Create(ctx, operator))
 
 	// Wait for the controller to set the initial phase condition
@@ -87,9 +97,9 @@ func TestOperatorCRDPhases(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		condition := meta.FindStatusCondition(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
-		return condition != nil
-	}, 10*time.Minute, time.Second, "Operator phase should be EnsureKusto")
+		condition := meta.FindStatusCondition(fetched.Status.Conditions, adxmonv1.InitConditionOwner)
+		return condition != nil && condition.Status == metav1.ConditionTrue
+	}, 10*time.Minute, time.Second, "Wait for initial phase condition")
 
 	// Now we'll update the CRD to contain a completed Kusto cluster and ensure the next phase is triggered
 	require.NoError(t, ctrlClient.Get(ctx, types.NamespacedName{
@@ -117,7 +127,7 @@ func TestOperatorCRDPhases(t *testing.T) {
 	}
 	require.NoError(t, ctrlClient.Update(ctx, &fetched))
 
-	// Wait for the controller to set the next phase condition
+	// Wait for ADX cluster to become ready
 	require.Eventually(t, func() bool {
 		err := ctrlClient.Get(ctx, types.NamespacedName{
 			Name:      operator.Name,
@@ -126,24 +136,32 @@ func TestOperatorCRDPhases(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		condition := meta.FindStatusCondition(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
-		if condition == nil {
-			return false
-		}
-		if condition.Status != metav1.ConditionTrue {
-			return false
-		}
+		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
+	}, 10*time.Minute, time.Second, "Wait for ADX cluster to be ready")
 
-		// Now ensure the next phase is set
-		condition = meta.FindStatusCondition(fetched.Status.Conditions, adxmonv1.IngestorClusterConditionOwner)
-		if condition == nil {
+	// Wait for Ingestor to become ready
+	require.Eventually(t, func() bool {
+		err := ctrlClient.Get(ctx, types.NamespacedName{
+			Name:      operator.Name,
+			Namespace: operator.Namespace,
+		}, &fetched)
+		if err != nil {
 			return false
 		}
-		return condition.Status == metav1.ConditionTrue
-	}, 10*time.Minute, time.Second, "Operator phase for Kusto should be complete")
+		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.IngestorClusterConditionOwner)
+	}, 10*time.Minute, time.Second, "Wait for Ingestor to be ready")
 
-	// Optionally, simulate phase progression by updating status and checking next phase
-	// ...future test logic for phase progression...
+	// Wait for Collector to become ready
+	require.Eventually(t, func() bool {
+		err := ctrlClient.Get(ctx, types.NamespacedName{
+			Name:      operator.Name,
+			Namespace: operator.Namespace,
+		}, &fetched)
+		if err != nil {
+			return false
+		}
+		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.CollectorClusterConditionOwner)
+	}, 10*time.Minute, time.Second, "Wait for Collector to be ready")
 }
 
 func StartTestEnv(t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
@@ -155,10 +173,18 @@ func StartTestEnv(t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer
 	testcontainers.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	kubeConfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
+	require.NoError(t, err)
+	t.Logf("Kubeconfig: %s", kubeConfig)
+
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
-	kustoUrl = kustoContainer.ConnectionUrl()
+
+	restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	require.NoError(t, err)
+	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	kustoUrl = "http://kustainer.default.svc.cluster.local:8080"
 
 	opts := kustainer.IngestionBatchingPolicy{
 		MaximumBatchingTimeSpan: 30 * time.Second,

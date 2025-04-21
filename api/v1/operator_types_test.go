@@ -49,8 +49,6 @@ spec:
 	require.Len(t, op.Spec.ADX.Clusters, 1)
 	require.Equal(t, "test-adx", op.Spec.ADX.Clusters[0].Name)
 	require.Equal(t, "https://adx.example.com", op.Spec.ADX.Clusters[0].Endpoint)
-	require.Equal(t, "MSI", op.Spec.ADX.Clusters[0].Connection.Type)
-	require.Equal(t, "test-client", op.Spec.ADX.Clusters[0].Connection.ClientId)
 	require.Len(t, op.Spec.ADX.Clusters[0].Databases, 1)
 	require.Equal(t, "Metrics", op.Spec.ADX.Clusters[0].Databases[0].Name)
 	require.Equal(t, DatabaseTelemetryMetrics, op.Spec.ADX.Clusters[0].Databases[0].TelemetryType)
