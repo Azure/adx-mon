@@ -9,7 +9,57 @@ import (
 	"github.com/tinylib/msgp/msgp"
 )
 
-func BenchmarkMsgp(b *testing.B) {
+func TestNewLogToFluentExporter(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination string
+		tagAttr     string
+		expectErr   bool
+	}{
+		{
+			name:        "valid tcp",
+			destination: "tcp://localhost:24224",
+			tagAttr:     "log_tag",
+			expectErr:   false,
+		},
+		{
+			name:        "valid unix",
+			destination: "unix:///tmp/fluent.sock",
+			tagAttr:     "log_tag",
+			expectErr:   false,
+		},
+		{
+			name:        "invalid tag attribute",
+			destination: "unix:///tmp/fluent.sock",
+			tagAttr:     "",
+			expectErr:   true,
+		},
+		{
+			name:        "invalid destination",
+			destination: "invalid://localhost:24224",
+			tagAttr:     "log_tag",
+			expectErr:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opts := LogToFluentExporterOpts{
+				Destination:  test.destination,
+				TagAttribute: test.tagAttr,
+			}
+			exporter, err := NewLogToFluentExporter(opts)
+			if test.expectErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, exporter)
+		})
+	}
+}
+
+func BenchmarkEncoder(b *testing.B) {
 	logbatch := types.LogBatch{}
 	logbatch.AddLiterals(testlogs)
 

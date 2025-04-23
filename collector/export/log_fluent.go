@@ -16,7 +16,7 @@ import (
 
 type LogToFluentExporterOpts struct {
 	// Destination is the fluent protocol destination.
-	// It is a string of the form "host:port" or "unix:///path/to/socket"
+	// It is a string of the form "tcp://host:port" or "unix:///path/to/socket"
 	Destination string
 
 	// TagAttribute is the attribute key to extract the fluent tag from.
@@ -26,21 +26,39 @@ type LogToFluentExporterOpts struct {
 
 // LogToFluentExporter exports logs using the fluent-forward protocol
 type LogToFluentExporter struct {
-	destination string
-	encoderPool *sync.Pool
+	destinationNetwork string
+	destination        string
+	encoderPool        *sync.Pool
 
 	conn net.Conn
 }
 
-func NewLogToFluentExporter(opts LogToFluentExporterOpts) *LogToFluentExporter {
+func NewLogToFluentExporter(opts LogToFluentExporterOpts) (*LogToFluentExporter, error) {
+	var destination string
+	var destinationNetwork string
+	if strings.HasPrefix(opts.Destination, "unix://") {
+		destination = strings.TrimPrefix(opts.Destination, "unix://")
+		destinationNetwork = "unix"
+	} else if strings.HasPrefix(opts.Destination, "tcp://") {
+		destination = strings.TrimPrefix(opts.Destination, "tcp://")
+		destinationNetwork = "tcp"
+	} else {
+		return nil, fmt.Errorf("invalid destination %s: must be in the form tcp://<host>:<port> or unix:///path/to/socket", opts.Destination)
+	}
+
+	if opts.TagAttribute == "" {
+		return nil, fmt.Errorf("TagAttribute must be set")
+	}
+
 	return &LogToFluentExporter{
-		destination: opts.Destination,
+		destinationNetwork: destinationNetwork,
+		destination:        destination,
 		encoderPool: &sync.Pool{
 			New: func() interface{} {
 				return newFluentEncoder(opts.TagAttribute)
 			},
 		},
-	}
+	}, nil
 }
 
 func (e *LogToFluentExporter) Open(ctx context.Context) error {
@@ -86,14 +104,7 @@ func (e *LogToFluentExporter) dial(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
 	d.Timeout = 10 * time.Second // Adjust timeout as needed
 
-	// Check if destination starts with "unix://" for Unix domain socket
-	if strings.HasPrefix(e.destination, "unix://") {
-		socketPath := strings.TrimPrefix(e.destination, "unix://")
-		return d.DialContext(ctx, "unix", socketPath)
-	}
-
-	// Default to TCP
-	return d.DialContext(ctx, "tcp", e.destination)
+	return d.DialContext(ctx, e.destinationNetwork, e.destination)
 }
 
 func (e *LogToFluentExporter) Name() string {
