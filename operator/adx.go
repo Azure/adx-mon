@@ -38,8 +38,10 @@ func handleAdxEvent(ctx context.Context, r *Reconciler, operator *adxmonv1.Opera
 }
 
 // getIMDSMetadata queries Azure IMDS for metadata about the current environment
-func getIMDSMetadata(ctx context.Context) (region, subscriptionId, resourceGroup, aksClusterName string, ok bool) {
-	const imdsURL = "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+func getIMDSMetadata(ctx context.Context, imdsURL string) (region, subscriptionId, resourceGroup, aksClusterName string, ok bool) {
+	if imdsURL == "" {
+		imdsURL = "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", imdsURL, nil)
 	if err != nil {
 		return
@@ -154,6 +156,31 @@ func lookupManagedIdentityPrincipalID(ctx context.Context, cred *azidentity.Defa
 	return "", fmt.Errorf("managed identity with client ID %s not found", clientID)
 }
 
+func ensureAdxProvider(ctx context.Context, cred *azidentity.DefaultAzureCredential, subscriptionID string) (bool, error) {
+	// Check if Kusto provider is registered
+	providersClient, err := armresources.NewProvidersClient(subscriptionID, cred, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to create providers client: %w", err)
+	}
+
+	provider, err := providersClient.Get(ctx, "Microsoft.Kusto", nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to get Kusto provider status: %w", err)
+	}
+
+	if provider.RegistrationState != nil && *provider.RegistrationState != "Registered" {
+		logger.Infof("Registering Microsoft.Kusto resource provider...")
+		_, err = providersClient.Register(ctx, "Microsoft.Kusto", nil)
+		if err != nil {
+			return false, fmt.Errorf("failed to register Kusto provider: %w", err)
+		}
+
+		return false, nil // Registration in progress
+	}
+
+	return true, nil
+}
+
 // templateDatabase represents a database in the ARM template
 type templateDatabase struct {
 	Name             string
@@ -170,7 +197,7 @@ func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 	}
 
 	// Get IMDS metadata for defaults
-	imdsRegion, imdsSub, imdsRG, imdsAksName, imdsOK := getIMDSMetadata(ctx)
+	imdsRegion, imdsSub, imdsRG, imdsAksName, imdsOK := getIMDSMetadata(ctx, "")
 
 	// Authenticate early since we need it for SKU selection
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
@@ -262,6 +289,16 @@ func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 			}
 		}
 
+		// Ensure the Kusto resource provider is registered
+		registered, err := ensureAdxProvider(ctx, cred, cluster.Provision.SubscriptionID)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to ensure Kusto provider is registered: %w", err)
+		}
+		if !registered {
+			logger.Infof("Kusto provider is not registered, requeuing...")
+			return ctrl.Result{RequeueAfter: time.Minute}, nil
+		}
+
 		// Load ARM template from manifestsFS
 		tmplBytes, err := manifestsFS.ReadFile("manifests/kusto-cluster-arm.json")
 		if err != nil {
@@ -312,6 +349,27 @@ func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 		}
 
 		deploymentName := fmt.Sprintf("adxmon-%s-%d", cluster.Name, time.Now().Unix())
+
+		// Check if resource group exists and create if needed
+		rgClient, err := armresources.NewResourceGroupsClient(cluster.Provision.SubscriptionID, cred, nil)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to create resource groups client: %w", err)
+		}
+
+		_, err = rgClient.Get(ctx, cluster.Provision.ResourceGroup, nil)
+		if err != nil {
+			logger.Infof("Resource group %s not found, creating...", cluster.Provision.ResourceGroup)
+			_, err = rgClient.CreateOrUpdate(ctx,
+				cluster.Provision.ResourceGroup,
+				armresources.ResourceGroup{
+					Location: to.Ptr(cluster.Provision.Region),
+				},
+				nil)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to create resource group: %w", err)
+			}
+		}
+
 		deployment := armresources.Deployment{
 			Properties: &armresources.DeploymentProperties{
 				Mode:       to.Ptr(armresources.DeploymentModeIncremental),

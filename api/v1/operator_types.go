@@ -4,21 +4,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// OperatorSpec defines the desired state of Operator
-type OperatorSpec struct {
-	// ADX configuration (optional for collector-only clusters)
-	ADX *ADXConfig `json:"adx,omitempty"`
-
-	// Ingestor configuration (optional for collector-only clusters)
-	Ingestor *IngestorConfig `json:"ingestor,omitempty"`
-
-	// Collector configuration
-	Collector *CollectorConfig `json:"collector,omitempty"`
-
-	// Alerter configuration (optional)
-	Alerter *AlerterConfig `json:"alerter,omitempty"`
-}
-
 // ADXConfig holds configuration for one or more ADX clusters.
 type ADXConfig struct {
 	Clusters []ADXClusterSpec `json:"clusters"`
@@ -147,6 +132,21 @@ const (
 	OperatorServiceReasonUnknown      OperatorServiceReason = "Unknown"
 	OperatorServiceReasonNotReady     OperatorServiceReason = "NotReady"
 )
+
+// OperatorSpec defines the desired state of Operator
+type OperatorSpec struct {
+	// ADX configuration (optional for collector-only clusters)
+	ADX *ADXConfig `json:"adx,omitempty"`
+
+	// Ingestor configuration (optional for collector-only clusters)
+	Ingestor *IngestorConfig `json:"ingestor,omitempty"`
+
+	// Collector configuration
+	Collector *CollectorConfig `json:"collector,omitempty"`
+
+	// Alerter configuration (optional)
+	Alerter *AlerterConfig `json:"alerter,omitempty"`
+}
 
 // OperatorStatus defines the observed state of Operator
 type OperatorStatus struct {

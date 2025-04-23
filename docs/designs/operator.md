@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `adx-mon-operator` is a Kubernetes operator responsible for managing the lifecycle of an adx-mon cluster, including its core components (collector, ingestor, alerter) and required Azure infrastructure. The operator leverages [Azure Service Operator (ASO)](https://azure.github.io/azure-service-operator/) to declaratively manage Azure resources such as ADX (Azure Data Explorer) clusters, databases, and other dependencies.
+The `adx-mon-operator` is a Kubernetes operator responsible for managing the lifecycle of an adx-mon cluster, including its core components (collector, ingestor, alerter) and required Azure infrastructure. The operator uses ARM templates for declarative management of Azure resources such as ADX (Azure Data Explorer) clusters and databases.
 
 The operator aims to provide a simple, production-ready bootstrap experience for adx-mon clusters, while supporting advanced customization for complex and federated deployments.
 
@@ -11,8 +11,10 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 ## Responsibilities
 
 - **Azure Infrastructure Management:**  
-  - Declaratively create and manage Azure resources (e.g., ADX clusters) using ASO CRDs.
-  - Wait for ASO-managed resources to reach a ready state before proceeding with dependent adx-mon components.
+  - Declaratively create and manage Azure resources using ARM templates
+  - Built-in resource provider registration and validation
+  - Automatic resource group creation and management
+  - Wait for Azure resources to reach ready state before proceeding
 
 - **adx-mon Component Management:**  
   - Generate and apply manifests for adx-mon components (collector, ingestor, alerter) as Kubernetes resources (e.g., StatefulSets, Deployments, Services).
@@ -32,7 +34,7 @@ The operator aims to provide a simple, production-ready bootstrap experience for
   - Status and conditions are updated at each step to reflect progress and issues.
 
 - **Resource Cleanup on Deletion:**  
-  - When an Operator CRD is deleted, the operator will also delete all managed resources, including ASO CRDs (for ADX clusters and databases) and adx-mon component manifests (ingestor, collector, alerter), ensuring a clean teardown of the stack.
+  - When an Operator CRD is deleted, the operator will also delete all managed resources, including Azure resources (for ADX clusters and databases) and adx-mon component manifests (ingestor, collector, alerter), ensuring a clean teardown of the stack.
 
 ---
 
@@ -80,41 +82,347 @@ The `Operator` CRD is the entry point for managing an adx-mon cluster. It should
 - **Status fields:**  
   - Reflect the current state and subresource conditions (e.g., ADX cluster ready, database ready, ingestor ready, collector ready).
 
-### Example CRD
+---
+
+## ADX Cluster Management
+
+### Auto-Provisioning and Zero-Config Support
+
+The operator supports both fully specified and zero-config deployments:
+
+1. **Zero-Config Mode:**
+   - Uses Azure IMDS to automatically detect:
+     - Region
+     - Subscription ID
+     - Resource Group
+     - AKS cluster name (for naming)
+   - Automatically selects optimal SKU based on regional availability
+   - Creates default databases for metrics and logs
+   - Configures standard retention policies
+
+2. **Infrastructure Preparation:**
+   - Automatically registers the Microsoft.Kusto resource provider if needed
+   - Creates resource group if it doesn't exist
+   - Validates SKU availability in the target region
+
+3. **Default Configuration:**
+   - Default databases: Metrics and Logs
+   - Standard hot cache period: P30D
+   - Standard soft delete period: P30D
+   - Public network access: Disabled
+   - Streaming ingest: Disabled
+
+### ADX Deployment Strategy
+
+The operator currently supports ARM template-based deployment with plans for Azure Service Operator (ASO) integration:
+
+1. **Current: ARM Template-Based Deployment:**
+   - Uses embedded ARM templates for consistent deployment
+   - Supports incremental deployment mode
+   - Dynamic template rendering with Go templates
+   - Parameter inlining for simplified deployment
+   - Built-in output handling for cluster FQDN
+
+2. **Future: ASO-Based Deployment:**
+   - Planned integration with Azure Service Operator
+   - Will use ASO's Kusto CRDs for declarative management
+   - Benefits:
+     - Native Kubernetes resource model
+     - Simplified dependency management
+     - Integration with ASO's identity management
+   - Implementation plan:
+     - Add factory interface for deployment strategy
+     - Support configurable choice between ARM and ASO
+     - Maintain backwards compatibility with ARM templates
+
+3. **Database Configuration (Both Strategies):**
+   - Databases created as part of deployment
+   - Each database configured with:
+     - Kind: ReadWrite
+     - Soft delete period: P30D (30 days)
+     - Hot cache period: P30D (30 days)
+   - Copy-based deployment for multiple databases
+
+4. **Strategy Selection:**
+   - ARM templates: Current default implementation
+   - ASO: Future option via configuration flag
+   - Factory pattern will allow runtime selection
+   - Seamless migration path between strategies
+
+### Managed Identity Integration
+
+The operator supports managed identity configuration:
+
+1. **Identity Assignment:**
+   - System-assigned identity for ADX clusters
+   - Optional user-assigned identity integration
+
+2. **Role Management:**
+   - Automatic role assignment for specified managed identities
+   - Kusto Database Admin role assignment for cluster access
+
+### SKU Selection Strategy
+
+The operator implements a sophisticated SKU selection strategy:
+
+1. **Preferred SKUs (in order):**
+   - Standard_L8as_v3
+   - Standard_L16as_v3
+   - Standard_L32as_v3
+
+2. **Fallback Behavior:**
+   - Validates SKU availability in target region
+   - Falls back to first available Standard tier SKU if preferred not available
+
+### Resource Group Management
+
+The operator handles resource group lifecycle:
+
+1. **Resource Group Creation:**
+   - Checks for resource group existence
+   - Creates if not found using target region
+   - Supports both existing and new resource groups
+
+---
+
+### Status Management
+
+The operator implements a comprehensive status tracking system:
+
+1. **Condition Types:**
+   - InitCondition: Basic CRD setup and validation
+   - ADXClusterCondition: ADX infrastructure state
+   - IngestorClusterCondition: Ingestor deployment state
+   - CollectorClusterCondition: Collector deployment state
+   - AlerterClusterCondition: Alerter deployment state (when enabled)
+
+2. **Status Reason Enumeration:**
+   - NotInstalled: Component needs installation
+   - Installing: Component is being installed/configured
+   - Installed: Component is ready and running
+   - Drifted: Configuration has deviated from spec
+   - TerminalError: Unrecoverable error occurred
+   - NotReady: Component is installed but not ready
+   - Unknown: Status cannot be determined
+
+3. **Resource Readiness Checking:**
+   - StatefulSet: Checks ReadyReplicas against desired replicas
+   - DaemonSet: Checks NumberReady against DesiredNumberScheduled
+   - Deployment: Validates ReadyReplicas matches spec
+   - ADX Cluster: Verifies "Running" state and URI availability
+
+4. **Generation Tracking:**
+   - ObservedGeneration tracks spec changes
+   - Ensures proper reconciliation on updates
+   - Prevents stale status conditions
+
+---
+
+## Autoscaler Design
+
+The operator includes support for automated scaling of both ADX clusters and Ingestor components through a CronJob-based autoscaler. This component periodically evaluates system metrics and adjusts resources accordingly.
+
+### Autoscaler Architecture
+
+1. **Monitored Metrics:**
+   - Ingestion Volume: Rate of data ingestion
+   - System Load: CPU and memory utilization
+   - Queue Length: Backlog of pending data
+   - Custom metrics support via weighting system
+
+2. **Scaling Logic:**
+   - Multi-metric evaluation with configurable weights
+   - Independent scaling of ADX and Ingestor components
+   - Cooldown periods to prevent oscillation
+   - Respects min/max boundaries for nodes/replicas
+
+3. **Configuration Example:**
+```yaml
+spec:
+  autoscaler:
+    enabled: true
+    schedule: "*/5 * * * *"
+    adx:
+      metrics:
+        - type: IngestionVolume
+          scaleUpThreshold: 75.0
+          scaleDownThreshold: 25.0
+          weight: 0.6
+        - type: SystemLoad
+          scaleUpThreshold: 80.0
+          scaleDownThreshold: 30.0
+          weight: 0.4
+      minNodes: 2
+      maxNodes: 10
+      cooldownMinutes: 15
+    ingestor:
+      metrics:
+        - type: QueueLength
+          scaleUpThreshold: 1000
+          scaleDownThreshold: 100
+          weight: 0.7
+        - type: MemoryUsage
+          scaleUpThreshold: 85.0
+          scaleDownThreshold: 40.0
+          weight: 0.3
+      minReplicas: 1
+      maxReplicas: 10
+      cooldownMinutes: 5
+```
+
+### Implementation Strategy
+
+1. **Metric Collection:**
+   - ADX cluster metrics via Azure Monitor
+   - Ingestor metrics via Kubernetes metrics API
+   - Custom metrics via Prometheus endpoints
+
+2. **Scale Decision Algorithm:**
+   ```
+   For each component (ADX/Ingestor):
+   1. Collect all configured metrics
+   2. Calculate weighted score:
+      score = Σ(metric_value * metric_weight)
+   3. If score > scaleUpThreshold:
+      - Scale up by 1 unit if cooldown period elapsed
+   4. If score < scaleDownThreshold:
+      - Scale down by 1 unit if cooldown period elapsed
+   ```
+
+3. **Safety Mechanisms:**
+   - Gradual scaling (one unit at a time)
+   - Cooldown periods between operations
+   - Hard limits on min/max resources
+   - Validation of scaling operations
+
+4. **Status Reporting:**
+   - Last scale operation timestamp
+   - Current metric values
+   - Scale decisions and reasons
+   - Error conditions
+
+The autoscaler provides a robust, configurable solution for maintaining optimal performance while managing resource costs effectively.
+
+---
+
+### Example CRDs
+
+The operator supports configurations ranging from minimal zero-config deployments to fully customized setups.
+
+#### Minimal (Zero-Config) Example
+
+The simplest possible configuration deploys a collector-only setup with all defaults:
 
 ```yaml
 apiVersion: adx-mon.azure.com/v1
 kind: Operator
 metadata:
-  name: adx-mon
+  name: minimal-adx-monitor
+spec:
+  collector: {}  # Empty collector config uses all defaults
+```
+
+This minimal configuration:
+- Uses default container images
+- Deploys collector components with default settings
+- Suitable for testing or development environments
+- Can be expanded incrementally as needs grow
+
+#### Complete (Fully Customized) Example
+
+This example demonstrates all available configuration options:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Operator
+metadata:
+  name: complete-adx-monitor
 spec:
   adx:
     clusters:
-      - name: adx-prod
-        endpoint: "https://adx-prod.eastus.kusto.windows.net"
-        connection:
-          type: MSI
-          clientId: "12345678-1234-1234-1234-123456789abc"
+      - name: prod-metrics
+        endpoint: "https://prod-metrics.kusto.windows.net"
         databases:
-          - name: logsdb
-            telemetryType: Logs      # enum: Logs, Metrics, Traces
-          - name: metricsdb
+          - name: Metrics
             telemetryType: Metrics
+          - name: Logs
+            telemetryType: Logs
+          - name: Traces
+            telemetryType: Traces
+        provision:
+          subscriptionId: "00000000-0000-0000-0000-000000000000"
+          resourceGroup: "adx-monitor-prod"
+          region: "eastus2"
+          sku: "Standard_L8as_v3"
+          tier: "Standard"
+          managedIdentityClientId: "11111111-1111-1111-1111-111111111111"
+
   ingestor:
-    image: ghcr.io/azure/adx-mon/ingestor:latest
+    image: "ghcr.io/azure/adx-mon/ingestor:v1.0.0"
     replicas: 3
+
   collector:
-    image: ghcr.io/azure/adx-mon/collector:latest
-    # If this is a collector-only cluster, specify ingestor connection:
-    ingestorEndpoint: "http://central-ingestor.svc.cluster.local:8080"
+    image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
+    ingestorEndpoint: "http://ingestor.monitoring.svc.cluster.local:8080"
     ingestorAuth:
       type: "token"
       tokenSecretRef:
         name: "ingestor-auth"
         key: "token"
+
   alerter:
-    image: ghcr.io/azure/adx-mon/alerter:latest
+    image: "ghcr.io/azure/adx-mon/alerter:v1.0.0"
 ```
+
+The complete configuration demonstrates:
+- Full ADX cluster configuration with provisioning details
+- Multiple databases with different telemetry types
+- Ingestor configuration with custom replica count
+- Collector configuration with explicit ingestor connection
+- Authentication configuration using Kubernetes secrets
+- Alerter configuration with custom image
+
+These examples can be used as templates and adjusted according to specific requirements. Many fields have default values and are optional.
+
+#### Auto-Provisioning Example
+
+This example demonstrates how the operator can automatically provision ADX clusters when only basic information is provided:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Operator
+metadata:
+  name: auto-provision-adx-monitor
+spec:
+  adx:
+    clusters:
+      - provision:
+          subscriptionId: "00000000-0000-0000-0000-000000000000"
+          resourceGroup: "adx-monitor-prod"
+          region: "eastus2"
+  
+  ingestor:
+    replicas: 2
+  
+  collector:
+    image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
+```
+
+In this configuration:
+- The operator will automatically:
+  - Generate a unique cluster name
+  - Create the ADX cluster in the specified resource group and region
+  - Set up default databases for logs, metrics, and traces
+  - Configure networking and security settings
+  - Apply recommended production-grade defaults for the cluster
+- You only need to specify the Azure subscription details
+- The operator handles all the complexity of ADX cluster provisioning
+- Additional cluster settings can be added later through CRD updates
+
+This approach is ideal for:
+- Getting started quickly with production workloads
+- Teams who want infrastructure-as-code without managing all the details
+- Environments where standard configurations are preferred
 
 #### Collector-Only Cluster Example
 
@@ -163,7 +471,7 @@ spec:
 
 1. **Granular Reconciliation:**  
    - The operator proceeds in incremental steps, updating subresource conditions for each phase:
-     - Upsert ASO-managed ADX clusters.
+     - Upsert Azure-managed ADX clusters.
      - Wait for ADX clusters to be ready.
      - Upsert ADX databases.
      - Wait for databases to be ready.
@@ -187,7 +495,7 @@ spec:
 ## Implementation Notes
 
 - The operator should use controller-runtime's watches and informers to efficiently detect changes to both its own CRD and the managed resources.
-- ASO CRDs are the source of truth for Azure resources; the operator should not attempt to manage Azure resources directly.
+- Azure resources are the source of truth for infrastructure; the operator should not attempt to manage Azure resources directly.
 - The operator should be idempotent and safe to reapply.
 - Subresource conditions should be used to provide granular status and progress reporting.
 - Future versions may support more advanced customization, validation, and upgrade strategies.

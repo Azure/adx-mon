@@ -43,7 +43,7 @@
   "resources": [
     {
       "type": "Microsoft.Kusto/clusters",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2024-04-13",
       "name": "[parameters('clusterName')]",
       "location": "[parameters('location')]",
       "sku": {
@@ -56,15 +56,12 @@
       "properties": {
         "enableStreamingIngest": false,
         "enablePurge": false,
-        "enableSoftDelete": true,
-        "softDeletePeriod": "P7D",
-        "publicNetworkAccess": "Enabled",
-        "managedIdentityClientId": "[parameters('managedIdentityClientId')]"
+        "publicNetworkAccess": "Disabled"
       }
     },
     {
       "type": "Microsoft.Kusto/clusters/databases",
-      "apiVersion": "2023-01-01",
+      "apiVersion": "2024-04-13",
       "name": "[format('{0}/{1}', parameters('clusterName'), parameters('databases')[copyIndex()].name)]",
       "location": "[parameters('location')]",
       "dependsOn": [

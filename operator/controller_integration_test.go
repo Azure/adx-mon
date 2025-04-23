@@ -22,7 +22,7 @@ import (
 )
 
 func TestOperatorCRDPhases(t *testing.T) {
-	// testutils.IntegrationTest(t)
+	testutils.IntegrationTest(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
