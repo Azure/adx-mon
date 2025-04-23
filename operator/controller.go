@@ -24,7 +24,9 @@ var manifestsFS embed.FS
 
 type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme  *runtime.Scheme
+	AdxCtor AdxClusterCreator
+	AdxRdy  AdxClusterReady
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -55,6 +57,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.AdxCtor == nil {
+		r.AdxCtor = ArmAdxCluster
+	}
+	if r.AdxRdy == nil {
+		r.AdxRdy = ArmAdxReady
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.Operator{}).
 		Owns(&appsv1.DaemonSet{}).   // collector

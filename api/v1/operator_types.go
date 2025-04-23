@@ -58,6 +58,8 @@ type ADXClusterProvisionSpec struct {
 	Tier string `json:"tier"`
 	// Managed Identity Client ID for admin assignment (optional)
 	ManagedIdentityClientID string `json:"managedIdentityClientId,omitempty"`
+	// Managed Identity Principal ID (object ID) for admin assignment (derived from client ID)
+	ManagedIdentityPrincipalID string `json:"managedIdentityPrincipalId,omitempty"`
 }
 
 // SecretKeyRef references a key in a Kubernetes Secret.

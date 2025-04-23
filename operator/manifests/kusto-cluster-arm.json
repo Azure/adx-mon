@@ -18,17 +18,26 @@
       "type": "string",
       "defaultValue": "{{ .Provision.Tier }}"
     },
-    "resourceGroup": {
-      "type": "string",
-      "defaultValue": "{{ .Provision.ResourceGroup }}"
-    },
-    "subscriptionId": {
-      "type": "string",
-      "defaultValue": "{{ .Provision.SubscriptionID }}"
-    },
     "managedIdentityClientId": {
       "type": "string",
       "defaultValue": "{{ .Provision.ManagedIdentityClientID }}"
+    },
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "defaultValue": "{{ .Provision.ManagedIdentityPrincipalID }}"
+    },
+    "databases": {
+      "type": "array",
+      "defaultValue": [
+        {{- range .Databases }}
+        {
+          "name": "{{ .Name }}",
+          "kind": "ReadWrite",
+          "softDeletePeriod": "P30D",
+          "hotCachePeriod": "P30D"
+        }{{ if not .Last }},{{ end }}
+        {{- end }}
+      ]
     }
   },
   "resources": [
@@ -46,15 +55,43 @@
       },
       "properties": {
         "enableStreamingIngest": false,
-        "enableDiskEncryption": false,
         "enablePurge": false,
         "enableSoftDelete": true,
         "softDeletePeriod": "P7D",
-        "publicNetworkAccess": "Disabled",
-        "virtualNetworkConfiguration": {
-          "subnetId": "[resourceId(parameters('resourceGroup'), 'Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('subnetName'))]"
-        },
+        "publicNetworkAccess": "Enabled",
         "managedIdentityClientId": "[parameters('managedIdentityClientId')]"
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}', parameters('clusterName'), parameters('databases')[copyIndex()].name)]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters', parameters('clusterName'))]"
+      ],
+      "copy": {
+        "name": "databasesCopy",
+        "count": "[length(parameters('databases'))]"
+      },
+      "kind": "[parameters('databases')[copyIndex()].kind]",
+      "properties": {
+        "softDeletePeriod": "[parameters('databases')[copyIndex()].softDeletePeriod]",
+        "hotCachePeriod": "[parameters('databases')[copyIndex()].hotCachePeriod]"
+      }
+    },
+    {
+      "condition": "[not(empty(parameters('managedIdentityClientId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.Kusto/clusters', parameters('clusterName')), parameters('managedIdentityClientId'), 'KustoDatabaseAdmin')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters', parameters('clusterName'))]"
+      ],
+      "properties": {
+        "principalId": "[parameters('managedIdentityPrincipalId')]",
+        "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', '41805ef3-0583-43c0-b62b-19ecb7da6c9f')]",
+        "principalType": "ServicePrincipal"
       }
     }
   ],

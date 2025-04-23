@@ -26,7 +26,7 @@ func TestOperatorCRDPhases(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	kustoUrl, k3sContainer := StartTestEnv(t)
+	k3sContainer := StartTestEnv(t)
 
 	// Set the controller-runtime logger to use t.Log via testutils.NewTestLogger
 	log.SetLogger(testutils.NewTestLogger(t))
@@ -51,7 +51,12 @@ func TestOperatorCRDPhases(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set up reconciler
-	r := &Reconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}
+	r := &Reconciler{
+		Client:  mgr.GetClient(),
+		Scheme:  mgr.GetScheme(),
+		AdxCtor: KustainerClusterCreator(t, k3sContainer),
+		AdxRdy:  KustainerClusterReady(t),
+	}
 	require.NoError(t, r.SetupWithManager(mgr))
 
 	// Start manager in background
@@ -97,35 +102,8 @@ func TestOperatorCRDPhases(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		condition := meta.FindStatusCondition(fetched.Status.Conditions, adxmonv1.InitConditionOwner)
-		return condition != nil && condition.Status == metav1.ConditionTrue
+		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.InitConditionOwner)
 	}, 10*time.Minute, time.Second, "Wait for initial phase condition")
-
-	// Now we'll update the CRD to contain a completed Kusto cluster and ensure the next phase is triggered
-	require.NoError(t, ctrlClient.Get(ctx, types.NamespacedName{
-		Name:      operator.Name,
-		Namespace: operator.Namespace,
-	}, &fetched),
-	)
-	fetched.Spec.ADX = &adxmonv1.ADXConfig{
-		Clusters: []adxmonv1.ADXClusterSpec{
-			{
-				Name:     "test-cluster",
-				Endpoint: kustoUrl,
-				Databases: []adxmonv1.ADXDatabaseSpec{
-					{
-						Name:          "Metrics",
-						TelemetryType: adxmonv1.DatabaseTelemetryMetrics,
-					},
-					{
-						Name:          "Logs",
-						TelemetryType: adxmonv1.DatabaseTelemetryLogs,
-					},
-				},
-			},
-		},
-	}
-	require.NoError(t, ctrlClient.Update(ctx, &fetched))
 
 	// Wait for ADX cluster to become ready
 	require.Eventually(t, func() bool {
@@ -164,12 +142,11 @@ func TestOperatorCRDPhases(t *testing.T) {
 	}, 10*time.Minute, time.Second, "Wait for Collector to be ready")
 }
 
-func StartTestEnv(t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
+func StartTestEnv(t *testing.T) *k3s.K3sContainer {
 	t.Helper()
 
 	ctx := context.Background()
-	var err error
-	k3sContainer, err = k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
 	require.NoError(t, err)
 
@@ -177,22 +154,80 @@ func StartTestEnv(t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer
 	require.NoError(t, err)
 	t.Logf("Kubeconfig: %s", kubeConfig)
 
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
-	testcontainers.CleanupContainer(t, kustoContainer)
-	require.NoError(t, err)
+	return k3sContainer
+}
 
-	restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
-	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
-	kustoUrl = "http://kustainer.default.svc.cluster.local:8080"
+func KustainerClusterCreator(t *testing.T, k3sContainer *k3s.K3sContainer) AdxClusterCreator {
+	t.Helper()
 
-	opts := kustainer.IngestionBatchingPolicy{
-		MaximumBatchingTimeSpan: 30 * time.Second,
+	return func(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
+		// Create a Kustainer cluster
+		kustainerContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, kustainerContainer)
+		require.NoError(t, err)
+
+		restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
+		require.NoError(t, err)
+		require.NoError(t, kustainerContainer.PortForward(ctx, restConfig))
+
+		opts := kustainer.IngestionBatchingPolicy{
+			MaximumBatchingTimeSpan: 30 * time.Second,
+		}
+		for _, dbName := range []string{"Metrics", "Logs"} {
+			require.NoError(t, kustainerContainer.CreateDatabase(ctx, dbName))
+			require.NoError(t, kustainerContainer.SetIngestionBatchingPolicy(ctx, dbName, opts))
+		}
+
+		operator.Spec.ADX = &adxmonv1.ADXConfig{
+			Clusters: []adxmonv1.ADXClusterSpec{
+				{
+					Name:     "test-cluster",
+					Endpoint: "http://kustainer.default.svc.cluster.local:8080",
+					Databases: []adxmonv1.ADXDatabaseSpec{
+						{
+							Name:          "Metrics",
+							TelemetryType: adxmonv1.DatabaseTelemetryMetrics,
+						},
+						{
+							Name:          "Logs",
+							TelemetryType: adxmonv1.DatabaseTelemetryLogs,
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, r.Update(ctx, operator))
+
+		c := metav1.Condition{
+			Type:               adxmonv1.ADXClusterConditionOwner,
+			Status:             metav1.ConditionUnknown,
+			Reason:             string(adxmonv1.OperatorServiceReasonInstalling),
+			LastTransitionTime: metav1.NewTime(time.Now()),
+			ObservedGeneration: operator.GetGeneration(),
+		}
+		if meta.SetStatusCondition(&operator.Status.Conditions, c) {
+			require.NoError(t, r.Status().Update(ctx, operator))
+		}
+
+		return ctrl.Result{Requeue: true}, nil
 	}
-	for _, dbName := range []string{"Metrics", "Logs"} {
-		require.NoError(t, kustoContainer.CreateDatabase(ctx, dbName))
-		require.NoError(t, kustoContainer.SetIngestionBatchingPolicy(ctx, dbName, opts))
-	}
+}
 
-	return
+func KustainerClusterReady(t *testing.T) AdxClusterReady {
+	t.Helper()
+
+	return func(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
+		c := metav1.Condition{
+			Type:               adxmonv1.ADXClusterConditionOwner,
+			Status:             metav1.ConditionTrue,
+			Reason:             string(adxmonv1.OperatorServiceReasonInstalled),
+			LastTransitionTime: metav1.NewTime(time.Now()),
+			ObservedGeneration: operator.GetGeneration(),
+		}
+		if meta.SetStatusCondition(&operator.Status.Conditions, c) {
+			require.NoError(t, r.Status().Update(ctx, operator))
+		}
+
+		return ctrl.Result{Requeue: true}, nil
+	}
 }

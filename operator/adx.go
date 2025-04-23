@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	kusto "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
+	armmsi "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/msi/armmsi"
 	armresources "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,75 +30,11 @@ type AdxClusterCreator = func(ctx context.Context, r *Reconciler, operator *adxm
 type AdxClusterReady = func(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error)
 
 func handleAdxEvent(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
-	if clustersAreDone(operator) {
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			Reason:             string(adxmonv1.OperatorServiceReasonInstalled),
-			Message:            "All Kusto clusters are ready",
-			LastTransitionTime: metav1.NewTime(time.Now()),
-		}
-		if meta.SetStatusCondition(&operator.Status.Conditions, c) {
-			err := r.Status().Update(ctx, operator)
-			return ctrl.Result{Requeue: true}, err
-		}
-
-		return ctrl.Result{}, nil
-	}
-
-	// TODO Ensure ASO Kusto CRD is created, check its status
-	// or we might just bootstrap ADX ourselves.
-
-	c := metav1.Condition{
-		Type:               adxmonv1.ADXClusterConditionOwner,
-		Status:             metav1.ConditionUnknown,
-		Reason:             string(adxmonv1.OperatorServiceReasonInstalling),
-		Message:            "Ensuring Kusto cluster and database via ASO",
-		LastTransitionTime: metav1.NewTime(time.Now()),
-	}
-	if meta.SetStatusCondition(&operator.Status.Conditions, c) {
-		if err := r.Status().Update(ctx, operator); err != nil {
-			logger.Errorf("Failed to update status: %v", err)
-			return ctrl.Result{}, err
-		}
-	}
-
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
-}
-
-func clustersAreDone(operator *adxmonv1.Operator) bool {
 	condition := meta.FindStatusCondition(operator.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
-	if condition != nil &&
-		condition.Status == metav1.ConditionTrue &&
-		condition.ObservedGeneration == operator.GetGeneration() {
-		// If the condition is true, we can assume the cluster is done
-		return true
-	}
-
-	// If a Kusto cluster already has an endpoint, we denote the cluster as "existing".
-	var allExisting bool
-	if operator.Spec.ADX != nil {
-		for _, cluster := range operator.Spec.ADX.Clusters {
-			if cluster.Endpoint == "" {
-				return false
-			}
-			allExisting = true
-		}
-	}
-	if allExisting {
-		return true
-	}
-
-	// TODO: Check the ASO owned Kusto CRD status
-
-	// If the cluster is not existing, we check if the owner condition is true.
 	if condition == nil {
-		return false
+		return r.AdxCtor(ctx, r, operator)
 	}
-	if condition.Status != metav1.ConditionTrue {
-		return false
-	}
-	return true
+	return r.AdxRdy(ctx, r, operator)
 }
 
 // getIMDSMetadata queries Azure IMDS for metadata about the current environment
@@ -190,6 +127,42 @@ func getBestAvailableSKU(ctx context.Context, subscriptionId string, region stri
 	return "", "", fmt.Errorf("no suitable SKU found in region %s", region)
 }
 
+// lookupManagedIdentityPrincipalID looks up the principal ID (object ID) for a managed identity given its client ID
+func lookupManagedIdentityPrincipalID(ctx context.Context, cred *azidentity.DefaultAzureCredential, subscriptionID, resourceGroup, clientID string) (string, error) {
+	msiClient, err := armmsi.NewUserAssignedIdentitiesClient(subscriptionID, cred, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create managed identities client: %w", err)
+	}
+
+	// List managed identities in the resource group
+	pager := msiClient.NewListByResourceGroupPager(resourceGroup, nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to list managed identities: %w", err)
+		}
+		for _, identity := range page.Value {
+			if identity.Properties != nil && identity.Properties.ClientID != nil && *identity.Properties.ClientID == clientID {
+				if identity.Properties.PrincipalID == nil {
+					return "", fmt.Errorf("managed identity found but principal ID is nil")
+				}
+				return *identity.Properties.PrincipalID, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("managed identity with client ID %s not found", clientID)
+}
+
+// templateDatabase represents a database in the ARM template
+type templateDatabase struct {
+	Name             string
+	Kind             string
+	SoftDeletePeriod string
+	HotCachePeriod   string
+	Last             bool
+}
+
 // ArmAdxCluster creates a Kusto cluster using an ARM template
 func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
 	if operator.Spec.ADX == nil {
@@ -256,6 +229,31 @@ func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 			updated = true
 		}
 
+		// Look up principal ID if managed identity client ID is specified
+		if cluster.Provision.ManagedIdentityClientID != "" && cluster.Provision.ManagedIdentityPrincipalID == "" {
+			principalID, err := lookupManagedIdentityPrincipalID(ctx, cred, cluster.Provision.SubscriptionID, cluster.Provision.ResourceGroup, cluster.Provision.ManagedIdentityClientID)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to look up managed identity principal ID: %w", err)
+			}
+			cluster.Provision.ManagedIdentityPrincipalID = principalID
+			updated = true
+		}
+
+		if len(cluster.Databases) == 0 {
+			// Default to two databases if none specified
+			cluster.Databases = []adxmonv1.ADXDatabaseSpec{
+				{
+					Name:          "Metrics",
+					TelemetryType: adxmonv1.DatabaseTelemetryMetrics,
+				},
+				{
+					Name:          "Logs",
+					TelemetryType: adxmonv1.DatabaseTelemetryLogs,
+				},
+			}
+			updated = true
+		}
+
 		// Persist any changes back to the API server
 		if updated {
 			if err := r.Update(ctx, operator); err != nil {
@@ -276,10 +274,27 @@ func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 
 		// Render template
 		var buf bytes.Buffer
-		err = tmpl.Execute(&buf, map[string]any{
+		templateData := map[string]any{
 			"Name":      cluster.Name,
 			"Provision": cluster.Provision,
-		})
+		}
+
+		// Convert ADXDatabaseSpecs to template databases
+		if len(cluster.Databases) > 0 {
+			templateDbs := make([]templateDatabase, len(cluster.Databases))
+			for i, db := range cluster.Databases {
+				templateDbs[i] = templateDatabase{
+					Name:             db.Name,
+					Kind:             "ReadWrite",
+					SoftDeletePeriod: "P30D",
+					HotCachePeriod:   "P30D",
+					Last:             i == len(cluster.Databases)-1,
+				}
+			}
+			templateData["Databases"] = templateDbs
+		}
+
+		err = tmpl.Execute(&buf, templateData)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to render ARM template: %w", err)
 		}
@@ -319,6 +334,7 @@ func ArmAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 		Reason:             string(adxmonv1.OperatorServiceReasonInstalling),
 		Message:            "Provisioning Kusto clusters",
 		LastTransitionTime: metav1.NewTime(time.Now()),
+		ObservedGeneration: operator.GetGeneration(),
 	}
 	meta.SetStatusCondition(&operator.Status.Conditions, c)
 	if err := r.Status().Update(ctx, operator); err != nil {
@@ -406,6 +422,7 @@ func ArmAdxReady(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator
 			Reason:             string(adxmonv1.OperatorServiceReasonInstalling),
 			Message:            "Waiting for Kusto clusters to be ready",
 			LastTransitionTime: metav1.NewTime(time.Now()),
+			ObservedGeneration: operator.GetGeneration(),
 		}
 		meta.SetStatusCondition(&operator.Status.Conditions, c)
 		if err := r.Status().Update(ctx, operator); err != nil {
