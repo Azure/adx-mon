@@ -19,14 +19,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-//go:embed manifests/*.yaml manifests/**/*.yaml manifests/kusto-cluster-arm.json
+//go:embed manifests/*.yaml manifests/**/*.yaml
 var manifestsFS embed.FS
 
 type Reconciler struct {
 	client.Client
-	Scheme  *runtime.Scheme
-	AdxCtor AdxClusterCreator
-	AdxRdy  AdxClusterReady
+	Scheme    *runtime.Scheme
+	AdxCtor   AdxClusterCreator
+	AdxUpdate AdxClusterCreator
+	AdxRdy    AdxClusterReady
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -58,7 +59,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.AdxCtor == nil {
-		r.AdxCtor = ArmAdxCluster
+		r.AdxCtor = CreateAdxCluster
+	}
+	if r.AdxUpdate == nil {
+		r.AdxUpdate = EnsureAdxClusterConfiguration
 	}
 	if r.AdxRdy == nil {
 		r.AdxRdy = ArmAdxReady
@@ -71,24 +75,38 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func IsStatusConditionTrue(operator *adxmonv1.Operator, conditionType string) bool {
+	if operator == nil {
+		return false
+	}
+	condition := meta.FindStatusCondition(operator.Status.Conditions, conditionType)
+	if condition == nil {
+		return false
+	}
+	if condition.ObservedGeneration != operator.Generation {
+		return false
+	}
+	return condition.Status == metav1.ConditionTrue
+}
+
 func OrchestrateResources(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
 	// Initial bootstrapping phase where we ensure our CRDs are installed.
-	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.InitConditionOwner) {
+	if !IsStatusConditionTrue(operator, adxmonv1.InitConditionOwner) {
 		return handleInitEvent(ctx, r, operator)
 	}
 
 	// Get ADX provisioned and configured
-	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
+	if !IsStatusConditionTrue(operator, adxmonv1.ADXClusterConditionOwner) {
 		return handleAdxEvent(ctx, r, operator)
 	}
 
 	// Install Ingestor and wait for it to be ready
-	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.IngestorClusterConditionOwner) {
+	if !IsStatusConditionTrue(operator, adxmonv1.IngestorClusterConditionOwner) {
 		return IngestorHandler.HandleEvent(ctx, r, nil, operator)
 	}
 
 	// Install Collector and wait for it to be ready
-	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.CollectorClusterConditionOwner) {
+	if !IsStatusConditionTrue(operator, adxmonv1.CollectorClusterConditionOwner) {
 		return CollectorHandler.HandleEvent(ctx, r, nil, operator)
 	}
 

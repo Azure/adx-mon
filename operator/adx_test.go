@@ -128,10 +128,11 @@ func TestArmAdxCluster(t *testing.T) {
 
 	// Create the reconciler
 	r := &Reconciler{
-		Client:  fakeClient, // Use the fake client
-		Scheme:  scheme,
-		AdxCtor: ArmAdxCluster,
-		AdxRdy:  ArmAdxReady,
+		Client:    fakeClient, // Use the fake client
+		Scheme:    scheme,
+		AdxCtor:   CreateAdxCluster,
+		AdxUpdate: EnsureAdxClusterConfiguration,
+		AdxRdy:    ArmAdxReady,
 	}
 
 	// Create a test operator CR
@@ -156,9 +157,9 @@ func TestArmAdxCluster(t *testing.T) {
 		},
 	}
 	require.NoError(t, fakeClient.Create(context.Background(), operator))
-	result, err := ArmAdxCluster(context.Background(), r, operator)
+	result, err := handleAdxEvent(context.Background(), r, operator)
 	require.NoError(t, err)
-	require.False(t, result.IsZero())
+	require.NotNil(t, result)
 
 	t.Cleanup(func() {
 		t.Logf("Cleaning up resources for test: subscription-id=%s, resource-group=%s", subscriptionID, t.Name())
@@ -182,14 +183,6 @@ func TestArmAdxCluster(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		result, err := ArmAdxReady(context.Background(), r, &fetched)
-		if err != nil {
-			return false
-		}
-		if result.IsZero() {
-			return false
-		}
 		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
 	}, 30*time.Minute, time.Minute, "Wait for Kusto to become ready")
-
 }

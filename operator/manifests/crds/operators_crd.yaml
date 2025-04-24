@@ -86,6 +86,10 @@ spec:
                               description: Managed Identity Client ID for admin assignment
                                 (optional)
                               type: string
+                            managedIdentityPrincipalId:
+                              description: Managed Identity Principal ID (object ID)
+                                for admin assignment (derived from client ID)
+                              type: string
                             region:
                               description: Azure Region
                               type: string
