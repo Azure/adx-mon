@@ -248,6 +248,7 @@ func (w *PrometheusRemoteWrite) Validate() error {
 type OtelLog struct {
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	Exporters      []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *OtelLog) Validate() error {
@@ -333,6 +334,7 @@ type HostLog struct {
 	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
 	KernelTargets        []*KernelTarget   `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
 	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	Exporters            []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *HostLog) Validate() error {
@@ -556,18 +558,30 @@ func (c *Config) Validate() error {
 		if err := c.OtelLog.Validate(); err != nil {
 			return err
 		}
+
+		for _, exporterName := range c.OtelLog.Exporters {
+			if !HasLogsExporter(exporterName, c.Exporters) {
+				return fmt.Errorf("otel-log.exporters %q not found", exporterName)
+			}
+		}
 	}
 
 	tailScrapingFromKube := false
-	for _, v := range c.HostLog {
+	for i, v := range c.HostLog {
 		if err := v.Validate(); err != nil {
 			return err
 		}
 		if !v.DisableKubeDiscovery {
 			if tailScrapingFromKube {
-				return errors.New("host-log.disable-kube-discovery not set for more than one HostLog configuration")
+				return fmt.Errorf("host-log[%d].disable-kube-discovery not set for more than one HostLog configuration", i)
 			}
 			tailScrapingFromKube = true
+		}
+
+		for _, exporterName := range v.Exporters {
+			if !HasLogsExporter(exporterName, c.Exporters) {
+				return fmt.Errorf("host-log[%d].exporters %q not found", i, exporterName)
+			}
 		}
 	}
 

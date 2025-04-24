@@ -190,27 +190,177 @@ func TestConfig_ValidateOtelLogs_EmptyAddAttributes(t *testing.T) {
 	require.Equal(t, "otel-log.add-attributes key must be set", c.Validate().Error())
 }
 
-func TestConfig_ValidateConfig_HostLog(t *testing.T) {
-	c := Config{
-		HostLog: []*HostLog{
-			&HostLog{
-				DisableKubeDiscovery: true,
+func TestConfig_ValidateConfig_OtelLog_Exporters(t *testing.T) {
+	type testcase struct {
+		name   string
+		config Config
+		err    string
+	}
+
+	testcases := []testcase{
+		{
+			name: "Success",
+			config: Config{
+				OtelLog: &OtelLog{
+					Exporters: []string{
+						"foo",
+						"bar",
+					},
+				},
+				Exporters: &Exporters{
+					FluentForwardLogExport: []*FluentForwardLogExport{
+						{
+							Name:         "foo",
+							Destination:  "unix:///tmp/fluent.sock",
+							TagAttribute: "foo_log_tag",
+						},
+						{
+							Name:         "bar",
+							Destination:  "unix:///tmp/fluent2.sock",
+							TagAttribute: "bar_log_tag",
+						},
+					},
+				},
 			},
-			&HostLog{},
+		},
+		{
+			name: "Missing exporter",
+			config: Config{
+				OtelLog: &OtelLog{
+					Exporters: []string{
+						"foo",
+						"bar",
+					},
+				},
+				Exporters: &Exporters{
+					FluentForwardLogExport: []*FluentForwardLogExport{
+						{
+							Name:         "foo",
+							Destination:  "unix:///tmp/fluent.sock",
+							TagAttribute: "foo_log_tag",
+						},
+					},
+				},
+			},
+			err: `otel-log.exporters "bar" not found`,
 		},
 	}
 
-	require.NoError(t, c.Validate())
+	for _, tt := range testcases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.err, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
 
-	// Both taillog configs will try to discover Kubernetes pods.
-	c = Config{
-		HostLog: []*HostLog{
-			&HostLog{},
-			&HostLog{},
+func TestConfig_ValidateConfig_HostLog(t *testing.T) {
+	type testcase struct {
+		name   string
+		config Config
+		err    string
+	}
+
+	testcases := []testcase{
+		{
+			name: "Success - single host log with kube discovery enabled",
+			config: Config{
+				HostLog: []*HostLog{
+					&HostLog{
+						DisableKubeDiscovery: true,
+					},
+					&HostLog{},
+				},
+			},
+		},
+		{
+			name: "Failure - multiple host logs with kube discovery enabled",
+			config: Config{
+				HostLog: []*HostLog{
+					&HostLog{},
+					&HostLog{},
+				},
+			},
+			err: "host-log[1].disable-kube-discovery not set for more than one HostLog configuration",
+		},
+		{
+			name: "Success - valid exporters",
+			config: Config{
+				HostLog: []*HostLog{
+					&HostLog{
+						DisableKubeDiscovery: true,
+						Exporters: []string{
+							"foo",
+						},
+					},
+					&HostLog{
+						Exporters: []string{
+							"bar",
+						},
+					},
+				},
+				Exporters: &Exporters{
+					FluentForwardLogExport: []*FluentForwardLogExport{
+						{
+							Name:         "foo",
+							Destination:  "unix:///tmp/fluent.sock",
+							TagAttribute: "foo_log_tag",
+						},
+						{
+							Name:         "bar",
+							Destination:  "unix:///tmp/fluent2.sock",
+							TagAttribute: "bar_log_tag",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Failure - missing exporter",
+			config: Config{
+				HostLog: []*HostLog{
+					&HostLog{
+						DisableKubeDiscovery: true,
+						Exporters: []string{
+							"foo",
+						},
+					},
+					&HostLog{
+						Exporters: []string{
+							"bar",
+						},
+					},
+				},
+				Exporters: &Exporters{
+					FluentForwardLogExport: []*FluentForwardLogExport{
+						{
+							Name:         "foo",
+							Destination:  "unix:///tmp/fluent.sock",
+							TagAttribute: "foo_log_tag",
+						},
+					},
+				},
+			},
+			err: `host-log[1].exporters "bar" not found`,
 		},
 	}
 
-	require.Equal(t, "host-log.disable-kube-discovery not set for more than one HostLog configuration", c.Validate().Error())
+	for _, tt := range testcases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.err != "" {
+				require.Error(t, err)
+				require.Equal(t, tt.err, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestConfig_OtelMetrics(t *testing.T) {
