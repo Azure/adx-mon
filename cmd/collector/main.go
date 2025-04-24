@@ -587,6 +587,15 @@ func realMain(ctx *cli.Context) error {
 			tailSourceConfig.StaticTargets = staticTargets
 			tailSourceConfig.CursorDirectory = cfg.StorageDir
 			sinks := []types.Sink{sink}
+
+			for _, exporterName := range v.Exporters {
+				sink, err := config.GetLogsExporter(exporterName, cfg.Exporters)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get exporter %s: %w", exporterName, err)
+				}
+				sinks = append(sinks, sink)
+			}
+
 			workerCreator := engine.WorkerCreator(
 				transformers,
 				sinks,
@@ -620,10 +629,18 @@ func realMain(ctx *cli.Context) error {
 					return nil, fmt.Errorf("create sink for tailsource: %w", err)
 				}
 
+				transformers := []types.Transformer{}
+				for _, t := range v.Transforms {
+					transform, err := transforms.NewTransform(t.Name, t.Config)
+					if err != nil {
+						return nil, fmt.Errorf("create transform: %w", err)
+					}
+					transformers = append(transformers, transform)
+				}
 				attributeTransform := addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
 				})
-				transforms := []types.Transformer{attributeTransform}
+				transformers = append(transformers, attributeTransform)
 
 				var targets []kernel.KernelTargetConfig
 				for _, target := range v.KernelTargets {
@@ -635,8 +652,16 @@ func realMain(ctx *cli.Context) error {
 				}
 
 				sinks := []types.Sink{sink}
+				for _, exporterName := range v.Exporters {
+					sink, err := config.GetLogsExporter(exporterName, cfg.Exporters)
+					if err != nil {
+						return nil, fmt.Errorf("failed to get exporter %s: %w", exporterName, err)
+					}
+					sinks = append(sinks, sink)
+				}
+
 				kernelSourceConfig := kernel.KernelSourceConfig{
-					WorkerCreator:   engine.WorkerCreator(transforms, sinks),
+					WorkerCreator:   engine.WorkerCreator(transformers, sinks),
 					CursorDirectory: cfg.StorageDir,
 					Targets:         targets,
 				}
@@ -648,7 +673,7 @@ func realMain(ctx *cli.Context) error {
 
 				return &logs.Service{
 					Source:     source,
-					Transforms: transforms,
+					Transforms: transformers,
 					Sinks:      sinks,
 				}, nil
 			}
@@ -698,6 +723,13 @@ func realMain(ctx *cli.Context) error {
 				}
 
 				sinks := []types.Sink{sink}
+				for _, exporterName := range v.Exporters {
+					sink, err := config.GetLogsExporter(exporterName, cfg.Exporters)
+					if err != nil {
+						return nil, fmt.Errorf("failed to get exporter %s: %w", exporterName, err)
+					}
+					sinks = append(sinks, sink)
+				}
 				journalConfig := journal.SourceConfig{
 					Targets:         targets,
 					CursorDirectory: cfg.StorageDir,
