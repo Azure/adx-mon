@@ -4,6 +4,77 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// OperatorSpec defines the desired state of Operator
+type OperatorSpec struct {
+	// Azure authentication configuration (optional)
+	// +optional
+	AzureAuth *AzureAuthConfig `json:"azureAuth,omitempty"`
+
+	// ADX configuration (optional for collector-only clusters)
+	// +optional
+	ADX *ADXConfig `json:"adx,omitempty"`
+
+	// Ingestor configuration (optional for collector-only clusters)
+	// +optional
+	Ingestor *IngestorConfig `json:"ingestor,omitempty"`
+
+	// Collector configuration
+	// +optional
+	Collector *CollectorConfig `json:"collector,omitempty"`
+
+	// Alerter configuration (optional)
+	// +optional
+	Alerter *AlerterConfig `json:"alerter,omitempty"`
+}
+
+// OperatorStatus defines the observed state of Operator
+type OperatorStatus struct {
+	// Conditions is a list of conditions that apply to the Function
+	// +kubebuilder:validation:Optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// AzureAuthType defines the authentication type to use
+type AzureAuthType string
+
+const (
+	// AzureAuthTypeDefault uses DefaultAzureCredential which tries all auth methods
+	AzureAuthTypeDefault AzureAuthType = "Default"
+	// AzureAuthTypeManagedIdentity uses specific managed identity
+	AzureAuthTypeManagedIdentity AzureAuthType = "ManagedIdentity"
+	// AzureAuthTypeServicePrincipal uses service principal credentials
+	AzureAuthTypeServicePrincipal AzureAuthType = "ServicePrincipal"
+)
+
+// AzureAuthConfig defines the Azure authentication configuration
+type AzureAuthConfig struct {
+	// Type of authentication to use
+	// +kubebuilder:validation:Enum=Default;ManagedIdentity;ServicePrincipal
+	// +kubebuilder:default=Default
+	Type AzureAuthType `json:"type"`
+
+	// ManagedIdentityClientID specifies which managed identity to use. Only used when Type is ManagedIdentity.
+	// If not specified, the system-assigned managed identity is used.
+	// +optional
+	ManagedIdentityClientID string `json:"managedIdentityClientId,omitempty"`
+
+	// ServicePrincipal holds service principal credentials. Only used when Type is ServicePrincipal.
+	// +optional
+	ServicePrincipal *AzureServicePrincipalAuth `json:"servicePrincipal,omitempty"`
+}
+
+// AzureServicePrincipalAuth holds service principal authentication details
+type AzureServicePrincipalAuth struct {
+	// TenantID is the Azure AD tenant ID
+	TenantID string `json:"tenantId"`
+
+	// ClientID references a secret containing the client ID
+	ClientID SecretKeyRef `json:"clientId"`
+
+	// ClientSecret references a secret containing the client secret
+	ClientSecret SecretKeyRef `json:"clientSecret"`
+}
+
 // ADXConfig holds configuration for one or more ADX clusters.
 type ADXConfig struct {
 	Clusters []ADXClusterSpec `json:"clusters"`
@@ -132,28 +203,6 @@ const (
 	OperatorServiceReasonUnknown      OperatorServiceReason = "Unknown"
 	OperatorServiceReasonNotReady     OperatorServiceReason = "NotReady"
 )
-
-// OperatorSpec defines the desired state of Operator
-type OperatorSpec struct {
-	// ADX configuration (optional for collector-only clusters)
-	ADX *ADXConfig `json:"adx,omitempty"`
-
-	// Ingestor configuration (optional for collector-only clusters)
-	Ingestor *IngestorConfig `json:"ingestor,omitempty"`
-
-	// Collector configuration
-	Collector *CollectorConfig `json:"collector,omitempty"`
-
-	// Alerter configuration (optional)
-	Alerter *AlerterConfig `json:"alerter,omitempty"`
-}
-
-// OperatorStatus defines the observed state of Operator
-type OperatorStatus struct {
-	// Conditions is a list of conditions that apply to the Function
-	// +kubebuilder:validation:Optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status

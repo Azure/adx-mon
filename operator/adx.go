@@ -11,14 +11,17 @@ import (
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
 	kusto "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
 	armmsi "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/msi/armmsi"
 	armresources "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
+	corev1 "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -44,7 +47,8 @@ func handleAdxEvent(ctx context.Context, r *Reconciler, operator *adxmonv1.Opera
 				return ctrl.Result{}, err
 			}
 		}
-	} else if condition.ObservedGeneration != operator.GetGeneration() {
+	} else if condition.ObservedGeneration != operator.GetGeneration() && condition.Reason == string(adxmonv1.OperatorServiceReasonInstalled) && condition.Status == metav1.ConditionTrue {
+		// If the ADX cluster operation had previously completed successfully, but the config has since been updated, attempt to reconcile cluster state.
 		condition.Status = metav1.ConditionUnknown
 		condition.Reason = string(adxmonv1.OperatorServiceReasonDrifted)
 		condition.ObservedGeneration = operator.GetGeneration()
@@ -132,7 +136,7 @@ var recommendedSKUs = []string{
 }
 
 // getBestAvailableSKU queries Azure for available SKUs and returns the highest priority one
-func getBestAvailableSKU(ctx context.Context, subscriptionId string, region string, cred *azidentity.DefaultAzureCredential) (sku, tier string, err error) {
+func getBestAvailableSKU(ctx context.Context, subscriptionId string, region string, cred azcore.TokenCredential) (sku, tier string, err error) {
 	clustersClient, err := kusto.NewClustersClient(subscriptionId, cred, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create clusters client: %w", err)
@@ -179,7 +183,7 @@ func getBestAvailableSKU(ctx context.Context, subscriptionId string, region stri
 }
 
 // lookupManagedIdentityPrincipalID looks up the principal ID (object ID) for a managed identity given its client ID
-func lookupManagedIdentityPrincipalID(ctx context.Context, cred *azidentity.DefaultAzureCredential, subscriptionID, resourceGroup, clientID string) (string, error) {
+func lookupManagedIdentityPrincipalID(ctx context.Context, cred azcore.TokenCredential, subscriptionID, resourceGroup, clientID string) (string, error) {
 	msiClient, err := armmsi.NewUserAssignedIdentitiesClient(subscriptionID, cred, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create managed identities client: %w", err)
@@ -205,7 +209,7 @@ func lookupManagedIdentityPrincipalID(ctx context.Context, cred *azidentity.Defa
 	return "", fmt.Errorf("managed identity with client ID %s not found", clientID)
 }
 
-func ensureAdxProvider(ctx context.Context, cred *azidentity.DefaultAzureCredential, subscriptionID string) (bool, error) {
+func ensureAdxProvider(ctx context.Context, cred azcore.TokenCredential, subscriptionID string) (bool, error) {
 	// Check if Kusto provider is registered
 	providersClient, err := armresources.NewProvidersClient(subscriptionID, cred, nil)
 	if err != nil {
@@ -236,7 +240,7 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 		return ctrl.Result{}, fmt.Errorf("failed to apply defaults: %w", err)
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getAzureCredential(ctx, r, operator)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get Azure credential: %w", err)
 	}
@@ -329,6 +333,18 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 					Identity: &kusto.Identity{
 						Type: to.Ptr(kusto.IdentityTypeSystemAssigned),
 					},
+					// TODO Support customization of these properties via our CRD
+					Properties: &kusto.ClusterProperties{
+						EnableAutoStop: to.Ptr(false),
+						EngineType:     to.Ptr(kusto.EngineTypeV3),
+						OptimizedAutoscale: &kusto.OptimizedAutoscale{
+							IsEnabled: to.Ptr(true),
+							Maximum:   to.Ptr(int32(10)),
+							Minimum:   to.Ptr(int32(2)),
+							Version:   to.Ptr(int32(1)),
+						},
+					},
+					// TODO support Zones
 				},
 				nil,
 			)
@@ -349,6 +365,15 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 				}
 			}
 			return ctrl.Result{RequeueAfter: time.Minute}, nil
+		} else {
+			// Must wait for the cluster to be ready before we can create the databases
+			resp, err := clustersClient.Get(ctx, cluster.Provision.ResourceGroup, cluster.Name, nil)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
+			}
+			if resp.Properties == nil || resp.Properties.State == nil || *resp.Properties.State != kusto.StateRunning {
+				return ctrl.Result{RequeueAfter: time.Minute}, nil
+			}
 		}
 
 		// Create databases
@@ -357,6 +382,7 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 			return ctrl.Result{}, fmt.Errorf("failed to create databases client: %w", err)
 		}
 
+		var dbCreated bool
 		for _, db := range cluster.Databases {
 			// Check if database exists
 			available, err := databasesClient.CheckNameAvailability(
@@ -365,6 +391,7 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 				cluster.Name,
 				kusto.CheckNameRequest{
 					Name: to.Ptr(db.Name),
+					Type: to.Ptr(kusto.TypeMicrosoftKustoClustersDatabases),
 				},
 				nil,
 			)
@@ -392,21 +419,25 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 				if err != nil {
 					return ctrl.Result{}, fmt.Errorf("failed to create database: %w", err)
 				}
-				c := metav1.Condition{
-					Type:               adxmonv1.ADXClusterConditionOwner,
-					Status:             metav1.ConditionUnknown,
-					Reason:             string(adxmonv1.OperatorServiceReasonNotInstalled),
-					Message:            fmt.Sprintf("Provisioning ADX cluster %s database %s", cluster.Name, db.Name),
-					LastTransitionTime: metav1.NewTime(time.Now()),
-					ObservedGeneration: operator.GetGeneration(),
-				}
-				if meta.SetStatusCondition(&operator.Status.Conditions, c) {
-					if err := r.Status().Update(ctx, operator); err != nil {
-						return ctrl.Result{}, err
-					}
-				}
-				return ctrl.Result{RequeueAfter: time.Minute}, nil
+				dbCreated = true
 			}
+		}
+
+		if dbCreated {
+			c := metav1.Condition{
+				Type:               adxmonv1.ADXClusterConditionOwner,
+				Status:             metav1.ConditionUnknown,
+				Reason:             string(adxmonv1.OperatorServiceReasonNotInstalled),
+				Message:            fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Name),
+				LastTransitionTime: metav1.NewTime(time.Now()),
+				ObservedGeneration: operator.GetGeneration(),
+			}
+			if meta.SetStatusCondition(&operator.Status.Conditions, c) {
+				if err := r.Status().Update(ctx, operator); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
 	}
 
@@ -427,7 +458,7 @@ func CreateAdxCluster(ctx context.Context, r *Reconciler, operator *adxmonv1.Ope
 }
 
 func EnsureAdxClusterConfiguration(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getAzureCredential(ctx, r, operator)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get Azure credential: %w", err)
 	}
@@ -589,7 +620,7 @@ func ArmAdxReady(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator
 		return ctrl.Result{}, nil
 	}
 
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getAzureCredential(ctx, r, operator)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get Azure credential: %w", err)
 	}
@@ -696,7 +727,7 @@ func applyDefaults(ctx context.Context, r *Reconciler, operator *adxmonv1.Operat
 	imdsRegion, imdsSub, imdsRG, imdsAksName, imdsOK := getIMDSMetadata(ctx, "")
 
 	// Authenticate early since we need it for SKU selection
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := getAzureCredential(ctx, r, operator)
 	if err != nil {
 		return fmt.Errorf("failed to get Azure credential: %w", err)
 	}
@@ -814,5 +845,77 @@ func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.D
 		ID:       to.Ptr(fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Kusto/Clusters/%s/databases/%s", subId, rgName, clusterName, dbName)),
 		Name:     to.Ptr(dbName),
 		Type:     to.Ptr("Microsoft.Kusto/Clusters/Databases"),
+	}
+}
+
+func getAzureCredential(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (azcore.TokenCredential, error) {
+	if operator.Spec.AzureAuth == nil {
+		// Use default credentials
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create default credential: %w", err)
+		}
+		return cred, nil
+	}
+
+	switch operator.Spec.AzureAuth.Type {
+	case adxmonv1.AzureAuthTypeDefault:
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create default credential: %w", err)
+		}
+		return cred, nil
+
+	case adxmonv1.AzureAuthTypeManagedIdentity:
+		var opts *azidentity.ManagedIdentityCredentialOptions
+		if operator.Spec.AzureAuth.ManagedIdentityClientID != "" {
+			opts = &azidentity.ManagedIdentityCredentialOptions{
+				ID: azidentity.ClientID(operator.Spec.AzureAuth.ManagedIdentityClientID),
+			}
+		}
+		cred, err := azidentity.NewManagedIdentityCredential(opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create managed identity credential: %w", err)
+		}
+		return cred, nil
+
+	case adxmonv1.AzureAuthTypeServicePrincipal:
+		if operator.Spec.AzureAuth.ServicePrincipal == nil {
+			return nil, fmt.Errorf("service principal auth configured but no credentials provided")
+		}
+
+		// Get client ID from secret
+		var clientIDSecret corev1.Secret
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      operator.Spec.AzureAuth.ServicePrincipal.ClientID.Name,
+			Namespace: operator.Namespace,
+		}, &clientIDSecret); err != nil {
+			return nil, fmt.Errorf("failed to get client ID secret: %w", err)
+		}
+		clientID := string(clientIDSecret.Data[operator.Spec.AzureAuth.ServicePrincipal.ClientID.Key])
+
+		// Get client secret from secret
+		var clientSecretSecret corev1.Secret
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      operator.Spec.AzureAuth.ServicePrincipal.ClientSecret.Name,
+			Namespace: operator.Namespace,
+		}, &clientSecretSecret); err != nil {
+			return nil, fmt.Errorf("failed to get client secret: %w", err)
+		}
+		clientSecret := string(clientSecretSecret.Data[operator.Spec.AzureAuth.ServicePrincipal.ClientSecret.Key])
+
+		cred, err := azidentity.NewClientSecretCredential(
+			operator.Spec.AzureAuth.ServicePrincipal.TenantID,
+			clientID,
+			clientSecret,
+			nil,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create service principal credential: %w", err)
+		}
+		return cred, nil
+
+	default:
+		return nil, fmt.Errorf("unknown auth type: %s", operator.Spec.AzureAuth.Type)
 	}
 }

@@ -176,13 +176,18 @@ func TestArmAdxCluster(t *testing.T) {
 
 	var fetched adxmonv1.Operator
 	require.Eventually(t, func() bool {
-		err := r.Client.Get(context.Background(), types.NamespacedName{
+		err = r.Client.Get(context.Background(), types.NamespacedName{
 			Name:      operator.Name,
 			Namespace: operator.Namespace,
 		}, &fetched)
 		if err != nil {
 			return false
 		}
+
+		result, err := handleAdxEvent(context.Background(), r, &fetched)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
 		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
 	}, 30*time.Minute, time.Minute, "Wait for Kusto to become ready")
 }

@@ -205,16 +205,99 @@ The operator implements a comprehensive status tracking system:
    - NotReady: Component is installed but not ready
    - Unknown: Status cannot be determined
 
-3. **Resource Readiness Checking:**
-   - StatefulSet: Checks ReadyReplicas against desired replicas
-   - DaemonSet: Checks NumberReady against DesiredNumberScheduled
-   - Deployment: Validates ReadyReplicas matches spec
-   - ADX Cluster: Verifies "Running" state and URI availability
+3. **State Transitions:**
 
-4. **Generation Tracking:**
-   - ObservedGeneration tracks spec changes
-   - Ensures proper reconciliation on updates
-   - Prevents stale status conditions
+```mermaid
+stateDiagram-v2
+    [*] --> NotInstalled : CRD Created/Empty Condition
+    NotInstalled --> Installing : Valid spec & shouldInstall()
+    Installing --> Unknown : Transient error
+    Installing --> NotReady : Resources created but not ready
+    Installing --> TerminalError : Unrecoverable error
+    Installing --> Installed : All resources ready & IsReady()
+    NotReady --> Installing : AutoRetry (1min)
+    Installed --> Drifted : ObservedGeneration != Generation
+    Drifted --> Installing : Reconciliation started
+    Unknown --> NotInstalled : Next reconciliation
+    Unknown --> TerminalError : Fatal validation error
+    TerminalError --> [*] : CRD Deleted
+    
+    state Installing {
+        [*] --> ValidatingProviders : Entry
+        ValidatingProviders --> CreatingResources : Providers ready
+        ValidatingProviders --> RetryingProviders : Provider not ready
+        RetryingProviders --> ValidatingProviders : Retry timer
+        CreatingResources --> WaitingForReady : Resources created
+        WaitingForReady --> ConfiguringResources : ADX ready
+        ConfiguringResources --> UpdatingStatus : Components created
+        UpdatingStatus --> [*] : All resources ready
+    }
+    
+    note right of Installing {
+        Substates:
+        - ValidatingProviders: Azure/Kusto provider registration
+        - RetryingProviders: Wait for provider registration
+        - CreatingResources: Deploy ADX/DB/components
+        - WaitingForReady: Check ADX cluster readiness
+        - ConfiguringResources: Deploy app components
+        - UpdatingStatus: Update resource conditions
+    }
+    
+    note left of Drifted {
+        Triggered by:
+        - ObservedGeneration != Generation
+        - Manual resource modifications
+        - UpdateSpec() returns true
+        - Resource state drift detected
+    }
+    
+    note right of NotReady {
+        Conditions:
+        - Resources created but not ready
+        - StatefulSet replicas not ready
+        - DaemonSet pods not ready
+        - ADX cluster not ready
+        Auto-retries every 1 minute
+    }
+    
+    note right of TerminalError {
+        Terminal states:
+        - Invalid configuration
+        - Permission/quota errors 
+        - Unrecoverable Azure failures
+        - Template rendering errors
+        - Resource creation failures
+        No further reconciliation
+    }
+```
+
+**State Transition Triggers:**
+- NotInstalled → Installing: Valid spec, all prerequisites met
+- NotInstalled → TerminalError: Fatal validation or config error
+- Installing → Installed: All managed resources report ready
+- Installing → TerminalError: Unrecoverable error (e.g., Azure failure, invalid config)
+- Installing → NotReady: Resources created but not yet ready (e.g., pods not running)
+- NotReady → Installing: Automatic retry or manual reconciliation
+- Installed → Drifted: Spec generation changes or manual resource edits detected
+- Drifted → Installing: Reconciliation triggered by drift
+- TerminalError: Only leaves this state if spec is updated or CRD is deleted
+- Unknown: Used for indeterminate states, transitions to NotInstalled or TerminalError on next reconciliation
+
+**OperatorServiceReason values reflected in states:**
+- NotInstalled
+- Installing
+- Installed
+- Drifted
+- TerminalError
+- NotReady
+- Unknown
+
+**Control Flow and Status Update Notes:**
+- All state transitions must call setCondition to update status and reason
+- Any return ctrl.Result{}, nil in a non-terminal state without a status update is a bug and should be fixed
+- TerminalError must always be accompanied by a clear status update and message
+- Retryable errors should use Requeue or RequeueAfter to ensure forward progress
+- Generation tracking (ObservedGeneration) ensures reconciliation on spec changes
 
 ---
 

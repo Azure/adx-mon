@@ -128,6 +128,61 @@ spec:
                     description: Image for the alerter container.
                     type: string
                 type: object
+              azureAuth:
+                description: Azure authentication configuration (optional)
+                properties:
+                  managedIdentityClientId:
+                    description: |-
+                      ManagedIdentityClientID specifies which managed identity to use. Only used when Type is ManagedIdentity.
+                      If not specified, the system-assigned managed identity is used.
+                    type: string
+                  servicePrincipal:
+                    description: ServicePrincipal holds service principal credentials.
+                      Only used when Type is ServicePrincipal.
+                    properties:
+                      clientId:
+                        description: ClientID references a secret containing the client
+                          ID
+                        properties:
+                          key:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      clientSecret:
+                        description: ClientSecret references a secret containing the
+                          client secret
+                        properties:
+                          key:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      tenantId:
+                        description: TenantID is the Azure AD tenant ID
+                        type: string
+                    required:
+                    - clientId
+                    - clientSecret
+                    - tenantId
+                    type: object
+                  type:
+                    default: Default
+                    description: Type of authentication to use
+                    enum:
+                    - Default
+                    - ManagedIdentity
+                    - ServicePrincipal
+                    type: string
+                required:
+                - type
+                type: object
               collector:
                 description: Collector configuration
                 properties:

@@ -22,7 +22,7 @@ import (
 )
 
 func TestOperatorCRDPhases(t *testing.T) {
-	testutils.IntegrationTest(t)
+	// testutils.IntegrationTest(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -52,10 +52,11 @@ func TestOperatorCRDPhases(t *testing.T) {
 
 	// Set up reconciler
 	r := &Reconciler{
-		Client:  mgr.GetClient(),
-		Scheme:  mgr.GetScheme(),
-		AdxCtor: KustainerClusterCreator(t, k3sContainer),
-		AdxRdy:  KustainerClusterReady(t),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		AdxCtor:   KustainerClusterCreator(t, k3sContainer),
+		AdxUpdate: KustainerClusterCreator(t, k3sContainer),
+		AdxRdy:    KustainerClusterReady(t),
 	}
 	require.NoError(t, r.SetupWithManager(mgr))
 

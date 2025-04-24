@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"fmt"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -75,39 +76,40 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func IsStatusConditionTrue(operator *adxmonv1.Operator, conditionType string) bool {
-	if operator == nil {
-		return false
-	}
-	condition := meta.FindStatusCondition(operator.Status.Conditions, conditionType)
-	if condition == nil {
-		return false
-	}
-	if condition.ObservedGeneration != operator.Generation {
-		return false
-	}
-	return condition.Status == metav1.ConditionTrue
-}
-
 func OrchestrateResources(ctx context.Context, r *Reconciler, operator *adxmonv1.Operator) (ctrl.Result, error) {
+
 	// Initial bootstrapping phase where we ensure our CRDs are installed.
-	if !IsStatusConditionTrue(operator, adxmonv1.InitConditionOwner) {
+	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.InitConditionOwner) {
 		return handleInitEvent(ctx, r, operator)
 	}
 
 	// Get ADX provisioned and configured
-	if !IsStatusConditionTrue(operator, adxmonv1.ADXClusterConditionOwner) {
+	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
 		return handleAdxEvent(ctx, r, operator)
 	}
 
 	// Install Ingestor and wait for it to be ready
-	if !IsStatusConditionTrue(operator, adxmonv1.IngestorClusterConditionOwner) {
+	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.IngestorClusterConditionOwner) {
 		return IngestorHandler.HandleEvent(ctx, r, nil, operator)
 	}
 
 	// Install Collector and wait for it to be ready
-	if !IsStatusConditionTrue(operator, adxmonv1.CollectorClusterConditionOwner) {
+	if !meta.IsStatusConditionTrue(operator.Status.Conditions, adxmonv1.CollectorClusterConditionOwner) {
 		return CollectorHandler.HandleEvent(ctx, r, nil, operator)
+	}
+
+	c := metav1.Condition{
+		Type:               adxmonv1.OperatorCommandConditionOwner,
+		Status:             metav1.ConditionTrue,
+		Reason:             string(adxmonv1.OperatorServiceReasonInstalled),
+		LastTransitionTime: metav1.NewTime(time.Now()),
+		ObservedGeneration: operator.GetGeneration(),
+	}
+	if meta.SetStatusCondition(&operator.Status.Conditions, c) {
+		if err := r.Status().Update(ctx, operator); err != nil {
+			logger.Errorf("Failed to update status: %v", err)
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{}, nil
@@ -123,6 +125,7 @@ func handleInitEvent(ctx context.Context, r *Reconciler, operator *adxmonv1.Oper
 		Status:             metav1.ConditionTrue,
 		Reason:             string(adxmonv1.OperatorServiceReasonInstalled),
 		LastTransitionTime: metav1.NewTime(time.Now()),
+		ObservedGeneration: operator.GetGeneration(),
 	}
 	if meta.SetStatusCondition(&operator.Status.Conditions, c) {
 		if err := r.Status().Update(ctx, operator); err != nil {
@@ -137,7 +140,7 @@ func InstallCrds(ctx context.Context, r *Reconciler) error {
 	// Install each CRD from manifestsFS under manifests/crds
 	entries, err := manifestsFS.ReadDir("manifests/crds")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read CRD directory: %w", err)
 	}
 
 	for _, entry := range entries {
@@ -146,19 +149,36 @@ func InstallCrds(ctx context.Context, r *Reconciler) error {
 		}
 		crdBytes, err := manifestsFS.ReadFile("manifests/crds/" + entry.Name())
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read CRD file %s: %w", entry.Name(), err)
 		}
 
 		// Unmarshal YAML to unstructured.Unstructured
 		obj := &unstructured.Unstructured{}
 		if err := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(crdBytes), 4096).Decode(obj); err != nil {
-			return err
+			return fmt.Errorf("failed to unmarshal CRD file %s: %w", entry.Name(), err)
 		}
 
-		// Create or update the CRD
-		err = r.Client.Create(ctx, obj)
-		if err != nil && !errors.IsAlreadyExists(err) {
-			return err
+		// Try to get the existing CRD first
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(obj.GroupVersionKind())
+		err = r.Client.Get(ctx, client.ObjectKey{Name: obj.GetName()}, existing)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				// CRD doesn't exist, create it
+				if err := r.Client.Create(ctx, obj); err != nil {
+					return fmt.Errorf("failed to create CRD %s: %w", obj.GetName(), err)
+				}
+				logger.Infof("Created CRD %s", obj.GetName())
+			} else {
+				return fmt.Errorf("failed to get existing CRD %s: %w", obj.GetName(), err)
+			}
+		} else {
+			// CRD exists, update it
+			obj.SetResourceVersion(existing.GetResourceVersion())
+			if err := r.Client.Update(ctx, obj); err != nil {
+				return fmt.Errorf("failed to update CRD %s: %w", obj.GetName(), err)
+			}
+			logger.Infof("Updated CRD %s", obj.GetName())
 		}
 	}
 	return nil
