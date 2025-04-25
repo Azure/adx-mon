@@ -14,8 +14,8 @@ import (
 )
 
 type Exporters struct {
-	OtlpMetricExport       []*OtlpMetricExport       `toml:"otlp-metric-export" comment:"Configuration for exporting metrics to an OTLP/HTTP endpoint."`
-	FluentForwardLogExport []*FluentForwardLogExport `toml:"fluent-forward-log-export" comment:"Configuration for exporting logs to a Fluentd/Fluent Bit endpoint."`
+	OtlpMetricExport       []*OtlpMetricExport       `toml:"otlp-metric-export,omitempty" comment:"Configuration for exporting metrics to an OTLP/HTTP endpoint."`
+	FluentForwardLogExport []*FluentForwardLogExport `toml:"fluent-forward-log-export,omitempty" comment:"Configuration for exporting logs to a Fluentd/Fluent Bit endpoint."`
 }
 
 func (e *Exporters) Validate() error {

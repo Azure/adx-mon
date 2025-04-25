@@ -330,7 +330,7 @@ type HostLog struct {
 	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
 	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
-	StaticPodTargets     []*PodTarget      `toml:"static-pod-target" comment:"Defines a pod target to scrape."`
+	StaticPodTargets     []*PodTarget      `toml:"static-pod-target" comment:"Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver."`
 	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
 	KernelTargets        []*KernelTarget   `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
 	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`

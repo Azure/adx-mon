@@ -34,3 +34,11 @@ jobs:
 
     - name: Test
       run: ENABLE_ASSERTIONS=true go test -race -mod=vendor -v -timeout=30m ./...
+
+    - name: Ensure docs are updated
+      run: |
+        go run tools/docgen/config/config.go
+        if ! git diff --exit-code -- docs/config.md; then
+          echo "docs/config.md is not up to date. Please run 'go run tools/docgen/config/config.go' and commit the changes." >&2
+          exit 1
+        fi
