@@ -26,6 +26,9 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/collector/otlp"
+	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/remote"
@@ -515,6 +518,48 @@ func realMain(ctx *cli.Context) error {
 				DisableMetricsForwarding: disableMetricsForwarding,
 				RemoteWriteClients:       remoteWriteClients,
 			},
+		})
+	}
+
+	if cfg.OtelLog != nil {
+		v := cfg.OtelLog
+		addAttributes := mergeMaps(cfg.AddAttributes, v.AddAttributes)
+
+		createHttpFunc := func(store storage.Store, health *cluster.Health) (*logs.Service, *http.HttpHandler, error) {
+			transformers := []types.Transformer{}
+			if len(addAttributes) > 0 {
+				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
+					ResourceValues: addAttributes,
+				}))
+			}
+
+			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
+				Store: store,
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create store sink: %w", err)
+			}
+
+			sinks := []types.Sink{sink}
+			logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
+				WorkerCreator: engine.WorkerCreator(transformers, sinks),
+				HealthChecker: health,
+			})
+
+			workerSvc := &logs.Service{
+				Source:     logsSvc,
+				Transforms: transformers,
+				Sinks:      sinks,
+			}
+			httpHandler := &http.HttpHandler{
+				Path:    "/v1/logs",
+				Handler: logsSvc.Handler,
+			}
+			return workerSvc, httpHandler, nil
+		}
+
+		opts.HttpLogCollectorOpts = append(opts.HttpLogCollectorOpts, collector.HttpLogCollectorOpts{
+			CreateHTTPSvc: createHttpFunc,
 		})
 	}
 
