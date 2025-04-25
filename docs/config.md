@@ -34,6 +34,8 @@ max-segment-size = 52428800
 max-disk-usage = 53687091200
 # Interval to flush the WAL. (default 100)
 wal-flush-interval-ms = 100
+# Maximum number of concurrent transfers.
+max-transfer-concurrency = 100
 # Storage directory for the WAL and log cursors.
 storage-dir = '/var/lib/adx-mon'
 # Enable pprof endpoints.
@@ -238,6 +240,8 @@ The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/ot
   lift-attributes = [
     'host'
   ]
+  # List of exporter names to forward logs to.
+  exporters = []
 
   # Key/value pairs of attributes to add to all logs.
   [otel-log.add-attributes]
@@ -310,18 +314,14 @@ Available parser types:
 *   **`keyvalue`**: Parses log messages formatted as `key1=value1 key2="quoted value" key3=value3 ...`. It extracts these key-value pairs and adds them to the log body. Keys and values are strings. Values containing spaces should be quoted.
 *   **`space`**: Splits the log message string by whitespace (using `strings.Fields`, which handles multiple spaces, tabs, etc.). Each resulting part is added to the log body with keys named sequentially: `field0`, `field1`, `field2`, and so on. All resulting fields are strings.
 
+
 ```toml
 # Defines a host log scraper.
 [[host-log]]
   # Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery.
-  disable-kube-discovery = false
-  # Defines a list of transforms to apply to log lines.
-  transforms = []
-
-  # Key/value pairs of attributes to add to all logs.
-  [host-log.add-attributes]
-    cluster = 'cluster1'
-    geo = 'eu'
+  disable-kube-discovery = true
+  # List of exporter names to forward logs to.
+  exporters = []
 
   # Defines a tail file target.
   [[host-log.file-target]]
@@ -350,6 +350,23 @@ Available parser types:
       'json'
     ]
 
+  # Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver.
+  [[host-log.static-pod-target]]
+    # The namespace of the pod to scrape.
+    namespace = 'default'
+    # The name of the pod to scrape.
+    name = 'myapp'
+    # The destination to send the logs to.  Syntax matches that of adx-mon/log-destination annotations.
+    destination = 'Logs:MyApp'
+    # Parsers to apply sequentially to the log line.
+    parsers = [
+      'json'
+    ]
+
+    # The labels to match on the pod.  If the pod has all of these labels, it will be scraped.
+    [host-log.static-pod-target.label-targets]
+      app = 'myapp'
+
   # Defines a journal target to scrape.
   [[host-log.journal-target]]
     # Matches for the journal reader based on journalctl MATCHES. To select a systemd unit, use the field _SYSTEMD_UNIT. (e.g. '_SYSTEMD_UNIT=avahi-daemon.service' for selecting logs from the avahi-daemon service.)
@@ -363,12 +380,36 @@ Available parser types:
     table = 'Docker'
     # Parsers to apply sequentially to the log line.
     parsers = []
+    # Optional journal metadata fields http://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html
+    journal-fields = []
+
+  # Defines a kernel target to scrape.
+  [[host-log.kernel-target]]
+    # Database to store logs in.
+    database = 'Logs'
+    # Table to store logs in.
+    table = 'Kernel'
+    # One of emerg, alert, crit, err, warning, notice, info, debug, default is info.
+    priority = 'warning'
+
+  # Defines a list of transforms to apply to log lines.
+  [[host-log.transforms]]
+    # The name of the transform to apply to the log line.
+    name = 'addattributes'
+
+    # The configuration for the transform.
+    [host-log.transforms.config]
+      environment = 'production'
 
 ```
+
 ## Exporters
 
+Exporters are used to send telemetry to external systems in parallel with data sent to Azure Data Explorer. Exporters are per-source type (e.g. Metrics, Logs). Exporters are defined under the top level configuration key `[exporters]` within a key representing the exporter type (e.g. `[exporters.otlp-metric-export]`). They are referenced by their configured `name` in the relevant telemetry collection section.
+### Metric Exporters
 
-Exporters are used to send telemetry to external systems in parallel with data sent to Azure Data Explorer. The collector currently supports sending metrics to [OpenTelemetry OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) endpoints. Exporters are defined under the top level configuration key `exporters`under the exporter type. They are referenced by name in each metric collector.
+
+Metrics currently support exporting to [OpenTelemetry OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) endpoints with `otlp-metric-exporter`. The exporter can be configured to drop metrics by default, and only keep metrics that match a regex or have a specific label and value.
 
 Metric collectors process metrics through their own metric filters and transforms prior to forwarding them to any defined exporters. The exporters then apply their own filters and transforms before sending the metrics to the destination.
 
@@ -460,5 +501,55 @@ Metric collectors process metrics through their own metric filters and transform
     # Key/value pairs of resource attributes to add to all metrics.
     [exporters.otlp-metric-export.add-resource-attributes]
       destination_namespace = 'primary-metrics'
+
+```
+### Log Exporters
+
+
+Logs currently support exporting to [fluent-forward](https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1.5) tcp or unix domain socket endpoints with `fluent-forward-log-export`. This exporter forwards logs to the remote endpoint with a tag based on the value of the attribute `tag-attribute` within the log.
+
+As an example, if 'tag-attribute' is set to 'fluent-output-tag', logs with an attribute of `fluent-output-tag` -> `service-logs` will be emitted with the tag `service-logs`. If the attribute is not present, the log will not be emitted by this exporter.
+
+
+```toml
+# Defines a host log scraper.
+[[host-log]]
+  # Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery.
+  disable-kube-discovery = false
+  # Defines a tail file target.
+  file-target = []
+  # Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver.
+  static-pod-target = []
+  # Defines a journal target to scrape.
+  journal-target = []
+  # Defines a kernel target to scrape.
+  kernel-target = []
+  # Defines a list of transforms to apply to log lines.
+  transforms = []
+  # List of exporter names to forward logs to.
+  exporters = [
+    'fluentd-tcp',
+    'fluentd-unix'
+  ]
+
+# Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.
+# Exporters are declared here and referenced by name in each collection source.
+[exporters]
+  # Configuration for exporting logs to a Fluentd/Fluent Bit endpoint.
+  [[exporters.fluent-forward-log-export]]
+    # Name of the exporter.
+    name = 'fluentd-tcp'
+    # Fluentd/Fluent Bit endpoint to send logs to. Must be in the form tcp://<host>:<port> or unix:///path/to/socket.
+    destination = 'tcp://localhost:24224'
+    # Attribute key to use as the tag for the log. If the attribute is not set, the log will be ignored by this exporter.
+    tag-attribute = 'fluent-output-tag-tcp'
+
+  [[exporters.fluent-forward-log-export]]
+    # Name of the exporter.
+    name = 'fluentd-unix'
+    # Fluentd/Fluent Bit endpoint to send logs to. Must be in the form tcp://<host>:<port> or unix:///path/to/socket.
+    destination = 'unix:///var/run/fluent.sock'
+    # Attribute key to use as the tag for the log. If the attribute is not set, the log will be ignored by this exporter.
+    tag-attribute = 'fluent-output-tag-unix'
 
 ```
