@@ -242,7 +242,7 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 
 	sb.WriteString("'")
 
-	logger.Infof("Creating table %s %s", table, sb.String())
+	logger.Infof("Creating ingestion mapping for table %s %s", table, sb.String())
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
