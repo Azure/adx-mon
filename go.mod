@@ -32,8 +32,8 @@ require (
 	github.com/siderolabs/go-kmsg v0.1.4
 	github.com/stretchr/testify v1.10.0
 	github.com/tenebris-tech/tail v1.0.5
-	github.com/testcontainers/testcontainers-go v0.36.0
-	github.com/testcontainers/testcontainers-go/modules/k3s v0.36.0
+	github.com/testcontainers/testcontainers-go v0.37.0
+	github.com/testcontainers/testcontainers-go/modules/k3s v0.37.0
 	github.com/tinylib/msgp v1.2.5
 	github.com/traefik/yaegi v0.15.1
 	github.com/urfave/cli/v2 v2.27.6
@@ -105,7 +105,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/magiconair/properties v1.8.9 // indirect
+	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/mattn/go-ieproxy v0.0.11 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
