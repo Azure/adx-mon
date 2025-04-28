@@ -318,10 +318,6 @@ github.com/google/go-cmp/cmp/internal/diff
 github.com/google/go-cmp/cmp/internal/flags
 github.com/google/go-cmp/cmp/internal/function
 github.com/google/go-cmp/cmp/internal/value
-# github.com/google/gofuzz v1.2.0
-## explicit; go 1.12
-github.com/google/gofuzz
-github.com/google/gofuzz/bytesource
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
@@ -364,7 +360,7 @@ github.com/lmittmann/tint
 # github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0
 ## explicit; go 1.16
 github.com/lufia/plan9stats
-# github.com/magiconair/properties v1.8.9
+# github.com/magiconair/properties v1.8.10
 ## explicit; go 1.19
 github.com/magiconair/properties
 # github.com/mailru/easyjson v0.9.0
@@ -515,7 +511,7 @@ github.com/tenebris-tech/tail/ratelimiter
 github.com/tenebris-tech/tail/util
 github.com/tenebris-tech/tail/watch
 github.com/tenebris-tech/tail/winfile
-# github.com/testcontainers/testcontainers-go v0.36.0
+# github.com/testcontainers/testcontainers-go v0.37.0
 ## explicit; go 1.23.0
 github.com/testcontainers/testcontainers-go
 github.com/testcontainers/testcontainers-go/exec
@@ -525,7 +521,7 @@ github.com/testcontainers/testcontainers-go/internal/core
 github.com/testcontainers/testcontainers-go/internal/core/network
 github.com/testcontainers/testcontainers-go/log
 github.com/testcontainers/testcontainers-go/wait
-# github.com/testcontainers/testcontainers-go/modules/k3s v0.36.0
+# github.com/testcontainers/testcontainers-go/modules/k3s v0.37.0
 ## explicit; go 1.23.0
 github.com/testcontainers/testcontainers-go/modules/k3s
 # github.com/tinylib/msgp v1.2.5
@@ -768,12 +764,13 @@ k8s.io/api/storagemigration/v1alpha1
 ## explicit; go 1.23.0
 k8s.io/apiextensions-apiserver/pkg/apis/apiextensions
 k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1
-# k8s.io/apimachinery v0.32.3
-## explicit; go 1.23.0
+# k8s.io/apimachinery v0.33.0
+## explicit; go 1.24.0
 k8s.io/apimachinery/pkg/api/equality
 k8s.io/apimachinery/pkg/api/errors
 k8s.io/apimachinery/pkg/api/meta
 k8s.io/apimachinery/pkg/api/meta/testrestmapper
+k8s.io/apimachinery/pkg/api/operation
 k8s.io/apimachinery/pkg/api/resource
 k8s.io/apimachinery/pkg/api/validation
 k8s.io/apimachinery/pkg/apis/meta/internalversion
@@ -1173,7 +1170,7 @@ k8s.io/klog/v2/internal/dbg
 k8s.io/klog/v2/internal/serialize
 k8s.io/klog/v2/internal/severity
 k8s.io/klog/v2/internal/sloghandler
-# k8s.io/kube-openapi v0.0.0-20241212222426-2c72e554b1e7
+# k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
 ## explicit; go 1.21
 k8s.io/kube-openapi/pkg/cached
 k8s.io/kube-openapi/pkg/common
@@ -1246,7 +1243,11 @@ sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics
 ## explicit; go 1.23
 sigs.k8s.io/json
 sigs.k8s.io/json/internal/golang/encoding/json
-# sigs.k8s.io/structured-merge-diff/v4 v4.5.0
+# sigs.k8s.io/randfill v1.0.0
+## explicit; go 1.18
+sigs.k8s.io/randfill
+sigs.k8s.io/randfill/bytesource
+# sigs.k8s.io/structured-merge-diff/v4 v4.6.0
 ## explicit; go 1.13
 sigs.k8s.io/structured-merge-diff/v4/fieldpath
 sigs.k8s.io/structured-merge-diff/v4/merge
