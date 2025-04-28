@@ -146,12 +146,6 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	logger.Infof("Linting rules from path=%s", path)
 
 	lint := NewLinter()
-	http.Handle("/alerts", lint.Handler())
-	fakeaddr := fmt.Sprintf("http://localhost:%d", opts.Port)
-	alertCli, err := alert.NewClient(time.Minute)
-	if err != nil {
-		return err
-	}
 
 	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
 	if err != nil {
@@ -163,8 +157,8 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		return err
 	}
 	executor := engine.NewExecutor(engine.ExecutorOpts{
-		AlertCli:    alertCli,
-		AlertAddr:   fakeaddr,
+		AlertCli:    lint,
+		AlertAddr:   "http://fake.microsoft.com",
 		KustoClient: kclient,
 		RuleStore:   ruleStore,
 		Region:      opts.Region,
