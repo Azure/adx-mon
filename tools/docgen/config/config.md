@@ -13,3 +13,17 @@ Collector is configured with a [TOML-formatted](https://toml.io/) file. In Kuber
 {{ configToToml .Config }}
 ```
 {{- end }}
+
+## Exporters
+
+Exporters are used to send telemetry to external systems in parallel with data sent to Azure Data Explorer. Exporters are per-source type (e.g. Metrics, Logs). Exporters are defined under the top level configuration key `[exporters]` within a key representing the exporter type (e.g. `[exporters.otlp-metric-export]`). They are referenced by their configured `name` in the relevant telemetry collection section.
+
+{{- range .ExporterSections }}
+### {{ .Title }}
+
+{{ .Description }}
+
+```toml
+{{ configToToml .Config }}
+```
+{{- end }}

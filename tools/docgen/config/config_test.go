@@ -10,4 +10,9 @@ func TestConfigValidity(t *testing.T) {
 			t.Errorf("invalid config for section %s: %v", section.Title, err)
 		}
 	}
+	for _, section := range contents.ExporterSections {
+		if err := section.Config.Validate(); err != nil {
+			t.Errorf("invalid config for section %s: %v", section.Title, err)
+		}
+	}
 }
