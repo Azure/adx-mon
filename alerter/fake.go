@@ -93,34 +93,19 @@ func NewLinter() *lintAlertHandler {
 	}
 }
 
-func (lh *lintAlertHandler) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, err := io.ReadAll(r.Body)
-		if err != nil {
-			logger.Errorf("Failed to read request body: %s", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+// Create implements the alert.Client interface for testing purposes.
+// It logs out the type of failure and tracks that we have had failed queries.
+func (lh *lintAlertHandler) Create(ctx context.Context, endpoint string, alert alert.Alert) error {
+	lh.alertCount[alert.CorrelationID]++
+	if len(alert.Title) > icmTitleMaxLength {
+		logger.Errorf("Title Exceeded Max Length: %s", alert.Title)
+		lh.hasFailedQueries = true
+	}
 
-		a := alert.Alert{}
-		if err := json.Unmarshal(b, &a); err != nil {
-			logger.Errorf("Failed to unmarshal request body: %s", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		lh.alertCount[a.CorrelationID]++
-		if len(a.Title) > icmTitleMaxLength {
-			logger.Errorf("Title Exceeded Max Length: %s", a.Title)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		if strings.HasPrefix(a.CorrelationID, "alert-failure") {
-			lh.hasFailedQueries = true
-		}
-
-		w.WriteHeader(http.StatusCreated)
-	})
+	if strings.HasPrefix(alert.CorrelationID, "alert-failure") {
+		lh.hasFailedQueries = true
+	}
+	return nil
 }
 
 func (lh *lintAlertHandler) HasFailedQueries() bool {
