@@ -80,22 +80,28 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 	}
 
 	var podName string
+	// Wait for pod to exist and be running/ready
 	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
 		pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 			LabelSelector: "app=kustainer",
 		})
-		if err != nil {
+		if err != nil || len(pods.Items) == 0 {
 			return false, nil
 		}
-		if len(pods.Items) == 0 {
+		pod := pods.Items[0]
+		if pod.Status.Phase != corev1.PodRunning {
 			return false, nil
 		}
-
-		podName = pods.Items[0].Name
+		for _, cs := range pod.Status.ContainerStatuses {
+			if !cs.Ready {
+				return false, nil
+			}
+		}
+		podName = pod.Name
 		return true, nil
 	})
 	if err != nil {
-		return fmt.Errorf("failed to get pod name: %w", err)
+		return fmt.Errorf("failed to get ready pod: %w", err)
 	}
 
 	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
@@ -108,17 +114,18 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 		return fmt.Errorf("failed create container: %w", err)
 	}
 
-	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-		if err := c.connect(ctx, config, podName); err != nil {
-			return false, nil
+	// Retry port-forward on failure, with backoff
+	var lastErr error
+	for i := range 5 {
+		err = c.connect(ctx, config, podName)
+		if err == nil {
+			return nil
 		}
-		return true, nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to kustainer: %w", err)
+		lastErr = err
+		// Exponential backoff
+		time.Sleep(time.Second * time.Duration(2<<i))
 	}
-
-	return nil
+	return fmt.Errorf("failed to connect to kustainer after retries: %w", lastErr)
 }
 
 func (c *KustainerContainer) Close() error {

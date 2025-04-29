@@ -76,10 +76,29 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	require.NoError(t, err)
 	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
 
-	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
+	// Get k3s node IP
+	k3sIP, err := k3sContainer.ContainerIP(ctx)
 	require.NoError(t, err)
-	t.Logf("Kubeconfig: %s", kubeconfig)
-	t.Logf("Kustainer: %s", kustoContainer.ConnectionUrl())
+
+	// Create a real Kubernetes clientset for Service/NodePort lookup
+	kubeClientset, err := kubernetes.NewForConfig(restConfig)
+	require.NoError(t, err)
+
+	// Get kustainer NodePort
+	svc, err := kubeClientset.CoreV1().Services("default").Get(ctx, "kustainer", metav1.GetOptions{})
+	require.NoError(t, err)
+	var nodePort int32
+	for _, port := range svc.Spec.Ports {
+		if port.Port == 8080 {
+			nodePort = port.NodePort
+			break
+		}
+	}
+	require.NotZero(t, nodePort, "NodePort for kustainer service not found")
+
+	kustoUrl = fmt.Sprintf("http://%s:%d", k3sIP, nodePort)
+	t.Logf("Kubeconfig: %s", kustoUrl)
+	t.Logf("Kustainer: %s", kustoUrl)
 
 	t.Run("Configure Kusto", func(t *testing.T) {
 		opts := kustainer.IngestionBatchingPolicy{
@@ -123,8 +142,7 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		require.NoError(tt, err)
 	})
 
-	kustoUrl = kustoContainer.ConnectionUrl()
-	return
+	return kustoUrl, k3sContainer
 }
 
 func VerifyAlerts(ctx context.Context, t *testing.T, kustainerUrl string, k3sContainer *k3s.K3sContainer) {
