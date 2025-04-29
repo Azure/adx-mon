@@ -1,0 +1,186 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: adxclusters.adx-mon.azure.com
+spec:
+  group: adx-mon.azure.com
+  names:
+    kind: ADXCluster
+    listKind: ADXClusterList
+    plural: adxclusters
+    singular: adxcluster
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: ADXCluster is the Schema for the adxclusters API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ADXClusterSpec defines the desired state of ADXCluster
+            properties:
+              clusterName:
+                description: ClusterName is the unique, valid name for the ADX cluster.
+                  Must match ^[a-zA-Z0-9-]+$ and be at most 100 characters. Used for
+                  resource identification and naming in Azure.
+                maxLength: 100
+                pattern: ^[a-zA-Z0-9-]+$
+                type: string
+              databases:
+                description: Databases is an array of ADXClusterDatabaseSpec objects.
+                  Each object defines a database to be created in the ADX cluster.
+                  If not specified, no databases will be created.
+                items:
+                  properties:
+                    databaseName:
+                      description: ADX valid database name, required
+                      maxLength: 64
+                      minLength: 1
+                      pattern: ^[a-zA-Z0-9_]+$
+                      type: string
+                    retentionInDays:
+                      default: 30
+                      description: default 30, optional
+                      type: integer
+                    retentionPolicy:
+                      description: ADX retention policy, optional
+                      type: string
+                    telemetryType:
+                      description: 'TelemetryType: Required'
+                      enum:
+                      - Metrics
+                      - Logs
+                      - Traces
+                      type: string
+                  required:
+                  - databaseName
+                  - telemetryType
+                  type: object
+                type: array
+              endpoint:
+                description: 'Endpoint is the URI of an existing ADX cluster. If set,
+                  the operator will use this cluster instead of provisioning a new
+                  one. Example: "https://mycluster.kusto.windows.net"'
+                format: uri
+                type: string
+              provision:
+                description: Provision contains optional Azure provisioning details
+                  for the ADX cluster. If omitted, the operator will attempt zero-config
+                  provisioning using Azure IMDS.
+                properties:
+                  location:
+                    description: Location is the Azure region for the ADX cluster
+                      (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
+                    type: string
+                  managedIdentityClientId:
+                    description: ManagedIdentityClientId is the client ID of a user-assigned
+                      managed identity to use for the cluster. Optional. If omitted,
+                      system-assigned identity will be used.
+                    type: string
+                  resourceGroup:
+                    description: ResourceGroup is the Azure resource group for the
+                      ADX cluster. Optional. If omitted, will be auto-created or detected.
+                    type: string
+                  skuName:
+                    description: SkuName is the Azure SKU for the ADX cluster (e.g.,
+                      "Standard_L8as_v3"). Optional. The operator will select a default
+                      if not specified.
+                    type: string
+                  subscriptionId:
+                    description: SubscriptionId is the Azure subscription ID to use
+                      for provisioning. Optional. If omitted, will be auto-detected
+                      in zero-config mode.
+                    type: string
+                  tier:
+                    description: Tier is the Azure ADX tier (e.g., "Standard"). Optional.
+                      Defaults to "Standard" if not specified.
+                    type: string
+                type: object
+            required:
+            - clusterName
+            type: object
+          status:
+            description: ADXClusterStatus defines the observed state of ADXCluster
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

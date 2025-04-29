@@ -192,7 +192,7 @@ This minimal configuration:
 - Suitable for testing or development environments
 - Can be expanded incrementally as needs grow
 
-This examples deploys a full adx-mon cluster with all defaults:
+This example deploys a full adx-mon cluster with all defaults:
 
 ```yaml
 apiVersion: adx-mon.azure.com/v1
@@ -207,7 +207,11 @@ apiVersion: adx-mon.azure.com/v1
 kind: Ingestor
 metadata:
   name: minimal-adx-ingestor
-spec: {}
+spec:
+  adxClusterSelector:
+    matchLabels:
+      # label selector for ADXCluster
+      app: adx-mon
 
 ---
 
@@ -215,7 +219,11 @@ apiVersion: adx-mon.azure.com/v1
 kind: Alerter
 metadata:
   name: minimal-adx-alerter
-spec: {}
+spec:
+  notificationEndpoint: "http://alerter-endpoint"
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
 
 ---
 
@@ -223,7 +231,8 @@ apiVersion: adx-mon.azure.com/v1
 kind: ADXCluster
 metadata:
   name: minimal-adx-cluster
-spec: {}
+spec:
+  clusterName: minimal-adx-cluster
 ```
 
 ---
@@ -238,23 +247,15 @@ kind: ADXCluster
 metadata:
   name: prod-adx-cluster
 spec:
-  clusters:
-    - name: prod-metrics
-      endpoint: "https://prod-metrics.kusto.windows.net"
-      databases:
-        - name: Metrics
-          telemetryType: Metrics
-        - name: Logs
-          telemetryType: Logs
-        - name: Traces
-          telemetryType: Traces
-      provision:
-        subscriptionId: "00000000-0000-0000-0000-000000000000"
-        resourceGroup: "adx-monitor-prod"
-        region: "eastus2"
-        sku: "Standard_L8as_v3"
-        tier: "Standard"
-        managedIdentityClientId: "11111111-1111-1111-1111-111111111111"
+  clusterName: prod-metrics
+  endpoint: "https://prod-metrics.kusto.windows.net"
+  provision:
+    subscriptionId: "00000000-0000-0000-0000-000000000000"
+    resourceGroup: "adx-monitor-prod"
+    location: "eastus2"
+    skuName: "Standard_L8as_v3"
+    tier: "Standard"
+    managedIdentityClientId: "11111111-1111-1111-1111-111111111111"
 
 ---
 
@@ -265,7 +266,11 @@ metadata:
 spec:
   image: "ghcr.io/azure/adx-mon/ingestor:v1.0.0"
   replicas: 3
-  adxClusterRef: prod-adx-cluster
+  endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+  exposeExternally: false
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
 
 ---
 
@@ -276,11 +281,6 @@ metadata:
 spec:
   image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
   ingestorEndpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
-  ingestorAuth:
-    type: "token"
-    tokenSecretRef:
-      name: "ingestor-auth"
-      key: "token"
 
 ---
 
@@ -290,14 +290,17 @@ metadata:
   name: prod-alerter
 spec:
   image: "ghcr.io/azure/adx-mon/alerter:v1.0.0"
+  notificationEndpoint: "http://alerter-endpoint"
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
 ```
 
 This configuration demonstrates:
 - Full ADX cluster configuration with provisioning details
-- Multiple databases with different telemetry types
-- Ingestor configuration with custom replica count and ADXCluster reference
-- Collector configuration with explicit ingestor endpoint and authentication
-- Alerter configuration with custom image
+- Ingestor configuration with custom replica count, endpoint, and ADXCluster reference
+- Collector configuration with explicit ingestor endpoint and custom image
+- Alerter configuration with custom image, notification endpoint, and ADXCluster selector
 
 ---
 
