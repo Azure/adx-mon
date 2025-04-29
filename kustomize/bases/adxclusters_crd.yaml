@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: summaryrules.adx-mon.azure.com
+  name: adxclusters.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: SummaryRule
-    listKind: SummaryRuleList
-    plural: summaryrules
-    singular: summaryrule
+    kind: ADXCluster
+    listKind: ADXClusterList
+    plural: adxclusters
+    singular: adxcluster
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: SummaryRule is the Schema for the summaryrules API
+        description: ADXCluster is the Schema for the adxclusters API
         properties:
           apiVersion:
             description: |-
@@ -37,37 +37,46 @@ spec:
           metadata:
             type: object
           spec:
-            description: SummaryRuleSpec defines the desired state of SummaryRule
+            description: ADXClusterSpec defines the desired state of ADXCluster
             properties:
-              body:
-                description: Body is the KQL body of the function
+              clusterName:
+                description: ADX cluster valid name
+                maxLength: 100
+                pattern: ^[a-zA-Z0-9-]+$
                 type: string
-              database:
-                description: Database is the name of the database in which the function
-                  will be created
+              endpoint:
+                description: ADX url
+                format: uri
                 type: string
-              interval:
-                description: Interval is the cadence at which the rule will be executed
-                type: string
-              name:
-                description: Name is the name of the rule
-                type: string
-              table:
-                description: Table is rule output destination
-                type: string
+              provision:
+                description: Optional
+                properties:
+                  location:
+                    description: Azure location, optional
+                    type: string
+                  managedIdentityClientId:
+                    description: Azure MSI client-id, optional
+                    type: string
+                  resourceGroup:
+                    description: Azure resource-group, optional
+                    type: string
+                  skuName:
+                    description: ADX sku name, optional
+                    type: string
+                  subscriptionId:
+                    description: Azure sub-id, optional
+                    type: string
+                  tier:
+                    description: ADX tier, optional
+                    type: string
+                type: object
             required:
-            - body
-            - database
-            - interval
-            - name
-            - table
+            - clusterName
             type: object
           status:
-            description: SummaryRuleStatus defines the observed state of Function
+            description: ADXClusterStatus defines the observed state of ADXCluster
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

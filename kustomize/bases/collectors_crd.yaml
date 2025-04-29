@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: summaryrules.adx-mon.azure.com
+  name: collectors.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: SummaryRule
-    listKind: SummaryRuleList
-    plural: summaryrules
-    singular: summaryrule
+    kind: Collector
+    listKind: CollectorList
+    plural: collectors
+    singular: collector
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: SummaryRule is the Schema for the summaryrules API
+        description: Collector is the Schema for the collectors API
         properties:
           apiVersion:
             description: |-
@@ -37,37 +37,20 @@ spec:
           metadata:
             type: object
           spec:
-            description: SummaryRuleSpec defines the desired state of SummaryRule
+            description: CollectorSpec defines the desired state of Collector
             properties:
-              body:
-                description: Body is the KQL body of the function
+              image:
+                description: Image is the image to use for the collector
                 type: string
-              database:
-                description: Database is the name of the database in which the function
-                  will be created
+              ingestorEndpoint:
+                description: IngestorEndpoint is the endpoint to use for the ingestor.
+                format: uri
                 type: string
-              interval:
-                description: Interval is the cadence at which the rule will be executed
-                type: string
-              name:
-                description: Name is the name of the rule
-                type: string
-              table:
-                description: Table is rule output destination
-                type: string
-            required:
-            - body
-            - database
-            - interval
-            - name
-            - table
             type: object
           status:
-            description: SummaryRuleStatus defines the observed state of Function
+            description: CollectorStatus defines the observed state of Collector
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

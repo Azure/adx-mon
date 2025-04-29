@@ -38,4 +38,36 @@ resources:
   kind: ManagementCommand
   path: github.com/Azure/adx-mon/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: azure.com
+  group: adx-mon
+  kind: ADXCluster
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: azure.com
+  group: adx-mon
+  kind: Ingestor
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: azure.com
+  group: adx-mon
+  kind: Collector
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: azure.com
+  group: adx-mon
+  kind: Alerter
+  path: github.com/Azure/adx-mon/api/v1
+  version: v1
 version: "3"
