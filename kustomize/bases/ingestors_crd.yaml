@@ -41,7 +41,7 @@ spec:
             properties:
               adxClusterSelector:
                 description: ADXClusterSelector is a label selector used to select
-                  the ADX clusters CRDs
+                  the ADXCluster CRDs this ingestor should target. This field is required.
                 properties:
                   matchExpressions:
                     description: matchExpressions is a list of label selector requirements.
@@ -87,21 +87,24 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               endpoint:
-                description: |-
-                  Endpoint is the endpoint to use for the ingestor. If running in a cluster, this should be the service name
-                  otherwise the operator will generate an endpoint.
+                description: Endpoint is the endpoint to use for the ingestor. If
+                  running in a cluster, this should be the service name; otherwise,
+                  the operator will generate an endpoint. Optional.
                 type: string
               exposeExternally:
                 default: false
-                description: ExposeExternally is a flag to indicate if the ingestor
-                  should be exposed externally as reflected in the Endpoint.
+                description: ExposeExternally indicates if the ingestor should be
+                  exposed externally as reflected in the Endpoint. Optional; defaults
+                  to false.
                 type: boolean
               image:
-                description: Image is the image to use for the ingestor
+                description: Image is the container image to use for the ingestor
+                  component. Optional; if omitted, a default image will be used.
                 type: string
               replicas:
                 default: 1
-                description: Replicas is the number of replicas to run
+                description: Replicas is the number of ingestor replicas to run. Optional;
+                  defaults to 1 if omitted.
                 format: int32
                 type: integer
             required:

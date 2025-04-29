@@ -6,27 +6,26 @@ import (
 
 // IngestorSpec defines the desired state of Ingestor
 type IngestorSpec struct {
-	// +kubebuilder:validation:Optional
-	// Image is the image to use for the ingestor
+	//+kubebuilder:validation:Optional
+	// Image is the container image to use for the ingestor component. Optional; if omitted, a default image will be used.
 	Image string `json:"image,omitempty"`
 
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=1
-	// Replicas is the number of replicas to run
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=1
+	// Replicas is the number of ingestor replicas to run. Optional; defaults to 1 if omitted.
 	Replicas int32 `json:"replicas,omitempty"`
 
-	// +kubebuilder:validation:Optional
-	// Endpoint is the endpoint to use for the ingestor. If running in a cluster, this should be the service name
-	// otherwise the operator will generate an endpoint.
+	//+kubebuilder:validation:Optional
+	// Endpoint is the endpoint to use for the ingestor. If running in a cluster, this should be the service name; otherwise, the operator will generate an endpoint. Optional.
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=false
-	// ExposeExternally is a flag to indicate if the ingestor should be exposed externally as reflected in the Endpoint.
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=false
+	// ExposeExternally indicates if the ingestor should be exposed externally as reflected in the Endpoint. Optional; defaults to false.
 	ExposeExternally bool `json:"exposeExternally,omitempty"`
 
-	// +kubebuilder:validation:Required
-	// ADXClusterSelector is a label selector used to select the ADX clusters CRDs
+	//+kubebuilder:validation:Required
+	// ADXClusterSelector is a label selector used to select the ADXCluster CRDs this ingestor should target. This field is required.
 	ADXClusterSelector *metav1.LabelSelector `json:"adxClusterSelector"`
 }
 
@@ -34,7 +33,7 @@ const IngestorConditionOwner = "ingestor.adx-mon.azure.com"
 
 // IngestorStatus defines the observed state of Ingestor
 type IngestorStatus struct {
-	// +kubebuilder:validation:Optional
+	//+kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 

@@ -6,22 +6,23 @@ import (
 
 // AlerterSpec defines the desired state of Alerter
 type AlerterSpec struct {
-	// +kubebuilder:validation:Optional
-	// Image is the image to use for the alerter
+	//+kubebuilder:validation:Optional
+	// Image is the container image to use for the alerter component. Optional; if omitted, a default image will be used.
 	Image string `json:"image,omitempty"`
 
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Format=uri
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Format=uri
+	// NotificationEndpoint is the URI where alert notifications will be sent. This field is required.
 	NotificationEndpoint string `json:"notificationEndpoint"`
 
-	// +kubebuilder:validation:Required
-	// ADXClusterSelector is a label selector used to select the ADX clusters CRDs
+	//+kubebuilder:validation:Required
+	// ADXClusterSelector is a label selector used to select the ADXCluster CRDs this alerter should target. This field is required.
 	ADXClusterSelector *metav1.LabelSelector `json:"adxClusterSelector"`
 }
 
 // AlerterStatus defines the observed state of Alerter
 type AlerterStatus struct {
-	// +kubebuilder:validation:Optional
+	//+kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 

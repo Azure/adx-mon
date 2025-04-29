@@ -40,34 +40,80 @@ spec:
             description: ADXClusterSpec defines the desired state of ADXCluster
             properties:
               clusterName:
-                description: ADX cluster valid name
+                description: ClusterName is the unique, valid name for the ADX cluster.
+                  Must match ^[a-zA-Z0-9-]+$ and be at most 100 characters. Used for
+                  resource identification and naming in Azure.
                 maxLength: 100
                 pattern: ^[a-zA-Z0-9-]+$
                 type: string
+              databases:
+                description: Databases is an array of ADXClusterDatabaseSpec objects.
+                  Each object defines a database to be created in the ADX cluster.
+                  If not specified, no databases will be created.
+                items:
+                  properties:
+                    databaseName:
+                      description: ADX valid database name, required
+                      maxLength: 64
+                      minLength: 1
+                      pattern: ^[a-zA-Z0-9_]+$
+                      type: string
+                    retentionInDays:
+                      default: 30
+                      description: default 30, optional
+                      type: integer
+                    retentionPolicy:
+                      description: ADX retention policy, optional
+                      type: string
+                    telemetryType:
+                      description: 'TelemetryType: Required'
+                      enum:
+                      - Metrics
+                      - Logs
+                      - Traces
+                      type: string
+                  required:
+                  - databaseName
+                  - telemetryType
+                  type: object
+                type: array
               endpoint:
-                description: ADX url
+                description: 'Endpoint is the URI of an existing ADX cluster. If set,
+                  the operator will use this cluster instead of provisioning a new
+                  one. Example: "https://mycluster.kusto.windows.net"'
                 format: uri
                 type: string
               provision:
-                description: Optional
+                description: Provision contains optional Azure provisioning details
+                  for the ADX cluster. If omitted, the operator will attempt zero-config
+                  provisioning using Azure IMDS.
                 properties:
                   location:
-                    description: Azure location, optional
+                    description: Location is the Azure region for the ADX cluster
+                      (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
                     type: string
                   managedIdentityClientId:
-                    description: Azure MSI client-id, optional
+                    description: ManagedIdentityClientId is the client ID of a user-assigned
+                      managed identity to use for the cluster. Optional. If omitted,
+                      system-assigned identity will be used.
                     type: string
                   resourceGroup:
-                    description: Azure resource-group, optional
+                    description: ResourceGroup is the Azure resource group for the
+                      ADX cluster. Optional. If omitted, will be auto-created or detected.
                     type: string
                   skuName:
-                    description: ADX sku name, optional
+                    description: SkuName is the Azure SKU for the ADX cluster (e.g.,
+                      "Standard_L8as_v3"). Optional. The operator will select a default
+                      if not specified.
                     type: string
                   subscriptionId:
-                    description: Azure sub-id, optional
+                    description: SubscriptionId is the Azure subscription ID to use
+                      for provisioning. Optional. If omitted, will be auto-detected
+                      in zero-config mode.
                     type: string
                   tier:
-                    description: ADX tier, optional
+                    description: Tier is the Azure ADX tier (e.g., "Standard"). Optional.
+                      Defaults to "Standard" if not specified.
                     type: string
                 type: object
             required:

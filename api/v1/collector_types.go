@@ -6,13 +6,13 @@ import (
 
 // CollectorSpec defines the desired state of Collector
 type CollectorSpec struct {
-	// +kubebuilder:validation:Optional
-	// Image is the image to use for the collector
+	//+kubebuilder:validation:Optional
+	// Image is the container image to use for the collector component. Optional; if omitted, a default image will be used.
 	Image string `json:"image,omitempty"`
 
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Format=uri
-	// IngestorEndpoint is the endpoint to use for the ingestor.
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:validation:Format=uri
+	// IngestorEndpoint is the URI endpoint for the ingestor service that this collector should send data to. Optional; if omitted, the operator will configure it automatically.
 	IngestorEndpoint string `json:"ingestorEndpoint,omitempty"`
 }
 
@@ -20,7 +20,7 @@ const CollectorConditionOwner = "collector.adx-mon.azure.com"
 
 // CollectorStatus defines the observed state of Collector
 type CollectorStatus struct {
-	// +kubebuilder:validation:Optional
+	//+kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 

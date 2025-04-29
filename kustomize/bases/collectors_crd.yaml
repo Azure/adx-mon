@@ -40,10 +40,13 @@ spec:
             description: CollectorSpec defines the desired state of Collector
             properties:
               image:
-                description: Image is the image to use for the collector
+                description: Image is the container image to use for the collector
+                  component. Optional; if omitted, a default image will be used.
                 type: string
               ingestorEndpoint:
-                description: IngestorEndpoint is the endpoint to use for the ingestor.
+                description: IngestorEndpoint is the URI endpoint for the ingestor
+                  service that this collector should send data to. Optional; if omitted,
+                  the operator will configure it automatically.
                 format: uri
                 type: string
             type: object
