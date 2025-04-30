@@ -49,15 +49,15 @@ type ADXClusterProvisionSpec struct {
 	// /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}
 	UserAssignedIdentities []string `json:"userAssignedIdentities,omitempty"`
 	//+kubebuilder:validation:Optional
-	////+kubebuilder:validation:default=false
+	////+kubebuilder:default=false
 	// AutoScale indicates whether to enable auto-scaling for the ADX cluster. Optional. Defaults to false if not specified.
 	AutoScale bool `json:"autoScale,omitempty"`
 	//+kubebuilder:validation:Optional
-	//+kubebuilder:validation:default=10
+	//+kubebuilder:default=10
 	// AutoScaleMax is the maximum number of nodes for auto-scaling. Optional. Defaults to 10 if not specified.
 	AutoScaleMax int `json:"autoScaleMax,omitempty"`
 	//+kubebuilder:validation:Optional
-	//+kubebuilder:validation:default=2
+	//+kubebuilder:default=2
 	// AutoScaleMin is the minimum number of nodes for auto-scaling. Optional. Defaults to 2 if not specified.
 	AutoScaleMin int `json:"autoScaleMin,omitempty"`
 	//+kubebuilder:validation:Optional

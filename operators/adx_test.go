@@ -2,11 +2,25 @@ package operator
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
+	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/stretchr/testify/require"
+	meta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func TestGetIMDSMetadata(t *testing.T) {
@@ -86,4 +100,88 @@ func TestGetIMDSMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAdxClusterCreate(t *testing.T) {
+	t.Skip("This is a manual test that requires az cli authentication")
+
+	// Use `az login --use-device-code` to authenticate
+	// NOTE: This is a long test that will generate a real ADX cluster. The test will
+	// attempt to cleanup any created resources.
+
+	// Get subscription ID from az cli
+	output, err := exec.Command("az", "account", "show", "--query", "id", "-o", "tsv").Output()
+	require.NoError(t, err, "Failed to get subscription ID from az cli")
+	subscriptionID := strings.TrimSpace(string(output))
+	require.NotEmpty(t, subscriptionID, "Subscription ID is empty")
+
+	// Build scheme
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	// Create a fake client
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects().
+		WithStatusSubresource(&adxmonv1.ADXCluster{}).
+		Build()
+
+	// Create the reconciler
+	r := &AdxReconciler{
+		Client: fakeClient, // Use the fake client
+		Scheme: scheme,
+	}
+
+	// Create a test CRD
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-operator",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: fmt.Sprintf("adxmon-%d", time.Now().Unix()),
+			Provision: &adxmonv1.ADXClusterProvisionSpec{
+				SubscriptionId: subscriptionID,
+				ResourceGroup:  t.Name(),
+				Location:       "canadacentral",
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(context.Background(), cluster))
+
+	t.Cleanup(func() {
+		t.Logf("Cleaning up resources for test: subscription-id=%s, resource-group=%s", subscriptionID, t.Name())
+
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		require.NoError(t, err)
+
+		rgClient, err := armresources.NewResourceGroupsClient(subscriptionID, cred, nil)
+		require.NoError(t, err)
+
+		_, err = rgClient.BeginDelete(context.Background(), t.Name(), nil)
+		require.NoError(t, err)
+	})
+
+	var fetched adxmonv1.ADXCluster
+	require.Eventually(t, func() bool {
+		err = r.Client.Get(context.Background(), types.NamespacedName{
+			Name:      cluster.GetName(),
+			Namespace: cluster.GetNamespace(),
+		}, &fetched)
+		if err != nil {
+			return false
+		}
+
+		result, err := r.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      cluster.GetName(),
+				Namespace: cluster.GetNamespace(),
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
+	}, 30*time.Minute, time.Minute, "Wait for Kusto to become ready")
 }

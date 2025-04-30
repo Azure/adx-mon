@@ -188,7 +188,7 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 		ctx,
 		cluster.Spec.Provision.Location,
 		kusto.ClusterCheckNameRequest{
-			Name: to.Ptr(cluster.Name),
+			Name: to.Ptr(cluster.Spec.ClusterName),
 		},
 		nil,
 	)
@@ -214,6 +214,15 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 			}
 		}
 
+		var autoScale *kusto.OptimizedAutoscale
+		if cluster.Spec.Provision.AutoScale {
+			autoScale = &kusto.OptimizedAutoscale{
+				IsEnabled: to.Ptr(cluster.Spec.Provision.AutoScale),
+				Maximum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMax)),
+				Minimum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMin)),
+				Version:   to.Ptr(int32(1)),
+			}
+		}
 		_, err := clustersClient.BeginCreateOrUpdate(
 			ctx,
 			cluster.Spec.Provision.ResourceGroup,
@@ -226,14 +235,9 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 				},
 				Identity: identity,
 				Properties: &kusto.ClusterProperties{
-					EnableAutoStop: to.Ptr(false),
-					EngineType:     to.Ptr(kusto.EngineTypeV3),
-					OptimizedAutoscale: &kusto.OptimizedAutoscale{
-						IsEnabled: to.Ptr(cluster.Spec.Provision.AutoScale),
-						Maximum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMax)),
-						Minimum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMin)),
-						Version:   to.Ptr(int32(1)),
-					},
+					EnableAutoStop:     to.Ptr(false),
+					EngineType:         to.Ptr(kusto.EngineTypeV3),
+					OptimizedAutoscale: autoScale,
 				},
 			},
 			nil,
