@@ -248,6 +248,15 @@ The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/ot
     cluster = 'cluster1'
     geo = 'eu'
 
+  # Defines a list of transforms to apply to log lines.
+  [[otel-log.transforms]]
+    # The name of the transform to apply to the log line.
+    name = 'addattributes'
+
+    # The configuration for the transform.
+    [otel-log.transforms.config]
+      environment = 'production'
+
 ```
 ## Otel Metrics
 

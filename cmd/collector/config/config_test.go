@@ -259,6 +259,63 @@ func TestConfig_ValidateConfig_OtelLog_Exporters(t *testing.T) {
 	}
 }
 
+func TestConfig_ValidateOtelLog_Transforms(t *testing.T) {
+	tests := []struct {
+		name    string
+		otelLog *OtelLog
+		wantErr bool
+	}{
+		{
+			name: "Success_valid_transform",
+			otelLog: &OtelLog{
+				Transforms: []*LogTransform{
+					{
+						Name: "plugin",
+						Config: map[string]interface{}{
+							"GoPath":     "path",
+							"ImportName": "import",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Failure_invalid_transform",
+			otelLog: &OtelLog{
+				Transforms: []*LogTransform{
+					{
+						Name: "plugin",
+						Config: map[string]interface{}{
+							"GoPath":     "path",
+							"ImportName": "import",
+						},
+					},
+					{
+						Name:   "unknown-type",
+						Config: map[string]interface{}{},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{
+				OtelLog: tt.otelLog,
+			}
+			err := c.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 	type testcase struct {
 		name   string
@@ -1057,7 +1114,7 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Failure_invalid_log_type",
+			name: "Failure invalid log type",
 			config: &HostLog{
 				StaticFileTargets: []*TailTarget{
 					{
@@ -1074,7 +1131,7 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Failure_empty_attribute_key",
+			name: "Failure empty attribute key",
 			config: &HostLog{
 				AddAttributes: map[string]string{"": "value"},
 				StaticFileTargets: []*TailTarget{
@@ -1088,7 +1145,7 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Failure_empty_attribute_value",
+			name: "Failure empty attribute value",
 			config: &HostLog{
 				AddAttributes: map[string]string{"key": ""},
 				StaticFileTargets: []*TailTarget{
@@ -1150,7 +1207,7 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Failure_invalid_journald_target",
+			name: "Failure invalid journald target",
 			config: &HostLog{
 				JournalTargets: []*JournalTarget{
 					{

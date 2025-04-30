@@ -527,6 +527,16 @@ func realMain(ctx *cli.Context) error {
 
 		createHttpFunc := func(store storage.Store, health *cluster.Health) (*logs.Service, *http.HttpHandler, error) {
 			transformers := []types.Transformer{}
+			if v.Transforms != nil {
+				for _, t := range v.Transforms {
+					transform, err := transforms.NewTransform(t.Name, t.Config)
+					if err != nil {
+						return nil, nil, fmt.Errorf("create transform: %w", err)
+					}
+					transformers = append(transformers, transform)
+				}
+			}
+
 			if len(addAttributes) > 0 {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
