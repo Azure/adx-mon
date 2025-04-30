@@ -588,8 +588,6 @@ type LogRecord struct {
 	// as an event.
 	//
 	// [Optional].
-	//
-	// Status: [Development]
 	EventName     string `protobuf:"bytes,12,opt,name=event_name,json=eventName,proto3" json:"event_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -837,8 +835,6 @@ type LogRecord_builder struct {
 	// as an event.
 	//
 	// [Optional].
-	//
-	// Status: [Development]
 	EventName string
 }
 

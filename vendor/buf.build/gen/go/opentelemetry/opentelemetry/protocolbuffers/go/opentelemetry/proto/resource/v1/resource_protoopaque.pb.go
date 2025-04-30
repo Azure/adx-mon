@@ -42,6 +42,7 @@ type Resource struct {
 	state                             protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_Attributes             *[]*v1.KeyValue        `protobuf:"bytes,1,rep,name=attributes,proto3"`
 	xxx_hidden_DroppedAttributesCount uint32                 `protobuf:"varint,2,opt,name=dropped_attributes_count,json=droppedAttributesCount,proto3"`
+	xxx_hidden_EntityRefs             *[]*v1.EntityRef       `protobuf:"bytes,3,rep,name=entity_refs,json=entityRefs,proto3"`
 	unknownFields                     protoimpl.UnknownFields
 	sizeCache                         protoimpl.SizeCache
 }
@@ -87,12 +88,25 @@ func (x *Resource) GetDroppedAttributesCount() uint32 {
 	return 0
 }
 
+func (x *Resource) GetEntityRefs() []*v1.EntityRef {
+	if x != nil {
+		if x.xxx_hidden_EntityRefs != nil {
+			return *x.xxx_hidden_EntityRefs
+		}
+	}
+	return nil
+}
+
 func (x *Resource) SetAttributes(v []*v1.KeyValue) {
 	x.xxx_hidden_Attributes = &v
 }
 
 func (x *Resource) SetDroppedAttributesCount(v uint32) {
 	x.xxx_hidden_DroppedAttributesCount = v
+}
+
+func (x *Resource) SetEntityRefs(v []*v1.EntityRef) {
+	x.xxx_hidden_EntityRefs = &v
 }
 
 type Resource_builder struct {
@@ -105,6 +119,12 @@ type Resource_builder struct {
 	// dropped_attributes_count is the number of dropped attributes. If the value is 0, then
 	// no attributes were dropped.
 	DroppedAttributesCount uint32
+	// Set of entities that participate in this Resource.
+	//
+	// Note: keys in the references MUST exist in attributes of this message.
+	//
+	// Status: [Development]
+	EntityRefs []*v1.EntityRef
 }
 
 func (b0 Resource_builder) Build() *Resource {
@@ -113,6 +133,7 @@ func (b0 Resource_builder) Build() *Resource {
 	_, _ = b, x
 	x.xxx_hidden_Attributes = &b.Attributes
 	x.xxx_hidden_DroppedAttributesCount = b.DroppedAttributesCount
+	x.xxx_hidden_EntityRefs = &b.EntityRefs
 	return m0
 }
 
@@ -120,26 +141,30 @@ var File_opentelemetry_proto_resource_v1_resource_proto protoreflect.FileDescrip
 
 const file_opentelemetry_proto_resource_v1_resource_proto_rawDesc = "" +
 	"\n" +
-	".opentelemetry/proto/resource/v1/resource.proto\x12\x1fopentelemetry.proto.resource.v1\x1a*opentelemetry/proto/common/v1/common.proto\"\x8d\x01\n" +
+	".opentelemetry/proto/resource/v1/resource.proto\x12\x1fopentelemetry.proto.resource.v1\x1a*opentelemetry/proto/common/v1/common.proto\"\xd8\x01\n" +
 	"\bResource\x12G\n" +
 	"\n" +
 	"attributes\x18\x01 \x03(\v2'.opentelemetry.proto.common.v1.KeyValueR\n" +
 	"attributes\x128\n" +
-	"\x18dropped_attributes_count\x18\x02 \x01(\rR\x16droppedAttributesCountB\xc3\x01\n" +
+	"\x18dropped_attributes_count\x18\x02 \x01(\rR\x16droppedAttributesCount\x12I\n" +
+	"\ventity_refs\x18\x03 \x03(\v2(.opentelemetry.proto.common.v1.EntityRefR\n" +
+	"entityRefsB\xc3\x01\n" +
 	"\"io.opentelemetry.proto.resource.v1B\rResourceProtoP\x01Zjbuf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/resource/v1;resourcev1\xaa\x02\x1fOpenTelemetry.Proto.Resource.V1b\x06proto3"
 
 var file_opentelemetry_proto_resource_v1_resource_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_opentelemetry_proto_resource_v1_resource_proto_goTypes = []any{
-	(*Resource)(nil),    // 0: opentelemetry.proto.resource.v1.Resource
-	(*v1.KeyValue)(nil), // 1: opentelemetry.proto.common.v1.KeyValue
+	(*Resource)(nil),     // 0: opentelemetry.proto.resource.v1.Resource
+	(*v1.KeyValue)(nil),  // 1: opentelemetry.proto.common.v1.KeyValue
+	(*v1.EntityRef)(nil), // 2: opentelemetry.proto.common.v1.EntityRef
 }
 var file_opentelemetry_proto_resource_v1_resource_proto_depIdxs = []int32{
 	1, // 0: opentelemetry.proto.resource.v1.Resource.attributes:type_name -> opentelemetry.proto.common.v1.KeyValue
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: opentelemetry.proto.resource.v1.Resource.entity_refs:type_name -> opentelemetry.proto.common.v1.EntityRef
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_opentelemetry_proto_resource_v1_resource_proto_init() }
