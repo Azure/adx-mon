@@ -63,7 +63,7 @@ type ADXClusterDatabaseSpec struct {
 	//+kubebuilder:validation:Required
 	//+kubebuilder:validation:Enum=Metrics;Logs;Traces
 	// TelemetryType: Required
-	TelemtryType DatabaseTelemetryType `json:"telemetryType"`
+	TelemetryType DatabaseTelemetryType `json:"telemetryType"`
 }
 
 type DatabaseTelemetryType string
