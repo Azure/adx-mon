@@ -737,6 +737,129 @@ func (b0 InstrumentationScope_builder) Build() *InstrumentationScope {
 	return m0
 }
 
+// A reference to an Entity.
+// Entity represents an object of interest associated with produced telemetry: e.g spans, metrics, profiles, or logs.
+//
+// Status: [Development]
+type EntityRef struct {
+	state                      protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_SchemaUrl       string                 `protobuf:"bytes,1,opt,name=schema_url,json=schemaUrl,proto3"`
+	xxx_hidden_Type            string                 `protobuf:"bytes,2,opt,name=type,proto3"`
+	xxx_hidden_IdKeys          []string               `protobuf:"bytes,3,rep,name=id_keys,json=idKeys,proto3"`
+	xxx_hidden_DescriptionKeys []string               `protobuf:"bytes,4,rep,name=description_keys,json=descriptionKeys,proto3"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *EntityRef) Reset() {
+	*x = EntityRef{}
+	mi := &file_opentelemetry_proto_common_v1_common_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntityRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntityRef) ProtoMessage() {}
+
+func (x *EntityRef) ProtoReflect() protoreflect.Message {
+	mi := &file_opentelemetry_proto_common_v1_common_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *EntityRef) GetSchemaUrl() string {
+	if x != nil {
+		return x.xxx_hidden_SchemaUrl
+	}
+	return ""
+}
+
+func (x *EntityRef) GetType() string {
+	if x != nil {
+		return x.xxx_hidden_Type
+	}
+	return ""
+}
+
+func (x *EntityRef) GetIdKeys() []string {
+	if x != nil {
+		return x.xxx_hidden_IdKeys
+	}
+	return nil
+}
+
+func (x *EntityRef) GetDescriptionKeys() []string {
+	if x != nil {
+		return x.xxx_hidden_DescriptionKeys
+	}
+	return nil
+}
+
+func (x *EntityRef) SetSchemaUrl(v string) {
+	x.xxx_hidden_SchemaUrl = v
+}
+
+func (x *EntityRef) SetType(v string) {
+	x.xxx_hidden_Type = v
+}
+
+func (x *EntityRef) SetIdKeys(v []string) {
+	x.xxx_hidden_IdKeys = v
+}
+
+func (x *EntityRef) SetDescriptionKeys(v []string) {
+	x.xxx_hidden_DescriptionKeys = v
+}
+
+type EntityRef_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	// The Schema URL, if known. This is the identifier of the Schema that the entity data
+	// is recorded in. To learn more about Schema URL see
+	// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
+	//
+	// This schema_url applies to the data in this message and to the Resource attributes
+	// referenced by id_keys and description_keys.
+	// TODO: discuss if we are happy with this somewhat complicated definition of what
+	// the schema_url applies to.
+	//
+	// This field obsoletes the schema_url field in ResourceMetrics/ResourceSpans/ResourceLogs.
+	SchemaUrl string
+	// Defines the type of the entity. MUST not change during the lifetime of the entity.
+	// For example: "service" or "host". This field is required and MUST not be empty
+	// for valid entities.
+	Type string
+	// Attribute Keys that identify the entity.
+	// MUST not change during the lifetime of the entity. The Id must contain at least one attribute.
+	// These keys MUST exist in the containing {message}.attributes.
+	IdKeys []string
+	// Descriptive (non-identifying) attribute keys of the entity.
+	// MAY change over the lifetime of the entity. MAY be empty.
+	// These attribute keys are not part of entity's identity.
+	// These keys MUST exist in the containing {message}.attributes.
+	DescriptionKeys []string
+}
+
+func (b0 EntityRef_builder) Build() *EntityRef {
+	m0 := &EntityRef{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.xxx_hidden_SchemaUrl = b.SchemaUrl
+	x.xxx_hidden_Type = b.Type
+	x.xxx_hidden_IdKeys = b.IdKeys
+	x.xxx_hidden_DescriptionKeys = b.DescriptionKeys
+	return m0
+}
+
 var File_opentelemetry_proto_common_v1_common_proto protoreflect.FileDescriptor
 
 const file_opentelemetry_proto_common_v1_common_proto_rawDesc = "" +
@@ -768,16 +891,23 @@ const file_opentelemetry_proto_common_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"attributes\x18\x03 \x03(\v2'.opentelemetry.proto.common.v1.KeyValueR\n" +
 	"attributes\x128\n" +
-	"\x18dropped_attributes_count\x18\x04 \x01(\rR\x16droppedAttributesCountB\xb9\x01\n" +
+	"\x18dropped_attributes_count\x18\x04 \x01(\rR\x16droppedAttributesCount\"\x82\x01\n" +
+	"\tEntityRef\x12\x1d\n" +
+	"\n" +
+	"schema_url\x18\x01 \x01(\tR\tschemaUrl\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x17\n" +
+	"\aid_keys\x18\x03 \x03(\tR\x06idKeys\x12)\n" +
+	"\x10description_keys\x18\x04 \x03(\tR\x0fdescriptionKeysB\xb9\x01\n" +
 	" io.opentelemetry.proto.common.v1B\vCommonProtoP\x01Zfbuf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1;commonv1\xaa\x02\x1dOpenTelemetry.Proto.Common.V1b\x06proto3"
 
-var file_opentelemetry_proto_common_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_opentelemetry_proto_common_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_opentelemetry_proto_common_v1_common_proto_goTypes = []any{
 	(*AnyValue)(nil),             // 0: opentelemetry.proto.common.v1.AnyValue
 	(*ArrayValue)(nil),           // 1: opentelemetry.proto.common.v1.ArrayValue
 	(*KeyValueList)(nil),         // 2: opentelemetry.proto.common.v1.KeyValueList
 	(*KeyValue)(nil),             // 3: opentelemetry.proto.common.v1.KeyValue
 	(*InstrumentationScope)(nil), // 4: opentelemetry.proto.common.v1.InstrumentationScope
+	(*EntityRef)(nil),            // 5: opentelemetry.proto.common.v1.EntityRef
 }
 var file_opentelemetry_proto_common_v1_common_proto_depIdxs = []int32{
 	1, // 0: opentelemetry.proto.common.v1.AnyValue.array_value:type_name -> opentelemetry.proto.common.v1.ArrayValue
@@ -813,7 +943,7 @@ func file_opentelemetry_proto_common_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_opentelemetry_proto_common_v1_common_proto_rawDesc), len(file_opentelemetry_proto_common_v1_common_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
