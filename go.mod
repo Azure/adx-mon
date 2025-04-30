@@ -4,7 +4,7 @@ go 1.23.5
 toolchain go1.24.1
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20241217213620-6454adb4e03c.2
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250429200730-bec9c7d2421e.2
 	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.6-20250429200730-bec9c7d2421e.1
 	github.com/Azure/azure-kusto-go v0.15.2
 	github.com/VictoriaMetrics/easyproto v0.1.4
