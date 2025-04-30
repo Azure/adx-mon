@@ -248,6 +248,7 @@ func (w *PrometheusRemoteWrite) Validate() error {
 type OtelLog struct {
 	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
 	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	Transforms     []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
 	Exporters      []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
@@ -258,6 +259,12 @@ func (w *OtelLog) Validate() error {
 		}
 		if v == "" {
 			return errors.New("otel-log.add-attributes value must be set")
+		}
+	}
+
+	for _, v := range w.Transforms {
+		if !transforms.IsValidTransformType(v.Name) {
+			return fmt.Errorf("otel-log.transforms %s is not a valid transform", v.Name)
 		}
 	}
 

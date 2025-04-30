@@ -238,6 +238,14 @@ func getContents() Contents {
 						LiftAttributes: []string{
 							"host",
 						},
+						Transforms: []*config.LogTransform{
+							{
+								Name: "addattributes",
+								Config: map[string]interface{}{
+									"environment": "production",
+								},
+							},
+						},
 					},
 				},
 			},
