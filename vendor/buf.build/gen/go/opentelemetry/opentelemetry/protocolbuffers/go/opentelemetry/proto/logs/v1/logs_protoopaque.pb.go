@@ -754,8 +754,6 @@ type LogRecord_builder struct {
 	// as an event.
 	//
 	// [Optional].
-	//
-	// Status: [Development]
 	EventName string
 }
 

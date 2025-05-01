@@ -54,8 +54,6 @@ const (
 // MetricsServiceClient is a client for the opentelemetry.proto.collector.metrics.v1.MetricsService
 // service.
 type MetricsServiceClient interface {
-	// For performance reasons, it is recommended to keep this RPC
-	// alive for the entire life of the application.
 	Export(context.Context, *connect_go.Request[v1.ExportMetricsServiceRequest]) (*connect_go.Response[v1.ExportMetricsServiceResponse], error)
 }
 
@@ -91,8 +89,6 @@ func (c *metricsServiceClient) Export(ctx context.Context, req *connect_go.Reque
 // MetricsServiceHandler is an implementation of the
 // opentelemetry.proto.collector.metrics.v1.MetricsService service.
 type MetricsServiceHandler interface {
-	// For performance reasons, it is recommended to keep this RPC
-	// alive for the entire life of the application.
 	Export(context.Context, *connect_go.Request[v1.ExportMetricsServiceRequest]) (*connect_go.Response[v1.ExportMetricsServiceResponse], error)
 }
 
