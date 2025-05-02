@@ -24,6 +24,11 @@ const (
 	QueryHealthHealthy = float64(1)
 	// Query is failing due to service issues (unable to query due to networking issues, timeouts, etc)
 	QueryHealthUnhealthy = float64(0)
+
+	// Notifications are healthy
+	NotificationHealthHealthy = float64(0)
+	// Notifications are failing
+	NotificationHealthUnhealthy = float64(1)
 )
 
 func TestWorker_TagsMismatch(t *testing.T) {
@@ -482,6 +487,68 @@ func TestWorker_AlertsThrottled(t *testing.T) {
 
 	require.Equal(t, createdAlert.Destination, rule.Destination)
 	require.Contains(t, createdAlert.Title, "has too many notifications in eastus")
+}
+
+func TestWorker_NotificationHealth(t *testing.T) {
+	kcli := &fakeKustoClient{
+		queryErr: &NotificationValidationError{"invalid result"},
+	}
+
+	// First test: Alert creation fails
+	var createCalled bool
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			createCalled = true
+			return fmt.Errorf("failed to create alert")
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+	}
+
+	// Initialize metrics to healthy state
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name).Set(NotificationHealthHealthy)
+
+	w.ExecuteQuery(context.Background())
+
+	// Verify alert creation was attempted
+	require.True(t, createCalled, "Create alert should be called")
+
+	// Verify notification health is now unhealthy (create failed)
+	notificationHealthValue := getGaugeValue(t, metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, NotificationHealthUnhealthy, notificationHealthValue)
+
+	// Second test: Alert creation succeeds
+	createCalled = false
+	alertCli = &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			createCalled = true
+			return nil
+		},
+	}
+
+	w.AlertCli = alertCli
+
+	// Keep metrics as they were after the first test
+	w.ExecuteQuery(context.Background())
+
+	// Verify alert creation was attempted
+	require.True(t, createCalled, "Create alert should be called")
+
+	// Verify notification health is now healthy (create succeeded)
+	notificationHealthValue = getGaugeValue(t, metrics.NotificationUnhealthy.WithLabelValues(rule.Namespace, rule.Name))
+	require.Equal(t, NotificationHealthHealthy, notificationHealthValue)
 }
 
 func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
