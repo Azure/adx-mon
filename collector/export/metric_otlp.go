@@ -291,10 +291,10 @@ func (c *PromToOtlpExporter) sendRequest(body []byte, count int64) error {
 
 		if exportMetricsServiceResponse.HasPartialSuccess() {
 			rejected := exportMetricsServiceResponse.PartialSuccess.RejectedDataPoints
-			metrics.CollectorExporterMetricsFailed.WithLabelValues("PromToOtlp", c.destination).Add(float64(rejected))
-			metrics.CollectorExporterMetricsSent.WithLabelValues("PromToOtlp", c.destination).Add(float64(count - rejected))
+			metrics.CollectorExporterFailed.WithLabelValues("PromToOtlp", c.destination).Add(float64(rejected))
+			metrics.CollectorExporterSent.WithLabelValues("PromToOtlp", c.destination).Add(float64(count - rejected))
 		} else {
-			metrics.CollectorExporterMetricsSent.WithLabelValues("PromToOtlp", c.destination).Add(float64(count))
+			metrics.CollectorExporterSent.WithLabelValues("PromToOtlp", c.destination).Add(float64(count))
 		}
 	} else {
 		io.Copy(io.Discard, resp.Body)
