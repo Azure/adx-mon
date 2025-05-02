@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/tinylib/msgp/msgp"
 )
 
@@ -97,7 +98,12 @@ func (e *LogToFluentExporter) Send(ctx context.Context, batch *types.LogBatch) e
 
 	// Write the data
 	_, err = conn.Write(data)
-	return err
+	if err != nil {
+		metrics.CollectorExporterFailed.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
+		return fmt.Errorf("failed to write to %s: %w", e.destination, err)
+	}
+	metrics.CollectorExporterSent.WithLabelValues(e.Name(), e.destination).Add(float64(len(batch.Logs)))
+	return nil
 }
 
 func (e *LogToFluentExporter) dial(ctx context.Context) (net.Conn, error) {
