@@ -2,58 +2,49 @@
 
 ## Overview
 
-The `adx-mon operator` is a Kubernetes operator responsible for managing the lifecycle of an adx-mon cluster, including its core components (collector, ingestor, alerter) and required Azure infrastructure. The operator uses the Azure SDK for Go to manage Azure resources such as ADX (Azure Data Explorer) clusters and databases.
+The `adx-mon operator` is a Kubernetes operator responsible for managing the lifecycle of adx-mon components (collector, ingestor, alerter) and potentially related Azure infrastructure like ADX (Azure Data Explorer) clusters. The operator uses the Azure SDK for Go to manage Azure resources when necessary.
 
-The operator aims to provide a simple, production-ready bootstrap experience for adx-mon clusters, while supporting advanced customization for complex and federated deployments.
+The operator aims to provide a simple, production-ready bootstrap experience for adx-mon deployments, while supporting advanced customization for complex and federated deployments.
 
 ---
 
 ## Responsibilities
 
-- **Azure Infrastructure Management:**  
-  - Declaratively create and manage Azure resources using the Azure SDK
-  - Built-in resource provider registration and validation
-  - Automatic resource group creation and management
-  - Wait for Azure resources to reach ready state before proceeding
+- **Azure Infrastructure Management (via ADXCluster CRD):**
+  - Declaratively create and manage Azure ADX clusters and databases based on the `ADXCluster` CRD.
+  - Support using existing ADX clusters via the `endpoint` field.
+  - Handle Azure resource provider registration and validation.
+  - Automatic resource group creation and management (optional).
+  - Wait for Azure resources to reach a ready state.
 
-- **adx-mon Component Management:**  
-  - Generate and apply manifests for adx-mon components (collector, ingestor, alerter) as Kubernetes resources (e.g., StatefulSets, Deployments, Services).
-  - Support default images for each component, with the ability to override via CRD spec.
-  - Allow configuration of the number of ingestor instances (replicas).
-  - Support further customization of component manifests via CRD fields.
+- **adx-mon Component Management:**
+  - Generate and apply manifests for adx-mon components (collector, ingestor, alerter) based on their respective CRDs (`Collector`, `Ingestor`, `Alerter`).
+  - Manage Kubernetes resources like StatefulSets, Deployments, and Services for these components.
+  - Support default container images for each component, with overrides via the `image` field in each CRD spec.
+  - Allow configuration of the number of ingestor instances via `spec.replicas` in the `Ingestor` CRD.
   - Support deployment of only a subset of components (e.g., only collectors) to enable federated/multi-cluster topologies.
 
-- **Reconciliation and Drift Detection:**  
-  - Watch the manifests for adx-mon components.
-  - If a managed resource (e.g., a StatefulSet for the ingestor) is manually changed in a way that overrides a setting specified in the corresponding CRD (such as replica count), detect the change and revert it to match the CRD's desired state.
-  - Ensure the operator's desired state is always enforced in the actual cluster state, supporting declarative workflows.
-  - **Note:** At this time, the operator does not attempt to reconcile drifted Azure resources (such as ADX clusters or databases). If Azure resources are modified outside the operator, the operator will not revert or update them to match the desired state.
+- **Reconciliation and Drift Detection:**
+  - Watch the CRDs and the managed Kubernetes resources (e.g., StatefulSets for the ingestor).
+  - If a managed resource is manually changed in a way that conflicts with the CRD spec (e.g., `replicas` count), detect the change and revert it to match the CRD's desired state.
+  - Ensure the operator's desired state is always enforced in the actual cluster state.
+  - **Note:** The operator primarily reconciles Kubernetes resources based on CRD changes. It does not currently reconcile drifted *Azure* resources (e.g., ADX clusters modified outside Kubernetes).
 
-- **Incremental, Granular Reconciliation:**  
-  - The operator proceeds in highly granular steps, maintaining subresource conditions for each phase (e.g., ADX cluster ready, database ready, ingestor ready, collector ready).
-  - Each phase is only attempted after all dependencies are successfully reconciled.
+- **Incremental, Granular Reconciliation:**
+  - The operator proceeds in steps, often using conditions in the CRD status to track progress (e.g., `ADXCluster` ready, `Ingestor` ready).
   - Status and conditions are updated at each step to reflect progress and issues.
 
-- **Resource Cleanup on Deletion:**  
-  - When a CRD for an adx-mon component (e.g., Collector, Ingestor, Alerter) is deleted, the operator will delete the corresponding managed Kubernetes resources (such as StatefulSets, Deployments, Services) to ensure a clean teardown of the adx-mon stack.
-  - Azure infrastructure (e.g., ADX clusters and databases) will be left in place for now. In a future iteration, we may address safe teardown of these Azure resources.
+- **Resource Cleanup on Deletion:**
+  - When a CRD for an adx-mon component (e.g., `Ingestor`) is deleted, the operator uses Kubernetes owner references to ensure the corresponding managed Kubernetes resources (like StatefulSets) are garbage collected.
+  - Deletion of an `ADXCluster` CRD does *not* automatically delete the underlying Azure resources by default.
 
 ---
 
 ## Multi-Cluster and Federation Support
 
-- The operator supports deployment in different Kubernetes clusters for federated scenarios:
-  - **Central Ingestor Cluster:**  
-    - Deploys ingestor components (and optionally ADX resources).
-    - Receives events from multiple remote collector clusters.
-  - **Collector Clusters:**  
-    - Deploys only collector components.
-    - Forwards events to a central ingestor cluster.
-    - Requires configuration of ingestor endpoints and authentication.
-
-- The CRD specs determine the deployment mode:
-  - If only `collector` is specified, the operator assumes this is a collector-only cluster and requires `ingestor` connection details.
-  - If `ingestor` and `adx` are specified, the operator will bootstrap the full stack and expose endpoints for remote collectors.
+- The operator supports deploying components separately for federated scenarios:
+  - **Central Ingestor Cluster:** Deploys `Ingestor` components (potentially linked to `ADXCluster` resources). Receives data from remote collectors.
+  - **Collector Clusters:** Deploys only `Collector` components. Requires configuration of the `ingestorEndpoint` in the `CollectorSpec` to point to the central ingestor.
 
 ---
 
@@ -205,176 +196,140 @@ spec:
 
 ---
 
-## ADX Cluster Management
+## ADX Cluster Management (Details)
 
-An important option for ADX clusters is to "bring your own" or utilize an existing cluster. This is accomplished by specifying the cluster's endpoint in the ADXCluster CRD. When an endpoint is provided, the operator will use the referenced existing ADX cluster rather than provisioning a new one.
+An important option for ADX clusters is to "bring your own" or utilize an existing cluster. This is accomplished by specifying the cluster's endpoint in the `ADXCluster` CRD (`spec.endpoint`). When an endpoint is provided, the operator will use the referenced existing ADX cluster rather than provisioning a new one.
 
 ### Auto-Provisioning and Zero-Config Support
 
-The operator supports both fully specified and zero-config deployments:
+The operator supports both fully specified and zero-config deployments for *new* clusters (when `spec.endpoint` is not provided):
 
-1. **Zero-Config Mode:**
-   - Uses Azure IMDS to automatically detect:
-     - Region
-     - Subscription ID
-     - Resource Group
-     - AKS cluster name (for naming)
-   - Automatically selects optimal SKU based on regional availability
-   - Creates default databases for metrics and logs
-   - Configures standard retention policies
+1.  **Zero-Config Mode (via Azure SDK features, not explicitly shown in operator code provided):**
+    *   Uses Azure IMDS or environment variables to automatically detect:
+        *   Region
+        *   Subscription ID
+        *   Resource Group
+    *   May automatically select an optimal SKU.
+    *   Creates default databases if `spec.databases` is empty.
 
-2. **Infrastructure Preparation:**
-   - Automatically registers the Microsoft.Kusto resource provider if needed
-   - Creates resource group if it doesn't exist
-   - Validates SKU availability in the target region
+2.  **Infrastructure Preparation (via Azure SDK):**
+    *   Automatically registers the `Microsoft.Kusto` resource provider if needed.
+    *   Creates resource group if specified and doesn't exist.
+    *   Validates SKU availability in the target region.
 
-3. **Default Configuration:**
-   - Default databases: Metrics and Logs
-   - Standard hot cache period: P30D
-   - Standard soft delete period: P30D
-   - Public network access: Disabled
-   - Streaming ingest: Disabled
+### ADX Deployment Strategy (via Azure SDK)
 
-### ADX Deployment Strategy
+The operator uses the Azure SDK for Go to manage the lifecycle of ADX clusters and databases when provisioning:
 
-The operator uses the Azure SDK for Go to manage the lifecycle of ADX clusters and databases:
+1.  **Azure SDK-Based Deployment:** Creates, updates, and potentially deletes ADX clusters and databases.
+2.  **Database Configuration:** Databases created based on `spec.databases`.
 
-1. **Azure SDK-Based Deployment:**
-   - Uses the Azure SDK for Go to create, update, and delete ADX clusters and databases
-   - Supports incremental deployment and updates
-   - Handles output and status reporting for cluster endpoints and resource states
+### Managed Identity Integration (via Azure SDK)
 
-2. **Database Configuration:**
-   - Databases created as part of deployment
-   - Each database configured with:
-     - Kind: ReadWrite
-     - Soft delete period: P30D (30 days)
-     - Hot cache period: P30D (30 days)
-   - Copy-based deployment for multiple databases
+The operator supports managed identity configuration for provisioned clusters:
 
-3. **Strategy Selection:**
-   - Azure SDK: Default and only implementation
+1.  **Identity Assignment:** System-assigned identity by default, or user-assigned if `spec.provision.managedIdentityClientId` is provided.
+2.  **Role Management:** May handle role assignments (details depend on specific Azure SDK implementation).
 
-### Managed Identity Integration
+### SKU Selection Strategy (via Azure SDK)
 
-The operator supports managed identity configuration:
+The operator likely implements an SKU selection strategy when provisioning:
 
-1. **Identity Assignment:**
-   - System-assigned identity for ADX clusters
-   - Optional user-assigned identity integration
+1.  **Preferred SKUs:** May prioritize certain SKUs (e.g., `Standard_L8as_v3`).
+2.  **Fallback Behavior:** Validates SKU availability and falls back if necessary.
 
-2. **Role Management:**
-   - Automatic role assignment for specified managed identities
-   - Kusto Database Admin role assignment for cluster access
+### Resource Group Management (via Azure SDK)
 
-### SKU Selection Strategy
+The operator handles resource group lifecycle when provisioning:
 
-The operator implements a sophisticated SKU selection strategy:
+1.  **Resource Group Creation:** Checks for existence, creates if specified and not found.
 
-1. **Preferred SKUs (in order):**
-   - Standard_L8as_v3
-   - Standard_L16as_v3
-   - Standard_L32as_v3
+---
 
-2. **Fallback Behavior:**
-   - Validates SKU availability in target region
-   - Falls back to first available Standard tier SKU if preferred not available
+## Example CRDs
 
-### Resource Group Management
+#### Minimal (Zero-Config Ingestor/Collector/Alerter with Existing ADX Cluster)
 
-The operator handles resource group lifecycle:
-
-1. **Resource Group Creation:**
-   - Checks for resource group existence
-   - Creates if not found using target region
-   - Supports both existing and new resource groups
-
-### Example CRDs
-
-The operator supports configurations ranging from minimal zero-config deployments to fully customized setups.
-
-#### Minimal (Zero-Config) Example
-
-This example deploys a collector-only setup with all defaults:
+This example assumes an `ADXCluster` named `existing-adx-cluster` (managed separately or by another CRD) exists and has the label `app: my-adx`. It deploys the components using default images and settings, connecting them to the specified cluster.
 
 ```yaml
 apiVersion: adx-mon.azure.com/v1
-kind: Collector
+kind: ADXCluster
 metadata:
-  name: minimal-adx-collector
-spec: {}
-```
-
-This minimal configuration:
-- Uses default container images
-- Deploys collector components with default settings
-- Suitable for testing or development environments
-- Can be expanded incrementally as needs grow
-
-This example deploys a full adx-mon cluster with all defaults:
-
-```yaml
-apiVersion: adx-mon.azure.com/v1
-kind: Collector
-metadata:
-  name: minimal-adx-collector
-spec: {}
+  name: existing-adx-cluster # This CRD might just reference an existing cluster
+  labels:
+    app: my-adx
+spec:
+  clusterName: my-existing-cluster-name # Name in Azure
+  endpoint: "https://my-existing-cluster.eastus2.kusto.windows.net" # IMPORTANT: Tells operator to use existing
+  databases:
+    - databaseName: "MetricsDB"
+      telemetryType: Metrics
+    - databaseName: "LogsDB"
+      telemetryType: Logs
+# No 'provision' section needed if using existing endpoint
 
 ---
 
 apiVersion: adx-mon.azure.com/v1
 kind: Ingestor
 metadata:
-  name: minimal-adx-ingestor
+  name: minimal-ingestor
 spec:
   adxClusterSelector:
     matchLabels:
-      # label selector for ADXCluster
-      app: adx-mon
+      app: my-adx # Selects the ADXCluster above
+
+---
+
+apiVersion: adx-mon.azure.com/v1
+kind: Collector
+metadata:
+  name: minimal-collector
+spec: {} # Ingestor endpoint will be auto-discovered if Ingestor CRD is in the same namespace
 
 ---
 
 apiVersion: adx-mon.azure.com/v1
 kind: Alerter
 metadata:
-  name: minimal-adx-alerter
+  name: minimal-alerter
 spec:
-  notificationEndpoint: "http://alerter-endpoint"
+  notificationEndpoint: "http://alertmanager.example.com:9093/api/v1/alerts"
   adxClusterSelector:
     matchLabels:
-      app: adx-mon
-
----
-
-apiVersion: adx-mon.azure.com/v1
-kind: ADXCluster
-metadata:
-  name: minimal-adx-cluster
-spec:
-  clusterName: minimal-adx-cluster
+      app: my-adx # Selects the ADXCluster above
 ```
 
----
+#### Complete (Fully Customized with Provisioning) Example
 
-#### Complete (Fully Customized) Example
-
-This example demonstrates all available configuration options for each CRD:
+This example demonstrates provisioning a new ADX cluster and configuring all components with custom settings.
 
 ```yaml
 apiVersion: adx-mon.azure.com/v1
 kind: ADXCluster
 metadata:
   name: prod-adx-cluster
+  labels:
+    env: production
+    team: monitoring
 spec:
-  clusterName: prod-metrics
-  endpoint: "https://prod-metrics.kusto.windows.net"
+  clusterName: adxmonprod01 # Desired name in Azure
+  # No 'endpoint' means provision a new cluster
   provision:
     subscriptionId: "00000000-0000-0000-0000-000000000000"
-    resourceGroup: "adx-monitor-prod"
+    resourceGroup: "adx-monitor-prod-rg"
     location: "eastus2"
     skuName: "Standard_L8as_v3"
     tier: "Standard"
-    managedIdentityClientId: "11111111-1111-1111-1111-111111111111"
+    # managedIdentityClientId: "11111111-1111-1111-1111-111111111111" # Optional: User-assigned MSI
+  databases:
+    - databaseName: "ProdMetrics"
+      telemetryType: Metrics
+      retentionInDays: 90
+    - databaseName: "ProdLogs"
+      telemetryType: Logs
+      retentionInDays: 30
 
 ---
 
@@ -383,13 +338,13 @@ kind: Ingestor
 metadata:
   name: prod-ingestor
 spec:
-  image: "ghcr.io/azure/adx-mon/ingestor:v1.0.0"
+  image: "myacr.azurecr.io/adx-mon/ingestor:v1.2.3"
   replicas: 3
-  endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+  # endpoint: "ingestor-service.prod.svc.cluster.local" # Optional: Override auto-generated endpoint
   exposeExternally: false
   adxClusterSelector:
     matchLabels:
-      app: adx-mon
+      env: production # Selects the ADXCluster above
 
 ---
 
@@ -398,8 +353,8 @@ kind: Collector
 metadata:
   name: prod-collector
 spec:
-  image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
-  ingestorEndpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+  image: "myacr.azurecr.io/adx-mon/collector:v1.2.3"
+  # ingestorEndpoint: "http://ingestor-service.prod.svc.cluster.local:8080" # Optional: Override auto-discovery
 
 ---
 
@@ -408,8 +363,8 @@ kind: Alerter
 metadata:
   name: prod-alerter
 spec:
-  image: "ghcr.io/azure/adx-mon/alerter:v1.0.0"
-  notificationEndpoint: "http://alerter-endpoint"
+  image: "myacr.azurecr.io/adx-mon/alerter:v1.2.3"
+  notificationEndpoint: "http://prod-alertmanager.example.com:9093/api/v1/alerts"
   adxClusterSelector:
     matchLabels:
       app: adx-mon

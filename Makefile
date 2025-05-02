@@ -62,6 +62,9 @@ generate-crd:
 	mv bin/*.yaml kustomize/bases/
 	mv bin/*.go api/v1/
 	mv bin/PROJECT tools/crdgen/PROJECT
+
+	mkdir -p operator/manifests/crds
+	cp kustomize/bases/*.yaml operator/manifests/crds
 .PHONY: generate-crd
 
 default:

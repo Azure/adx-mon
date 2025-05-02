@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: ingestors.adx-mon.azure.com
+  name: alerters.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: Ingestor
-    listKind: IngestorList
-    plural: ingestors
-    singular: ingestor
+    kind: Alerter
+    listKind: AlerterList
+    plural: alerters
+    singular: alerter
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: Ingestor is the Schema for the ingestors API
+        description: Alerter is the Schema for the alerters API
         properties:
           apiVersion:
             description: |-
@@ -37,11 +37,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: IngestorSpec defines the desired state of Ingestor
+            description: AlerterSpec defines the desired state of Alerter
             properties:
               adxClusterSelector:
                 description: ADXClusterSelector is a label selector used to select
-                  the ADXCluster CRDs this ingestor should target. This field is required.
+                  the ADXCluster CRDs this alerter should target. This field is required.
                 properties:
                   matchExpressions:
                     description: matchExpressions is a list of label selector requirements.
@@ -86,37 +86,21 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
-              appliedProvisionState:
-                description: |-
-                  AppliedProvisionState is a JSON-serialized snapshot of the CRD
-                  as last applied by the operator. This is set by the operator and is read-only for users.
-                type: string
-              endpoint:
-                description: Endpoint is the endpoint to use for the ingestor. If
-                  running in a cluster, this should be the service name; otherwise,
-                  the operator will generate an endpoint. Optional.
-                type: string
-              exposeExternally:
-                default: false
-                description: ExposeExternally indicates if the ingestor should be
-                  exposed externally as reflected in the Endpoint. Optional; defaults
-                  to false.
-                type: boolean
               image:
-                description: Image is the container image to use for the ingestor
-                  component. Optional; if omitted, a default image will be used.
+                description: Image is the container image to use for the alerter component.
+                  Optional; if omitted, a default image will be used.
                 type: string
-              replicas:
-                default: 1
-                description: Replicas is the number of ingestor replicas to run. Optional;
-                  defaults to 1 if omitted.
-                format: int32
-                type: integer
+              notificationEndpoint:
+                description: NotificationEndpoint is the URI where alert notifications
+                  will be sent. This field is required.
+                format: uri
+                type: string
             required:
             - adxClusterSelector
+            - notificationEndpoint
             type: object
           status:
-            description: IngestorStatus defines the observed state of Ingestor
+            description: AlerterStatus defines the observed state of Alerter
             properties:
               conditions:
                 items:
