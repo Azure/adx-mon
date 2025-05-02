@@ -62,6 +62,10 @@ func (f *fakeUploader) Database() string {
 	return f.db
 }
 
+func (f *fakeUploader) Endpoint() string {
+	return "fake"
+}
+
 func (f *fakeUploader) upload(ctx context.Context) {
 	for {
 		select {

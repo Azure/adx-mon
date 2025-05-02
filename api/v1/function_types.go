@@ -20,27 +20,29 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // AllDatabases is a special value that indicates all databases
 // +k8s:deepcopy-gen=false
 const AllDatabases = "*"
 
 // FunctionSpec defines the desired state of Function
 type FunctionSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	//+kubebuilder:validation:Optional
 	// This flag tells the controller to suspend subsequent executions, it does
 	// not apply to already started executions.  Defaults to false.
-	// +optional
 	Suspend *bool `json:"suspend,omitempty"`
 
+	//+kubebuilder:validation:Required
 	// Database is the name of the database in which the function will be created
 	Database string `json:"database"`
+
+	//+kubebuilder:validation:Required
 	// Body is the KQL body of the function
 	Body string `json:"body"`
+
+	//+kubebuilder:validation:Optional
+	// AppliedEndpoint is a JSON-serialized of the endpoints that the function
+	// is applied to. This is set by the operator and is read-only for users.
+	AppliedEndpoint string `json:"appliedEndpoint,omitempty"`
 }
 
 // FunctionStatusEnum defines the possible status values for FunctionStatus

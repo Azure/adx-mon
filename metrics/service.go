@@ -30,6 +30,7 @@ type TimeSeriesWriter interface {
 
 type StatementExecutor interface {
 	Database() string
+	Endpoint() string
 	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 

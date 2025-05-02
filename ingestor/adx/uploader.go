@@ -28,6 +28,7 @@ type Uploader interface {
 	service.Component
 
 	Database() string
+	Endpoint() string
 
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan *cluster.Batch
@@ -122,6 +123,10 @@ func (n *uploader) UploadQueue() chan *cluster.Batch {
 
 func (n *uploader) Database() string {
 	return n.database
+}
+
+func (n *uploader) Endpoint() string {
+	return n.KustoCli.Endpoint()
 }
 
 func (n *uploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {

@@ -36,6 +36,7 @@ type DropUnusedTablesTask struct {
 
 type StatementExecutor interface {
 	Database() string
+	Endpoint() string
 	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
@@ -142,24 +143,34 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			return nil
 		}
 
-		stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
-		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-			if !errors.Retry(err) {
-				logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-				if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
-					logger.Errorf("Failed to update permanent failure status: %v", err)
+		// If endpoints have changed, or function is not in Success, re-apply
+		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success {
+			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
+			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				if !errors.Retry(err) {
+					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
+					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
+						logger.Errorf("Failed to update permanent failure status: %v", err)
+					}
+					continue
+				} else {
+					t.updateKQLFunctionStatus(ctx, function, v1.Failed, err)
+					logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
+					continue
 				}
-				continue
-			} else {
-				t.updateKQLFunctionStatus(ctx, function, v1.Failed, err)
-				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-				continue
 			}
-		}
 
-		logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
-		if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
-			logger.Errorf("Failed to update success status: %v", err)
+			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
+			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
+				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
+				if err := t.store.Update(ctx, function); err != nil {
+					logger.Errorf("Failed to update function %s.%s: %v", function.Spec.Database, function.Name, err)
+				}
+			}
+
+			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
+				logger.Errorf("Failed to update success status: %v", err)
+			}
 		}
 	}
 

@@ -56,6 +56,10 @@ func (d *dispatcher) Database() string {
 	return ""
 }
 
+func (d *dispatcher) Endpoint() string {
+	return ""
+}
+
 func (d *dispatcher) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
 	// Not implemented.  Should this fanout to all uploaders?
 	return nil, nil

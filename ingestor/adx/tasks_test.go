@@ -27,12 +27,17 @@ import (
 
 type TestStatementExecutor struct {
 	database    string
+	endpoint    string
 	stmts       []string
 	nextMgmtErr error
 }
 
 func (t *TestStatementExecutor) Database() string {
 	return t.database
+}
+
+func (t *TestStatementExecutor) Endpoint() string {
+	return t.endpoint
 }
 
 func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
@@ -48,6 +53,7 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 
 type TestFunctionStore struct {
 	funcs         []*v1.Function
+	updates       []*v1.Function
 	statusUpdates []*v1.Function
 	nextUpdateErr error
 }
@@ -60,12 +66,34 @@ func (t *TestFunctionStore) List(ctx context.Context) ([]*v1.Function, error) {
 	return ret, nil
 }
 
-func (t *TestFunctionStore) UpdateStatus(ctx context.Context, fn *v1.Function) error {
-	t.statusUpdates = append(t.statusUpdates, fn)
+func (t *TestFunctionStore) Update(ctx context.Context, fn *v1.Function) error {
+	t.updates = append(t.updates, fn.DeepCopy())
 	if t.nextUpdateErr != nil {
 		ret := t.nextUpdateErr
 		t.nextUpdateErr = nil
 		return ret
+	}
+	for i, f := range t.funcs {
+		if f.Name == fn.Name && f.Namespace == fn.Namespace {
+			t.funcs[i] = fn.DeepCopy()
+			break
+		}
+	}
+	return nil
+}
+
+func (t *TestFunctionStore) UpdateStatus(ctx context.Context, fn *v1.Function) error {
+	t.statusUpdates = append(t.statusUpdates, fn.DeepCopy())
+	if t.nextUpdateErr != nil {
+		ret := t.nextUpdateErr
+		t.nextUpdateErr = nil
+		return ret
+	}
+	for i, f := range t.funcs {
+		if f.Name == fn.Name && f.Namespace == fn.Namespace {
+			t.funcs[i].Status = *fn.Status.DeepCopy()
+			break
+		}
 	}
 	return nil
 }
@@ -422,6 +450,10 @@ type KustoStatementExecutor struct {
 
 func (k *KustoStatementExecutor) Database() string {
 	return k.database
+}
+
+func (k *KustoStatementExecutor) Endpoint() string {
+	return k.client.Endpoint()
 }
 
 func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
