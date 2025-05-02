@@ -551,6 +551,14 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			sinks := []types.Sink{sink}
+			for _, exporterName := range v.Exporters {
+				sink, err := config.GetLogsExporter(exporterName, cfg.Exporters)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to get exporter %s: %w", exporterName, err)
+				}
+				sinks = append(sinks, sink)
+			}
+
 			logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
 				WorkerCreator: engine.WorkerCreator(transformers, sinks),
 				HealthChecker: health,
