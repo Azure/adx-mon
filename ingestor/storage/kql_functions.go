@@ -22,6 +22,7 @@ const (
 
 type Functions interface {
 	UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error
+	Update(ctx context.Context, fn *adxmonv1.Function) error
 	List(ctx context.Context) ([]*adxmonv1.Function, error)
 }
 
@@ -35,6 +36,19 @@ func NewFunctions(client client.Client, elector scheduler.Elector) *functions {
 		Client:  client,
 		Elector: elector,
 	}
+}
+
+func (f *functions) Update(ctx context.Context, fn *adxmonv1.Function) error {
+	if f.Client == nil {
+		return errors.New("no client provided")
+	}
+
+	if err := f.Client.Update(ctx, fn); err != nil {
+		logger.Errorf("Failed to update function %s: %v", fn.Name, err)
+		return err
+	}
+
+	return nil
 }
 
 func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error {
