@@ -304,6 +304,162 @@ This configuration demonstrates:
 
 ---
 
+## CRD Enhancements for Federated Cluster Support
+
+To enable federated cluster functionality, the ADXCluster CRD is extended with new fields and sections as follows:
+
+### Role Field
+
+Specify the cluster's role:
+- `role: Partition` (default, for data-holding clusters)
+- `role: Federated` (for the central federating cluster)
+
+### Federation Section
+
+A new `federation` section encapsulates all federation-related configuration.
+
+#### For Partition Clusters
+
+```yaml
+spec:
+  role: Partition
+  federation:
+    federatedClusters:
+      - endpoint: "https://federated.kusto.windows.net"
+        heartbeatDatabase: "FleetDiscovery"
+        heartbeatTable: "Heartbeats"
+        managedIdentityClientId: "xxxx-xxxx-xxxx"
+    partitioning:
+      geo: "EU"
+      location: "westeurope"
+```
+- `federatedClusters`: List of federated cluster endpoints and heartbeat config.
+- `partitioning`: Open-ended map/object for partitioning metadata (geo, location, tenant, etc.).
+
+#### For Federated Clusters
+
+```yaml
+spec:
+  clusterName: hub
+  endpoint: "https://hub.kusto.windows.net"
+  provision:
+    subscriptionId: "00000000-0000-0000-0000-000000000000"
+    resourceGroup: "adx-monitor-prod"
+    location: "eastus2"
+    skuName: "Standard_L8as_v3"
+    tier: "Standard"
+    managedIdentityClientId: "11111111-1111-1111-1111-111111111111"
+  role: Federated
+  federation:
+    heartbeatDatabase: "FleetDiscovery"
+    heartbeatTable: "Heartbeats"
+    heartbeatTTL: "1h"
+    macroExpand:
+      functionPrefix: "federated_"
+      bestEffort: true
+      folder: "federation_facades"
+```
+- `heartbeatDatabase`/`heartbeatTable`: Where to read heartbeats from.
+- `heartbeatTTL`: How recent a heartbeat must be to consider a partition cluster live.
+- `macroExpand`: Options for macro-expand KQL function generation.
+  - `functionPrefix`: Prefix for generated KQL functions.
+  - `bestEffort`: Use best effort mode for macro-expand.
+  - `folder`: Folder in the federated cluster where macro-expand facades/functions are stored.
+
+### Heartbeat Table Schema
+
+The federated feature relies on a `heartbeat` table in the federated cluster to track the state and topology of partition clusters. The schema for this table is as follows:
+
+| Column Name        | Type      | Description                                      |
+|--------------------|-----------|--------------------------------------------------|
+| Timestamp          | datetime  | When the heartbeat was sent                      |
+| ClusterEndpoint    | string    | The endpoint of the partition cluster            |
+| Schema             | dynamic   | Databases and tables present in the partition    |
+| PartitionMetadata  | dynamic   | Partitioning attributes (geo, location, etc.)    |
+
+#### Field Explanations
+- **Timestamp**: The UTC time when the partition cluster emitted the heartbeat.
+- **ClusterEndpoint**: The fully qualified endpoint URL of the partition cluster.
+- **Schema**: A dynamic object describing the databases and tables present in the partition cluster. For example:
+  ```json
+  [
+    {
+      "database": "Logs",
+      "tables": ["A", "B", "C"]
+    }
+  ]
+  ```
+- **PartitionMetadata**: A dynamic object containing the partitioning strategy and attributes for the cluster, such as geo or location. For example:
+  ```json
+  {
+    "geo": "EU",
+    "location": "westeurope"
+  }
+  ```
+
+#### Example Log Row
+```json
+{
+    "Timestamp": "2025-05-03T12:34:56Z",
+    "ClusterEndpoint": "https://eu-partition.kusto.windows.net",
+    "Schema": [
+        {
+            "database": "Logs",
+            "tables": ["A", "B", "C"]
+        }
+    ],
+    "PartitionMetadata": {
+        "geo": "EU",
+        "location": "westeurope"
+    }
+}
+```
+
+### Example CRD Snippets
+
+**Partition Cluster Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: eu-partition
+spec:
+  role: Partition
+  federation:
+    federatedClusters:
+      - endpoint: "https://federated.kusto.windows.net"
+        heartbeatDatabase: "FleetDiscovery"
+        heartbeatTable: "Heartbeats"
+        managedIdentityClientId: "xxxx-xxxx"
+    partitioning:
+      geo: "EU"
+      location: "westeurope"
+  # ...existing cluster config...
+```
+
+**Federated Cluster Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: federated
+spec:
+  role: Federated
+  federation:
+    heartbeatDatabase: "FleetDiscovery"
+    heartbeatTable: "Heartbeats"
+    heartbeatTTL: "1h"
+    macroExpand:
+      functionPrefix: "federated_"
+      bestEffort: true
+      folder: "federation_facades"
+  # ...existing cluster config...
+```
+
+These enhancements provide a clear, extensible way to configure both partition and federated clusters for the federation feature, including macro-expand facade management.
+
+---
+
 ## Operator Workflow
 
 1. **Granular Reconciliation:**  
@@ -326,6 +482,57 @@ This configuration demonstrates:
 3. **Sync Desired and Actual State:**  
    - If the Operator CRD is updated, reconcile the manifests and Azure resources as needed.
    - If the actual state drifts from the desired state, update the actual state to match the desired state.
+
+---
+
+## Federated Cluster Support
+
+### Overview
+
+The operator supports a federated ADX cluster model to enable organizations to partition telemetry data across multiple Azure Data Explorer (ADX) clusters, often to meet geographic or regulatory data residency requirements. The federated model provides a "single pane of glass" experience for querying and analytics, allowing users to query a central federated cluster that transparently federates queries across all partition clusters.
+
+### Architecture
+
+- **Partition Clusters:**  
+  Each partition cluster is managed by its own ADX operator instance and contains a subset of the data, typically partitioned by geography or other business criteria.
+
+- **Federated Cluster:**  
+  A central federated cluster is managed by a federated operator. This cluster does not manage the lifecycle of partition clusters, but provides a unified query interface.
+
+### Discovery Mechanism
+
+- **Heartbeat-Based Discovery:**  
+  - Partition cluster operators are configured with the endpoint(s) of the federated cluster via the ADX CRD.
+  - Each partition cluster operator periodically sends a heartbeat log row to a specified database and table in the federated cluster.
+  - The heartbeat includes:
+    - Partition cluster endpoint
+    - List of databases and tables (as a dynamic object)
+    - Partitioning schema (e.g., location, geo, tenant) as a dynamic object
+    - Timestamp
+  - The federated operator periodically queries the heartbeat table (e.g., `Heartbeats | where Timestamp > ago(1h) | distinct Endpoint`) to discover live partition clusters and their topologies.
+  - Liveness is inferred from heartbeat freshness; clusters that have not heartbeated recently are excluded from federated queries.
+  - Retention policy on the heartbeat table ensures cleanup of old/stale entries.
+
+- **Authentication:**  
+  - Partition clusters authenticate to the federated cluster using Microsoft-supported mechanisms (e.g., Managed Service Identity), with the identity specified in the CRD.
+
+### Federated Querying
+
+- **Macro-Expand Operator:**  
+  - The federated cluster uses the Kusto macro-expand operator to define KQL functions or queries that union data from all live partition clusters.
+  - Entity groups for macro-expand are dynamically constructed based on the current fleet topology, as discovered via heartbeats.
+  - This enables the federated cluster to present a single logical view for each table, while queries are transparently federated across all relevant clusters and databases.
+  - The federated operator updates KQL functions and entity groups as the fleet topology changes.
+
+- **Schema Flexibility:**  
+  - The dynamic object for database/table topology allows the federated operator to only federate queries to clusters that actually contain the relevant table, improving efficiency and flexibility.
+
+### Operational Considerations
+
+- Heartbeat interval and retention policy are configurable.
+- MSI permissions must be correctly configured for secure heartbeat writes.
+- The federated operator must handle schema differences and errors gracefully.
+- Metrics and alerts should be implemented for missed heartbeats or authentication failures.
 
 ---
 
