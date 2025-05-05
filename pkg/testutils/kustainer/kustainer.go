@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,8 +35,10 @@ import (
 type KustainerContainer struct {
 	testcontainers.Container
 
-	endpoint string
-	stop     chan struct{}
+	endpoint    string
+	stop        chan struct{}
+	mu          sync.Mutex // protects endpoint and stop
+	monitorOnce sync.Once  // ensures monitor is started only once
 }
 
 func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KustainerContainer, error) {
@@ -119,6 +122,10 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 	for i := range 5 {
 		err = c.connect(ctx, config, podName)
 		if err == nil {
+			// Start connection monitor only once
+			c.monitorOnce.Do(func() {
+				go c.monitorConnection(ctx, config, podName)
+			})
 			return nil
 		}
 		lastErr = err
@@ -126,6 +133,56 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 		time.Sleep(time.Second * time.Duration(2<<i))
 	}
 	return fmt.Errorf("failed to connect to kustainer after retries: %w", lastErr)
+}
+
+// monitorConnection periodically checks the endpoint and reconnects if needed.
+func (c *KustainerContainer) monitorConnection(ctx context.Context, config *rest.Config, podName string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		c.mu.Lock()
+		endpoint := c.endpoint
+		stop := c.stop
+		c.mu.Unlock()
+		if endpoint == "" {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		// Use net.Dial to check if the port is open
+		u, err := url.Parse(endpoint)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		host := u.Host
+		if !strings.Contains(host, ":") {
+			host += ":8080"
+		}
+		conn, err := net.DialTimeout("tcp", host, 2*time.Second)
+		if err != nil {
+			// Connection is unhealthy, attempt reconnect
+			if stop != nil {
+				close(stop)
+			}
+			// Try to reconnect
+			for i := 0; i < 5; i++ {
+				if ctx.Err() != nil {
+					return
+				}
+				err := c.connect(ctx, config, podName)
+				if err == nil {
+					break
+				}
+				time.Sleep(time.Second * time.Duration(2<<i))
+			}
+		} else {
+			conn.Close()
+		}
+		time.Sleep(3 * time.Second)
+	}
 }
 
 func (c *KustainerContainer) Close() error {
@@ -231,8 +288,10 @@ func (c *KustainerContainer) connect(ctx context.Context, config *rest.Config, p
 			return fmt.Errorf("failed to get local port: %w", err)
 		}
 		endpoint := fmt.Sprintf("http://localhost:%d", localPorts[0].Local)
+		c.mu.Lock()
 		c.stop = stopChan
 		c.endpoint = endpoint
+		c.mu.Unlock()
 		return nil
 	case <-time.After(10 * time.Second):
 		close(stopChan)

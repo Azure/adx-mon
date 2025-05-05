@@ -262,9 +262,8 @@ func TestFunctions(t *testing.T) {
 		fn.Spec.Body = ".create-or-alter function testtest() { print 'Hello World 2' }"
 		require.NoError(t, ctrlCli.Update(ctx, fn))
 
-		require.NoError(t, task.Run(ctx))
-
 		require.Eventually(t, func() bool {
+			require.NoError(t, task.Run(ctx))
 			fn := testutils.GetFunction(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
 			return strings.Contains(fn.Body, "Hello World 2")
 		}, 10*time.Minute, time.Second)
@@ -275,9 +274,8 @@ func TestFunctions(t *testing.T) {
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
 		require.NoError(t, ctrlCli.Delete(ctx, fn))
 
-		require.NoError(t, task.Run(ctx))
-
 		require.Eventually(t, func() bool {
+			require.NoError(t, task.Run(ctx))
 			return !testutils.FunctionExists(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
 		}, 10*time.Minute, time.Second)
 	})
@@ -294,9 +292,9 @@ func TestFunctions(t *testing.T) {
 			},
 		}
 		require.NoError(t, ctrlCli.Create(ctx, fn))
-		require.NoError(t, task.Run(ctx))
 
 		require.Eventually(t, func() bool {
+			require.NoError(t, task.Run(ctx))
 			return testutils.FunctionExists(ctx, t, executor.Database(), "a", kustoContainer.ConnectionUrl()) &&
 				testutils.FunctionExists(ctx, t, executor.Database(), "b", kustoContainer.ConnectionUrl())
 		}, 10*time.Minute, time.Second)
@@ -325,9 +323,9 @@ func TestFunctions(t *testing.T) {
 			},
 		}
 		require.NoError(t, ctrlCli.Create(ctx, fn))
-		require.NoError(t, task.Run(ctx))
 
 		require.Eventually(t, func() bool {
+			require.NoError(t, task.Run(ctx))
 			fnr := &adxmonv1.Function{}
 			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fnr))
 			return fnr.Status.Status == v1.PermanentFailure
@@ -388,9 +386,9 @@ func TestManagementCommands(t *testing.T) {
 			},
 		}
 		require.NoError(t, ctrlCli.Create(ctx, fn))
-		require.NoError(t, task.Run(ctx))
 
 		require.Eventually(t, func() bool {
+			require.NoError(t, task.Run(ctx))
 			cmd := &adxmonv1.ManagementCommand{}
 			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, cmd))
 
@@ -425,9 +423,9 @@ func TestManagementCommands(t *testing.T) {
 			},
 		}
 		require.NoError(t, ctrlCli.Create(ctx, fn))
-		require.NoError(t, task.Run(ctx))
 
 		require.Eventually(t, func() bool {
+			require.NoError(t, task.Run(ctx))
 			cmd := &adxmonv1.ManagementCommand{}
 			require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, cmd))
 
