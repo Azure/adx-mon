@@ -28,6 +28,8 @@ func newParser(parserType ParserType) (Parser, error) {
 		return NewKeyValueParser(KeyValueParserConfig{})
 	case ParserTypeSpace:
 		return NewSpaceParser(SpaceParserConfig{})
+	case ParserTypeKlog:
+		return NewKlogParser(KlogParserConfig{})
 	default:
 		return nil, fmt.Errorf("unknown parser type: %s", parserType)
 	}
@@ -55,6 +57,8 @@ func IsValidParser(parserType string) bool {
 	case string(ParserTypeKeyValue):
 		return true
 	case string(ParserTypeSpace):
+		return true
+	case string(ParserTypeKlog):
 		return true
 	default:
 		return false

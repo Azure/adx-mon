@@ -16,8 +16,8 @@ func TestNewParsers(t *testing.T) {
 	}{
 		{
 			name:     "valid parser",
-			input:    []string{"json", "keyvalue"},
-			expected: []Parser{&JsonParser{}, &KeyValueParser{}},
+			input:    []string{"json", "keyvalue", "klog"},
+			expected: []Parser{&JsonParser{}, &KeyValueParser{}, &KlogParser{}},
 		},
 		{
 			name:     "empty",
@@ -61,6 +61,11 @@ func TestIsValidParser(t *testing.T) {
 		{
 			name:     "valid keyvalue",
 			input:    "keyvalue",
+			expected: true,
+		},
+		{
+			name:     "valid klog",
+			input:    "klog",
 			expected: true,
 		},
 		{
@@ -178,6 +183,41 @@ func TestExecuteParsers(t *testing.T) {
 			expectedBody: map[string]interface{}{
 				"a": "b",
 				"c": "d",
+			},
+		},
+		{
+			name:    "successful klog parse",
+			parsers: []Parser{&KlogParser{}},
+			message: `I0506 15:40:33.494743       1 bounded_frequency_runner.go:296] "sync-runner: ran, next possible in 1s, periodic in 1h0m0s"`,
+			expectedBody: map[string]interface{}{
+				"filename":    "bounded_frequency_runner.go",
+				"line_number": "296",
+				"timestamp":   "15:40:33.494743",
+				"message":     "sync-runner: ran, next possible in 1s, periodic in 1h0m0s",
+			},
+		},
+		{
+			name:    "klog parse with key-value pairs",
+			parsers: []Parser{&KlogParser{}},
+			message: `I1025 00:15:15.525108       1 controller_utils.go:116] "Pod status updated" pod="kube-system/kubedns" status="ready"`,
+			expectedBody: map[string]interface{}{
+				"timestamp":   "00:15:15.525108",
+				"filename":    "controller_utils.go",
+				"line_number": "116",
+				"message":     "Pod status updated",
+				"pod":         "kube-system/kubedns",
+				"status":      "ready",
+			},
+		},
+		{
+			name:    "klog parse with unstructured message",
+			parsers: []Parser{&KlogParser{}},
+			message: `I0506 15:40:33.494743       1 bounded_frequency_runner.go:296] sync-runner: ran, next possible in 1s, periodic in 1h0m0s`,
+			expectedBody: map[string]interface{}{
+				"timestamp":   "15:40:33.494743",
+				"filename":    "bounded_frequency_runner.go",
+				"line_number": "296",
+				"message":     "sync-runner: ran, next possible in 1s, periodic in 1h0m0s",
 			},
 		},
 	}
