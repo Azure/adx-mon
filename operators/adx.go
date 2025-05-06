@@ -349,73 +349,9 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 
-	clusterUpdate := kusto.Cluster{
-		Location:   resp.Location,
-		SKU:        resp.SKU,
-		Identity:   resp.Identity,
-		Properties: resp.Properties,
-	}
-	var updated bool
-	if resp.SKU != nil {
-		if resp.SKU.Name != nil && string(*resp.SKU.Name) == appliedProvisionState.SkuName && appliedProvisionState.SkuName != cluster.Spec.Provision.SkuName {
-			logger.Infof("Updating cluster %s sku from %s to %s", *resp.Name, string(*resp.SKU.Name), cluster.Spec.Provision.SkuName)
-			clusterUpdate.SKU.Name = toSku(cluster.Spec.Provision.SkuName)
-			updated = true
-		}
-		if resp.SKU.Tier != nil && string(*resp.SKU.Tier) == appliedProvisionState.Tier && appliedProvisionState.Tier != cluster.Spec.Provision.Tier {
-			logger.Infof("Updating cluster %s tier from %s to %s", *resp.Name, string(*resp.SKU.Tier), cluster.Spec.Provision.Tier)
-			clusterUpdate.SKU.Tier = toTier(cluster.Spec.Provision.Tier)
-			updated = true
-		}
-	}
-	if resp.Identity != nil && resp.Identity.Type != nil && *resp.Identity.Type == kusto.IdentityTypeUserAssigned && appliedProvisionState.UserAssignedIdentities != nil {
-		// This block is responsible for reconciling the set of user-assigned identities on the cluster.
-		// The goal is to ensure that only the identities managed by the operator (i.e., those specified in the CRD)
-		// are added or removed, without disturbing any identities that may have been added out-of-band (e.g., manually in Azure).
-		//
-		// To do this, we compare the set of user-assigned identities from the last-applied state (appliedProvisionState.UserAssignedIdentities)
-		// with the current desired state from the CRD (cluster.Spec.Provision.UserAssignedIdentities):
-		//   - For any identity present in the CRD but not in the applied state, we add it to resp.Identity.UserAssignedIdentities
-		//     (but only if it isn't already present, to avoid overwriting manual additions).
-		//   - For any identity present in the applied state but not in the CRD, we remove it from resp.Identity.UserAssignedIdentities
-		//     (but only if it is present, and only if it was previously managed by the operator).
-		//
-		// This approach ensures that we do not inadvertently remove or alter any identities that a user may have added
-		// directly in Azure or through other means. Only the identities that the operator is responsible for are managed here.
-		// The 'updated' flag is set to true if any changes are made, so that the update can be persisted.
-
-		// Build sets for comparison
-		currentSet := make(map[string]struct{})
-		for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
-			currentSet[id] = struct{}{}
-		}
-		appliedSet := make(map[string]struct{})
-		for _, id := range appliedProvisionState.UserAssignedIdentities {
-			appliedSet[id] = struct{}{}
-		}
-		// Additions: in currentSet but not in appliedSet
-		for id := range currentSet {
-			if _, wasApplied := appliedSet[id]; !wasApplied {
-				if resp.Identity.UserAssignedIdentities == nil {
-					clusterUpdate.Identity.UserAssignedIdentities = make(map[string]*kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
-				}
-				if _, exists := resp.Identity.UserAssignedIdentities[id]; !exists {
-					clusterUpdate.Identity.UserAssignedIdentities[id] = &kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
-					updated = true
-				}
-			}
-		}
-		// Deletions: in appliedSet but not in currentSet
-		for id := range appliedSet {
-			if _, isCurrent := currentSet[id]; !isCurrent {
-				if resp.Identity.UserAssignedIdentities != nil {
-					if _, exists := resp.Identity.UserAssignedIdentities[id]; exists {
-						delete(clusterUpdate.Identity.UserAssignedIdentities, id)
-						updated = true
-					}
-				}
-			}
-		}
+	clusterUpdate, updated := diffSkus(resp, appliedProvisionState, cluster)
+	if diffIdentities(resp, appliedProvisionState, cluster, &clusterUpdate) {
+		updated = true
 	}
 
 	if !updated {
@@ -722,6 +658,85 @@ func applyDefaults(ctx context.Context, r *AdxReconciler, cluster *adxmonv1.ADXC
 	}
 
 	return nil
+}
+
+func diffSkus(resp kusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (kusto.Cluster, bool) {
+	clusterUpdate := kusto.Cluster{
+		Location:   resp.Location,
+		SKU:        resp.SKU,
+		Identity:   resp.Identity,
+		Properties: resp.Properties,
+	}
+	if resp.SKU == nil {
+		return clusterUpdate, false
+	}
+
+	var updated bool
+	if resp.SKU.Name != nil && string(*resp.SKU.Name) == appliedProvisionState.SkuName && appliedProvisionState.SkuName != cluster.Spec.Provision.SkuName {
+		logger.Infof("Updating cluster %s sku from %s to %s", *resp.Name, string(*resp.SKU.Name), cluster.Spec.Provision.SkuName)
+		clusterUpdate.SKU.Name = toSku(cluster.Spec.Provision.SkuName)
+		updated = true
+	}
+	if resp.SKU.Tier != nil && string(*resp.SKU.Tier) == appliedProvisionState.Tier && appliedProvisionState.Tier != cluster.Spec.Provision.Tier {
+		logger.Infof("Updating cluster %s tier from %s to %s", *resp.Name, string(*resp.SKU.Tier), cluster.Spec.Provision.Tier)
+		clusterUpdate.SKU.Tier = toTier(cluster.Spec.Provision.Tier)
+		updated = true
+	}
+	return clusterUpdate, updated
+}
+
+func diffIdentities(resp kusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *kusto.Cluster) bool {
+	var updated bool
+	if resp.Identity != nil && resp.Identity.Type != nil && *resp.Identity.Type == kusto.IdentityTypeUserAssigned && appliedProvisionState.UserAssignedIdentities != nil {
+		// This block is responsible for reconciling the set of user-assigned identities on the cluster.
+		// The goal is to ensure that only the identities managed by the operator (i.e., those specified in the CRD)
+		// are added or removed, without disturbing any identities that may have been added out-of-band (e.g., manually in Azure).
+		//
+		// To do this, we compare the set of user-assigned identities from the last-applied state (appliedProvisionState.UserAssignedIdentities)
+		// with the current desired state from the CRD (cluster.Spec.Provision.UserAssignedIdentities):
+		//   - For any identity present in the CRD but not in the applied state, we add it to resp.Identity.UserAssignedIdentities
+		//     (but only if it isn't already present, to avoid overwriting manual additions).
+		//   - For any identity present in the applied state but not in the CRD, we remove it from resp.Identity.UserAssignedIdentities
+		//     (but only if it is present, and only if it was previously managed by the operator).
+		//
+		// This approach ensures that we do not inadvertently remove or alter any identities that a user may have added
+		// directly in Azure or through other means. Only the identities that the operator is responsible for are managed here.
+		// The 'updated' flag is set to true if any changes are made, so that the update can be persisted.
+
+		// Build sets for comparison
+		currentSet := make(map[string]struct{})
+		for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
+			currentSet[id] = struct{}{}
+		}
+		appliedSet := make(map[string]struct{})
+		for _, id := range appliedProvisionState.UserAssignedIdentities {
+			appliedSet[id] = struct{}{}
+		}
+		// Additions: in currentSet but not in appliedSet
+		for id := range currentSet {
+			if _, wasApplied := appliedSet[id]; !wasApplied {
+				if resp.Identity.UserAssignedIdentities == nil {
+					clusterUpdate.Identity.UserAssignedIdentities = make(map[string]*kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
+				}
+				if _, exists := resp.Identity.UserAssignedIdentities[id]; !exists {
+					clusterUpdate.Identity.UserAssignedIdentities[id] = &kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+					updated = true
+				}
+			}
+		}
+		// Deletions: in appliedSet but not in currentSet
+		for id := range appliedSet {
+			if _, isCurrent := currentSet[id]; !isCurrent {
+				if resp.Identity.UserAssignedIdentities != nil {
+					if _, exists := resp.Identity.UserAssignedIdentities[id]; exists {
+						delete(clusterUpdate.Identity.UserAssignedIdentities, id)
+						updated = true
+					}
+				}
+			}
+		}
+	}
+	return updated
 }
 
 func toSku(sku string) *armkusto.AzureSKUName {

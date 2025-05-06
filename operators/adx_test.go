@@ -11,7 +11,9 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/stretchr/testify/require"
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -184,4 +186,273 @@ func TestAdxClusterCreate(t *testing.T) {
 
 		return meta.IsStatusConditionTrue(fetched.Status.Conditions, adxmonv1.ADXClusterConditionOwner)
 	}, 30*time.Minute, time.Minute, "Wait for Kusto to become ready")
+}
+
+func TestDiffSkus(t *testing.T) {
+	tests := []struct {
+		name                  string
+		resp                  armkusto.ClustersClientGetResponse // The state of the cluster in Azure
+		appliedProvisionState *adxmonv1.AppliedProvisionState    // The configuration from when the cluster was previously upserted
+		cluster               *adxmonv1.ADXCluster               // The current configuration, or the desired state
+		wantUpdated           bool
+		wantSkuName           string
+		wantTier              string
+	}{
+		// Actual state matches the previous configuration and the current configuration, nothing to do
+		{
+			name: "no changes needed",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					SKU: &armkusto.AzureSKU{
+						Name: (*armkusto.AzureSKUName)(to.Ptr("Standard_L8as_v3")),
+						Tier: (*armkusto.AzureSKUTier)(to.Ptr("Standard")),
+					},
+					Name: to.Ptr("adxmon-test"),
+				},
+			},
+			appliedProvisionState: &adxmonv1.AppliedProvisionState{
+				SkuName: "Standard_L8as_v3",
+				Tier:    "Standard",
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						SkuName: "Standard_L8as_v3",
+						Tier:    "Standard",
+					},
+				},
+			},
+			wantUpdated: false,
+		},
+		// Our CRD / configuration was updated, and the actual state in Azure matches the previously applied state, so we can update
+		{
+			name: "sku name updated",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					SKU: &armkusto.AzureSKU{
+						Name: (*armkusto.AzureSKUName)(to.Ptr("Standard_L8as_v3")),
+						Tier: (*armkusto.AzureSKUTier)(to.Ptr("Standard")),
+					},
+					Name: to.Ptr("adxmon-test"),
+				},
+			},
+			appliedProvisionState: &adxmonv1.AppliedProvisionState{
+				SkuName: "Standard_L8as_v3",
+				Tier:    "Standard",
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						SkuName: "Standard_L16as_v3",
+						Tier:    "Standard",
+					},
+				},
+			},
+			wantUpdated: true,
+			wantSkuName: "Standard_L16as_v3",
+			wantTier:    "Standard",
+		},
+		// The Sku name was updated in Azure, we expect to take no action
+		{
+			name: "sku name updated manually",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					SKU: &armkusto.AzureSKU{
+						Name: (*armkusto.AzureSKUName)(to.Ptr("Standard_L16as_v3")),
+						Tier: (*armkusto.AzureSKUTier)(to.Ptr("Standard")),
+					},
+					Name: to.Ptr("adxmon-test"),
+				},
+			},
+			appliedProvisionState: &adxmonv1.AppliedProvisionState{
+				SkuName: "Standard_L8as_v3",
+				Tier:    "Standard",
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						SkuName: "Standard_L16as_v3",
+						Tier:    "Standard",
+					},
+				},
+			},
+			wantUpdated: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clusterUpdate, updated := diffSkus(tt.resp, tt.appliedProvisionState, tt.cluster)
+			require.Equal(t, tt.wantUpdated, updated)
+
+			if updated {
+				require.NotNil(t, clusterUpdate.SKU)
+				require.Equal(t, tt.wantSkuName, string(*clusterUpdate.SKU.Name))
+				require.Equal(t, tt.wantTier, string(*clusterUpdate.SKU.Tier))
+			}
+		})
+	}
+}
+
+func TestDiffIdentities(t *testing.T) {
+	makeUserAssignedIdentitiesMap := func(ids ...string) map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties {
+		m := make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
+		for _, id := range ids {
+			m[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+		}
+		return m
+	}
+
+	tests := []struct {
+		name        string
+		resp        armkusto.ClustersClientGetResponse // The state of the cluster in Azure
+		applied     *adxmonv1.AppliedProvisionState    // The configuration from when the cluster was previously upserted
+		cluster     *adxmonv1.ADXCluster               // The current configuration, or the desired state
+		wantUpdated bool
+		wantIDs     []string
+	}{
+		{
+			// Scenario: Adding a new user-assigned identity via the CRD when none existed before.
+			// Tests that the operator detects the addition and updates the cluster accordingly.
+			name: "add identity",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type:                   to.Ptr(armkusto.IdentityTypeUserAssigned),
+						UserAssignedIdentities: makeUserAssignedIdentitiesMap(),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						UserAssignedIdentities: []string{"/id1"},
+					},
+				},
+			},
+			wantUpdated: true,
+			wantIDs:     []string{"/id1"},
+		},
+		{
+			// Scenario: Removing a user-assigned identity from the CRD when one existed before.
+			// Tests that the operator detects the removal and updates the cluster accordingly.
+			name: "remove identity",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type:                   to.Ptr(armkusto.IdentityTypeUserAssigned),
+						UserAssignedIdentities: makeUserAssignedIdentitiesMap("/id1"),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{"/id1"},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						UserAssignedIdentities: []string{},
+					},
+				},
+			},
+			wantUpdated: true,
+			wantIDs:     []string{},
+		},
+		{
+			// Scenario: No change in user-assigned identities between CRD, applied, and Azure state.
+			// Tests that the operator does not trigger an update when nothing has changed.
+			name: "no change",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type:                   to.Ptr(armkusto.IdentityTypeUserAssigned),
+						UserAssignedIdentities: makeUserAssignedIdentitiesMap("/id1"),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{"/id1"},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						UserAssignedIdentities: []string{"/id1"},
+					},
+				},
+			},
+			wantUpdated: false,
+			wantIDs:     []string{"/id1"},
+		},
+		{
+			// Scenario: There is an unmanaged identity present in Azure that is not tracked by the operator.
+			// Tests that the operator preserves unmanaged identities when updating the set.
+			name: "preserve unmanaged identity",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type:                   to.Ptr(armkusto.IdentityTypeUserAssigned),
+						UserAssignedIdentities: makeUserAssignedIdentitiesMap("/id1", "/unmanaged"),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{"/id1"},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						UserAssignedIdentities: []string{},
+					},
+				},
+			},
+			wantUpdated: true,
+			wantIDs:     []string{"/unmanaged"},
+		},
+		{
+			// Scenario: The identity type is not user-assigned (e.g., system-assigned only).
+			// Tests that the operator does not attempt to update user-assigned identities in this case.
+			name: "identity type not user assigned",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type: to.Ptr(armkusto.IdentityTypeSystemAssigned),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{"/id1"},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{
+						UserAssignedIdentities: []string{"/id1"},
+					},
+				},
+			},
+			wantUpdated: false,
+			wantIDs:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clusterUpdate := armkusto.Cluster{
+				Identity: tt.resp.Identity,
+			}
+			updated := diffIdentities(tt.resp, tt.applied, tt.cluster, &clusterUpdate)
+			require.Equal(t, tt.wantUpdated, updated)
+			if tt.wantIDs == nil {
+				require.Nil(t, clusterUpdate.Identity.UserAssignedIdentities)
+				return
+			}
+			var gotIDs []string
+			for id := range clusterUpdate.Identity.UserAssignedIdentities {
+				gotIDs = append(gotIDs, id)
+			}
+			require.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
 }
