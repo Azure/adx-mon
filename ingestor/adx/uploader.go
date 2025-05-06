@@ -3,6 +3,7 @@ package adx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -203,7 +204,7 @@ func sanitizeErrorString(err error) error {
 	errString := err.Error()
 	r := regexp.MustCompile(`sig=[a-zA-Z0-9]+`)
 	errString = r.ReplaceAllString(errString, "sig=REDACTED")
-	return fmt.Errorf(errString)
+	return errors.New(errString)
 }
 
 func (n *uploader) upload(ctx context.Context) error {

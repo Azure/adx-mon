@@ -45,7 +45,7 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		logger.Fatalf(err.Error())
+		logger.Fatal(err.Error())
 	}
 }
 
@@ -133,7 +133,7 @@ func realMain(ctx *cli.Context) error {
 		// Shutdown the server and cancel context
 		err := svc.Close()
 		if err != nil {
-			logger.Errorf(err.Error())
+			logger.Error(err.Error())
 		}
 	}()
 	<-svcCtx.Done()
