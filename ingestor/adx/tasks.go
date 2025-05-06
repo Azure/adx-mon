@@ -144,7 +144,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		}
 
 		// If endpoints have changed, or function is not in Success, re-apply
-		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success {
+		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
 			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 				if !errors.Retry(err) {
