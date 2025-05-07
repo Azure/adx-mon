@@ -88,14 +88,29 @@ spec:
                   for the ADX cluster. If omitted, the operator will attempt zero-config
                   provisioning using Azure IMDS.
                 properties:
+                  appliedProvisionState:
+                    description: |-
+                      AppliedProvisionState is a JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities
+                      as last applied by the operator. This is set by the operator and is read-only for users.
+                    type: string
+                  autoScale:
+                    description: |-
+                      //+kubebuilder:default=false
+                      AutoScale indicates whether to enable auto-scaling for the ADX cluster. Optional. Defaults to false if not specified.
+                    type: boolean
+                  autoScaleMax:
+                    default: 10
+                    description: AutoScaleMax is the maximum number of nodes for auto-scaling.
+                      Optional. Defaults to 10 if not specified.
+                    type: integer
+                  autoScaleMin:
+                    default: 2
+                    description: AutoScaleMin is the minimum number of nodes for auto-scaling.
+                      Optional. Defaults to 2 if not specified.
+                    type: integer
                   location:
                     description: Location is the Azure region for the ADX cluster
                       (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
-                    type: string
-                  managedIdentityClientId:
-                    description: ManagedIdentityClientId is the client ID of a user-assigned
-                      managed identity to use for the cluster. Optional. If omitted,
-                      system-assigned identity will be used.
                     type: string
                   resourceGroup:
                     description: ResourceGroup is the Azure resource group for the
@@ -115,6 +130,13 @@ spec:
                     description: Tier is the Azure ADX tier (e.g., "Standard"). Optional.
                       Defaults to "Standard" if not specified.
                     type: string
+                  userAssignedIdentities:
+                    description: |-
+                      UserAssignedIdentities is a list of MSIs that can be attached to the cluster. They should be resource-ids of the form
+                      /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}
+                    items:
+                      type: string
+                    type: array
                 type: object
             required:
             - clusterName

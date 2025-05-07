@@ -1,6 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -42,8 +45,58 @@ type ADXClusterProvisionSpec struct {
 	// Tier is the Azure ADX tier (e.g., "Standard"). Optional. Defaults to "Standard" if not specified.
 	Tier string `json:"tier,omitempty"`
 	//+kubebuilder:validation:Optional
-	// ManagedIdentityClientId is the client ID of a user-assigned managed identity to use for the cluster. Optional. If omitted, system-assigned identity will be used.
-	ManagedIdentityClientId string `json:"managedIdentityClientId,omitempty"`
+	// UserAssignedIdentities is a list of MSIs that can be attached to the cluster. They should be resource-ids of the form
+	// /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}
+	UserAssignedIdentities []string `json:"userAssignedIdentities,omitempty"`
+	//+kubebuilder:validation:Optional
+	////+kubebuilder:default=false
+	// AutoScale indicates whether to enable auto-scaling for the ADX cluster. Optional. Defaults to false if not specified.
+	AutoScale bool `json:"autoScale,omitempty"`
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=10
+	// AutoScaleMax is the maximum number of nodes for auto-scaling. Optional. Defaults to 10 if not specified.
+	AutoScaleMax int `json:"autoScaleMax,omitempty"`
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default=2
+	// AutoScaleMin is the minimum number of nodes for auto-scaling. Optional. Defaults to 2 if not specified.
+	AutoScaleMin int `json:"autoScaleMin,omitempty"`
+	//+kubebuilder:validation:Optional
+	// AppliedProvisionState is a JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities
+	// as last applied by the operator. This is set by the operator and is read-only for users.
+	AppliedProvisionState string `json:"appliedProvisionState,omitempty"`
+}
+
+type AppliedProvisionState struct {
+	SkuName                string   `json:"skuName,omitempty"`
+	Tier                   string   `json:"tier,omitempty"`
+	UserAssignedIdentities []string `json:"userAssignedIdentities,omitempty"`
+}
+
+func (s *ADXClusterProvisionSpec) StoreAppliedProvisioningState() error {
+	// Store the current provisioning state as a JSON string
+	provisionState, err := json.Marshal(AppliedProvisionState{
+		SkuName:                s.SkuName,
+		Tier:                   s.Tier,
+		UserAssignedIdentities: s.UserAssignedIdentities,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal provision state: %w", err)
+	}
+	s.AppliedProvisionState = string(provisionState)
+	return nil
+}
+
+func (s *ADXClusterProvisionSpec) LoadAppliedProvisioningState() (*AppliedProvisionState, error) {
+	// Unmarshal the JSON string back into the struct
+	if s.AppliedProvisionState == "" {
+		return nil, nil
+	}
+	var stored AppliedProvisionState
+	err := json.Unmarshal([]byte(s.AppliedProvisionState), &stored)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal provision state: %w", err)
+	}
+	return &stored, nil
 }
 
 type ADXClusterDatabaseSpec struct {
@@ -63,7 +116,7 @@ type ADXClusterDatabaseSpec struct {
 	//+kubebuilder:validation:Required
 	//+kubebuilder:validation:Enum=Metrics;Logs;Traces
 	// TelemetryType: Required
-	TelemtryType DatabaseTelemetryType `json:"telemetryType"`
+	TelemetryType DatabaseTelemetryType `json:"telemetryType"`
 }
 
 type DatabaseTelemetryType string

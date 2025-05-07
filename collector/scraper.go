@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"regexp"
@@ -281,7 +282,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 	}
 
 	if err := s.sendBatch(ctx, wr); err != nil {
-		logger.Errorf(err.Error())
+		logger.Error(err.Error())
 	}
 	wr.Timeseries = wr.Timeseries[:0]
 }
@@ -294,7 +295,7 @@ func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteReq
 
 	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
 		if err := s.sendBatch(ctx, filtered); err != nil {
-			logger.Errorf(err.Error())
+			logger.Error(err.Error())
 		}
 		for i := range filtered.Timeseries {
 			ts := filtered.Timeseries[i]
@@ -561,7 +562,7 @@ func parseTargetList(targetList string) (map[string]string, error) {
 		// Split each rawTarget by ':'
 		targetPair := strings.Split(strings.TrimSpace(rawTarget), ":")
 		if len(targetPair) != 2 {
-			return nil, fmt.Errorf("Using default scrape rules - target list contains malformed grouping: " + rawTarget)
+			return nil, errors.New("using default scrape rules - target list contains malformed grouping: " + rawTarget)
 		}
 		// flipping expected order to ensure that port is the key
 		m[targetPair[1]] = targetPair[0]
@@ -599,7 +600,7 @@ func getTargetAnnotationMapOrDefault(p *v1.Pod, key string, defaultVal map[strin
 
 	parsedMap, err := parseTargetList(rawVal)
 	if err != nil {
-		logger.Warnf(err.Error())
+		logger.Warn(err.Error())
 		return defaultVal
 	}
 	return parsedMap
