@@ -5,11 +5,15 @@ import (
 	ERRS "errors"
 	"fmt"
 	"io"
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -466,4 +470,45 @@ type AsyncOperationStatus struct {
 	LastUpdatedOn time.Time `kusto:"LastUpdatedOn"`
 	State         string    `kusto:"State"`
 	ShouldRetry   float64   `kusto:"ShouldRetry"`
+}
+
+type AuditDiskSpaceTask struct {
+	QueueSizer cluster.QueueSizer
+	StorageDir string
+}
+
+func NewAuditDiskSpaceTask(queueSizer cluster.QueueSizer, storageDir string) *AuditDiskSpaceTask {
+	return &AuditDiskSpaceTask{
+		QueueSizer: queueSizer,
+		StorageDir: storageDir,
+	}
+}
+
+func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
+	var actualSize int64
+	var actualCount int64
+
+	err := filepath.Walk(t.StorageDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(info.Name(), ".wal") {
+			actualSize += info.Size()
+			actualCount++
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Errorf("AuditDiskSpaceTask: failed to walk storage dir: %v", err)
+		return err
+	}
+
+	expectedSize := t.QueueSizer.SegmentsSize()
+	expectedCount := t.QueueSizer.SegmentsTotal()
+
+	const oneGB = float64(1 << 30)
+	if math.Abs(float64(actualSize-expectedSize)) > oneGB || math.Abs(float64(actualCount-expectedCount)) > 10 {
+		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d", actualSize, expectedSize, actualCount, expectedCount)
+	}
+	return nil
 }
