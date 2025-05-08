@@ -59,30 +59,149 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 
 ## CRD Design
 
-The `Operator` CRD is the entry point for managing an adx-mon cluster. It should support:
+The adx-mon operator manages the following Custom Resource Definitions (CRDs):
+- ADXCluster
+- Ingestor
+- Collector
+- Alerter
 
-- **Minimal configuration for quick bootstrap:**  
-  - Defaults for all images:  
-    - `ghcr.io/azure/adx-mon/collector:latest`
-    - `ghcr.io/azure/adx-mon/ingestor:latest`
-    - `ghcr.io/azure/adx-mon/alerter:latest`
-  - Default to a single ADX cluster with databases for _Metrics_ and _Logs_.
-  - Default to 1 replica for each component.
+Each CRD is described below with its current schema and example YAML, strictly reflecting the Go source definitions.
 
-- **Customizable fields:**  
-  - Images for each component.
-  - Number of ingestor replicas.
-  - ADX cluster/database names and configuration.
-  - Support for multiple ADX clusters, each with multiple databases.
-  - Each database specifies a telemetry type: `Logs`, `Metrics`, or `Traces`.
-  - Cluster connection info, including endpoint and MSI client-id if using managed identity.
-  - Optional: advanced overrides for component manifests.
-  - **Federation fields:**  
-    - For collector-only clusters: specify `ingestor` connection details (endpoint, authentication).
-    - For ingestor clusters: expose endpoints for remote collectors.
+### ADXCluster CRD
 
-- **Status fields:**  
-  - Reflect the current state and subresource conditions (e.g., ADX cluster ready, database ready, ingestor ready, collector ready).
+**Spec fields:**
+- `clusterName` (string, required): Unique, valid name for the ADX cluster. Must match ^[a-zA-Z0-9-]+$ and be at most 100 characters. Used for resource identification and naming in Azure.
+- `endpoint` (string, optional): URI of an existing ADX cluster. If set, the operator will use this cluster instead of provisioning a new one. Example: "https://mycluster.kusto.windows.net"
+- `databases` (array of objects, optional): List of databases to create in the ADX cluster. Each object has:
+  - `databaseName` (string, required): ADX valid database name. ^[a-zA-Z0-9_]+$, 1-64 chars.
+  - `retentionInDays` (int, optional): Retention period in days. Default: 30.
+  - `retentionPolicy` (string, optional): ADX retention policy.
+  - `telemetryType` (string, required): One of `Metrics`, `Logs`, or `Traces`.
+- `provision` (object, optional): Azure provisioning details:
+  - `subscriptionId` (string, optional): Azure subscription ID. If omitted, will be auto-detected in zero-config mode.
+  - `resourceGroup` (string, optional): Azure resource group. If omitted, will be auto-created or detected.
+  - `location` (string, optional): Azure region (e.g., "eastus2"). If omitted, will be auto-detected.
+  - `skuName` (string, optional): Azure SKU (e.g., "Standard_L8as_v3").
+  - `tier` (string, optional): Azure ADX tier (e.g., "Standard"). Defaults to "Standard" if not specified.
+  - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids).
+  - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Defaults to false.
+  - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Defaults to 10.
+  - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Defaults to 2.
+  - `appliedProvisionState` (string, optional, read-only): JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities as last applied by the operator.
+
+**Status fields:**
+- `conditions` (array, optional): Standard Kubernetes conditions.
+
+**Minimal Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: minimal-adx-cluster
+spec:
+  clusterName: minimal-adx-cluster
+```
+
+**Full Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: prod-adx-cluster
+spec:
+  clusterName: prod-metrics
+  endpoint: "https://prod-metrics.kusto.windows.net"
+  databases:
+    - databaseName: metricsdb
+      retentionInDays: 30
+      telemetryType: Metrics
+    - databaseName: logsdb
+      retentionInDays: 30
+      telemetryType: Logs
+  provision:
+    subscriptionId: "00000000-0000-0000-0000-000000000000"
+    resourceGroup: "adx-monitor-prod"
+    location: "eastus2"
+    skuName: "Standard_L8as_v3"
+    tier: "Standard"
+    userAssignedIdentities:
+      - "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/adx-monitor-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/identity1"
+    autoScale: true
+    autoScaleMax: 20
+    autoScaleMin: 4
+```
+
+### Ingestor CRD
+
+**Spec fields:**
+- `image` (string, optional): Container image for the ingestor component.
+- `replicas` (int32, optional): Number of ingestor replicas. Default: 1.
+- `endpoint` (string, optional): Endpoint for the ingestor. If running in a cluster, this should be the service name; otherwise, the operator will generate an endpoint.
+- `exposeExternally` (bool, optional): Whether to expose the ingestor externally. Default: false.
+- `adxClusterSelector` (LabelSelector, required): Label selector to target ADXCluster CRDs.
+
+**Status fields:**
+- `conditions` (array, optional): Standard Kubernetes conditions.
+
+**Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Ingestor
+metadata:
+  name: prod-ingestor
+spec:
+  image: "ghcr.io/azure/adx-mon/ingestor:v1.0.0"
+  replicas: 3
+  endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+  exposeExternally: false
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
+```
+
+### Collector CRD
+
+**Spec fields:**
+- `image` (string, optional): Container image for the collector component.
+- `ingestorEndpoint` (string, optional): URI endpoint for the ingestor service to send data to.
+
+**Status fields:**
+- `conditions` (array, optional): Standard Kubernetes conditions.
+
+**Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Collector
+metadata:
+  name: prod-collector
+spec:
+  image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
+  ingestorEndpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+```
+
+### Alerter CRD
+
+**Spec fields:**
+- `image` (string, optional): Container image for the alerter component.
+- `notificationEndpoint` (string, required): URI where alert notifications will be sent.
+- `adxClusterSelector` (LabelSelector, required): Label selector to target ADXCluster CRDs.
+
+**Status fields:**
+- `conditions` (array, optional): Standard Kubernetes conditions.
+
+**Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Alerter
+metadata:
+  name: prod-alerter
+spec:
+  image: "ghcr.io/azure/adx-mon/alerter:v1.0.0"
+  notificationEndpoint: "http://alerter-endpoint"
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
+```
 
 ---
 
