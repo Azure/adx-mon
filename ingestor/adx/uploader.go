@@ -319,16 +319,7 @@ func (n *uploader) upload(ctx context.Context) error {
 					logger.Errorf("Failed to remove batch: %s", err.Error())
 				}
 
-				for _, sr := range segmentReaders {
-					sampleType, sampleCount := sr.SampleMetadata()
-
-					switch sampleType {
-					case wal.MetricSampleType:
-						metrics.MetricsUploaded.WithLabelValues(database, table).Add(float64(sampleCount))
-					case wal.LogSampleType:
-						metrics.LogsUploaded.WithLabelValues(database, table).Add(float64(sampleCount))
-					}
-				}
+				metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
 			}()
 
 		}
