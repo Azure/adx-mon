@@ -303,6 +303,11 @@ func (s *Service) Open(ctx context.Context) error {
 		})
 	}
 
+	t := adx.NewAuditDiskSpaceTask(s.batcher, s.opts.StorageDir)
+	s.scheduler.ScheduleEvery(5*time.Minute, "audit-disk-space", func(ctx context.Context) error {
+		return t.Run(ctx)
+	})
+
 	return nil
 }
 
