@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS builder
+FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 
 RUN tdnf install -y golang systemd-devel gcc glibc-devel binutils kernel-headers ca-certificates
 
@@ -14,18 +14,18 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
 " -o ./bin/collector ./cmd/collector
 
-# Install systemd lib to get libsystemd.so
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS libsystemdsource
+# Install systemd libs (and dependencies) to a separate stage
+FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS libsystemdsource
 
-RUN tdnf install -y systemd
+RUN tdnf install -y systemd-libs xz-libs zstd-libs lz4 libcap-ng libgcrypt libgpg-error
 
-FROM mcr.microsoft.com/cbl-mariner/distroless/base:2.0
+FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
 
 LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
 
-# Binary looks under /usr/lib64 for libsystemd.so and other required so files
+# Binary looks under /usr/lib for libsystemd.so.0 and other required so files
 # Found with `export LD_DEBUG=libs` and running the binary
-COPY --from=libsystemdsource /usr/lib/libsystemd.so /usr/lib/liblzma.so.5 /usr/lib/libzstd.so.1 /usr/lib/liblz4.so.1 /usr/lib/libcap.so.2 /usr/lib/libgcrypt.so.20 /usr/lib/libgpg-error.so.0 /usr/lib/libgcc_s.so.1 /usr/lib64/
+COPY --from=libsystemdsource /usr/lib/libsystemd.so.0 /usr/lib/liblzma.so.5 /usr/lib/libzstd.so.1 /usr/lib/liblz4.so.1 /usr/lib/libcap.so.2 /usr/lib/libgcrypt.so.20 /usr/lib/libgpg-error.so.0 /usr/lib/
 COPY --from=builder /code/bin/collector /collector
 
 ENTRYPOINT ["/collector"]
