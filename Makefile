@@ -15,10 +15,15 @@ build-collector:
 	CGO_ENABLED=1 go build -o bin/collector ./cmd/collector/
 .PHONY: build
 
-build: build-alerter build-ingestor build-collector
+build-operator:
+	mkdir -p bin
+	CGO_ENABLED=0 go build -o bin/operator ./cmd/operator/...
 .PHONY: build
 
-image: image-ingestor image-alerter image-collector
+build: build-alerter build-ingestor build-collector build-operator
+.PHONY: build
+
+image: image-ingestor image-alerter image-collector image-operator
 .PHONY: image
 
 image-ingestor:
@@ -30,10 +35,16 @@ image-alerter:
 image-collector:
 	docker build --no-cache -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
 
+image-operator:
+	docker build --no-cache -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
+
+image-operator-dev:
+
 push:
 	docker push ghcr.io/azure/adx-mon/alerter:latest
 	docker push ghcr.io/azure/adx-mon/ingestor:latest
 	docker push ghcr.io/azure/adx-mon/collector:latest
+	docker push ghcr.io/azure/adx-mon/operator:latest
 
 clean:
 	rm bin/*
