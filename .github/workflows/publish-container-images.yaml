@@ -26,6 +26,8 @@ jobs:
             image: ghcr.io/${{ github.repository }}/collector
           - dockerfile: build/images/Dockerfile.ingestor
             image: ghcr.io/${{ github.repository }}/ingestor
+          - dockerfile: build/images/Dockerfile.operator
+            image: ghcr.io/${{ github.repository }}/operator
 
     steps:
       - name: Checkout repository
