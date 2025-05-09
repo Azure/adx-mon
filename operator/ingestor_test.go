@@ -169,12 +169,12 @@ func TestIngestorReconciler_CreateIngestor(t *testing.T) {
 			Endpoint:    "https://bring-your-own-adx-cluster",
 			Databases: []adxmonv1.ADXClusterDatabaseSpec{
 				{
-					DatabaseName: "Metrics",
-					TelemtryType: adxmonv1.DatabaseTelemetryMetrics,
+					DatabaseName:  "Metrics",
+					TelemetryType: adxmonv1.DatabaseTelemetryMetrics,
 				},
 				{
-					DatabaseName: "Logs",
-					TelemtryType: adxmonv1.DatabaseTelemetryLogs,
+					DatabaseName:  "Logs",
+					TelemetryType: adxmonv1.DatabaseTelemetryLogs,
 				},
 			},
 		},
@@ -300,8 +300,8 @@ func TestIngestorReconciler_handleADXClusterSelectorChange(t *testing.T) {
 		Spec: adxmonv1.ADXClusterSpec{
 			Endpoint: "https://newcluster.kusto.windows.net",
 			Databases: []adxmonv1.ADXClusterDatabaseSpec{
-				{DatabaseName: "NewMetricsDB", TelemtryType: adxmonv1.DatabaseTelemetryMetrics},
-				{DatabaseName: "NewLogsDB", TelemtryType: adxmonv1.DatabaseTelemetryLogs},
+				{DatabaseName: "NewMetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				{DatabaseName: "NewLogsDB", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
 			},
 		},
 		Status: adxmonv1.ADXClusterStatus{
