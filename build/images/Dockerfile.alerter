@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS builder
+FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 
 RUN tdnf install -y golang ca-certificates
 
@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
 " -o ./bin/alerter ./cmd/alerter
 
-FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
+FROM mcr.microsoft.com/azurelinux/distroless/minimal:3.0
 
 LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
 
