@@ -289,6 +289,11 @@ func (s *Service) Open(ctx context.Context) error {
 		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
 			return m.Run(ctx)
 		})
+
+		sr := adx.NewSummaryRuleTask(crdStore, v)
+		s.scheduler.ScheduleEvery(10*time.Minute, "summary-rules", func(ctx context.Context) error {
+			return sr.Run(ctx)
+		})
 	}
 
 	for _, v := range s.opts.LogsKustoCli {
@@ -300,6 +305,11 @@ func (s *Service) Open(ctx context.Context) error {
 		m := adx.NewManagementCommandsTask(crdStore, v)
 		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
 			return m.Run(ctx)
+		})
+
+		sr := adx.NewSummaryRuleTask(crdStore, v)
+		s.scheduler.ScheduleEvery(10*time.Minute, "summary-rules", func(ctx context.Context) error {
+			return sr.Run(ctx)
 		})
 	}
 
