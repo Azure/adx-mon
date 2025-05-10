@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http/pprof"
-	_ "net/http/pprof"
 	"regexp"
 	"time"
 

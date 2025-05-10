@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: ingestors.adx-mon.azure.com
+  name: adxclusters.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: Ingestor
-    listKind: IngestorList
-    plural: ingestors
-    singular: ingestor
+    kind: ADXCluster
+    listKind: ADXClusterList
+    plural: adxclusters
+    singular: adxcluster
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: Ingestor is the Schema for the ingestors API
+        description: ADXCluster is the Schema for the adxclusters API
         properties:
           apiVersion:
             description: |-
@@ -37,86 +37,90 @@ spec:
           metadata:
             type: object
           spec:
-            description: IngestorSpec defines the desired state of Ingestor
+            description: ADXClusterSpec defines the desired state of ADXCluster
             properties:
-              adxClusterSelector:
-                description: ADXClusterSelector is a label selector used to select
-                  the ADXCluster CRDs this ingestor should target. This field is required.
-                properties:
-                  matchExpressions:
-                    description: matchExpressions is a list of label selector requirements.
-                      The requirements are ANDed.
-                    items:
-                      description: |-
-                        A label selector requirement is a selector that contains values, a key, and an operator that
-                        relates the key and values.
-                      properties:
-                        key:
-                          description: key is the label key that the selector applies
-                            to.
-                          type: string
-                        operator:
-                          description: |-
-                            operator represents a key's relationship to a set of values.
-                            Valid operators are In, NotIn, Exists and DoesNotExist.
-                          type: string
-                        values:
-                          description: |-
-                            values is an array of string values. If the operator is In or NotIn,
-                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                            the values array must be empty. This array is replaced during a strategic
-                            merge patch.
-                          items:
-                            type: string
-                          type: array
-                          x-kubernetes-list-type: atomic
-                      required:
-                      - key
-                      - operator
-                      type: object
-                    type: array
-                    x-kubernetes-list-type: atomic
-                  matchLabels:
-                    additionalProperties:
+              clusterName:
+                description: ClusterName is the unique, valid name for the ADX cluster.
+                  Must match ^[a-zA-Z0-9-]+$ and be at most 100 characters. Used for
+                  resource identification and naming in Azure.
+                maxLength: 100
+                pattern: ^[a-zA-Z0-9-]+$
+                type: string
+              databases:
+                description: Databases is an array of ADXClusterDatabaseSpec objects.
+                  Each object defines a database to be created in the ADX cluster.
+                  If not specified, no databases will be created.
+                items:
+                  properties:
+                    databaseName:
+                      description: ADX valid database name, required
+                      maxLength: 64
+                      minLength: 1
+                      pattern: ^[a-zA-Z0-9_]+$
                       type: string
-                    description: |-
-                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                      map is equivalent to an element of matchExpressions, whose key field is "key", the
-                      operator is "In", and the values array contains only "value". The requirements are ANDed.
-                    type: object
-                type: object
-                x-kubernetes-map-type: atomic
-              appliedProvisionState:
-                description: |-
-                  AppliedProvisionState is a JSON-serialized snapshot of the CRD
-                  as last applied by the operator. This is set by the operator and is read-only for users.
-                type: string
+                    retentionInDays:
+                      default: 30
+                      description: default 30, optional
+                      type: integer
+                    retentionPolicy:
+                      description: ADX retention policy, optional
+                      type: string
+                    telemetryType:
+                      description: 'TelemetryType: Required'
+                      enum:
+                      - Metrics
+                      - Logs
+                      - Traces
+                      type: string
+                  required:
+                  - databaseName
+                  - telemetryType
+                  type: object
+                type: array
               endpoint:
-                description: Endpoint is the endpoint to use for the ingestor. If
-                  running in a cluster, this should be the service name; otherwise,
-                  the operator will generate an endpoint. Optional.
+                description: 'Endpoint is the URI of an existing ADX cluster. If set,
+                  the operator will use this cluster instead of provisioning a new
+                  one. Example: "https://mycluster.kusto.windows.net"'
+                format: uri
                 type: string
-              exposeExternally:
-                default: false
-                description: ExposeExternally indicates if the ingestor should be
-                  exposed externally as reflected in the Endpoint. Optional; defaults
-                  to false.
-                type: boolean
-              image:
-                description: Image is the container image to use for the ingestor
-                  component. Optional; if omitted, a default image will be used.
-                type: string
-              replicas:
-                default: 1
-                description: Replicas is the number of ingestor replicas to run. Optional;
-                  defaults to 1 if omitted.
-                format: int32
-                type: integer
+              provision:
+                description: Provision contains optional Azure provisioning details
+                  for the ADX cluster. If omitted, the operator will attempt zero-config
+                  provisioning using Azure IMDS.
+                properties:
+                  location:
+                    description: Location is the Azure region for the ADX cluster
+                      (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
+                    type: string
+                  managedIdentityClientId:
+                    description: ManagedIdentityClientId is the client ID of a user-assigned
+                      managed identity to use for the cluster. Optional. If omitted,
+                      system-assigned identity will be used.
+                    type: string
+                  resourceGroup:
+                    description: ResourceGroup is the Azure resource group for the
+                      ADX cluster. Optional. If omitted, will be auto-created or detected.
+                    type: string
+                  skuName:
+                    description: SkuName is the Azure SKU for the ADX cluster (e.g.,
+                      "Standard_L8as_v3"). Optional. The operator will select a default
+                      if not specified.
+                    type: string
+                  subscriptionId:
+                    description: SubscriptionId is the Azure subscription ID to use
+                      for provisioning. Optional. If omitted, will be auto-detected
+                      in zero-config mode.
+                    type: string
+                  tier:
+                    description: Tier is the Azure ADX tier (e.g., "Standard"). Optional.
+                      Defaults to "Standard" if not specified.
+                    type: string
+                type: object
             required:
-            - adxClusterSelector
+            - clusterName
             type: object
           status:
-            description: IngestorStatus defines the observed state of Ingestor
+            description: ADXClusterStatus defines the observed state of ADXCluster
             properties:
               conditions:
                 items:
