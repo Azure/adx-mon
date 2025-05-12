@@ -45,6 +45,7 @@ type Syncer struct {
 
 	defaultMapping schema.SchemaMapping
 	cancelFn       context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 type IngestionMapping struct {
@@ -87,13 +88,15 @@ func (s *Syncer) Open(ctx context.Context) error {
 
 	ctx, s.cancelFn = context.WithCancel(ctx)
 
-	go s.reconcileMappings(ctx)
+	s.wg.Add(1)
+	go s.reconcileTables(ctx)
 
 	return nil
 }
 
 func (s *Syncer) Close() error {
 	s.cancelFn()
+	s.wg.Wait()
 	return nil
 }
 
@@ -398,8 +401,9 @@ func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
 	return nil
 }
 
-func (s *Syncer) reconcileMappings(ctx context.Context) {
-	t := time.NewTicker(24 * time.Hour)
+func (s *Syncer) reconcileTables(ctx context.Context) {
+	defer s.wg.Done()
+	t := time.NewTicker(15 * time.Minute)
 	defer t.Stop()
 
 	for {
@@ -408,6 +412,7 @@ func (s *Syncer) reconcileMappings(ctx context.Context) {
 			return
 		case <-t.C:
 
+			logger.Infof("Reconcile tables and ingestion mappings for database %s", s.database)
 			if err := func() error {
 				tables, err := s.loadTables(ctx)
 				if err != nil {
@@ -427,6 +432,13 @@ func (s *Syncer) reconcileMappings(ctx context.Context) {
 				s.mu.Lock()
 				defer s.mu.Unlock()
 
+				for tblName := range s.tables {
+					if _, ok := tableExists[tblName]; !ok {
+						logger.Debugf("Removing cached table %s from %s", tblName, s.database)
+						delete(s.tables, tblName)
+					}
+				}
+
 				for k := range s.mappings {
 					tableName := strings.Split(k, "_")[0]
 
@@ -435,9 +447,10 @@ func (s *Syncer) reconcileMappings(ctx context.Context) {
 						delete(s.mappings, k)
 					}
 				}
+
 				return nil
 			}(); err != nil {
-				logger.Errorf("Error removing unused ingestion mappings: %s", err)
+				logger.Errorf("Error removing tables and mappings from cache: %s", err)
 			}
 		}
 	}
@@ -467,5 +480,4 @@ func (s *Syncer) loadTables(ctx context.Context) ([]Table, error) {
 		}
 		tables = append(tables, v)
 	}
-	return tables, nil
 }
