@@ -83,19 +83,87 @@ spec:
                   one. Example: "https://mycluster.kusto.windows.net"'
                 format: uri
                 type: string
+              federation:
+                description: Supports cluster partitioning. Only relevant if Role
+                  is set.
+                properties:
+                  federatedTargets:
+                    description: If role is "Partition", specifies the Federated cluster(s)
+                      details for heartbeating.
+                    items:
+                      properties:
+                        endpoint:
+                          description: 'Endpoint is the URI of the federated ADX cluster.
+                            Example: "https://mycluster.kusto.windows.net"'
+                          type: string
+                        heartbeatDatabase:
+                          pattern: ^[a-zA-Z0-9_]+$
+                          type: string
+                        heartbeatTable:
+                          pattern: ^[a-zA-Z0-9_]+$
+                          type: string
+                        managedIdentityClientId:
+                          description: Used for writing logs to the federated cluster.
+                          type: string
+                      required:
+                      - endpoint
+                      - heartbeatDatabase
+                      - heartbeatTable
+                      - managedIdentityClientId
+                      type: object
+                    type: array
+                  heartbeatDatabase:
+                    description: If role is "Federated", specifies the ADX cluster's
+                      heartbeat database.
+                    pattern: ^[a-zA-Z0-9_]+$
+                    type: string
+                  heartbeatTTL:
+                    default: 1h
+                    description: If role is "Federated", specifies the ADX cluster's
+                      heartbeat table TTL.
+                    pattern: ^(\d+h)?(\d+m)?(\d+s)?$
+                    type: string
+                  heartbeatTable:
+                    description: If role is "Federated", specifies the ADX cluster's
+                      heartbeat table.
+                    pattern: ^[a-zA-Z0-9_]+$
+                    type: string
+                  partitioning:
+                    additionalProperties:
+                      type: string
+                    description: If role is "Partition", specifies the ADX cluster's
+                      partition details.  Open-ended map/object for partitioning metadata
+                      (geo, location, tenant, etc.).
+                    type: object
+                type: object
               provision:
                 description: Provision contains optional Azure provisioning details
                   for the ADX cluster. If omitted, the operator will attempt zero-config
                   provisioning using Azure IMDS.
                 properties:
+                  appliedProvisionState:
+                    description: |-
+                      AppliedProvisionState is a JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities
+                      as last applied by the operator. This is set by the operator and is read-only for users.
+                    type: string
+                  autoScale:
+                    description: |-
+                      //+kubebuilder:default=false
+                      AutoScale indicates whether to enable auto-scaling for the ADX cluster. Optional. Defaults to false if not specified.
+                    type: boolean
+                  autoScaleMax:
+                    default: 10
+                    description: AutoScaleMax is the maximum number of nodes for auto-scaling.
+                      Optional. Defaults to 10 if not specified.
+                    type: integer
+                  autoScaleMin:
+                    default: 2
+                    description: AutoScaleMin is the minimum number of nodes for auto-scaling.
+                      Optional. Defaults to 2 if not specified.
+                    type: integer
                   location:
                     description: Location is the Azure region for the ADX cluster
                       (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
-                    type: string
-                  managedIdentityClientId:
-                    description: ManagedIdentityClientId is the client ID of a user-assigned
-                      managed identity to use for the cluster. Optional. If omitted,
-                      system-assigned identity will be used.
                     type: string
                   resourceGroup:
                     description: ResourceGroup is the Azure resource group for the
@@ -115,7 +183,22 @@ spec:
                     description: Tier is the Azure ADX tier (e.g., "Standard"). Optional.
                       Defaults to "Standard" if not specified.
                     type: string
+                  userAssignedIdentities:
+                    description: |-
+                      UserAssignedIdentities is a list of MSIs that can be attached to the cluster. They should be resource-ids of the form
+                      /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identityName}
+                    items:
+                      type: string
+                    type: array
                 type: object
+              role:
+                description: 'Role specifies the cluster''s role: "Partition" (default,
+                  for data-holding clusters) or "Federated" (for the central federating
+                  cluster).'
+                enum:
+                - Partition
+                - Federated
+                type: string
             required:
             - clusterName
             type: object

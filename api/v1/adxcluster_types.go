@@ -26,6 +26,70 @@ type ADXClusterSpec struct {
 	//+kubebuilder:validation:Optional
 	// Provision contains optional Azure provisioning details for the ADX cluster. If omitted, the operator will attempt zero-config provisioning using Azure IMDS.
 	Provision *ADXClusterProvisionSpec `json:"provision,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:validation:Enum=Partition;Federated
+	// Role specifies the cluster's role: "Partition" (default, for data-holding clusters) or "Federated" (for the central federating cluster).
+	Role *ClusterRole `json:"role,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// Supports cluster partitioning. Only relevant if Role is set.
+	Federation *ADXClusterFederationSpec `json:"federation,omitempty"`
+}
+
+type ClusterRole string
+
+const (
+	ClusterRolePartition ClusterRole = "Partition"
+	ClusterRoleFederated ClusterRole = "Federated"
+)
+
+type ADXClusterFederationSpec struct {
+	// role: Partition
+
+	//+kubebuilder:validation:Optional
+	// If role is "Partition", specifies the Federated cluster(s) details for heartbeating.
+	FederationTargets []ADXClusterFederatedClusterSpec `json:"federatedTargets,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// If role is "Partition", specifies the ADX cluster's partition details.  Open-ended map/object for partitioning metadata (geo, location, tenant, etc.).
+	Partitioning *map[string]string `json:"partitioning,omitempty"`
+
+	// role: Federated
+
+	//+kubebuilder:validation:Optional
+	// If role is "Federated", specifies the ADX cluster's heartbeat database.
+	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
+	HeartbeatDatabase *string `json:"heartbeatDatabase,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// If role is "Federated", specifies the ADX cluster's heartbeat table.
+	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
+	HeartbeatTable *string `json:"heartbeatTable,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	//+kubebuilder:default="1h"
+	//+kubebuilder:validation:Pattern=^(\d+h)?(\d+m)?(\d+s)?$
+	// If role is "Federated", specifies the ADX cluster's heartbeat table TTL.
+	HeartbeatTTL *string `json:"heartbeatTTL,omitempty"`
+}
+
+type ADXClusterFederatedClusterSpec struct {
+	//+kubebuilder:validation:Required
+	// Endpoint is the URI of the federated ADX cluster. Example: "https://mycluster.kusto.windows.net"
+	Endpoint string `json:"endpoint"`
+
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
+	HeartbeatDatabase string `json:"heartbeatDatabase"`
+
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
+	HeartbeatTable string `json:"heartbeatTable"`
+
+	//+kubebuilder:validation:Required
+	// Used for writing logs to the federated cluster.
+	ManagedIdentityClientId string `json:"managedIdentityClientId"`
 }
 
 type ADXClusterProvisionSpec struct {
