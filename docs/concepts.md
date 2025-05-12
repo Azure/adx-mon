@@ -18,8 +18,406 @@ queries are used for analysis, alerting and visualization.
 ## Components
 
 ### Collector
+
+The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is typically deployed as a DaemonSet on every node in your Kubernetes cluster, where it collects metrics, logs, and traces from the local node and forwards them to the Ingestor for aggregation and storage in Azure Data Explorer (ADX).
+
+#### Key Features
+- **Multi-Source Telemetry Collection:** Collects from Prometheus endpoints, logs (including OTLP and host logs), and traces.
+- **Kubernetes Native:** Discovers pods and services to scrape via annotations (e.g., `adx-mon/scrape: "true"`).
+- **Configurable via TOML:** Uses a TOML config file (see `docs/config.md`) for flexible setup of scrape targets, filters, exporters, and storage.
+- **Efficient Buffering:** Uses a Write-Ahead Log (WAL) to buffer data locally for reliability and performance.
+- **Label/Attribute Lifting:** Supports lifting selected labels/attributes to top-level columns for easier querying in ADX.
+- **Filtering:** Supports regex-based keep/drop rules for metrics and labels, and attribute-based log filtering.
+- **Exporters:** Can forward telemetry to additional endpoints (e.g., OTLP, Prometheus remote write) in parallel with ADX.
+- **Health & Metrics:** Exposes Prometheus metrics for collector health, WAL status, and scrape/export stats.
+
+#### Configuration & Usage
+- **Deployment:** Usually managed by the adx-mon Operator via the `Collector` CRD, or deployed as a DaemonSet.
+- **Config File:** Main configuration is via a TOML file (see `docs/config.md` for all options and examples). Key fields include:
+  - `endpoint`: Ingestor URL to send telemetry to.
+  - `storage-dir`: Directory for WAL and log cursors.
+  - `prometheus-scrape`: Prometheus scrape settings (interval, targets, filters).
+  - `prometheus-remote-write`: Accepts Prometheus remote write protocol.
+  - `otel-log`/`otel-metric`: Accepts OTLP logs/metrics.
+  - `host-log`: Collects host and kernel logs.
+  - `exporters`: Additional telemetry destinations.
+- **Kubernetes Annotations:**
+  - `adx-mon/scrape`: Enables scraping for a pod/service.
+  - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path.
+  - `adx-mon/log-destination`: Sets log destination table.
+  - `adx-mon/log-parsers`: Comma-separated list of log parsers (e.g., `json`).
+
+#### Example Collector CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Collector
+metadata:
+  name: prod-collector
+spec:
+  image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
+  ingestorEndpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+```
+
+#### Example Config Snippet
+```toml
+endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
+storage-dir = '/var/lib/adx-mon'
+region = 'eastus'
+
+[prometheus-scrape]
+  database = 'Metrics'
+  scrape-interval = 10
+  scrape-timeout = 5
+  drop-metrics = ['^kube_pod_ips$', 'etcd_grpc.*']
+  keep-metrics = ['nginx.*']
+
+[[prometheus-scrape.static-scrape-target]]
+  host-regex = '.*'
+  url = 'http://localhost:9090/metrics'
+  namespace = 'monitoring'
+  pod = 'host-monitor'
+  container = 'host-monitor'
+```
+
+#### How It Works
+1. **Discovery:** Finds pods/services to scrape based on annotations and static config.
+2. **Scraping/Collection:** Collects metrics, logs, and traces from configured sources.
+3. **Buffering:** Writes data to local WAL for reliability and batching.
+4. **Forwarding:** Sends batches to the Ingestor, which aggregates and uploads to ADX.
+5. **Exporting:** Optionally forwards telemetry to additional endpoints (e.g., OTLP, remote write).
+6. **Health Monitoring:** Exposes `/metrics` for Prometheus scraping and tracks WAL/export status.
+
+#### Development & Testing
+- Configurable for local or in-cluster testing.
+- See `docs/config.md` for all config options and advanced usage.
+
+---
+
 ### Ingestor
+
+The **Ingestor** is the aggregation and buffering point for all telemetry collected by ADX-Mon. It receives metrics, logs, and traces from Collectors, batches and stores them using a Write-Ahead Log (WAL), and uploads them to Azure Data Explorer (ADX) in optimized batches. The ingestor is designed for high-throughput, reliability, and efficient use of ADX resources.
+
+#### Key Features
+- **WAL-Based Buffering:** All incoming telemetry is written to disk in an append-only WAL for durability and efficient batching.
+- **Batching & Coalescing:** Segments are batched by table/schema and uploaded to ADX in large, compressed batches (100MB–1GB recommended) to optimize ingestion cost and performance.
+- **Peer Transfer:** Small segments are transferred to peer ingestors for coalescing, reducing the number of small files ingested by ADX.
+- **Direct Upload Fallback:** If a segment is too old or too large, it is uploaded directly to ADX, bypassing peer transfer.
+- **Multi-Database Support:** Can upload to multiple ADX databases (e.g., metrics, logs) simultaneously.
+- **Kubernetes Native:** Deployed as a StatefulSet, supports scaling and partitioning.
+- **CRD-Driven:** Managed via the `Ingestor` CRD for declarative configuration.
+- **Health & Metrics:** Exposes Prometheus metrics for WAL, batching, upload, and transfer status.
+
+#### Configuration & Usage
+- **Deployment:** Usually managed by the adx-mon Operator via the `Ingestor` CRD, or deployed as a StatefulSet.
+- **Config File/CLI:** Main configuration is via CLI flags or environment variables (see `cmd/ingestor/main.go`). Key options include:
+  - `--storage-dir`: Directory for WAL segments.
+  - `--metrics-kusto-endpoints`, `--logs-kusto-endpoints`: ADX endpoints for metrics/logs (format: `<db>=<endpoint>`).
+  - `--uploads`: Number of concurrent uploads.
+  - `--max-segment-size`, `--max-segment-age`: Segment batching thresholds.
+  - `--max-transfer-size`, `--max-transfer-age`: Peer transfer thresholds.
+  - `--disable-peer-transfer`: Disable peer transfer (upload all segments directly).
+  - `--partition-size`: Number of nodes in a partition for sharding.
+  - `--max-disk-usage`, `--max-segment-count`: Backpressure controls.
+  - `--enable-wal-fsync`: Enable fsync for WAL durability.
+  - See `docs/config.md` for all options.
+
+#### Example Ingestor CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Ingestor
+metadata:
+  name: prod-ingestor
+spec:
+  image: "ghcr.io/azure/adx-mon/ingestor:v1.0.0"
+  replicas: 3
+  endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+  exposeExternally: false
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
+```
+
+#### How It Works
+1. **Receive Telemetry:** Collectors send metrics/logs/traces to the ingestor via HTTP (Prometheus remote write, OTLP, etc.).
+2. **WAL Write:** Data is written to a WAL segment file per table/schema.
+3. **Batching:** When a segment reaches the max size or age, it is either:
+   - **Transferred to a peer** (if small enough and within age threshold), or
+   - **Uploaded directly to ADX** (if too large/old or transfer fails).
+4. **Peer Transfer:** Segments are transferred to the peer responsible for the table (partitioned by hash). Peers coalesce segments for larger uploads.
+5. **ADX Upload:** Batches are compressed and uploaded to ADX using the Kusto ingestion API. Table and mapping are auto-managed.
+6. **Cleanup:** Uploaded/expired segments are removed from disk. Backpressure is applied if disk usage/segment count exceeds limits.
+
+#### Example Data Flow Diagram
+```mermaid
+flowchart TD
+    Collector1 -->|metrics/logs| IngestorA
+    Collector2 -->|metrics/logs| IngestorB
+    IngestorA -- Peer Transfer --> IngestorB
+    IngestorA -- Upload --> ADX[(Azure Data Explorer)]
+    IngestorB -- Upload --> ADX
+```
+
+#### Health & Metrics
+- Exposes `/metrics` endpoint for Prometheus scraping.
+- Tracks WAL segment counts, disk usage, upload/transfer queue sizes, upload/transfer rates, and error counts.
+- Provides metrics for backpressure, slow requests, and dropped segments.
+
+#### Development & Testing
+- Can be run locally with test ADX clusters or in "direct upload" mode.
+- Includes integration tests for WAL, batching, and upload logic.
+- See `docs/ingestor.md` and `README.md` for advanced usage and troubleshooting.
+
+---
+
+### WAL Segment File Format
+
+WAL (Write-Ahead Log) segment files are the durable, append-only storage format used for buffering telemetry data before upload to Azure Data Explorer (ADX). Understanding the binary format is essential for troubleshooting, recovery, and advanced integrations.
+
+### Segment File Structure
+
+Each WAL segment file consists of:
+
+1. **Segment Header (8 bytes):**
+   - Bytes 0-5: ASCII `"ADXWAL"` (magic number)
+   - Bytes 6-7: Reserved for future use (e.g., versioning)
+
+2. **Block Sequence:**
+   - The remainder of the file is a sequence of blocks, each with its own header and compressed payload.
+
+#### Block Layout
+Each block is encoded as:
+
+| Field         | Size      | Description                                                      |
+|--------------|-----------|------------------------------------------------------------------|
+| Length       | 4 bytes   | Big-endian uint32: length of the compressed block                |
+| CRC32        | 4 bytes   | Big-endian uint32: CRC32 checksum of the compressed block        |
+| Block Data   | variable  | S2 (Snappy-compatible) compressed block (see below)              |
+
+##### Block Data (after decompression)
+| Field         | Size      | Description                                                      |
+|--------------|-----------|------------------------------------------------------------------|
+| Magic        | 2 bytes   | `0xAA 0xAA` (block header magic number)                          |
+| Version      | 1 byte    | Block version (currently `1`)                                    |
+| Type         | 1 byte    | Sample type (e.g., metric, log, trace)                           |
+| Count        | 4 bytes   | Big-endian uint32: number of samples in the block                |
+| Value        | N bytes   | Actual uncompressed data payload                                 |
+
+- The block data is compressed using S2 (Snappy-compatible) before being written to disk.
+- The block header (magic, version, type, count) is always present at the start of the decompressed block.
+
+##### Block Write Example
+```
+┌───────────┬─────────┬───────────┬───────────┬───────────┬───────────┬───────────┐
+│    Len    │   CRC   │   Magic   │  Version  │   Type    │   Count   │   Value   │
+│  4 bytes  │ 4 bytes │  2 bytes  │  1 byte   │  1 byte   │  4 bytes  │  N bytes  │
+└───────────┴─────────┴───────────┴───────────┴───────────┴───────────┴───────────┘
+```
+
+### Versioning & Compatibility
+- The segment version is stored in the block header (currently `1`).
+- The first 8 bytes of the file are reserved for magic/versioning.
+- The format is designed for forward compatibility; unknown blocks can be skipped or truncated.
+
+### Recovery & Repair
+- Each block is independently verifiable using its CRC32 checksum.
+- The `Repair()` method can truncate the file at the last good block if corruption is detected (e.g., after a crash).
+
+### Summary Table
+| Offset | Field         | Size      | Description                                 |
+|--------|--------------|-----------|---------------------------------------------|
+| 0      | SegmentMagic | 8 bytes   | `"ADXWAL"` + reserved                      |
+| 8+     | Block(s)     | variable  | See block structure above                   |
+
+### Example: Minimal WAL Segment (Hex)
+```
+41 44 58 57 41 4C 00 00   # "ADXWAL" + reserved
+...                       # Block(s) as described above
+```
+
+---
+
+For more details, see the implementation in `pkg/wal/segment.go` and `pkg/wal/wal.go`.
+
+---
+
 ### Alerter
+
+The **Alerter** component is responsible for evaluating alert rules (defined as Kubernetes `AlertRule` CRDs) and sending alert notifications to external systems when conditions are met. It queries Azure Data Explorer (ADX) on a schedule, evaluates the results, and generates notifications for each alerting row.
+
+#### Key Features
+- **CRD-Driven:** Alerting rules are defined as `AlertRule` CRDs, specifying the KQL query, schedule, and notification destination.
+- **Kusto Query Execution:** Periodically executes KQL queries against ADX clusters, as configured in the rule.
+- **Notification Delivery:** Sends alert notifications to a configurable HTTP endpoint (e.g., ICM, PagerDuty, custom webhooks) in a standard JSON format.
+- **Correlation & Auto-Mitigation:** Supports correlation IDs to deduplicate alerts and auto-mitigate after a configurable duration.
+- **Tag-Based Routing:** Supports tag-based filtering to control which alerter instance processes which rules (e.g., by region, cloud, or custom tags).
+- **Health & Metrics:** Exposes Prometheus metrics for alert delivery health, query health, and notification status.
+
+#### Configuration & Usage
+- **Deployment:** The alerter is typically deployed as a Kubernetes Deployment or managed by the adx-mon Operator via the `Alerter` CRD.
+- **Configurable via CLI:** Supports configuration via command-line flags (see `cmd/alerter/main.go`), including Kusto endpoints, region, cloud, notification endpoint, concurrency, and tags.
+- **Notification Endpoint:** Set via the `notificationEndpoint` field in the `Alerter` CRD or `--alerter-address` CLI flag. This is the HTTP endpoint to which alert notifications are POSTed.
+- **Kusto Endpoints:** Provided as a map of database name to endpoint (e.g., `--kusto-endpoint "DB=https://cluster.kusto.windows.net"`).
+- **Tags:** Key-value pairs (e.g., `--tag region=uksouth`) used to filter which rules this alerter instance will process.
+
+#### Example Alerter CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Alerter
+metadata:
+  name: prod-alerter
+spec:
+  image: "ghcr.io/azure/adx-mon/alerter:v1.0.0"
+  notificationEndpoint: "http://alerter-endpoint"
+  adxClusterSelector:
+    matchLabels:
+      app: adx-mon
+```
+
+#### Alert Notification Format
+Alert notifications are sent as JSON via HTTP POST to the configured endpoint. Example payload:
+```json
+{
+  "Destination": "MDM://Platform",
+  "Title": "High CPU Usage",
+  "Summary": "CPU usage exceeded 90% on node xyz",
+  "Description": "The CPU usage on node xyz has been above 90% for 5 minutes.",
+  "Severity": 2,
+  "Source": "namespace/alert-name",
+  "CorrelationID": "namespace/alert-name://unique-correlation-id",
+  "CustomFields": { "region": "uksouth" }
+}
+```
+
+#### How It Works
+1. **Rule Discovery:** Loads `AlertRule` CRDs from the Kubernetes API or local files.
+2. **Query Execution:** On each interval, executes the KQL query defined in the rule against the specified ADX database.
+3. **Result Processing:** For each row returned, constructs an alert notification, including severity, title, summary, correlation ID, and custom fields.
+4. **Notification Delivery:** Sends the alert as a JSON payload to the configured notification endpoint.
+5. **Health Monitoring:** Exposes Prometheus metrics for query and notification health.
+
+#### Tag-Based Routing
+Alerter instances can be configured with tags (e.g., `region`, `cloud`). Only rules whose `criteria` match the instance's tags will be processed by that instance. This enables multi-region or multi-cloud deployments.
+
+#### Example CLI Usage
+```sh
+cd cmd/alerter
+# Run with required Kusto endpoint and kubeconfig
+./alerter --kusto-endpoint "DB=https://cluster.kusto.windows.net" --kubeconfig ~/.kube/config --region uksouth --cloud AzureCloud --alerter-address http://alerter-endpoint
+```
+
+#### Health & Metrics
+- Exposes `/metrics` endpoint for Prometheus scraping.
+- Tracks health of query execution and notification delivery.
+- Provides metrics for alert delivery failures, unhealthy rules, and notification status.
+
+#### Development & Testing
+- Includes a `lint` mode to validate alert rules without sending notifications.
+- Supports local testing with fake Kusto and alert endpoints.
+- See `README.md` for testing instructions.
+
+---
+
+### Operator
+
+The **Operator** is the control plane component that manages the lifecycle of all adx-mon resources—including Collectors, Ingestors, Alerters, and Azure Data Explorer (ADX) infrastructure—using Kubernetes Custom Resource Definitions (CRDs). It provides a declarative, automated, and production-ready way to deploy, scale, and manage the entire ADX-Mon stack.
+
+#### Key Responsibilities
+- **CRD Management:** Watches and reconciles `ADXCluster`, `Ingestor`, `Collector`, and `Alerter` CRDs, ensuring the actual state matches the desired state.
+- **Azure Infrastructure Automation:** Provisions and manages ADX clusters and databases using the Azure SDK for Go, including resource groups, managed identities, and database policies.
+- **Component Lifecycle:** Generates and applies Kubernetes manifests for all adx-mon components, supporting custom images, replica counts, and configuration overrides.
+- **Reconciliation & Drift Detection:** Continuously monitors managed resources and reverts manual changes to match the CRD spec. Updates CRD status fields to reflect progress and issues.
+- **Incremental, Granular Workflow:** Proceeds in dependency order (ADX → Ingestor → Collector → Alerter), updating subresource conditions at each phase.
+- **Resource Cleanup:** Deletes managed Kubernetes resources when CRDs are deleted. (Azure resources are not deleted by default.)
+- **Multi-Cluster & Federation:** Supports federated and partitioned ADX topologies for geo-distributed or multi-tenant scenarios.
+
+#### How It Works
+1. **CRD Reconciliation:** Watches for changes to adx-mon CRDs and managed resources.
+2. **Azure Resource Management:** Provisions or connects to ADX clusters/databases as specified in the `ADXCluster` CRD.
+3. **Component Deployment:** Deploys or updates StatefulSets/Deployments for Ingestor, Collector, and Alerter based on their CRDs.
+4. **Status & Health:** Updates CRD status fields and subresource conditions to reflect readiness and errors.
+5. **Federation Support:** Manages federated clusters, heartbeats, and macro-expand KQL functions for cross-cluster querying.
+
+#### Example Operator Workflow
+```mermaid
+flowchart TD
+    ADXClusterCRD -->|provision| ADXCluster
+    ADXCluster -->|ready| IngestorCRD
+    IngestorCRD -->|deploy| Ingestor
+    Ingestor -->|ready| CollectorCRD
+    CollectorCRD -->|deploy| Collector
+    Collector -->|ready| AlerterCRD
+    AlerterCRD -->|deploy| Alerter
+```
+
+#### Example CRDs
+- **ADXCluster:**
+  ```yaml
+  apiVersion: adx-mon.azure.com/v1
+  kind: ADXCluster
+  metadata:
+    name: prod-adx-cluster
+  spec:
+    clusterName: prod-metrics
+    endpoint: "https://prod-metrics.kusto.windows.net"
+    provision:
+      subscriptionId: "00000000-0000-0000-0000-000000000000"
+      resourceGroup: "adx-monitor-prod"
+      location: "eastus2"
+      skuName: "Standard_L8as_v3"
+      tier: "Standard"
+      managedIdentityClientId: "11111111-1111-1111-1111-111111111111"
+  ```
+- **Ingestor:**
+  ```yaml
+  apiVersion: adx-mon.azure.com/v1
+  kind: Ingestor
+  metadata:
+    name: prod-ingestor
+  spec:
+    image: "ghcr.io/azure/adx-mon/ingestor:v1.0.0"
+    replicas: 3
+    endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+    exposeExternally: false
+    adxClusterSelector:
+      matchLabels:
+        app: adx-mon
+  ```
+- **Collector:**
+  ```yaml
+  apiVersion: adx-mon.azure.com/v1
+  kind: Collector
+  metadata:
+    name: prod-collector
+  spec:
+    image: "ghcr.io/azure/adx-mon/collector:v1.0.0"
+    ingestorEndpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
+  ```
+- **Alerter:**
+  ```yaml
+  apiVersion: adx-mon.azure.com/v1
+  kind: Alerter
+  metadata:
+    name: prod-alerter
+  spec:
+    image: "ghcr.io/azure/adx-mon/alerter:v1.0.0"
+    notificationEndpoint: "http://alerter-endpoint"
+    adxClusterSelector:
+      matchLabels:
+        app: adx-mon
+  ```
+
+#### Federation & Multi-Cluster
+- **Partition Clusters:** Each partition cluster is managed by its own operator and contains a subset of the data (e.g., by geo or tenant).
+- **Federated Cluster:** A central operator manages a federated ADX cluster, providing a unified query interface and managing heartbeats and macro-expand KQL functions.
+- **Heartbeat Table:** Partition clusters send periodic heartbeats to the federated cluster, which uses them to discover topology and liveness.
+
+#### Development & Testing
+- Operator can be run locally or in-cluster.
+- Supports dry-run and debug modes for safe testing.
+- See `docs/designs/operator.md` for advanced configuration, federation, and troubleshooting.
+
+---
+
 ### Azure Data Explorer
 ### Grafana
 
