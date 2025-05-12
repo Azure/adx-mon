@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,11 +12,15 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -455,4 +460,194 @@ func TestDiffIdentities(t *testing.T) {
 			require.ElementsMatch(t, tt.wantIDs, gotIDs)
 		})
 	}
+}
+
+func TestEnsureHeartbeatTable(t *testing.T) {
+	ctx := context.Background()
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	var (
+		dbName  = "NetDefaultDB"
+		tblName = "Heartbeat"
+	)
+	crd := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-operator",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "adxmon-test",
+			Endpoint:    kustoContainer.ConnectionUrl(),
+			Role:        to.Ptr(adxmonv1.ClusterRoleFederated),
+			Federation: &adxmonv1.ADXClusterFederationSpec{
+				HeartbeatDatabase: to.Ptr(dbName),
+				HeartbeatTable:    to.Ptr(tblName),
+			},
+		},
+	}
+	created, err := ensureHeartbeatTable(ctx, crd)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	// Second time the table should already exist
+	created, err = ensureHeartbeatTable(ctx, crd)
+	require.NoError(t, err)
+	require.False(t, created)
+}
+
+func TestHeartbeatFederatedClusters(t *testing.T) {
+	ctx := context.Background()
+	kustainerFederatedCluster, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, kustainerFederatedCluster)
+	require.NoError(t, err)
+
+	kustainerPartitionedCluster, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, kustainerPartitionedCluster)
+	require.NoError(t, err)
+
+	// Create the federated heartbeat table
+	var (
+		dbName  = "NetDefaultDB"
+		tblName = "Heartbeat"
+	)
+	crd := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-operator",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "adxmon-federated-test",
+			Endpoint:    kustainerFederatedCluster.ConnectionUrl(),
+			Role:        to.Ptr(adxmonv1.ClusterRoleFederated),
+			Federation: &adxmonv1.ADXClusterFederationSpec{
+				HeartbeatDatabase: to.Ptr(dbName),
+				HeartbeatTable:    to.Ptr(tblName),
+			},
+		},
+	}
+	created, err := ensureHeartbeatTable(ctx, crd)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	// Create some tables in the partitioned cluster
+	ep := kusto.NewConnectionStringBuilder(kustainerPartitionedCluster.ConnectionUrl())
+	client, err := kusto.New(ep)
+	require.NoError(t, err)
+
+	for _, tableName := range []string{"Table1", "Table2"} {
+		stmt := kql.New("").AddUnsafe(fmt.Sprintf(".create table %s (x: int)", tableName))
+		_, err = client.Mgmt(ctx, dbName, stmt)
+		require.NoError(t, err)
+	}
+
+	// Heartbeat the partitioned cluster
+	heartbeat := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-operator",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "adxmon-partitioned-test",
+			Endpoint:    kustainerPartitionedCluster.ConnectionUrl(),
+			Role:        to.Ptr(adxmonv1.ClusterRolePartition),
+			Federation: &adxmonv1.ADXClusterFederationSpec{
+				FederationTargets: []adxmonv1.ADXClusterFederatedClusterSpec{
+					{
+						Endpoint:          kustainerFederatedCluster.ConnectionUrl(),
+						HeartbeatDatabase: dbName,
+						HeartbeatTable:    tblName,
+					},
+				},
+				Partitioning: &map[string]string{
+					"geo": "eu",
+				},
+			},
+		},
+	}
+	r := &AdxReconciler{}
+	result, err := r.HeartbeatFederatedClusters(ctx, heartbeat)
+	require.NoError(t, err)
+	require.NotZero(t, result)
+}
+
+func TestParseHeartbeatRows(t *testing.T) {
+	rawSchema := `{"database":"db1","tables":["t1","t2"]}`
+	rawMeta := map[string]string{"geo": "us"}
+	rows := []HeartbeatRow{
+		{
+			Timestamp:         time.Now(),
+			ClusterEndpoint:   "ep1",
+			Schema:            json.RawMessage(rawSchema),
+			PartitionMetadata: rawMeta,
+		},
+	}
+	schemaByEndpoint, metaByEndpoint := parseHeartbeatRows(rows)
+	require.Contains(t, schemaByEndpoint, "ep1")
+	require.Equal(t, "db1", schemaByEndpoint["ep1"].Database)
+	require.Equal(t, rawMeta, metaByEndpoint["ep1"])
+}
+
+func TestExtractDatabasesFromSchemas(t *testing.T) {
+	schemas := map[string]ADXClusterSchema{
+		"ep1": {Database: "db1"},
+		"ep2": {Database: "db2"},
+	}
+	dbs := extractDatabasesFromSchemas(schemas)
+	require.Contains(t, dbs, "db1")
+	require.Contains(t, dbs, "db2")
+}
+
+func TestMapTablesToEndpoints(t *testing.T) {
+	schemas := map[string]ADXClusterSchema{
+		"ep1": {Database: "db1", Tables: []string{"t1", "t2"}},
+		"ep2": {Database: "db1", Tables: []string{"t2"}},
+	}
+	m := mapTablesToEndpoints(schemas)
+	require.ElementsMatch(t, m["db1"]["t1"], []string{"ep1"})
+	require.ElementsMatch(t, m["db1"]["t2"], []string{"ep1", "ep2"})
+}
+
+func TestGenerateKustoFunctionDefinitions(t *testing.T) {
+	m := map[string]map[string][]string{
+		"db1": {
+			"t1": {"ep1"},
+			"t2": {"ep1", "ep2"},
+		},
+	}
+	funcs := generateKustoFunctionDefinitions(m)
+	require.Contains(t, funcs, "db1")
+	foundT1 := false
+	foundT2 := false
+	for _, f := range funcs["db1"] {
+		if strings.Contains(f, ".create-or-alter function t1()") {
+			foundT1 = true
+		}
+		if strings.Contains(f, ".create-or-alter function t2()") {
+			foundT2 = true
+		}
+	}
+	require.True(t, foundT1)
+	require.True(t, foundT2)
+}
+
+func TestSplitKustoScripts(t *testing.T) {
+	funcs := []string{"a", "b", "c"}
+	preamble := ".execute database script with (ContinueOnErrors=true)\n<|\n"
+
+	scripts := splitKustoScripts(funcs, len(preamble)+2) // Only enough room for one function per script
+	require.Len(t, scripts, 3)
+	for _, script := range scripts {
+		require.Len(t, script, 1)
+		// Each script part should start with a comment
+		require.True(t, strings.HasPrefix(script[0], "//\n"))
+	}
+
+	scripts = splitKustoScripts(funcs, 1000) // Large enough for all in one
+	require.Len(t, scripts, 1)
+	joined := strings.Join(scripts[0], "")
+	require.Contains(t, joined, "//\na\n")
+	require.Contains(t, joined, "//\nb\n")
+	require.Contains(t, joined, "//\nc\n")
 }
