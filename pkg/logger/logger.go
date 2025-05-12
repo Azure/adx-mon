@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 )
@@ -181,4 +182,33 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	}
 
 	return a
+}
+
+// controllerRuntimeLogSink implements logr.LogSink
+type controllerRuntimeLogSink struct{}
+
+func (l *controllerRuntimeLogSink) Init(info logr.RuntimeInfo)                 {}
+func (l *controllerRuntimeLogSink) Enabled(level int) bool                     { return true }
+func (l *controllerRuntimeLogSink) WithName(name string) logr.LogSink          { return l }
+func (l *controllerRuntimeLogSink) WithValues(kvs ...interface{}) logr.LogSink { return l }
+
+func (l *controllerRuntimeLogSink) Info(level int, msg string, keysAndValues ...interface{}) {
+	if len(keysAndValues) > 0 {
+		Info(msg, slog.Any("values", keysAndValues))
+	} else {
+		Info(msg)
+	}
+}
+
+func (l *controllerRuntimeLogSink) Error(err error, msg string, keysAndValues ...interface{}) {
+	attrs := []any{slog.Any("error", err)}
+	if len(keysAndValues) > 0 {
+		attrs = append(attrs, slog.Any("values", keysAndValues))
+	}
+	Error(msg, attrs...)
+}
+
+// AsLogr returns a logr.Logger that uses our logger implementation
+func AsLogr() logr.Logger {
+	return logr.New(&controllerRuntimeLogSink{})
 }

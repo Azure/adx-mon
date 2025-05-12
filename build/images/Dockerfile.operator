@@ -1,0 +1,23 @@
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS builder
+
+RUN tdnf install -y golang ca-certificates
+
+ADD . /code
+WORKDIR /code
+
+ARG VERSION GIT_COMMIT BUILD_TIME
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+-ldflags=" \
+-X 'github.com/Azure/adx-mon/pkg/version.Version=${VERSION}' \
+-X 'github.com/Azure/adx-mon/pkg/version.GitCommit=${GIT_COMMIT}' \
+-X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
+" -o ./bin/operator ./cmd/operator
+
+FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0
+
+LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
+
+COPY --from=builder /code/bin /
+
+ENTRYPOINT ["/operator"]
