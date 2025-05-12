@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.3
-  name: ingestors.adx-mon.azure.com
+  name: summaryrules.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: Ingestor
-    listKind: IngestorList
-    plural: ingestors
-    singular: ingestor
+    kind: SummaryRule
+    listKind: SummaryRuleList
+    plural: summaryrules
+    singular: summaryrule
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: Ingestor is the Schema for the ingestors API
+        description: SummaryRule is the Schema for the summaryrules API
         properties:
           apiVersion:
             description: |-
@@ -37,88 +37,37 @@ spec:
           metadata:
             type: object
           spec:
-            description: IngestorSpec defines the desired state of Ingestor
+            description: SummaryRuleSpec defines the desired state of SummaryRule
             properties:
-              adxClusterSelector:
-                description: ADXClusterSelector is a label selector used to select
-                  the ADXCluster CRDs this ingestor should target. This field is required.
-                properties:
-                  matchExpressions:
-                    description: matchExpressions is a list of label selector requirements.
-                      The requirements are ANDed.
-                    items:
-                      description: |-
-                        A label selector requirement is a selector that contains values, a key, and an operator that
-                        relates the key and values.
-                      properties:
-                        key:
-                          description: key is the label key that the selector applies
-                            to.
-                          type: string
-                        operator:
-                          description: |-
-                            operator represents a key's relationship to a set of values.
-                            Valid operators are In, NotIn, Exists and DoesNotExist.
-                          type: string
-                        values:
-                          description: |-
-                            values is an array of string values. If the operator is In or NotIn,
-                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                            the values array must be empty. This array is replaced during a strategic
-                            merge patch.
-                          items:
-                            type: string
-                          type: array
-                          x-kubernetes-list-type: atomic
-                      required:
-                      - key
-                      - operator
-                      type: object
-                    type: array
-                    x-kubernetes-list-type: atomic
-                  matchLabels:
-                    additionalProperties:
-                      type: string
-                    description: |-
-                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                      map is equivalent to an element of matchExpressions, whose key field is "key", the
-                      operator is "In", and the values array contains only "value". The requirements are ANDed.
-                    type: object
-                type: object
-                x-kubernetes-map-type: atomic
-              appliedProvisionState:
-                description: |-
-                  AppliedProvisionState is a JSON-serialized snapshot of the CRD
-                  as last applied by the operator. This is set by the operator and is read-only for users.
+              body:
+                description: Body is the KQL body of the function
                 type: string
-              endpoint:
-                description: Endpoint is the endpoint to use for the ingestor. If
-                  running in a cluster, this should be the service name; otherwise,
-                  the operator will generate an endpoint. Optional.
+              database:
+                description: Database is the name of the database in which the function
+                  will be created
                 type: string
-              exposeExternally:
-                default: false
-                description: ExposeExternally indicates if the ingestor should be
-                  exposed externally as reflected in the Endpoint. Optional; defaults
-                  to false.
-                type: boolean
-              image:
-                description: Image is the container image to use for the ingestor
-                  component. Optional; if omitted, a default image will be used.
+              interval:
+                description: Interval is the cadence at which the rule will be executed
                 type: string
-              replicas:
-                default: 1
-                description: Replicas is the number of ingestor replicas to run. Optional;
-                  defaults to 1 if omitted.
-                format: int32
-                type: integer
+              name:
+                description: Name is the name of the rule
+                type: string
+              table:
+                description: Table is rule output destination
+                type: string
             required:
-            - adxClusterSelector
+            - body
+            - database
+            - interval
+            - name
+            - table
             type: object
           status:
-            description: IngestorStatus defines the observed state of Ingestor
+            description: SummaryRuleStatus defines the observed state of Function
             properties:
               conditions:
+                description: Conditions is an array of current observed SummaryRule
+                  conditions
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
