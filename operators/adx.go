@@ -2,8 +2,10 @@ package operator
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -11,11 +13,12 @@ import (
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
-	kusto "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
 	armresources "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -65,6 +68,16 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	case condition.Reason == ADXClusterWaitingReason:
 		// Check the status of the cluster
 		return r.CheckStatus(ctx, &cluster)
+	}
+
+	// Federated cluster support.
+	if meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) && cluster.Spec.Role != nil {
+		switch *cluster.Spec.Role {
+		case adxmonv1.ClusterRolePartition:
+			return r.HeartbeatFederatedClusters(ctx, &cluster)
+		case adxmonv1.ClusterRoleFederated:
+			return r.FederateClusters(ctx, &cluster)
+		}
 	}
 
 	return ctrl.Result{}, nil
@@ -150,6 +163,16 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	_ = setClusterStatusCondition(ADXClusterWaitingReason, "Provisioning ADX clusters")
+
+	tblCreated, err := ensureHeartbeatTable(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if tblCreated {
+		// Tables are created synchronously, no waiting is necessary.
+		_ = setClusterStatusCondition(ADXClusterCreatingReason, "Provisioned Heartbeat Table")
+	}
+
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
@@ -180,14 +203,14 @@ func ensureResourceGroup(ctx context.Context, cluster *adxmonv1.ADXCluster, cred
 
 // createOrUpdateKustoCluster creates the cluster if it doesn't exist, or waits for it to be ready
 func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azcore.TokenCredential) (bool, error) {
-	clustersClient, err := kusto.NewClustersClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
+	clustersClient, err := armkusto.NewClustersClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create clusters client: %w", err)
 	}
 	available, err := clustersClient.CheckNameAvailability(
 		ctx,
 		cluster.Spec.Provision.Location,
-		kusto.ClusterCheckNameRequest{
+		armkusto.ClusterCheckNameRequest{
 			Name: to.Ptr(cluster.Spec.ClusterName),
 		},
 		nil,
@@ -198,25 +221,25 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 	if available.NameAvailable != nil && *available.NameAvailable {
 		logger.Infof("Creating Kusto cluster %s...", cluster.Spec.ClusterName)
 
-		var identity *kusto.Identity
+		var identity *armkusto.Identity
 		if cluster.Spec.Provision != nil && len(cluster.Spec.Provision.UserAssignedIdentities) != 0 {
-			userAssignedIdentities := make(map[string]*kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
+			userAssignedIdentities := make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
 			for _, u := range cluster.Spec.Provision.UserAssignedIdentities {
-				userAssignedIdentities[u] = &kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+				userAssignedIdentities[u] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
 			}
-			identity = &kusto.Identity{
-				Type:                   to.Ptr(kusto.IdentityTypeUserAssigned),
+			identity = &armkusto.Identity{
+				Type:                   to.Ptr(armkusto.IdentityTypeUserAssigned),
 				UserAssignedIdentities: userAssignedIdentities,
 			}
 		} else {
-			identity = &kusto.Identity{
-				Type: to.Ptr(kusto.IdentityTypeSystemAssigned),
+			identity = &armkusto.Identity{
+				Type: to.Ptr(armkusto.IdentityTypeSystemAssigned),
 			}
 		}
 
-		var autoScale *kusto.OptimizedAutoscale
+		var autoScale *armkusto.OptimizedAutoscale
 		if cluster.Spec.Provision.AutoScale {
-			autoScale = &kusto.OptimizedAutoscale{
+			autoScale = &armkusto.OptimizedAutoscale{
 				IsEnabled: to.Ptr(cluster.Spec.Provision.AutoScale),
 				Maximum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMax)),
 				Minimum:   to.Ptr(int32(cluster.Spec.Provision.AutoScaleMin)),
@@ -227,16 +250,16 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 			ctx,
 			cluster.Spec.Provision.ResourceGroup,
 			cluster.Spec.ClusterName,
-			kusto.Cluster{
+			armkusto.Cluster{
 				Location: to.Ptr(cluster.Spec.Provision.Location),
-				SKU: &kusto.AzureSKU{
+				SKU: &armkusto.AzureSKU{
 					Name: toSku(cluster.Spec.Provision.SkuName),
 					Tier: toTier(cluster.Spec.Provision.Tier),
 				},
 				Identity: identity,
-				Properties: &kusto.ClusterProperties{
+				Properties: &armkusto.ClusterProperties{
 					EnableAutoStop:     to.Ptr(false),
-					EngineType:         to.Ptr(kusto.EngineTypeV3),
+					EngineType:         to.Ptr(armkusto.EngineTypeV3),
 					OptimizedAutoscale: autoScale,
 				},
 			},
@@ -251,7 +274,7 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 		if err != nil {
 			return false, fmt.Errorf("failed to get cluster status: %w", err)
 		}
-		if resp.Properties == nil || resp.Properties.State == nil || *resp.Properties.State != kusto.StateRunning {
+		if resp.Properties == nil || resp.Properties.State == nil || *resp.Properties.State != armkusto.StateRunning {
 			return false, nil // Not ready yet
 		}
 	}
@@ -260,19 +283,26 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 
 // ensureDatabases creates databases if they do not exist, returns true if any were created
 func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azcore.TokenCredential) (bool, error) {
-	databasesClient, err := kusto.NewDatabasesClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
+	databasesClient, err := armkusto.NewDatabasesClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create databases client: %w", err)
 	}
+	databases := cluster.Spec.Databases
+	if cluster.Spec.Federation.HeartbeatDatabase != nil {
+		databases = append(databases, adxmonv1.ADXClusterDatabaseSpec{
+			DatabaseName:  *cluster.Spec.Federation.HeartbeatDatabase,
+			TelemetryType: adxmonv1.DatabaseTelemetryLogs,
+		})
+	}
 	var dbCreated bool
-	for _, db := range cluster.Spec.Databases {
+	for _, db := range databases {
 		available, err := databasesClient.CheckNameAvailability(
 			ctx,
 			cluster.Spec.Provision.ResourceGroup,
 			cluster.Spec.ClusterName,
-			kusto.CheckNameRequest{
+			armkusto.CheckNameRequest{
 				Name: to.Ptr(db.DatabaseName),
-				Type: to.Ptr(kusto.TypeMicrosoftKustoClustersDatabases),
+				Type: to.Ptr(armkusto.TypeMicrosoftKustoClustersDatabases),
 			},
 			nil,
 		)
@@ -302,6 +332,62 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 		}
 	}
 	return dbCreated, nil
+}
+
+func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bool, error) {
+	if cluster.Spec.Role == nil ||
+		*cluster.Spec.Role != adxmonv1.ClusterRoleFederated ||
+		cluster.Spec.Federation == nil ||
+		cluster.Spec.Federation.HeartbeatDatabase == nil ||
+		cluster.Spec.Federation.HeartbeatTable == nil {
+		return false, nil
+	}
+	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
+	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
+		// Enables kustainer integration testing
+		ep.WithDefaultAzureCredential()
+	}
+	client, err := kusto.New(ep)
+	if err != nil {
+		return false, fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	q := kql.New(".show tables | where TableName == '").AddUnsafe(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("' | count")
+	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q)
+	if err != nil {
+		return false, fmt.Errorf("failed to query Kusto tables: %w", err)
+	}
+	defer result.Stop()
+
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to retrieve tables: %w", err)
+		}
+
+		var t TableExists
+		if err := row.ToStruct(&t); err != nil {
+			return false, fmt.Errorf("failed to parse table count: %w", err)
+		}
+		if t.Count > 0 {
+			// Table exists, nothing to do
+			return false, nil
+		}
+	}
+
+	stmt := kql.New(".create table ").AddTable(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("(Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic)")
+	_, err = client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, stmt)
+	return true, err
+}
+
+type TableExists struct {
+	Count int64 `kusto:"Count"`
 }
 
 func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -340,7 +426,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
 
-	clustersClient, err := kusto.NewClustersClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
+	clustersClient, err := armkusto.NewClustersClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create clusters client: %w", err)
 	}
@@ -404,7 +490,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
 
-	clustersClient, err := kusto.NewClustersClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
+	clustersClient, err := armkusto.NewClustersClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create clusters client: %w", err)
 	}
@@ -417,7 +503,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 
 	// If the cluster is running, we're done
-	if *resp.Properties.State == kusto.StateRunning {
+	if *resp.Properties.State == armkusto.StateRunning {
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionTrue,
@@ -444,13 +530,13 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 
 	// If the cluster has failed to provision, we're done
-	if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == kusto.ProvisioningStateFailed {
+	if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == armkusto.ProvisioningStateFailed {
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: cluster.GetGeneration(),
 			LastTransitionTime: metav1.Now(),
-			Reason:             string(kusto.ProvisioningStateFailed),
+			Reason:             string(armkusto.ProvisioningStateFailed),
 			Message:            "Cluster creation failed",
 		}
 		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
@@ -463,6 +549,211 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 
 	// For all other states, we can safely continue to wait
 	return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
+}
+
+func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	if cluster.Spec.Role == nil ||
+		*cluster.Spec.Role != adxmonv1.ClusterRolePartition ||
+		cluster.Spec.Federation == nil ||
+		cluster.Spec.Federation.FederationTargets == nil ||
+		cluster.Spec.Federation.Partitioning == nil {
+		return ctrl.Result{}, nil
+	}
+
+	for _, target := range cluster.Spec.Federation.FederationTargets {
+		if err := heartbeatFederatedCluster(ctx, cluster, target); err != nil {
+			logger.Errorf("Failed to heartbeat federated cluster %s: %v", target.Endpoint, err)
+			continue
+		}
+		logger.Infof("Heartbeat sent to federated cluster %s", target.Endpoint)
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+}
+
+func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster, target adxmonv1.ADXClusterFederatedClusterSpec) error {
+	partitionClusterEndpoint := cluster.Spec.Endpoint
+	ep := kusto.NewConnectionStringBuilder(partitionClusterEndpoint)
+	if strings.HasPrefix(partitionClusterEndpoint, "https://") {
+		// Enables kustainer integration testing
+		ep.WithDefaultAzureCredential()
+	}
+	client, err := kusto.New(ep)
+	if err != nil {
+		return fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	q := kql.New(".show databases")
+	result, err := client.Mgmt(ctx, target.HeartbeatDatabase, q)
+	if err != nil {
+		return fmt.Errorf("failed to query databases: %w", err)
+	}
+	defer result.Stop()
+
+	var databases []string
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return fmt.Errorf("failed to retrieve databases: %w", err)
+		}
+
+		var dbr DatabaseRec
+		if err := row.ToStruct(&dbr); err != nil {
+			return fmt.Errorf("failed to parse database: %w", err)
+		}
+		databases = append(databases, dbr.DatabaseName)
+	}
+
+	var schema []ADXClusterSchema
+	for _, database := range databases {
+		s := ADXClusterSchema{
+			Database: database,
+		}
+		q := kql.New(".show tables")
+		result, err := client.Mgmt(ctx, database, q)
+		if err != nil {
+			return fmt.Errorf("failed to query tables: %w", err)
+		}
+
+		for {
+			row, errInline, errFinal := result.NextRowOrError()
+			if errFinal == io.EOF {
+				break
+			}
+			if errInline != nil {
+				continue
+			}
+			if errFinal != nil {
+				return fmt.Errorf("failed to retrieve tables: %w", err)
+			}
+
+			var tbl TableRec
+			if err := row.ToStruct(&tbl); err != nil {
+				return fmt.Errorf("failed to parse table: %w", err)
+			}
+			s.Tables = append(s.Tables, tbl.TableName)
+		}
+
+		schema = append(schema, s)
+	}
+
+	federatedClusterEndpoint := target.Endpoint
+	ep = kusto.NewConnectionStringBuilder(federatedClusterEndpoint)
+	if strings.HasPrefix(federatedClusterEndpoint, "https://") && target.ManagedIdentityClientId != "" {
+		// Enables kustainer integration testing
+		ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
+	}
+	client, err = kusto.New(ep)
+	if err != nil {
+		return fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	schemaData, err := json.Marshal(schema)
+	if err != nil {
+		return fmt.Errorf("failed to marshal schema: %w", err)
+	}
+
+	partitionMetadata, err := json.Marshal(*cluster.Spec.Federation.Partitioning)
+	if err != nil {
+		return fmt.Errorf("failed to marshal partition metadata: %w", err)
+	}
+
+	// Use encoding/csv to properly escape CSV fields
+	var b strings.Builder
+	w := csv.NewWriter(&b)
+	w.Write([]string{
+		time.Now().Format(time.RFC3339),
+		partitionClusterEndpoint,
+		string(schemaData),
+		string(partitionMetadata),
+	})
+	w.Flush()
+	row := strings.TrimRight(b.String(), "\n") // Remove trailing newline added by csv.Writer
+	stmt := kql.New(".ingest inline into table ").
+		AddTable(target.HeartbeatTable).
+		AddLiteral(" <| ").AddUnsafe(row)
+	_, err = client.Mgmt(ctx, target.HeartbeatDatabase, stmt)
+	return err
+}
+
+type TableRec struct {
+	TableName string `json:"TableName"`
+}
+
+type DatabaseRec struct {
+	DatabaseName string `json:"DatabaseName"`
+}
+
+type ADXClusterSchema struct {
+	Database string   `json:"database"`
+	Tables   []string `json:"tables"`
+}
+
+func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	if cluster.Spec.Role == nil ||
+		*cluster.Spec.Role != adxmonv1.ClusterRoleFederated ||
+		cluster.Spec.Federation == nil ||
+		cluster.Spec.Federation.HeartbeatDatabase == nil ||
+		cluster.Spec.Federation.HeartbeatTable == nil {
+		return ctrl.Result{}, nil
+	}
+
+	// Step 1: Create Kusto client
+	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
+	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
+		ep.WithDefaultAzureCredential()
+	}
+	client, err := kusto.New(ep)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	// Step 2: Query heartbeat table
+	rows, err := queryHeartbeatTable(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to query heartbeat table: %w", err)
+	}
+
+	// Step 3: Parse result
+	schemaByEndpoint, _ := parseHeartbeatRows(rows)
+
+	// Step 4: Unique list of databases
+	dbSet := extractDatabasesFromSchemas(schemaByEndpoint)
+	var dbSpecs []adxmonv1.ADXClusterDatabaseSpec
+	for db := range dbSet {
+		dbSpecs = append(dbSpecs, adxmonv1.ADXClusterDatabaseSpec{DatabaseName: db})
+	}
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
+	}
+	cluster.Spec.Databases = dbSpecs
+	_, err = ensureDatabases(ctx, cluster, cred)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
+	}
+
+	// Step 5: Map tables to endpoints
+	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
+
+	// Step 6: Generate function definitions
+	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
+
+	// Step 7/8: For each database, split scripts and execute
+	const maxScriptSize = 1024 * 1024 // 1MB
+	for db, funcs := range funcsByDB {
+		scripts := splitKustoScripts(funcs, maxScriptSize)
+		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to execute Kusto scripts for db %s: %w", db, err)
+		}
+	}
+
+	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 }
 
 // getIMDSMetadata queries Azure IMDS for metadata about the current environment
@@ -512,7 +803,7 @@ var recommendedSKUs = []string{
 
 // getBestAvailableSKU queries Azure for available SKUs and returns the highest priority one
 func getBestAvailableSKU(ctx context.Context, subscriptionId string, region string, cred azcore.TokenCredential) (sku, tier string, err error) {
-	clustersClient, err := kusto.NewClustersClient(subscriptionId, cred, nil)
+	clustersClient, err := armkusto.NewClustersClient(subscriptionId, cred, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create clusters client: %w", err)
 	}
@@ -660,8 +951,8 @@ func applyDefaults(ctx context.Context, r *AdxReconciler, cluster *adxmonv1.ADXC
 	return nil
 }
 
-func diffSkus(resp kusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (kusto.Cluster, bool) {
-	clusterUpdate := kusto.Cluster{
+func diffSkus(resp armkusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
+	clusterUpdate := armkusto.Cluster{
 		Location:   resp.Location,
 		SKU:        resp.SKU,
 		Identity:   resp.Identity,
@@ -685,9 +976,9 @@ func diffSkus(resp kusto.ClustersClientGetResponse, appliedProvisionState *adxmo
 	return clusterUpdate, updated
 }
 
-func diffIdentities(resp kusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *kusto.Cluster) bool {
+func diffIdentities(resp armkusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *armkusto.Cluster) bool {
 	var updated bool
-	if resp.Identity != nil && resp.Identity.Type != nil && *resp.Identity.Type == kusto.IdentityTypeUserAssigned && appliedProvisionState.UserAssignedIdentities != nil {
+	if resp.Identity != nil && resp.Identity.Type != nil && *resp.Identity.Type == armkusto.IdentityTypeUserAssigned && appliedProvisionState.UserAssignedIdentities != nil {
 		// This block is responsible for reconciling the set of user-assigned identities on the cluster.
 		// The goal is to ensure that only the identities managed by the operator (i.e., those specified in the CRD)
 		// are added or removed, without disturbing any identities that may have been added out-of-band (e.g., manually in Azure).
@@ -716,10 +1007,10 @@ func diffIdentities(resp kusto.ClustersClientGetResponse, appliedProvisionState 
 		for id := range currentSet {
 			if _, wasApplied := appliedSet[id]; !wasApplied {
 				if resp.Identity.UserAssignedIdentities == nil {
-					clusterUpdate.Identity.UserAssignedIdentities = make(map[string]*kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
+					clusterUpdate.Identity.UserAssignedIdentities = make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
 				}
 				if _, exists := resp.Identity.UserAssignedIdentities[id]; !exists {
-					clusterUpdate.Identity.UserAssignedIdentities[id] = &kusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+					clusterUpdate.Identity.UserAssignedIdentities[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
 					updated = true
 				}
 			}
@@ -765,4 +1056,134 @@ func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.D
 		Name:     to.Ptr(dbName),
 		Type:     to.Ptr("Microsoft.Kusto/Clusters/Databases"),
 	}
+}
+
+// HeartbeatRow represents a row in the heartbeat table
+// Schema: Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic
+type HeartbeatRow struct {
+	Timestamp         time.Time         `kusto:"Timestamp"`
+	ClusterEndpoint   string            `kusto:"ClusterEndpoint"`
+	Schema            json.RawMessage   `kusto:"Schema"`
+	PartitionMetadata map[string]string `kusto:"PartitionMetadata"`
+}
+
+// Helper: Query the heartbeat table for recent entries
+func queryHeartbeatTable(ctx context.Context, client *kusto.Client, database, table, ttl string) ([]HeartbeatRow, error) {
+	query := fmt.Sprintf("%s | where Timestamp > ago(%s)", table, ttl)
+	result, err := client.Query(ctx, database, kql.New("").AddUnsafe(query))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query heartbeat table: %w", err)
+	}
+	defer result.Stop()
+
+	var rows []HeartbeatRow
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, fmt.Errorf("failed to read heartbeat row: %w", errFinal)
+		}
+		var h HeartbeatRow
+		if err := row.ToStruct(&h); err != nil {
+			return nil, fmt.Errorf("failed to parse heartbeat row: %w", err)
+		}
+		rows = append(rows, h)
+	}
+	return rows, nil
+}
+
+// Helper: Parse heartbeat rows into endpoint->schema and endpoint->partitionMetadata
+func parseHeartbeatRows(rows []HeartbeatRow) (map[string]ADXClusterSchema, map[string]map[string]string) {
+	schemaByEndpoint := make(map[string]ADXClusterSchema)
+	partitionMetaByEndpoint := make(map[string]map[string]string)
+	for _, row := range rows {
+		var schema ADXClusterSchema
+		_ = json.Unmarshal(row.Schema, &schema)
+		schemaByEndpoint[row.ClusterEndpoint] = schema
+		partitionMetaByEndpoint[row.ClusterEndpoint] = row.PartitionMetadata
+	}
+	return schemaByEndpoint, partitionMetaByEndpoint
+}
+
+// Helper: Extract unique databases from schemas
+func extractDatabasesFromSchemas(schemas map[string]ADXClusterSchema) map[string]struct{} {
+	dbSet := make(map[string]struct{})
+	for _, schema := range schemas {
+		dbSet[schema.Database] = struct{}{}
+	}
+	return dbSet
+}
+
+// Helper: Map tables to endpoints for each database
+func mapTablesToEndpoints(schemas map[string]ADXClusterSchema) map[string]map[string][]string {
+	dbTableEndpoints := make(map[string]map[string][]string)
+	for endpoint, schema := range schemas {
+		db := schema.Database
+		if dbTableEndpoints[db] == nil {
+			dbTableEndpoints[db] = make(map[string][]string)
+		}
+		for _, table := range schema.Tables {
+			dbTableEndpoints[db][table] = append(dbTableEndpoints[db][table], endpoint)
+		}
+	}
+	return dbTableEndpoints
+}
+
+// Helper: Generate Kusto function definitions for each table
+func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]string) map[string][]string {
+	funcsByDB := make(map[string][]string)
+	for db, tableMap := range dbTableEndpoints {
+		for table, endpoints := range tableMap {
+			var clusters []string
+			for _, ep := range endpoints {
+				clusters = append(clusters, fmt.Sprintf("cluster('%s').database('%s')", ep, db))
+			}
+			macro := fmt.Sprintf("macro-expand entity_group [%s] as X { X.%s }", strings.Join(clusters, ", "), table)
+			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
+			funcsByDB[db] = append(funcsByDB[db], funcDef)
+		}
+	}
+	return funcsByDB
+}
+
+// Helper: Split Kusto scripts if they approach 1MB and add script preamble and comments
+func splitKustoScripts(funcs []string, maxSize int) [][]string {
+	const scriptPreamble = ".execute database script with (ContinueOnErrors=true)\n<|\n"
+	var scripts [][]string
+	var current []string
+	currentSize := len(scriptPreamble)
+	for _, f := range funcs {
+		// Add comment and newline before each function
+		funcWithComment := "//\n" + f + "\n"
+		sz := len(funcWithComment)
+		if currentSize+sz > maxSize && len(current) > 0 {
+			scripts = append(scripts, current)
+			current = nil
+			currentSize = len(scriptPreamble)
+		}
+		current = append(current, funcWithComment)
+		currentSize += sz
+	}
+	if len(current) > 0 {
+		scripts = append(scripts, current)
+	}
+	return scripts
+}
+
+// Helper: Execute Kusto scripts in a database, using the .execute database script preamble
+func executeKustoScripts(ctx context.Context, client *kusto.Client, database string, scripts [][]string) error {
+	const scriptPreamble = ".execute database script with (ContinueOnErrors=true)\n<|\n"
+	for _, script := range scripts {
+		fullScript := scriptPreamble + strings.Join(script, "")
+		_, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript))
+		if err != nil {
+			return fmt.Errorf("failed to execute Kusto script: %w", err)
+		}
+	}
+	return nil
 }

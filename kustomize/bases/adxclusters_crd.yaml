@@ -83,6 +83,59 @@ spec:
                   one. Example: "https://mycluster.kusto.windows.net"'
                 format: uri
                 type: string
+              federation:
+                description: Supports cluster partitioning. Only relevant if Role
+                  is set.
+                properties:
+                  federatedTargets:
+                    description: If role is "Partition", specifies the Federated cluster(s)
+                      details for heartbeating.
+                    items:
+                      properties:
+                        endpoint:
+                          description: 'Endpoint is the URI of the federated ADX cluster.
+                            Example: "https://mycluster.kusto.windows.net"'
+                          type: string
+                        heartbeatDatabase:
+                          pattern: ^[a-zA-Z0-9_]+$
+                          type: string
+                        heartbeatTable:
+                          pattern: ^[a-zA-Z0-9_]+$
+                          type: string
+                        managedIdentityClientId:
+                          description: Used for writing logs to the federated cluster.
+                          type: string
+                      required:
+                      - endpoint
+                      - heartbeatDatabase
+                      - heartbeatTable
+                      - managedIdentityClientId
+                      type: object
+                    type: array
+                  heartbeatDatabase:
+                    description: If role is "Federated", specifies the ADX cluster's
+                      heartbeat database.
+                    pattern: ^[a-zA-Z0-9_]+$
+                    type: string
+                  heartbeatTTL:
+                    default: 1h
+                    description: If role is "Federated", specifies the ADX cluster's
+                      heartbeat table TTL.
+                    pattern: ^(\d+h)?(\d+m)?(\d+s)?$
+                    type: string
+                  heartbeatTable:
+                    description: If role is "Federated", specifies the ADX cluster's
+                      heartbeat table.
+                    pattern: ^[a-zA-Z0-9_]+$
+                    type: string
+                  partitioning:
+                    additionalProperties:
+                      type: string
+                    description: If role is "Partition", specifies the ADX cluster's
+                      partition details.  Open-ended map/object for partitioning metadata
+                      (geo, location, tenant, etc.).
+                    type: object
+                type: object
               provision:
                 description: Provision contains optional Azure provisioning details
                   for the ADX cluster. If omitted, the operator will attempt zero-config
@@ -138,6 +191,14 @@ spec:
                       type: string
                     type: array
                 type: object
+              role:
+                description: 'Role specifies the cluster''s role: "Partition" (default,
+                  for data-holding clusters) or "Federated" (for the central federating
+                  cluster).'
+                enum:
+                - Partition
+                - Federated
+                type: string
             required:
             - clusterName
             type: object
