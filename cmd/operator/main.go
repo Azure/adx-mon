@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	operator "github.com/Azure/adx-mon/operators"
+	operator "github.com/Azure/adx-mon/operator"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2"
