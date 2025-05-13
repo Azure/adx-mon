@@ -210,7 +210,7 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	}, updated))
 	found := false
 	for _, cond := range updated.Status.Conditions {
-		if cond.Type == "AlerterOwner" {
+		if cond.Type == adxmonv1.ADXClusterConditionOwner {
 			found = true
 			break
 		}

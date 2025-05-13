@@ -410,7 +410,7 @@ func (r *AlerterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.Alerter{}).
-		Owns(&appsv1.StatefulSet{}).
+		Owns(&appsv1.Deployment{}).
 		// Add Watches for ADXCluster changes
 		Watches(
 			&adxmonv1.ADXCluster{},

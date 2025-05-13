@@ -60,7 +60,7 @@ roleRef:
   name: {{ .Namespace }}:alerter
 subjects:
   - kind: ServiceAccount
-    name: ingestor
+    name: alerter
     namespace: {{ .Namespace }}
 ---
 apiVersion: apps/v1
