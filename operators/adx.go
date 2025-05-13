@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -662,9 +663,17 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		return fmt.Errorf("failed to marshal partition metadata: %w", err)
 	}
 
-	// Timestamp, ClusterEndpoint, Schema, PartitionMetadata
-	// - ClusterEndpoint: Partition cluster endpoint
-	row := fmt.Sprintf(`"%s","%s","%s","%s"`, time.Now().Format(time.RFC3339), partitionClusterEndpoint, string(schemaData), string(partitionMetadata))
+	// Use encoding/csv to properly escape CSV fields
+	var b strings.Builder
+	w := csv.NewWriter(&b)
+	w.Write([]string{
+		time.Now().Format(time.RFC3339),
+		partitionClusterEndpoint,
+		string(schemaData),
+		string(partitionMetadata),
+	})
+	w.Flush()
+	row := strings.TrimRight(b.String(), "\n") // Remove trailing newline added by csv.Writer
 	stmt := kql.New(".ingest inline into table ").
 		AddTable(target.HeartbeatTable).
 		AddLiteral(" <| ").AddUnsafe(row)
