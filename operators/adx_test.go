@@ -635,8 +635,9 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 func TestSplitKustoScripts(t *testing.T) {
 	funcs := []string{"a", "b", "c"}
 	preamble := ".execute database script with (ContinueOnErrors=true)\n<|\n"
+	const overheadPerScript = 2 // Accounts for additional characters or delimiters in the script
 
-	scripts := splitKustoScripts(funcs, len(preamble)+2) // Only enough room for one function per script
+	scripts := splitKustoScripts(funcs, len(preamble)+overheadPerScript) // Only enough room for one function per script
 	require.Len(t, scripts, 3)
 	for _, script := range scripts {
 		require.Len(t, script, 1)
