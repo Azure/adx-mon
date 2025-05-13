@@ -12,6 +12,7 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
@@ -463,6 +464,7 @@ func TestDiffIdentities(t *testing.T) {
 }
 
 func TestEnsureHeartbeatTable(t *testing.T) {
+	testutils.IntegrationTest(t)
 	ctx := context.Background()
 	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
 	testcontainers.CleanupContainer(t, kustoContainer)
@@ -498,6 +500,7 @@ func TestEnsureHeartbeatTable(t *testing.T) {
 }
 
 func TestHeartbeatFederatedClusters(t *testing.T) {
+	testutils.IntegrationTest(t)
 	ctx := context.Background()
 	kustainerFederatedCluster, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
 	testcontainers.CleanupContainer(t, kustainerFederatedCluster)
