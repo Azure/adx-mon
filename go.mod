@@ -19,6 +19,7 @@ require (
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/davidnarayan/go-flake v0.0.0-20180604195229-c680a61bf75c
+	github.com/go-logr/logr v1.4.2
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/golang/protobuf v1.5.4
 	github.com/golang/snappy v1.0.0
@@ -89,7 +90,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
-	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
@@ -167,5 +167,6 @@ require (
 
 replace (
 	github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
+	github.com/redis/go-redis/v9 => github.com/redis/go-redis/v9 v9.7.3
 	github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445
 )
