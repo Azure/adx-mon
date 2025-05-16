@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -208,14 +209,7 @@ func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 		Name:      "test-alerter",
 		Namespace: "default",
 	}, updated))
-	found := false
-	for _, cond := range updated.Status.Conditions {
-		if cond.Type == adxmonv1.ADXClusterConditionOwner {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "Expected status condition to be set")
+	require.True(t, meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.AlerterConditionOwner) != nil)
 }
 
 func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
