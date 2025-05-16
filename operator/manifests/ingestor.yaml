@@ -13,7 +13,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: adx-mon:ingestor
+  name: {{ .Namespace }}:ingestor
 rules:
   - apiGroups:
       - ""
@@ -57,11 +57,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: adx-mon:ingestor
+  name: {{ .Namespace }}:ingestor
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: adx-mon:ingestor
+  name: {{ .Namespace }}:ingestor
 subjects:
   - kind: ServiceAccount
     name: ingestor

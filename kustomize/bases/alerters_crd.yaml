@@ -86,6 +86,11 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              appliedProvisionState:
+                description: |-
+                  AppliedProvisionState is a JSON-serialized snapshot of the CRD
+                  as last applied by the operator. This is set by the operator and is read-only for users.
+                type: string
               image:
                 description: Image is the container image to use for the alerter component.
                   Optional; if omitted, a default image will be used.
