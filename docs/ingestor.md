@@ -48,4 +48,14 @@ sized to be between 100MB and 1GB (uncompressed) to align with Kusto ingestion b
 
 ## Traces
 
+## WAL Format and Storage
+
+The Ingestor uses a Write-Ahead Log (WAL) for durable, append-only buffering of telemetry data before upload to Azure Data Explorer. The WAL binary format is fully documented in [Concepts: WAL Segment File Format](concepts.md#wal-segment-file-format), including:
+- Segment and block header layout
+- Field encoding and versioning
+- Compression (S2/Snappy)
+- Repair and compatibility
+
+For advanced troubleshooting, integrations, or recovery, see the [WAL format section](concepts.md#wal-segment-file-format) and the implementation in `pkg/wal/segment.go`.
+
 [1] https://docs.microsoft.com/en-us/azure/data-explorer/ingest-best-practices

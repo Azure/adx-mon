@@ -39,3 +39,5 @@ spec:
 ```
 
 To support management commands scoped to a database, we will provide an optional `database` parameter.
+
+> **See also:** [CRD Reference](../crds.md) for a summary of all CRDs and links to advanced usage.

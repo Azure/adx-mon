@@ -21,4 +21,5 @@ collection and analysis of observability data.
 * [Installation](installation.md)
 * [Quick Start](quick-start.md)
 * [Concepts](concepts.md)
-* [Cook Book](cookbook.md) 
+* [CRD Reference](crds.md)
+* [Cook Book](cookbook.md)

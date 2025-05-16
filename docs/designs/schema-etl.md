@@ -179,4 +179,6 @@ _Ingestor_ would then execute the following
 - When attempting to reconcile each Function's state, we'll make sure the process is idempotent such that if a Function definition already exists that matches all the parameters found in its CRD, we do not attempt to update its state.
 
 ## Questions
-- If Ingestor has a reference to a CRD / Function that is later deleted, do we want to delete the associated Function in Kusto? 
+- If Ingestor has a reference to a CRD / Function that is later deleted, do we want to delete the associated Function in Kusto?
+
+> **See also:** [CRD Reference](../crds.md) for a summary of all CRDs and links to advanced usage.
