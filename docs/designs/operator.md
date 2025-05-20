@@ -50,6 +50,8 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 
 ## CRD Design
 
+> **See also:** [CRD Reference](../crds.md) for a summary table and links to all CRDs, including advanced types (SummaryRule, Function, ManagementCommand).
+
 The adx-mon operator manages the following Custom Resource Definitions (CRDs):
 - ADXCluster
 - Ingestor
