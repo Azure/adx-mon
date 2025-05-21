@@ -169,7 +169,9 @@ flowchart TD
 
 ---
 
-### WAL Segment File Format
+## WAL Segment File Format
+
+> **Note:** The WAL binary format is fully documented below and matches the implementation in `pkg/wal/segment.go`. This includes segment and block headers, field layout, encoding, versioning, and repair logic. For advanced integrations or troubleshooting, see also [Ingestor Overview](ingestor.md#walf-format-and-storage).
 
 WAL (Write-Ahead Log) segment files are the durable, append-only storage format used for buffering telemetry data before upload to Azure Data Explorer (ADX). Understanding the binary format is essential for troubleshooting, recovery, and advanced integrations.
 
