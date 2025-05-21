@@ -40,7 +40,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.37.0
 	github.com/testcontainers/testcontainers-go/modules/k3s v0.37.0
 	github.com/tinylib/msgp v1.3.0
-	github.com/traefik/yaegi v0.15.1
+	github.com/traefik/yaegi v0.16.1
 	github.com/urfave/cli/v2 v2.27.6
 	github.com/valyala/fastjson v1.6.4
 	go.uber.org/multierr v1.11.0

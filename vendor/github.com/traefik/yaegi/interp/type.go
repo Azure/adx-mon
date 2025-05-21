@@ -484,6 +484,7 @@ func nodeType2(interp *Interpreter, sc *scope, n *node, seen []*node) (t *itype,
 			length = int(vInt(sym.rval))
 		default:
 			// Size is defined by a numeric constant expression.
+			var ok bool
 			if _, err := interp.cfg(c0, sc, sc.pkgID, sc.pkgName); err != nil {
 				if strings.Contains(err.Error(), " undefined: ") {
 					incomplete = true
@@ -491,12 +492,17 @@ func nodeType2(interp *Interpreter, sc *scope, n *node, seen []*node) (t *itype,
 				}
 				return nil, err
 			}
-			v, ok := c0.rval.Interface().(constant.Value)
-			if !ok {
-				incomplete = true
-				break
+			if !c0.rval.IsValid() {
+				return nil, c0.cfgErrorf("undefined array size")
 			}
-			length = constToInt(v)
+			if length, ok = c0.rval.Interface().(int); !ok {
+				v, ok := c0.rval.Interface().(constant.Value)
+				if !ok {
+					incomplete = true
+					break
+				}
+				length = constToInt(v)
+			}
 		}
 		val, err := nodeType2(interp, sc, n.child[1], seen)
 		if err != nil {
@@ -983,16 +989,18 @@ func nodeType2(interp *Interpreter, sc *scope, n *node, seen []*node) (t *itype,
 					rtype = rtype.Elem()
 				}
 				t = valueTOf(rtype, withNode(n), withScope(sc))
-			} else {
-				err = n.cfgErrorf("undefined selector %s.%s", lt.path, name)
+				break
 			}
+			// Continue search in source package, as it may exist if package contains generics.
+			fallthrough
 		case srcPkgT:
-			pkg := interp.srcPkg[lt.path]
-			if s, ok := pkg[name]; ok {
-				t = s.typ
-			} else {
-				err = n.cfgErrorf("undefined selector %s.%s", lt.path, name)
+			if pkg, ok := interp.srcPkg[lt.path]; ok {
+				if s, ok := pkg[name]; ok {
+					t = s.typ
+					break
+				}
 			}
+			err = n.cfgErrorf("undefined selector %s.%s", lt.path, name)
 		default:
 			if m, _ := lt.lookupMethod(name); m != nil {
 				t, err = nodeType2(interp, sc, m.child[2], seen)
@@ -1086,6 +1094,9 @@ func nodeType2(interp *Interpreter, sc *scope, n *node, seen []*node) (t *itype,
 			}
 			sc.sym[sname].typ = t
 		}
+
+	case typeAssertExpr:
+		t, err = nodeType2(interp, sc, n.child[1], seen)
 
 	default:
 		err = n.cfgErrorf("type definition not implemented: %s", n.kind)
@@ -1221,6 +1232,8 @@ func fieldName(n *node) string {
 		return fieldName(n.child[1])
 	case starExpr:
 		return fieldName(n.child[0])
+	case indexExpr:
+		return fieldName(n.child[0])
 	case identExpr:
 		return n.ident
 	default:
@@ -1336,7 +1349,7 @@ func (t *itype) numOut() int {
 		}
 	case builtinT:
 		switch t.name {
-		case "append", "cap", "complex", "copy", "imag", "len", "make", "new", "real", "recover":
+		case "append", "cap", "complex", "copy", "imag", "len", "make", "new", "real", "recover", "unsafe.Alignof", "unsafe.Offsetof", "unsafe.Sizeof":
 			return 1
 		}
 	}
@@ -1522,7 +1535,7 @@ func (t *itype) ordered() bool {
 	return isInt(typ) || isFloat(typ) || isString(typ)
 }
 
-// Equals returns true if the given type is identical to the receiver one.
+// equals returns true if the given type is identical to the receiver one.
 func (t *itype) equals(o *itype) bool {
 	switch ti, oi := isInterface(t), isInterface(o); {
 	case ti && oi:
@@ -1536,13 +1549,21 @@ func (t *itype) equals(o *itype) bool {
 	}
 }
 
+// matchDefault returns true if the receiver default type is the same as the given one.
+func (t *itype) matchDefault(o *itype) bool {
+	return t.untyped && t.id() == "untyped "+o.id()
+}
+
 // MethodSet defines the set of methods signatures as strings, indexed per method name.
 type methodSet map[string]string
 
 // Contains returns true if the method set m contains the method set n.
 func (m methodSet) contains(n methodSet) bool {
-	for k, v := range n {
-		if m[k] != v {
+	for k := range n {
+		// Only check the presence of method, not its complete signature,
+		// as the receiver may be part of the arguments, which makes a
+		// robust check complex.
+		if _, ok := m[k]; !ok {
 			return false
 		}
 	}
@@ -2129,8 +2150,14 @@ func (t *itype) refType(ctx *refTypeContext) reflect.Type {
 		var fields []reflect.StructField
 		for _, f := range t.field {
 			field := reflect.StructField{
-				Name: exportName(f.name), Type: f.typ.refType(ctx),
-				Tag: reflect.StructTag(f.tag), Anonymous: f.embed,
+				Name: exportName(f.name),
+				Type: f.typ.refType(ctx),
+				Tag:  reflect.StructTag(f.tag),
+			}
+			if len(t.field) == 1 && f.embed {
+				// Mark the field as embedded (anonymous) only if it is the
+				// only one, to avoid a panic due to golang/go#15924 issue.
+				field.Anonymous = true
 			}
 			fields = append(fields, field)
 			// Find any nil type refs that indicates a rebuild is needed on this field.
@@ -2366,7 +2393,7 @@ func isMap(t *itype) bool  { return t.TypeOf().Kind() == reflect.Map }
 func isPtr(t *itype) bool  { return t.TypeOf().Kind() == reflect.Ptr }
 
 func isEmptyInterface(t *itype) bool {
-	return t.cat == interfaceT && len(t.field) == 0
+	return t != nil && t.cat == interfaceT && len(t.field) == 0
 }
 
 func isGeneric(t *itype) bool {
