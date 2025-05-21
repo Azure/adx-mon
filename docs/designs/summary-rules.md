@@ -104,3 +104,5 @@ spec:
 
 This is useful when the remote cluster has different retention policies, data is queried frequently or there is data collected in other system that is useful for reference.  For example, it might
 be useful to import data from a remote cluster that has a global view of all telemetry data but you only need a subset of that data.
+
+> **See also:** [CRD Reference](../crds.md) for a summary of all CRDs and links to advanced usage.

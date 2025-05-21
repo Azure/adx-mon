@@ -1,6 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -18,7 +21,36 @@ type AlerterSpec struct {
 	//+kubebuilder:validation:Required
 	// ADXClusterSelector is a label selector used to select the ADXCluster CRDs this alerter should target. This field is required.
 	ADXClusterSelector *metav1.LabelSelector `json:"adxClusterSelector"`
+
+	// AppliedProvisionState is a JSON-serialized snapshot of the CRD
+	// as last applied by the operator. This is set by the operator and is read-only for users.
+	AppliedProvisionState string `json:"appliedProvisionState,omitempty"`
 }
+
+func (s *AlerterSpec) StoreAppliedProvisioningState() error {
+	// Store the current provisioning state as a JSON string
+	provisionState, err := json.Marshal(s)
+	if err != nil {
+		return fmt.Errorf("failed to marshal provision state: %w", err)
+	}
+	s.AppliedProvisionState = string(provisionState)
+	return nil
+}
+
+func (s *AlerterSpec) LoadAppliedProvisioningState() (*AlerterSpec, error) {
+	// Unmarshal the JSON string back into the struct
+	if s.AppliedProvisionState == "" {
+		return nil, nil
+	}
+	var stored AlerterSpec
+	err := json.Unmarshal([]byte(s.AppliedProvisionState), &stored)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal provision state: %w", err)
+	}
+	return &stored, nil
+}
+
+const AlerterConditionOwner = "alerter.adx-mon.azure.com"
 
 // AlerterStatus defines the observed state of Alerter
 type AlerterStatus struct {

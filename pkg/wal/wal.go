@@ -222,7 +222,14 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (i
 }
 
 func (w *WAL) validateLimits() error {
-	if w.opts.MaxDiskUsage > 0 && w.index.TotalSize()+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.MaxDiskUsage {
+	totalSize := w.index.TotalSize() + atomic.LoadInt64(&w.inflightWriteBytes)
+	w.mu.RLock()
+	if w.segment != nil {
+		totalSize += w.segment.Size()
+	}
+	w.mu.RUnlock()
+
+	if w.opts.MaxDiskUsage > 0 && totalSize >= w.opts.MaxDiskUsage {
 		return ErrMaxDiskUsageExceeded
 	}
 
