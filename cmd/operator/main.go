@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	operator "github.com/Azure/adx-mon/operators"
+	operator "github.com/Azure/adx-mon/operator"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2"
@@ -70,13 +70,29 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create manager: %w", err)
 	}
 
-	// Set up controller
-	reconciler := &operator.AdxReconciler{
+	// Set up controllers
+	adxr := &operator.AdxReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}
-	if err = reconciler.SetupWithManager(mgr); err != nil {
-		return fmt.Errorf("unable to create controller: %w", err)
+	if err = adxr.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create adx controller: %w", err)
+	}
+
+	ir := &operator.IngestorReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = ir.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create ingestor controller: %w", err)
+	}
+
+	ar := &operator.AlerterReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = ar.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create alerter controller: %w", err)
 	}
 
 	// Start manager
