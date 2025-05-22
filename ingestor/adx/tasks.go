@@ -369,13 +369,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 					// Operation is still in progress, so we can skip it
 				}
-				// If the operation wasn't found in the Kusto operations list,
-				// it has fallen out of the backlog window
-				if !found {
-					logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
-						op.OperationId, rule.Name)
-					rule.RemoveAsyncOperation(op.OperationId)
-				}
+			}
+			
+			// If the operation wasn't found in the Kusto operations list after checking all operations,
+			// it has fallen out of the backlog window
+			if !found {
+				logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
+					op.OperationId, rule.Name)
+				rule.RemoveAsyncOperation(op.OperationId)
 			}
 		}
 
