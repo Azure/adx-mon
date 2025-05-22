@@ -435,7 +435,13 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			continue
 		}
 
-		owner, _ := b.Partitioner.Owner([]byte(prefix))
+		// Use FailoverAwarePartitioner if available
+		owner := ""
+		if fap, ok := b.Partitioner.(*FailoverAwarePartitioner); ok {
+			owner, _ = fap.OwnerWithDB([]byte(prefix), db)
+		} else {
+			owner, _ = b.Partitioner.Owner([]byte(prefix))
+		}
 
 		// If the peer has signaled that it's unhealthy, upload the segments directly.
 		peerHealthy := b.health.IsPeerHealthy(owner)

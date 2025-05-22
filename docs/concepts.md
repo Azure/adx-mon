@@ -147,6 +147,10 @@ spec:
 5. **ADX Upload:** Batches are compressed and uploaded to ADX using the Kusto ingestion API. Table and mapping are auto-managed.
 6. **Cleanup:** Uploaded/expired segments are removed from disk. Backpressure is applied if disk usage/segment count exceeds limits.
 
+#### Adaptive Failover Peering
+
+The ingestor implements an adaptive failover peering strategy to ensure that ingestion failures in one ADX database do not impact others. If a database becomes unavailable, all segments for that database are routed to a designated "sacrificial" ingestor instance. When the sacrificial instance's disk is full, it returns 429 errors, causing other peers to drop segments for the failed database. Ingestion for healthy databases continues without interruption. See [ingestor-storage.md](ingestor-storage.md) for details.
+
 #### Example Data Flow Diagram
 ```mermaid
 flowchart TD
