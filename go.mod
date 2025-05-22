@@ -27,7 +27,7 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/klauspost/pgzip v1.2.6
 	github.com/libp2p/go-buffer-pool v0.1.0
-	github.com/lmittmann/tint v1.0.7
+	github.com/lmittmann/tint v1.1.0
 	github.com/mattn/go-isatty v0.0.20
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
@@ -40,7 +40,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.37.0
 	github.com/testcontainers/testcontainers-go/modules/k3s v0.37.0
 	github.com/tinylib/msgp v1.3.0
-	github.com/traefik/yaegi v0.15.1
+	github.com/traefik/yaegi v0.16.1
 	github.com/urfave/cli/v2 v2.27.6
 	github.com/valyala/fastjson v1.6.4
 	go.uber.org/multierr v1.11.0
