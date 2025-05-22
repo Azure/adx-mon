@@ -126,7 +126,7 @@ func (r *replicator) transfer(ctx context.Context) {
 		case batch := <-r.queue:
 			segments := batch.Segments
 
-			if err := func() error {
+			err := func() error {
 				paths := make([]string, len(segments))
 				for i, seg := range segments {
 					paths[i] = seg.Path
@@ -172,49 +172,8 @@ func (r *replicator) transfer(ctx context.Context) {
 				}
 
 				start := time.Now()
-				if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
-					if errors.Is(err, ErrBadRequest{}) {
-						// If ingestor returns a bad request, we should drop the segments as it means we're sending something
-						// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
-						// and log the error.
-						logger.Errorf("Failed to transfer segment %s to %s@%s: %s.  Dropping segments.", filename, owner, addr, err)
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove segment: %s", err)
-						}
-						return nil
-					} else if errors.Is(err, ErrSegmentExists) {
-						// Segment already exists, remove our side so we don't keep retrying.
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove segment: %s", err)
-						}
-						return nil
-					} else if errors.Is(err, ErrSegmentLocked) {
-						// Segment is locked, retry later.
-						return nil
-					} else if errors.Is(err, ErrPeerOverloaded) {
-						// Handle peer overloaded (429) in failover mode: drop segment if database is in failover and log/metric
-						if errors.Is(err, ErrPeerOverloaded) {
-							// Check if partitioner is failover-aware and if db is in failover
-							if fap, ok := r.Partitioner.(*FailoverAwarePartitioner); ok {
-								db, _, _, _, _ := wal.ParseFilename(filename)
-								if fap.FailoverState != nil && fap.FailoverState.InFailover(db) && owner == fap.FailoverState.GetFailover(db) {
-									logger.Warnf("Dropping segment %s for db %s due to failover 429 from sacrificial instance %s", filename, db, owner)
-									// TODO: metrics.IngestorSegmentsDroppedFailover.Inc() (add metric)
-									if err := batch.Remove(); err != nil {
-										logger.Errorf("Failed to remove segment: %s", err)
-									}
-									return nil
-								}
-							}
-							// Ingestor is overloaded, mark the peer as unhealthy and retry later.
-							r.Health.SetPeerUnhealthy(owner)
-							return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
-						}
-						// Unknown error, assume it's transient and retry after some backoff.
-						r.Health.SetPeerUnhealthy(owner)
-						return err
-					}
-
+				err = r.cli.Write(ctx, addr, filename, mr)
+				if err == nil {
 					for _, seg := range segments {
 						if logger.IsDebug() {
 							logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
@@ -223,14 +182,43 @@ func (r *replicator) transfer(ctx context.Context) {
 					if err := batch.Remove(); err != nil {
 						logger.Errorf("Failed to batch segment: %s", err)
 					}
-
 					return nil
-				}(); err != nil {
-					logger.Errorf("Failed to transfer batch: %v", err)
 				}
-
-				batch.Release()
+				if errors.Is(err, ErrBadRequest{}) {
+					logger.Errorf("Failed to transfer segment %s to %s@%s: %s.  Dropping segments.", filename, owner, addr, err)
+					if err := batch.Remove(); err != nil {
+						logger.Errorf("Failed to remove segment: %s", err)
+					}
+					return nil
+				} else if errors.Is(err, ErrSegmentExists) {
+					if err := batch.Remove(); err != nil {
+						logger.Errorf("Failed to remove segment: %s", err)
+					}
+					return nil
+				} else if errors.Is(err, ErrSegmentLocked) {
+					return nil
+				} else if errors.Is(err, ErrPeerOverloaded) {
+					if fap, ok := r.Partitioner.(*FailoverAwarePartitioner); ok {
+						db, _, _, _, _ := wal.ParseFilename(filename)
+						if fap.FailoverState != nil && fap.FailoverState.InFailover(db) && owner == fap.FailoverState.GetFailover(db) {
+							logger.Warnf("Dropping segment %s for db %s due to failover 429 from sacrificial instance %s", filename, db, owner)
+							if err := batch.Remove(); err != nil {
+								logger.Errorf("Failed to remove segment: %s", err)
+							}
+							return nil
+						}
+					}
+					r.Health.SetPeerUnhealthy(owner)
+					return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
+				}
+				r.Health.SetPeerUnhealthy(owner)
+				return err
+				// Do NOT call batch.Remove() for unknown errors
+			}()
+			if err != nil {
+				logger.Errorf("Failed to transfer batch: %v", err)
 			}
+			batch.Release()
 		}
 	}
 }
