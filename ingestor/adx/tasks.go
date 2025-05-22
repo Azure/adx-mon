@@ -253,15 +253,21 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 }
 
 type SummaryRuleTask struct {
-	store    storage.CRDHandler
-	kustoCli StatementExecutor
+	store         storage.CRDHandler
+	kustoCli      StatementExecutor
+	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
+	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 }
 
 func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor) *SummaryRuleTask {
-	return &SummaryRuleTask{
+	task := &SummaryRuleTask{
 		store:    store,
 		kustoCli: kustoCli,
 	}
+	// Set the default implementations
+	task.GetOperations = task.getOperations
+	task.SubmitRule = task.submitRule
+	return task
 }
 
 type KustoAsyncOperationState string
@@ -369,13 +375,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 					// Operation is still in progress, so we can skip it
 				}
-				// If the operation wasn't found in the Kusto operations list,
-				// it has fallen out of the backlog window
-				if !found {
-					logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
-						op.OperationId, rule.Name)
-					rule.RemoveAsyncOperation(op.OperationId)
-				}
+			}
+			
+			// If the operation wasn't found in the Kusto operations list after checking all operations,
+			// it has fallen out of the backlog window
+			if !found {
+				logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
+					op.OperationId, rule.Name)
+				rule.RemoveAsyncOperation(op.OperationId)
 			}
 		}
 
@@ -388,7 +395,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	return nil
 }
 
-func (t *SummaryRuleTask) SubmitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
 	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
@@ -403,7 +410,7 @@ func (t *SummaryRuleTask) SubmitRule(ctx context.Context, rule v1.SummaryRule, s
 	return operationIDFromResult(res)
 }
 
-func (t *SummaryRuleTask) GetOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
+func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
 	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry) | sort by LastUpdatedOn asc")
