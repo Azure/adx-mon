@@ -192,30 +192,45 @@ func (r *replicator) transfer(ctx context.Context) {
 						// Segment is locked, retry later.
 						return nil
 					} else if errors.Is(err, ErrPeerOverloaded) {
-						// Ingestor is overloaded, mark the peer as unhealthy and retry later.
+						// Handle peer overloaded (429) in failover mode: drop segment if database is in failover and log/metric
+						if errors.Is(err, ErrPeerOverloaded) {
+							// Check if partitioner is failover-aware and if db is in failover
+							if fap, ok := r.Partitioner.(*FailoverAwarePartitioner); ok {
+								db, _, _, _, _ := wal.ParseFilename(filename)
+								if fap.FailoverState != nil && fap.FailoverState.InFailover(db) && owner == fap.FailoverState.GetFailover(db) {
+									logger.Warnf("Dropping segment %s for db %s due to failover 429 from sacrificial instance %s", filename, db, owner)
+									// TODO: metrics.IngestorSegmentsDroppedFailover.Inc() (add metric)
+									if err := batch.Remove(); err != nil {
+										logger.Errorf("Failed to remove segment: %s", err)
+									}
+									return nil
+								}
+							}
+							// Ingestor is overloaded, mark the peer as unhealthy and retry later.
+							r.Health.SetPeerUnhealthy(owner)
+							return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
+						}
+						// Unknown error, assume it's transient and retry after some backoff.
 						r.Health.SetPeerUnhealthy(owner)
-						return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
+						return err
 					}
-					// Unknown error, assume it's transient and retry after some backoff.
-					r.Health.SetPeerUnhealthy(owner)
-					return err
+
+					for _, seg := range segments {
+						if logger.IsDebug() {
+							logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
+						}
+					}
+					if err := batch.Remove(); err != nil {
+						logger.Errorf("Failed to batch segment: %s", err)
+					}
+
+					return nil
+				}(); err != nil {
+					logger.Errorf("Failed to transfer batch: %v", err)
 				}
 
-				for _, seg := range segments {
-					if logger.IsDebug() {
-						logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
-					}
-				}
-				if err := batch.Remove(); err != nil {
-					logger.Errorf("Failed to batch segment: %s", err)
-				}
-
-				return nil
-			}(); err != nil {
-				logger.Errorf("Failed to transfer batch: %v", err)
+				batch.Release()
 			}
-
-			batch.Release()
 		}
 	}
 }
