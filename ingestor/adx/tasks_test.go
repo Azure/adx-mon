@@ -26,10 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// mockCRDHandler implements storage.CRDHandler interface for testing
 type mockCRDHandler struct {
 	listResponse  client.ObjectList
 	listError     error
 	updateStatusFn func(context.Context, client.Object, error) error
+	updatedObjects []client.Object
 }
 
 func (m *mockCRDHandler) List(ctx context.Context, list client.ObjectList, filters ...storage.ListFilterFunc) error {
@@ -54,6 +56,8 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	if m.updateStatusFn != nil {
 		return m.updateStatusFn(ctx, obj, errStatus)
 	}
+	// Track updated objects for assertions in tests
+	m.updatedObjects = append(m.updatedObjects, obj.DeepCopyObject().(client.Object))
 	return nil
 }
 
@@ -493,29 +497,73 @@ func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement
 }
 
 func TestAsyncOperationRemoval(t *testing.T) {
-	// Create sample operations
-	operations := []v1.AsyncOperation{
-		{
-			OperationId: "op-1",
-			StartTime:   "2025-05-22T19:20:00Z",
-			EndTime:     "2025-05-22T19:30:00Z",
+	// Create a mock statement executor that returns empty operations list
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	
+	// Create a summary rule with an async operation
+	ruleName := "test-rule"
+	operationId := "op-1"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
 		},
 	}
 	
-	// Create kusto operations that don't include our operation
-	kustoOperations := []AsyncOperationStatus{}
+	// Add an async operation to the rule
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: operationId,
+		StartTime:   "2025-05-22T19:20:00Z",
+		EndTime:     "2025-05-22T19:30:00Z",
+	})
 	
-	// This is what we're testing - the logic within our fixed code
-	found := false
-	for _, kustoOp := range kustoOperations {
-		if operations[0].OperationId == kustoOp.OperationId {
-			found = true
-			break
-		}
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
 	}
 	
-	// Test that the operation is marked as not found
-	require.False(t, found, "Operation should not be found in Kusto operations")
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse: ruleList,
+		updatedObjects: []client.Object{},
+	}
+	
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+	
+	// Set the GetOperations function to return an empty list
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{}, nil
+	}
+	
+	// Mock the SubmitRule function to avoid actual Kusto operations
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "new-operation-id", nil
+	}
+	
+	// Run the task
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+	
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	
+	// Check that the async operation was removed from the rule
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+	require.Empty(t, updatedRule.GetAsyncOperations(), "Async operations should be empty")
 }
 
 func TestSummaryRules(t *testing.T) {
