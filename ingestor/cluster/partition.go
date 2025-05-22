@@ -45,9 +45,14 @@ type FailoverAwarePartitioner struct {
 	InstanceName string
 }
 
-// Owner returns the hostname and address of the node that owns the given key, considering failover state.
+// Owner implements MetricPartitioner for compatibility, using an empty dbName.
+func (f *FailoverAwarePartitioner) Owner(b []byte) (string, string) {
+	return f.OwnerWithDB(b, "")
+}
+
+// OwnerWithDB returns the hostname and address of the node that owns the given key, considering failover state.
 // If the database is in failover, all segments for that database are routed to the designated instance.
-func (f *FailoverAwarePartitioner) Owner(b []byte, dbName string) (string, string) {
+func (f *FailoverAwarePartitioner) OwnerWithDB(b []byte, dbName string) (string, string) {
 	if f.FailoverState != nil && f.FailoverState.InFailover(dbName) {
 		owner := f.FailoverState.GetFailover(dbName)
 		addr := f.Partitioner.addrs[owner]
