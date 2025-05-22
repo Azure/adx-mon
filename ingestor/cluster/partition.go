@@ -36,3 +36,22 @@ func (p *Partitioner) Owner(b []byte) (string, string) {
 	}
 	return v, p.addrs[v]
 }
+
+// FailoverAwarePartitioner wraps a Partitioner and consults FailoverState for database failover routing.
+type FailoverAwarePartitioner struct {
+	Partitioner   *Partitioner
+	FailoverState *FailoverState
+	// instanceName is the name of this ingestor instance
+	InstanceName string
+}
+
+// Owner returns the hostname and address of the node that owns the given key, considering failover state.
+// If the database is in failover, all segments for that database are routed to the designated instance.
+func (f *FailoverAwarePartitioner) Owner(b []byte, dbName string) (string, string) {
+	if f.FailoverState != nil && f.FailoverState.InFailover(dbName) {
+		owner := f.FailoverState.GetFailover(dbName)
+		addr := f.Partitioner.addrs[owner]
+		return owner, addr
+	}
+	return f.Partitioner.Owner(b)
+}
