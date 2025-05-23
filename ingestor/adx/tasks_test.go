@@ -602,6 +602,22 @@ func TestEnsureTableExistsUnitTest(t *testing.T) {
 		require.NoError(t, task.ensureTableExists(context.Background(), "testtable"))
 		require.GreaterOrEqual(t, len(executor.stmts), 1)
 		require.Contains(t, executor.stmts[0], ".show tables | where TableName == 'testtable'")
+		require.Contains(t, executor.stmts[1], ".create-merge table")
+	})
+	
+	t.Run("error handling", func(t *testing.T) {
+		executor := &TestStatementExecutor{
+			database: "testdb",
+			nextMgmtErr: fmt.Errorf("test error"),
+		}
+		task := &SummaryRuleTask{
+			kustoCli: executor,
+		}
+		
+		// Should return an error when checking table existence fails
+		err := task.ensureTableExists(context.Background(), "errortable")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to check if table errortable exists")
 	})
 }
 var severalFunctions = `// function a

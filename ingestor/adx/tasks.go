@@ -358,12 +358,17 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					foundOperations[op.OperationId] = true
 
 					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
-						// If the operation is completed successfully (not failed), ensure the table exists
+						// If the operation completed successfully, verify the table exists before marking as complete
 						if kustoOp.State == string(KustoAsyncOperationStateCompleted) {
 							// Ensure the summary table exists
 							if err := t.ensureTableExists(ctx, rule.Spec.Table); err != nil {
 								logger.Errorf("Failed to ensure table %s exists: %v", rule.Spec.Table, err)
+								// Store the error in the operation status but don't remove the operation yet
+								// This will prevent the rule from being marked as complete until the table exists
+								continue
 							}
+							// Table exists, so we can safely mark the operation as complete
+							logger.Infof("Table %s verified to exist, marking operation %s as complete", rule.Spec.Table, kustoOp.OperationId)
 						}
 						// We're done polling this async operation, so we can remove it from the list
 						rule.RemoveAsyncOperation(kustoOp.OperationId)
