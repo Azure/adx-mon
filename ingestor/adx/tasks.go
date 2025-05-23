@@ -358,6 +358,13 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					foundOperations[op.OperationId] = true
 
 					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
+						// If the operation is completed successfully (not failed), ensure the table exists
+						if kustoOp.State == string(KustoAsyncOperationStateCompleted) {
+							// Ensure the summary table exists
+							if err := t.ensureTableExists(ctx, rule.Spec.Table); err != nil {
+								logger.Errorf("Failed to ensure table %s exists: %v", rule.Spec.Table, err)
+							}
+						}
 						// We're done polling this async operation, so we can remove it from the list
 						rule.RemoveAsyncOperation(kustoOp.OperationId)
 					}
@@ -401,6 +408,49 @@ func (t *SummaryRuleTask) SubmitRule(ctx context.Context, rule v1.SummaryRule, s
 	}
 
 	return operationIDFromResult(res)
+}
+
+// ensureTableExists checks if the table specified in the rule exists, and if not, creates it.
+// This is necessary because sometimes Kusto async operations mark as complete but don't create the table.
+func (t *SummaryRuleTask) ensureTableExists(ctx context.Context, tableName string) error {
+	// Check if table exists
+	stmt := kql.New(".show tables | where TableName == '").AddUnsafe(tableName).AddLiteral("'")
+	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	if err != nil {
+		return fmt.Errorf("failed to check if table %s exists: %w", tableName, err)
+	}
+	defer rows.Stop()
+	
+	// Check if there are any rows in the result (table exists)
+	tableExists := false
+	for {
+		_, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return fmt.Errorf("error checking if table %s exists: %w", tableName, errFinal)
+		}
+		
+		tableExists = true
+		break
+	}
+	
+	if !tableExists {
+		logger.Infof("Table %s does not exist, creating it", tableName)
+		// Create the table with a minimal schema to ensure it exists
+		createStmt := kql.New(".create-merge table ['").AddUnsafe(tableName).AddLiteral("'] (Timestamp: datetime)")
+		_, err := t.kustoCli.Mgmt(ctx, createStmt)
+		if err != nil {
+			return fmt.Errorf("failed to create table %s: %w", tableName, err)
+		}
+		logger.Infof("Successfully created table %s", tableName)
+	}
+	
+	return nil
 }
 
 func (t *SummaryRuleTask) GetOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
