@@ -26,10 +26,11 @@ import (
 )
 
 type TestStatementExecutor struct {
-	database    string
-	endpoint    string
-	stmts       []string
-	nextMgmtErr error
+	database       string
+	endpoint       string
+	stmts          []string
+	nextMgmtErr    error
+	nextMgmtResult []*kusto.RowIterator
 }
 
 func (t *TestStatementExecutor) Database() string {
@@ -46,6 +47,12 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		ret := t.nextMgmtErr
 		t.nextMgmtErr = nil
 		return nil, ret
+	}
+
+	if len(t.nextMgmtResult) > 0 {
+		result := t.nextMgmtResult[0]
+		t.nextMgmtResult = t.nextMgmtResult[1:]
+		return result, nil
 	}
 
 	return nil, nil
@@ -582,6 +589,21 @@ func TestSummaryRules(t *testing.T) {
 	require.Equal(t, 0, len(asyncOps))
 }
 
+func TestEnsureTableExistsUnitTest(t *testing.T) {
+	t.Run("empty database creates table", func(t *testing.T) {
+		executor := &TestStatementExecutor{
+			database: "testdb",
+		}
+		task := &SummaryRuleTask{
+			kustoCli: executor,
+		}
+
+		// Simple test to verify we're sending the right commands
+		require.NoError(t, task.ensureTableExists(context.Background(), "testtable"))
+		require.GreaterOrEqual(t, len(executor.stmts), 1)
+		require.Contains(t, executor.stmts[0], ".show tables | where TableName == 'testtable'")
+	})
+}
 var severalFunctions = `// function a
 .create-or-alter function a() {
   print "a"

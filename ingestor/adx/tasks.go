@@ -419,24 +419,26 @@ func (t *SummaryRuleTask) ensureTableExists(ctx context.Context, tableName strin
 	if err != nil {
 		return fmt.Errorf("failed to check if table %s exists: %w", tableName, err)
 	}
-	defer rows.Stop()
 	
 	// Check if there are any rows in the result (table exists)
 	tableExists := false
-	for {
-		_, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
+	if rows != nil {
+		defer rows.Stop()
+		for {
+			_, errInline, errFinal := rows.NextRowOrError()
+			if errFinal == io.EOF {
+				break
+			}
+			if errInline != nil {
+				continue
+			}
+			if errFinal != nil {
+				return fmt.Errorf("error checking if table %s exists: %w", tableName, errFinal)
+			}
+			
+			tableExists = true
 			break
 		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return fmt.Errorf("error checking if table %s exists: %w", tableName, errFinal)
-		}
-		
-		tableExists = true
-		break
 	}
 	
 	if !tableExists {
