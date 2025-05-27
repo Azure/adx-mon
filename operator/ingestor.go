@@ -524,37 +524,48 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 	return nil
 }
 
-// updateStatefulSetWithRetry implements optimistic concurrency control for StatefulSet updates
-func (r *IngestorReconciler) updateStatefulSetWithRetry(ctx context.Context, sts *appsv1.StatefulSet) error {
+// retryWithConflictResolution retries an update operation on a Kubernetes object, resolving conflicts by fetching the latest version and reapplying changes.
+func retryWithConflictResolution(ctx context.Context, c client.Client, obj client.Object, reapplyChanges func(latest client.Object) error) error {
 	const maxRetries = 5
 	for i := 0; i < maxRetries; i++ {
-		if err := r.Update(ctx, sts); err != nil {
+		if err := c.Update(ctx, obj); err != nil {
 			if !apierrors.IsConflict(err) {
 				// Not a conflict error, return immediately
 				return err
 			}
 
 			// Conflict error, fetch the latest version and retry
-			logger.Infof("Conflict updating StatefulSet %s, retrying (attempt %d/%d)", sts.Name, i+1, maxRetries)
+			logger.Infof("Conflict updating %s, retrying (attempt %d/%d)", obj.GetName(), i+1, maxRetries)
 
-			var latestSts appsv1.StatefulSet
-			if err := r.Get(ctx, client.ObjectKeyFromObject(sts), &latestSts); err != nil {
-				return fmt.Errorf("failed to fetch latest StatefulSet for retry: %w", err)
+			latest := obj.DeepCopyObject().(client.Object)
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), latest); err != nil {
+				return fmt.Errorf("failed to fetch latest object for retry: %w", err)
 			}
 
-			// Preserve the spec changes we want to apply
-			preservedSpec := sts.Spec
+			// Reapply the desired changes
+			if err := reapplyChanges(latest); err != nil {
+				return fmt.Errorf("failed to reapply changes: %w", err)
+			}
 
-			// Update with the latest StatefulSet object
-			*sts = latestSts
-
-			// Reapply our spec changes
-			sts.Spec = preservedSpec
-
+			// Update the object with the latest version
+			obj.SetResourceVersion(latest.GetResourceVersion())
 			continue
 		}
 		// Update succeeded
 		return nil
 	}
-	return fmt.Errorf("failed to update StatefulSet after %d retries due to conflicts", maxRetries)
+	return fmt.Errorf("failed to update object after %d retries due to conflicts", maxRetries)
+}
+
+// updateStatefulSetWithRetry implements optimistic concurrency control for StatefulSet updates
+func (r *IngestorReconciler) updateStatefulSetWithRetry(ctx context.Context, sts *appsv1.StatefulSet) error {
+	return retryWithConflictResolution(ctx, r.Client, sts, func(latest client.Object) error {
+		latestSts, ok := latest.(*appsv1.StatefulSet)
+		if !ok {
+			return fmt.Errorf("unexpected object type: %T", latest)
+		}
+		// Preserve the spec changes we want to apply
+		sts.Spec = latestSts.Spec
+		return nil
+	})
 }
