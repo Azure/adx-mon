@@ -75,7 +75,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
 	var sts appsv1.StatefulSet
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ingestor.GetNamespace(), Name: ingestor.GetName()}, &sts); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
 		return ctrl.Result{}, err
@@ -383,7 +383,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			logger.Infof("Skipping owner reference for cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
 		}
 
-		if err := r.Create(ctx, obj); err != nil && !errors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 	}
@@ -502,7 +502,7 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 		existing.SetGroupVersionKind(obj.GroupVersionKind())
 		err = r.Client.Get(ctx, client.ObjectKey{Name: obj.GetName()}, existing)
 		if err != nil {
-			if errors.IsNotFound(err) {
+			if apierrors.IsNotFound(err) {
 				// CRD doesn't exist, create it
 				if err := r.Client.Create(ctx, obj); err != nil {
 					return fmt.Errorf("failed to create CRD %s: %w", obj.GetName(), err)

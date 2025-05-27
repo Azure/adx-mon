@@ -182,7 +182,7 @@ func (r *AlerterReconciler) updateImageIfNeeded(deployment *appsv1.Deployment, a
 func (r *AlerterReconciler) IsReady(ctx context.Context, alerter *adxmonv1.Alerter) (ctrl.Result, error) {
 	var deploy appsv1.Deployment
 	if err := r.Get(ctx, client.ObjectKey{Namespace: alerter.GetNamespace(), Name: "alerter"}, &deploy); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
 		return ctrl.Result{}, err
@@ -251,7 +251,7 @@ func (r *AlerterReconciler) CreateAlerter(ctx context.Context, alerter *adxmonv1
 				}
 			}
 		}
-		if err := r.Create(ctx, obj); err != nil && !errors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 	}
@@ -275,7 +275,7 @@ func (r *AlerterReconciler) installAlertRuleCRD(ctx context.Context) error {
 	existing.SetGroupVersionKind(obj.GroupVersionKind())
 	err = r.Client.Get(ctx, client.ObjectKey{Name: obj.GetName()}, existing)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			if err := r.Client.Create(ctx, obj); err != nil {
 				return fmt.Errorf("failed to create AlertRule CRD %s: %w", obj.GetName(), err)
 			}
