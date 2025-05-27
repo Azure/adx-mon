@@ -14,7 +14,6 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -527,6 +526,7 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 // retryWithConflictResolution retries an update operation on a Kubernetes object, resolving conflicts by fetching the latest version and reapplying changes.
 func retryWithConflictResolution(ctx context.Context, c client.Client, obj client.Object, reapplyChanges func(latest client.Object) error) error {
 	const maxRetries = 5
+	const baseBackoff = 100 * time.Millisecond
 	for i := 0; i < maxRetries; i++ {
 		if err := c.Update(ctx, obj); err != nil {
 			if !apierrors.IsConflict(err) {
