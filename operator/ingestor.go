@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -135,7 +136,7 @@ func (r *IngestorReconciler) ReconcileComponent(ctx context.Context, req ctrl.Re
 
 	// Apply updates if any
 	if update {
-		if err := r.Update(ctx, &sts); err != nil {
+		if err := r.updateStatefulSetWithRetry(ctx, &sts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update StatefulSet: %w", err)
 		}
 		if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifest updating...", metav1.ConditionUnknown); err != nil {
@@ -521,4 +522,39 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// updateStatefulSetWithRetry implements optimistic concurrency control for StatefulSet updates
+func (r *IngestorReconciler) updateStatefulSetWithRetry(ctx context.Context, sts *appsv1.StatefulSet) error {
+	const maxRetries = 5
+	for i := 0; i < maxRetries; i++ {
+		if err := r.Update(ctx, sts); err != nil {
+			if !apierrors.IsConflict(err) {
+				// Not a conflict error, return immediately
+				return err
+			}
+
+			// Conflict error, fetch the latest version and retry
+			logger.Infof("Conflict updating StatefulSet %s, retrying (attempt %d/%d)", sts.Name, i+1, maxRetries)
+
+			var latestSts appsv1.StatefulSet
+			if err := r.Get(ctx, client.ObjectKeyFromObject(sts), &latestSts); err != nil {
+				return fmt.Errorf("failed to fetch latest StatefulSet for retry: %w", err)
+			}
+
+			// Preserve the spec changes we want to apply
+			preservedSpec := sts.Spec
+
+			// Update with the latest StatefulSet object
+			*sts = latestSts
+
+			// Reapply our spec changes
+			sts.Spec = preservedSpec
+
+			continue
+		}
+		// Update succeeded
+		return nil
+	}
+	return fmt.Errorf("failed to update StatefulSet after %d retries due to conflicts", maxRetries)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -100,7 +101,7 @@ func (r *AlerterReconciler) ReconcileComponent(ctx context.Context, req ctrl.Req
 
 	// Apply updates if any
 	if update {
-		if err := r.Update(ctx, &deployment); err != nil {
+		if err := r.updateDeploymentWithRetry(ctx, &deployment); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update Deployment: %w", err)
 		}
 		if err := r.setCondition(ctx, alerter, r.waitForReadyReason, "Alerter manifest updating...", metav1.ConditionUnknown); err != nil {
@@ -417,4 +418,39 @@ func (r *AlerterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapFn),
 		).
 		Complete(r)
+}
+
+// updateDeploymentWithRetry implements optimistic concurrency control for Deployment updates
+func (r *AlerterReconciler) updateDeploymentWithRetry(ctx context.Context, deployment *appsv1.Deployment) error {
+	const maxRetries = 5
+	for i := 0; i < maxRetries; i++ {
+		if err := r.Update(ctx, deployment); err != nil {
+			if !apierrors.IsConflict(err) {
+				// Not a conflict error, return immediately
+				return err
+			}
+
+			// Conflict error, fetch the latest version and retry
+			logger.Infof("Conflict updating Deployment %s, retrying (attempt %d/%d)", deployment.Name, i+1, maxRetries)
+
+			var latestDeployment appsv1.Deployment
+			if err := r.Get(ctx, client.ObjectKeyFromObject(deployment), &latestDeployment); err != nil {
+				return fmt.Errorf("failed to fetch latest Deployment for retry: %w", err)
+			}
+
+			// Preserve the spec changes we want to apply
+			preservedSpec := deployment.Spec
+
+			// Update with the latest Deployment object
+			*deployment = latestDeployment
+
+			// Reapply our spec changes
+			deployment.Spec = preservedSpec
+
+			continue
+		}
+		// Update succeeded
+		return nil
+	}
+	return fmt.Errorf("failed to update Deployment after %d retries due to conflicts", maxRetries)
 }
