@@ -64,6 +64,7 @@ func (s *Repository) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer dir.Close()
 
 	for {
 		entries, err := dir.ReadDir(100)
