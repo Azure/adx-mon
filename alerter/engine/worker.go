@@ -99,8 +99,8 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
 	defer cancel()
 
-	start := time.Now().UTC()
-	queryContext, err := NewQueryContext(e.rule, start, e.Region)
+	endTime := time.Now().UTC()
+	queryContext, err := NewQueryContext(e.rule, endTime, e.Region)
 	if err != nil {
 		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 		return
