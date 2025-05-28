@@ -189,6 +189,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxBatchSegments:   opts.MaxBatchSegments,
 		Partitioner:        coord,
 		Segmenter:          store.Index(),
+		ActiveSegmenter:    store,
 		UploadQueue:        opts.Uploader.UploadQueue(),
 		TransferQueue:      repl.TransferQueue(),
 		PeerHealthReporter: health,

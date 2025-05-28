@@ -268,3 +268,18 @@ func (s *Repository) WriteDebug(w io.Writer) error {
 	_, _ = fmt.Fprintf(w, "\nWAL: Disk Usage: %d, Segments: %d\n", walsSize, count)
 	return tw.Flush()
 }
+
+// ActiveSegmentsSize returns the total size of all active segments
+func (s *Repository) ActiveSegmentsSize() int64 {
+	var totalSize int64
+	s.wals.Each(func(key string, value *WAL) error {
+		totalSize += int64(value.Size())
+		return nil
+	})
+	return totalSize
+}
+
+// ActiveSegmentsTotal returns the total count of all active segments
+func (s *Repository) ActiveSegmentsTotal() int64 {
+	return int64(s.wals.Count())
+}

@@ -338,6 +338,16 @@ func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
 }
 
+// ActiveSegmentsSize returns the total size of all active segments
+func (s *LocalStore) ActiveSegmentsSize() int64 {
+	return s.repository.ActiveSegmentsSize()
+}
+
+// ActiveSegmentsTotal returns the total count of all active segments
+func (s *LocalStore) ActiveSegmentsTotal() int64 {
+	return s.repository.ActiveSegmentsTotal()
+}
+
 // WriteDebug writes debug information to the given writer.
 func (s *LocalStore) WriteDebug(w io.Writer) error {
 	if err := s.repository.WriteDebug(w); err != nil {

@@ -28,6 +28,11 @@ type Segmenter interface {
 	Remove(si wal.SegmentInfo)
 }
 
+type ActiveSegmenter interface {
+	ActiveSegmentsTotal() int64
+	ActiveSegmentsSize() int64
+}
+
 type BatcherOpts struct {
 	StorageDir       string
 	MinUploadSize    int64
@@ -36,8 +41,9 @@ type BatcherOpts struct {
 	MaxTransferAge   time.Duration
 	MaxBatchSegments int
 
-	Partitioner MetricPartitioner
-	Segmenter   Segmenter
+	Partitioner     MetricPartitioner
+	Segmenter       Segmenter
+	ActiveSegmenter ActiveSegmenter
 
 	UploadQueue        chan *Batch
 	TransferQueue      chan *Batch
@@ -137,6 +143,7 @@ type batcher struct {
 
 	Partitioner      MetricPartitioner
 	Segmenter        Segmenter
+	ActiveSegmenter  ActiveSegmenter
 	health           PeerHealthReporter
 	hostname         string
 	maxTransferAge   time.Duration
@@ -169,6 +176,7 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		maxBatchSegments: maxBatchSegments, // The maximum number of segments to include in a merged batch
 		Partitioner:      opts.Partitioner,
 		Segmenter:        opts.Segmenter,
+		ActiveSegmenter:  opts.ActiveSegmenter,
 		uploadQueue:      opts.UploadQueue,
 		transferQueue:    opts.TransferQueue,
 		health:           opts.PeerHealthReporter,
@@ -205,11 +213,19 @@ func (b *batcher) UploadQueueSize() int {
 }
 
 func (b *batcher) SegmentsTotal() int64 {
-	return atomic.LoadInt64(&b.segmentsTotal)
+	total := atomic.LoadInt64(&b.segmentsTotal)
+	if b.ActiveSegmenter != nil {
+		total += b.ActiveSegmenter.ActiveSegmentsTotal()
+	}
+	return total
 }
 
 func (b *batcher) SegmentsSize() int64 {
-	return atomic.LoadInt64(&b.segementsSize)
+	size := atomic.LoadInt64(&b.segementsSize)
+	if b.ActiveSegmenter != nil {
+		size += b.ActiveSegmenter.ActiveSegmentsSize()
+	}
+	return size
 }
 
 func (b *batcher) MaxSegmentAge() time.Duration {
