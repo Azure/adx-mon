@@ -620,6 +620,7 @@ func TestEnsureTableExistsUnitTest(t *testing.T) {
 		require.Contains(t, err.Error(), "failed to check if table errortable exists")
 	})
 }
+
 var severalFunctions = `// function a
 .create-or-alter function a() {
   print "a"

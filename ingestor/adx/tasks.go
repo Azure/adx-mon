@@ -358,17 +358,17 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					foundOperations[op.OperationId] = true
 
 					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
-						// If the operation completed successfully, verify the table exists before marking as complete
+						// If the operation completed successfully, ensure the table exists 
 						if kustoOp.State == string(KustoAsyncOperationStateCompleted) {
-							// Ensure the summary table exists
+							// Verify and create the table if necessary, but don't block the operation completion
 							if err := t.ensureTableExists(ctx, rule.Spec.Table); err != nil {
-								logger.Errorf("Failed to ensure table %s exists: %v", rule.Spec.Table, err)
-								// Store the error in the operation status but don't remove the operation yet
-								// This will prevent the rule from being marked as complete until the table exists
-								continue
+								logger.Errorf("Operation %s completed but failed to ensure table %s exists: %v", 
+									kustoOp.OperationId, rule.Spec.Table, err)
+								// Log the error but continue with removing the operation
+							} else {
+								logger.Infof("Table %s verified to exist for completed operation %s", 
+									rule.Spec.Table, kustoOp.OperationId)
 							}
-							// Table exists, so we can safely mark the operation as complete
-							logger.Infof("Table %s verified to exist, marking operation %s as complete", rule.Spec.Table, kustoOp.OperationId)
 						}
 						// We're done polling this async operation, so we can remove it from the list
 						rule.RemoveAsyncOperation(kustoOp.OperationId)
@@ -401,6 +401,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 }
 
 func (t *SummaryRuleTask) SubmitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+	// Ensure the table exists before submitting the rule to address cases where .set-or-append doesn't create it
+	if err := t.ensureTableExists(ctx, rule.Spec.Table); err != nil {
+		logger.Warnf("Failed to ensure table %s exists before rule submission: %v", rule.Spec.Table, err)
+		// Continue anyway as the set-or-append might still work
+	} else {
+		logger.Infof("Verified table %s exists before submitting rule", rule.Spec.Table)
+	}
+
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
 	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
