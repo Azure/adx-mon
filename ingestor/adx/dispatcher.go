@@ -81,6 +81,7 @@ func (d *dispatcher) upload(ctx context.Context) {
 			select {
 			case u.UploadQueue() <- batch:
 			default:
+				batch.Release()
 				logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(u.UploadQueue()), cap(u.UploadQueue()))
 			}
 		}
