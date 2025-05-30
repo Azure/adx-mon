@@ -20,4 +20,4 @@ To bundle the quick start guide into a single script, run:
 make k8s-bundle
 ```
 
-This will create an updated `bundle.sh` script in the `build/k8s` directory that can be run to deploy the quick start guide.
+This will create an updated `bundle.sh` script in the `build/k8s` directory that can be run to deploy the quick start guide. The bundling process uses Docker for cross-platform compatibility.
