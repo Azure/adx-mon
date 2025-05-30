@@ -78,6 +78,10 @@ generate-crd:
 	cp kustomize/bases/*.yaml operator/manifests/crds
 .PHONY: generate-crd
 
+k8s-bundle:
+	./build/scripts/generate-bundle.sh
+.PHONY: k8s-bundle
+
 default:
 	@$(MAKE) test
 	@$(MAKE) build
