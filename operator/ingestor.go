@@ -14,7 +14,7 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -75,7 +75,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
 	var sts appsv1.StatefulSet
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ingestor.GetNamespace(), Name: ingestor.GetName()}, &sts); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
 		return ctrl.Result{}, err
@@ -135,7 +135,7 @@ func (r *IngestorReconciler) ReconcileComponent(ctx context.Context, req ctrl.Re
 
 	// Apply updates if any
 	if update {
-		if err := r.Update(ctx, &sts); err != nil {
+		if err := r.updateStatefulSetWithRetry(ctx, &sts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update StatefulSet: %w", err)
 		}
 		if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifest updating...", metav1.ConditionUnknown); err != nil {
@@ -383,7 +383,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			logger.Infof("Skipping owner reference for cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
 		}
 
-		if err := r.Create(ctx, obj); err != nil && !errors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 	}
@@ -502,7 +502,7 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 		existing.SetGroupVersionKind(obj.GroupVersionKind())
 		err = r.Client.Get(ctx, client.ObjectKey{Name: obj.GetName()}, existing)
 		if err != nil {
-			if errors.IsNotFound(err) {
+			if apierrors.IsNotFound(err) {
 				// CRD doesn't exist, create it
 				if err := r.Client.Create(ctx, obj); err != nil {
 					return fmt.Errorf("failed to create CRD %s: %w", obj.GetName(), err)
@@ -521,4 +521,51 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// retryWithConflictResolution retries an update operation on a Kubernetes object, resolving conflicts by fetching the latest version and reapplying changes.
+func retryWithConflictResolution(ctx context.Context, c client.Client, obj client.Object, reapplyChanges func(latest client.Object) error) error {
+	const maxRetries = 5
+	const baseBackoff = 100 * time.Millisecond
+	for i := 0; i < maxRetries; i++ {
+		if err := c.Update(ctx, obj); err != nil {
+			if !apierrors.IsConflict(err) {
+				// Not a conflict error, return immediately
+				return err
+			}
+
+			// Conflict error, fetch the latest version and retry
+			logger.Infof("Conflict updating %s, retrying (attempt %d/%d)", obj.GetName(), i+1, maxRetries)
+
+			latest := obj.DeepCopyObject().(client.Object)
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), latest); err != nil {
+				return fmt.Errorf("failed to fetch latest object for retry: %w", err)
+			}
+
+			// Reapply the desired changes
+			if err := reapplyChanges(latest); err != nil {
+				return fmt.Errorf("failed to reapply changes: %w", err)
+			}
+
+			// Update the object with the latest version
+			obj.SetResourceVersion(latest.GetResourceVersion())
+			continue
+		}
+		// Update succeeded
+		return nil
+	}
+	return fmt.Errorf("failed to update object after %d retries due to conflicts", maxRetries)
+}
+
+// updateStatefulSetWithRetry implements optimistic concurrency control for StatefulSet updates
+func (r *IngestorReconciler) updateStatefulSetWithRetry(ctx context.Context, sts *appsv1.StatefulSet) error {
+	return retryWithConflictResolution(ctx, r.Client, sts, func(latest client.Object) error {
+		latestSts, ok := latest.(*appsv1.StatefulSet)
+		if !ok {
+			return fmt.Errorf("unexpected object type: %T", latest)
+		}
+		// Preserve the spec changes we want to apply
+		sts.Spec = latestSts.Spec
+		return nil
+	})
 }

@@ -14,7 +14,7 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -100,7 +100,7 @@ func (r *AlerterReconciler) ReconcileComponent(ctx context.Context, req ctrl.Req
 
 	// Apply updates if any
 	if update {
-		if err := r.Update(ctx, &deployment); err != nil {
+		if err := r.updateDeploymentWithRetry(ctx, &deployment); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update Deployment: %w", err)
 		}
 		if err := r.setCondition(ctx, alerter, r.waitForReadyReason, "Alerter manifest updating...", metav1.ConditionUnknown); err != nil {
@@ -182,7 +182,7 @@ func (r *AlerterReconciler) updateImageIfNeeded(deployment *appsv1.Deployment, a
 func (r *AlerterReconciler) IsReady(ctx context.Context, alerter *adxmonv1.Alerter) (ctrl.Result, error) {
 	var deploy appsv1.Deployment
 	if err := r.Get(ctx, client.ObjectKey{Namespace: alerter.GetNamespace(), Name: "alerter"}, &deploy); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
 		return ctrl.Result{}, err
@@ -251,7 +251,7 @@ func (r *AlerterReconciler) CreateAlerter(ctx context.Context, alerter *adxmonv1
 				}
 			}
 		}
-		if err := r.Create(ctx, obj); err != nil && !errors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 	}
@@ -275,7 +275,7 @@ func (r *AlerterReconciler) installAlertRuleCRD(ctx context.Context) error {
 	existing.SetGroupVersionKind(obj.GroupVersionKind())
 	err = r.Client.Get(ctx, client.ObjectKey{Name: obj.GetName()}, existing)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			if err := r.Client.Create(ctx, obj); err != nil {
 				return fmt.Errorf("failed to create AlertRule CRD %s: %w", obj.GetName(), err)
 			}
@@ -417,4 +417,39 @@ func (r *AlerterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapFn),
 		).
 		Complete(r)
+}
+
+// updateDeploymentWithRetry implements optimistic concurrency control for Deployment updates
+func (r *AlerterReconciler) updateDeploymentWithRetry(ctx context.Context, deployment *appsv1.Deployment) error {
+	const maxRetries = 5
+	for i := 0; i < maxRetries; i++ {
+		if err := r.Update(ctx, deployment); err != nil {
+			if !apierrors.IsConflict(err) {
+				// Not a conflict error, return immediately
+				return err
+			}
+
+			// Conflict error, fetch the latest version and retry
+			logger.Infof("Conflict updating Deployment %s, retrying (attempt %d/%d)", deployment.Name, i+1, maxRetries)
+
+			var latestDeployment appsv1.Deployment
+			if err := r.Get(ctx, client.ObjectKeyFromObject(deployment), &latestDeployment); err != nil {
+				return fmt.Errorf("failed to fetch latest Deployment for retry: %w", err)
+			}
+
+			// Preserve the spec changes we want to apply
+			preservedSpec := deployment.Spec
+
+			// Update with the latest Deployment object
+			*deployment = latestDeployment
+
+			// Reapply our spec changes
+			deployment.Spec = preservedSpec
+
+			continue
+		}
+		// Update succeeded
+		return nil
+	}
+	return fmt.Errorf("failed to update Deployment after %d retries due to conflicts", maxRetries)
 }
