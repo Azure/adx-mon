@@ -312,6 +312,32 @@ if [[ "$CONFIRM" == "y" ]]; then
           # Create Azure Managed Grafana
           echo "The $GRAFANA instance does not exist. Creating it in $GRAFANA_RG resource group."
           az grafana create --name "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription $GRAFANA_SUB
+          
+          # Wait for Grafana instance to be fully provisioned and ready
+          echo "Waiting for Grafana instance to be ready..."
+          GRAFANA_READY=false
+          WAIT_ATTEMPTS=0
+          MAX_WAIT_ATTEMPTS=30  # 15 minutes max wait time
+          
+          while [[ "$GRAFANA_READY" != "true" && $WAIT_ATTEMPTS -lt $MAX_WAIT_ATTEMPTS ]]; do
+            GRAFANA_INFO=$(az grafana show --name "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription $GRAFANA_SUB -o json 2>/dev/null || echo "{}")
+            PROVISIONING_STATE=$(echo $GRAFANA_INFO | jq -r '.properties.provisioningState // "Unknown"')
+            ENDPOINT=$(echo $GRAFANA_INFO | jq -r '.properties.endpoint // ""')
+            
+            if [[ "$PROVISIONING_STATE" == "Succeeded" && -n "$ENDPOINT" && "$ENDPOINT" != "null" ]]; then
+              GRAFANA_READY=true
+              echo "Grafana instance is ready (provisioning state: $PROVISIONING_STATE)"
+            else
+              echo "Grafana instance not ready yet (provisioning state: $PROVISIONING_STATE). Waiting 30 seconds..."
+              sleep 30
+              ((WAIT_ATTEMPTS++))
+            fi
+          done
+          
+          if [[ "$GRAFANA_READY" != "true" ]]; then
+            echo "Warning: Grafana instance may not be fully ready after waiting. Proceeding anyway..."
+          fi
+          
           GRAFANA_INFO=$(az grafana show --name "$GRAFANA" --resource-group "$GRAFANA_RG" --subscription $GRAFANA_SUB -o json)
           GRAFANA_ENDPOINT=$(echo $GRAFANA_INFO | jq -r '.properties.endpoint')
         else
@@ -368,8 +394,26 @@ if [[ "$CONFIRM" == "y" ]]; then
     fi
 
     if [[ "$IMPORT_DASHBOARDS" == "y" ]]; then
+      echo "Importing dashboards to Grafana instance..."
       for DASHBOARD in api-server cluster-info metrics-stats namespaces pods; do
-         az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --definition @"$SCRIPT_DIR/dashboards/$DASHBOARD.json" --overwrite
+        echo "Importing dashboard: $DASHBOARD"
+        DASHBOARD_ATTEMPTS=0
+        DASHBOARD_SUCCESS=false
+        
+        while [[ "$DASHBOARD_SUCCESS" != "true" && $DASHBOARD_ATTEMPTS -lt 3 ]]; do
+          if az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --definition @"$SCRIPT_DIR/dashboards/$DASHBOARD.json" --overwrite 2>/dev/null; then
+            DASHBOARD_SUCCESS=true
+            echo "Successfully imported dashboard: $DASHBOARD"
+          else
+            ((DASHBOARD_ATTEMPTS++))
+            if [[ $DASHBOARD_ATTEMPTS -lt 3 ]]; then
+              echo "Failed to import dashboard $DASHBOARD (attempt $DASHBOARD_ATTEMPTS/3). Retrying in 10 seconds..."
+              sleep 10
+            else
+              echo "Failed to import dashboard $DASHBOARD after 3 attempts. Skipping..."
+            fi
+          fi
+        done
       done
     else
         echo "No dashboards will be imported."
