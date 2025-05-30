@@ -19,7 +19,8 @@ echo "Generating bundle.sh from $K8S_DIR"
 cd "$TEMP_DIR"
 
 # Create tarball excluding the existing bundle.sh
-tar czf bundle.tar.gz --exclude=bundle.sh -C "$K8S_DIR" .
+# Use --mtime to ensure reproducible builds
+tar czf bundle.tar.gz --exclude=bundle.sh --mtime='1970-01-01 00:00:00' -C "$K8S_DIR" .
 
 # Encode to base64
 base64 bundle.tar.gz > bundle.tar.gz.b64
