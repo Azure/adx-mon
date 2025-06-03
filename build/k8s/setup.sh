@@ -368,8 +368,46 @@ if [[ "$CONFIRM" == "y" ]]; then
     fi
 
     if [[ "$IMPORT_DASHBOARDS" == "y" ]]; then
+      # Function to update dashboard with default template variable values
+      update_dashboard_defaults() {
+        local dashboard_file="$1"
+        local datasource_default="$2"
+        local cluster_default="$3"
+        local temp_file="/tmp/$(basename "$dashboard_file")"
+        
+        # Update the dashboard JSON with default values for Datasource and Cluster variables
+        jq --arg datasource "$datasource_default" --arg cluster "$cluster_default" '
+          .templating.list |= map(
+            if .name == "Datasource" then
+              . + {
+                "current": {
+                  "selected": false,
+                  "text": $datasource,
+                  "value": $datasource
+                }
+              }
+            elif .name == "Cluster" then
+              . + {
+                "current": {
+                  "selected": false,
+                  "text": $cluster,
+                  "value": $cluster
+                }
+              }
+            else
+              .
+            end
+          )
+        ' "$dashboard_file" > "$temp_file"
+        
+        echo "$temp_file"
+      }
+      
       for DASHBOARD in api-server cluster-info metrics-stats namespaces pods; do
-         az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --definition @"$SCRIPT_DIR/dashboards/$DASHBOARD.json" --overwrite
+         echo "Importing dashboard: $DASHBOARD with default datasource '$KUSTO_CLUSTER' and cluster '$AKS_CLUSTER'"
+         UPDATED_DASHBOARD=$(update_dashboard_defaults "$SCRIPT_DIR/dashboards/$DASHBOARD.json" "$KUSTO_CLUSTER" "$AKS_CLUSTER")
+         az grafana dashboard create -n "$GRAFANA" --resource-group "$GRAFANA_RG" --definition @"$UPDATED_DASHBOARD" --overwrite
+         rm -f "$UPDATED_DASHBOARD"
       done
     else
         echo "No dashboards will be imported."
