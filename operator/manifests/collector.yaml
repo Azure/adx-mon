@@ -7,13 +7,13 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: collector
+  name: {{ .Name }}
   namespace: {{ .Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ .Namespace }}:collector
+  name: {{ .Name }}:collector
 rules:
   - apiGroups:
       - ""
@@ -39,20 +39,20 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Namespace }}:collector
+  name: {{ .Name }}:collector
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ .Namespace }}:collector
+  name: {{ .Name }}:collector
 subjects:
   - kind: ServiceAccount
-    name: collector
+    name: {{ .Name }}
     namespace: {{ .Namespace }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: collector-config
+  name: {{ .Name }}-config
   namespace: {{ .Namespace }}
 data:
   config.toml: |
@@ -60,7 +60,7 @@ data:
     endpoint = '{{ .IngestorEndpoint }}'
 
     # Region is a location identifier
-    region = 'default'
+    region = '{{ .Region }}'
 
     # Skip TLS verification.
     insecure-skip-verify = true
@@ -120,7 +120,7 @@ data:
       # Defines a static scrape target.
       static-scrape-target = [
         # Scrape our own metrics
-        { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = '{{ .Namespace }}', pod = 'collector', container = 'collector' },
+        { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = '{{ .Namespace }}', pod = '{{ .Name }}', container = '{{ .Name }}' },
 
         # Scrape cadvisor metrics
         { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/cadvisor', namespace = 'kube-system', pod = 'kubelet', container = 'cadvisor' },
@@ -183,7 +183,7 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: collector
+  name: {{ .Name }}
   namespace: {{ .Namespace }}
 spec:
   selector:
@@ -214,10 +214,20 @@ spec:
         - key: node-role.kubernetes.io/master
           operator: Exists
           effect: NoSchedule
-      serviceAccountName: collector
+      automountServiceAccountToken: true
+      serviceAccountName: {{ .Name }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
       containers:
-        - name: collector
+        - name: {{ .Name }}
           image: "{{ .Image }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsGroup: 3000
+            runAsUser: 1000
           command:
             - /collector
           args:
@@ -279,7 +289,7 @@ spec:
           configMap:
             # Provide the name of the ConfigMap containing the files you want
             # to add to the container
-            name: collector-config
+            name: {{ .Name }}-config
         - name: storage
           hostPath:
             path: /mnt/collector

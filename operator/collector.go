@@ -16,10 +16,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 //go:embed manifests/collector.yaml
@@ -67,7 +70,7 @@ func (r *CollectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 func (r *CollectorReconciler) IsReady(ctx context.Context, collector *adxmonv1.Collector) (ctrl.Result, error) {
 	var ds appsv1.DaemonSet
-	if err := r.Get(ctx, client.ObjectKey{Namespace: collector.GetNamespace(), Name: "collector"}, &ds); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Namespace: collector.GetNamespace(), Name: collector.GetName()}, &ds); err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{RequeueAfter: time.Minute}, nil
 		}
@@ -99,7 +102,7 @@ func (r *CollectorReconciler) ReconcileComponent(ctx context.Context, req ctrl.R
 	var update bool
 
 	// Update image if needed
-	if r.updateImageIfNeeded(&ds, collector) {
+	if r.updateImageIfNeeded(ctx, &ds, collector) {
 		update = true
 	}
 
@@ -113,8 +116,8 @@ func (r *CollectorReconciler) ReconcileComponent(ctx context.Context, req ctrl.R
 	return ctrl.Result{}, nil
 }
 
-func (r *CollectorReconciler) updateImageIfNeeded(ds *appsv1.DaemonSet, collector *adxmonv1.Collector) bool {
-	r.applyDefaults(collector)
+func (r *CollectorReconciler) updateImageIfNeeded(ctx context.Context, ds *appsv1.DaemonSet, collector *adxmonv1.Collector) bool {
+	r.applyDefaults(ctx, collector)
 	
 	currentImage := ds.Spec.Template.Spec.Containers[0].Image
 	if currentImage != collector.Spec.Image {
@@ -129,14 +132,57 @@ func (r *CollectorReconciler) updateImageIfNeeded(ds *appsv1.DaemonSet, collecto
 func (r *CollectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.waitForReadyReason = "WaitForReady"
 
+	// Define the mapping function for Ingestor changes to enqueue Collector reconciliations
+	mapFn := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		ingestor, ok := obj.(*adxmonv1.Ingestor)
+		if !ok {
+			logger.Errorf("EventHandler received non-Ingestor object: %T", obj)
+			return nil
+		}
+
+		collectorList := &adxmonv1.CollectorList{}
+		// List Collectors only in the namespace of the changed Ingestor
+		if err := r.Client.List(ctx, collectorList, client.InNamespace(ingestor.Namespace)); err != nil {
+			logger.Errorf("Failed to list Collectors in namespace %s while handling Ingestor %s/%s event: %v", ingestor.Namespace, ingestor.Namespace, ingestor.Name, err)
+			return nil
+		}
+
+		requests := []reconcile.Request{}
+		for _, collector := range collectorList.Items {
+			// Skip if Collector is being deleted
+			if !collector.DeletionTimestamp.IsZero() {
+				continue
+			}
+			
+			// Enqueue reconcile request for this Collector since it may need to update its endpoint
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      collector.Name,
+					Namespace: collector.Namespace,
+				},
+			})
+			logger.Infof("Enqueuing reconcile request for Collector %s/%s due to change in Ingestor %s/%s", collector.Namespace, collector.Name, ingestor.Namespace, ingestor.Name)
+
+			if err := r.setCondition(ctx, &collector, "IngestorChanged", fmt.Sprintf("Ingestor %s/%s changed", ingestor.Namespace, ingestor.Name), metav1.ConditionUnknown); err != nil {
+				logger.Errorf("Failed to set condition for Collector %s/%s: %v", collector.Namespace, collector.Name, err)
+			}
+		}
+		return requests
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.Collector{}).
 		Owns(&appsv1.DaemonSet{}).
+		// Add Watches for Ingestor changes
+		Watches(
+			&adxmonv1.Ingestor{},
+			handler.EnqueueRequestsFromMapFunc(mapFn),
+		).
 		Complete(r)
 }
 
 func (r *CollectorReconciler) CreateCollector(ctx context.Context, collector *adxmonv1.Collector) (ctrl.Result, error) {
-	r.applyDefaults(collector)
+	r.applyDefaults(ctx, collector)
 	if err := r.Update(ctx, collector); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update collector: %w", err)
 	}
@@ -159,7 +205,7 @@ func (r *CollectorReconciler) CreateCollector(ctx context.Context, collector *ad
 		return ctrl.Result{}, nil // No need to retry
 	}
 
-	data := r.templateData(collector)
+	data := r.templateData(ctx, collector)
 
 	var rendered bytes.Buffer
 	if err := tmpl.Execute(&rendered, data); err != nil {
@@ -205,13 +251,38 @@ func (r *CollectorReconciler) CreateCollector(ctx context.Context, collector *ad
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
-func (r *CollectorReconciler) applyDefaults(collector *adxmonv1.Collector) {
+func (r *CollectorReconciler) findIngestorEndpoint(ctx context.Context, namespace string) string {
+	ingestorList := &adxmonv1.IngestorList{}
+	if err := r.Client.List(ctx, ingestorList, client.InNamespace(namespace)); err != nil {
+		logger.Errorf("Failed to list Ingestors in namespace %s: %v", namespace, err)
+		return ""
+	}
+	
+	for _, ingestor := range ingestorList.Items {
+		// Skip if Ingestor is being deleted
+		if !ingestor.DeletionTimestamp.IsZero() {
+			continue
+		}
+		// Use the first available ingestor endpoint
+		if ingestor.Spec.Endpoint != "" {
+			return ingestor.Spec.Endpoint
+		}
+	}
+	return ""
+}
+
+func (r *CollectorReconciler) applyDefaults(ctx context.Context, collector *adxmonv1.Collector) {
 	if collector.Spec.Image == "" {
 		collector.Spec.Image = "ghcr.io/azure/adx-mon/collector:latest"
 	}
 	if collector.Spec.IngestorEndpoint == "" {
-		// Auto-configure to use ingestor service in the same namespace
-		collector.Spec.IngestorEndpoint = fmt.Sprintf("https://ingestor.%s.svc.cluster.local", collector.Namespace)
+		// Try to find an Ingestor CRD in the same namespace
+		if endpoint := r.findIngestorEndpoint(ctx, collector.Namespace); endpoint != "" {
+			collector.Spec.IngestorEndpoint = endpoint
+		} else {
+			// Fallback to auto-configure using service name
+			collector.Spec.IngestorEndpoint = fmt.Sprintf("https://ingestor.%s.svc.cluster.local", collector.Namespace)
+		}
 	}
 }
 
@@ -219,13 +290,23 @@ type collectorTemplateData struct {
 	Image           string
 	IngestorEndpoint string
 	Namespace       string
+	Name            string
+	Region          string
 }
 
-func (r *CollectorReconciler) templateData(collector *adxmonv1.Collector) *collectorTemplateData {
+func (r *CollectorReconciler) templateData(ctx context.Context, collector *adxmonv1.Collector) *collectorTemplateData {
+	// Discover region from IMDS
+	region := "default"
+	if location, _, _, _, ok := getIMDSMetadata(ctx, ""); ok {
+		region = location
+	}
+	
 	return &collectorTemplateData{
 		Image:           collector.Spec.Image,
 		IngestorEndpoint: collector.Spec.IngestorEndpoint,
 		Namespace:       collector.Namespace,
+		Name:            collector.Name,
+		Region:          region,
 	}
 }
 

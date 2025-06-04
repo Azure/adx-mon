@@ -46,7 +46,7 @@ func TestCollectorReconciler_IsReady(t *testing.T) {
 	// Test case 2: DaemonSet exists but not ready
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "collector",
+			Name:      "test-collector",
 			Namespace: "default",
 		},
 		Status: appsv1.DaemonSetStatus{
@@ -187,7 +187,9 @@ func TestCollectorReconciler_ApplyDefaults(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 	r := &CollectorReconciler{
+		Client: client,
 		Scheme: scheme,
 	}
 
@@ -202,7 +204,7 @@ func TestCollectorReconciler_ApplyDefaults(t *testing.T) {
 		},
 	}
 
-	r.applyDefaults(collector)
+	r.applyDefaults(context.Background(), collector)
 
 	require.Equal(t, "ghcr.io/azure/adx-mon/collector:latest", collector.Spec.Image)
 	require.Equal(t, "https://ingestor.test-namespace.svc.cluster.local", collector.Spec.IngestorEndpoint)
@@ -211,8 +213,46 @@ func TestCollectorReconciler_ApplyDefaults(t *testing.T) {
 	collector.Spec.Image = "custom-image:v1"
 	collector.Spec.IngestorEndpoint = "https://custom-ingestor.example.com"
 
-	r.applyDefaults(collector)
+	r.applyDefaults(context.Background(), collector)
 
 	require.Equal(t, "custom-image:v1", collector.Spec.Image)
 	require.Equal(t, "https://custom-ingestor.example.com", collector.Spec.IngestorEndpoint)
+}
+
+func TestCollectorReconciler_ApplyDefaults_WithIngestor(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	// Create an Ingestor in the same namespace
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "test-namespace",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Endpoint: "https://test-ingestor.example.com",
+		},
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor).Build()
+	r := &CollectorReconciler{
+		Client: client,
+		Scheme: scheme,
+	}
+
+	// Test that collector uses Ingestor endpoint
+	collector := &adxmonv1.Collector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-collector",
+			Namespace: "test-namespace",
+		},
+		Spec: adxmonv1.CollectorSpec{
+			// Leave endpoint empty to test auto-discovery
+		},
+	}
+
+	r.applyDefaults(context.Background(), collector)
+
+	require.Equal(t, "ghcr.io/azure/adx-mon/collector:latest", collector.Spec.Image)
+	require.Equal(t, "https://test-ingestor.example.com", collector.Spec.IngestorEndpoint)
 }
