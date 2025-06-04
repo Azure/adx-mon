@@ -42,3 +42,11 @@ jobs:
           echo "docs/config.md is not up to date. Please run 'go run tools/docgen/config/config.go' and commit the changes." >&2
           exit 1
         fi
+
+    - name: Ensure k8s bundle is updated
+      run: |
+        make k8s-bundle
+        if ! git diff --exit-code -- build/k8s/bundle.sh; then
+          echo "build/k8s/bundle.sh is not up to date. Please run 'make k8s-bundle' and commit the changes." >&2
+          exit 1
+        fi
