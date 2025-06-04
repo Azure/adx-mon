@@ -17,8 +17,7 @@ Updates to the `docs` directory will be automatically published to GitHub Pages 
 To bundle the quick start guide into a single script, run:
 
 ```bash
-$ docker run -it -v $(pwd)/build/k8s:/build ubuntu bash 
-$ cd /build && rm -f ./bundle.sh && tar czf /tmp/bundle.tar.gz . && base64 /tmp/bundle.tar.gz > /tmp/bundle.tar.gz.b64 && echo '#!/bin/bash' > bundle.sh && echo 'base64 -d << "EOF" | tar xz' >> bundle.sh && cat /tmp/bundle.tar.gz.b64 >> bundle.sh && echo 'EOF' >> bundle.sh && echo "./setup.sh" >> bundle.sh
+make k8s-bundle
 ```
 
-This will create a `bundle.sh` script in the `build/k8s` directory that can be run to deploy the quick start guide.
+This will create an updated `bundle.sh` script in the `build/k8s` directory that can be run to deploy the quick start guide. The bundling process uses Docker for cross-platform compatibility.
