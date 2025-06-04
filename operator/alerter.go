@@ -12,6 +12,7 @@ import (
 	time "time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -421,35 +422,8 @@ func (r *AlerterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // updateDeploymentWithRetry implements optimistic concurrency control for Deployment updates
 func (r *AlerterReconciler) updateDeploymentWithRetry(ctx context.Context, deployment *appsv1.Deployment) error {
-	const maxRetries = 5
-	for i := 0; i < maxRetries; i++ {
-		if err := r.Update(ctx, deployment); err != nil {
-			if !apierrors.IsConflict(err) {
-				// Not a conflict error, return immediately
-				return err
-			}
-
-			// Conflict error, fetch the latest version and retry
-			logger.Infof("Conflict updating Deployment %s, retrying (attempt %d/%d)", deployment.Name, i+1, maxRetries)
-
-			var latestDeployment appsv1.Deployment
-			if err := r.Get(ctx, client.ObjectKeyFromObject(deployment), &latestDeployment); err != nil {
-				return fmt.Errorf("failed to fetch latest Deployment for retry: %w", err)
-			}
-
-			// Preserve the spec changes we want to apply
-			preservedSpec := deployment.Spec
-
-			// Update with the latest Deployment object
-			*deployment = latestDeployment
-
-			// Reapply our spec changes
-			deployment.Spec = preservedSpec
-
-			continue
-		}
-		// Update succeeded
-		return nil
-	}
-	return fmt.Errorf("failed to update Deployment after %d retries due to conflicts", maxRetries)
+	return k8s.UpdateWithRetryPreserveSpec(ctx, r.Client, deployment,
+		func(d *appsv1.Deployment) appsv1.DeploymentSpec { return d.Spec },
+		func(d *appsv1.Deployment, spec appsv1.DeploymentSpec) { d.Spec = spec },
+	)
 }

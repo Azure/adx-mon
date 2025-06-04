@@ -12,6 +12,7 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
@@ -20,7 +21,6 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
 	armresources "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1188,35 +1188,8 @@ func executeKustoScripts(ctx context.Context, client *kusto.Client, database str
 
 // updateClusterWithRetry implements optimistic concurrency control for cluster updates
 func (r *AdxReconciler) updateClusterWithRetry(ctx context.Context, cluster *adxmonv1.ADXCluster) error {
-	const maxRetries = 5
-	for i := 0; i < maxRetries; i++ {
-		if err := r.Update(ctx, cluster); err != nil {
-			if !apierrors.IsConflict(err) {
-				// Not a conflict error, return immediately
-				return err
-			}
-
-			// Conflict error, fetch the latest version and retry
-			logger.Infof("Conflict updating cluster %s, retrying (attempt %d/%d)", cluster.Name, i+1, maxRetries)
-
-			var latestCluster adxmonv1.ADXCluster
-			if err := r.Get(ctx, client.ObjectKeyFromObject(cluster), &latestCluster); err != nil {
-				return fmt.Errorf("failed to fetch latest cluster for retry: %w", err)
-			}
-
-			// Preserve the spec changes we want to apply
-			preservedSpec := cluster.Spec
-
-			// Update with the latest cluster object
-			*cluster = latestCluster
-
-			// Reapply our spec changes
-			cluster.Spec = preservedSpec
-
-			continue
-		}
-		// Update succeeded
-		return nil
-	}
-	return fmt.Errorf("failed to update cluster after %d retries due to conflicts", maxRetries)
+	return k8s.UpdateWithRetryPreserveSpec(ctx, r.Client, cluster,
+		func(c *adxmonv1.ADXCluster) adxmonv1.ADXClusterSpec { return c.Spec },
+		func(c *adxmonv1.ADXCluster, spec adxmonv1.ADXClusterSpec) { c.Spec = spec },
+	)
 }

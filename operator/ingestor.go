@@ -12,6 +12,7 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -523,49 +524,10 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 	return nil
 }
 
-// retryWithConflictResolution retries an update operation on a Kubernetes object, resolving conflicts by fetching the latest version and reapplying changes.
-func retryWithConflictResolution(ctx context.Context, c client.Client, obj client.Object, reapplyChanges func(latest client.Object) error) error {
-	const maxRetries = 5
-	const baseBackoff = 100 * time.Millisecond
-	for i := 0; i < maxRetries; i++ {
-		if err := c.Update(ctx, obj); err != nil {
-			if !apierrors.IsConflict(err) {
-				// Not a conflict error, return immediately
-				return err
-			}
-
-			// Conflict error, fetch the latest version and retry
-			logger.Infof("Conflict updating %s, retrying (attempt %d/%d)", obj.GetName(), i+1, maxRetries)
-
-			latest := obj.DeepCopyObject().(client.Object)
-			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), latest); err != nil {
-				return fmt.Errorf("failed to fetch latest object for retry: %w", err)
-			}
-
-			// Reapply the desired changes
-			if err := reapplyChanges(latest); err != nil {
-				return fmt.Errorf("failed to reapply changes: %w", err)
-			}
-
-			// Update the object with the latest version
-			obj.SetResourceVersion(latest.GetResourceVersion())
-			continue
-		}
-		// Update succeeded
-		return nil
-	}
-	return fmt.Errorf("failed to update object after %d retries due to conflicts", maxRetries)
-}
-
 // updateStatefulSetWithRetry implements optimistic concurrency control for StatefulSet updates
 func (r *IngestorReconciler) updateStatefulSetWithRetry(ctx context.Context, sts *appsv1.StatefulSet) error {
-	return retryWithConflictResolution(ctx, r.Client, sts, func(latest client.Object) error {
-		latestSts, ok := latest.(*appsv1.StatefulSet)
-		if !ok {
-			return fmt.Errorf("unexpected object type: %T", latest)
-		}
-		// Preserve the spec changes we want to apply
-		sts.Spec = latestSts.Spec
-		return nil
-	})
+	return k8s.UpdateWithRetryPreserveSpec(ctx, r.Client, sts,
+		func(s *appsv1.StatefulSet) appsv1.StatefulSetSpec { return s.Spec },
+		func(s *appsv1.StatefulSet, spec appsv1.StatefulSetSpec) { s.Spec = spec },
+	)
 }
