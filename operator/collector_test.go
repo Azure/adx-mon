@@ -182,3 +182,37 @@ func TestCollectorReconciler_CreateCollector(t *testing.T) {
 	require.Equal(t, metav1.ConditionTrue, updatedCollector.Status.Conditions[0].Status)
 	require.Equal(t, "WaitForReady", updatedCollector.Status.Conditions[0].Reason)
 }
+
+func TestCollectorReconciler_ApplyDefaults(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	r := &CollectorReconciler{
+		Scheme: scheme,
+	}
+
+	// Test auto-configuration of defaults
+	collector := &adxmonv1.Collector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-collector",
+			Namespace: "test-namespace",
+		},
+		Spec: adxmonv1.CollectorSpec{
+			// Leave image and endpoint empty to test defaults
+		},
+	}
+
+	r.applyDefaults(collector)
+
+	require.Equal(t, "ghcr.io/azure/adx-mon/collector:latest", collector.Spec.Image)
+	require.Equal(t, "https://ingestor.test-namespace.svc.cluster.local", collector.Spec.IngestorEndpoint)
+
+	// Test that existing values are not overridden
+	collector.Spec.Image = "custom-image:v1"
+	collector.Spec.IngestorEndpoint = "https://custom-ingestor.example.com"
+
+	r.applyDefaults(collector)
+
+	require.Equal(t, "custom-image:v1", collector.Spec.Image)
+	require.Equal(t, "https://custom-ingestor.example.com", collector.Spec.IngestorEndpoint)
+}

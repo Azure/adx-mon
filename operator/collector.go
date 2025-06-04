@@ -210,7 +210,8 @@ func (r *CollectorReconciler) applyDefaults(collector *adxmonv1.Collector) {
 		collector.Spec.Image = "ghcr.io/azure/adx-mon/collector:latest"
 	}
 	if collector.Spec.IngestorEndpoint == "" {
-		collector.Spec.IngestorEndpoint = "https://ingestor.adx-mon.svc.cluster.local"
+		// Auto-configure to use ingestor service in the same namespace
+		collector.Spec.IngestorEndpoint = fmt.Sprintf("https://ingestor.%s.svc.cluster.local", collector.Namespace)
 	}
 }
 
