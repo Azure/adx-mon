@@ -2,7 +2,7 @@ package adx
 
 import (
 	"context"
-	ERRS "errors"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"strings"
@@ -15,7 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
-	KERRS "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -60,7 +60,7 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	// Implement the actual UpdateStatus logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
-		return ERRS.New("object does not implement ConditionedObject")
+		return stderrors.New("object does not implement ConditionedObject")
 	}
 
 	var (
@@ -92,7 +92,7 @@ func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, 
 	// Implement the actual UpdateStatusWithKustoErrorParsing logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
-		return ERRS.New("object does not implement ConditionedObject")
+		return stderrors.New("object does not implement ConditionedObject")
 	}
 
 	var (
@@ -125,8 +125,8 @@ func kustoErrorParsing(err error) string {
 
 	errMsg := err.Error()
 
-	var kustoerr *KERRS.HttpError
-	if ERRS.As(err, &kustoerr) {
+	var kustoerr *kustoerrors.HttpError
+	if stderrors.As(err, &kustoerr) {
 		decoded := kustoerr.UnmarshalREST()
 		if errMap, ok := decoded["error"].(map[string]interface{}); ok {
 			if errMsgVal, ok := errMap["@message"].(string); ok {
@@ -268,7 +268,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 
 		// Requires truncation
 		msg := strings.Repeat("a", 300)
-		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, ERRS.New(msg)))
+		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, stderrors.New(msg)))
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Equal(t, msg[:256], fn.Status.Error)
 	})
@@ -280,7 +280,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 			},
 		}
 		body := `{"error":{"@message": "this function is invalid"}}`
-		funcErr := KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		funcErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		task := &SyncFunctionsTask{
 			store: &TestFunctionStore{},
@@ -292,7 +292,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 		// Requires truncation
 		msg := strings.Repeat("a", 300)
 		body = fmt.Sprintf(`{"error":{"@message": "%s"}}`, msg)
-		funcErr = KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		funcErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, funcErr))
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Equal(t, msg[:256], fn.Status.Error)
@@ -630,7 +630,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 	}
 	
 	// Mock the SubmitRule function to return an error
-	submissionError := ERRS.New("invalid KQL query")
+	submissionError := stderrors.New("invalid KQL query")
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		return "", submissionError
 	}
@@ -836,7 +836,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		require.Equal(t, io.EOF.Error(), condition.Message, "Message should be the raw error")
 
 		// Test truncation for long error messages
-		longError := ERRS.New(strings.Repeat("a", 300))
+		longError := stderrors.New(strings.Repeat("a", 300))
 		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, longError))
 		
 		condition = rule.GetCondition()
@@ -866,7 +866,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 
 		// Create a Kusto HTTP error with structured message
 		body := `{"error":{"@message": "query contains invalid syntax"}}`
-		kustoErr := KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		task := &SummaryRuleTask{store: mockHandler}
 		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, kustoErr))
@@ -880,7 +880,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		// Test truncation for long Kusto error messages
 		longMsg := strings.Repeat("b", 300)
 		body = fmt.Sprintf(`{"error":{"@message": "%s"}}`, longMsg)
-		kustoErr = KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, kustoErr))
 		
 		condition = rule.GetCondition()

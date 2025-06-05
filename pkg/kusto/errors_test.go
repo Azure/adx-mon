@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	KERRS "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +31,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto http error extracts @message", func(t *testing.T) {
 		body := `{"error":{"@message": "this function is invalid"}}`
-		kustoErr := KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "this function is invalid", result)
@@ -40,7 +40,7 @@ func TestParseError(t *testing.T) {
 	t.Run("long kusto http error @message is truncated", func(t *testing.T) {
 		longMsg := strings.Repeat("b", 300)
 		body := `{"error":{"@message": "` + longMsg + `"}}`
-		kustoErr := KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, longMsg[:256], result)
