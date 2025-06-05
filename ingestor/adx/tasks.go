@@ -255,14 +255,16 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 type SummaryRuleTask struct {
 	store         storage.CRDHandler
 	kustoCli      StatementExecutor
+	region        string
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 }
 
-func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor) *SummaryRuleTask {
+func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, region string) *SummaryRuleTask {
 	task := &SummaryRuleTask{
 		store:    store,
 		kustoCli: kustoCli,
+		region:   region,
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
@@ -413,6 +415,7 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	// preceding let-statements.
 	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
 	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_region", fmt.Sprintf("\"%s\"", t.region))
 	// Execute asynchronously
 	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(rule.Spec.Body)
 	res, err := t.kustoCli.Mgmt(ctx, stmt)

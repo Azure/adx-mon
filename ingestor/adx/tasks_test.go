@@ -66,6 +66,7 @@ type TestStatementExecutor struct {
 	endpoint    string
 	stmts       []string
 	nextMgmtErr error
+	mgmtFunc    func(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
 func (t *TestStatementExecutor) Database() string {
@@ -82,6 +83,11 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		ret := t.nextMgmtErr
 		t.nextMgmtErr = nil
 		return nil, ret
+	}
+
+	// Use custom mgmt function if provided
+	if t.mgmtFunc != nil {
+		return t.mgmtFunc(ctx, query, options...)
 	}
 
 	return nil, nil
@@ -540,6 +546,7 @@ func TestAsyncOperationRemoval(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
+		region:   "test-region",
 	}
 	
 	// Set the GetOperations function to return an empty list
@@ -569,6 +576,48 @@ func TestAsyncOperationRemoval(t *testing.T) {
 	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
 	require.Equal(t, "new-operation-id", asyncOps[0].OperationId, "Should be the new operation")
 	require.NotEqual(t, operationId, asyncOps[0].OperationId, "Old operation should be gone")
+}
+
+func TestSummaryRuleRegionVariableInjection(t *testing.T) {
+	// Create a mock executor to capture the executed query
+	var capturedQuery string
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+		mgmtFunc: func(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+			capturedQuery = query.String()
+			// Return an error to avoid trying to parse the result
+			return nil, fmt.Errorf("mock error to capture query")
+		},
+	}
+
+	// Create summary rule task with a specific region
+	testRegion := "us-west-2"
+	task := NewSummaryRuleTask(nil, mockExecutor, testRegion)
+
+	// Create a test rule that uses _region variable
+	rule := v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-rule",
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Body:     "TestMetrics | where timestamp between (_startTime .. _endTime) and region == _region | summarize count() by bin(timestamp, 1h)",
+		},
+	}
+
+	// Submit the rule (expect it to fail, but we'll capture the query)
+	_, err := task.submitRule(context.Background(), rule, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z")
+	require.Error(t, err) // We expect an error from our mock
+
+	// Verify that _region was replaced with the actual region value
+	require.Contains(t, capturedQuery, `region == "us-west-2"`, "Query should contain the injected region value")
+	require.NotContains(t, capturedQuery, "_region", "Query should not contain the _region placeholder")
+
+	// Also verify that time variables were replaced
+	require.Contains(t, capturedQuery, "datetime(2024-01-01T00:00:00Z)", "Query should contain injected start time")
+	require.Contains(t, capturedQuery, "datetime(2024-01-01T01:00:00Z)", "Query should contain injected end time")
 }
 
 func TestSummaryRules(t *testing.T) {
@@ -618,7 +667,7 @@ func TestSummaryRules(t *testing.T) {
 	}
 
 	store := storage.NewCRDHandler(ctrlCli, nil)
-	task := NewSummaryRuleTask(store, executor)
+	task := NewSummaryRuleTask(store, executor, "test-region")
 
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
