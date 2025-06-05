@@ -1,9 +1,9 @@
 package kusto
 
 import (
-	stderrors "errors"
+	"errors"
 
-	"github.com/Azure/azure-kusto-go/kusto/data/errors"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 )
 
 // ParseError extracts a clean error message from Kusto HttpError objects
@@ -16,8 +16,8 @@ func ParseError(err error) string {
 
 	errMsg := err.Error()
 
-	var kustoerr *errors.HttpError
-	if stderrors.As(err, &kustoerr) {
+	var kustoerr *kustoerrors.HttpError
+	if errors.As(err, &kustoerr) {
 		decoded := kustoerr.UnmarshalREST()
 		if errMap, ok := decoded["error"].(map[string]interface{}); ok {
 			if errMsgVal, ok := errMap["@message"].(string); ok {
