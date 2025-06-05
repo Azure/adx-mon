@@ -441,9 +441,9 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext.RunAsNonRoot, "runAsNonRoot should be set")
 	require.True(t, *sts.Spec.Template.Spec.SecurityContext.RunAsNonRoot, "runAsNonRoot should be true")
 	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext.RunAsUser, "runAsUser should be set")
-	require.Equal(t, int64(65534), *sts.Spec.Template.Spec.SecurityContext.RunAsUser, "runAsUser should be 65534")
+	require.Equal(t, int64(1000), *sts.Spec.Template.Spec.SecurityContext.RunAsUser, "runAsUser should be 1000")
 	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext.RunAsGroup, "runAsGroup should be set")
-	require.Equal(t, int64(65534), *sts.Spec.Template.Spec.SecurityContext.RunAsGroup, "runAsGroup should be 65534")
+	require.Equal(t, int64(3000), *sts.Spec.Template.Spec.SecurityContext.RunAsGroup, "runAsGroup should be 3000")
 	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext.FSGroup, "fsGroup should be set")
 	require.Equal(t, int64(65534), *sts.Spec.Template.Spec.SecurityContext.FSGroup, "fsGroup should be 65534")
 
