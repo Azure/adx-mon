@@ -291,7 +291,7 @@ func (s *Service) Open(ctx context.Context) error {
 		})
 
 		sr := adx.NewSummaryRuleTask(crdStore, v)
-		s.scheduler.ScheduleEvery(10*time.Minute, "summary-rules", func(ctx context.Context) error {
+		s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
 			return sr.Run(ctx)
 		})
 	}
@@ -308,7 +308,7 @@ func (s *Service) Open(ctx context.Context) error {
 		})
 
 		sr := adx.NewSummaryRuleTask(crdStore, v)
-		s.scheduler.ScheduleEvery(10*time.Minute, "summary-rules", func(ctx context.Context) error {
+		s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
 			return sr.Run(ctx)
 		})
 	}
