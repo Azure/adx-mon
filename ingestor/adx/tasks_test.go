@@ -559,11 +559,16 @@ func TestAsyncOperationRemoval(t *testing.T) {
 	// Check that the rule was updated
 	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
 	
-	// Check that the async operation was removed from the rule
+	// Check that the old async operation was removed but a new one was created
 	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 	require.True(t, ok, "Updated object should be a SummaryRule")
 	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
-	require.Empty(t, updatedRule.GetAsyncOperations(), "Async operations should be empty")
+	
+	// Should have exactly 1 operation (the new one), not 0
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
+	require.Equal(t, "new-operation-id", asyncOps[0].OperationId, "Should be the new operation")
+	require.NotEqual(t, operationId, asyncOps[0].OperationId, "Old operation should be gone")
 }
 
 func TestSummaryRules(t *testing.T) {

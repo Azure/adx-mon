@@ -125,15 +125,19 @@ func (s *SummaryRule) SetAsyncOperation(operation AsyncOperation) {
 	asyncOperations := s.GetAsyncOperations()
 
 	// Check if the operation already exists
+	found := false
 	for i, op := range asyncOperations {
 		if op.OperationId == operation.OperationId {
 			// Update the existing operation
 			asyncOperations[i] = operation
+			found = true
 			break
 		}
 	}
 	// If the operation doesn't exist, append it
-	asyncOperations = append(asyncOperations, operation)
+	if !found {
+		asyncOperations = append(asyncOperations, operation)
+	}
 	// Limit the number of async operations to 200
 	if len(asyncOperations) > 200 {
 		asyncOperations = asyncOperations[1:]
