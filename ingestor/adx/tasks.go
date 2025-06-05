@@ -2,7 +2,6 @@ package adx
 
 import (
 	"context"
-	ERRS "errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,8 +14,9 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/pkg/kusto"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
+	kustolib "github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,7 +41,7 @@ type DropUnusedTablesTask struct {
 type StatementExecutor interface {
 	Database() string
 	Endpoint() string
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query kustolib.Statement, options ...kustolib.MgmtOption) (*kustolib.RowIterator, error)
 }
 
 func NewDropUnusedTablesTask(kustoCli StatementExecutor) *DropUnusedTablesTask {
@@ -85,7 +85,7 @@ func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
 }
 
 func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDetail, error) {
-	stmt := kusto.NewStmt(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
+	stmt := kustolib.NewStmt(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, err
@@ -184,22 +184,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
-		errMsg := err.Error()
-
-		var kustoerr *errors.HttpError
-		if ERRS.As(err, &kustoerr) {
-			decoded := kustoerr.UnmarshalREST()
-			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
-				if errMsgVal, ok := errMap["@message"].(string); ok {
-					errMsg = errMsgVal
-				}
-			}
-		}
-
-		if len(errMsg) > 256 {
-			errMsg = errMsg[:256]
-		}
-		fn.Status.Error = errMsg
+		fn.Status.Error = kusto.ParseError(err)
 	}
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
@@ -350,7 +335,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			if err != nil {
 				submissionError = err
-				t.store.UpdateStatus(ctx, &rule, err)
+				t.updateSummaryRuleStatus(ctx, &rule, err)
 			} else {
 				asyncOp.OperationId = operationId
 				rule.SetAsyncOperation(asyncOp)
@@ -406,7 +391,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		// Only update status to success if there was no submission error
 		if submissionError == nil {
-			if err := t.store.UpdateStatus(ctx, &rule, nil); err != nil {
+			if err := t.updateSummaryRuleStatus(ctx, &rule, nil); err != nil {
 				logger.Errorf("Failed to update summary rule status: %v", err)
 				// Not a lot we can do here, we'll end up just retrying next interval.
 			}
@@ -484,7 +469,7 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	return operations, nil
 }
 
-func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
+func operationIDFromResult(iter *kustolib.RowIterator) (string, error) {
 	defer iter.Stop()
 
 	for {
@@ -507,6 +492,11 @@ func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
 	}
 
 	return "", nil
+}
+
+// updateSummaryRuleStatus updates the status of a SummaryRule with proper Kusto error parsing
+func (t *SummaryRuleTask) updateSummaryRuleStatus(ctx context.Context, rule *v1.SummaryRule, err error) error {
+	return t.store.UpdateStatusWithKustoErrorParsing(ctx, rule, err)
 }
 
 type AsyncOperationStatus struct {

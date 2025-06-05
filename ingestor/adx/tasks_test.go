@@ -2,7 +2,7 @@ package adx
 
 import (
 	"context"
-	"errors"
+	ERRS "errors"
 	"fmt"
 	"io"
 	"strings"
@@ -60,7 +60,7 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	// Implement the actual UpdateStatus logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
-		return errors.New("object does not implement ConditionedObject")
+		return ERRS.New("object does not implement ConditionedObject")
 	}
 
 	var (
@@ -82,6 +82,63 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	// Track updated objects for assertions in tests
 	m.updatedObjects = append(m.updatedObjects, obj.DeepCopyObject().(client.Object))
 	return nil
+}
+
+func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, obj client.Object, errStatus error) error {
+	if m.updateStatusFn != nil {
+		return m.updateStatusFn(ctx, obj, errStatus)
+	}
+	
+	// Implement the actual UpdateStatusWithKustoErrorParsing logic to set conditions properly
+	statusObj, ok := obj.(adxmonv1.ConditionedObject)
+	if !ok {
+		return ERRS.New("object does not implement ConditionedObject")
+	}
+
+	var (
+		status  = metav1.ConditionTrue
+		message = ""
+	)
+	if errStatus != nil {
+		status = metav1.ConditionFalse
+		// Import kusto package to get proper error parsing
+		message = kustoErrorParsing(errStatus)
+	}
+
+	condition := metav1.Condition{
+		Status:  status,
+		Message: message,
+	}
+
+	statusObj.SetCondition(condition)
+	
+	// Track updated objects for assertions in tests
+	m.updatedObjects = append(m.updatedObjects, obj.DeepCopyObject().(client.Object))
+	return nil
+}
+
+// kustoErrorParsing mimics the kusto.ParseError function for testing
+func kustoErrorParsing(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	errMsg := err.Error()
+
+	var kustoerr *KERRS.HttpError
+	if ERRS.As(err, &kustoerr) {
+		decoded := kustoerr.UnmarshalREST()
+		if errMap, ok := decoded["error"].(map[string]interface{}); ok {
+			if errMsgVal, ok := errMap["@message"].(string); ok {
+				errMsg = errMsgVal
+			}
+		}
+	}
+
+	if len(errMsg) > 256 {
+		errMsg = errMsg[:256]
+	}
+	return errMsg
 }
 
 type TestStatementExecutor struct {
@@ -211,7 +268,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 
 		// Requires truncation
 		msg := strings.Repeat("a", 300)
-		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, errors.New(msg)))
+		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, ERRS.New(msg)))
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Equal(t, msg[:256], fn.Status.Error)
 	})
@@ -573,7 +630,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 	}
 	
 	// Mock the SubmitRule function to return an error
-	submissionError := errors.New("invalid KQL query")
+	submissionError := ERRS.New("invalid KQL query")
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		return "", submissionError
 	}
@@ -747,6 +804,119 @@ func TestAsyncOperationRemoval(t *testing.T) {
 	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
 	require.Equal(t, "new-operation-id", asyncOps[0].OperationId, "Should be the new operation")
 	require.NotEqual(t, operationId, asyncOps[0].OperationId, "Old operation should be gone")
+}
+
+func TestSummaryRuleKustoErrorParsing(t *testing.T) {
+	t.Run("update status with non-kusto error", func(t *testing.T) {
+		mockHandler := &mockCRDHandler{
+			updatedObjects: make([]client.Object, 0),
+		}
+		
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "testtable",
+				Name:     "test-rule",
+				Body:     "test query",
+				Interval: metav1.Duration{Duration: time.Minute},
+			},
+		}
+
+		task := &SummaryRuleTask{store: mockHandler}
+		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, io.EOF))
+
+		// Check that the condition was set with the raw error message
+		condition := rule.GetCondition()
+		require.NotNil(t, condition, "Condition should be set")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
+		require.Equal(t, io.EOF.Error(), condition.Message, "Message should be the raw error")
+
+		// Test truncation for long error messages
+		longError := ERRS.New(strings.Repeat("a", 300))
+		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, longError))
+		
+		condition = rule.GetCondition()
+		require.NotNil(t, condition, "Condition should be set")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
+		require.Equal(t, strings.Repeat("a", 256), condition.Message, "Message should be truncated to 256 chars")
+	})
+
+	t.Run("update status with kusto-http error", func(t *testing.T) {
+		mockHandler := &mockCRDHandler{
+			updatedObjects: make([]client.Object, 0),
+		}
+		
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "testtable", 
+				Name:     "test-rule",
+				Body:     "test query",
+				Interval: metav1.Duration{Duration: time.Minute},
+			},
+		}
+
+		// Create a Kusto HTTP error with structured message
+		body := `{"error":{"@message": "query contains invalid syntax"}}`
+		kustoErr := KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+
+		task := &SummaryRuleTask{store: mockHandler}
+		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, kustoErr))
+
+		// Check that the condition was set with the parsed Kusto error message
+		condition := rule.GetCondition()
+		require.NotNil(t, condition, "Condition should be set")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
+		require.Equal(t, "query contains invalid syntax", condition.Message, "Message should be parsed from Kusto error")
+
+		// Test truncation for long Kusto error messages
+		longMsg := strings.Repeat("b", 300)
+		body = fmt.Sprintf(`{"error":{"@message": "%s"}}`, longMsg)
+		kustoErr = KERRS.HTTP(KERRS.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, kustoErr))
+		
+		condition = rule.GetCondition()
+		require.NotNil(t, condition, "Condition should be set")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
+		require.Equal(t, longMsg[:256], condition.Message, "Message should be truncated to 256 chars")
+	})
+
+	t.Run("update status without error", func(t *testing.T) {
+		mockHandler := &mockCRDHandler{
+			updatedObjects: make([]client.Object, 0),
+		}
+		
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "testtable",
+				Name:     "test-rule", 
+				Body:     "test query",
+				Interval: metav1.Duration{Duration: time.Minute},
+			},
+		}
+
+		task := &SummaryRuleTask{store: mockHandler}
+		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, nil))
+
+		// Check that the condition was set with success status
+		condition := rule.GetCondition()
+		require.NotNil(t, condition, "Condition should be set")
+		require.Equal(t, metav1.ConditionTrue, condition.Status, "Status should be True for success")
+		require.Empty(t, condition.Message, "Message should be empty for success")
+	})
 }
 
 func TestSummaryRules(t *testing.T) {
