@@ -1,7 +1,7 @@
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250429200730-bec9c7d2421e.2 h1:djlNC/2GWPoamqQ/fygtRx5HJo2bxwalBK+ktMck9II=
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250429200730-bec9c7d2421e.2/go.mod h1:FUM2okcb4oi2Iu7H7Wqg1IowAgLWlzSWNtUjwEP6g2s=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.6-20250429200730-bec9c7d2421e.1 h1:RRbAHFYcgYN/qQOBMdoFby8Dk5oF/ZpL3SjvC+x5u1Q=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.6-20250429200730-bec9c7d2421e.1/go.mod h1:9nxxsNWBYu+Iuod+jneWQr/xLW/htmnclCc3psDIafc=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250522205734-1fc52e899c99.2 h1:gGYPz7tK3i3K690uyq2mw7sPQuSN/6UAwJR1o7w0BS4=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250522205734-1fc52e899c99.2/go.mod h1:fENzgQPaENg1xGr0r0y5JJt3SUU2cSvecucI+e9jcIs=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.6-20250522205734-1fc52e899c99.1 h1:qIQHvXNK8OGkKexLTLeR0PhDUmBTzD7d/8CrHJ0hXkg=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.6-20250522205734-1fc52e899c99.1/go.mod h1:9nxxsNWBYu+Iuod+jneWQr/xLW/htmnclCc3psDIafc=
 dario.cat/mergo v1.0.1 h1:Ra4+bf83h2ztPIQYNP99R6m+Y7KfnARDfID+a+vLl4s=
 dario.cat/mergo v1.0.1/go.mod h1:uNxQE+84aUszobStD9th8a29P2fMDhsBdgRYvZOxGmk=
 github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 h1:bvDV9vkmnHYOMsOr4WLk+Vo07yKIzd94sVoIqshQ4bU=
