@@ -318,6 +318,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			continue
 		}
 
+		// Track if there was a submission error for this rule
+		var submissionError error
+
 		// Get the current condition of the rule
 		cnd := rule.GetCondition()
 		if cnd == nil {
@@ -346,9 +349,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			if err != nil {
+				submissionError = err
 				t.store.UpdateStatus(ctx, &rule, err)
 			} else {
-
 				asyncOp.OperationId = operationId
 				rule.SetAsyncOperation(asyncOp)
 			}
@@ -401,9 +404,12 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := t.store.UpdateStatus(ctx, &rule, nil); err != nil {
-			logger.Errorf("Failed to update summary rule status: %v", err)
-			// Not a lot we can do here, we'll end up just retrying next interval.
+		// Only update status to success if there was no submission error
+		if submissionError == nil {
+			if err := t.store.UpdateStatus(ctx, &rule, nil); err != nil {
+				logger.Errorf("Failed to update summary rule status: %v", err)
+				// Not a lot we can do here, we'll end up just retrying next interval.
+			}
 		}
 	}
 
