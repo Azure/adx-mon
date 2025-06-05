@@ -2,7 +2,7 @@ package adx
 
 import (
 	"context"
-	stderrors "errors"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -60,7 +60,7 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	// Implement the actual UpdateStatus logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
-		return stderrors.New("object does not implement ConditionedObject")
+		return errors.New("object does not implement ConditionedObject")
 	}
 
 	var (
@@ -92,7 +92,7 @@ func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, 
 	// Implement the actual UpdateStatusWithKustoErrorParsing logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
-		return stderrors.New("object does not implement ConditionedObject")
+		return errors.New("object does not implement ConditionedObject")
 	}
 
 	var (
@@ -126,7 +126,7 @@ func kustoErrorParsing(err error) string {
 	errMsg := err.Error()
 
 	var kustoerr *kustoerrors.HttpError
-	if stderrors.As(err, &kustoerr) {
+	if errors.As(err, &kustoerr) {
 		decoded := kustoerr.UnmarshalREST()
 		if errMap, ok := decoded["error"].(map[string]interface{}); ok {
 			if errMsgVal, ok := errMap["@message"].(string); ok {
@@ -268,7 +268,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 
 		// Requires truncation
 		msg := strings.Repeat("a", 300)
-		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, stderrors.New(msg)))
+		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, errors.New(msg)))
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Equal(t, msg[:256], fn.Status.Error)
 	})
@@ -630,7 +630,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 	}
 	
 	// Mock the SubmitRule function to return an error
-	submissionError := stderrors.New("invalid KQL query")
+	submissionError := errors.New("invalid KQL query")
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		return "", submissionError
 	}
@@ -836,7 +836,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		require.Equal(t, io.EOF.Error(), condition.Message, "Message should be the raw error")
 
 		// Test truncation for long error messages
-		longError := stderrors.New(strings.Repeat("a", 300))
+		longError := errors.New(strings.Repeat("a", 300))
 		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, longError))
 		
 		condition = rule.GetCondition()
