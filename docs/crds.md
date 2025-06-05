@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Defines KQL summary/aggregation automation   | database, name, body, table, interval | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Defines KQL summary/aggregation automation with time and cluster label substitutions | database, name, body, table, interval | [Summary Rules](designs/summary-rules.md#crd) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
 
@@ -151,19 +151,46 @@ spec:
   name: HourlyAvg
   body: |
     SomeMetric
-    | where Timestamp between (_startTime .. _endtime)
+    | where Timestamp between (_startTime .. _endTime)
     | summarize avg(Value) by bin(Timestamp, 1h)
   table: SomeMetricHourlyAvg
   interval: 1h
 ```
+
+**Environment-Specific Example with Cluster Labels:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: environment-specific-summary
+spec:
+  database: MyDB
+  name: EnvSummary
+  body: |
+    MyTable
+    | where Timestamp between (_startTime .. _endTime)
+    | where Environment == "_cluster.environment"
+    | where Region == "_cluster.region" 
+    | summarize count() by bin(Timestamp, 1h)
+  table: MySummaryTable
+  interval: 1h
+```
+
 **Key Fields:**
 - `database`: Target ADX database.
 - `name`: Logical name for the rule.
-- `body`: KQL query to run (can use `_startTime`/`_endtime`).
+- `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally use `_cluster.<key>` placeholders for environment-specific values.
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
 
-**Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries.
+**Required Placeholders:**
+- `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
+- `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`.
+
+**Optional Cluster Label Substitutions:**
+- `_cluster.<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.
+
+**Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries. Use cluster label substitutions to create environment-agnostic rules that work across different deployments.
 
 ---
 

@@ -112,6 +112,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
 - **Config File/CLI:** Main configuration is via CLI flags or environment variables (see `cmd/ingestor/main.go`). Key options include:
   - `--storage-dir`: Directory for WAL segments.
   - `--metrics-kusto-endpoints`, `--logs-kusto-endpoints`: ADX endpoints for metrics/logs (format: `<db>=<endpoint>`).
+  - `--cluster-labels`: Labels used to identify and distinguish ingestor clusters (format: `<key>=<value>`). Used for `_cluster.<key>` substitutions in SummaryRules.
   - `--uploads`: Number of concurrent uploads.
   - `--max-segment-size`, `--max-segment-age`: Segment batching thresholds.
   - `--max-transfer-size`, `--max-transfer-age`: Peer transfer thresholds.
