@@ -31,6 +31,8 @@ const (
 	SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
 	// SummaryRuleOperationIdOwner is the owner of the summary rule operation id
 	SummaryRuleOperationIdOwner = "summaryrule.adx-mon.azure.com/OperationId"
+	// SummaryRuleLastSuccessfulExecution tracks the end time of the last successful query execution
+	SummaryRuleLastSuccessfulExecution = "summaryrule.adx-mon.azure.com/LastSuccessfulExecution"
 	// SummaryRuleAsyncOperationPollInterval acts as a cooldown period between checking
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
@@ -72,6 +74,38 @@ type SummaryRuleStatus struct {
 
 func (s *SummaryRule) GetCondition() *metav1.Condition {
 	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOwner)
+}
+
+func (s *SummaryRule) GetLastSuccessfulExecutionTime() *time.Time {
+	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleLastSuccessfulExecution)
+	if condition == nil {
+		return nil
+	}
+	
+	// Parse the time from the message field
+	if condition.Message == "" {
+		return nil
+	}
+	
+	t, err := time.Parse(time.RFC3339Nano, condition.Message)
+	if err != nil {
+		return nil
+	}
+	
+	return &t
+}
+
+func (s *SummaryRule) SetLastSuccessfulExecutionTime(endTime time.Time) {
+	condition := &metav1.Condition{
+		Type:               SummaryRuleLastSuccessfulExecution,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ExecutionCompleted",
+		Message:            endTime.UTC().Format(time.RFC3339Nano),
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: s.GetGeneration(),
+	}
+	
+	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
 func (s *SummaryRule) SetCondition(c metav1.Condition) {
