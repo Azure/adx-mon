@@ -111,7 +111,7 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
-        runAsGroup: 65534
+        runAsGroup: 3000
         fsGroup: 65534
       serviceAccountName: ingestor
       containers:
