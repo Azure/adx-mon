@@ -108,10 +108,22 @@ spec:
         adx-mon/log-destination: "Logs:Ingestor"
         adx-mon/log-parsers: json
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
       serviceAccountName: ingestor
       containers:
         - name: ingestor
           image: {{ .Image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 9090
               name: ingestor
@@ -142,6 +154,8 @@ spec:
             - "--logs-kusto-endpoints={{ . }}"
             {{- end }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: metrics
               mountPath: /mnt/data
             - mountPath: /etc/pki/ca-trust/extracted
@@ -168,6 +182,8 @@ spec:
                       - ingestor
               topologyKey: kubernetes.io/hostname
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: ca-certs
           hostPath:
             path: /etc/ssl/certs

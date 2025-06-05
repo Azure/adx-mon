@@ -93,6 +93,11 @@ spec:
       labels:
         app: alerter
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
       containers:
       - args:
         - --alerter-address={{ .AlerterEndpoint }}
@@ -108,6 +113,13 @@ spec:
         image: {{ .Image }}
         imagePullPolicy: Always
         name: alerter
+        securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
         ports:
         - containerPort: 8080
           protocol: TCP
@@ -121,6 +133,8 @@ spec:
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:
+        - mountPath: /tmp
+          name: tmp
         - mountPath: /etc/pki/ca-trust/extracted
           name: etc-pki-ca-certs
           readOnly: true
@@ -140,6 +154,8 @@ spec:
         key: infra-nodepool
         operator: Exists
       volumes:
+      - name: tmp
+        emptyDir: {}
       - hostPath:
           path: /etc/ssl/certs
           type: Directory
