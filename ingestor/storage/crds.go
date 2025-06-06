@@ -7,7 +7,7 @@ import (
 	"reflect"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/kusto"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -140,7 +140,7 @@ func (c *crdHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, obj 
 	}
 	if errStatus != nil {
 		condition.Status = metav1.ConditionFalse
-		condition.Message = kusto.ParseError(errStatus)
+		condition.Message = kustoutil.ParseError(errStatus)
 	}
 
 	statusObj.SetCondition(condition)

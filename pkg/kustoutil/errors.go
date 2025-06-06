@@ -1,4 +1,4 @@
-package kusto
+package kustoutil
 
 import (
 	"errors"

@@ -12,7 +12,7 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	kustoutils "github.com/Azure/adx-mon/pkg/kusto"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -102,7 +102,7 @@ func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, 
 	)
 	if errStatus != nil {
 		status = metav1.ConditionFalse
-		message = kustoutils.ParseError(errStatus)
+		message = kustoutil.ParseError(errStatus)
 	}
 
 	condition := metav1.Condition{

@@ -14,9 +14,9 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/pkg/kusto"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
-	kustolib "github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,7 +41,7 @@ type DropUnusedTablesTask struct {
 type StatementExecutor interface {
 	Database() string
 	Endpoint() string
-	Mgmt(ctx context.Context, query kustolib.Statement, options ...kustolib.MgmtOption) (*kustolib.RowIterator, error)
+	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
 func NewDropUnusedTablesTask(kustoCli StatementExecutor) *DropUnusedTablesTask {
@@ -85,7 +85,7 @@ func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
 }
 
 func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDetail, error) {
-	stmt := kustolib.NewStmt(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
+	stmt := kusto.NewStmt(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
-		fn.Status.Error = kusto.ParseError(err)
+		fn.Status.Error = kustoutil.ParseError(err)
 	}
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
@@ -469,7 +469,7 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	return operations, nil
 }
 
-func operationIDFromResult(iter *kustolib.RowIterator) (string, error) {
+func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
 	defer iter.Stop()
 
 	for {
