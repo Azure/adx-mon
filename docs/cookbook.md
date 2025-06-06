@@ -39,12 +39,12 @@ spec:
   body: |
     Logs
     | where Timestamp between (_startTime .. _endTime)
-    | where Environment == "_cluster.environment"
-    | where Region == "_cluster.region"
+    | where Environment == "_environment"
+    | where Region == "_region"
     | where Level == "ERROR"
     | summarize ErrorCount = count() 
       by bin(Timestamp, 15m), Service, Pod
-    | extend Environment = "_cluster.environment", Region = "_cluster.region"
+    | extend Environment = "_environment", Region = "_region"
   table: ErrorRateByEnvironment
   interval: 15m
 ```

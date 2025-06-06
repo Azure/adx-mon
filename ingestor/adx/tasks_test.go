@@ -726,7 +726,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("replaces cluster label placeholders correctly", func(t *testing.T) {
-		body := "MyTable | where Environment == \"_cluster.environment\" | where Region == \"_cluster.region\" | count"
+		body := "MyTable | where Environment == \"environment\" | where Region == \"region\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -742,7 +742,7 @@ func TestApplySubstitutions(t *testing.T) {
 
 	t.Run("replaces both time and cluster placeholders", func(t *testing.T) {
 		body := `MyTable 
-		| where Environment == "_cluster.environment"
+		| where Environment == "environment"
 		| where Timestamp between (_startTime .. _endTime)
 		| summarize count() by bin(Timestamp, 1h)`
 		startTime := "2024-01-01T00:00:00Z"
@@ -761,7 +761,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("handles multiple cluster labels", func(t *testing.T) {
-		body := "MyTable | where Env == \"_cluster.env\" | where DC == \"_cluster.datacenter\" | where Team == \"_cluster.team\""
+		body := "MyTable | where Env == \"env\" | where DC == \"datacenter\" | where Team == \"team\""
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -801,7 +801,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("leaves unreferenced cluster labels unchanged", func(t *testing.T) {
-		body := "MyTable | where Environment == \"_cluster.environment\" | count"
+		body := "MyTable | where Environment == \"environment\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -817,7 +817,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("handles cluster labels with special characters", func(t *testing.T) {
-		body := "MyTable | where Notes == \"_cluster.notes\" | count"
+		body := "MyTable | where Notes == \"notes\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -835,7 +835,7 @@ func TestApplySubstitutions(t *testing.T) {
 		| where StartTime >= _startTime 
 		| where EndTime <= _endTime
 		| where ProcessedTime between (_startTime .. _endTime)
-		| where Environment == "_cluster.env"`
+		| where Environment == "env"`
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -853,7 +853,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("handles missing cluster label placeholders gracefully", func(t *testing.T) {
-		body := "MyTable | where Environment == \"_cluster.environment\" | where Region == \"_cluster.missing\" | count"
+		body := "MyTable | where Environment == \"environment\" | where Region == \"missing\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -864,12 +864,12 @@ func TestApplySubstitutions(t *testing.T) {
 		result := applySubstitutions(body, startTime, endTime, clusterLabels)
 
 		// Should replace the existing key but leave the missing one unchanged
-		expected := "MyTable | where Environment == \"'production'\" | where Region == \"_cluster.missing\" | count"
+		expected := "MyTable | where Environment == \"'production'\" | where Region == \"missing\" | count"
 		require.Equal(t, expected, result)
 	})
 
 	t.Run("handles cluster labels with single quotes", func(t *testing.T) {
-		body := "MyTable | where Name == \"_cluster.name\" | count"
+		body := "MyTable | where Name == \"name\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -884,7 +884,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("handles empty string values", func(t *testing.T) {
-		body := "MyTable | where Environment == \"_cluster.environment\" | count"
+		body := "MyTable | where Environment == \"environment\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -900,11 +900,11 @@ func TestApplySubstitutions(t *testing.T) {
 	t.Run("realistic KQL query example", func(t *testing.T) {
 		body := `let metrics = MyMetricsTable
 		| where Timestamp between (_startTime .. _endTime)
-		| where Environment == "_cluster.environment"
-		| where Region == "_cluster.region";
+		| where Environment == "environment"
+		| where Region == "region";
 		let logs = MyLogsTable  
 		| where Timestamp between (_startTime .. _endTime)
-		| where Environment == "_cluster.environment"
+		| where Environment == "environment"
 		| where Level == "ERROR";
 		metrics
 		| join kind=leftouter logs on Environment
@@ -936,7 +936,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("edge case: cluster label key with dots", func(t *testing.T) {
-		body := "MyTable | where Config == \"_cluster.app.version\" | count"
+		body := "MyTable | where Config == \"app.version\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -950,7 +950,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("edge case: cluster label with numeric value", func(t *testing.T) {
-		body := "MyTable | where Port == \"_cluster.port\" | count"
+		body := "MyTable | where Port == \"port\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{
@@ -991,7 +991,7 @@ func TestApplySubstitutions(t *testing.T) {
 	})
 
 	t.Run("edge case: cluster label with backslashes and quotes", func(t *testing.T) {
-		body := "MyTable | where Path == \"_cluster.path\" | count"
+		body := "MyTable | where Path == \"path\" | count"
 		startTime := "2024-01-01T00:00:00Z"
 		endTime := "2024-01-01T01:00:00Z"
 		clusterLabels := map[string]string{

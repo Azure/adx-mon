@@ -418,7 +418,7 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 
 	// Replace cluster label placeholders
 	for k, v := range clusterLabels {
-		placeholder := fmt.Sprintf("_cluster.%s", k)
+		placeholder := fmt.Sprintf("%s", k)
 		replacement := fmt.Sprintf("'%s'", v)
 		body = strings.ReplaceAll(body, placeholder, replacement)
 	}

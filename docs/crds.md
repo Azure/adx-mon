@@ -169,8 +169,8 @@ spec:
   body: |
     MyTable
     | where Timestamp between (_startTime .. _endTime)
-    | where Environment == "_cluster.environment"
-    | where Region == "_cluster.region" 
+    | where Environment == "_environment"
+    | where Region == "_region" 
     | summarize count() by bin(Timestamp, 1h)
   table: MySummaryTable
   interval: 1h
@@ -179,7 +179,7 @@ spec:
 **Key Fields:**
 - `database`: Target ADX database.
 - `name`: Logical name for the rule.
-- `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally use `_cluster.<key>` placeholders for environment-specific values.
+- `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally use `<key>` placeholders for environment-specific values.
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
 
@@ -188,7 +188,7 @@ spec:
 - `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`.
 
 **Optional Cluster Label Substitutions:**
-- `_cluster.<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.
+- `<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.
 
 **Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries. Use cluster label substitutions to create environment-agnostic rules that work across different deployments.
 
