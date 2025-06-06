@@ -246,7 +246,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 		msg := strings.Repeat("a", 300)
 		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, errors.New(msg)))
 		require.Equal(t, v1.Failed, fn.Status.Status)
-		require.Equal(t, strings.Repeat("a", 256)+"...", fn.Status.Error)
+		require.Equal(t, strings.Repeat("a", 256), fn.Status.Error)
 	})
 
 	t.Run("update status with kusto-http error", func(t *testing.T) {
@@ -271,7 +271,7 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 		funcErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 		require.NoError(t, task.updateKQLFunctionStatus(context.Background(), fn, v1.Failed, funcErr))
 		require.Equal(t, v1.Failed, fn.Status.Status)
-		require.Equal(t, strings.Repeat("a", 256)+"...", fn.Status.Error)
+		require.Equal(t, strings.Repeat("a", 256), fn.Status.Error)
 	})
 }
 
@@ -818,7 +818,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		condition = rule.GetCondition()
 		require.NotNil(t, condition, "Condition should be set")
 		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
-		require.Equal(t, strings.Repeat("a", 256)+"...", condition.Message, "Message should be truncated to 256 chars")
+		require.Equal(t, strings.Repeat("a", 256), condition.Message, "Message should be truncated to 256 chars")
 	})
 
 	t.Run("update status with kusto-http error", func(t *testing.T) {
@@ -862,7 +862,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		condition = rule.GetCondition()
 		require.NotNil(t, condition, "Condition should be set")
 		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
-		require.Equal(t, longMsg[:256]+"...", condition.Message, "Message should be truncated to 256 chars")
+		require.Equal(t, longMsg[:256], condition.Message, "Message should be truncated to 256 chars")
 	})
 
 	t.Run("update status without error", func(t *testing.T) {
