@@ -1,0 +1,308 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Name }}:collector
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/metrics
+      - nodes/proxy
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Name }}:collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Name }}:collector
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Name }}
+    namespace: {{ .Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Name }}-config
+  namespace: {{ .Namespace }}
+data:
+  config.toml: |
+    # Ingestor URL to send collected telemetry.
+    endpoint = '{{ .IngestorEndpoint }}'
+
+    # Region is a location identifier
+    region = '{{ .Region }}'
+
+    # Skip TLS verification.
+    insecure-skip-verify = true
+
+    # Address to listen on for endpoints.
+    listen-addr = ':8080'
+
+    # Maximum number of connections to accept.
+    max-connections = 100
+
+    # Maximum number of samples to send in a single batch.
+    max-batch-size = 10000
+
+    # Storage directory for the WAL.
+    storage-dir = '/mnt/data'
+
+    # Regexes of metrics to drop from all sources.
+    drop-metrics = []
+
+    # Disable metrics forwarding to endpoints.
+    disable-metrics-forwarding = false
+
+    # WAL flush interval in milliseconds.  For collector it's lowered to reduce CPU usage since
+    # fewer metrics are in flight.
+    wal-flush-interval-ms = 1000
+
+    lift-labels = [
+      { name = 'host' },
+      { name = 'cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    # Key/value pairs of labels to add to all metrics.
+    lift-resources = [
+      { name = 'host' },
+      { name = 'cluster' },
+      { name = 'adxmon_pod', column = 'Pod' },
+      { name = 'adxmon_namespace', column = 'Namespace' },
+      { name = 'adxmon_container', column = 'Container' },
+    ]
+
+    # Key/value pairs of labels to add to all metrics and logs.
+    [add-labels]
+      host = '$(HOSTNAME)'
+      cluster = 'default'
+
+    # Defines a prometheus scrape endpoint.
+    [prometheus-scrape]
+
+      # Database to store metrics in.
+      database = 'Metrics'
+
+      default-drop-metrics = false
+
+      # Defines a static scrape target.
+      static-scrape-target = [
+        # Scrape our own metrics
+        { host-regex = '.*', url = 'http://$(HOSTNAME):3100/metrics', namespace = '{{ .Namespace }}', pod = '{{ .Name }}', container = '{{ .Name }}' },
+
+        # Scrape cadvisor metrics
+        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/cadvisor', namespace = 'kube-system', pod = 'kubelet', container = 'cadvisor' },
+
+        # Scrape cadvisor metrics
+        { host-regex = '.*', url = 'https://$(HOSTNAME):10250/metrics/resource', namespace = 'kube-system', pod = 'kubelet', container = 'resource' },
+      ]
+
+      # Scrape interval in seconds.
+      scrape-interval = 30
+
+      # Scrape timeout in seconds.
+      scrape-timeout = 25
+
+      # Disable metrics forwarding to endpoints.
+      disable-metrics-forwarding = false
+
+      # Regexes of metrics to keep from scraping source.
+      keep-metrics = []
+
+      # Regexes of metrics to drop from scraping source.
+      drop-metrics = []
+
+    # Defines a prometheus remote write endpoint.
+    [[prometheus-remote-write]]
+
+      # Database to store metrics in.
+      database = 'Metrics'
+
+      # The path to listen on for prometheus remote write requests.  Defaults to /receive.
+      path = '/receive'
+
+      # Regexes of metrics to drop.
+      drop-metrics = []
+
+      # Disable metrics forwarding to endpoints.
+      disable-metrics-forwarding = false
+
+      # Key/value pairs of labels to add to this source.
+      [prometheus-remote-write.add-labels]
+
+    # Defines an OpenTelemetry log endpoint.
+    [otel-log]
+      # Attributes lifted from the Body and added to Attributes.
+      lift-attributes = ['kusto.database', 'kusto.table']
+
+    [[host-log]]
+      parsers = ['json']
+
+      journal-target = [
+        # matches are optional and are parsed like MATCHES in journalctl.
+        # If different fields are matched, only entries matching all terms are included.
+        # If the same fields are matched, entries matching any term are included.
+        # + can be added between to include a disjunction of terms.
+        # See examples under man 1 journalctl
+        { matches = [ '_SYSTEMD_UNIT=kubelet.service' ], database = 'Logs', table = 'Kubelet' }
+      ]
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+spec:
+  selector:
+    matchLabels:
+      adxmon: collector
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 30%
+  template:
+    metadata:
+      labels:
+        adxmon: collector
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "9091"
+        adx-mon/path: "/metrics"
+        adx-mon/log-destination: "Logs:Collector"
+        adx-mon/log-parsers: json
+    spec:
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      automountServiceAccountToken: true
+      serviceAccountName: {{ .Name }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+      containers:
+        - name: {{ .Name }}
+          image: "{{ .Image }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsGroup: 3000
+            runAsUser: 1000
+          command:
+            - /collector
+          args:
+            - "--config=/etc/config/config.toml"
+            - "--hostname=$(HOSTNAME)"
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              hostPort: 3100
+          env:
+            - name: LOG_LEVEL
+              value: INFO
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: "GODEBUG"
+              value: "http2client=0"
+          volumeMounts:
+            - mountPath: /etc/ssl/certs
+              name: ssl-certs
+              readOnly: true
+            - mountPath: /etc/pki/ca-trust/extracted
+              name: etc-pki-ca-certs
+              readOnly: true
+            - name: config-volume
+              mountPath: /etc/config
+            - name: storage
+              mountPath: /mnt/data
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: runlog
+              mountPath: /run/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: etcmachineid
+              mountPath: /etc/machine-id
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+            limits:
+              cpu: 500m
+              memory: 2000Mi
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+        - name: config-volume
+          configMap:
+            # Provide the name of the ConfigMap containing the files you want
+            # to add to the container
+            name: {{ .Name }}-config
+        - name: storage
+          hostPath:
+            path: /mnt/collector
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: runlog  # used for non-persistent storage mode of journalctl
+          hostPath:
+            path: /run/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: etcmachineid
+          hostPath:
+            path: /etc/machine-id
+            type: File

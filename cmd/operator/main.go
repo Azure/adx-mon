@@ -95,6 +95,14 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create alerter controller: %w", err)
 	}
 
+	cr := &operator.CollectorReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = cr.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create collector controller: %w", err)
+	}
+
 	// Start manager
 	go func() {
 		if err := mgr.Start(svcCtx); err != nil {
