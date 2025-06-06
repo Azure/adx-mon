@@ -324,6 +324,7 @@ func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
 
 	alerter := &adxmonv1.Alerter{
 		ObjectMeta: metav1.ObjectMeta{
@@ -429,4 +430,17 @@ func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
 		}
 	}
 	require.True(t, found, "Should have tmpfs volume for read-only filesystem")
+
+	// c0034 - Service account token mounting
+	require.NotNil(t, dep.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
+	require.True(t, *dep.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be true in deployment")
+
+	// Verify that service account has automountServiceAccountToken set to false
+	sa := &corev1.ServiceAccount{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "alerter",
+		Namespace: "default",
+	}, sa))
+	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
+	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
 }

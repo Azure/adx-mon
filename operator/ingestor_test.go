@@ -382,6 +382,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
 
 	ingestor := &adxmonv1.Ingestor{
 		ObjectMeta: metav1.ObjectMeta{
@@ -488,4 +489,17 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 		}
 	}
 	require.True(t, found, "Should have tmpfs volume for read-only filesystem")
+
+	// c0034 - Service account token mounting
+	require.NotNil(t, sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
+	require.True(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be true in statefulset")
+
+	// Verify that service account has automountServiceAccountToken set to false
+	sa := &corev1.ServiceAccount{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "ingestor",
+		Namespace: "default",
+	}, sa))
+	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
+	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
 }
