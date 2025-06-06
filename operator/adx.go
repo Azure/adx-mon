@@ -884,9 +884,6 @@ func applyDefaults(ctx context.Context, r *AdxReconciler, cluster *adxmonv1.ADXC
 	}
 
 	updated := false
-	if cluster.Spec.Endpoint != "" {
-		return nil // Skip clusters that already have endpoints
-	}
 
 	// Initialize provision and status if needed
 	if cluster.Spec.Provision == nil {
@@ -914,8 +911,8 @@ func applyDefaults(ctx context.Context, r *AdxReconciler, cluster *adxmonv1.ADXC
 		updated = true
 	}
 
-	// Get best available SKU if not specified
-	if cluster.Spec.Provision.SkuName == "" {
+	// Get best available SKU if not specified and Endpoint isn't already set, which means the cluster is already provisioned
+	if cluster.Spec.Provision.SkuName == "" && cluster.Spec.Endpoint == "" {
 		sku, tier, err := getBestAvailableSKU(ctx, cluster.Spec.Provision.SubscriptionId, cluster.Spec.Provision.Location, cred)
 		if err != nil {
 			return fmt.Errorf("failed to determine SKU: %w", err)
