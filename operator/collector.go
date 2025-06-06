@@ -191,7 +191,8 @@ func (r *CollectorReconciler) CreateCollector(ctx context.Context, collector *ad
 	tmplBytes, err := collectorManifestFS.ReadFile("manifests/collector.yaml")
 	if err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, collector, "TemplateError", "Failed to read collector template", metav1.ConditionFalse); err != nil {
+		logger.Errorf("Failed to read collector template for %s/%s: %v", collector.Namespace, collector.Name, err)
+		if err := r.setCondition(ctx, collector, "TemplateError", fmt.Sprintf("Failed to read collector template: %v", err), metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -199,7 +200,8 @@ func (r *CollectorReconciler) CreateCollector(ctx context.Context, collector *ad
 	tmpl, err := template.New("collector").Parse(string(tmplBytes))
 	if err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, collector, "TemplateError", "Failed to parse collector template", metav1.ConditionFalse); err != nil {
+		logger.Errorf("Failed to parse collector template for %s/%s: %v", collector.Namespace, collector.Name, err)
+		if err := r.setCondition(ctx, collector, "TemplateError", fmt.Sprintf("Failed to parse collector template: %v", err), metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -210,7 +212,8 @@ func (r *CollectorReconciler) CreateCollector(ctx context.Context, collector *ad
 	var rendered bytes.Buffer
 	if err := tmpl.Execute(&rendered, data); err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, collector, "TemplateError", "Failed to render collector template", metav1.ConditionFalse); err != nil {
+		logger.Errorf("Failed to render collector template for %s/%s: %v", collector.Namespace, collector.Name, err)
+		if err := r.setCondition(ctx, collector, "TemplateError", fmt.Sprintf("Failed to render collector template: %v", err), metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
