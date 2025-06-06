@@ -6,6 +6,12 @@ import (
 	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 )
 
+const (
+	// MaxErrorMessageLength defines the maximum length for error messages
+	// to prevent excessively long messages in status conditions
+	MaxErrorMessageLength = 256
+)
+
 // ParseError extracts a clean error message from Kusto HttpError objects
 // and truncates the message to a maximum length for consistent error handling.
 // This utility is used across different CRD types that interact with Kusto.
@@ -26,8 +32,8 @@ func ParseError(err error) string {
 		}
 	}
 
-	if len(errMsg) > 256 {
-		errMsg = errMsg[:256]
+	if len(errMsg) > MaxErrorMessageLength {
+		errMsg = errMsg[:MaxErrorMessageLength] + "..."
 	}
 	return errMsg
 }
