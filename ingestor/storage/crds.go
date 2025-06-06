@@ -134,18 +134,13 @@ func (c *crdHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, obj 
 		return errors.New("object does not implement ConditionedObject")
 	}
 
-	var (
-		status  = metav1.ConditionTrue
-		message = ""
-	)
-	if errStatus != nil {
-		status = metav1.ConditionFalse
-		message = kusto.ParseError(errStatus)
-	}
-
 	condition := metav1.Condition{
-		Status:  status,
-		Message: message,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+	}
+	if errStatus != nil {
+		condition.Status = metav1.ConditionFalse
+		condition.Message = kusto.ParseError(errStatus)
 	}
 
 	statusObj.SetCondition(condition)
