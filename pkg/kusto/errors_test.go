@@ -25,8 +25,8 @@ func TestParseError(t *testing.T) {
 		longMsg := strings.Repeat("a", 300)
 		err := &stringError{msg: longMsg}
 		result := ParseError(err)
-		require.Equal(t, longMsg[:256]+"...", result)
-		require.Len(t, result, 259) // 256 + 3 for "..."
+		require.Equal(t, longMsg[:256], result)
+		require.Len(t, result, 256)
 	})
 
 	t.Run("kusto http error extracts @message", func(t *testing.T) {
@@ -43,8 +43,8 @@ func TestParseError(t *testing.T) {
 		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
-		require.Equal(t, longMsg[:256]+"...", result)
-		require.Len(t, result, 259) // 256 + 3 for "..."
+		require.Equal(t, longMsg[:256], result)
+		require.Len(t, result, 256)
 	})
 }
 

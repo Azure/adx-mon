@@ -33,7 +33,7 @@ func ParseError(err error) string {
 	}
 
 	if len(errMsg) > MaxErrorMessageLength {
-		errMsg = errMsg[:MaxErrorMessageLength] + "..."
+		errMsg = errMsg[:MaxErrorMessageLength]
 	}
 	return errMsg
 }
