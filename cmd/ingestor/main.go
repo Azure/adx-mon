@@ -261,6 +261,15 @@ func realMain(ctx *cli.Context) error {
 		logsKustoCli = append(logsKustoCli, cli)
 	}
 
+	clusterLabels := make(map[string]string)
+	for _, label := range ctx.StringSlice("cluster-labels") {
+		split := strings.SplitN(label, "=", 2)
+		if len(split) != 2 {
+			logger.Fatalf("Invalid cluster label format: %s, expected <key>=<value>", label)
+		}
+		clusterLabels[split[0]] = split[1]
+	}
+
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:                 k8scli,
 		K8sCtrlCli:             ctrlCli,
@@ -288,6 +297,7 @@ func realMain(ctx *cli.Context) error {
 		InsecureSkipVerify:     insecureSkipVerify,
 		DropFilePrefixes:       dropPrefixes,
 		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
+		ClusterLabels:          clusterLabels,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
