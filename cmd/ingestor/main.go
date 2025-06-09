@@ -51,6 +51,7 @@ func main() {
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
 			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
 			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
+			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish ingestor clusters. Format: <key>=<value>"},
 			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
 			&cli.UintFlag{Name: "max-connections", Usage: "Max number of concurrent connection allowed.  0 for no limit", Value: 1000},
@@ -287,6 +288,7 @@ func realMain(ctx *cli.Context) error {
 		InsecureSkipVerify:     insecureSkipVerify,
 		DropFilePrefixes:       dropPrefixes,
 		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
+		ClusterLabels:          makeClusterLabels(ctx),
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
@@ -498,4 +500,59 @@ func (a *writerAdapter) Write(data []byte) (int, error) {
 		return len(data), nil
 	}
 	return a.Writer.Write(data)
+}
+
+// makeClusterLabels processes the --cluster-labels CLI arguments into a map for SummaryRule templating.
+//
+// This function is critical for SummaryRule template substitution. It ensures that all cluster label
+// keys have an underscore prefix, which matches the placeholder format expected in SummaryRule bodies.
+//
+// CLI Input Format: --cluster-labels=<key>=<value>
+// Examples:
+//
+//	--cluster-labels=environment=production --cluster-labels=region=eastus
+//	--cluster-labels=_datacenter=west --cluster-labels=cluster_id=prod-01
+//
+// Template Substitution Process:
+// 1. Keys are prefixed with "_" if they don't already have one
+// 2. The resulting map is used by applySubstitutions() in ingestor/adx/tasks.go
+// 3. In SummaryRule bodies, placeholders like "_region" get replaced with quoted values like "eastus"
+//
+// Example transformation:
+//
+//	Input:  --cluster-labels=region=eastus --cluster-labels=environment=production
+//	Output: map[string]string{"_region": "eastus", "_environment": "production"}
+//
+// SummaryRule usage example:
+//
+//	Body: | where Region == "_region" and Environment == "_environment"
+//	Result: | where Region == "eastus" and Environment == "production"
+//
+// SECURITY NOTE: This templating directly modifies KQL queries. Incorrect key/value handling
+// could lead to query injection or unintended data access. The underscore prefix ensures
+// template keys are clearly distinguished from regular KQL syntax.
+func makeClusterLabels(ctx *cli.Context) map[string]string {
+	clusterLabels := make(map[string]string)
+	for _, label := range ctx.StringSlice("cluster-labels") {
+		split := strings.SplitN(label, "=", 2)
+		if len(split) != 2 {
+			logger.Fatalf("Invalid cluster label format: %s, expected <key>=<value>", label)
+		}
+
+		key := split[0]
+		value := split[1]
+
+		// CRITICAL: Add underscore prefix to KEY (not value) if it doesn't already exist.
+		// This ensures template placeholders in SummaryRule bodies match the map keys.
+		// Example: "region" becomes "_region" to match SummaryRule placeholder "_region"
+		if !strings.HasPrefix(key, "_") {
+			key = "_" + key
+		}
+
+		// Store the key-value pair for template substitution
+		// Key: template placeholder (e.g., "_region")
+		// Value: replacement text (e.g., "eastus")
+		clusterLabels[key] = value
+	}
+	return clusterLabels
 }
