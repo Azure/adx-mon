@@ -28,8 +28,8 @@ import (
 
 // mockCRDHandler implements storage.CRDHandler interface for testing
 type mockCRDHandler struct {
-	listResponse  client.ObjectList
-	listError     error
+	listResponse   client.ObjectList
+	listError      error
 	updateStatusFn func(context.Context, client.Object, error) error
 	updatedObjects []client.Object
 }
@@ -38,7 +38,7 @@ func (m *mockCRDHandler) List(ctx context.Context, list client.ObjectList, filte
 	if m.listError != nil {
 		return m.listError
 	}
-	
+
 	// Copy the response items to the provided list
 	if m.listResponse != nil {
 		switch list := list.(type) {
@@ -48,7 +48,7 @@ func (m *mockCRDHandler) List(ctx context.Context, list client.ObjectList, filte
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -66,6 +66,7 @@ type TestStatementExecutor struct {
 	endpoint    string
 	stmts       []string
 	nextMgmtErr error
+	operationID string
 }
 
 func (t *TestStatementExecutor) Database() string {
@@ -82,6 +83,15 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		ret := t.nextMgmtErr
 		t.nextMgmtErr = nil
 		return nil, ret
+	}
+
+	// For ClusterLabels tests, we need to return a mock result that simulates an operation ID
+	// Since we're mainly testing the query transformation, we can return a mock iterator
+	// that provides an operation ID when needed
+	if t.operationID != "" {
+		// This is a simplified mock - in real usage, the RowIterator would contain
+		// the operation ID from Kusto. For our tests, we'll work around this limitation.
+		return &kusto.RowIterator{}, nil
 	}
 
 	return nil, nil
@@ -502,7 +512,7 @@ func TestAsyncOperationRemoval(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
-	
+
 	// Create a summary rule with an async operation
 	ruleName := "test-rule"
 	operationId := "op-1"
@@ -517,53 +527,58 @@ func TestAsyncOperationRemoval(t *testing.T) {
 			Body:     "TestBody",
 		},
 	}
-	
+
 	// Add an async operation to the rule
 	rule.SetAsyncOperation(v1.AsyncOperation{
 		OperationId: operationId,
 		StartTime:   "2025-05-22T19:20:00Z",
 		EndTime:     "2025-05-22T19:30:00Z",
 	})
-	
+
 	// Create a list to be returned by the mock handler
 	ruleList := &v1.SummaryRuleList{
 		Items: []v1.SummaryRule{*rule},
 	}
-	
+
 	// Create a mock handler that will return our rule and track updates
 	mockHandler := &mockCRDHandler{
-		listResponse: ruleList,
+		listResponse:   ruleList,
 		updatedObjects: []client.Object{},
 	}
-	
+
 	// Create the task with our mocks
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
 	}
-	
+
 	// Set the GetOperations function to return an empty list
 	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
 		return []AsyncOperationStatus{}, nil
 	}
-	
+
 	// Mock the SubmitRule function to avoid actual Kusto operations
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		return "new-operation-id", nil
 	}
-	
+
 	// Run the task
 	err := task.Run(context.Background())
 	require.NoError(t, err)
-	
+
 	// Check that the rule was updated
 	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
-	
-	// Check that the async operation was removed from the rule
+
+	// Check that the old async operation was removed but a new one was created
 	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 	require.True(t, ok, "Updated object should be a SummaryRule")
 	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
-	require.Empty(t, updatedRule.GetAsyncOperations(), "Async operations should be empty")
+
+	// Should have exactly 1 operation (the new one), not 0
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
+	require.Equal(t, "new-operation-id", asyncOps[0].OperationId, "Should be the new operation")
+	require.NotEqual(t, operationId, asyncOps[0].OperationId, "Old operation should be gone")
 }
 
 func TestSummaryRules(t *testing.T) {
@@ -613,7 +628,7 @@ func TestSummaryRules(t *testing.T) {
 	}
 
 	store := storage.NewCRDHandler(ctrlCli, nil)
-	task := NewSummaryRuleTask(store, executor)
+	task := NewSummaryRuleTask(store, executor, nil)
 
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
@@ -696,3 +711,297 @@ var severalFunctions = `// function a
 .create-or-alter function b() {
   print "b"
 }`
+
+func TestApplySubstitutions(t *testing.T) {
+	t.Run("replaces time placeholders correctly", func(t *testing.T) {
+		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("replaces cluster label placeholders correctly", func(t *testing.T) {
+		body := "MyTable | where Environment == \"environment\" | where Region == \"region\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"environment": "production",
+			"region":      "eastus",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Environment == \"'production'\" | where Region == \"'eastus'\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("replaces both time and cluster placeholders", func(t *testing.T) {
+		body := `MyTable 
+		| where Environment == "environment"
+		| where Timestamp between (_startTime .. _endTime)
+		| summarize count() by bin(Timestamp, 1h)`
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"environment": "staging",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := `MyTable 
+		| where Environment == "'staging'"
+		| where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z))
+		| summarize count() by bin(Timestamp, 1h)`
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles multiple cluster labels", func(t *testing.T) {
+		body := "MyTable | where Env == \"env\" | where DC == \"datacenter\" | where Team == \"team\""
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"env":        "prod",
+			"datacenter": "us-west-2",
+			"team":       "platform",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Env == \"'prod'\" | where DC == \"'us-west-2'\" | where Team == \"'platform'\""
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles empty cluster labels", func(t *testing.T) {
+		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles nil cluster labels", func(t *testing.T) {
+		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		var clusterLabels map[string]string
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("leaves unreferenced cluster labels unchanged", func(t *testing.T) {
+		body := "MyTable | where Environment == \"environment\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"environment": "production",
+			"region":      "eastus",         // Not referenced in body
+			"team":        "infrastructure", // Not referenced in body
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Environment == \"'production'\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles cluster labels with special characters", func(t *testing.T) {
+		body := "MyTable | where Notes == \"notes\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"notes": "test-env with spaces & symbols!",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Notes == \"'test-env with spaces & symbols!'\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles multiple occurrences of same placeholder", func(t *testing.T) {
+		body := `MyTable 
+		| where StartTime >= _startTime 
+		| where EndTime <= _endTime
+		| where ProcessedTime between (_startTime .. _endTime)
+		| where Environment == "env"`
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"env": "test",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := `MyTable 
+		| where StartTime >= datetime(2024-01-01T00:00:00Z) 
+		| where EndTime <= datetime(2024-01-01T01:00:00Z)
+		| where ProcessedTime between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z))
+		| where Environment == "'test'"`
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles missing cluster label placeholders gracefully", func(t *testing.T) {
+		body := "MyTable | where Environment == \"environment\" | where Region == \"missing\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"environment": "production",
+			// "missing" key is not provided
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		// Should replace the existing key but leave the missing one unchanged
+		expected := "MyTable | where Environment == \"'production'\" | where Region == \"missing\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles cluster labels with single quotes", func(t *testing.T) {
+		body := "MyTable | where Name == \"name\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"name": "John's cluster",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		// Should wrap the value in single quotes as implemented
+		expected := "MyTable | where Name == \"'John's cluster'\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("handles empty string values", func(t *testing.T) {
+		body := "MyTable | where Environment == \"environment\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"environment": "",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Environment == \"''\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("realistic KQL query example", func(t *testing.T) {
+		body := `let metrics = MyMetricsTable
+		| where Timestamp between (_startTime .. _endTime)
+		| where Environment == "environment"
+		| where Region == "region";
+		let logs = MyLogsTable  
+		| where Timestamp between (_startTime .. _endTime)
+		| where Environment == "environment"
+		| where Level == "ERROR";
+		metrics
+		| join kind=leftouter logs on Environment
+		| summarize MetricCount = count(), ErrorCount = countif(Level == "ERROR")
+		  by bin(Timestamp, 5m), Environment`
+
+		startTime := "2024-01-01T00:00:00.000Z"
+		endTime := "2024-01-01T01:00:00.000Z"
+		clusterLabels := map[string]string{
+			"environment": "production",
+			"region":      "us-east-1",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := `let metrics = MyMetricsTable
+		| where Timestamp between (datetime(2024-01-01T00:00:00.000Z) .. datetime(2024-01-01T01:00:00.000Z))
+		| where Environment == "'production'"
+		| where Region == "'us-east-1'";
+		let logs = MyLogsTable  
+		| where Timestamp between (datetime(2024-01-01T00:00:00.000Z) .. datetime(2024-01-01T01:00:00.000Z))
+		| where Environment == "'production'"
+		| where Level == "ERROR";
+		metrics
+		| join kind=leftouter logs on Environment
+		| summarize MetricCount = count(), ErrorCount = countif(Level == "ERROR")
+		  by bin(Timestamp, 5m), Environment`
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("edge case: cluster label key with dots", func(t *testing.T) {
+		body := "MyTable | where Config == \"app.version\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"app.version": "v1.2.3",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Config == \"'v1.2.3'\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("edge case: cluster label with numeric value", func(t *testing.T) {
+		body := "MyTable | where Port == \"port\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"port": "8080",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where Port == \"'8080'\" | count"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("edge case: time placeholders with different formats", func(t *testing.T) {
+		body := "MyTable | where CreatedAt > _startTime and UpdatedAt < _endTime"
+		startTime := "2024-12-31T23:59:59.999Z"
+		endTime := "2025-01-01T00:00:00.000Z"
+		clusterLabels := map[string]string{}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		expected := "MyTable | where CreatedAt > datetime(2024-12-31T23:59:59.999Z) and UpdatedAt < datetime(2025-01-01T00:00:00.000Z)"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("edge case: no substitutions needed", func(t *testing.T) {
+		body := "MyTable | where Environment == 'production' | summarize count()"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"environment": "staging",
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		// Should remain unchanged as no placeholders are present
+		expected := "MyTable | where Environment == 'production' | summarize count()"
+		require.Equal(t, expected, result)
+	})
+
+	t.Run("edge case: cluster label with backslashes and quotes", func(t *testing.T) {
+		body := "MyTable | where Path == \"path\" | count"
+		startTime := "2024-01-01T00:00:00Z"
+		endTime := "2024-01-01T01:00:00Z"
+		clusterLabels := map[string]string{
+			"path": `C:\Program Files\App's "Directory"`,
+		}
+
+		result := applySubstitutions(body, startTime, endTime, clusterLabels)
+
+		// The current implementation simply wraps in single quotes
+		expected := `MyTable | where Path == "'C:\Program Files\App's "Directory"'" | count`
+		require.Equal(t, expected, result)
+	})
+}
