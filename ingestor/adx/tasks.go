@@ -2,7 +2,6 @@ package adx
 
 import (
 	"context"
-	ERRS "errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,6 +14,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
@@ -184,22 +184,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
-		errMsg := err.Error()
-
-		var kustoerr *errors.HttpError
-		if ERRS.As(err, &kustoerr) {
-			decoded := kustoerr.UnmarshalREST()
-			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
-				if errMsgVal, ok := errMap["@message"].(string); ok {
-					errMsg = errMsgVal
-				}
-			}
-		}
-
-		if len(errMsg) > 256 {
-			errMsg = errMsg[:256]
-		}
-		fn.Status.Error = errMsg
+		fn.Status.Error = kustoutil.ParseError(err)
 	}
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
@@ -318,6 +303,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			continue
 		}
 
+		// Track if there was a submission error for this rule
+		var submissionError error
+
 		// Get the current condition of the rule
 		cnd := rule.GetCondition()
 		if cnd == nil {
@@ -346,9 +334,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			if err != nil {
-				t.store.UpdateStatus(ctx, &rule, err)
+				submissionError = err
+				t.updateSummaryRuleStatus(ctx, &rule, err)
 			} else {
-
 				asyncOp.OperationId = operationId
 				rule.SetAsyncOperation(asyncOp)
 			}
@@ -401,9 +389,12 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := t.store.UpdateStatus(ctx, &rule, nil); err != nil {
-			logger.Errorf("Failed to update summary rule status: %v", err)
-			// Not a lot we can do here, we'll end up just retrying next interval.
+		// Only update status to success if there was no submission error
+		if submissionError == nil {
+			if err := t.updateSummaryRuleStatus(ctx, &rule, nil); err != nil {
+				logger.Errorf("Failed to update summary rule status: %v", err)
+				// Not a lot we can do here, we'll end up just retrying next interval.
+			}
 		}
 	}
 
@@ -501,6 +492,11 @@ func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
 	}
 
 	return "", nil
+}
+
+// updateSummaryRuleStatus updates the status of a SummaryRule with proper Kusto error parsing
+func (t *SummaryRuleTask) updateSummaryRuleStatus(ctx context.Context, rule *v1.SummaryRule, err error) error {
+	return t.store.UpdateStatusWithKustoErrorParsing(ctx, rule, err)
 }
 
 type AsyncOperationStatus struct {

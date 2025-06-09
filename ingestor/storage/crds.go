@@ -7,6 +7,7 @@ import (
 	"reflect"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/scheduler"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +33,7 @@ func FilterCompleted(obj client.Object) bool {
 type CRDHandler interface {
 	List(ctx context.Context, list client.ObjectList, filters ...ListFilterFunc) error
 	UpdateStatus(ctx context.Context, obj client.Object, errStatus error) error
+	UpdateStatusWithKustoErrorParsing(ctx context.Context, obj client.Object, errStatus error) error
 }
 
 type crdHandler struct {
@@ -111,6 +113,34 @@ func (c *crdHandler) UpdateStatus(ctx context.Context, obj client.Object, errSta
 	condition := metav1.Condition{
 		Status:  status,
 		Message: message,
+	}
+
+	statusObj.SetCondition(condition)
+
+	if err := c.Client.Status().Update(ctx, obj); err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	return nil
+}
+
+func (c *crdHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, obj client.Object, errStatus error) error {
+	if c.Client == nil {
+		return errors.New("no client provided")
+	}
+
+	statusObj, ok := obj.(adxmonv1.ConditionedObject)
+	if !ok {
+		return errors.New("object does not implement ConditionedObject")
+	}
+
+	condition := metav1.Condition{
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+	}
+	if errStatus != nil {
+		condition.Status = metav1.ConditionFalse
+		condition.Message = kustoutil.ParseError(errStatus)
 	}
 
 	statusObj.SetCondition(condition)
