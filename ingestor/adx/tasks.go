@@ -2,7 +2,6 @@ package adx
 
 import (
 	"context"
-	ERRS "errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,6 +14,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
@@ -184,22 +184,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
-		errMsg := err.Error()
-
-		var kustoerr *errors.HttpError
-		if ERRS.As(err, &kustoerr) {
-			decoded := kustoerr.UnmarshalREST()
-			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
-				if errMsgVal, ok := errMap["@message"].(string); ok {
-					errMsg = errMsgVal
-				}
-			}
-		}
-
-		if len(errMsg) > 256 {
-			errMsg = errMsg[:256]
-		}
-		fn.Status.Error = errMsg
+		fn.Status.Error = kustoutil.ParseError(err)
 	}
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
@@ -257,12 +242,14 @@ type SummaryRuleTask struct {
 	kustoCli      StatementExecutor
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
+	ClusterLabels map[string]string
 }
 
-func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor) *SummaryRuleTask {
+func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
 	task := &SummaryRuleTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		kustoCli:      kustoCli,
+		ClusterLabels: clusterLabels,
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
@@ -316,6 +303,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			continue
 		}
 
+		// Track if there was a submission error for this rule
+		var submissionError error
+
 		// Get the current condition of the rule
 		cnd := rule.GetCondition()
 		if cnd == nil {
@@ -344,9 +334,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			if err != nil {
-				t.store.UpdateStatus(ctx, &rule, err)
+				submissionError = err
+				t.updateSummaryRuleStatus(ctx, &rule, err)
 			} else {
-
 				asyncOp.OperationId = operationId
 				rule.SetAsyncOperation(asyncOp)
 			}
@@ -376,7 +366,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					// Operation is still in progress, so we can skip it
 				}
 			}
-			
+
 			// If the operation wasn't found in the Kusto operations list after checking all operations,
 			// it might have fallen out of the backlog window OR completed very quickly.
 			// Only remove it if it's older than 25 hours (giving some buffer beyond Kusto's 24h window)
@@ -399,22 +389,41 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
-		if err := t.store.UpdateStatus(ctx, &rule, nil); err != nil {
-			logger.Errorf("Failed to update summary rule status: %v", err)
-			// Not a lot we can do here, we'll end up just retrying next interval.
+		// Only update status to success if there was no submission error
+		if submissionError == nil {
+			if err := t.updateSummaryRuleStatus(ctx, &rule, nil); err != nil {
+				logger.Errorf("Failed to update summary rule status: %v", err)
+				// Not a lot we can do here, we'll end up just retrying next interval.
+			}
 		}
 	}
 
 	return nil
 }
 
+// applySubstitutions applies time and cluster label substitutions to a KQL query body
+func applySubstitutions(body, startTime, endTime string, clusterLabels map[string]string) string {
+	// Replace time placeholders
+	body = strings.ReplaceAll(body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
+	body = strings.ReplaceAll(body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+
+	// Replace cluster label placeholders
+	for k, v := range clusterLabels {
+		placeholder := fmt.Sprintf("%s", k)
+		replacement := fmt.Sprintf("'%s'", v)
+		body = strings.ReplaceAll(body, placeholder, replacement)
+	}
+
+	return body
+}
+
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
-	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
-	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+	body := applySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
+
 	// Execute asynchronously
-	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(rule.Spec.Body)
+	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
 	res, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
@@ -483,6 +492,11 @@ func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
 	}
 
 	return "", nil
+}
+
+// updateSummaryRuleStatus updates the status of a SummaryRule with proper Kusto error parsing
+func (t *SummaryRuleTask) updateSummaryRuleStatus(ctx context.Context, rule *v1.SummaryRule, err error) error {
+	return t.store.UpdateStatusWithKustoErrorParsing(ctx, rule, err)
 }
 
 type AsyncOperationStatus struct {
