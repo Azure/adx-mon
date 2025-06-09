@@ -257,12 +257,14 @@ type SummaryRuleTask struct {
 	kustoCli      StatementExecutor
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
+	ClusterLabels map[string]string
 }
 
-func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor) *SummaryRuleTask {
+func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
 	task := &SummaryRuleTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		kustoCli:      kustoCli,
+		ClusterLabels: clusterLabels,
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
@@ -376,7 +378,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					// Operation is still in progress, so we can skip it
 				}
 			}
-			
+
 			// If the operation wasn't found in the Kusto operations list after checking all operations,
 			// it might have fallen out of the backlog window OR completed very quickly.
 			// Only remove it if it's older than 25 hours (giving some buffer beyond Kusto's 24h window)
@@ -408,13 +410,29 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	return nil
 }
 
+// applySubstitutions applies time and cluster label substitutions to a KQL query body
+func applySubstitutions(body, startTime, endTime string, clusterLabels map[string]string) string {
+	// Replace time placeholders
+	body = strings.ReplaceAll(body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
+	body = strings.ReplaceAll(body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+
+	// Replace cluster label placeholders
+	for k, v := range clusterLabels {
+		placeholder := fmt.Sprintf("%s", k)
+		replacement := fmt.Sprintf("'%s'", v)
+		body = strings.ReplaceAll(body, placeholder, replacement)
+	}
+
+	return body
+}
+
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
-	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
-	rule.Spec.Body = strings.ReplaceAll(rule.Spec.Body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+	body := applySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
+
 	// Execute asynchronously
-	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(rule.Spec.Body)
+	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
 	res, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
