@@ -713,16 +713,22 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
 
-	// Step 2: Query heartbeat table
+	// Step 2: Ensure heartbeat table exists
+	_, err = ensureHeartbeatTable(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to ensure heartbeat table: %w", err)
+	}
+
+	// Step 3: Query heartbeat table
 	rows, err := queryHeartbeatTable(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to query heartbeat table: %w", err)
 	}
 
-	// Step 3: Parse result
+	// Step 4: Parse result
 	schemaByEndpoint, _ := parseHeartbeatRows(rows)
 
-	// Step 4: Unique list of databases
+	// Step 5: Unique list of databases
 	dbSet := extractDatabasesFromSchemas(schemaByEndpoint)
 	var dbSpecs []adxmonv1.ADXClusterDatabaseSpec
 	for db := range dbSet {
@@ -738,13 +744,13 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
-	// Step 5: Map tables to endpoints
+	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
-	// Step 6: Generate function definitions
+	// Step 7: Generate function definitions
 	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
 
-	// Step 7/8: For each database, split scripts and execute
+	// Step 8/9: For each database, split scripts and execute
 	const maxScriptSize = 1024 * 1024 // 1MB
 	for db, funcs := range funcsByDB {
 		scripts := splitKustoScripts(funcs, maxScriptSize)
