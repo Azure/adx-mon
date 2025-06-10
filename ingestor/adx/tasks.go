@@ -316,21 +316,45 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
+		// Calculate the next execution window based on the last successful execution
+		var windowStartTime, windowEndTime time.Time
+		
+		lastSuccessfulEndTime := rule.GetLastSuccessfulExecutionTime()
+		if lastSuccessfulEndTime == nil {
+			// First execution: start from current time aligned to interval boundary, going back one interval
+			now := time.Now().UTC()
+			// Align to minute boundary for consistency
+			alignedNow := now.Truncate(time.Minute)
+			windowEndTime = alignedNow
+			windowStartTime = windowEndTime.Add(-rule.Spec.Interval.Duration)
+		} else {
+			// Subsequent executions: start from where the last successful execution ended
+			windowStartTime = *lastSuccessfulEndTime
+			windowEndTime = windowStartTime.Add(rule.Spec.Interval.Duration)
+			
+			// Ensure we don't execute future windows
+			now := time.Now().UTC().Truncate(time.Minute)
+			if windowEndTime.After(now) {
+				windowEndTime = now
+			}
+		}
+
 		// Determine if the rule should be executed based on several criteria:
 		// 1. The rule is being deleted
 		// 2. Previous submission failed
 		// 3. Rule has been updated (new generation)
-		// 4. It's time for the next interval execution
+		// 4. It's time for the next interval execution (based on actual time windows)
 		shouldSubmitRule := rule.DeletionTimestamp != nil || // Rule is being deleted
 			cnd.Status == metav1.ConditionFalse || // Submission failed, so no async operation was created for this interval
 			cnd.ObservedGeneration != rule.GetGeneration() || // A new version of this CRD was created
-			time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration // It's time to execute for a new interval
+			(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= rule.Spec.Interval.Duration) || // Time for next interval
+			(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration) // First execution timing
 
 		if shouldSubmitRule {
-			// Prepare a new async operation with time range from last execution to now
+			// Prepare a new async operation with calculated time range
 			asyncOp := v1.AsyncOperation{
-				StartTime: cnd.LastTransitionTime.UTC().Truncate(time.Minute).Format(time.RFC3339Nano),
-				EndTime:   time.Now().UTC().Truncate(time.Minute).Format(time.RFC3339Nano),
+				StartTime: windowStartTime.Format(time.RFC3339Nano),
+				EndTime:   windowEndTime.Format(time.RFC3339Nano),
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			if err != nil {
@@ -354,6 +378,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					foundOperations[op.OperationId] = true
 
 					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
+						// Check if the operation completed successfully
+						if kustoOp.State == string(KustoAsyncOperationStateCompleted) {
+							// Operation completed successfully - update the last successful execution time
+							endTime, err := time.Parse(time.RFC3339Nano, op.EndTime)
+							if err == nil {
+								rule.SetLastSuccessfulExecutionTime(endTime)
+							}
+						}
 						// We're done polling this async operation, so we can remove it from the list
 						rule.RemoveAsyncOperation(kustoOp.OperationId)
 					}
