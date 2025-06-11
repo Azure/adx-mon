@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -320,7 +322,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		// Calculate the next execution window based on the last successful execution
 		var windowStartTime, windowEndTime time.Time
-		
+
 		lastSuccessfulEndTime := rule.GetLastSuccessfulExecutionTime()
 		if lastSuccessfulEndTime == nil {
 			// First execution: start from current time aligned to interval boundary, going back one interval
@@ -333,7 +335,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			// Subsequent executions: start from where the last successful execution ended
 			windowStartTime = *lastSuccessfulEndTime
 			windowEndTime = windowStartTime.Add(rule.Spec.Interval.Duration)
-			
+
 			// Ensure we don't execute future windows
 			now := time.Now().UTC().Truncate(time.Minute)
 			if windowEndTime.After(now) {
@@ -371,6 +373,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Process any outstanding async operations for this rule
 		operations := rule.GetAsyncOperations()
 		foundOperations := make(map[string]bool)
+		hasFailedOperations := false
 
 		for _, op := range operations {
 			found := false
@@ -386,6 +389,13 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 							endTime, err := time.Parse(time.RFC3339Nano, op.EndTime)
 							if err == nil {
 								rule.SetLastSuccessfulExecutionTime(endTime)
+							}
+						} else if kustoOp.State == string(KustoAsyncOperationStateFailed) {
+							// Operation failed - mark the rule as failed
+							hasFailedOperations = true
+							logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+							if err := t.updateSummaryRuleStatus(ctx, &rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
+								logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
 							}
 						}
 						// We're done polling this async operation, so we can remove it from the list
@@ -423,8 +433,8 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
-		// Only update status to success if there was no submission error
-		if submissionError == nil {
+		// Only update status to success if there was no submission error and no failed operations
+		if submissionError == nil && !hasFailedOperations {
 			if err := t.updateSummaryRuleStatus(ctx, &rule, nil); err != nil {
 				logger.Errorf("Failed to update summary rule status: %v", err)
 				// Not a lot we can do here, we'll end up just retrying next interval.
@@ -437,18 +447,34 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 // applySubstitutions applies time and cluster label substitutions to a KQL query body
 func applySubstitutions(body, startTime, endTime string, clusterLabels map[string]string) string {
-	// Replace time placeholders
-	body = strings.ReplaceAll(body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
-	body = strings.ReplaceAll(body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+	// Build the wrapped query with let statements, with direct value substitution
+	var letStatements []string
 
-	// Replace cluster label placeholders
-	for k, v := range clusterLabels {
-		placeholder := fmt.Sprintf("%s", k)
-		replacement := fmt.Sprintf("'%s'", v)
-		body = strings.ReplaceAll(body, placeholder, replacement)
+	// Add time parameter definitions with direct datetime substitution
+	letStatements = append(letStatements, fmt.Sprintf("let _startTime=datetime(%s);", startTime))
+	letStatements = append(letStatements, fmt.Sprintf("let _endTime=datetime(%s);", endTime))
+
+	// Add cluster label parameter definitions with direct value substitution
+	// Sort keys to ensure deterministic output
+	var keys []string
+	for k := range clusterLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		v := clusterLabels[k]
+		// Escape any double quotes in the value
+		escapedValue := strconv.Quote(v)
+		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", k, escapedValue))
 	}
 
-	return body
+	// Construct the full query with let statements
+	query := fmt.Sprintf("%s\n%s",
+		strings.Join(letStatements, "\n"),
+		strings.TrimSpace(body))
+
+	return query
 }
 
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {

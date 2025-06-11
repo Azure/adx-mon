@@ -29,6 +29,15 @@ jobs:
     - name: Install dependencies
       run: sudo apt install -y libsystemd-dev # for collector journal input
 
+    - name: Check gofmt
+      run: |
+        unformatted=$(find . -type d -name vendor -prune -o -type f -name '*.go' -print0 | xargs -0 gofmt -l)
+        if [ -n "$unformatted" ]; then
+          echo "The following files are not gofmt'd:"
+          echo "$unformatted"
+          exit 1
+        fi
+
     - name: Build
       run: go build -mod=vendor -v ./...
 
