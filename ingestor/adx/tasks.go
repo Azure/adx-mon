@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -451,7 +453,15 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 	letStatements = append(letStatements, fmt.Sprintf("let _endTime=datetime(%s);", endTime))
 
 	// Add cluster label parameter definitions with direct value substitution
-	for k, v := range clusterLabels {
+	// Sort keys to ensure deterministic output
+	var keys []string
+	for k := range clusterLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		v := clusterLabels[k]
 		// Escape any double quotes in the value
 		escapedValue := strconv.Quote(v)
 		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", k, escapedValue))

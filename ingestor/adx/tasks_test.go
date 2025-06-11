@@ -1069,8 +1069,8 @@ T
 			},
 			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
 let _endTime=datetime(2024-01-01T01:00:00Z);
-let _region="eastus";
 let _environment="production";
+let _region="eastus";
 T
 | where Timestamp between( _startTime .. _endTime )
 | where Region == _region
