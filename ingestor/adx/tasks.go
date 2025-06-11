@@ -318,7 +318,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		// Calculate the next execution window based on the last successful execution
 		var windowStartTime, windowEndTime time.Time
-		
+
 		lastSuccessfulEndTime := rule.GetLastSuccessfulExecutionTime()
 		if lastSuccessfulEndTime == nil {
 			// First execution: start from current time aligned to interval boundary, going back one interval
@@ -331,7 +331,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			// Subsequent executions: start from where the last successful execution ended
 			windowStartTime = *lastSuccessfulEndTime
 			windowEndTime = windowStartTime.Add(rule.Spec.Interval.Duration)
-			
+
 			// Ensure we don't execute future windows
 			now := time.Now().UTC().Truncate(time.Minute)
 			if windowEndTime.After(now) {
@@ -369,6 +369,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Process any outstanding async operations for this rule
 		operations := rule.GetAsyncOperations()
 		foundOperations := make(map[string]bool)
+		hasFailedOperations := false
 
 		for _, op := range operations {
 			found := false
@@ -384,6 +385,13 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 							endTime, err := time.Parse(time.RFC3339Nano, op.EndTime)
 							if err == nil {
 								rule.SetLastSuccessfulExecutionTime(endTime)
+							}
+						} else if kustoOp.State == string(KustoAsyncOperationStateFailed) {
+							// Operation failed - mark the rule as failed
+							hasFailedOperations = true
+							logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+							if err := t.updateSummaryRuleStatus(ctx, &rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
+								logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
 							}
 						}
 						// We're done polling this async operation, so we can remove it from the list
@@ -421,8 +429,8 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
-		// Only update status to success if there was no submission error
-		if submissionError == nil {
+		// Only update status to success if there was no submission error and no failed operations
+		if submissionError == nil && !hasFailedOperations {
 			if err := t.updateSummaryRuleStatus(ctx, &rule, nil); err != nil {
 				logger.Errorf("Failed to update summary rule status: %v", err)
 				// Not a lot we can do here, we'll end up just retrying next interval.
