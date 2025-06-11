@@ -453,8 +453,8 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 	// Add cluster label parameter definitions with direct value substitution
 	for k, v := range clusterLabels {
 		// Escape any double quotes in the value
-		escapedValue := strings.ReplaceAll(v, "\"", "\\\"")
-		letStatements = append(letStatements, fmt.Sprintf("let %s=\"%s\";", k, escapedValue))
+		escapedValue := strconv.Quote(v)
+		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", k, escapedValue))
 	}
 
 	// Construct the full query with let statements
