@@ -782,6 +782,328 @@ func TestAsyncOperationRemoval(t *testing.T) {
 	require.NotEqual(t, operationId, asyncOps[0].OperationId, "Old operation should be gone")
 }
 
+func TestSummaryRuleGetOperationsFailure(t *testing.T) {
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	
+	// Create a summary rule
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+	
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+	
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse: ruleList,
+		updatedObjects: []client.Object{},
+	}
+	
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+	
+	// Set the GetOperations function to return an error (simulating Kusto unavailable)
+	getOperationsError := errors.New("failed to connect to Kusto cluster")
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, getOperationsError
+	}
+	
+	// Mock the SubmitRule function to succeed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "operation-id-123", nil
+	}
+	
+	// Run the task - this should now succeed even when GetOperations fails
+	err := task.Run(context.Background())
+	
+	// After our fix, it should succeed and store the async operation
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+	
+	// Check that the rule was updated with success status
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated exactly once")
+	
+	// Check that the rule shows success and has the async operation stored
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+	
+	// Verify the condition shows success
+	condition := updatedRule.GetCondition()
+	require.NotNil(t, condition, "Rule should have a condition")
+	require.Equal(t, metav1.ConditionTrue, condition.Status, "Condition status should be True")
+	require.Empty(t, condition.Message, "Condition message should be empty for success")
+	
+	// Should have one async operation since submission succeeded
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation when submission succeeds")
+	require.Equal(t, "operation-id-123", asyncOps[0].OperationId, "Should have the correct operation ID")
+}
+
+func TestSummaryRuleGetOperationsSucceedsAfterFailure(t *testing.T) {
+	// This test ensures that after GetOperations is fixed to not block rule processing,
+	// existing async operations are still handled correctly when GetOperations succeeds
+	
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	
+	// Create a summary rule with an existing async operation
+	ruleName := "test-rule"
+	existingOperationId := "existing-op-123"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+	
+	// Add an existing async operation
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: existingOperationId,
+		StartTime:   "2025-05-22T19:20:00Z",
+		EndTime:     "2025-05-22T19:30:00Z",
+	})
+	
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+	
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse: ruleList,
+		updatedObjects: []client.Object{},
+	}
+	
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+	
+	// Set the GetOperations function to return the existing operation as completed
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{
+			{
+				OperationId:   existingOperationId,
+				State:         string(KustoAsyncOperationStateCompleted),
+				ShouldRetry:   0,
+			},
+		}, nil
+	}
+	
+	// Mock the SubmitRule function - should not be called since no new submission is needed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "new-operation-id", nil
+	}
+	
+	// Run the task - should succeed and remove the completed async operation
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Should succeed when GetOperations succeeds")
+	
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	
+	// Check that the completed async operation was removed but a new one was created
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+	
+	// The completed operation should be removed, and a new one should be created
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
+	require.Equal(t, "new-operation-id", asyncOps[0].OperationId, "Should be the new operation")
+	require.NotEqual(t, existingOperationId, asyncOps[0].OperationId, "Old operation should be gone")
+}
+
+func TestSummaryRuleGetOperationsFailureWithExistingOperations(t *testing.T) {
+	// This test ensures that when GetOperations fails but we have existing async operations
+	// stored in the CRD, they are still handled correctly (removed if old enough)
+	
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	
+	// Create a summary rule with an old async operation that should be removed
+	ruleName := "test-rule"
+	oldOperationId := "old-op-123"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+	
+	// Add an old async operation (older than 25 hours, should be removed)
+	oldStartTime := time.Now().Add(-26 * time.Hour).Format(time.RFC3339Nano)
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: oldOperationId,
+		StartTime:   oldStartTime,
+		EndTime:     time.Now().Add(-25 * time.Hour).Format(time.RFC3339Nano),
+	})
+	
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+	
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse: ruleList,
+		updatedObjects: []client.Object{},
+	}
+	
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+	
+	// Set the GetOperations function to return an error (Kusto unavailable)
+	getOperationsError := errors.New("failed to connect to Kusto cluster")
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, getOperationsError
+	}
+	
+	// Mock the SubmitRule function to succeed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "new-operation-id-456", nil
+	}
+	
+	// Run the task - should succeed despite GetOperations failure
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+	
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	
+	// Check that the old async operation was removed and a new one was created
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+	
+	// The old operation should be removed due to age, and a new one should be created
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
+	require.Equal(t, "new-operation-id-456", asyncOps[0].OperationId, "Should be the new operation")
+	require.NotEqual(t, oldOperationId, asyncOps[0].OperationId, "Old operation should be gone due to age")
+}
+
+func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
+	// This test ensures that when GetOperations fails but we have recent async operations
+	// stored in the CRD, they are kept (not removed due to age)
+	
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	
+	// Create a summary rule with a recent async operation that should be kept
+	ruleName := "test-rule"
+	recentOperationId := "recent-op-123"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+	
+	// Add a recent async operation (less than 25 hours old, should be kept)
+	recentStartTime := time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: recentOperationId,
+		StartTime:   recentStartTime,
+		EndTime:     time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano),
+	})
+	
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+	
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse: ruleList,
+		updatedObjects: []client.Object{},
+	}
+	
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+	
+	// Set the GetOperations function to return an error (Kusto unavailable)
+	getOperationsError := errors.New("failed to connect to Kusto cluster")
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, getOperationsError
+	}
+	
+	// Mock the SubmitRule function to succeed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "new-operation-id-789", nil
+	}
+	
+	// Run the task - should succeed despite GetOperations failure
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+	
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	
+	// Check the operations: recent one should be kept and a new one should be created
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+	
+	// Should have both operations: the recent one (kept) and the new one
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 2, "Should have two async operations (recent + new)")
+	
+	// Check that both operations are present
+	operationIds := []string{asyncOps[0].OperationId, asyncOps[1].OperationId}
+	require.Contains(t, operationIds, recentOperationId, "Should keep the recent operation")
+	require.Contains(t, operationIds, "new-operation-id-789", "Should have the new operation")
+}
+
 func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 	t.Run("update status with non-kusto error", func(t *testing.T) {
 		mockHandler := &mockCRDHandler{
