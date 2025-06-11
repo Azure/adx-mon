@@ -81,17 +81,17 @@ func (s *SummaryRule) GetLastSuccessfulExecutionTime() *time.Time {
 	if condition == nil {
 		return nil
 	}
-	
+
 	// Parse the time from the message field
 	if condition.Message == "" {
 		return nil
 	}
-	
+
 	t, err := time.Parse(time.RFC3339Nano, condition.Message)
 	if err != nil {
 		return nil
 	}
-	
+
 	return &t
 }
 
@@ -104,7 +104,7 @@ func (s *SummaryRule) SetLastSuccessfulExecutionTime(endTime time.Time) {
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: s.GetGeneration(),
 	}
-	
+
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 

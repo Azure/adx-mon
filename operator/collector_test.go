@@ -51,7 +51,7 @@ func TestCollectorReconciler_IsReady(t *testing.T) {
 		},
 		Status: appsv1.DaemonSetStatus{
 			DesiredNumberScheduled: 3,
-			NumberReady:           1,
+			NumberReady:            1,
 		},
 	}
 	client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(collector, ds).WithStatusSubresource(&adxmonv1.Collector{}).Build()
@@ -158,7 +158,7 @@ func TestCollectorReconciler_CreateCollector(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: adxmonv1.CollectorSpec{
-			Image:           "test-image:v1",
+			Image:            "test-image:v1",
 			IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
 		},
 	}
@@ -320,7 +320,7 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 				Namespace: "default",
 			},
 			Spec: adxmonv1.CollectorSpec{
-				Image:           "test-image:v1",
+				Image:            "test-image:v1",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
 			},
 		}
@@ -385,7 +385,7 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 			},
 			Status: appsv1.DaemonSetStatus{
 				DesiredNumberScheduled: 3,
-				NumberReady:           1,
+				NumberReady:            1,
 			},
 		}
 
@@ -420,7 +420,7 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 				Namespace: "default",
 			},
 			Spec: adxmonv1.CollectorSpec{
-				Image:           "test-image:v1",
+				Image:            "test-image:v1",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
 			},
 			Status: adxmonv1.CollectorStatus{
@@ -469,7 +469,7 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 				Generation: 2, // Generation is higher than condition's ObservedGeneration
 			},
 			Spec: adxmonv1.CollectorSpec{
-				Image:           "test-image:v2",
+				Image:            "test-image:v2",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
 			},
 			Status: adxmonv1.CollectorStatus{
@@ -518,7 +518,7 @@ func TestCollectorReconciler_Reconcile(t *testing.T) {
 				Generation: 1,
 			},
 			Spec: adxmonv1.CollectorSpec{
-				Image:           "test-image:v1",
+				Image:            "test-image:v1",
 				IngestorEndpoint: "https://test-ingestor.svc.cluster.local",
 			},
 			Status: adxmonv1.CollectorStatus{
