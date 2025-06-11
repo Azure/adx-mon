@@ -449,8 +449,11 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 
 	// Replace cluster label placeholders
 	for k, v := range clusterLabels {
-		placeholder := fmt.Sprintf("%s", k)
-		replacement := fmt.Sprintf("'%s'", v)
+		// Look for quoted placeholders like "key" and replace with properly escaped quoted values
+		placeholder := fmt.Sprintf("\"%s\"", k)
+		// Escape any double quotes in the value by replacing " with \"
+		escapedValue := strings.ReplaceAll(v, "\"", "\\\"")
+		replacement := fmt.Sprintf("\"%s\"", escapedValue)
 		body = strings.ReplaceAll(body, placeholder, replacement)
 	}
 
