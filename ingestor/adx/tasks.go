@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -443,18 +445,34 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 // applySubstitutions applies time and cluster label substitutions to a KQL query body
 func applySubstitutions(body, startTime, endTime string, clusterLabels map[string]string) string {
-	// Replace time placeholders
-	body = strings.ReplaceAll(body, "_startTime", fmt.Sprintf("datetime(%s)", startTime))
-	body = strings.ReplaceAll(body, "_endTime", fmt.Sprintf("datetime(%s)", endTime))
+	// Build the wrapped query with let statements, with direct value substitution
+	var letStatements []string
 
-	// Replace cluster label placeholders
-	for k, v := range clusterLabels {
-		placeholder := fmt.Sprintf("%s", k)
-		replacement := fmt.Sprintf("'%s'", v)
-		body = strings.ReplaceAll(body, placeholder, replacement)
+	// Add time parameter definitions with direct datetime substitution
+	letStatements = append(letStatements, fmt.Sprintf("let _startTime=datetime(%s);", startTime))
+	letStatements = append(letStatements, fmt.Sprintf("let _endTime=datetime(%s);", endTime))
+
+	// Add cluster label parameter definitions with direct value substitution
+	// Sort keys to ensure deterministic output
+	var keys []string
+	for k := range clusterLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		v := clusterLabels[k]
+		// Escape any double quotes in the value
+		escapedValue := strconv.Quote(v)
+		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", k, escapedValue))
 	}
 
-	return body
+	// Construct the full query with let statements
+	query := fmt.Sprintf("%s\n%s",
+		strings.Join(letStatements, "\n"),
+		strings.TrimSpace(body))
+
+	return query
 }
 
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {

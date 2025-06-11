@@ -1027,295 +1027,62 @@ var severalFunctions = `// function a
 }`
 
 func TestApplySubstitutions(t *testing.T) {
-	t.Run("replaces time placeholders correctly", func(t *testing.T) {
-		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("replaces cluster label placeholders correctly", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | where Region == \"region\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			"region":      "eastus",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Environment == \"'production'\" | where Region == \"'eastus'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("replaces both time and cluster placeholders", func(t *testing.T) {
-		body := `MyTable 
-		| where Environment == "environment"
-		| where Timestamp between (_startTime .. _endTime)
-		| summarize count() by bin(Timestamp, 1h)`
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "staging",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := `MyTable 
-		| where Environment == "'staging'"
-		| where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z))
-		| summarize count() by bin(Timestamp, 1h)`
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles multiple cluster labels", func(t *testing.T) {
-		body := "MyTable | where Env == \"env\" | where DC == \"datacenter\" | where Team == \"team\""
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"env":        "prod",
-			"datacenter": "us-west-2",
-			"team":       "platform",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Env == \"'prod'\" | where DC == \"'us-west-2'\" | where Team == \"'platform'\""
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles empty cluster labels", func(t *testing.T) {
-		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles nil cluster labels", func(t *testing.T) {
-		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		var clusterLabels map[string]string
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("leaves unreferenced cluster labels unchanged", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			"region":      "eastus",         // Not referenced in body
-			"team":        "infrastructure", // Not referenced in body
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Environment == \"'production'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles cluster labels with special characters", func(t *testing.T) {
-		body := "MyTable | where Notes == \"notes\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"notes": "test-env with spaces & symbols!",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Notes == \"'test-env with spaces & symbols!'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles multiple occurrences of same placeholder", func(t *testing.T) {
-		body := `MyTable 
-		| where StartTime >= _startTime 
-		| where EndTime <= _endTime
-		| where ProcessedTime between (_startTime .. _endTime)
-		| where Environment == "env"`
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"env": "test",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := `MyTable 
-		| where StartTime >= datetime(2024-01-01T00:00:00Z) 
-		| where EndTime <= datetime(2024-01-01T01:00:00Z)
-		| where ProcessedTime between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z))
-		| where Environment == "'test'"`
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles missing cluster label placeholders gracefully", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | where Region == \"missing\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			// "missing" key is not provided
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// Should replace the existing key but leave the missing one unchanged
-		expected := "MyTable | where Environment == \"'production'\" | where Region == \"missing\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles cluster labels with single quotes", func(t *testing.T) {
-		body := "MyTable | where Name == \"name\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"name": "John's cluster",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// Should wrap the value in single quotes as implemented
-		expected := "MyTable | where Name == \"'John's cluster'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles empty string values", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Environment == \"''\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("realistic KQL query example", func(t *testing.T) {
-		body := `let metrics = MyMetricsTable
-		| where Timestamp between (_startTime .. _endTime)
-		| where Environment == "environment"
-		| where Region == "region";
-		let logs = MyLogsTable  
-		| where Timestamp between (_startTime .. _endTime)
-		| where Environment == "environment"
-		| where Level == "ERROR";
-		metrics
-		| join kind=leftouter logs on Environment
-		| summarize MetricCount = count(), ErrorCount = countif(Level == "ERROR")
-		  by bin(Timestamp, 5m), Environment`
-
-		startTime := "2024-01-01T00:00:00.000Z"
-		endTime := "2024-01-01T01:00:00.000Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			"region":      "us-east-1",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := `let metrics = MyMetricsTable
-		| where Timestamp between (datetime(2024-01-01T00:00:00.000Z) .. datetime(2024-01-01T01:00:00.000Z))
-		| where Environment == "'production'"
-		| where Region == "'us-east-1'";
-		let logs = MyLogsTable  
-		| where Timestamp between (datetime(2024-01-01T00:00:00.000Z) .. datetime(2024-01-01T01:00:00.000Z))
-		| where Environment == "'production'"
-		| where Level == "ERROR";
-		metrics
-		| join kind=leftouter logs on Environment
-		| summarize MetricCount = count(), ErrorCount = countif(Level == "ERROR")
-		  by bin(Timestamp, 5m), Environment`
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: cluster label key with dots", func(t *testing.T) {
-		body := "MyTable | where Config == \"app.version\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"app.version": "v1.2.3",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Config == \"'v1.2.3'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: cluster label with numeric value", func(t *testing.T) {
-		body := "MyTable | where Port == \"port\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"port": "8080",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Port == \"'8080'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: time placeholders with different formats", func(t *testing.T) {
-		body := "MyTable | where CreatedAt > _startTime and UpdatedAt < _endTime"
-		startTime := "2024-12-31T23:59:59.999Z"
-		endTime := "2025-01-01T00:00:00.000Z"
-		clusterLabels := map[string]string{}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where CreatedAt > datetime(2024-12-31T23:59:59.999Z) and UpdatedAt < datetime(2025-01-01T00:00:00.000Z)"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: no substitutions needed", func(t *testing.T) {
-		body := "MyTable | where Environment == 'production' | summarize count()"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "staging",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// Should remain unchanged as no placeholders are present
-		expected := "MyTable | where Environment == 'production' | summarize count()"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: cluster label with backslashes and quotes", func(t *testing.T) {
-		body := "MyTable | where Path == \"path\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"path": `C:\Program Files\App's "Directory"`,
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// The current implementation simply wraps in single quotes
-		expected := `MyTable | where Path == "'C:\Program Files\App's "Directory"'" | count`
-		require.Equal(t, expected, result)
-	})
+	tests := []struct {
+		Name          string
+		RuleBody      string
+		ClusterLabels map[string]string
+		Want          string
+	}{
+		{
+			Name: "timestamps",
+			RuleBody: `T
+| where Timestamp between( _startTime .. _endTime )`,
+			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
+let _endTime=datetime(2024-01-01T01:00:00Z);
+T
+| where Timestamp between( _startTime .. _endTime )`,
+		},
+		{
+			Name: "region",
+			RuleBody: `T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region`,
+			ClusterLabels: map[string]string{
+				"_region": "eastus",
+			},
+			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
+let _endTime=datetime(2024-01-01T01:00:00Z);
+let _region="eastus";
+T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region`,
+		},
+		{
+			Name: "region and environment",
+			RuleBody: `T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region
+| where Environment != _environment`,
+			ClusterLabels: map[string]string{
+				"_region":      "eastus",
+				"_environment": "production",
+			},
+			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
+let _endTime=datetime(2024-01-01T01:00:00Z);
+let _environment="production";
+let _region="eastus";
+T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region
+| where Environment != _environment`,
+		},
+	}
+	startTime := "2024-01-01T00:00:00Z"
+	endTime := "2024-01-01T01:00:00Z"
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			have := applySubstitutions(tt.RuleBody, startTime, endTime, tt.ClusterLabels)
+			require.Equal(t, tt.Want, have)
+		})
+	}
 }
