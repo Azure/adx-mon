@@ -9,6 +9,7 @@ kind: ServiceAccount
 metadata:
   name: ingestor
   namespace: {{ .Namespace }}
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -108,10 +109,23 @@ spec:
         adx-mon/log-destination: "Logs:Ingestor"
         adx-mon/log-parsers: json
     spec:
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 65534
       serviceAccountName: ingestor
       containers:
         - name: ingestor
           image: {{ .Image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 9090
               name: ingestor
@@ -142,6 +156,8 @@ spec:
             - "--logs-kusto-endpoints={{ . }}"
             {{- end }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: metrics
               mountPath: /mnt/data
             - mountPath: /etc/pki/ca-trust/extracted
@@ -168,6 +184,8 @@ spec:
                       - ingestor
               topologyKey: kubernetes.io/hostname
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: ca-certs
           hostPath:
             path: /etc/ssl/certs
