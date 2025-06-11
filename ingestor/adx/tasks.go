@@ -292,10 +292,12 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	}
 
 	// Get the status of all async operations currently tracked in Kusto
-	// to match against our rules' operations
+	// to match against our rules' operations. If this fails (e.g., Kusto unavailable),
+	// we can still process rules and store new async operations in CRD subresources.
 	kustoAsyncOperations, err := t.GetOperations(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get async operations: %w", err)
+		logger.Warnf("Failed to get async operations from Kusto, continuing with rule processing: %v", err)
+		kustoAsyncOperations = []AsyncOperationStatus{}
 	}
 
 	// Process each summary rule individually
