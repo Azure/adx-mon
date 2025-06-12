@@ -1,6 +1,6 @@
 # SummaryRule Monitor Tool
 
-A live monitoring tool for ADX-Mon SummaryRules that displays real-time information about rule execution, timing, and status.
+A beautiful, live monitoring tool for ADX-Mon SummaryRules that displays real-time information about rule execution, timing, and status using a modern terminal UI.
 
 ## Usage
 
@@ -35,18 +35,45 @@ The tool displays:
 5. **Outstanding Operations**: Any active async operations with their time windows
 6. **Rule Status**: Current condition status and messages
 
-## Live Updates
+## Modern Terminal UI
 
-The tool refreshes every 10 seconds automatically. Press `Ctrl+C` to exit.
+- **Responsive Design**: Automatically adapts to any terminal size
+- **Beautiful Styling**: Colors, borders, and typography using Lipgloss
+- **Live Updates**: Refreshes every 10 seconds with smooth transitions
+- **Interactive Controls**: 
+  - `q` or `Ctrl+C` to quit
+  - `r` to manually refresh
+- **Error Handling**: Graceful display of connection issues and errors
 
 ## Building
 
 ```bash
-go build -o summary-rule main.go
+go build -mod=mod -o summary-rule main.go
 ```
+
+### Quick Start
+
+```bash
+# Build the tool
+go build -mod=mod -o summary-rule main.go
+
+# Run with your SummaryRule
+summary-rule NAMESPACE=default NAME=my-summary-rule
+
+# Or with custom kubeconfig
+summary-rule NAMESPACE=default NAME=my-summary-rule KUBECONFIG=~/.kube/config
+```
+
+## Technical Details
+
+- **Built with**: [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [Lipgloss](https://github.com/charmbracelet/lipgloss)
+- **Architecture**: Clean Elm-style architecture with message passing
+- **Performance**: Efficient rendering with automatic screen size detection
+- **Accessibility**: Works in any terminal that supports ANSI colors
 
 ## Requirements
 
 - Access to a Kubernetes cluster with ADX-Mon deployed
 - Appropriate RBAC permissions to read SummaryRules and StatefulSets
 - Go 1.21+ for building from source
+- Terminal with ANSI color support (most modern terminals)
