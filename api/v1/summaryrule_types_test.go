@@ -93,3 +93,31 @@ func TestAsyncOperations(t *testing.T) {
 	ops = sr.GetAsyncOperations()
 	require.Equal(t, 200, len(ops))
 }
+
+func TestBacklog(t *testing.T) {
+	var sr SummaryRule
+
+	// We expect the initial AsyncOperation to be empty
+	ops := sr.GetAsyncOperations()
+	require.Equal(t, 0, len(ops))
+
+	// Create a backlog AsyncOperation, which means it has no operation-id
+	sr.SetAsyncOperation(AsyncOperation{StartTime: "2025-05-22T19:20:00Z", EndTime: "2025-05-22T19:30:00Z"})
+	ops = sr.GetAsyncOperations()
+	require.Equal(t, 1, len(ops))
+
+	// Add another backlog
+	sr.SetAsyncOperation(AsyncOperation{StartTime: "2025-05-22T19:40:00Z", EndTime: "2025-05-22T19:50:00Z"})
+	ops = sr.GetAsyncOperations()
+	require.Equal(t, 2, len(ops))
+
+	// Now simulate the operation was able to be submitted, so the operation-id is now set
+	sr.SetAsyncOperation(AsyncOperation{OperationId: "1", StartTime: "2025-05-22T19:20:00Z", EndTime: "2025-05-22T19:30:00Z"})
+	ops = sr.GetAsyncOperations()
+	require.Equal(t, 2, len(ops)) // should just update the existing operation
+	for _, op := range ops {
+		if op.StartTime == "2025-05-22T19:20:00Z" && op.EndTime == "2025-05-22T19:30:00Z" {
+			require.Equal(t, "1", op.OperationId) // should have the operation-id set now
+		}
+	}
+}
