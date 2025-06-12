@@ -4,16 +4,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
-	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
 	v1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -22,11 +23,74 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type SummaryRuleInfo struct {
-	Rule          *v1.SummaryRule
-	ClusterLabels map[string]string
-	RenderedQuery string
-	TimeInfo      TimeInfo
+// Styles
+var (
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Background(lipgloss.Color("#7D56F4")).
+			Padding(0, 1).
+			MarginBottom(1)
+
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#7D56F4")).
+			MarginTop(1)
+
+	infoBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#874BFD")).
+			Padding(1, 2).
+			MarginBottom(1)
+
+	queryBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#F25D94")).
+			Padding(1, 2).
+			MarginBottom(1)
+
+	successStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#04B575"))
+
+	warningStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFAA00"))
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF5555"))
+
+	dimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#777777"))
+
+	statusBarStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#333333")).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Padding(0, 1)
+)
+
+// Messages
+type tickMsg time.Time
+type dataMsg struct {
+	rule          *v1.SummaryRule
+	clusterLabels map[string]string
+	timeInfo      TimeInfo
+	renderedQuery string
+	err           error
+}
+
+// Model for Bubble Tea
+type model struct {
+	client        ctrlclient.Client
+	namespace     string
+	name          string
+	rule          *v1.SummaryRule
+	clusterLabels map[string]string
+	timeInfo      TimeInfo
+	renderedQuery string
+	lastUpdate    time.Time
+	err           error
+	width         int
+	height        int
+	ready         bool
 }
 
 type TimeInfo struct {
@@ -54,37 +118,318 @@ func main() {
 	// Set up Kubernetes client
 	client, err := createKubeClient(*kubeconfig)
 	if err != nil {
-		logger.Errorf("Failed to create Kubernetes client: %v", err)
-		os.Exit(1)
+		log.Fatalf("Failed to create Kubernetes client: %v", err)
 	}
 
-	// Set up signal handling for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create initial model
+	m := model{
+		client:    client,
+		namespace: *namespace,
+		name:      *name,
+	}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		logger.Infof("Received shutdown signal")
-		cancel()
-	}()
+	// Start Bubble Tea program
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		log.Fatalf("Error running program: %v", err)
+	}
+}
 
-	// Main monitoring loop
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+func (m model) Init() tea.Cmd {
+	return tea.Batch(fetchData(m.client, m.namespace, m.name), tick())
+}
 
-	// Display initial information
-	displaySummaryRuleInfo(ctx, client, *namespace, *name)
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ready = true
+		return m, nil
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// Clear screen and redisplay
-			fmt.Print("\033[H\033[2J")
-			displaySummaryRuleInfo(ctx, client, *namespace, *name)
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "r":
+			// Manual refresh
+			return m, fetchData(m.client, m.namespace, m.name)
+		}
+
+	case tickMsg:
+		return m, tea.Batch(fetchData(m.client, m.namespace, m.name), tick())
+
+	case dataMsg:
+		m.rule = msg.rule
+		m.clusterLabels = msg.clusterLabels
+		m.timeInfo = msg.timeInfo
+		m.renderedQuery = msg.renderedQuery
+		m.err = msg.err
+		m.lastUpdate = time.Now()
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m model) View() string {
+	if !m.ready {
+		return "Loading..."
+	}
+
+	var content []string
+
+	// Title
+	title := titleStyle.Width(m.width).Render(fmt.Sprintf("SummaryRule Monitor: %s/%s", m.namespace, m.name))
+	content = append(content, title)
+
+	if m.err != nil {
+		errorBox := errorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+		content = append(content, errorBox)
+		return strings.Join(content, "\n")
+	}
+
+	if m.rule == nil {
+		content = append(content, "Loading rule information...")
+		return strings.Join(content, "\n")
+	}
+
+	// Calculate responsive layout
+	halfWidth := (m.width - 4) / 2
+
+	// Rule configuration and timing side by side
+	ruleInfo := m.renderRuleInfo(halfWidth)
+	timeInfo := m.renderTimeInfo(halfWidth)
+	topSection := lipgloss.JoinHorizontal(lipgloss.Top, ruleInfo, timeInfo)
+	content = append(content, topSection)
+
+	// Cluster labels (if any)
+	if len(m.clusterLabels) > 0 {
+		labelsInfo := m.renderClusterLabels(m.width - 4)
+		content = append(content, labelsInfo)
+	}
+
+	// Rendered query
+	queryInfo := m.renderQuery(m.width - 4)
+	content = append(content, queryInfo)
+
+	// Async operations and status side by side
+	opsInfo := m.renderAsyncOperations(halfWidth)
+	statusInfo := m.renderStatus(halfWidth)
+	bottomSection := lipgloss.JoinHorizontal(lipgloss.Top, opsInfo, statusInfo)
+	content = append(content, bottomSection)
+
+	// Status bar
+	statusBar := m.renderStatusBar()
+	content = append(content, statusBar)
+
+	return strings.Join(content, "\n")
+}
+
+func (m model) renderRuleInfo(width int) string {
+	var info []string
+	info = append(info, headerStyle.Render("📊 Rule Configuration"))
+	info = append(info, fmt.Sprintf("Database: %s", successStyle.Render(m.rule.Spec.Database)))
+	info = append(info, fmt.Sprintf("Table: %s", successStyle.Render(m.rule.Spec.Table)))
+	info = append(info, fmt.Sprintf("Interval: %s", successStyle.Render(m.rule.Spec.Interval.Duration.String())))
+
+	return infoBoxStyle.Width(width).Render(strings.Join(info, "\n"))
+}
+
+func (m model) renderTimeInfo(width int) string {
+	var info []string
+	info = append(info, headerStyle.Render("⏰ Execution Timing"))
+
+	if m.timeInfo.LastExecutionTime != nil {
+		info = append(info, fmt.Sprintf("Last: %s (%s ago)",
+			m.timeInfo.LastExecutionTime.Format("15:04:05"),
+			successStyle.Render(m.timeInfo.TimeSinceExecution)))
+		info = append(info, fmt.Sprintf("Next: %s (in %s)",
+			m.timeInfo.NextExecutionTime.Format("15:04:05"),
+			warningStyle.Render(m.timeInfo.TimeUntilNext)))
+	} else {
+		info = append(info, dimStyle.Render("Last: Never"))
+		info = append(info, dimStyle.Render("Next: When conditions are met"))
+	}
+
+	info = append(info, fmt.Sprintf("Window: %s to %s",
+		m.timeInfo.CurrentWindowStart.Format("15:04:05"),
+		m.timeInfo.CurrentWindowEnd.Format("15:04:05")))
+
+	return infoBoxStyle.Width(width).Render(strings.Join(info, "\n"))
+}
+
+func (m model) renderClusterLabels(width int) string {
+	var info []string
+	info = append(info, headerStyle.Render("🏷️  Cluster Labels"))
+
+	var keys []string
+	for k := range m.clusterLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		info = append(info, fmt.Sprintf("%s: %s", dimStyle.Render(k), successStyle.Render(m.clusterLabels[k])))
+	}
+
+	return infoBoxStyle.Width(width).Render(strings.Join(info, "\n"))
+}
+
+func (m model) renderQuery(width int) string {
+	var content []string
+	content = append(content, headerStyle.Render("📝 Rendered Query (Current Time Window)"))
+
+	// Wrap long lines
+	lines := strings.Split(m.renderedQuery, "\n")
+	maxLineWidth := width - 4 // Account for padding
+	for _, line := range lines {
+		if len(line) <= maxLineWidth {
+			content = append(content, line)
+		} else {
+			// Simple word wrap
+			for len(line) > maxLineWidth {
+				content = append(content, line[:maxLineWidth])
+				line = line[maxLineWidth:]
+			}
+			if len(line) > 0 {
+				content = append(content, line)
+			}
+		}
+	}
+
+	return queryBoxStyle.Width(width).Render(strings.Join(content, "\n"))
+}
+
+func (m model) renderAsyncOperations(width int) string {
+	var info []string
+	info = append(info, headerStyle.Render("🔄 Outstanding Operations"))
+
+	asyncOps := m.rule.GetAsyncOperations()
+	if len(asyncOps) == 0 {
+		info = append(info, dimStyle.Render("None"))
+	} else {
+		info = append(info, fmt.Sprintf("Count: %s", warningStyle.Render(fmt.Sprintf("%d", len(asyncOps)))))
+		// Calculate available width for operation ID, considering "1. ", "...", and time info
+		// Approximate length of time info: "   HH:MM:SS - HH:MM:SS (duration)" which is roughly 30-35 chars
+		// "1. " is 3 chars. "..." is 3 chars if truncated.
+		// Let's allocate a generous 40 chars for surrounding text and padding.
+		opIDMaxWidth := width - 40
+		if opIDMaxWidth < 8 { // Ensure at least 8 chars for truncated view
+			opIDMaxWidth = 8
+		}
+
+		for i, op := range asyncOps {
+			if i >= 3 { // Limit display to first 3
+				info = append(info, dimStyle.Render(fmt.Sprintf("... and %d more", len(asyncOps)-3)))
+				break
+			}
+			startTime, _ := time.Parse(time.RFC3339Nano, op.StartTime)
+			endTime, _ := time.Parse(time.RFC3339Nano, op.EndTime)
+
+			opIDDisplay := op.OperationId
+			if len(op.OperationId) > opIDMaxWidth {
+				opIDDisplay = op.OperationId[:opIDMaxWidth-3] + "..."
+			}
+
+			info = append(info, fmt.Sprintf("%d. %s", i+1, opIDDisplay))
+			info = append(info, fmt.Sprintf("   %s - %s (%s)",
+				startTime.Format("15:04:05"),
+				endTime.Format("15:04:05"),
+				dimStyle.Render(endTime.Sub(startTime).String())))
+		}
+	}
+
+	return infoBoxStyle.Width(width).Render(strings.Join(info, "\n"))
+}
+
+func (m model) renderStatus(width int) string {
+	var info []string
+	info = append(info, headerStyle.Render("📋 Rule Status"))
+
+	condition := m.rule.GetCondition()
+	if condition != nil {
+		var statusColor lipgloss.Style
+		switch condition.Status {
+		case "True":
+			statusColor = successStyle
+		case "False":
+			statusColor = errorStyle
+		default:
+			statusColor = warningStyle
+		}
+
+		info = append(info, fmt.Sprintf("Status: %s", statusColor.Render(string(condition.Status))))
+		if condition.Reason != "" {
+			info = append(info, fmt.Sprintf("Reason: %s", dimStyle.Render(condition.Reason)))
+		}
+		if condition.Message != "" {
+			message := condition.Message
+			if len(message) > 50 {
+				message = message[:47] + "..."
+			}
+			info = append(info, fmt.Sprintf("Message: %s", dimStyle.Render(message)))
+		}
+		info = append(info, fmt.Sprintf("Last Transition: %s",
+			dimStyle.Render(condition.LastTransitionTime.Format("15:04:05"))))
+		info = append(info, fmt.Sprintf("Generation: %s",
+			dimStyle.Render(fmt.Sprintf("%d", condition.ObservedGeneration))))
+	} else {
+		info = append(info, dimStyle.Render("No condition set"))
+	}
+
+	return infoBoxStyle.Width(width).Render(strings.Join(info, "\n"))
+}
+
+func (m model) renderStatusBar() string {
+	left := fmt.Sprintf("Last updated: %s", m.lastUpdate.Format("15:04:05"))
+	right := "Press 'q' to quit, 'r' to refresh manually"
+
+	gap := m.width - len(left) - len(right)
+	if gap < 0 {
+		gap = 0
+	}
+
+	statusText := left + strings.Repeat(" ", gap) + right
+	return statusBarStyle.Width(m.width).Render(statusText)
+}
+
+// Commands
+func tick() tea.Cmd {
+	return tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func fetchData(client ctrlclient.Client, namespace, name string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Fetch SummaryRule
+		rule := &v1.SummaryRule{}
+		err := client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, rule)
+		if err != nil {
+			return dataMsg{err: err}
+		}
+
+		// Fetch cluster labels from ingestor StatefulSet
+		clusterLabels, err := getClusterLabelsFromIngestor(ctx, client)
+		if err != nil {
+			// Non-fatal error, continue with empty labels
+			clusterLabels = make(map[string]string)
+		}
+
+		// Calculate time information
+		timeInfo := calculateTimeInfo(rule)
+
+		// Render the query
+		renderedQuery := renderQuery(rule.Spec.Body, timeInfo.CurrentWindowStart, timeInfo.CurrentWindowEnd, clusterLabels)
+
+		return dataMsg{
+			rule:          rule,
+			clusterLabels: clusterLabels,
+			timeInfo:      timeInfo,
+			renderedQuery: renderedQuery,
 		}
 	}
 }
@@ -122,130 +467,6 @@ func createKubeClient(kubeconfig string) (ctrlclient.Client, error) {
 	}
 
 	return client, nil
-}
-
-func displaySummaryRuleInfo(ctx context.Context, client ctrlclient.Client, namespace, name string) {
-	// Fetch SummaryRule
-	rule := &v1.SummaryRule{}
-	err := client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, rule)
-	if err != nil {
-		fmt.Printf("Error fetching SummaryRule %s/%s: %v\n", namespace, name, err)
-		return
-	}
-
-	// Fetch cluster labels from ingestor StatefulSet
-	clusterLabels, err := getClusterLabelsFromIngestor(ctx, client)
-	if err != nil {
-		fmt.Printf("Warning: Failed to get cluster labels from ingestor: %v\n", err)
-		clusterLabels = make(map[string]string)
-	}
-
-	// Calculate time information
-	timeInfo := calculateTimeInfo(rule)
-
-	// Render the query
-	renderedQuery := renderQuery(rule.Spec.Body, timeInfo.CurrentWindowStart, timeInfo.CurrentWindowEnd, clusterLabels)
-
-	// Display header
-	fmt.Printf("╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║ SummaryRule Monitor: %s/%s%s║\n", namespace, name, strings.Repeat(" ", 120-len(namespace)-len(name)-24))
-	fmt.Printf("║ Last Updated: %s%s║\n", time.Now().Format("2006-01-02 15:04:05 MST"), strings.Repeat(" ", 95))
-	fmt.Printf("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n\n")
-
-	// Display rule basic information
-	fmt.Printf("📊 Rule Configuration:\n")
-	fmt.Printf("   Database: %s\n", rule.Spec.Database)
-	fmt.Printf("   Table: %s\n", rule.Spec.Table)
-	fmt.Printf("   Interval: %s\n", rule.Spec.Interval.Duration.String())
-	fmt.Printf("\n")
-
-	// Display timing information
-	fmt.Printf("⏰ Execution Timing:\n")
-	if timeInfo.LastExecutionTime != nil {
-		fmt.Printf("   Last Execution: %s (%s ago)\n",
-			timeInfo.LastExecutionTime.Format("2006-01-02 15:04:05 MST"),
-			timeInfo.TimeSinceExecution)
-		fmt.Printf("   Next Execution: %s (in %s)\n",
-			timeInfo.NextExecutionTime.Format("2006-01-02 15:04:05 MST"),
-			timeInfo.TimeUntilNext)
-	} else {
-		fmt.Printf("   Last Execution: Never\n")
-		fmt.Printf("   Next Execution: When conditions are met\n")
-	}
-	fmt.Printf("   Current Window: %s to %s\n",
-		timeInfo.CurrentWindowStart.Format("2006-01-02 15:04:05 MST"),
-		timeInfo.CurrentWindowEnd.Format("2006-01-02 15:04:05 MST"))
-	fmt.Printf("\n")
-
-	// Display cluster labels if any
-	if len(clusterLabels) > 0 {
-		fmt.Printf("🏷️  Cluster Labels:\n")
-		var keys []string
-		for k := range clusterLabels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Printf("   %s: %s\n", k, clusterLabels[k])
-		}
-		fmt.Printf("\n")
-	}
-
-	// Display rendered query
-	fmt.Printf("📝 Rendered Query (Current Time Window):\n")
-	fmt.Printf("┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐\n")
-	queryLines := strings.Split(renderedQuery, "\n")
-	for _, line := range queryLines {
-		if len(line) > 138 {
-			line = line[:135] + "..."
-		}
-		fmt.Printf("│ %-138s │\n", line)
-	}
-	fmt.Printf("└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘\n\n")
-
-	// Display async operations
-	asyncOps := rule.GetAsyncOperations()
-	if len(asyncOps) > 0 {
-		fmt.Printf("🔄 Outstanding Async Operations (%d):\n", len(asyncOps))
-		for i, op := range asyncOps {
-			startTime, _ := time.Parse(time.RFC3339Nano, op.StartTime)
-			endTime, _ := time.Parse(time.RFC3339Nano, op.EndTime)
-			fmt.Printf("   %d. Operation ID: %s\n", i+1, op.OperationId)
-			fmt.Printf("      Time Window: %s to %s\n",
-				startTime.Format("2006-01-02 15:04:05"),
-				endTime.Format("2006-01-02 15:04:05"))
-			fmt.Printf("      Duration: %s\n", endTime.Sub(startTime).String())
-			if i < len(asyncOps)-1 {
-				fmt.Printf("\n")
-			}
-		}
-	} else {
-		fmt.Printf("🔄 Outstanding Async Operations: None\n")
-	}
-
-	// Display rule status
-	fmt.Printf("\n📋 Rule Status:\n")
-	condition := rule.GetCondition()
-	if condition != nil {
-		fmt.Printf("   Status: %s\n", condition.Status)
-		if condition.Reason != "" {
-			fmt.Printf("   Reason: %s\n", condition.Reason)
-		}
-		if condition.Message != "" {
-			message := condition.Message
-			if len(message) > 100 {
-				message = message[:97] + "..."
-			}
-			fmt.Printf("   Message: %s\n", message)
-		}
-		fmt.Printf("   Last Transition: %s\n", condition.LastTransitionTime.Format("2006-01-02 15:04:05 MST"))
-		fmt.Printf("   Observed Generation: %d\n", condition.ObservedGeneration)
-	} else {
-		fmt.Printf("   Status: No condition set\n")
-	}
-
-	fmt.Printf("\n" + strings.Repeat("─", 140) + "\n")
-	fmt.Printf("Press Ctrl+C to exit. Refreshing every 10 seconds...\n")
 }
 
 func getClusterLabelsFromIngestor(ctx context.Context, client ctrlclient.Client) (map[string]string, error) {
