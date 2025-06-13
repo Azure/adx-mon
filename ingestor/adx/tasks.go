@@ -343,32 +343,48 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
+		// Check if there's already a pending operation for this time window
+		// to prevent double execution within the same Run() cycle
+		windowStartTimeStr := windowStartTime.Format(time.RFC3339Nano)
+		windowEndTimeStr := windowEndTime.Format(time.RFC3339Nano)
+		hasExistingPendingOperation := false
+		for _, op := range rule.GetAsyncOperations() {
+			if op.StartTime == windowStartTimeStr && op.EndTime == windowEndTimeStr && op.OperationId == "" {
+				hasExistingPendingOperation = true
+				break
+			}
+		}
+
 		// Determine if the rule should be executed based on several criteria:
 		// 1. The rule is being deleted
-		// 2. Previous submission failed
+		// 2. Previous submission failed (but only if there's no existing pending operation for this window)
 		// 3. Rule has been updated (new generation)
 		// 4. It's time for the next interval execution (based on actual time windows)
 		shouldSubmitRule := rule.DeletionTimestamp != nil || // Rule is being deleted
-			cnd.Status == metav1.ConditionFalse || // Submission failed, so no async operation was created for this interval
+			(cnd.Status == metav1.ConditionFalse && !hasExistingPendingOperation) || // Submission failed, but no pending operation exists for this window
 			cnd.ObservedGeneration != rule.GetGeneration() || // A new version of this CRD was created
 			(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= rule.Spec.Interval.Duration) || // Time for next interval
 			(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration) // First execution timing
 
+		// Track operations submitted in this run cycle to prevent double execution
+		submittedInThisRun := make(map[string]bool)
+
 		if shouldSubmitRule {
 			// Prepare a new async operation with calculated time range
 			asyncOp := v1.AsyncOperation{
-				StartTime: windowStartTime.Format(time.RFC3339Nano),
-				EndTime:   windowEndTime.Format(time.RFC3339Nano),
+				StartTime: windowStartTimeStr,
+				EndTime:   windowEndTimeStr,
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
+			asyncOp.OperationId = operationId
+			rule.SetAsyncOperation(asyncOp)
 			
+			// Mark this time window as submitted in this run cycle
+			submittedInThisRun[windowStartTimeStr+"|"+windowEndTimeStr] = true
+
 			if err != nil {
 				submissionError = err
 				t.updateSummaryRuleStatus(ctx, &rule, err)
-			} else {
-				// Only add the async operation to the rule if submission was successful
-				asyncOp.OperationId = operationId
-				rule.SetAsyncOperation(asyncOp)
 			}
 		}
 
@@ -415,7 +431,8 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 			// Check for backlog operations, or those that failed to be submitted. We need to attempt
 			// executing these so that we don't skip any windows.
-			if op.OperationId == "" {
+			// Skip operations that were just submitted in this run cycle to prevent double execution.
+			if op.OperationId == "" && !submittedInThisRun[op.StartTime+"|"+op.EndTime] {
 				if operationId, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err == nil {
 					// Great, we were able to recover the failed submission window.
 					op.OperationId = operationId
