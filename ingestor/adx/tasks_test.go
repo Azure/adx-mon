@@ -1494,8 +1494,8 @@ func TestSummaryRuleCriteriaMatching(t *testing.T) {
 				"environment": {"staging"},
 			},
 			clusterLabels: map[string]string{
-				"region":      "westus",     // doesn't match
-				"environment": "staging",    // matches
+				"region":      "westus",  // doesn't match
+				"environment": "staging", // matches
 			},
 			shouldMatch: true,
 			description: "Rule should match when any criteria matches (OR logic between criteria)",
