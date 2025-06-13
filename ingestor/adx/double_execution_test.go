@@ -3,6 +3,7 @@ package adx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -170,7 +171,7 @@ func TestSummaryRuleDoubleExecutionPrevention(t *testing.T) {
 		require.Equal(t, 1, submitCount, "SubmitRule should be called exactly once, but got %d calls", submitCount)
 	})
 
-	t.Run("FIXED: no double execution within single Run call after fix", func(t *testing.T) {
+	t.Run("verifies ShouldRetry fix prevents immediate double execution", func(t *testing.T) {
 		// Create a rule 
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -272,5 +273,90 @@ func TestSummaryRuleDoubleExecutionPrevention(t *testing.T) {
 		} else {
 			t.Logf("Double execution detected - this demonstrates the bug")
 		}
+	})
+
+	t.Run("investigates double execution from ShouldRetry mechanism", func(t *testing.T) {
+		// Create a rule
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-rule",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody",
+			},
+		}
+
+		// Set a condition that should trigger shouldSubmitRule
+		rule.SetCondition(metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: time.Now().Add(-2 * time.Hour)}, // Old enough to trigger timing condition
+			Status:             metav1.ConditionTrue,
+		})
+
+		// Mock handler
+		mockHandler := &mockCRDHandler{
+			listResponse: &v1.SummaryRuleList{
+				Items: []v1.SummaryRule{*rule},
+			},
+			updatedObjects: []client.Object{},
+		}
+
+		// Mock executor
+		mockExecutor := &TestStatementExecutor{
+			database: "testdb",
+			endpoint: "http://test-endpoint",
+		}
+
+		// Create task
+		task := &SummaryRuleTask{
+			store:    mockHandler,
+			kustoCli: mockExecutor,
+		}
+
+		// Track submitted operations
+		var submitCount int
+		var submittedOperationIds []string
+		var capturedOperations []struct {
+			startTime string
+			endTime   string
+		}
+
+		task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+			submitCount++
+			operationId := fmt.Sprintf("op-%d", submitCount)
+			submittedOperationIds = append(submittedOperationIds, operationId)
+			capturedOperations = append(capturedOperations, struct {
+				startTime string
+				endTime   string
+			}{startTime, endTime})
+			return operationId, nil
+		}
+
+		// Mock GetOperations to return the operation we just submitted with ShouldRetry != 0
+		task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+			if len(submittedOperationIds) > 0 {
+				return []AsyncOperationStatus{
+					{
+						OperationId: submittedOperationIds[0], // Return the operation we just submitted
+						State:       string(KustoAsyncOperationStateInProgress), 
+						ShouldRetry: 1, // This would cause double execution without the fix
+					},
+				}, nil
+			}
+			return []AsyncOperationStatus{}, nil
+		}
+
+		// Run the task once
+		err := task.Run(context.Background())
+		require.NoError(t, err)
+
+		// Check results - with the fix, should only submit once despite ShouldRetry
+		t.Logf("Submit count: %d", submitCount)
+		t.Logf("Captured operations: %+v", capturedOperations)
+		
+		// With the fix, ShouldRetry should NOT cause immediate double execution
+		require.Equal(t, 1, submitCount, "Should only submit once - ShouldRetry should not cause immediate double execution within same Run() cycle")
 	})
 }
