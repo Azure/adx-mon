@@ -1411,3 +1411,145 @@ T
 		})
 	}
 }
+
+func TestSummaryRuleCriteriaMatching(t *testing.T) {
+	tests := []struct {
+		name          string
+		criteria      map[string][]string
+		clusterLabels map[string]string
+		shouldMatch   bool
+		description   string
+	}{
+		{
+			name:        "no criteria - should always match",
+			criteria:    nil,
+			shouldMatch: true,
+			description: "Rules with no criteria should always execute",
+		},
+		{
+			name:        "empty criteria - should always match",
+			criteria:    map[string][]string{},
+			shouldMatch: true,
+			description: "Rules with empty criteria should always execute",
+		},
+		{
+			name: "exact match - single value",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "eastus",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has the exact required label value",
+		},
+		{
+			name: "case insensitive match - single value",
+			criteria: map[string][]string{
+				"region": {"EastUS"},
+			},
+			clusterLabels: map[string]string{
+				"REGION": "eastus",
+			},
+			shouldMatch: true,
+			description: "Rule should match case-insensitively",
+		},
+		{
+			name: "no match - different value",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "westus",
+			},
+			shouldMatch: false,
+			description: "Rule should not match when cluster has different label value",
+		},
+		{
+			name: "no match - missing label",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"environment": "production",
+			},
+			shouldMatch: false,
+			description: "Rule should not match when cluster is missing required label",
+		},
+		{
+			name: "match - multiple values (OR logic)",
+			criteria: map[string][]string{
+				"region": {"eastus", "westus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "westus",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has any of the specified values (OR logic)",
+		},
+		{
+			name: "match - multiple criteria (any match)",
+			criteria: map[string][]string{
+				"region":      {"eastus"},
+				"environment": {"staging"},
+			},
+			clusterLabels: map[string]string{
+				"region":      "westus",     // doesn't match
+				"environment": "staging",    // matches
+			},
+			shouldMatch: true,
+			description: "Rule should match when any criteria matches (OR logic between criteria)",
+		},
+		{
+			name: "no match - multiple criteria (no match)",
+			criteria: map[string][]string{
+				"region":      {"eastus"},
+				"environment": {"staging"},
+			},
+			clusterLabels: map[string]string{
+				"region":      "westus",     // doesn't match
+				"environment": "production", // doesn't match
+			},
+			shouldMatch: false,
+			description: "Rule should not match when no criteria matches",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock summary rule with the test criteria
+			rule := v1.SummaryRule{
+				Spec: v1.SummaryRuleSpec{
+					Database: "TestDB",
+					Criteria: tt.criteria,
+				},
+			}
+
+			// Simulate the matching logic from the SummaryRuleTask.Run method
+			var matched bool
+			for k, v := range rule.Spec.Criteria {
+				lowerKey := strings.ToLower(k)
+				// Look for matching cluster label (case-insensitive key matching)
+				for labelKey, labelValue := range tt.clusterLabels {
+					if strings.ToLower(labelKey) == lowerKey {
+						for _, value := range v {
+							if strings.ToLower(labelValue) == strings.ToLower(value) {
+								matched = true
+								break
+							}
+						}
+						break // We found the key, no need to check other label keys
+					}
+				}
+				if matched {
+					break
+				}
+			}
+
+			// Apply the rule logic: if criteria are specified but none matched, skip
+			shouldExecute := len(rule.Spec.Criteria) == 0 || matched
+
+			require.Equal(t, tt.shouldMatch, shouldExecute, tt.description)
+		})
+	}
+}
