@@ -66,7 +66,7 @@ spec:
 	require.Equal(t, "adx-mon", sr.GetNamespace())
 	require.Equal(t, "SomeMetricHourlyAvg", sr.Spec.Table)
 	require.Equal(t, metav1.Duration{Duration: time.Hour}, sr.Spec.Interval)
-	
+
 	// Check criteria
 	require.NotEmpty(t, sr.Spec.Criteria)
 	require.Contains(t, sr.Spec.Criteria, "region")
