@@ -1417,12 +1417,12 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	now := time.Now().UTC()
 	rule := &v1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "test-rule", 
+			Name:       "test-rule",
 			Generation: 1,
 		},
 		Spec: v1.SummaryRuleSpec{
 			Database: "testdb",
-			Table:    "TestTable", 
+			Table:    "TestTable",
 			Interval: metav1.Duration{Duration: time.Hour},
 			Body:     "TestBody",
 		},
@@ -1431,8 +1431,8 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	// Set up rule condition to prevent shouldSubmitRule from being true
 	rule.SetCondition(metav1.Condition{
 		Type:               "summaryrule.adx-mon.azure.com/OperationId",
-		Status:             metav1.ConditionTrue, // Not failed
-		ObservedGeneration: 1,                    // Matches generation
+		Status:             metav1.ConditionTrue,                          // Not failed
+		ObservedGeneration: 1,                                             // Matches generation
 		LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)}, // Recent enough
 	})
 
@@ -1440,7 +1440,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	rule.SetAsyncOperation(v1.AsyncOperation{
 		OperationId: "op-1",
 		StartTime:   now.Add(-time.Hour).Format(time.RFC3339Nano),
-		EndTime:     now.Add(-10*time.Minute).Format(time.RFC3339Nano), // Completed 10 min ago
+		EndTime:     now.Add(-10 * time.Minute).Format(time.RFC3339Nano), // Completed 10 min ago
 	})
 
 	mockHandler := &mockCRDHandler{
@@ -1456,7 +1456,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		store:    mockHandler,
 		kustoCli: mockExecutor,
 	}
-	
+
 	var submitCount int
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		submitCount++
@@ -1477,9 +1477,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 
 	err := task.Run(context.Background())
 	require.NoError(t, err)
-	
+
 	// Should not submit any new operations since the existing one is completed
 	require.Equal(t, 0, submitCount, "Completed operations should not be retried even with ShouldRetry flag")
 }
-
-
