@@ -1411,3 +1411,142 @@ T
 		})
 	}
 }
+
+func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
+	// Test that completed operations are not retried due to ShouldRetry flag
+	now := time.Now().UTC()
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-rule", 
+			Generation: 1,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable", 
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Set up rule condition to prevent shouldSubmitRule from being true
+	rule.SetCondition(metav1.Condition{
+		Type:               "summaryrule.adx-mon.azure.com/OperationId",
+		Status:             metav1.ConditionTrue, // Not failed
+		ObservedGeneration: 1,                    // Matches generation
+		LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)}, // Recent enough
+	})
+
+	// Set up rule with existing async operation that just completed
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: "op-1",
+		StartTime:   now.Add(-time.Hour).Format(time.RFC3339Nano),
+		EndTime:     now.Add(-10*time.Minute).Format(time.RFC3339Nano), // Completed 10 min ago
+	})
+
+	mockHandler := &mockCRDHandler{
+		listResponse: &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule}},
+	}
+
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+	
+	var submitCount int
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitCount++
+		t.Logf("SubmitRule called #%d for time window %s-%s", submitCount, startTime, endTime)
+		return fmt.Sprintf("op-%d", submitCount), nil
+	}
+
+	// Mock GetOperations to return completed operation with ShouldRetry set
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{
+			{
+				OperationId: "op-1",
+				State:       string(KustoAsyncOperationStateCompleted),
+				ShouldRetry: 1, // This should NOT cause retry for completed operation
+			},
+		}, nil
+	}
+
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+	
+	// Should not submit any new operations since the existing one is completed
+	require.Equal(t, 0, submitCount, "Completed operations should not be retried even with ShouldRetry flag")
+}
+
+func TestSummaryRuleShouldRetryInProgress(t *testing.T) {
+	// Test that in-progress operations with ShouldRetry flag are retried
+	now := time.Now().UTC()
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-rule",
+			Generation: 1,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Set up rule condition to prevent shouldSubmitRule from being true
+	rule.SetCondition(metav1.Condition{
+		Type:               "summaryrule.adx-mon.azure.com/OperationId",
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: 1,
+		LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)},
+	})
+
+	// Set up rule with existing async operation that is in progress
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: "op-1",
+		StartTime:   now.Add(-time.Hour).Format(time.RFC3339Nano),
+		EndTime:     now.Add(-10*time.Minute).Format(time.RFC3339Nano),
+	})
+
+	mockHandler := &mockCRDHandler{
+		listResponse: &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule}},
+	}
+
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	var submitCount int
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitCount++
+		return fmt.Sprintf("retry-op-%d", submitCount), nil
+	}
+
+	// Mock GetOperations to return in-progress operation with ShouldRetry set
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{
+			{
+				OperationId: "op-1",
+				State:       string(KustoAsyncOperationStateInProgress),
+				ShouldRetry: 1, // This SHOULD cause retry for in-progress operation
+			},
+		}, nil
+	}
+
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+
+	// Should submit one retry since the operation is in progress and has ShouldRetry flag
+	require.Equal(t, 1, submitCount, "In-progress operations with ShouldRetry flag should be retried")
+}
