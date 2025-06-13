@@ -354,9 +354,6 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= rule.Spec.Interval.Duration) || // Time for next interval
 			(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration) // First execution timing
 
-		// Track operations submitted in this run cycle to prevent immediate retry
-		submittedInThisRun := make(map[string]bool)
-
 		if shouldSubmitRule {
 			// Prepare a new async operation with calculated time range
 			asyncOp := v1.AsyncOperation{
@@ -366,9 +363,6 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			asyncOp.OperationId = operationId
 			rule.SetAsyncOperation(asyncOp)
-			
-			// Mark this operation as submitted in this run cycle
-			submittedInThisRun[operationId] = true
 
 			if err != nil {
 				submissionError = err
@@ -407,8 +401,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 						}
 						// We're done polling this async operation, so we can remove it from the list
 						rule.RemoveAsyncOperation(kustoOp.OperationId)
+						continue
 					}
-					if kustoOp.ShouldRetry != 0 && !submittedInThisRun[op.OperationId] {
+					if kustoOp.ShouldRetry != 0 {
 						if _, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err != nil {
 							logger.Errorf("Failed to submit rule: %v", err)
 						}
