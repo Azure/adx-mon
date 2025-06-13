@@ -307,6 +307,33 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			continue
 		}
 
+		// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
+		var matched bool
+		for k, v := range rule.Spec.Criteria {
+			lowerKey := strings.ToLower(k)
+			// Look for matching cluster label (case-insensitive key matching)
+			for labelKey, labelValue := range t.ClusterLabels {
+				if strings.ToLower(labelKey) == lowerKey {
+					for _, value := range v {
+						if strings.ToLower(labelValue) == strings.ToLower(value) {
+							matched = true
+							break
+						}
+					}
+					break // We found the key, no need to check other label keys
+				}
+			}
+			if matched {
+				break
+			}
+		}
+
+		// If criteria are specified, but none of them matched, skip the rule
+		if len(rule.Spec.Criteria) > 0 && !matched {
+			logger.Infof("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
+			continue
+		}
+
 		// Track if there was a submission error for this rule
 		var submissionError error
 
