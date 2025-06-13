@@ -361,12 +361,12 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 				EndTime:   windowEndTime.Format(time.RFC3339Nano),
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
+			asyncOp.OperationId = operationId
+			rule.SetAsyncOperation(asyncOp)
+
 			if err != nil {
 				submissionError = err
 				t.updateSummaryRuleStatus(ctx, &rule, err)
-			} else {
-				asyncOp.OperationId = operationId
-				rule.SetAsyncOperation(asyncOp)
 			}
 		}
 
@@ -377,6 +377,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		for _, op := range operations {
 			found := false
+			// Check the status of previously submitted operations
 			for _, kustoOp := range kustoAsyncOperations {
 				if op.OperationId == kustoOp.OperationId {
 					found = true
@@ -408,6 +409,16 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					}
 
 					// Operation is still in progress, so we can skip it
+				}
+			}
+			// Check for backlog operations, or those that failed to be submitted. We need to attempt
+			// executing these so that we don't skip any windows.
+			if op.OperationId == "" {
+				if operationId, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err == nil {
+					// Great, we were able to recover the failed submission window.
+					op.OperationId = operationId
+					rule.SetAsyncOperation(op)
+					found = true
 				}
 			}
 

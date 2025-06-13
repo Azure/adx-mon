@@ -161,7 +161,21 @@ func (s *SummaryRule) SetAsyncOperation(operation AsyncOperation) {
 	// Check if the operation already exists
 	found := false
 	for i, op := range asyncOperations {
-		if op.OperationId == operation.OperationId {
+		// If we're unable to submit an AsyncOperation, we add it to our backlog for
+		// future submission. Once we're able to submit the operation, we set the
+		// operation-id, which means we need to detect this case and match operations
+		// based on their time windows.
+		if op.OperationId == "" {
+			if op.StartTime == operation.StartTime &&
+				op.EndTime == operation.EndTime &&
+				op.StartTime != "" && op.EndTime != "" {
+				// If the operation is in the backlog, we need to update it with the new
+				// operation-id and the start and end times.
+				asyncOperations[i] = operation
+				found = true
+				break
+			}
+		} else if op.OperationId == operation.OperationId {
 			// Update the existing operation
 			asyncOperations[i] = operation
 			found = true
