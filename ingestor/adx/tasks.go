@@ -282,6 +282,35 @@ func IsKustoAsyncOperationStateCompleted(state string) bool {
 		state == string(KustoAsyncOperationStateFailed)
 }
 
+// matchesCriteria checks if the given criteria matches any of the cluster labels.
+// It uses case-insensitive matching for both keys and values.
+// Returns true if no criteria are specified (empty criteria means always match).
+// Returns true if any criterion matches (OR logic between criteria).
+func matchesCriteria(criteria map[string][]string, clusterLabels map[string]string) bool {
+	// If no criteria are specified, always match
+	if len(criteria) == 0 {
+		return true
+	}
+
+	// Check if any criterion matches
+	for k, v := range criteria {
+		lowerKey := strings.ToLower(k)
+		// Look for matching cluster label (case-insensitive key matching)
+		for labelKey, labelValue := range clusterLabels {
+			if strings.ToLower(labelKey) == lowerKey {
+				for _, value := range v {
+					if strings.ToLower(labelValue) == strings.ToLower(value) {
+						return true // Found a match, return immediately
+					}
+				}
+				break // We found the key, no need to check other label keys
+			}
+		}
+	}
+
+	return false // No criteria matched
+}
+
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
@@ -308,28 +337,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		}
 
 		// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
-		var matched bool
-		for k, v := range rule.Spec.Criteria {
-			lowerKey := strings.ToLower(k)
-			// Look for matching cluster label (case-insensitive key matching)
-			for labelKey, labelValue := range t.ClusterLabels {
-				if strings.ToLower(labelKey) == lowerKey {
-					for _, value := range v {
-						if strings.ToLower(labelValue) == strings.ToLower(value) {
-							matched = true
-							break
-						}
-					}
-					break // We found the key, no need to check other label keys
-				}
-			}
-			if matched {
-				break
-			}
-		}
-
-		// If criteria are specified, but none of them matched, skip the rule
-		if len(rule.Spec.Criteria) > 0 && !matched {
+		if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
 			logger.Infof("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
 			continue
 		}
