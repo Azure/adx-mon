@@ -632,7 +632,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 
 	// Should have no async operations since submission failed
 	asyncOps := updatedRule.GetAsyncOperations()
-	require.Len(t, asyncOps, 1, "Should have an async operation when submission fails")
+	require.Len(t, asyncOps, 0, "Should have no async operations when submission fails")
 }
 
 func TestSummaryRuleSubmissionSuccess(t *testing.T) {

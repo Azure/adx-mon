@@ -361,12 +361,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 				EndTime:   windowEndTime.Format(time.RFC3339Nano),
 			}
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
-			asyncOp.OperationId = operationId
-			rule.SetAsyncOperation(asyncOp)
-
+			
 			if err != nil {
 				submissionError = err
 				t.updateSummaryRuleStatus(ctx, &rule, err)
+			} else {
+				// Only add the async operation to the rule if submission was successful
+				asyncOp.OperationId = operationId
+				rule.SetAsyncOperation(asyncOp)
 			}
 		}
 
