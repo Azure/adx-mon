@@ -1517,38 +1517,8 @@ func TestSummaryRuleCriteriaMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a mock summary rule with the test criteria
-			rule := v1.SummaryRule{
-				Spec: v1.SummaryRuleSpec{
-					Database: "TestDB",
-					Criteria: tt.criteria,
-				},
-			}
-
-			// Simulate the matching logic from the SummaryRuleTask.Run method
-			var matched bool
-			for k, v := range rule.Spec.Criteria {
-				lowerKey := strings.ToLower(k)
-				// Look for matching cluster label (case-insensitive key matching)
-				for labelKey, labelValue := range tt.clusterLabels {
-					if strings.ToLower(labelKey) == lowerKey {
-						for _, value := range v {
-							if strings.ToLower(labelValue) == strings.ToLower(value) {
-								matched = true
-								break
-							}
-						}
-						break // We found the key, no need to check other label keys
-					}
-				}
-				if matched {
-					break
-				}
-			}
-
-			// Apply the rule logic: if criteria are specified but none matched, skip
-			shouldExecute := len(rule.Spec.Criteria) == 0 || matched
-
+			// Test the criteria matching logic directly
+			shouldExecute := matchesCriteria(tt.criteria, tt.clusterLabels)
 			require.Equal(t, tt.shouldMatch, shouldExecute, tt.description)
 		})
 	}
