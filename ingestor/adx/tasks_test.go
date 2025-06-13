@@ -1513,6 +1513,17 @@ func TestSummaryRuleCriteriaMatching(t *testing.T) {
 			shouldMatch: false,
 			description: "Rule should not match when no criteria matches",
 		},
+		{
+			name: "match - multiple environments (OR logic)",
+			criteria: map[string][]string{
+				"environment": {"production", "staging", "development"},
+			},
+			clusterLabels: map[string]string{
+				"environment": "staging",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has any of the specified environment values (OR logic)",
+		},
 	}
 
 	for _, tt := range tests {
