@@ -75,12 +75,12 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Verify the window duration is exactly the interval
 		windowDuration := endTime.Sub(startTime)
-		require.Equal(t, rule.Spec.Interval.Duration, windowDuration, 
+		require.Equal(t, rule.Spec.Interval.Duration, windowDuration,
 			"Window duration should match the configured interval")
 
 		// Verify the window ends at or before current time
 		now := time.Now().UTC()
-		require.True(t, endTime.Before(now) || endTime.Equal(now.Truncate(time.Minute)), 
+		require.True(t, endTime.Before(now) || endTime.Equal(now.Truncate(time.Minute)),
 			"Window should not extend into the future")
 	})
 
@@ -91,7 +91,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 				Name: "test-rule",
 			},
 			Spec: v1.SummaryRuleSpec{
-				Database: "testdb", 
+				Database: "testdb",
 				Table:    "TestTable",
 				Interval: metav1.Duration{Duration: time.Hour},
 				Body:     "TestBody",
@@ -156,7 +156,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify start time matches the last successful end time
-		require.True(t, startTime.Equal(lastSuccessfulEndTime), 
+		require.True(t, startTime.Equal(lastSuccessfulEndTime),
 			"Start time should equal the last successful execution end time")
 
 		// Verify the window duration is exactly the interval
@@ -173,7 +173,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 			},
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
-				Table:    "TestTable", 
+				Table:    "TestTable",
 				Interval: metav1.Duration{Duration: time.Hour},
 				Body:     "TestBody",
 			},
@@ -201,7 +201,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 			updatedObjects: []client.Object{},
 		}
 
-		// Mock executor  
+		// Mock executor
 		mockExecutor := &TestStatementExecutor{
 			database: "testdb",
 			endpoint: "http://test-endpoint",

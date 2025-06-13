@@ -57,7 +57,7 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	if m.updateStatusFn != nil {
 		return m.updateStatusFn(ctx, obj, errStatus)
 	}
-	
+
 	// Implement the actual UpdateStatus logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
@@ -79,7 +79,7 @@ func (m *mockCRDHandler) UpdateStatus(ctx context.Context, obj client.Object, er
 	}
 
 	statusObj.SetCondition(condition)
-	
+
 	// Track updated objects for assertions in tests
 	m.updatedObjects = append(m.updatedObjects, obj.DeepCopyObject().(client.Object))
 	return nil
@@ -89,7 +89,7 @@ func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, 
 	if m.updateStatusFn != nil {
 		return m.updateStatusFn(ctx, obj, errStatus)
 	}
-	
+
 	// Implement the actual UpdateStatusWithKustoErrorParsing logic to set conditions properly
 	statusObj, ok := obj.(adxmonv1.ConditionedObject)
 	if !ok {
@@ -111,7 +111,7 @@ func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, 
 	}
 
 	statusObj.SetCondition(condition)
-	
+
 	// Track updated objects for assertions in tests
 	m.updatedObjects = append(m.updatedObjects, obj.DeepCopyObject().(client.Object))
 	return nil
@@ -568,7 +568,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
-	
+
 	// Create a summary rule
 	ruleName := "test-rule"
 	rule := &v1.SummaryRule{
@@ -582,54 +582,54 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 			Body:     "TestBody",
 		},
 	}
-	
+
 	// Create a list to be returned by the mock handler
 	ruleList := &v1.SummaryRuleList{
 		Items: []v1.SummaryRule{*rule},
 	}
-	
+
 	// Create a mock handler that will return our rule and track updates
 	mockHandler := &mockCRDHandler{
-		listResponse: ruleList,
+		listResponse:   ruleList,
 		updatedObjects: []client.Object{},
 	}
-	
+
 	// Create the task with our mocks
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
 	}
-	
+
 	// Set the GetOperations function to return an empty list
 	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
 		return []AsyncOperationStatus{}, nil
 	}
-	
+
 	// Mock the SubmitRule function to return an error
 	submissionError := errors.New("invalid KQL query")
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		return "", submissionError
 	}
-	
+
 	// Run the task
 	err := task.Run(context.Background())
 	require.NoError(t, err)
-	
+
 	// Check that the rule was updated with error status only once
 	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated exactly once with error status")
-	
+
 	// Check that the rule contains the error
 	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 	require.True(t, ok, "Updated object should be a SummaryRule")
 	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
-	
+
 	// Verify the condition shows failure
 	condition := updatedRule.GetCondition()
 	require.NotNil(t, condition, "Rule should have a condition")
 	require.Equal(t, metav1.ConditionFalse, condition.Status, "Condition status should be False")
 	require.Equal(t, "Failed", condition.Reason, "Condition reason should be Failed")
 	require.Contains(t, condition.Message, "invalid KQL query", "Condition message should contain the error")
-	
+
 	// Should have no async operations since submission failed
 	asyncOps := updatedRule.GetAsyncOperations()
 	require.Len(t, asyncOps, 0, "Should have no async operations when submission fails")
@@ -641,7 +641,7 @@ func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
-	
+
 	// Create a summary rule
 	ruleName := "test-rule"
 	rule := &v1.SummaryRule{
@@ -655,52 +655,52 @@ func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 			Body:     "TestBody",
 		},
 	}
-	
+
 	// Create a list to be returned by the mock handler
 	ruleList := &v1.SummaryRuleList{
 		Items: []v1.SummaryRule{*rule},
 	}
-	
+
 	// Create a mock handler that will return our rule and track updates
 	mockHandler := &mockCRDHandler{
-		listResponse: ruleList,
+		listResponse:   ruleList,
 		updatedObjects: []client.Object{},
 	}
-	
+
 	// Create the task with our mocks
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
 	}
-	
+
 	// Set the GetOperations function to return an empty list
 	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
 		return []AsyncOperationStatus{}, nil
 	}
-	
+
 	// Mock the SubmitRule function to succeed
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		return "operation-id-123", nil
 	}
-	
+
 	// Run the task
 	err := task.Run(context.Background())
 	require.NoError(t, err)
-	
+
 	// Check that the rule was updated once with success status
 	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated exactly once")
-	
+
 	// Check that the rule shows success
 	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 	require.True(t, ok, "Updated object should be a SummaryRule")
 	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
-	
+
 	// Verify the condition shows success
 	condition := updatedRule.GetCondition()
 	require.NotNil(t, condition, "Rule should have a condition")
 	require.Equal(t, metav1.ConditionTrue, condition.Status, "Condition status should be True")
 	require.Empty(t, condition.Message, "Condition message should be empty for success")
-	
+
 	// Should have one async operation since submission succeeded
 	asyncOps := updatedRule.GetAsyncOperations()
 	require.Len(t, asyncOps, 1, "Should have one async operation when submission succeeds")
@@ -782,12 +782,337 @@ func TestAsyncOperationRemoval(t *testing.T) {
 	require.NotEqual(t, operationId, asyncOps[0].OperationId, "Old operation should be gone")
 }
 
+func TestSummaryRuleGetOperationsFailure(t *testing.T) {
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Set the GetOperations function to return an error (simulating Kusto unavailable)
+	getOperationsError := errors.New("failed to connect to Kusto cluster")
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, getOperationsError
+	}
+
+	// Mock the SubmitRule function to succeed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "operation-id-123", nil
+	}
+
+	// Run the task - this should now succeed even when GetOperations fails
+	err := task.Run(context.Background())
+
+	// After our fix, it should succeed and store the async operation
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+
+	// Check that the rule was updated with success status
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated exactly once")
+
+	// Check that the rule shows success and has the async operation stored
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+
+	// Verify the condition shows success
+	condition := updatedRule.GetCondition()
+	require.NotNil(t, condition, "Rule should have a condition")
+	require.Equal(t, metav1.ConditionTrue, condition.Status, "Condition status should be True")
+	require.Empty(t, condition.Message, "Condition message should be empty for success")
+
+	// Should have one async operation since submission succeeded
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation when submission succeeds")
+	require.Equal(t, "operation-id-123", asyncOps[0].OperationId, "Should have the correct operation ID")
+}
+
+func TestSummaryRuleGetOperationsSucceedsAfterFailure(t *testing.T) {
+	// This test ensures that the system can recover when GetOperations initially fails
+	// but then succeeds in a subsequent run, properly handling existing operations
+
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Track GetOperations call count to simulate initial failure then success
+	getOperationsCallCount := 0
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		getOperationsCallCount++
+		if getOperationsCallCount == 1 {
+			// First call fails (simulating Kusto unavailable)
+			return nil, errors.New("kusto connection failed")
+		}
+		// Second call succeeds but returns empty list (no operations)
+		return []AsyncOperationStatus{}, nil
+	}
+
+	// Mock the SubmitRule function
+	submitRuleCallCount := 0
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitRuleCallCount++
+		return fmt.Sprintf("operation-id-%d", submitRuleCallCount), nil
+	}
+
+	// First run - GetOperations fails but rule processing should continue with our fix
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+	require.Equal(t, 1, getOperationsCallCount, "GetOperations should have been called once")
+	require.Equal(t, 1, submitRuleCallCount, "SubmitRule should have been called once")
+
+	// Verify rule was updated with the new operation
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	updatedRule1, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	asyncOps1 := updatedRule1.GetAsyncOperations()
+	require.Len(t, asyncOps1, 1, "Should have one async operation from first run")
+	require.Equal(t, "operation-id-1", asyncOps1[0].OperationId, "Should have the operation from first run")
+
+	// Reset mock handler for second run
+	mockHandler.updatedObjects = []client.Object{}
+
+	// Second run - GetOperations succeeds
+	err = task.Run(context.Background())
+	require.NoError(t, err, "Should succeed when GetOperations succeeds")
+	require.Equal(t, 2, getOperationsCallCount, "GetOperations should have been called twice")
+
+	// The key test: this should work fine even after the initial GetOperations failure
+	// The exact behavior (whether new operations are created) depends on timing logic,
+	// but the main point is that the system doesn't crash and continues to function
+}
+
+func TestSummaryRuleGetOperationsFailureWithExistingOperations(t *testing.T) {
+	// This test ensures that when GetOperations fails but we have existing async operations
+	// stored in the CRD, they are still handled correctly (removed if old enough)
+
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule with an old async operation that should be removed
+	ruleName := "test-rule"
+	oldOperationId := "old-op-123"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Add an old async operation (older than 25 hours, should be removed)
+	oldStartTime := time.Now().Add(-26 * time.Hour).Format(time.RFC3339Nano)
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: oldOperationId,
+		StartTime:   oldStartTime,
+		EndTime:     time.Now().Add(-25 * time.Hour).Format(time.RFC3339Nano),
+	})
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Set the GetOperations function to return an error (Kusto unavailable)
+	getOperationsError := errors.New("failed to connect to Kusto cluster")
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, getOperationsError
+	}
+
+	// Mock the SubmitRule function to succeed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "new-operation-id-456", nil
+	}
+
+	// Run the task - should succeed despite GetOperations failure
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+
+	// Check that the old async operation was removed and a new one was created
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+
+	// The old operation should be removed due to age, and a new one should be created
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 1, "Should have one async operation (the new one)")
+	require.Equal(t, "new-operation-id-456", asyncOps[0].OperationId, "Should be the new operation")
+	require.NotEqual(t, oldOperationId, asyncOps[0].OperationId, "Old operation should be gone due to age")
+}
+
+func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
+	// This test ensures that when GetOperations fails but we have recent async operations
+	// stored in the CRD, they are kept (not removed due to age)
+
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule with a recent async operation that should be kept
+	ruleName := "test-rule"
+	recentOperationId := "recent-op-123"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Add a recent async operation (less than 25 hours old, should be kept)
+	recentStartTime := time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: recentOperationId,
+		StartTime:   recentStartTime,
+		EndTime:     time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano),
+	})
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Set the GetOperations function to return an error (Kusto unavailable)
+	getOperationsError := errors.New("failed to connect to Kusto cluster")
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, getOperationsError
+	}
+
+	// Mock the SubmitRule function to succeed
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return "new-operation-id-789", nil
+	}
+
+	// Run the task - should succeed despite GetOperations failure
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Should succeed even when GetOperations fails")
+
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+
+	// Check the operations: recent one should be kept and a new one should be created
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+
+	// Should have both operations: the recent one (kept) and the new one
+	asyncOps := updatedRule.GetAsyncOperations()
+	require.Len(t, asyncOps, 2, "Should have two async operations (recent + new)")
+
+	// Check that both operations are present
+	operationIds := []string{asyncOps[0].OperationId, asyncOps[1].OperationId}
+	require.Contains(t, operationIds, recentOperationId, "Should keep the recent operation")
+	require.Contains(t, operationIds, "new-operation-id-789", "Should have the new operation")
+}
+
 func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 	t.Run("update status with non-kusto error", func(t *testing.T) {
 		mockHandler := &mockCRDHandler{
 			updatedObjects: make([]client.Object, 0),
 		}
-		
+
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-rule",
@@ -814,7 +1139,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		// Test truncation for long error messages
 		longError := errors.New(strings.Repeat("a", 300))
 		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, longError))
-		
+
 		condition = rule.GetCondition()
 		require.NotNil(t, condition, "Condition should be set")
 		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
@@ -825,7 +1150,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		mockHandler := &mockCRDHandler{
 			updatedObjects: make([]client.Object, 0),
 		}
-		
+
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-rule",
@@ -833,7 +1158,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 			},
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
-				Table:    "testtable", 
+				Table:    "testtable",
 				Name:     "test-rule",
 				Body:     "test query",
 				Interval: metav1.Duration{Duration: time.Minute},
@@ -858,7 +1183,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		body = fmt.Sprintf(`{"error":{"@message": "%s"}}`, longMsg)
 		kustoErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 		require.NoError(t, task.updateSummaryRuleStatus(context.Background(), rule, kustoErr))
-		
+
 		condition = rule.GetCondition()
 		require.NotNil(t, condition, "Condition should be set")
 		require.Equal(t, metav1.ConditionFalse, condition.Status, "Status should be False for error")
@@ -869,7 +1194,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 		mockHandler := &mockCRDHandler{
 			updatedObjects: make([]client.Object, 0),
 		}
-		
+
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-rule",
@@ -878,7 +1203,7 @@ func TestSummaryRuleKustoErrorParsing(t *testing.T) {
 			Spec: v1.SummaryRuleSpec{
 				Database: "testdb",
 				Table:    "testtable",
-				Name:     "test-rule", 
+				Name:     "test-rule",
 				Body:     "test query",
 				Interval: metav1.Duration{Duration: time.Minute},
 			},
@@ -1027,295 +1352,62 @@ var severalFunctions = `// function a
 }`
 
 func TestApplySubstitutions(t *testing.T) {
-	t.Run("replaces time placeholders correctly", func(t *testing.T) {
-		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("replaces cluster label placeholders correctly", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | where Region == \"region\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			"region":      "eastus",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Environment == \"'production'\" | where Region == \"'eastus'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("replaces both time and cluster placeholders", func(t *testing.T) {
-		body := `MyTable 
-		| where Environment == "environment"
-		| where Timestamp between (_startTime .. _endTime)
-		| summarize count() by bin(Timestamp, 1h)`
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "staging",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := `MyTable 
-		| where Environment == "'staging'"
-		| where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z))
-		| summarize count() by bin(Timestamp, 1h)`
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles multiple cluster labels", func(t *testing.T) {
-		body := "MyTable | where Env == \"env\" | where DC == \"datacenter\" | where Team == \"team\""
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"env":        "prod",
-			"datacenter": "us-west-2",
-			"team":       "platform",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Env == \"'prod'\" | where DC == \"'us-west-2'\" | where Team == \"'platform'\""
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles empty cluster labels", func(t *testing.T) {
-		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles nil cluster labels", func(t *testing.T) {
-		body := "MyTable | where Timestamp between (_startTime .. _endTime) | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		var clusterLabels map[string]string
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Timestamp between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z)) | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("leaves unreferenced cluster labels unchanged", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			"region":      "eastus",         // Not referenced in body
-			"team":        "infrastructure", // Not referenced in body
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Environment == \"'production'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles cluster labels with special characters", func(t *testing.T) {
-		body := "MyTable | where Notes == \"notes\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"notes": "test-env with spaces & symbols!",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Notes == \"'test-env with spaces & symbols!'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles multiple occurrences of same placeholder", func(t *testing.T) {
-		body := `MyTable 
-		| where StartTime >= _startTime 
-		| where EndTime <= _endTime
-		| where ProcessedTime between (_startTime .. _endTime)
-		| where Environment == "env"`
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"env": "test",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := `MyTable 
-		| where StartTime >= datetime(2024-01-01T00:00:00Z) 
-		| where EndTime <= datetime(2024-01-01T01:00:00Z)
-		| where ProcessedTime between (datetime(2024-01-01T00:00:00Z) .. datetime(2024-01-01T01:00:00Z))
-		| where Environment == "'test'"`
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles missing cluster label placeholders gracefully", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | where Region == \"missing\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			// "missing" key is not provided
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// Should replace the existing key but leave the missing one unchanged
-		expected := "MyTable | where Environment == \"'production'\" | where Region == \"missing\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles cluster labels with single quotes", func(t *testing.T) {
-		body := "MyTable | where Name == \"name\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"name": "John's cluster",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// Should wrap the value in single quotes as implemented
-		expected := "MyTable | where Name == \"'John's cluster'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("handles empty string values", func(t *testing.T) {
-		body := "MyTable | where Environment == \"environment\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Environment == \"''\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("realistic KQL query example", func(t *testing.T) {
-		body := `let metrics = MyMetricsTable
-		| where Timestamp between (_startTime .. _endTime)
-		| where Environment == "environment"
-		| where Region == "region";
-		let logs = MyLogsTable  
-		| where Timestamp between (_startTime .. _endTime)
-		| where Environment == "environment"
-		| where Level == "ERROR";
-		metrics
-		| join kind=leftouter logs on Environment
-		| summarize MetricCount = count(), ErrorCount = countif(Level == "ERROR")
-		  by bin(Timestamp, 5m), Environment`
-
-		startTime := "2024-01-01T00:00:00.000Z"
-		endTime := "2024-01-01T01:00:00.000Z"
-		clusterLabels := map[string]string{
-			"environment": "production",
-			"region":      "us-east-1",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := `let metrics = MyMetricsTable
-		| where Timestamp between (datetime(2024-01-01T00:00:00.000Z) .. datetime(2024-01-01T01:00:00.000Z))
-		| where Environment == "'production'"
-		| where Region == "'us-east-1'";
-		let logs = MyLogsTable  
-		| where Timestamp between (datetime(2024-01-01T00:00:00.000Z) .. datetime(2024-01-01T01:00:00.000Z))
-		| where Environment == "'production'"
-		| where Level == "ERROR";
-		metrics
-		| join kind=leftouter logs on Environment
-		| summarize MetricCount = count(), ErrorCount = countif(Level == "ERROR")
-		  by bin(Timestamp, 5m), Environment`
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: cluster label key with dots", func(t *testing.T) {
-		body := "MyTable | where Config == \"app.version\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"app.version": "v1.2.3",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Config == \"'v1.2.3'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: cluster label with numeric value", func(t *testing.T) {
-		body := "MyTable | where Port == \"port\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"port": "8080",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where Port == \"'8080'\" | count"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: time placeholders with different formats", func(t *testing.T) {
-		body := "MyTable | where CreatedAt > _startTime and UpdatedAt < _endTime"
-		startTime := "2024-12-31T23:59:59.999Z"
-		endTime := "2025-01-01T00:00:00.000Z"
-		clusterLabels := map[string]string{}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		expected := "MyTable | where CreatedAt > datetime(2024-12-31T23:59:59.999Z) and UpdatedAt < datetime(2025-01-01T00:00:00.000Z)"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: no substitutions needed", func(t *testing.T) {
-		body := "MyTable | where Environment == 'production' | summarize count()"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"environment": "staging",
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// Should remain unchanged as no placeholders are present
-		expected := "MyTable | where Environment == 'production' | summarize count()"
-		require.Equal(t, expected, result)
-	})
-
-	t.Run("edge case: cluster label with backslashes and quotes", func(t *testing.T) {
-		body := "MyTable | where Path == \"path\" | count"
-		startTime := "2024-01-01T00:00:00Z"
-		endTime := "2024-01-01T01:00:00Z"
-		clusterLabels := map[string]string{
-			"path": `C:\Program Files\App's "Directory"`,
-		}
-
-		result := applySubstitutions(body, startTime, endTime, clusterLabels)
-
-		// The current implementation simply wraps in single quotes
-		expected := `MyTable | where Path == "'C:\Program Files\App's "Directory"'" | count`
-		require.Equal(t, expected, result)
-	})
+	tests := []struct {
+		Name          string
+		RuleBody      string
+		ClusterLabels map[string]string
+		Want          string
+	}{
+		{
+			Name: "timestamps",
+			RuleBody: `T
+| where Timestamp between( _startTime .. _endTime )`,
+			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
+let _endTime=datetime(2024-01-01T01:00:00Z);
+T
+| where Timestamp between( _startTime .. _endTime )`,
+		},
+		{
+			Name: "region",
+			RuleBody: `T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region`,
+			ClusterLabels: map[string]string{
+				"_region": "eastus",
+			},
+			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
+let _endTime=datetime(2024-01-01T01:00:00Z);
+let _region="eastus";
+T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region`,
+		},
+		{
+			Name: "region and environment",
+			RuleBody: `T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region
+| where Environment != _environment`,
+			ClusterLabels: map[string]string{
+				"_region":      "eastus",
+				"_environment": "production",
+			},
+			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
+let _endTime=datetime(2024-01-01T01:00:00Z);
+let _environment="production";
+let _region="eastus";
+T
+| where Timestamp between( _startTime .. _endTime )
+| where Region == _region
+| where Environment != _environment`,
+		},
+	}
+	startTime := "2024-01-01T00:00:00Z"
+	endTime := "2024-01-01T01:00:00Z"
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			have := applySubstitutions(tt.RuleBody, startTime, endTime, tt.ClusterLabels)
+			require.Equal(t, tt.Want, have)
+		})
+	}
 }

@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Defines KQL summary/aggregation automation with time and cluster label substitutions | database, name, body, table, interval | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, and cluster label substitutions | database, name, body, table, interval | [Summary Rules](designs/summary-rules.md#crd) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
 
@@ -191,6 +191,31 @@ spec:
 - `<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.
 
 **Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries. Use cluster label substitutions to create environment-agnostic rules that work across different deployments.
+
+### How SummaryRules Work Internally
+
+SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodically to:
+
+1. **Time Window Management**: Calculate precise execution windows based on the last successful execution time and the rule's interval. First execution starts from current time minus one interval; subsequent executions continue from where the previous execution ended.
+
+2. **Async Operation Lifecycle**: Submit KQL queries to ADX using `.set-or-append async <table> <| <query>` and track the resulting async operations through completion. Each operation gets an OperationId that's monitored until completion.
+
+3. **State Tracking**: Uses Kubernetes conditions to track:
+   - `SummaryRuleOwner`: Overall rule status (True/False/Unknown)
+   - `SummaryRuleOperationIdOwner`: Stores up to 200 async operations as JSON in the condition message
+   - `SummaryRuleLastSuccessfulExecution`: Tracks the end time of the last successful execution
+
+4. **Operation Polling**: Regularly polls ADX's `.show operations` to check status of tracked async operations. Operations can be in states: `Completed`, `Failed`, `InProgress`, `Throttled`, or `Scheduled`.
+
+5. **Resilience**: Handles ADX cluster restarts, network issues, and operation retries. Operations older than 25 hours are automatically cleaned up if they fall out of ADX's 24-hour operations window.
+
+**Execution Triggers**: Rules are submitted when:
+- Rule is being deleted
+- Previous submission failed
+- Rule was updated (new generation)
+- Time for next interval has elapsed
+
+**Error Handling**: Uses `UpdateStatusWithKustoErrorParsing()` to extract meaningful error messages from ADX responses and truncate long errors to 256 characters.
 
 ---
 
