@@ -504,7 +504,12 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 		v := clusterLabels[k]
 		// Escape any double quotes in the value
 		escapedValue := strconv.Quote(v)
-		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", k, escapedValue))
+		// Add underscore prefix for template substitution
+		templateKey := k
+		if !strings.HasPrefix(templateKey, "_") {
+			templateKey = "_" + templateKey
+		}
+		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", templateKey, escapedValue))
 	}
 
 	// Construct the full query with let statements
