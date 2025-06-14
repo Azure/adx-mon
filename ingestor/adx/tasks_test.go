@@ -1413,7 +1413,7 @@ T
 }
 
 func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
-	// Test that completed operations are not retried due to ShouldRetry flag
+	// Test that submitting a rule for the first time doesn't cause double execution
 	now := time.Now().UTC()
 	rule := &v1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1428,19 +1428,12 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		},
 	}
 
-	// Set up rule condition to prevent shouldSubmitRule from being true
+	// Fresh rule with no existing conditions or operations - should trigger first execution
 	rule.SetCondition(metav1.Condition{
 		Type:               "summaryrule.adx-mon.azure.com/OperationId",
-		Status:             metav1.ConditionTrue,                          // Not failed
-		ObservedGeneration: 1,                                             // Matches generation
-		LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)}, // Recent enough
-	})
-
-	// Set up rule with existing async operation that just completed
-	rule.SetAsyncOperation(v1.AsyncOperation{
-		OperationId: "op-1",
-		StartTime:   now.Add(-time.Hour).Format(time.RFC3339Nano),
-		EndTime:     now.Add(-10 * time.Minute).Format(time.RFC3339Nano), // Completed 10 min ago
+		Status:             metav1.ConditionFalse, // No successful submission yet
+		ObservedGeneration: 1,
+		LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Hour)}, // Old enough to trigger execution
 	})
 
 	mockHandler := &mockCRDHandler{
@@ -1458,17 +1451,23 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	}
 
 	var submitCount int
+	var submittedOperationId string
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		submitCount++
-		t.Logf("SubmitRule called #%d for time window %s-%s", submitCount, startTime, endTime)
-		return fmt.Sprintf("op-%d", submitCount), nil
+		submittedOperationId = fmt.Sprintf("op-%d", submitCount)
+		t.Logf("SubmitRule called #%d, operationId: %s", submitCount, submittedOperationId)
+		return submittedOperationId, nil
 	}
 
-	// Mock GetOperations to return completed operation with ShouldRetry set
+	// Mock GetOperations to return the operation that was just submitted with ShouldRetry=1
+	// This simulates the bug condition where a newly submitted operation would be retried immediately
 	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		if submittedOperationId == "" {
+			return []AsyncOperationStatus{}, nil
+		}
 		return []AsyncOperationStatus{
 			{
-				OperationId: "op-1",
+				OperationId: submittedOperationId,
 				State:       string(KustoAsyncOperationStateCompleted),
 				ShouldRetry: 1, // This should NOT cause retry for completed operation
 			},
@@ -1478,6 +1477,6 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	err := task.Run(context.Background())
 	require.NoError(t, err)
 
-	// Should not submit any new operations since the existing one is completed
-	require.Equal(t, 0, submitCount, "Completed operations should not be retried even with ShouldRetry flag")
+	// Should submit exactly once - not twice due to immediate retry
+	require.Equal(t, 1, submitCount, "Rule should be submitted only once, not retried immediately due to ShouldRetry flag")
 }
