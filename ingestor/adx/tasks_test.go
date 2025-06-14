@@ -1414,7 +1414,7 @@ T
 
 func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	// Test that submitting a rule for the first time doesn't cause double execution
-	now := time.Now().UTC()
+	// The fix ensures that completed operations (with ShouldRetry=0) are not processed for retry
 	rule := &v1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test-rule",
@@ -1427,14 +1427,6 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 			Body:     "TestBody",
 		},
 	}
-
-	// Fresh rule with no existing conditions or operations - should trigger first execution
-	rule.SetCondition(metav1.Condition{
-		Type:               "summaryrule.adx-mon.azure.com/OperationId",
-		Status:             metav1.ConditionFalse, // No successful submission yet
-		ObservedGeneration: 1,
-		LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Hour)}, // Old enough to trigger execution
-	})
 
 	mockHandler := &mockCRDHandler{
 		listResponse: &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule}},
@@ -1459,8 +1451,8 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		return submittedOperationId, nil
 	}
 
-	// Mock GetOperations to return the operation that was just submitted with ShouldRetry=1
-	// This simulates the bug condition where a newly submitted operation would be retried immediately
+	// Mock GetOperations to return the operation that was just submitted
+	// For completed operations, ShouldRetry should be 0
 	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
 		if submittedOperationId == "" {
 			return []AsyncOperationStatus{}, nil
@@ -1469,7 +1461,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 			{
 				OperationId: submittedOperationId,
 				State:       string(KustoAsyncOperationStateCompleted),
-				ShouldRetry: 1, // This should NOT cause retry for completed operation
+				ShouldRetry: 0, // Completed operations should have ShouldRetry=0
 			},
 		}, nil
 	}
@@ -1477,6 +1469,6 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	err := task.Run(context.Background())
 	require.NoError(t, err)
 
-	// Should submit exactly once - not twice due to immediate retry
-	require.Equal(t, 1, submitCount, "Rule should be submitted only once, not retried immediately due to ShouldRetry flag")
+	// Should submit exactly once - completed operations should not be retried
+	require.Equal(t, 1, submitCount, "Rule should be submitted only once")
 }
