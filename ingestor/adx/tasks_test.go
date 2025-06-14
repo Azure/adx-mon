@@ -1411,3 +1411,81 @@ T
 		})
 	}
 }
+
+func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
+	// Test that submitting a rule doesn't cause double execution across multiple execution cycles
+	// The fix ensures that completed operations (with ShouldRetry=0) are not processed for retry
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-rule",
+			Generation: 1,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Minute}, // Use 1 minute for faster testing
+			Body:     "TestBody",
+		},
+	}
+
+	mockHandler := &mockCRDHandler{
+		listResponse: &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule}},
+	}
+
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	var submitCount int
+	var allSubmittedOperations []string
+
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitCount++
+		operationId := fmt.Sprintf("op-%d", submitCount)
+		allSubmittedOperations = append(allSubmittedOperations, operationId)
+		t.Logf("SubmitRule called #%d, operationId: %s", submitCount, operationId)
+		return operationId, nil
+	}
+
+	// Mock GetOperations to return all previously submitted operations as completed
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		var operations []AsyncOperationStatus
+		for _, opId := range allSubmittedOperations {
+			operations = append(operations, AsyncOperationStatus{
+				OperationId: opId,
+				State:       string(KustoAsyncOperationStateCompleted),
+				ShouldRetry: 0, // Completed operations should have ShouldRetry=0
+			})
+		}
+		return operations, nil
+	}
+
+	// Test multiple execution cycles
+	for cycle := 1; cycle <= 3; cycle++ {
+		t.Logf("Running execution cycle %d", cycle)
+
+		initialSubmitCount := submitCount
+		err := task.Run(context.Background())
+		require.NoError(t, err)
+
+		// Each cycle should submit exactly one operation (no double execution)
+		expectedSubmitCount := initialSubmitCount + 1
+		require.Equal(t, expectedSubmitCount, submitCount,
+			"Cycle %d: Rule should be submitted only once per cycle", cycle)
+
+		// Simulate time advancement by updating the rule's last successful execution time
+		// This ensures the next cycle will be eligible for execution
+		if cycle < 3 { // Don't advance time after the last cycle
+			newEndTime := time.Now().UTC().Add(time.Duration(cycle) * time.Minute)
+			rule.SetLastSuccessfulExecutionTime(newEndTime)
+		}
+	}
+
+	require.Equal(t, 3, submitCount, "Should have submitted exactly 3 operations across 3 cycles")
+}
