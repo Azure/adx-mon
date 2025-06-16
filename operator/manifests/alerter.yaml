@@ -134,13 +134,7 @@ spec:
             memory: 125Mi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
-        volumeMounts:
-        - mountPath: /etc/pki/ca-trust/extracted
-          name: etc-pki-ca-certs
-          readOnly: true
-        - mountPath: /etc/ssl/certs
-          name: ca-certs
-          readOnly: true
+
       restartPolicy: Always
       serviceAccount: alerter
       serviceAccountName: alerter
@@ -153,12 +147,4 @@ spec:
       - effect: NoSchedule
         key: infra-nodepool
         operator: Exists
-      volumes:
-      - hostPath:
-          path: /etc/ssl/certs
-          type: Directory
-        name: ca-certs
-      - hostPath:
-          path: /etc/pki/ca-trust/extracted
-          type: DirectoryOrCreate
-        name: etc-pki-ca-certs
+      volumes: []

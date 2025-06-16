@@ -158,12 +158,6 @@ spec:
           volumeMounts:
             - name: metrics
               mountPath: /mnt/data
-            - mountPath: /etc/pki/ca-trust/extracted
-              name: etc-pki-ca-certs
-              readOnly: true
-            - mountPath: /etc/ssl/certs
-              name: ca-certs
-              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -182,14 +176,6 @@ spec:
                       - ingestor
               topologyKey: kubernetes.io/hostname
       volumes:
-        - name: ca-certs
-          hostPath:
-            path: /etc/ssl/certs
-            type: Directory
-        - name: etc-pki-ca-certs
-          hostPath:
-            path: /etc/pki/ca-trust/extracted
-            type: DirectoryOrCreate
         - name: metrics
           hostPath:
             path: /mnt/ingestor
