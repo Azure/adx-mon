@@ -211,7 +211,6 @@ SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodi
 
 **Execution Triggers**: Rules are submitted when:
 - Rule is being deleted
-- Previous submission failed
 - Rule was updated (new generation)
 - Time for next interval has elapsed
 
