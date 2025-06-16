@@ -156,8 +156,6 @@ spec:
             - "--logs-kusto-endpoints={{ . }}"
             {{- end }}
           volumeMounts:
-            - name: tmp
-              mountPath: /tmp
             - name: metrics
               mountPath: /mnt/data
             - mountPath: /etc/pki/ca-trust/extracted
@@ -184,8 +182,6 @@ spec:
                       - ingestor
               topologyKey: kubernetes.io/hostname
       volumes:
-        - name: tmp
-          emptyDir: {}
         - name: ca-certs
           hostPath:
             path: /etc/ssl/certs

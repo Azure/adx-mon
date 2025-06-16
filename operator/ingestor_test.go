@@ -470,26 +470,6 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	require.NotNil(t, container.SecurityContext.Capabilities.Drop, "capabilities.drop should be set")
 	require.Contains(t, container.SecurityContext.Capabilities.Drop, corev1.Capability("ALL"), "ALL capabilities should be dropped")
 
-	// Verify tmpfs volume for read-only filesystem compatibility
-	found := false
-	for _, vm := range container.VolumeMounts {
-		if vm.Name == "tmp" && vm.MountPath == "/tmp" {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "Should have /tmp volume mount for read-only filesystem")
-
-	// Verify tmpfs volume definition
-	found = false
-	for _, v := range sts.Spec.Template.Spec.Volumes {
-		if v.Name == "tmp" && v.EmptyDir != nil {
-			found = true
-			break
-		}
-	}
-	require.True(t, found, "Should have tmpfs volume for read-only filesystem")
-
 	// c0034 - Service account token mounting
 	require.NotNil(t, sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
 	require.True(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be true in statefulset")
