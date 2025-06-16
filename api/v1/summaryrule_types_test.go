@@ -34,6 +34,45 @@ spec:
 	require.Equal(t, "adx-mon", sr.GetNamespace())
 	require.Equal(t, "SomeMetricHourlyAvg", sr.Spec.Table)
 	require.Equal(t, metav1.Duration{Duration: time.Hour}, sr.Spec.Interval)
+	require.Empty(t, sr.Spec.Criteria) // No criteria specified
+}
+
+func TestSummaryRulesSpecFromYAMLWithCriteria(t *testing.T) {
+	yamlStr := `apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: HourlyAvg
+  namespace: adx-mon
+spec:
+  database: Metrics
+  body: |
+    SomeMetric
+    | where Timestamp between (_startTime .. _endtime)
+    | summarize avg(Value) by bin(Timestamp, 1h)
+  table: SomeMetricHourlyAvg
+  interval: 1h
+  criteria:
+    region:
+      - eastus
+      - westus
+    environment:
+      - production`
+
+	var sr SummaryRule
+	err := yaml.Unmarshal([]byte(yamlStr), &sr)
+	require.NoError(t, err)
+	require.Equal(t, "Metrics", sr.Spec.Database)
+	require.Equal(t, "HourlyAvg", sr.GetName())
+	require.Equal(t, "adx-mon", sr.GetNamespace())
+	require.Equal(t, "SomeMetricHourlyAvg", sr.Spec.Table)
+	require.Equal(t, metav1.Duration{Duration: time.Hour}, sr.Spec.Interval)
+
+	// Check criteria
+	require.NotEmpty(t, sr.Spec.Criteria)
+	require.Contains(t, sr.Spec.Criteria, "region")
+	require.Contains(t, sr.Spec.Criteria, "environment")
+	require.Equal(t, []string{"eastus", "westus"}, sr.Spec.Criteria["region"])
+	require.Equal(t, []string{"production"}, sr.Spec.Criteria["environment"])
 }
 
 func TestAsyncOperations(t *testing.T) {

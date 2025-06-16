@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, and cluster label substitutions | database, name, body, table, interval | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
 
@@ -176,12 +176,36 @@ spec:
   interval: 1h
 ```
 
+**Criteria-Based Example for Conditional Execution:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: region-specific-summary
+spec:
+  database: MyDB
+  name: RegionalSummary
+  body: |
+    MyTable
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize count() by bin(Timestamp, 1h)
+  table: MySummaryTable
+  interval: 1h
+  criteria:
+    region:
+      - eastus
+      - westus
+    environment:
+      - production
+```
+
 **Key Fields:**
 - `database`: Target ADX database.
 - `name`: Logical name for the rule.
 - `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally use `<key>` placeholders for environment-specific values.
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
+- `criteria`: _(Optional)_ Key/value pairs used to determine when a summary rule can execute. If empty or omitted, the rule always executes. Keys and values are deployment-specific and configured on ingestor instances via `--cluster-labels`. For a rule to execute, any one of the criteria must match (OR logic). Matching is case-insensitive.
 
 **Required Placeholders:**
 - `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.

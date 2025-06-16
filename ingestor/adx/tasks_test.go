@@ -1518,6 +1518,129 @@ T
 	}
 }
 
+func TestSummaryRuleCriteriaMatching(t *testing.T) {
+	tests := []struct {
+		name          string
+		criteria      map[string][]string
+		clusterLabels map[string]string
+		shouldMatch   bool
+		description   string
+	}{
+		{
+			name:        "no criteria - should always match",
+			criteria:    nil,
+			shouldMatch: true,
+			description: "Rules with no criteria should always execute",
+		},
+		{
+			name:        "empty criteria - should always match",
+			criteria:    map[string][]string{},
+			shouldMatch: true,
+			description: "Rules with empty criteria should always execute",
+		},
+		{
+			name: "exact match - single value",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "eastus",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has the exact required label value",
+		},
+		{
+			name: "case insensitive match - single value",
+			criteria: map[string][]string{
+				"region": {"EastUS"},
+			},
+			clusterLabels: map[string]string{
+				"REGION": "eastus",
+			},
+			shouldMatch: true,
+			description: "Rule should match case-insensitively",
+		},
+		{
+			name: "no match - different value",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "westus",
+			},
+			shouldMatch: false,
+			description: "Rule should not match when cluster has different label value",
+		},
+		{
+			name: "no match - missing label",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"environment": "production",
+			},
+			shouldMatch: false,
+			description: "Rule should not match when cluster is missing required label",
+		},
+		{
+			name: "match - multiple values (OR logic)",
+			criteria: map[string][]string{
+				"region": {"eastus", "westus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "westus",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has any of the specified values (OR logic)",
+		},
+		{
+			name: "match - multiple criteria (any match)",
+			criteria: map[string][]string{
+				"region":      {"eastus"},
+				"environment": {"staging"},
+			},
+			clusterLabels: map[string]string{
+				"region":      "westus",  // doesn't match
+				"environment": "staging", // matches
+			},
+			shouldMatch: true,
+			description: "Rule should match when any criteria matches (OR logic between criteria)",
+		},
+		{
+			name: "no match - multiple criteria (no match)",
+			criteria: map[string][]string{
+				"region":      {"eastus"},
+				"environment": {"staging"},
+			},
+			clusterLabels: map[string]string{
+				"region":      "westus",     // doesn't match
+				"environment": "production", // doesn't match
+			},
+			shouldMatch: false,
+			description: "Rule should not match when no criteria matches",
+		},
+		{
+			name: "match - multiple environments (OR logic)",
+			criteria: map[string][]string{
+				"environment": {"production", "staging", "development"},
+			},
+			clusterLabels: map[string]string{
+				"environment": "staging",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has any of the specified environment values (OR logic)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test the criteria matching logic directly
+			shouldExecute := matchesCriteria(tt.criteria, tt.clusterLabels)
+			require.Equal(t, tt.shouldMatch, shouldExecute, tt.description)
+		})
+	}
+}
+
 func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	// Test that submitting a rule doesn't cause double execution across multiple execution cycles
 	// The fix ensures that completed operations (with ShouldRetry=0) are not processed for retry

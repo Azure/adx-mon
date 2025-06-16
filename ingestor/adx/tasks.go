@@ -282,6 +282,35 @@ func IsKustoAsyncOperationStateCompleted(state string) bool {
 		state == string(KustoAsyncOperationStateFailed)
 }
 
+// matchesCriteria checks if the given criteria matches any of the cluster labels.
+// It uses case-insensitive matching for both keys and values.
+// Returns true if no criteria are specified (empty criteria means always match).
+// Returns true if any criterion matches (OR logic between criteria).
+func matchesCriteria(criteria map[string][]string, clusterLabels map[string]string) bool {
+	// If no criteria are specified, always match
+	if len(criteria) == 0 {
+		return true
+	}
+
+	// Check if any criterion matches
+	for k, v := range criteria {
+		lowerKey := strings.ToLower(k)
+		// Look for matching cluster label (case-insensitive key matching)
+		for labelKey, labelValue := range clusterLabels {
+			if strings.ToLower(labelKey) == lowerKey {
+				for _, value := range v {
+					if strings.ToLower(labelValue) == strings.ToLower(value) {
+						return true // Found a match, return immediately
+					}
+				}
+				break // We found the key, no need to check other label keys
+			}
+		}
+	}
+
+	return false // No criteria matched
+}
+
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
@@ -304,6 +333,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	for _, rule := range summaryRules.Items {
 		// Skip rules not belonging to the current database
 		if rule.Spec.Database != t.kustoCli.Database() {
+			continue
+		}
+
+		// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
+		if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
+			if logger.IsDebug() {
+				logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
+			}
 			continue
 		}
 
@@ -476,7 +513,12 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 		v := clusterLabels[k]
 		// Escape any double quotes in the value
 		escapedValue := strconv.Quote(v)
-		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", k, escapedValue))
+		// Add underscore prefix for template substitution
+		templateKey := k
+		if !strings.HasPrefix(templateKey, "_") {
+			templateKey = "_" + templateKey
+		}
+		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", templateKey, escapedValue))
 	}
 
 	// Construct the full query with let statements

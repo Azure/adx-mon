@@ -42,6 +42,17 @@ spec:
               body:
                 description: Body is the KQL body of the function
                 type: string
+              criteria:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+                  are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+                  started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+                  execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+                type: object
               database:
                 description: Database is the name of the database in which the function
                   will be created

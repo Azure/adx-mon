@@ -51,6 +51,12 @@ type SummaryRuleSpec struct {
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
 	Interval metav1.Duration `json:"interval"`
+
+	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+	// are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+	Criteria map[string][]string `json:"criteria,omitempty"`
 }
 
 // +kubebuilder:object:root=true
