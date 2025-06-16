@@ -170,6 +170,51 @@ flowchart TD
 
 ---
 
+### SummaryRules
+
+**SummaryRules** provide automated data aggregation and ETL (Extract, Transform, Load) capabilities within ADX-Mon. They execute scheduled KQL queries against ADX to create rollups, downsampled data, or import data from external sources, helping manage data retention costs and improve query performance.
+
+#### Key Features
+- **Automated Scheduling:** Execute KQL queries at defined intervals (e.g., hourly, daily) with precise time window management.
+- **Async Operation Tracking:** Submit queries as ADX async operations and monitor them through completion, handling retries and failures automatically.
+- **Time Window Management:** Calculate exact execution windows to ensure no data gaps or overlaps between runs.
+- **Cluster Label Substitution:** Support environment-agnostic rules using cluster labels for multi-environment deployments.
+- **State Persistence:** Track execution history and operation status using Kubernetes conditions.
+- **Resilient Operation:** Handle ADX cluster restarts, network issues, and operation cleanup automatically.
+
+#### Configuration & Usage
+- **Deployment:** SummaryRules are managed by the Ingestor's `SummaryRuleTask` which runs periodically to process all rules.
+- **CRD Definition:** Rules are defined as `SummaryRule` CRDs with fields:
+  - `database`: Target ADX database
+  - `table`: Destination table for aggregated results
+  - `body`: KQL query with `_startTime` and `_endTime` placeholders
+  - `interval`: Execution frequency (e.g., `1h`, `15m`, `1d`)
+- **Placeholders:**
+  - `_startTime`/`_endTime`: Automatically replaced with execution window times
+  - `_<label>`: Replaced with cluster label values from ingestor configuration
+
+#### Example SummaryRule CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: hourly-cpu-usage
+spec:
+  database: Metrics
+  table: CPUUsageHourly
+  interval: 1h
+  body: |
+    Metrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Name == "cpu_usage_percent"
+    | summarize avg(Value), max(Value), min(Value)
+      by bin(Timestamp, 1h), Pod, Namespace
+```
+
+For detailed examples and best practices, see the [SummaryRules Cookbook](cookbook.md#summaryrules).
+
+---
+
 ## WAL Segment File Format
 
 > **Note:** The WAL binary format is fully documented below and matches the implementation in `pkg/wal/segment.go`. This includes segment and block headers, field layout, encoding, versioning, and repair logic. For advanced integrations or troubleshooting, see also [Ingestor Overview](ingestor.md#walf-format-and-storage).
