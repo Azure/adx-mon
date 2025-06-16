@@ -438,6 +438,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 						}
 						// We're done polling this async operation, so we can remove it from the list
 						rule.RemoveAsyncOperation(kustoOp.OperationId)
+						continue
 					}
 					if kustoOp.ShouldRetry != 0 {
 						if _, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err != nil {
