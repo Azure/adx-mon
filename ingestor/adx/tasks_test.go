@@ -1345,7 +1345,7 @@ func TestSummaryRules(t *testing.T) {
 func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
 	// This test validates the fix for issue #796 - ensures that submission failures
 	// don't cause immediate retries on the next execution cycle due to ConditionFalse status.
-	
+
 	// Create a mock statement executor
 	mockExecutor := &TestStatementExecutor{
 		database: "testdb",
@@ -1411,14 +1411,14 @@ func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
 	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
 	updatedRule1, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 	require.True(t, ok, "Updated object should be a SummaryRule")
-	
+
 	condition1 := updatedRule1.GetCondition()
 	require.NotNil(t, condition1, "Rule should have a condition")
 	require.Equal(t, metav1.ConditionFalse, condition1.Status, "Condition status should be False after failure")
 
 	// Reset the updated objects list for the second run
 	mockHandler.updatedObjects = []client.Object{}
-	
+
 	// Update the rule list to use the failed rule for the second run
 	ruleList.Items[0] = *updatedRule1
 
@@ -1426,14 +1426,14 @@ func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
 	// It may still retry backlog operations (which is expected), but shouldn't create new operations
 	err = task.Run(context.Background())
 	require.NoError(t, err, "Task should succeed on second run")
-	
+
 	secondRunCalls := submitCallCount - firstRunCalls
-	
+
 	// Key assertion: The fix ensures that we don't create NEW submissions just because status is False.
 	// Any additional calls should be from backlog processing, not from the shouldSubmitRule logic.
 	// Since the interval is 1 hour and we're running immediately, there should be no time-based retries.
 	// The only retries should be from the backlog mechanism trying to recover the failed operations.
-	
+
 	// To validate the fix, we check that the number of calls in the second run is not greater than
 	// the number of failed operations from the first run (which would be retried via backlog).
 	asyncOps := updatedRule1.GetAsyncOperations()
@@ -1443,8 +1443,8 @@ func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
 			expectedBacklogRetries++
 		}
 	}
-	
-	require.LessOrEqual(t, secondRunCalls, expectedBacklogRetries, 
+
+	require.LessOrEqual(t, secondRunCalls, expectedBacklogRetries,
 		"Second run should only retry backlog operations, not create new ones due to ConditionFalse")
 }
 
