@@ -338,7 +338,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
 		if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
-			logger.Infof("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
+			if logger.IsDebug() {
+				logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
+			}
 			continue
 		}
 
