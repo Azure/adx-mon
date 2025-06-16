@@ -1342,6 +1342,112 @@ func TestSummaryRules(t *testing.T) {
 	require.Equal(t, 0, len(asyncOps))
 }
 
+func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
+	// This test validates the fix for issue #796 - ensures that submission failures
+	// don't cause immediate retries on the next execution cycle due to ConditionFalse status.
+
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule with a long interval to ensure no time-based retries
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour}, // Long interval
+			Body:     "TestBody",
+		},
+	}
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Set the GetOperations function to return an empty list
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{}, nil
+	}
+
+	// Track submission calls - should fail consistently to prevent backlog recovery
+	submitCallCount := 0
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitCallCount++
+		// Always fail to prevent the backlog mechanism from succeeding
+		return "", errors.New("kusto connection failed")
+	}
+
+	// First run - submission fails, status should become False
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Task should succeed even when submission fails")
+
+	// The first run might call SubmitRule twice:
+	// 1. Initial submission for new window
+	// 2. Backlog retry for the failed operation with empty OperationId
+	// This is expected behavior of the backlog mechanism
+	firstRunCalls := submitCallCount
+	require.GreaterOrEqual(t, firstRunCalls, 1, "SubmitRule should have been called at least once")
+
+	// Verify the rule was updated with failure status
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	updatedRule1, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+
+	condition1 := updatedRule1.GetCondition()
+	require.NotNil(t, condition1, "Rule should have a condition")
+	require.Equal(t, metav1.ConditionFalse, condition1.Status, "Condition status should be False after failure")
+
+	// Reset the updated objects list for the second run
+	mockHandler.updatedObjects = []client.Object{}
+
+	// Update the rule list to use the failed rule for the second run
+	ruleList.Items[0] = *updatedRule1
+
+	// Second run immediately after - should NOT create NEW submissions due to ConditionFalse
+	// It may still retry backlog operations (which is expected), but shouldn't create new operations
+	err = task.Run(context.Background())
+	require.NoError(t, err, "Task should succeed on second run")
+
+	secondRunCalls := submitCallCount - firstRunCalls
+
+	// Key assertion: The fix ensures that we don't create NEW submissions just because status is False.
+	// Any additional calls should be from backlog processing, not from the shouldSubmitRule logic.
+	// Since the interval is 1 hour and we're running immediately, there should be no time-based retries.
+	// The only retries should be from the backlog mechanism trying to recover the failed operations.
+
+	// To validate the fix, we check that the number of calls in the second run is not greater than
+	// the number of failed operations from the first run (which would be retried via backlog).
+	asyncOps := updatedRule1.GetAsyncOperations()
+	expectedBacklogRetries := 0
+	for _, op := range asyncOps {
+		if op.OperationId == "" {
+			expectedBacklogRetries++
+		}
+	}
+
+	require.LessOrEqual(t, secondRunCalls, expectedBacklogRetries,
+		"Second run should only retry backlog operations, not create new ones due to ConditionFalse")
+}
+
 var severalFunctions = `// function a
 .create-or-alter function a() {
   print "a"
