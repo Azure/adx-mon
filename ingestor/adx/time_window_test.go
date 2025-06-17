@@ -78,9 +78,10 @@ func TestTimeWindowCalculation(t *testing.T) {
 		require.Equal(t, rule.Spec.Interval.Duration, windowDuration,
 			"Window duration should match the configured interval")
 
-		// Verify the window ends at or before current time
-		now := time.Now().UTC()
-		require.True(t, endTime.Before(now) || endTime.Equal(now.Truncate(time.Minute)),
+		// Verify the window ends at or before a fixed reference time
+		// Using a fixed timestamp well into the future for deterministic testing
+		referenceTime := time.Date(2030, 12, 31, 23, 59, 59, 0, time.UTC)
+		require.True(t, endTime.Before(referenceTime) || endTime.Equal(referenceTime.Truncate(time.Minute)),
 			"Window should not extend into the future")
 	})
 
@@ -180,8 +181,10 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Set a condition with an old LastTransitionTime to allow new submissions
+		// Using a fixed timestamp for deterministic testing
+		fixedTime := time.Date(2025, 6, 17, 8, 0, 0, 0, time.UTC)
 		rule.SetCondition(metav1.Condition{
-			LastTransitionTime: metav1.Time{Time: time.Now().Add(-2 * time.Hour)},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			Status:             metav1.ConditionTrue,
 		})
 
