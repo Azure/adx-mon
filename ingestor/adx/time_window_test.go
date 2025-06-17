@@ -165,8 +165,8 @@ func TestTimeWindowCalculation(t *testing.T) {
 			"Window duration should match the configured interval")
 	})
 
-	t.Run("successful operation completion updates last successful execution time", func(t *testing.T) {
-		// Create a rule with an async operation
+	t.Run("execution time is updated when shouldSubmitRule is true", func(t *testing.T) {
+		// Create a rule with no prior execution history
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test-rule",
@@ -179,18 +179,10 @@ func TestTimeWindowCalculation(t *testing.T) {
 			},
 		}
 
-		// Set a condition with a recent LastTransitionTime to prevent new submissions
+		// Set a condition with an old LastTransitionTime to allow new submissions
 		rule.SetCondition(metav1.Condition{
-			LastTransitionTime: metav1.Time{Time: time.Now()},
+			LastTransitionTime: metav1.Time{Time: time.Now().Add(-2 * time.Hour)},
 			Status:             metav1.ConditionTrue,
-		})
-
-		// Add an async operation
-		operationEndTime := time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC)
-		rule.SetAsyncOperation(v1.AsyncOperation{
-			OperationId: "test-op-id",
-			StartTime:   time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
-			EndTime:     operationEndTime.Format(time.RFC3339Nano),
 		})
 
 		// Mock handler
@@ -213,21 +205,16 @@ func TestTimeWindowCalculation(t *testing.T) {
 			kustoCli: mockExecutor,
 		}
 
-		// Mock GetOperations to return completed operation
+		// Mock GetOperations to return empty (no ongoing operations)
 		task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-			return []AsyncOperationStatus{
-				{
-					OperationId: "test-op-id",
-					State:       string(KustoAsyncOperationStateCompleted),
-					ShouldRetry: 0,
-				},
-			}, nil
+			return []AsyncOperationStatus{}, nil
 		}
 
-		// Mock SubmitRule (should not be called)
+		// Track the submitted window end time
+		var submittedWindowEndTime string
 		task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
-			t.Fatal("SubmitRule should not be called when processing completed operations")
-			return "", nil
+			submittedWindowEndTime = endTime
+			return "test-operation-id", nil
 		}
 
 		// Run the task
@@ -241,15 +228,20 @@ func TestTimeWindowCalculation(t *testing.T) {
 		updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 		require.True(t, ok)
 
-		// Verify the last successful execution time was set
-		lastSuccessful := updatedRule.GetLastExecutionTime()
-		require.NotNil(t, lastSuccessful)
-		require.True(t, lastSuccessful.Equal(operationEndTime),
-			"Last successful execution time should match the operation end time")
+		// Verify the last execution time was set to the submitted window end time
+		lastExecution := updatedRule.GetLastExecutionTime()
+		require.NotNil(t, lastExecution)
 
-		// Verify the async operation was removed
-		require.Empty(t, updatedRule.GetAsyncOperations(),
-			"Completed async operation should be removed")
+		// Parse the submitted window end time and verify it matches
+		expectedEndTime, err := time.Parse(time.RFC3339Nano, submittedWindowEndTime)
+		require.NoError(t, err)
+		require.True(t, lastExecution.Equal(expectedEndTime),
+			"Last execution time should match the submitted window end time")
+
+		// Verify an async operation was created
+		asyncOps := updatedRule.GetAsyncOperations()
+		require.Len(t, asyncOps, 1, "Should have one async operation after submission")
+		require.Equal(t, "test-operation-id", asyncOps[0].OperationId, "Should have the correct operation ID")
 	})
 
 	t.Run("prevents gaps and overlaps in time windows", func(t *testing.T) {
