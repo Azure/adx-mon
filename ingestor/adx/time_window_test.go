@@ -182,7 +182,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Set a condition with an old LastTransitionTime to allow new submissions
 		// Using a fixed timestamp for deterministic testing
-		fixedTime := time.Date(2025, 6, 17, 8, 0, 0, 0, time.UTC)
+		fixedTime := time.Date(2024, 6, 17, 8, 0, 0, 0, time.UTC)
 		rule.SetCondition(metav1.Condition{
 			LastTransitionTime: metav1.Time{Time: fixedTime},
 			Status:             metav1.ConditionTrue,
