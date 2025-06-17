@@ -439,9 +439,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 
 	// Validate pod security context (c0055 - Linux hardening)
 	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext, "Pod security context should be set")
-	// Note: runAsNonRoot, runAsUser, and runAsGroup are omitted for ingestor as it needs root access to write to /mnt/ingestor
-	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext.FSGroup, "fsGroup should be set")
-	require.Equal(t, int64(65534), *sts.Spec.Template.Spec.SecurityContext.FSGroup, "fsGroup should be 65534")
+	// Note: runAsNonRoot, runAsUser, runAsGroup, and fsGroup are omitted for ingestor as it needs root access to write to /mnt/ingestor
 
 	// Validate container security context
 	require.Len(t, sts.Spec.Template.Spec.Containers, 1, "Should have exactly one container")

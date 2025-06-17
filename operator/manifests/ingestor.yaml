@@ -110,8 +110,7 @@ spec:
         adx-mon/log-parsers: json
     spec:
       automountServiceAccountToken: true
-      securityContext:
-        fsGroup: 65534
+      securityContext: {}
       serviceAccountName: ingestor
       containers:
         - name: ingestor
