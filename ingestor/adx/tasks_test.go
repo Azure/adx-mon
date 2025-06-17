@@ -1712,7 +1712,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		// This ensures the next cycle will be eligible for execution
 		if cycle < 3 { // Don't advance time after the last cycle
 			newEndTime := time.Now().UTC().Add(time.Duration(cycle) * time.Minute)
-			rule.SetLastSuccessfulExecutionTime(newEndTime)
+			rule.SetLastExecutionTime(newEndTime)
 		}
 	}
 

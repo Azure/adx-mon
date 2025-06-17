@@ -360,7 +360,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Calculate the next execution window based on the last successful execution
 		var windowStartTime, windowEndTime time.Time
 
-		lastSuccessfulEndTime := rule.GetLastSuccessfulExecutionTime()
+		lastSuccessfulEndTime := rule.GetLastExecutionTime()
 		if lastSuccessfulEndTime == nil {
 			// First execution: start from current time aligned to interval boundary, going back one interval
 			now := time.Now().UTC()
@@ -424,7 +424,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 							// Operation completed successfully - update the last successful execution time
 							endTime, err := time.Parse(time.RFC3339Nano, op.EndTime)
 							if err == nil {
-								rule.SetLastSuccessfulExecutionTime(endTime)
+								rule.SetLastExecutionTime(endTime)
 							}
 						} else if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 							// Operation failed - mark the rule as failed

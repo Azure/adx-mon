@@ -100,7 +100,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Set a last successful execution time
 		lastSuccessfulEndTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
-		rule.SetLastSuccessfulExecutionTime(lastSuccessfulEndTime)
+		rule.SetLastExecutionTime(lastSuccessfulEndTime)
 
 		// Add a condition to simulate a previous execution
 		rule.SetCondition(metav1.Condition{
@@ -242,7 +242,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 		require.True(t, ok)
 
 		// Verify the last successful execution time was set
-		lastSuccessful := updatedRule.GetLastSuccessfulExecutionTime()
+		lastSuccessful := updatedRule.GetLastExecutionTime()
 		require.NotNil(t, lastSuccessful)
 		require.True(t, lastSuccessful.Equal(operationEndTime),
 			"Last successful execution time should match the operation end time")
@@ -269,7 +269,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 		// Simulate first execution completed successfully
 		firstWindowStart := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 		firstWindowEnd := firstWindowStart.Add(30 * time.Minute)
-		rule.SetLastSuccessfulExecutionTime(firstWindowEnd)
+		rule.SetLastExecutionTime(firstWindowEnd)
 
 		// Set condition to allow second execution
 		rule.SetCondition(metav1.Condition{

@@ -82,7 +82,7 @@ func (s *SummaryRule) GetCondition() *metav1.Condition {
 	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOwner)
 }
 
-func (s *SummaryRule) GetLastSuccessfulExecutionTime() *time.Time {
+func (s *SummaryRule) GetLastExecutionTime() *time.Time {
 	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleLastSuccessfulExecution)
 	if condition == nil {
 		return nil
@@ -101,7 +101,7 @@ func (s *SummaryRule) GetLastSuccessfulExecutionTime() *time.Time {
 	return &t
 }
 
-func (s *SummaryRule) SetLastSuccessfulExecutionTime(endTime time.Time) {
+func (s *SummaryRule) SetLastExecutionTime(endTime time.Time) {
 	condition := &metav1.Condition{
 		Type:               SummaryRuleLastSuccessfulExecution,
 		Status:             metav1.ConditionTrue,
