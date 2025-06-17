@@ -1340,6 +1340,42 @@ func TestSummaryRules(t *testing.T) {
 	require.NotNil(t, nextCnd)
 	asyncOps = rule.GetAsyncOperations()
 	require.Equal(t, 0, len(asyncOps))
+
+	t.Run("Offline operation", func(t *testing.T) {
+		// Move back in time to ensure our predicate thinks we need to fill a backlog
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+		resetToTime := rule.GetLastExecutionTime().Add(-time.Hour * 10)
+		rule.SetLastExecutionTime(resetToTime)
+		require.NoError(t, ctrlCli.Status().Update(ctx, rule))
+
+		// Simulate failures
+		task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+			return "", errors.New("some failure scenario")
+		}
+
+		// Execute the rule, we expect to accumulate operations
+		for range 3 {
+			require.NoError(t, task.Run(ctx))
+		}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 3, len(ops), "Should have 3 async operations due to failures")
+
+		for _, op := range ops {
+			require.Empty(t, op.OperationId, "Cluster is offline so our operation-id should not be set")
+		}
+
+		// Simulate cluster availability
+		task.SubmitRule = task.submitRule
+
+		// Submit the backlog
+		require.NoError(t, task.Run(ctx))
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+
+		for _, op := range rule.GetAsyncOperations() {
+			require.NotEmpty(t, op.OperationId, "Cluster is online so backlog operation-ids should be set")
+		}
+	})
 }
 
 func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
@@ -1712,7 +1748,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		// This ensures the next cycle will be eligible for execution
 		if cycle < 3 { // Don't advance time after the last cycle
 			newEndTime := time.Now().UTC().Add(time.Duration(cycle) * time.Minute)
-			rule.SetLastSuccessfulExecutionTime(newEndTime)
+			rule.SetLastExecutionTime(newEndTime)
 		}
 	}
 

@@ -360,7 +360,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Calculate the next execution window based on the last successful execution
 		var windowStartTime, windowEndTime time.Time
 
-		lastSuccessfulEndTime := rule.GetLastSuccessfulExecutionTime()
+		lastSuccessfulEndTime := rule.GetLastExecutionTime()
 		if lastSuccessfulEndTime == nil {
 			// First execution: start from current time aligned to interval boundary, going back one interval
 			now := time.Now().UTC()
@@ -398,6 +398,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
 			asyncOp.OperationId = operationId
 			rule.SetAsyncOperation(asyncOp)
+			rule.SetLastExecutionTime(windowEndTime)
 
 			if err != nil {
 				submissionError = err
@@ -419,14 +420,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 					foundOperations[op.OperationId] = true
 
 					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
-						// Check if the operation completed successfully
-						if kustoOp.State == string(KustoAsyncOperationStateCompleted) {
-							// Operation completed successfully - update the last successful execution time
-							endTime, err := time.Parse(time.RFC3339Nano, op.EndTime)
-							if err == nil {
-								rule.SetLastSuccessfulExecutionTime(endTime)
-							}
-						} else if kustoOp.State == string(KustoAsyncOperationStateFailed) {
+						if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 							// Operation failed - mark the rule as failed
 							hasFailedOperations = true
 							logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
