@@ -31,6 +31,8 @@ const (
 	SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
 	// SummaryRuleOperationIdOwner is the owner of the summary rule operation id
 	SummaryRuleOperationIdOwner = "summaryrule.adx-mon.azure.com/OperationId"
+	// SummaryRuleLastSuccessfulExecution tracks the end time of the last successful query execution
+	SummaryRuleLastSuccessfulExecution = "summaryrule.adx-mon.azure.com/LastSuccessfulExecution"
 	// SummaryRuleAsyncOperationPollInterval acts as a cooldown period between checking
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
@@ -49,6 +51,12 @@ type SummaryRuleSpec struct {
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
 	Interval metav1.Duration `json:"interval"`
+
+	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+	// are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+	Criteria map[string][]string `json:"criteria,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -72,6 +80,38 @@ type SummaryRuleStatus struct {
 
 func (s *SummaryRule) GetCondition() *metav1.Condition {
 	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOwner)
+}
+
+func (s *SummaryRule) GetLastSuccessfulExecutionTime() *time.Time {
+	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleLastSuccessfulExecution)
+	if condition == nil {
+		return nil
+	}
+
+	// Parse the time from the message field
+	if condition.Message == "" {
+		return nil
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, condition.Message)
+	if err != nil {
+		return nil
+	}
+
+	return &t
+}
+
+func (s *SummaryRule) SetLastSuccessfulExecutionTime(endTime time.Time) {
+	condition := &metav1.Condition{
+		Type:               SummaryRuleLastSuccessfulExecution,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ExecutionCompleted",
+		Message:            endTime.UTC().Format(time.RFC3339Nano),
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: s.GetGeneration(),
+	}
+
+	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
 func (s *SummaryRule) SetCondition(c metav1.Condition) {
@@ -127,7 +167,21 @@ func (s *SummaryRule) SetAsyncOperation(operation AsyncOperation) {
 	// Check if the operation already exists
 	found := false
 	for i, op := range asyncOperations {
-		if op.OperationId == operation.OperationId {
+		// If we're unable to submit an AsyncOperation, we add it to our backlog for
+		// future submission. Once we're able to submit the operation, we set the
+		// operation-id, which means we need to detect this case and match operations
+		// based on their time windows.
+		if op.OperationId == "" {
+			if op.StartTime == operation.StartTime &&
+				op.EndTime == operation.EndTime &&
+				op.StartTime != "" && op.EndTime != "" {
+				// If the operation is in the backlog, we need to update it with the new
+				// operation-id and the start and end times.
+				asyncOperations[i] = operation
+				found = true
+				break
+			}
+		} else if op.OperationId == operation.OperationId {
 			// Update the existing operation
 			asyncOperations[i] = operation
 			found = true

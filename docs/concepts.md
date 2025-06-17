@@ -112,6 +112,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
 - **Config File/CLI:** Main configuration is via CLI flags or environment variables (see `cmd/ingestor/main.go`). Key options include:
   - `--storage-dir`: Directory for WAL segments.
   - `--metrics-kusto-endpoints`, `--logs-kusto-endpoints`: ADX endpoints for metrics/logs (format: `<db>=<endpoint>`).
+  - `--cluster-labels`: Labels used to identify and distinguish ingestor clusters (format: `<key>=<value>`). Used for `<key>` substitutions in SummaryRules.
   - `--uploads`: Number of concurrent uploads.
   - `--max-segment-size`, `--max-segment-age`: Segment batching thresholds.
   - `--max-transfer-size`, `--max-transfer-age`: Peer transfer thresholds.
@@ -166,6 +167,51 @@ flowchart TD
 - Can be run locally with test ADX clusters or in "direct upload" mode.
 - Includes integration tests for WAL, batching, and upload logic.
 - See `docs/ingestor.md` and `README.md` for advanced usage and troubleshooting.
+
+---
+
+### SummaryRules
+
+**SummaryRules** provide automated data aggregation and ETL (Extract, Transform, Load) capabilities within ADX-Mon. They execute scheduled KQL queries against ADX to create rollups, downsampled data, or import data from external sources, helping manage data retention costs and improve query performance.
+
+#### Key Features
+- **Automated Scheduling:** Execute KQL queries at defined intervals (e.g., hourly, daily) with precise time window management.
+- **Async Operation Tracking:** Submit queries as ADX async operations and monitor them through completion, handling retries and failures automatically.
+- **Time Window Management:** Calculate exact execution windows to ensure no data gaps or overlaps between runs.
+- **Cluster Label Substitution:** Support environment-agnostic rules using cluster labels for multi-environment deployments.
+- **State Persistence:** Track execution history and operation status using Kubernetes conditions.
+- **Resilient Operation:** Handle ADX cluster restarts, network issues, and operation cleanup automatically.
+
+#### Configuration & Usage
+- **Deployment:** SummaryRules are managed by the Ingestor's `SummaryRuleTask` which runs periodically to process all rules.
+- **CRD Definition:** Rules are defined as `SummaryRule` CRDs with fields:
+  - `database`: Target ADX database
+  - `table`: Destination table for aggregated results
+  - `body`: KQL query with `_startTime` and `_endTime` placeholders
+  - `interval`: Execution frequency (e.g., `1h`, `15m`, `1d`)
+- **Placeholders:**
+  - `_startTime`/`_endTime`: Automatically replaced with execution window times
+  - `_<label>`: Replaced with cluster label values from ingestor configuration
+
+#### Example SummaryRule CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: hourly-cpu-usage
+spec:
+  database: Metrics
+  table: CPUUsageHourly
+  interval: 1h
+  body: |
+    Metrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Name == "cpu_usage_percent"
+    | summarize avg(Value), max(Value), min(Value)
+      by bin(Timestamp, 1h), Pod, Namespace
+```
+
+For detailed examples and best practices, see the [SummaryRules Cookbook](cookbook.md#summaryrules).
 
 ---
 

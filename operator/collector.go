@@ -118,7 +118,7 @@ func (r *CollectorReconciler) ReconcileComponent(ctx context.Context, req ctrl.R
 
 func (r *CollectorReconciler) updateImageIfNeeded(ctx context.Context, ds *appsv1.DaemonSet, collector *adxmonv1.Collector) bool {
 	r.applyDefaults(ctx, collector)
-	
+
 	currentImage := ds.Spec.Template.Spec.Containers[0].Image
 	if currentImage != collector.Spec.Image {
 		logger.Infof("Updating image for collector %s/%s from %s to %s",
@@ -153,7 +153,7 @@ func (r *CollectorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			if !collector.DeletionTimestamp.IsZero() {
 				continue
 			}
-			
+
 			// Enqueue reconcile request for this Collector since it may need to update its endpoint
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
@@ -260,7 +260,7 @@ func (r *CollectorReconciler) findIngestorEndpoint(ctx context.Context, namespac
 		logger.Errorf("Failed to list Ingestors in namespace %s: %v", namespace, err)
 		return ""
 	}
-	
+
 	for _, ingestor := range ingestorList.Items {
 		// Skip if Ingestor is being deleted
 		if !ingestor.DeletionTimestamp.IsZero() {
@@ -290,11 +290,11 @@ func (r *CollectorReconciler) applyDefaults(ctx context.Context, collector *adxm
 }
 
 type collectorTemplateData struct {
-	Image           string
+	Image            string
 	IngestorEndpoint string
-	Namespace       string
-	Name            string
-	Region          string
+	Namespace        string
+	Name             string
+	Region           string
 }
 
 func (r *CollectorReconciler) templateData(ctx context.Context, collector *adxmonv1.Collector) *collectorTemplateData {
@@ -303,13 +303,13 @@ func (r *CollectorReconciler) templateData(ctx context.Context, collector *adxmo
 	if location, _, _, _, ok := getIMDSMetadata(ctx, ""); ok {
 		region = location
 	}
-	
+
 	return &collectorTemplateData{
-		Image:           collector.Spec.Image,
+		Image:            collector.Spec.Image,
 		IngestorEndpoint: collector.Spec.IngestorEndpoint,
-		Namespace:       collector.Namespace,
-		Name:            collector.Name,
-		Region:          region,
+		Namespace:        collector.Namespace,
+		Name:             collector.Name,
+		Region:           region,
 	}
 }
 
