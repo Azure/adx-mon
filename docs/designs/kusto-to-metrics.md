@@ -136,17 +136,30 @@ We recommend **Approach 2** (New MetricsExporter CRD) for the following reasons:
 
 ### Standard Schema Requirements
 
-For SummaryRule outputs to be exportable as metrics, the result table must contain:
+For SummaryRule outputs to be exportable as metrics, the result table must contain columns that can be mapped to the OTLP metrics format. The transformation is highly flexible and supports both simple and complex schemas.
 
-**Required Columns:**
-- `metric_value` (real/double): The numeric value of the metric
-- `timestamp` (datetime): When the metric was recorded
+#### Core OTLP Mapping
 
-**Optional Columns:**
-- `metric_name` (string): Name of the metric (if not specified, uses MetricsExporter.Transform.DefaultMetricName)
-- Any additional columns can be used as labels via `Transform.LabelColumns`
+The MetricsExporter transforms Kusto query results to OTLP metrics using this mapping:
 
-**Example KQL Query:**
+| Kusto Column | OTLP Field | Purpose |
+|--------------|------------|---------|
+| Configured via `valueColumn` | `NumberDataPoint.Value` | The numeric metric value |
+| Configured via `timestampColumn` | `NumberDataPoint.TimeUnixNano` | Metric timestamp |
+| Configured via `metricNameColumn` | `Metric.Name` | Metric name identifier |
+| Any columns in `labelColumns` | `NumberDataPoint.Attributes[]` | Dimensional labels/metadata |
+
+#### Required Columns
+- **Value Column**: Must contain numeric data (real/double/int)
+- **Timestamp Column**: Must contain datetime data
+
+#### Optional Columns
+- **Metric Name Column**: If not specified, uses `Transform.DefaultMetricName`
+- **Label Columns**: Any additional columns become OTLP attributes
+
+#### Simple Example - Generic Use Case
+
+**KQL Query:**
 ```kql
 MyTelemetryTable
 | where Timestamp between (_startTime .. _endTime)
@@ -156,6 +169,85 @@ MyTelemetryTable
     by ServiceName, Region
 | extend metric_name = "service_response_time_avg"
 ```
+
+**Transform Configuration:**
+```yaml
+transform:
+  metricNameColumn: "metric_name"
+  valueColumn: "metric_value"
+  timestampColumn: "timestamp"
+  labelColumns: ["ServiceName", "Region"]
+```
+
+**Resulting OTLP Metric:**
+```json
+{
+  "name": "service_response_time_avg",
+  "gauge": {
+    "dataPoints": [{
+      "value": 245.7,
+      "timeUnixNano": "1640995200000000000",
+      "attributes": [
+        {"key": "ServiceName", "value": "api-gateway"},
+        {"key": "Region", "value": "us-east-1"}
+      ]
+    }]
+  }
+}
+```
+
+#### Complex Example - Advanced Analytics Use Case
+
+For more complex schemas with additional metadata and calculated metrics:
+
+**KQL Query:**
+```kql
+AnalyticsData
+| where EventTime between (_startTime .. _endTime)
+| summarize 
+    Value = avg(SuccessRate),
+    Numerator = sum(SuccessCount),
+    Denominator = sum(TotalCount),
+    StartTimeUTC = min(EventTime),
+    EndTimeUTC = max(EventTime)
+    by LocationId, CustomerResourceId
+| extend metric_name = "success_rate_analytics"
+```
+
+**Transform Configuration:**
+```yaml
+transform:
+  metricNameColumn: "metric_name" 
+  valueColumn: "Value"
+  timestampColumn: "StartTimeUTC"
+  labelColumns: ["LocationId", "CustomerResourceId", "Numerator", "Denominator", "EndTimeUTC"]
+```
+
+**Resulting OTLP Metric:**
+```json
+{
+  "name": "success_rate_analytics",
+  "gauge": {
+    "dataPoints": [{
+      "value": 0.987,
+      "timeUnixNano": "1640995200000000000",
+      "attributes": [
+        {"key": "LocationId", "value": "datacenter-01"},
+        {"key": "CustomerResourceId", "value": "customer-12345"},
+        {"key": "Numerator", "value": "1974"},
+        {"key": "Denominator", "value": "2000"},
+        {"key": "EndTimeUTC", "value": "2022-01-01T10:05:00Z"}
+      ]
+    }]
+  }
+}
+```
+
+This approach allows any Kusto query result to be transformed into OTLP metrics by:
+1. **Selecting which column contains the primary metric value**
+2. **Choosing the timestamp column for temporal alignment**  
+3. **Mapping all other relevant columns as dimensional attributes**
+4. **Optionally specifying a dynamic or static metric name**
 
 ### MetricsExporter CRD Example
 
@@ -253,7 +345,58 @@ spec:
     labelColumns: ["ServiceName", "Environment"]
 ```
 
-### Use Case 2: Multi-Source Dashboard Metrics
+### Use Case 2: Advanced Analytics with Rich Metadata
+
+```yaml
+# SummaryRule for complex analytics with multiple dimensions
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: customer-analytics
+spec:
+  database: AnalyticsDB
+  name: CustomerPerformanceAnalytics
+  table: CustomerAnalyticsSummary
+  interval: 15m
+  body: |
+    CustomerEvents
+    | where EventTime between (_startTime .. _endTime)
+    | summarize 
+        Value = avg(SuccessRate),
+        Numerator = sum(SuccessfulRequests),
+        Denominator = sum(TotalRequests),
+        StartTimeUTC = min(EventTime),
+        EndTimeUTC = max(EventTime),
+        AvgLatency = avg(LatencyMs)
+        by LocationId, CustomerResourceId, ServiceTier
+    | extend metric_name = strcat("customer_success_rate_", tolower(ServiceTier))
+
+---
+# MetricsExporter that maps rich metadata to OTLP attributes
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: customer-analytics-exporter
+spec:
+  sourceRules:
+    - name: customer-analytics
+      database: AnalyticsDB
+      table: CustomerAnalyticsSummary
+  exporters: ["datadog", "custom-analytics-endpoint"]
+  interval: 5m
+  transform:
+    metricNameColumn: "metric_name"
+    valueColumn: "Value"
+    timestampColumn: "StartTimeUTC"
+    labelColumns: ["LocationId", "CustomerResourceId", "ServiceTier", "Numerator", "Denominator", "EndTimeUTC", "AvgLatency"]
+```
+
+**Resulting OTLP metrics will contain:**
+- **Primary value**: Success rate percentage
+- **Rich attributes**: Location, customer, service tier, raw counts, time ranges, and auxiliary metrics
+- **Flexible naming**: Dynamic metric names based on service tier
+
+### Use Case 3: Multi-Source Dashboard Metrics
 
 ```yaml
 # Export from multiple SummaryRules to create a comprehensive dashboard
@@ -281,7 +424,7 @@ spec:
     labelColumns: ["NodeName", "ClusterName", "Region"]
 ```
 
-### Use Case 3: Cross-Cluster Data Aggregation
+### Use Case 4: Cross-Cluster Data Aggregation
 
 ```yaml
 # SummaryRule that imports and aggregates data from multiple clusters
@@ -302,8 +445,9 @@ spec:
     | where Timestamp between (_startTime .. _endTime)
     | summarize 
         metric_value = count() * 1.0,
-        timestamp = bin(Timestamp, 5m)
-        by Region = tostring(split(ClusterName, '-')[0])
+        timestamp = bin(Timestamp, 5m),
+        error_rate = count() * 100.0 / countif(isnotempty(SuccessEvent))
+        by Region = tostring(split(ClusterName, '-')[0]), ServiceName
     | extend metric_name = "global_error_count"
 
 ---
@@ -323,7 +467,7 @@ spec:
     metricNameColumn: "metric_name"
     valueColumn: "metric_value"
     timestampColumn: "timestamp"
-    labelColumns: ["Region"]
+    labelColumns: ["Region", "ServiceName", "error_rate"]
 ```
 
 ## Implementation Timeline
