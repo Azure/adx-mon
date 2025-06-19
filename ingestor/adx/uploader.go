@@ -217,6 +217,7 @@ func (n *uploader) upload(ctx context.Context) error {
 
 			if batch.Database != n.database {
 				logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
+				batch.Release()
 				continue
 			}
 
