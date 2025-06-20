@@ -22,5 +22,8 @@ bin/
 # Local kustomize overlays
 kustomize/overlays
 
+# Generated CRD files (controller-gen produces these with different naming)
+kustomize/bases/adx-mon.azure.com_*.yaml
+
 # Dependency directories (remove the comment below to include it)
 # vendor/

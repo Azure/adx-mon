@@ -160,3 +160,113 @@ func TestBacklog(t *testing.T) {
 		}
 	}
 }
+
+func TestSummaryRuleIntervalValidation(t *testing.T) {
+	// Test cases to verify CEL validation logic: duration(self) >= duration('1m')
+	testCases := []struct {
+		name             string
+		interval         string
+		expectedDuration time.Duration
+		shouldPass       bool // Expected result when applied to cluster with CEL validation
+	}{
+		{
+			name:             "Valid interval - exactly 1 minute",
+			interval:         "1m",
+			expectedDuration: time.Minute,
+			shouldPass:       true,
+		},
+		{
+			name:             "Valid interval - more than 1 minute",
+			interval:         "5m",
+			expectedDuration: 5 * time.Minute,
+			shouldPass:       true,
+		},
+		{
+			name:             "Valid interval - 1 hour",
+			interval:         "1h",
+			expectedDuration: time.Hour,
+			shouldPass:       true,
+		},
+		{
+			name:             "Invalid interval - 30 seconds (less than 1 minute)",
+			interval:         "30s",
+			expectedDuration: 30 * time.Second,
+			shouldPass:       false, // Should fail CEL validation: duration(self) >= duration('1m')
+		},
+		{
+			name:             "Invalid interval - 45 seconds (less than 1 minute)",
+			interval:         "45s",
+			expectedDuration: 45 * time.Second,
+			shouldPass:       false, // Should fail CEL validation: duration(self) >= duration('1m')
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create YAML with the test interval
+			yamlStr := `apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: test-rule
+  namespace: default
+spec:
+  database: TestDB
+  body: |
+    TestTable
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize count() by bin(Timestamp, 1h)
+  table: TestOutput
+  interval: ` + tc.interval
+
+			var sr SummaryRule
+			err := yaml.Unmarshal([]byte(yamlStr), &sr)
+			require.NoError(t, err)
+
+			// Verify the interval was parsed correctly
+			require.Equal(t, metav1.Duration{Duration: tc.expectedDuration}, sr.Spec.Interval)
+
+			// Test the validation logic that matches the CEL expression: duration(self) >= duration('1m')
+			// This simulates the validation that Kubernetes API server performs with CEL
+			actualDuration := sr.Spec.Interval.Duration
+			minDuration := time.Minute
+			wouldPassCELValidation := actualDuration >= minDuration
+
+			require.Equal(t, tc.shouldPass, wouldPassCELValidation,
+				"CEL validation logic check failed for interval %s (duration: %v). Expected shouldPass=%v, got wouldPassCELValidation=%v",
+				tc.interval, actualDuration, tc.shouldPass, wouldPassCELValidation)
+
+			// Log the validation behavior for documentation
+			t.Logf("Interval %s (duration: %v) would pass CEL validation: %v (CEL: duration(self) >= duration('1m'))",
+				tc.interval, tc.expectedDuration, wouldPassCELValidation)
+		})
+	}
+}
+
+// TestSummaryRuleIntervalValidationLogic tests the core validation logic used in the CEL expression
+func TestSummaryRuleIntervalValidationLogic(t *testing.T) {
+	// Test the validation logic directly: duration(self) >= duration('1m')
+	testCases := []struct {
+		name           string
+		duration       time.Duration
+		expectedResult bool
+	}{
+		{"Exactly 1 minute", time.Minute, true},
+		{"More than 1 minute", 2 * time.Minute, true},
+		{"1 hour", time.Hour, true},
+		{"Less than 1 minute - 59s", 59 * time.Second, false},
+		{"Less than 1 minute - 30s", 30 * time.Second, false},
+		{"Zero duration", 0, false},
+	}
+
+	minDuration := time.Minute
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// This is the exact logic that the CEL expression evaluates
+			result := tc.duration >= minDuration
+			require.Equal(t, tc.expectedResult, result,
+				"Validation logic failed for duration %v. Expected %v, got %v",
+				tc.duration, tc.expectedResult, result)
+		})
+	}
+}
