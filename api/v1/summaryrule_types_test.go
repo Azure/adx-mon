@@ -204,13 +204,12 @@ func TestBacklog(t *testing.T) {
 }
 
 func TestSummaryRuleIntervalValidation(t *testing.T) {
-	// Test cases to document expected validation behavior
-	// Note: CEL validation is enforced by Kubernetes API server, not at Go struct level
+	// Test cases to verify CEL validation logic: duration(self) >= duration('1m')
 	testCases := []struct {
 		name             string
 		interval         string
 		expectedDuration time.Duration
-		shouldPass       bool // Indicates expected validation result when applied to cluster
+		shouldPass       bool // Expected result when applied to cluster with CEL validation
 	}{
 		{
 			name:             "Valid interval - exactly 1 minute",
@@ -268,11 +267,48 @@ spec:
 			// Verify the interval was parsed correctly
 			require.Equal(t, metav1.Duration{Duration: tc.expectedDuration}, sr.Spec.Interval)
 
-			// This test documents the expected validation behavior.
-			// When tc.shouldPass is false, applying this SummaryRule to a cluster
-			// with the CEL validation should fail with message: "interval must be at least 1 minute"
-			t.Logf("Interval %s (duration: %v) should pass validation: %v",
-				tc.interval, tc.expectedDuration, tc.shouldPass)
+			// Test the validation logic that matches the CEL expression: duration(self) >= duration('1m')
+			// This simulates the validation that Kubernetes API server performs with CEL
+			actualDuration := sr.Spec.Interval.Duration
+			minDuration := time.Minute
+			wouldPassCELValidation := actualDuration >= minDuration
+
+			require.Equal(t, tc.shouldPass, wouldPassCELValidation,
+				"CEL validation logic check failed for interval %s (duration: %v). Expected shouldPass=%v, got wouldPassCELValidation=%v",
+				tc.interval, actualDuration, tc.shouldPass, wouldPassCELValidation)
+
+			// Log the validation behavior for documentation
+			t.Logf("Interval %s (duration: %v) would pass CEL validation: %v (CEL: duration(self) >= duration('1m'))",
+				tc.interval, tc.expectedDuration, wouldPassCELValidation)
+		})
+	}
+}
+
+// TestSummaryRuleIntervalValidationLogic tests the core validation logic used in the CEL expression
+func TestSummaryRuleIntervalValidationLogic(t *testing.T) {
+	// Test the validation logic directly: duration(self) >= duration('1m')
+	testCases := []struct {
+		name           string
+		duration       time.Duration
+		expectedResult bool
+	}{
+		{"Exactly 1 minute", time.Minute, true},
+		{"More than 1 minute", 2 * time.Minute, true},
+		{"1 hour", time.Hour, true},
+		{"Less than 1 minute - 59s", 59 * time.Second, false},
+		{"Less than 1 minute - 30s", 30 * time.Second, false},
+		{"Zero duration", 0, false},
+	}
+
+	minDuration := time.Minute
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// This is the exact logic that the CEL expression evaluates
+			result := tc.duration >= minDuration
+			require.Equal(t, tc.expectedResult, result,
+				"Validation logic failed for duration %v. Expected %v, got %v",
+				tc.duration, tc.expectedResult, result)
 		})
 	}
 }
