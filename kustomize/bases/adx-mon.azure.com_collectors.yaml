@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: summaryrules.adx-mon.azure.com
+  name: collectors.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: SummaryRule
-    listKind: SummaryRuleList
-    plural: summaryrules
-    singular: summaryrule
+    kind: Collector
+    listKind: CollectorList
+    plural: collectors
+    singular: collector
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: SummaryRule is the Schema for the summaryrules API
+        description: Collector is the Schema for the collectors API
         properties:
           apiVersion:
             description: |-
@@ -37,51 +37,23 @@ spec:
           metadata:
             type: object
           spec:
-            description: SummaryRuleSpec defines the desired state of SummaryRule
+            description: CollectorSpec defines the desired state of Collector
             properties:
-              body:
-                description: Body is the KQL body of the function
+              image:
+                description: Image is the container image to use for the collector
+                  component. Optional; if omitted, a default image will be used.
                 type: string
-              criteria:
-                additionalProperties:
-                  items:
-                    type: string
-                  type: array
-                description: |-
-                  Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
-                  are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
-                  started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
-                  execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
-                type: object
-              database:
-                description: Database is the name of the database in which the function
-                  will be created
+              ingestorEndpoint:
+                description: IngestorEndpoint is the URI endpoint for the ingestor
+                  service that this collector should send data to. Optional; if omitted,
+                  the operator will configure it automatically.
+                format: uri
                 type: string
-              interval:
-                description: Interval is the cadence at which the rule will be executed
-                type: string
-                x-kubernetes-validations:
-                - rule: "duration(self) >= duration('1m')"
-                  message: "interval must be at least 1 minute"
-              name:
-                description: Name is the name of the rule (deprecated and not used
-                  - use `metadata.name` instead)
-                type: string
-              table:
-                description: Table is rule output destination
-                type: string
-            required:
-            - body
-            - database
-            - interval
-            - table
             type: object
           status:
-            description: SummaryRuleStatus defines the observed state of Function
+            description: CollectorStatus defines the observed state of Collector
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

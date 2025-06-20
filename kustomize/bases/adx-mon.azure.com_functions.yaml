@@ -4,20 +4,21 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: summaryrules.adx-mon.azure.com
+  name: functions.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: SummaryRule
-    listKind: SummaryRuleList
-    plural: summaryrules
-    singular: summaryrule
+    kind: Function
+    listKind: FunctionList
+    plural: functions
+    singular: function
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: SummaryRule is the Schema for the summaryrules API
+        description: Function defines a KQL function to be maintained in the Kusto
+          cluster
         properties:
           apiVersion:
             description: |-
@@ -37,51 +38,35 @@ spec:
           metadata:
             type: object
           spec:
-            description: SummaryRuleSpec defines the desired state of SummaryRule
+            description: FunctionSpec defines the desired state of Function
             properties:
+              appliedEndpoint:
+                description: |-
+                  AppliedEndpoint is a JSON-serialized of the endpoints that the function
+                  is applied to. This is set by the operator and is read-only for users.
+                type: string
               body:
                 description: Body is the KQL body of the function
                 type: string
-              criteria:
-                additionalProperties:
-                  items:
-                    type: string
-                  type: array
-                description: |-
-                  Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
-                  are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
-                  started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
-                  execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
-                type: object
               database:
                 description: Database is the name of the database in which the function
                   will be created
                 type: string
-              interval:
-                description: Interval is the cadence at which the rule will be executed
-                type: string
-                x-kubernetes-validations:
-                - rule: "duration(self) >= duration('1m')"
-                  message: "interval must be at least 1 minute"
-              name:
-                description: Name is the name of the rule (deprecated and not used
-                  - use `metadata.name` instead)
-                type: string
-              table:
-                description: Table is rule output destination
-                type: string
+              suspend:
+                description: |-
+                  This flag tells the controller to suspend subsequent executions, it does
+                  not apply to already started executions.  Defaults to false.
+                type: boolean
             required:
             - body
             - database
-            - interval
-            - table
             type: object
           status:
-            description: SummaryRuleStatus defines the observed state of Function
+            description: FunctionStatus defines the observed state of Function
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
+                description: Conditions is a list of conditions that apply to the
+                  Function
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -137,6 +122,35 @@ spec:
                   - type
                   type: object
                 type: array
+              error:
+                description: Error is a string that communicates any error message
+                  if one exists
+                type: string
+              lastTimeReconciled:
+                description: LastTimeReconciled is the last time the Function was
+                  reconciled
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable message indicating details
+                  about the Function
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  for this Function
+                format: int64
+                type: integer
+              reason:
+                description: Reason is a string that communicates the reason for a
+                  transition
+                type: string
+              status:
+                description: Status is an enum that represents the status of the Function
+                type: string
+            required:
+            - lastTimeReconciled
+            - observedGeneration
+            - status
             type: object
         type: object
     served: true

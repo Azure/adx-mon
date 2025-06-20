@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: summaryrules.adx-mon.azure.com
+  name: alerters.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
   names:
-    kind: SummaryRule
-    listKind: SummaryRuleList
-    plural: summaryrules
-    singular: summaryrule
+    kind: Alerter
+    listKind: AlerterList
+    plural: alerters
+    singular: alerter
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: SummaryRule is the Schema for the summaryrules API
+        description: Alerter is the Schema for the alerters API
         properties:
           apiVersion:
             description: |-
@@ -37,51 +37,77 @@ spec:
           metadata:
             type: object
           spec:
-            description: SummaryRuleSpec defines the desired state of SummaryRule
+            description: AlerterSpec defines the desired state of Alerter
             properties:
-              body:
-                description: Body is the KQL body of the function
-                type: string
-              criteria:
-                additionalProperties:
-                  items:
-                    type: string
-                  type: array
-                description: |-
-                  Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
-                  are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
-                  started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
-                  execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+              adxClusterSelector:
+                description: ADXClusterSelector is a label selector used to select
+                  the ADXCluster CRDs this alerter should target. This field is required.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
                 type: object
-              database:
-                description: Database is the name of the database in which the function
-                  will be created
+                x-kubernetes-map-type: atomic
+              appliedProvisionState:
+                description: |-
+                  AppliedProvisionState is a JSON-serialized snapshot of the CRD
+                  as last applied by the operator. This is set by the operator and is read-only for users.
                 type: string
-              interval:
-                description: Interval is the cadence at which the rule will be executed
+              image:
+                description: Image is the container image to use for the alerter component.
+                  Optional; if omitted, a default image will be used.
                 type: string
-                x-kubernetes-validations:
-                - rule: "duration(self) >= duration('1m')"
-                  message: "interval must be at least 1 minute"
-              name:
-                description: Name is the name of the rule (deprecated and not used
-                  - use `metadata.name` instead)
-                type: string
-              table:
-                description: Table is rule output destination
+              notificationEndpoint:
+                description: NotificationEndpoint is the URI where alert notifications
+                  will be sent. This field is required.
+                format: uri
                 type: string
             required:
-            - body
-            - database
-            - interval
-            - table
+            - adxClusterSelector
+            - notificationEndpoint
             type: object
           status:
-            description: SummaryRuleStatus defines the observed state of Function
+            description: AlerterStatus defines the observed state of Alerter
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

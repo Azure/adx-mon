@@ -60,6 +60,9 @@ spec:
               interval:
                 description: Interval is the cadence at which the rule will be executed
                 type: string
+                x-kubernetes-validations:
+                - rule: "duration(self) >= duration('1m')"
+                  message: "interval must be at least 1 minute"
               name:
                 description: Name is the name of the rule (deprecated and not used
                   - use `metadata.name` instead)
