@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	kwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
 )
@@ -44,7 +46,11 @@ func TestSummaryRuleIntervalValidationIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Apply the SummaryRule CRD to the cluster
-	err = applySummaryRuleCRD(ctx, dynamicClient)
+	// Use the working directory to construct path to the CRD file
+	workingDir, err := os.Getwd()
+	require.NoError(t, err)
+	crdPath := filepath.Join(workingDir, "kustomize", "bases", "summaryrules_crd.yaml")
+	err = applySummaryRuleCRD(ctx, dynamicClient, crdPath)
 	require.NoError(t, err, "Failed to apply SummaryRule CRD")
 
 	// Wait for CRD to be ready
@@ -135,13 +141,13 @@ func TestSummaryRuleIntervalValidationIntegration(t *testing.T) {
 				t.Logf("✅ Successfully created SummaryRule with interval %s", tc.interval)
 			} else {
 				require.Error(t, err, "Expected creation to fail for interval %s", tc.interval)
-				
+
 				// Check that it's a validation error with the expected message
 				statusErr, ok := err.(*apierrors.StatusError)
 				require.True(t, ok, "Expected StatusError, got %T: %v", err, err)
 				require.Contains(t, statusErr.ErrStatus.Message, tc.expectError,
 					"Expected error message to contain '%s', got: %s", tc.expectError, statusErr.ErrStatus.Message)
-				
+
 				t.Logf("❌ Correctly rejected SummaryRule with interval %s: %s", tc.interval, statusErr.ErrStatus.Message)
 			}
 		})
@@ -158,9 +164,8 @@ func parseDuration(s string) time.Duration {
 }
 
 // applySummaryRuleCRD applies the SummaryRule CRD to the cluster by reading the actual CRD file
-func applySummaryRuleCRD(ctx context.Context, dynamicClient dynamic.Interface) error {
+func applySummaryRuleCRD(ctx context.Context, dynamicClient dynamic.Interface, crdPath string) error {
 	// Read the actual CRD YAML file from the repository
-	crdPath := "/home/runner/work/adx-mon/adx-mon/kustomize/bases/summaryrules_crd.yaml"
 	crdContent, err := readCRDFile(crdPath)
 	if err != nil {
 		return fmt.Errorf("failed to read CRD file: %w", err)
@@ -201,36 +206,39 @@ func readCRDFile(path string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
-// waitForCRDReady waits for the CRD to be established and ready
+// waitForCRDReady waits for the CRD to be established and ready using apimachinery wait
 func waitForCRDReady(ctx context.Context, dynamicClient dynamic.Interface) error {
 	gvr := schema.GroupVersionResource{
 		Group:    "apiextensions.k8s.io",
 		Version:  "v1",
 		Resource: "customresourcedefinitions",
 	}
-	
-	// Wait up to 60 seconds for CRD to be ready
-	for i := 0; i < 60; i++ {
+
+	// Use apimachinery wait to poll for CRD readiness
+	return kwait.PollUntilContextTimeout(ctx, 1*time.Second, 60*time.Second, true, func(ctx context.Context) (bool, error) {
 		crd, err := dynamicClient.Resource(gvr).Get(ctx, "summaryrules.adx-mon.azure.com", metav1.GetOptions{})
-		if err == nil {
-			// Check if CRD is established
-			conditions, found, err := unstructured.NestedSlice(crd.Object, "status", "conditions")
-			if err == nil && found {
-				for _, condition := range conditions {
-					if condMap, ok := condition.(map[string]interface{}); ok {
-						if condType, found := condMap["type"]; found && condType == "Established" {
-							if status, found := condMap["status"]; found && status == "True" {
-								// Additional wait for the CRD to be fully ready for resource creation
-								time.Sleep(3 * time.Second)
-								return nil
-							}
-						}
+		if err != nil {
+			return false, nil // Keep polling if CRD doesn't exist yet
+		}
+
+		// Check if CRD is established
+		conditions, found, err := unstructured.NestedSlice(crd.Object, "status", "conditions")
+		if err != nil || !found {
+			return false, nil // Keep polling if status is not available
+		}
+
+		for _, condition := range conditions {
+			if condMap, ok := condition.(map[string]interface{}); ok {
+				if condType, found := condMap["type"]; found && condType == "Established" {
+					if status, found := condMap["status"]; found && status == "True" {
+						// Additional wait for the CRD to be fully ready for resource creation
+						time.Sleep(3 * time.Second)
+						return true, nil
 					}
 				}
 			}
 		}
-		time.Sleep(1 * time.Second)
-	}
-	
-	return fmt.Errorf("CRD did not become ready within timeout")
+
+		return false, nil // Keep polling if not established yet
+	})
 }
