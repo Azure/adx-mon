@@ -203,6 +203,80 @@ func TestBacklog(t *testing.T) {
 	}
 }
 
+func TestSummaryRuleIntervalValidation(t *testing.T) {
+	// Test cases to document expected validation behavior
+	// Note: CEL validation is enforced by Kubernetes API server, not at Go struct level
+	testCases := []struct {
+		name             string
+		interval         string
+		expectedDuration time.Duration
+		shouldPass       bool // Indicates expected validation result when applied to cluster
+	}{
+		{
+			name:             "Valid interval - exactly 1 minute",
+			interval:         "1m",
+			expectedDuration: time.Minute,
+			shouldPass:       true,
+		},
+		{
+			name:             "Valid interval - more than 1 minute",
+			interval:         "5m",
+			expectedDuration: 5 * time.Minute,
+			shouldPass:       true,
+		},
+		{
+			name:             "Valid interval - 1 hour",
+			interval:         "1h",
+			expectedDuration: time.Hour,
+			shouldPass:       true,
+		},
+		{
+			name:             "Invalid interval - 30 seconds (less than 1 minute)",
+			interval:         "30s",
+			expectedDuration: 30 * time.Second,
+			shouldPass:       false, // Should fail CEL validation: duration(self) >= duration('1m')
+		},
+		{
+			name:             "Invalid interval - 45 seconds (less than 1 minute)",
+			interval:         "45s",
+			expectedDuration: 45 * time.Second,
+			shouldPass:       false, // Should fail CEL validation: duration(self) >= duration('1m')
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create YAML with the test interval
+			yamlStr := `apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: test-rule
+  namespace: default
+spec:
+  database: TestDB
+  body: |
+    TestTable
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize count() by bin(Timestamp, 1h)
+  table: TestOutput
+  interval: ` + tc.interval
+
+			var sr SummaryRule
+			err := yaml.Unmarshal([]byte(yamlStr), &sr)
+			require.NoError(t, err)
+
+			// Verify the interval was parsed correctly
+			require.Equal(t, metav1.Duration{Duration: tc.expectedDuration}, sr.Spec.Interval)
+
+			// This test documents the expected validation behavior.
+			// When tc.shouldPass is false, applying this SummaryRule to a cluster
+			// with the CEL validation should fail with message: "interval must be at least 1 minute"
+			t.Logf("Interval %s (duration: %v) should pass validation: %v",
+				tc.interval, tc.expectedDuration, tc.shouldPass)
+		})
+	}
+}
+
 func TestShouldSubmitRule(t *testing.T) {
 	// Use fixed time for deterministic tests
 	fixedTime := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)

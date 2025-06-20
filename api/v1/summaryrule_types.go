@@ -51,6 +51,7 @@ type SummaryRuleSpec struct {
 	// Body is the KQL body of the function
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
+	//+kubebuilder:validation:XValidation:rule="duration(self) >= duration('1m')",message="interval must be at least 1 minute"
 	Interval metav1.Duration `json:"interval"`
 
 	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
