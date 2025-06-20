@@ -46,10 +46,9 @@ func TestSummaryRuleIntervalValidationIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Apply the SummaryRule CRD to the cluster
-	// Use the working directory to construct path to the CRD file
-	workingDir, err := os.Getwd()
-	require.NoError(t, err)
-	crdPath := filepath.Join(workingDir, "kustomize", "bases", "summaryrules_crd.yaml")
+	// Copy CRD file to temporary directory for testing
+	crdPath := filepath.Join(t.TempDir(), "summaryrules_crd.yaml")
+	require.NoError(t, testutils.CopyFile("../../kustomize/bases/summaryrules_crd.yaml", crdPath))
 	err = applySummaryRuleCRD(ctx, dynamicClient, crdPath)
 	require.NoError(t, err, "Failed to apply SummaryRule CRD")
 
