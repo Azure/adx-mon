@@ -1834,42 +1834,25 @@ func TestFailedOperationRetryIssue(t *testing.T) {
 	err := task.Run(context.Background())
 	require.NoError(t, err)
 
-	t.Logf("Total submissions: %d", len(submissions))
-	for i, sub := range submissions {
-		t.Logf("Submission %d: %s to %s", i+1, sub.startTime, sub.endTime)
-	}
+	// Assert that the failed operation was retried
+	require.NotEmpty(t, submissions, "Failed operation with ShouldRetry=1 should have been retried")
 
 	// Check that the rule was updated
 	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated")
-	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	_, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 	require.True(t, ok, "Updated object should be a SummaryRule")
 
-	// Let's see what async operations we have now
-	asyncOps := updatedRule.GetAsyncOperations()
-	t.Logf("Async operations after run: %+v", asyncOps)
-
-	// The key issue: the failed operation should be retried for the SAME time window
-	// Currently, the failed operation is removed and any submission is for a new time window
-
-	if len(submissions) == 0 {
-		t.Logf("ISSUE CONFIRMED: Failed operation with ShouldRetry=1 was not retried at all")
-	} else {
-		// Check if any submission was for the original failed time window
-		retriedOriginalWindow := false
-		for _, sub := range submissions {
-			if sub.startTime == failedStartTime && sub.endTime == failedEndTime {
-				retriedOriginalWindow = true
-				break
-			}
-		}
-
-		if retriedOriginalWindow {
-			t.Logf("RETRY WORKED: Failed operation was retried for the same time window")
-		} else {
-			t.Logf("ISSUE CONFIRMED: Failed operation was not retried for its original time window (%s to %s)", failedStartTime, failedEndTime)
-			t.Logf("Instead, submissions were for different time windows (likely current interval)")
+	// Assert that the failed operation was retried for the same time window
+	retriedOriginalWindow := false
+	for _, sub := range submissions {
+		if sub.startTime == failedStartTime && sub.endTime == failedEndTime {
+			retriedOriginalWindow = true
+			break
 		}
 	}
+	require.True(t, retriedOriginalWindow,
+		"Failed operation should be retried for its original time window (%s to %s)",
+		failedStartTime, failedEndTime)
 }
 
 // TestFailedOperationWithDetailedErrorMessage tests that detailed error messages
