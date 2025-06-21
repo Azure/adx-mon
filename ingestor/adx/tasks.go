@@ -462,13 +462,6 @@ func (t *SummaryRuleTask) processKustoOperation(ctx context.Context, rule *v1.Su
 		return t.processCompletedOperation(ctx, rule, op, kustoOp)
 	}
 
-	// If operation is still in progress but should be retried, submit a retry
-	if kustoOp.ShouldRetry != 0 {
-		if _, err := t.SubmitRule(ctx, *rule, op.StartTime, op.EndTime); err != nil {
-			logger.Errorf("Failed to submit rule: %v", err)
-		}
-	}
-
 	// Operation is still in progress, don't remove it
 	return false, false
 }
