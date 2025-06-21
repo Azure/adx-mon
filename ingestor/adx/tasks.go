@@ -240,12 +240,12 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 }
 
 type SummaryRuleTask struct {
-	store                    storage.CRDHandler
-	kustoCli                 StatementExecutor
-	GetOperations            func(ctx context.Context) ([]AsyncOperationStatus, error)
-	GetOperationErrorDetail  func(ctx context.Context, operationId string) (string, error)
-	SubmitRule               func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
-	ClusterLabels            map[string]string
+	store                   storage.CRDHandler
+	kustoCli                StatementExecutor
+	GetOperations           func(ctx context.Context) ([]AsyncOperationStatus, error)
+	GetOperationErrorDetail func(ctx context.Context, operationId string) (string, error)
+	SubmitRule              func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
+	ClusterLabels           map[string]string
 }
 
 func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
@@ -425,7 +425,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 						if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 							// Operation failed - mark the rule as failed
 							hasFailedOperations = true
-							
+
 							// Get detailed error information for better error messaging
 							detailedError := fmt.Sprintf("async operation %s failed", kustoOp.OperationId)
 							if errorDetail, err := t.GetOperationErrorDetail(ctx, kustoOp.OperationId); err != nil {
@@ -433,12 +433,12 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 							} else if errorDetail != "" {
 								detailedError = fmt.Sprintf("async operation %s failed: %s", kustoOp.OperationId, errorDetail)
 							}
-							
+
 							logger.Errorf("Async operation %s for rule %s.%s failed: %s", kustoOp.OperationId, rule.Spec.Database, rule.Name, detailedError)
 							if err := t.updateSummaryRuleStatus(ctx, &rule, fmt.Errorf("%s", detailedError)); err != nil {
 								logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
 							}
-							
+
 							// Check if the failed operation should be retried
 							if kustoOp.ShouldRetry != 0 {
 								logger.Infof("Retrying failed operation %s for rule %s.%s (ShouldRetry=%v)", kustoOp.OperationId, rule.Spec.Database, rule.Name, kustoOp.ShouldRetry)

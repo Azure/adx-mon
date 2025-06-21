@@ -1755,7 +1755,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	require.Equal(t, 3, submitCount, "Should have submitted exactly 3 operations across 3 cycles")
 }
 
-// TestFailedOperationRetryIssue demonstrates the issue where failed operations 
+// TestFailedOperationRetryIssue demonstrates the issue where failed operations
 // with ShouldRetry=1 are not retried because they are removed before retry logic runs
 func TestFailedOperationRetryIssue(t *testing.T) {
 	// Create a mock statement executor
@@ -1810,7 +1810,7 @@ func TestFailedOperationRetryIssue(t *testing.T) {
 		startTime, endTime string
 	}
 	var submissions []submission
-	
+
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 		submissions = append(submissions, submission{startTime, endTime})
 		t.Logf("SubmitRule called with startTime=%s, endTime=%s", startTime, endTime)
@@ -1824,8 +1824,8 @@ func TestFailedOperationRetryIssue(t *testing.T) {
 			{
 				OperationId:   "failed-op-123",
 				LastUpdatedOn: time.Now(),
-				State:         "Failed",    // This operation failed
-				ShouldRetry:   1,           // But should be retried
+				State:         "Failed", // This operation failed
+				ShouldRetry:   1,        // But should be retried
 			},
 		}, nil
 	}
@@ -1847,10 +1847,10 @@ func TestFailedOperationRetryIssue(t *testing.T) {
 	// Let's see what async operations we have now
 	asyncOps := updatedRule.GetAsyncOperations()
 	t.Logf("Async operations after run: %+v", asyncOps)
-	
+
 	// The key issue: the failed operation should be retried for the SAME time window
 	// Currently, the failed operation is removed and any submission is for a new time window
-	
+
 	if len(submissions) == 0 {
 		t.Logf("ISSUE CONFIRMED: Failed operation with ShouldRetry=1 was not retried at all")
 	} else {
@@ -1862,7 +1862,7 @@ func TestFailedOperationRetryIssue(t *testing.T) {
 				break
 			}
 		}
-		
+
 		if retriedOriginalWindow {
 			t.Logf("RETRY WORKED: Failed operation was retried for the same time window")
 		} else {
@@ -1872,7 +1872,7 @@ func TestFailedOperationRetryIssue(t *testing.T) {
 	}
 }
 
-// TestFailedOperationWithDetailedErrorMessage tests that detailed error messages 
+// TestFailedOperationWithDetailedErrorMessage tests that detailed error messages
 // are retrieved and displayed for failed operations
 func TestFailedOperationWithDetailedErrorMessage(t *testing.T) {
 	// Create a mock statement executor
@@ -1953,6 +1953,6 @@ func TestFailedOperationWithDetailedErrorMessage(t *testing.T) {
 	require.NotNil(t, condition, "Rule should have a condition")
 	require.Equal(t, metav1.ConditionFalse, condition.Status, "Condition status should be False")
 	// The error message should include the detailed Kusto error
-	require.Contains(t, condition.Message, "Semantic error: SEM0001: Filter expression should be Boolean", 
+	require.Contains(t, condition.Message, "Semantic error: SEM0001: Filter expression should be Boolean",
 		"Condition message should contain the detailed Kusto error")
 }
