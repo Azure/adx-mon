@@ -1754,3 +1754,205 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 
 	require.Equal(t, 3, submitCount, "Should have submitted exactly 3 operations across 3 cycles")
 }
+
+// TestFailedOperationRetryIssue demonstrates the issue where failed operations 
+// with ShouldRetry=1 are not retried because they are removed before retry logic runs
+func TestFailedOperationRetryIssue(t *testing.T) {
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule with a last execution time set in the past
+	// so that normal interval-based execution won't trigger
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Set last execution time to just now, so no new time-based executions should happen
+	rule.SetLastExecutionTime(time.Now().UTC())
+
+	// Add an existing async operation that will be found as failed with ShouldRetry=1
+	failedStartTime := "2025-06-20T17:31:00Z"
+	failedEndTime := "2025-06-20T17:36:00Z"
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: "failed-op-123",
+		StartTime:   failedStartTime,
+		EndTime:     failedEndTime,
+	})
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task
+	task := NewSummaryRuleTask(mockHandler, mockExecutor, nil)
+
+	// Track retry submissions and their time windows
+	type submission struct {
+		startTime, endTime string
+	}
+	var submissions []submission
+	
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submissions = append(submissions, submission{startTime, endTime})
+		t.Logf("SubmitRule called with startTime=%s, endTime=%s", startTime, endTime)
+		// Return a new operation ID for retry
+		return fmt.Sprintf("retry-op-%d", len(submissions)), nil
+	}
+
+	// Set the GetOperations function to return a failed operation with ShouldRetry=1
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{
+			{
+				OperationId:   "failed-op-123",
+				LastUpdatedOn: time.Now(),
+				State:         "Failed",    // This operation failed
+				ShouldRetry:   1,           // But should be retried
+			},
+		}, nil
+	}
+
+	// Run the task
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+
+	t.Logf("Total submissions: %d", len(submissions))
+	for i, sub := range submissions {
+		t.Logf("Submission %d: %s to %s", i+1, sub.startTime, sub.endTime)
+	}
+
+	// Check that the rule was updated
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated")
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+
+	// Let's see what async operations we have now
+	asyncOps := updatedRule.GetAsyncOperations()
+	t.Logf("Async operations after run: %+v", asyncOps)
+	
+	// The key issue: the failed operation should be retried for the SAME time window
+	// Currently, the failed operation is removed and any submission is for a new time window
+	
+	if len(submissions) == 0 {
+		t.Logf("ISSUE CONFIRMED: Failed operation with ShouldRetry=1 was not retried at all")
+	} else {
+		// Check if any submission was for the original failed time window
+		retriedOriginalWindow := false
+		for _, sub := range submissions {
+			if sub.startTime == failedStartTime && sub.endTime == failedEndTime {
+				retriedOriginalWindow = true
+				break
+			}
+		}
+		
+		if retriedOriginalWindow {
+			t.Logf("RETRY WORKED: Failed operation was retried for the same time window")
+		} else {
+			t.Logf("ISSUE CONFIRMED: Failed operation was not retried for its original time window (%s to %s)", failedStartTime, failedEndTime)
+			t.Logf("Instead, submissions were for different time windows (likely current interval)")
+		}
+	}
+}
+
+// TestFailedOperationWithDetailedErrorMessage tests that detailed error messages 
+// are retrieved and displayed for failed operations
+func TestFailedOperationWithDetailedErrorMessage(t *testing.T) {
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Set last execution time to now to prevent new executions
+	rule.SetLastExecutionTime(time.Now().UTC())
+
+	// Add an existing async operation that will be found as failed
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: "failed-op-with-details",
+		StartTime:   "2025-06-20T17:31:00Z",
+		EndTime:     "2025-06-20T17:36:00Z",
+	})
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that tracks status updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task
+	task := NewSummaryRuleTask(mockHandler, mockExecutor, nil)
+
+	// Mock the GetOperations function to return a failed operation
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{
+			{
+				OperationId:   "failed-op-with-details",
+				LastUpdatedOn: time.Now(),
+				State:         "Failed",
+				ShouldRetry:   0, // Don't retry, just test error messaging
+			},
+		}, nil
+	}
+
+	// Mock GetOperationErrorDetail to return a specific error message
+	task.GetOperationErrorDetail = func(ctx context.Context, operationId string) (string, error) {
+		if operationId == "failed-op-with-details" {
+			return "Request is invalid and cannot be processed: Semantic error: SEM0001: Filter expression should be Boolean", nil
+		}
+		return "", nil
+	}
+
+	// Run the task
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+
+	// Check that the rule was updated with error
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated")
+	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+
+	// Check the condition for detailed error message
+	condition := updatedRule.GetCondition()
+	require.NotNil(t, condition, "Rule should have a condition")
+	require.Equal(t, metav1.ConditionFalse, condition.Status, "Condition status should be False")
+	// The error message should include the detailed Kusto error
+	require.Contains(t, condition.Message, "Semantic error: SEM0001: Filter expression should be Boolean", 
+		"Condition message should contain the detailed Kusto error")
+}

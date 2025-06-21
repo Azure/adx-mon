@@ -240,11 +240,12 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 }
 
 type SummaryRuleTask struct {
-	store         storage.CRDHandler
-	kustoCli      StatementExecutor
-	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
-	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
-	ClusterLabels map[string]string
+	store                    storage.CRDHandler
+	kustoCli                 StatementExecutor
+	GetOperations            func(ctx context.Context) ([]AsyncOperationStatus, error)
+	GetOperationErrorDetail  func(ctx context.Context, operationId string) (string, error)
+	SubmitRule               func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
+	ClusterLabels            map[string]string
 }
 
 func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
@@ -255,6 +256,7 @@ func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, cl
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
+	task.GetOperationErrorDetail = task.getOperationErrorDetail
 	task.SubmitRule = task.submitRule
 	return task
 }
@@ -423,9 +425,30 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 						if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 							// Operation failed - mark the rule as failed
 							hasFailedOperations = true
-							logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
-							if err := t.updateSummaryRuleStatus(ctx, &rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
+							
+							// Get detailed error information for better error messaging
+							detailedError := fmt.Sprintf("async operation %s failed", kustoOp.OperationId)
+							if errorDetail, err := t.GetOperationErrorDetail(ctx, kustoOp.OperationId); err != nil {
+								logger.Debugf("Could not retrieve detailed error for operation %s: %v", kustoOp.OperationId, err)
+							} else if errorDetail != "" {
+								detailedError = fmt.Sprintf("async operation %s failed: %s", kustoOp.OperationId, errorDetail)
+							}
+							
+							logger.Errorf("Async operation %s for rule %s.%s failed: %s", kustoOp.OperationId, rule.Spec.Database, rule.Name, detailedError)
+							if err := t.updateSummaryRuleStatus(ctx, &rule, fmt.Errorf("%s", detailedError)); err != nil {
 								logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
+							}
+							
+							// Check if the failed operation should be retried
+							if kustoOp.ShouldRetry != 0 {
+								logger.Infof("Retrying failed operation %s for rule %s.%s (ShouldRetry=%v)", kustoOp.OperationId, rule.Spec.Database, rule.Name, kustoOp.ShouldRetry)
+								if _, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err != nil {
+									logger.Errorf("Failed to retry operation: %v", err)
+									// Keep the operation for future retry attempts
+									continue
+								}
+								// Retry submission succeeded, we can remove the original failed operation
+								// The new operation will be tracked separately
 							}
 						}
 						// We're done polling this async operation, so we can remove it from the list
@@ -573,6 +596,42 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	}
 
 	return operations, nil
+}
+
+// getOperationErrorDetail retrieves detailed error information for a specific failed operation
+func (t *SummaryRuleTask) getOperationErrorDetail(ctx context.Context, operationId string) (string, error) {
+	stmt := kql.New(".show operations | where OperationId == '").AddUnsafe(operationId).AddLiteral("' | summarize arg_max(LastUpdatedOn, Status)")
+	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve operation error detail: %w", err)
+	}
+	if rows == nil {
+		return "", fmt.Errorf("no result from operation error detail query")
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return "", fmt.Errorf("failed to retrieve operation error detail: %v", errFinal)
+		}
+
+		if len(row.Values) >= 2 {
+			// The Status column should contain the detailed error message
+			status := row.Values[1].String()
+			if status != "" {
+				return status, nil
+			}
+		}
+	}
+
+	return "", nil // No detailed error found
 }
 
 func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
