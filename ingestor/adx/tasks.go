@@ -469,18 +469,12 @@ func (t *SummaryRuleTask) processKustoOperation(ctx context.Context, rule *v1.Su
 // processCompletedOperation handles operations that have reached a completed state (success or failure)
 // Returns (shouldRemove, operationFailed)
 func (t *SummaryRuleTask) processCompletedOperation(ctx context.Context, rule *v1.SummaryRule, op v1.AsyncOperation, kustoOp AsyncOperationStatus) (bool, bool) {
-	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
-		return t.processFailedOperation(ctx, rule, op, kustoOp)
+	// If operation succeeded, remove it from tracking
+	if kustoOp.State != string(KustoAsyncOperationStateFailed) {
+		return true, false
 	}
 
-	// Operation succeeded, remove it from tracking
-	return true, false
-}
-
-// processFailedOperation handles failed operations, including retry logic and error reporting
-// Returns (shouldRemove, operationFailed)
-func (t *SummaryRuleTask) processFailedOperation(ctx context.Context, rule *v1.SummaryRule, op v1.AsyncOperation, kustoOp AsyncOperationStatus) (bool, bool) {
-	// Get detailed error information for better error messaging
+	// Handle failed operation - get detailed error information for better error messaging
 	detailedError := fmt.Sprintf("async operation %s failed", kustoOp.OperationId)
 	if errorDetail, err := t.GetOperationErrorDetail(ctx, kustoOp.OperationId); err != nil {
 		logger.Debugf("Could not retrieve detailed error for operation %s: %v", kustoOp.OperationId, err)
