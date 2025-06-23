@@ -42,8 +42,8 @@ spec:
             properties:
               appliedEndpoint:
                 description: |-
-                  AppliedEndpoint is a JSON-serialized snapshot of the endpoints that the
-                  function is applied to. This is set by the operator and is read-only for users.
+                  AppliedEndpoint is a JSON-serialized of the endpoints that the function
+                  is applied to. This is set by the operator and is read-only for users.
                 type: string
               body:
                 description: Body is the KQL body of the function
