@@ -325,38 +325,8 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			continue
 		}
 
-		// Track if there was a submission error for this rule
-		var submissionError error
-
-		// Get the current condition of the rule
-		cnd := rule.GetCondition()
-		if cnd == nil {
-			// For first-time execution, initialize the condition with a timestamp
-			// that's one interval back from current time
-			cnd = &metav1.Condition{
-				LastTransitionTime: metav1.Time{Time: time.Now().Add(-rule.Spec.Interval.Duration)},
-			}
-		}
-
-		// Calculate the next execution window based on the last successful execution
-		windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
-
-		if rule.ShouldSubmitRule(nil) {
-			// Prepare a new async operation with calculated time range
-			asyncOp := v1.AsyncOperation{
-				StartTime: windowStartTime.Format(time.RFC3339Nano),
-				EndTime:   windowEndTime.Format(time.RFC3339Nano),
-			}
-			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
-			asyncOp.OperationId = operationId
-			rule.SetAsyncOperation(asyncOp)
-			rule.SetLastExecutionTime(windowEndTime)
-
-			if err != nil {
-				submissionError = err
-				t.updateSummaryRuleStatus(ctx, &rule, err)
-			}
-		}
+		// Handle rule execution logic (timing evaluation and submission)
+		submissionError := t.handleRuleExecution(ctx, &rule)
 
 		// Process any outstanding async operations for this rule
 		operations := rule.GetAsyncOperations()
@@ -474,6 +444,44 @@ func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
 		return false
 	}
 	return true
+}
+
+// handleRuleExecution handles the execution logic for a single summary rule.
+// It evaluates whether the rule should be submitted based on its interval and timing,
+// and if so, submits the rule as an async operation to Kusto.
+// Returns any submission error that occurred.
+func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) error {
+	// Get the current condition of the rule
+	cnd := rule.GetCondition()
+	if cnd == nil {
+		// For first-time execution, initialize the condition with a timestamp
+		// that's one interval back from current time
+		cnd = &metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: time.Now().Add(-rule.Spec.Interval.Duration)},
+		}
+	}
+
+	// Calculate the next execution window based on the last successful execution
+	windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
+
+	if rule.ShouldSubmitRule(nil) {
+		// Prepare a new async operation with calculated time range
+		asyncOp := v1.AsyncOperation{
+			StartTime: windowStartTime.Format(time.RFC3339Nano),
+			EndTime:   windowEndTime.Format(time.RFC3339Nano),
+		}
+		operationId, err := t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
+		asyncOp.OperationId = operationId
+		rule.SetAsyncOperation(asyncOp)
+		rule.SetLastExecutionTime(windowEndTime)
+
+		if err != nil {
+			t.updateSummaryRuleStatus(ctx, rule, err)
+			return err
+		}
+	}
+
+	return nil
 }
 
 // applySubstitutions applies time and cluster label substitutions to a KQL query body
