@@ -319,3 +319,108 @@ func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
 	require.False(t, changed, "Expected no change when stored spec is nil")
 	require.ElementsMatch(t, expectedArgs, dep.Spec.Template.Spec.Containers[0].Args, "Args should not change when stored spec is nil")
 }
+
+func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	alerter := &adxmonv1.Alerter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-alerter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.AlerterSpec{
+			Image: "test-image:v1",
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app": "adx-mon",
+			},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "test-db", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&adxmonv1.Alerter{}).
+		Build()
+
+	reconciler := &AlerterReconciler{Client: client, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+
+	require.NoError(t, client.Create(context.Background(), cluster))
+	require.NoError(t, client.Create(context.Background(), alerter))
+
+	result, err := reconciler.CreateAlerter(context.Background(), alerter)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that a deployment was created
+	dep := &appsv1.Deployment{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "alerter",
+		Namespace: "default",
+	}, dep))
+
+	// Validate pod security context (c0055 - Linux hardening)
+	require.NotNil(t, dep.Spec.Template.Spec.SecurityContext, "Pod security context should be set")
+	require.NotNil(t, dep.Spec.Template.Spec.SecurityContext.RunAsNonRoot, "runAsNonRoot should be set")
+	require.True(t, *dep.Spec.Template.Spec.SecurityContext.RunAsNonRoot, "runAsNonRoot should be true")
+	require.NotNil(t, dep.Spec.Template.Spec.SecurityContext.RunAsUser, "runAsUser should be set")
+	require.Equal(t, int64(1000), *dep.Spec.Template.Spec.SecurityContext.RunAsUser, "runAsUser should be 1000")
+	require.NotNil(t, dep.Spec.Template.Spec.SecurityContext.RunAsGroup, "runAsGroup should be set")
+	require.Equal(t, int64(3000), *dep.Spec.Template.Spec.SecurityContext.RunAsGroup, "runAsGroup should be 3000")
+	require.NotNil(t, dep.Spec.Template.Spec.SecurityContext.FSGroup, "fsGroup should be set")
+	require.Equal(t, int64(65534), *dep.Spec.Template.Spec.SecurityContext.FSGroup, "fsGroup should be 65534")
+
+	// Validate container security context
+	require.Len(t, dep.Spec.Template.Spec.Containers, 1, "Should have exactly one container")
+	container := dep.Spec.Template.Spec.Containers[0]
+	require.NotNil(t, container.SecurityContext, "Container security context should be set")
+
+	// c0016 - Allow privilege escalation should be false
+	require.NotNil(t, container.SecurityContext.AllowPrivilegeEscalation, "allowPrivilegeEscalation should be set")
+	require.False(t, *container.SecurityContext.AllowPrivilegeEscalation, "allowPrivilegeEscalation should be false")
+
+	// c0013 - Privileged containers should be false
+	require.NotNil(t, container.SecurityContext.Privileged, "privileged should be set")
+	require.False(t, *container.SecurityContext.Privileged, "privileged should be false")
+
+	// c0017 - Immutable container filesystem
+	require.NotNil(t, container.SecurityContext.ReadOnlyRootFilesystem, "readOnlyRootFilesystem should be set")
+	require.True(t, *container.SecurityContext.ReadOnlyRootFilesystem, "readOnlyRootFilesystem should be true")
+
+	// c0055 - Linux hardening (capabilities)
+	require.NotNil(t, container.SecurityContext.Capabilities, "capabilities should be set")
+	require.NotNil(t, container.SecurityContext.Capabilities.Drop, "capabilities.drop should be set")
+	require.Contains(t, container.SecurityContext.Capabilities.Drop, corev1.Capability("ALL"), "ALL capabilities should be dropped")
+
+	// c0034 - Service account token mounting
+	require.NotNil(t, dep.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
+	require.True(t, *dep.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be true in deployment")
+
+	// Verify that service account has automountServiceAccountToken set to false
+	sa := &corev1.ServiceAccount{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "alerter",
+		Namespace: "default",
+	}, sa))
+	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
+	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
+}

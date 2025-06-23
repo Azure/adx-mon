@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.3
+    controller-gen.kubebuilder.io/version: v0.18.0
   name: summaryrules.adx-mon.azure.com
 spec:
   group: adx-mon.azure.com
@@ -42,6 +42,17 @@ spec:
               body:
                 description: Body is the KQL body of the function
                 type: string
+              criteria:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+                  are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+                  started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+                  execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+                type: object
               database:
                 description: Database is the name of the database in which the function
                   will be created
@@ -50,7 +61,8 @@ spec:
                 description: Interval is the cadence at which the rule will be executed
                 type: string
               name:
-                description: Name is the name of the rule
+                description: Name is the name of the rule (deprecated and not used
+                  - use `metadata.name` instead)
                 type: string
               table:
                 description: Table is rule output destination
@@ -59,7 +71,6 @@ spec:
             - body
             - database
             - interval
-            - name
             - table
             type: object
           status:

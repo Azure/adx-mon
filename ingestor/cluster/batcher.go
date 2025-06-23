@@ -26,6 +26,9 @@ type Segmenter interface {
 	Get(infos []wal.SegmentInfo, prefix string) []wal.SegmentInfo
 	PrefixesByAge() []string
 	Remove(si wal.SegmentInfo)
+	TotalSegments() int
+	TotalSize() int64
+	OldestSegmentAge() time.Duration
 }
 
 type BatcherOpts struct {
@@ -122,12 +125,6 @@ type batcher struct {
 	// pendingTransfers is the number of batches ready for transfer but not in the transfer queue.
 	pendingTransfer uint64
 
-	// segmentsTotal is the total number of segments on disk.
-	segmentsTotal int64
-
-	// segmentsSize is the total size of segments on disk.
-	segementsSize int64
-
 	// transferDisabled is set to true when transfers are disabled.
 	transferDisabled bool
 
@@ -205,15 +202,15 @@ func (b *batcher) UploadQueueSize() int {
 }
 
 func (b *batcher) SegmentsTotal() int64 {
-	return atomic.LoadInt64(&b.segmentsTotal)
+	return int64(b.Segmenter.TotalSegments())
 }
 
 func (b *batcher) SegmentsSize() int64 {
-	return atomic.LoadInt64(&b.segementsSize)
+	return b.Segmenter.TotalSize()
 }
 
 func (b *batcher) MaxSegmentAge() time.Duration {
-	return b.maxSegmentAge
+	return b.Segmenter.OldestSegmentAge()
 }
 
 func (b *batcher) watch(ctx context.Context) {
@@ -446,10 +443,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			notOwned = append(notOwned, batch)
 		}
 	}
-
-	atomic.StoreInt64(&b.segmentsTotal, totalFiles)
-	atomic.StoreInt64(&b.segementsSize, totalSize)
-
 	return owned, notOwned, nil
 }
 

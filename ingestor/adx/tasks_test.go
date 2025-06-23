@@ -632,7 +632,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 
 	// Should have no async operations since submission failed
 	asyncOps := updatedRule.GetAsyncOperations()
-	require.Len(t, asyncOps, 0, "Should have no async operations when submission fails")
+	require.Len(t, asyncOps, 1, "Should have an async operation when submission fails")
 }
 
 func TestSummaryRuleSubmissionSuccess(t *testing.T) {
@@ -1340,6 +1340,148 @@ func TestSummaryRules(t *testing.T) {
 	require.NotNil(t, nextCnd)
 	asyncOps = rule.GetAsyncOperations()
 	require.Equal(t, 0, len(asyncOps))
+
+	t.Run("Offline operation", func(t *testing.T) {
+		// Move back in time to ensure our predicate thinks we need to fill a backlog
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+		resetToTime := rule.GetLastExecutionTime().Add(-time.Hour * 10)
+		rule.SetLastExecutionTime(resetToTime)
+		require.NoError(t, ctrlCli.Status().Update(ctx, rule))
+
+		// Simulate failures
+		task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+			return "", errors.New("some failure scenario")
+		}
+
+		// Execute the rule, we expect to accumulate operations
+		for range 3 {
+			require.NoError(t, task.Run(ctx))
+		}
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 3, len(ops), "Should have 3 async operations due to failures")
+
+		for _, op := range ops {
+			require.Empty(t, op.OperationId, "Cluster is offline so our operation-id should not be set")
+		}
+
+		// Simulate cluster availability
+		task.SubmitRule = task.submitRule
+
+		// Submit the backlog
+		require.NoError(t, task.Run(ctx))
+		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, rule))
+
+		for _, op := range rule.GetAsyncOperations() {
+			require.NotEmpty(t, op.OperationId, "Cluster is online so backlog operation-ids should be set")
+		}
+	})
+}
+
+func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
+	// This test validates the fix for issue #796 - ensures that submission failures
+	// don't cause immediate retries on the next execution cycle due to ConditionFalse status.
+
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule with a long interval to ensure no time-based retries
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour}, // Long interval
+			Body:     "TestBody",
+		},
+	}
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Set the GetOperations function to return an empty list
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{}, nil
+	}
+
+	// Track submission calls - should fail consistently to prevent backlog recovery
+	submitCallCount := 0
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitCallCount++
+		// Always fail to prevent the backlog mechanism from succeeding
+		return "", errors.New("kusto connection failed")
+	}
+
+	// First run - submission fails, status should become False
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Task should succeed even when submission fails")
+
+	// The first run might call SubmitRule twice:
+	// 1. Initial submission for new window
+	// 2. Backlog retry for the failed operation with empty OperationId
+	// This is expected behavior of the backlog mechanism
+	firstRunCalls := submitCallCount
+	require.GreaterOrEqual(t, firstRunCalls, 1, "SubmitRule should have been called at least once")
+
+	// Verify the rule was updated with failure status
+	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	updatedRule1, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+
+	condition1 := updatedRule1.GetCondition()
+	require.NotNil(t, condition1, "Rule should have a condition")
+	require.Equal(t, metav1.ConditionFalse, condition1.Status, "Condition status should be False after failure")
+
+	// Reset the updated objects list for the second run
+	mockHandler.updatedObjects = []client.Object{}
+
+	// Update the rule list to use the failed rule for the second run
+	ruleList.Items[0] = *updatedRule1
+
+	// Second run immediately after - should NOT create NEW submissions due to ConditionFalse
+	// It may still retry backlog operations (which is expected), but shouldn't create new operations
+	err = task.Run(context.Background())
+	require.NoError(t, err, "Task should succeed on second run")
+
+	secondRunCalls := submitCallCount - firstRunCalls
+
+	// Key assertion: The fix ensures that we don't create NEW submissions just because status is False.
+	// Any additional calls should be from backlog processing, not from the shouldSubmitRule logic.
+	// Since the interval is 1 hour and we're running immediately, there should be no time-based retries.
+	// The only retries should be from the backlog mechanism trying to recover the failed operations.
+
+	// To validate the fix, we check that the number of calls in the second run is not greater than
+	// the number of failed operations from the first run (which would be retried via backlog).
+	asyncOps := updatedRule1.GetAsyncOperations()
+	expectedBacklogRetries := 0
+	for _, op := range asyncOps {
+		if op.OperationId == "" {
+			expectedBacklogRetries++
+		}
+	}
+
+	require.LessOrEqual(t, secondRunCalls, expectedBacklogRetries,
+		"Second run should only retry backlog operations, not create new ones due to ConditionFalse")
 }
 
 var severalFunctions = `// function a
@@ -1410,4 +1552,205 @@ T
 			require.Equal(t, tt.Want, have)
 		})
 	}
+}
+
+func TestSummaryRuleCriteriaMatching(t *testing.T) {
+	tests := []struct {
+		name          string
+		criteria      map[string][]string
+		clusterLabels map[string]string
+		shouldMatch   bool
+		description   string
+	}{
+		{
+			name:        "no criteria - should always match",
+			criteria:    nil,
+			shouldMatch: true,
+			description: "Rules with no criteria should always execute",
+		},
+		{
+			name:        "empty criteria - should always match",
+			criteria:    map[string][]string{},
+			shouldMatch: true,
+			description: "Rules with empty criteria should always execute",
+		},
+		{
+			name: "exact match - single value",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "eastus",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has the exact required label value",
+		},
+		{
+			name: "case insensitive match - single value",
+			criteria: map[string][]string{
+				"region": {"EastUS"},
+			},
+			clusterLabels: map[string]string{
+				"REGION": "eastus",
+			},
+			shouldMatch: true,
+			description: "Rule should match case-insensitively",
+		},
+		{
+			name: "no match - different value",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "westus",
+			},
+			shouldMatch: false,
+			description: "Rule should not match when cluster has different label value",
+		},
+		{
+			name: "no match - missing label",
+			criteria: map[string][]string{
+				"region": {"eastus"},
+			},
+			clusterLabels: map[string]string{
+				"environment": "production",
+			},
+			shouldMatch: false,
+			description: "Rule should not match when cluster is missing required label",
+		},
+		{
+			name: "match - multiple values (OR logic)",
+			criteria: map[string][]string{
+				"region": {"eastus", "westus"},
+			},
+			clusterLabels: map[string]string{
+				"region": "westus",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has any of the specified values (OR logic)",
+		},
+		{
+			name: "match - multiple criteria (any match)",
+			criteria: map[string][]string{
+				"region":      {"eastus"},
+				"environment": {"staging"},
+			},
+			clusterLabels: map[string]string{
+				"region":      "westus",  // doesn't match
+				"environment": "staging", // matches
+			},
+			shouldMatch: true,
+			description: "Rule should match when any criteria matches (OR logic between criteria)",
+		},
+		{
+			name: "no match - multiple criteria (no match)",
+			criteria: map[string][]string{
+				"region":      {"eastus"},
+				"environment": {"staging"},
+			},
+			clusterLabels: map[string]string{
+				"region":      "westus",     // doesn't match
+				"environment": "production", // doesn't match
+			},
+			shouldMatch: false,
+			description: "Rule should not match when no criteria matches",
+		},
+		{
+			name: "match - multiple environments (OR logic)",
+			criteria: map[string][]string{
+				"environment": {"production", "staging", "development"},
+			},
+			clusterLabels: map[string]string{
+				"environment": "staging",
+			},
+			shouldMatch: true,
+			description: "Rule should match when cluster has any of the specified environment values (OR logic)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test the criteria matching logic directly
+			shouldExecute := matchesCriteria(tt.criteria, tt.clusterLabels)
+			require.Equal(t, tt.shouldMatch, shouldExecute, tt.description)
+		})
+	}
+}
+
+func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
+	// Test that submitting a rule doesn't cause double execution across multiple execution cycles
+	// The fix ensures that completed operations (with ShouldRetry=0) are not processed for retry
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-rule",
+			Generation: 1,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Minute}, // Use 1 minute for faster testing
+			Body:     "TestBody",
+		},
+	}
+
+	mockHandler := &mockCRDHandler{
+		listResponse: &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule}},
+	}
+
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	var submitCount int
+	var allSubmittedOperations []string
+
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitCount++
+		operationId := fmt.Sprintf("op-%d", submitCount)
+		allSubmittedOperations = append(allSubmittedOperations, operationId)
+		t.Logf("SubmitRule called #%d, operationId: %s", submitCount, operationId)
+		return operationId, nil
+	}
+
+	// Mock GetOperations to return all previously submitted operations as completed
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		var operations []AsyncOperationStatus
+		for _, opId := range allSubmittedOperations {
+			operations = append(operations, AsyncOperationStatus{
+				OperationId: opId,
+				State:       string(KustoAsyncOperationStateCompleted),
+				ShouldRetry: 0, // Completed operations should have ShouldRetry=0
+			})
+		}
+		return operations, nil
+	}
+
+	// Test multiple execution cycles
+	for cycle := 1; cycle <= 3; cycle++ {
+		t.Logf("Running execution cycle %d", cycle)
+
+		initialSubmitCount := submitCount
+		err := task.Run(context.Background())
+		require.NoError(t, err)
+
+		// Each cycle should submit exactly one operation (no double execution)
+		expectedSubmitCount := initialSubmitCount + 1
+		require.Equal(t, expectedSubmitCount, submitCount,
+			"Cycle %d: Rule should be submitted only once per cycle", cycle)
+
+		// Simulate time advancement by updating the rule's last successful execution time
+		// This ensures the next cycle will be eligible for execution
+		if cycle < 3 { // Don't advance time after the last cycle
+			newEndTime := time.Now().UTC().Add(time.Duration(cycle) * time.Minute)
+			rule.SetLastExecutionTime(newEndTime)
+		}
+	}
+
+	require.Equal(t, 3, submitCount, "Should have submitted exactly 3 operations across 3 cycles")
 }

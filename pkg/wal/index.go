@@ -239,8 +239,30 @@ func (i *Index) PrefixesByCount() []string {
 	return prefixes
 }
 
+// TotalSize returns the total size of all segments in the index.
 func (i *Index) TotalSize() int64 {
 	return atomic.LoadInt64(&i.totalSize)
+}
+
+// OldestSegmentAge returns the age of the oldest segment in the index.
+func (i *Index) OldestSegmentAge() time.Duration {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	var dur time.Duration
+	for _, segments := range i.segments {
+		for _, seg := range segments {
+			age := time.Since(seg.CreatedAt)
+			if dur.Seconds() == 0 || age > dur {
+				dur = age
+			}
+		}
+	}
+
+	if dur == 0 {
+		return 0
+	}
+	return dur
 }
 
 func (i *Index) WriteDebug(w io.Writer) error {

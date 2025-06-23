@@ -188,3 +188,23 @@ func TestIndex_TotalSize(t *testing.T) {
 	i.Remove(remove1)
 	require.Equal(t, int64(4), i.TotalSize())
 }
+
+func TestIndex_OldestSegmentAge(t *testing.T) {
+	i := NewIndex()
+	require.Equal(t, time.Duration(0), i.OldestSegmentAge())
+
+	now := time.Now()
+	i.Add(SegmentInfo{Prefix: "a", Ulid: "1", Path: "/a", Size: 1, CreatedAt: now.Add(-10 * time.Second)})
+	i.Add(SegmentInfo{Prefix: "b", Ulid: "2", Path: "/b", Size: 2, CreatedAt: now.Add(-20 * time.Second)})
+	i.Add(SegmentInfo{Prefix: "c", Ulid: "3", Path: "/c", Size: 3, CreatedAt: now.Add(-5 * time.Second)})
+
+	age := i.OldestSegmentAge()
+	require.GreaterOrEqual(t, age, 20*time.Second)
+	require.Less(t, age, 21*time.Second)
+
+	// Remove the oldest, check next oldest
+	i.Remove(SegmentInfo{Prefix: "b", Ulid: "2", Path: "/b", Size: 2, CreatedAt: now.Add(-20 * time.Second)})
+	age = i.OldestSegmentAge()
+	require.GreaterOrEqual(t, age, 10*time.Second)
+	require.Less(t, age, 11*time.Second)
+}

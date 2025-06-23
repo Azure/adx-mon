@@ -502,26 +502,29 @@ func (a *writerAdapter) Write(data []byte) (int, error) {
 	return a.Writer.Write(data)
 }
 
-// makeClusterLabels processes the --cluster-labels CLI arguments into a map for SummaryRule templating.
+// makeClusterLabels processes the --cluster-labels CLI arguments into a map for SummaryRule criteria matching and templating.
 //
-// This function is critical for SummaryRule template substitution. It ensures that all cluster label
-// keys have an underscore prefix, which matches the placeholder format expected in SummaryRule bodies.
+// This function stores cluster labels as-is for criteria matching. Template substitution happens later
+// in applySubstitutions() where underscore prefixes are added to match SummaryRule placeholders.
 //
 // CLI Input Format: --cluster-labels=<key>=<value>
 // Examples:
 //
 //	--cluster-labels=environment=production --cluster-labels=region=eastus
-//	--cluster-labels=_datacenter=west --cluster-labels=cluster_id=prod-01
+//	--cluster-labels=datacenter=west --cluster-labels=cluster_id=prod-01
+//
+// Criteria Matching Process:
+// 1. Keys are stored without modification for case-insensitive criteria matching
+// 2. SummaryRule criteria like {"region": ["eastus"]} match against {"region": "eastus"}
 //
 // Template Substitution Process:
-// 1. Keys are prefixed with "_" if they don't already have one
-// 2. The resulting map is used by applySubstitutions() in ingestor/adx/tasks.go
-// 3. In SummaryRule bodies, placeholders like "_region" get replaced with quoted values like "eastus"
+// 1. Keys get underscore prefixes during applySubstitutions() in ingestor/adx/tasks.go
+// 2. In SummaryRule bodies, placeholders like "_region" get replaced with quoted values like "eastus"
 //
 // Example transformation:
 //
 //	Input:  --cluster-labels=region=eastus --cluster-labels=environment=production
-//	Output: map[string]string{"_region": "eastus", "_environment": "production"}
+//	Output: map[string]string{"region": "eastus", "environment": "production"}
 //
 // SummaryRule usage example:
 //
@@ -542,16 +545,8 @@ func makeClusterLabels(ctx *cli.Context) map[string]string {
 		key := split[0]
 		value := split[1]
 
-		// CRITICAL: Add underscore prefix to KEY (not value) if it doesn't already exist.
-		// This ensures template placeholders in SummaryRule bodies match the map keys.
-		// Example: "region" becomes "_region" to match SummaryRule placeholder "_region"
-		if !strings.HasPrefix(key, "_") {
-			key = "_" + key
-		}
-
-		// Store the key-value pair for template substitution
-		// Key: template placeholder (e.g., "_region")
-		// Value: replacement text (e.g., "eastus")
+		// Store the key-value pair as-is for criteria matching
+		// The underscore prefix will be added during template substitution
 		clusterLabels[key] = value
 	}
 	return clusterLabels
