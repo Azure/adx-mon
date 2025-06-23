@@ -321,16 +321,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 	// Process each summary rule individually
 	for _, rule := range summaryRules.Items {
-		// Skip rules not belonging to the current database
-		if rule.Spec.Database != t.kustoCli.Database() {
-			continue
-		}
-
-		// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
-		if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
-			if logger.IsDebug() {
-				logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
-			}
+		if !t.shouldProcessRule(rule) {
 			continue
 		}
 
@@ -464,6 +455,25 @@ func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleLis
 	}
 
 	return summaryRules, kustoAsyncOperations, nil
+}
+
+func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
+	// Skip rules not belonging to the current database
+	if rule.Spec.Database != t.kustoCli.Database() {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping %s/%s on %s because it does not match the current database: %s", rule.Namespace, rule.Name, t.kustoCli.Database(), rule.Spec.Database)
+		}
+		return false
+	}
+
+	// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
+	if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
+		}
+		return false
+	}
+	return true
 }
 
 // applySubstitutions applies time and cluster label substitutions to a KQL query body
