@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -314,10 +315,38 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
+	summaryRules, kustoAsyncOperations, err := t.initializeRun(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Process each summary rule individually
+	for _, rule := range summaryRules.Items {
+		if !t.shouldProcessRule(rule) {
+			continue
+		}
+
+		// Handle rule execution logic (timing evaluation and submission)
+		err := t.handleRuleExecution(ctx, &rule)
+
+		// Process any outstanding async operations for this rule
+		t.trackAsyncOperations(ctx, &rule, kustoAsyncOperations)
+
+		// Update the rule's primary status condition
+		if err := t.updateSummaryRuleStatus(ctx, &rule, err); err != nil {
+			logger.Errorf("Failed to update summary rule status: %v", err)
+			// Not a lot we can do here, we'll end up just retrying next interval.
+		}
+	}
+
+	return nil
+}
+
+func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, []AsyncOperationStatus, error) {
 	// Fetch all summary rules from storage
 	summaryRules := &v1.SummaryRuleList{}
 	if err := t.store.List(ctx, summaryRules); err != nil {
-		return fmt.Errorf("failed to list summary rules: %w", err)
+		return nil, nil, fmt.Errorf("failed to list summary rules: %w", err)
 	}
 
 	// Get the status of all async operations currently tracked in Kusto
@@ -329,161 +358,148 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		kustoAsyncOperations = []AsyncOperationStatus{}
 	}
 
-	// Process each summary rule individually
-	for _, rule := range summaryRules.Items {
-		// Skip rules not belonging to the current database
-		if rule.Spec.Database != t.kustoCli.Database() {
-			continue
+	return summaryRules, kustoAsyncOperations, nil
+}
+
+func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
+	// Skip rules not belonging to the current database
+	if rule.Spec.Database != t.kustoCli.Database() {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping %s/%s on %s because it does not match the current database: %s", rule.Namespace, rule.Name, t.kustoCli.Database(), rule.Spec.Database)
 		}
+		return false
+	}
 
-		// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
-		if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
-			if logger.IsDebug() {
-				logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
-			}
-			continue
+	// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
+	if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
 		}
+		return false
+	}
+	return true
+}
 
-		// Track if there was a submission error for this rule
-		var submissionError error
-
-		// Get the current condition of the rule
-		cnd := rule.GetCondition()
-		if cnd == nil {
-			// For first-time execution, initialize the condition with a timestamp
-			// that's one interval back from current time
-			cnd = &metav1.Condition{
-				LastTransitionTime: metav1.Time{Time: time.Now().Add(-rule.Spec.Interval.Duration)},
-			}
+// handleRuleExecution handles the execution logic for a single summary rule.
+// It evaluates whether the rule should be submitted based on its interval and timing,
+// and if so, submits the rule as an async operation to Kusto.
+// Returns any submission error that occurred.
+func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) error {
+	// Get the current condition of the rule
+	cnd := rule.GetCondition()
+	if cnd == nil {
+		// For first-time execution, initialize the condition with a timestamp
+		// that's one interval back from current time
+		cnd = &metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: time.Now().Add(-rule.Spec.Interval.Duration)},
 		}
+	}
 
-		// Calculate the next execution window based on the last successful execution
-		var windowStartTime, windowEndTime time.Time
+	// Calculate the next execution window based on the last successful execution
+	windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
 
-		lastSuccessfulEndTime := rule.GetLastExecutionTime()
-		if lastSuccessfulEndTime == nil {
-			// First execution: start from current time aligned to interval boundary, going back one interval
-			now := time.Now().UTC()
-			// Align to minute boundary for consistency
-			alignedNow := now.Truncate(time.Minute)
-			windowEndTime = alignedNow
-			windowStartTime = windowEndTime.Add(-rule.Spec.Interval.Duration)
-		} else {
-			// Subsequent executions: start from where the last successful execution ended
-			windowStartTime = *lastSuccessfulEndTime
-			windowEndTime = windowStartTime.Add(rule.Spec.Interval.Duration)
-
-			// Ensure we don't execute future windows
-			now := time.Now().UTC().Truncate(time.Minute)
-			if windowEndTime.After(now) {
-				windowEndTime = now
-			}
+	if rule.ShouldSubmitRule(nil) {
+		// Prepare a new async operation with calculated time range
+		asyncOp := v1.AsyncOperation{
+			StartTime: windowStartTime.Format(time.RFC3339Nano),
+			EndTime:   windowEndTime.Format(time.RFC3339Nano),
 		}
+		operationId, err := t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
+		asyncOp.OperationId = operationId
+		rule.SetAsyncOperation(asyncOp)
+		rule.SetLastExecutionTime(windowEndTime)
 
-		// Determine if the rule should be executed based on several criteria:
-		// 1. The rule is being deleted
-		// 2. Rule has been updated (new generation)
-		// 3. It's time for the next interval execution (based on actual time windows)
-		shouldSubmitRule := rule.DeletionTimestamp != nil || // Rule is being deleted
-			cnd.ObservedGeneration != rule.GetGeneration() || // A new version of this CRD was created
-			(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= rule.Spec.Interval.Duration) || // Time for next interval
-			(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration) // First execution timing
-
-		if shouldSubmitRule {
-			// Prepare a new async operation with calculated time range
-			asyncOp := v1.AsyncOperation{
-				StartTime: windowStartTime.Format(time.RFC3339Nano),
-				EndTime:   windowEndTime.Format(time.RFC3339Nano),
-			}
-			operationId, err := t.SubmitRule(ctx, rule, asyncOp.StartTime, asyncOp.EndTime)
-			asyncOp.OperationId = operationId
-			rule.SetAsyncOperation(asyncOp)
-			rule.SetLastExecutionTime(windowEndTime)
-
-			if err != nil {
-				submissionError = err
-				t.updateSummaryRuleStatus(ctx, &rule, err)
-			}
-		}
-
-		// Process any outstanding async operations for this rule
-		operations := rule.GetAsyncOperations()
-		foundOperations := make(map[string]bool)
-		hasFailedOperations := false
-
-		for _, op := range operations {
-			found := false
-			// Check the status of previously submitted operations
-			for _, kustoOp := range kustoAsyncOperations {
-				if op.OperationId == kustoOp.OperationId {
-					found = true
-					foundOperations[op.OperationId] = true
-
-					if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
-						if kustoOp.State == string(KustoAsyncOperationStateFailed) {
-							// Operation failed - mark the rule as failed
-							hasFailedOperations = true
-							logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
-							if err := t.updateSummaryRuleStatus(ctx, &rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
-								logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
-							}
-						}
-						// We're done polling this async operation, so we can remove it from the list
-						rule.RemoveAsyncOperation(kustoOp.OperationId)
-						continue
-					}
-					if kustoOp.ShouldRetry != 0 {
-						if _, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err != nil {
-							logger.Errorf("Failed to submit rule: %v", err)
-						}
-					}
-
-					// Operation is still in progress, so we can skip it
-				}
-			}
-			// Check for backlog operations, or those that failed to be submitted. We need to attempt
-			// executing these so that we don't skip any windows.
-			if op.OperationId == "" {
-				if operationId, err := t.SubmitRule(ctx, rule, op.StartTime, op.EndTime); err == nil {
-					// Great, we were able to recover the failed submission window.
-					op.OperationId = operationId
-					rule.SetAsyncOperation(op)
-					found = true
-				}
-			}
-
-			// If the operation wasn't found in the Kusto operations list after checking all operations,
-			// it might have fallen out of the backlog window OR completed very quickly.
-			// Only remove it if it's older than 25 hours (giving some buffer beyond Kusto's 24h window)
-			if !found {
-				if startTime, err := time.Parse(time.RFC3339Nano, op.StartTime); err == nil {
-					if time.Since(startTime) > 25*time.Hour {
-						logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
-							op.OperationId, rule.Name)
-						rule.RemoveAsyncOperation(op.OperationId)
-					} else {
-						logger.Debugf("Async operation %s for rule %s not found in Kusto operations but is recent, keeping",
-							op.OperationId, rule.Name)
-					}
-				} else {
-					// If we can't parse the time, remove it to avoid keeping broken operations
-					logger.Warnf("Async operation %s for rule %s has invalid StartTime format, removing",
-						op.OperationId, rule.Name)
-					rule.RemoveAsyncOperation(op.OperationId)
-				}
-			}
-		}
-
-		// Only update status to success if there was no submission error and no failed operations
-		if submissionError == nil && !hasFailedOperations {
-			if err := t.updateSummaryRuleStatus(ctx, &rule, nil); err != nil {
-				logger.Errorf("Failed to update summary rule status: %v", err)
-				// Not a lot we can do here, we'll end up just retrying next interval.
-			}
+		if err != nil {
+			return fmt.Errorf("failed to submit rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 		}
 	}
 
 	return nil
+}
+
+func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus) {
+	operations := rule.GetAsyncOperations()
+	for _, op := range operations {
+
+		// Check for backlog operations, or those that failed to be submitted. We need to attempt
+		// executing these so that we don't skip any windows.
+		if op.OperationId == "" {
+			t.processBacklogOperation(ctx, rule, op)
+			continue
+		}
+
+		index := slices.IndexFunc(kustoAsyncOperations, func(item AsyncOperationStatus) bool {
+			return item.OperationId == op.OperationId
+		})
+
+		// If the operation wasn't found in the Kusto operations list after checking all operations,
+		// it might have fallen out of the backlog window OR completed very quickly.
+		// Only remove it if it's older than 25 hours (giving some buffer beyond Kusto's 24h window)
+		if index == -1 {
+			t.handleStaleOperation(rule, op)
+			continue
+		}
+
+		kustoOp := kustoAsyncOperations[index]
+		if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
+			t.handleCompletedOperation(ctx, rule, kustoOp)
+		}
+		if kustoOp.ShouldRetry != 0 {
+			t.handleRetryOperation(ctx, rule, op, kustoOp)
+		}
+	}
+}
+
+func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation, kustoOp AsyncOperationStatus) {
+	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil && operationId != operation.OperationId {
+		// We've resubmitted an async operation due to a recoverable failure but this has created a new operation-id to track.
+		// Remove the existing async operation, we're done processing it, but save the newly created async operation for tracking.
+		rule.RemoveAsyncOperation(operation.OperationId)
+
+		// The new operation has all the same time window as the previous, we only
+		// need to update the OperationId.
+		operation.OperationId = operationId
+		rule.SetAsyncOperation(operation)
+	}
+}
+
+func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1.SummaryRule, kustoOp AsyncOperationStatus) {
+	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
+		// Operation failed - mark the rule as failed
+		logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+		if err := t.updateSummaryRuleStatus(ctx, rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
+			logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
+		}
+	}
+	// We're done polling this async operation, so we can remove it from the list
+	rule.RemoveAsyncOperation(kustoOp.OperationId)
+}
+
+func (t *SummaryRuleTask) handleStaleOperation(rule *v1.SummaryRule, operation v1.AsyncOperation) {
+	if startTime, err := time.Parse(time.RFC3339Nano, operation.StartTime); err == nil {
+		if time.Since(startTime) > 25*time.Hour {
+			logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
+				operation.OperationId, rule.Name)
+			rule.RemoveAsyncOperation(operation.OperationId)
+		} else {
+			logger.Debugf("Async operation %s for rule %s not found in Kusto operations but is recent, keeping",
+				operation.OperationId, rule.Name)
+		}
+	} else {
+		// If we can't parse the time, remove it to avoid keeping broken operations
+		logger.Warnf("Async operation %s for rule %s has invalid StartTime format, removing",
+			operation.OperationId, rule.Name)
+		rule.RemoveAsyncOperation(operation.OperationId)
+	}
+}
+
+func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation) {
+	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil {
+		// Great, we were able to recover the failed submission window.
+		operation.OperationId = operationId
+		rule.SetAsyncOperation(operation)
+	}
 }
 
 // applySubstitutions applies time and cluster label substitutions to a KQL query body
