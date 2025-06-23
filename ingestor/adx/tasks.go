@@ -314,19 +314,9 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
-	// Fetch all summary rules from storage
-	summaryRules := &v1.SummaryRuleList{}
-	if err := t.store.List(ctx, summaryRules); err != nil {
-		return fmt.Errorf("failed to list summary rules: %w", err)
-	}
-
-	// Get the status of all async operations currently tracked in Kusto
-	// to match against our rules' operations. If this fails (e.g., Kusto unavailable),
-	// we can still process rules and store new async operations in CRD subresources.
-	kustoAsyncOperations, err := t.GetOperations(ctx)
+	summaryRules, kustoAsyncOperations, err := t.initializeRun(ctx)
 	if err != nil {
-		logger.Warnf("Failed to get async operations from Kusto, continuing with rule processing: %v", err)
-		kustoAsyncOperations = []AsyncOperationStatus{}
+		return err
 	}
 
 	// Process each summary rule individually
@@ -455,6 +445,25 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, []AsyncOperationStatus, error) {
+	// Fetch all summary rules from storage
+	summaryRules := &v1.SummaryRuleList{}
+	if err := t.store.List(ctx, summaryRules); err != nil {
+		return nil, nil, fmt.Errorf("failed to list summary rules: %w", err)
+	}
+
+	// Get the status of all async operations currently tracked in Kusto
+	// to match against our rules' operations. If this fails (e.g., Kusto unavailable),
+	// we can still process rules and store new async operations in CRD subresources.
+	kustoAsyncOperations, err := t.GetOperations(ctx)
+	if err != nil {
+		logger.Warnf("Failed to get async operations from Kusto, continuing with rule processing: %v", err)
+		kustoAsyncOperations = []AsyncOperationStatus{}
+	}
+
+	return summaryRules, kustoAsyncOperations, nil
 }
 
 // applySubstitutions applies time and cluster label substitutions to a KQL query body
