@@ -358,27 +358,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		}
 
 		// Calculate the next execution window based on the last successful execution
-		var windowStartTime, windowEndTime time.Time
-
-		lastSuccessfulEndTime := rule.GetLastExecutionTime()
-		if lastSuccessfulEndTime == nil {
-			// First execution: start from current time aligned to interval boundary, going back one interval
-			now := time.Now().UTC()
-			// Align to minute boundary for consistency
-			alignedNow := now.Truncate(time.Minute)
-			windowEndTime = alignedNow
-			windowStartTime = windowEndTime.Add(-rule.Spec.Interval.Duration)
-		} else {
-			// Subsequent executions: start from where the last successful execution ended
-			windowStartTime = *lastSuccessfulEndTime
-			windowEndTime = windowStartTime.Add(rule.Spec.Interval.Duration)
-
-			// Ensure we don't execute future windows
-			now := time.Now().UTC().Truncate(time.Minute)
-			if windowEndTime.After(now) {
-				windowEndTime = now
-			}
-		}
+		windowStartTime, windowEndTime := rule.NextExecutionWindow()
 
 		if rule.ShouldSubmitRule() {
 			// Prepare a new async operation with calculated time range

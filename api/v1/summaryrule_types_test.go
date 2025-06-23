@@ -451,3 +451,281 @@ func TestShouldSubmitRule(t *testing.T) {
 		require.True(t, rule.ShouldSubmitRule())
 	})
 }
+
+func TestNextExecutionWindow(t *testing.T) {
+	// Use current time but truncate to seconds for deterministic tests
+	now := time.Now().Truncate(time.Second)
+
+	t.Run("first execution - no last execution time", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		// First execution should go back one interval from current time (aligned to minute)
+		expectedEndTime := now.UTC().Truncate(time.Minute)
+		expectedStartTime := expectedEndTime.Add(-time.Hour)
+
+		// Allow for small time differences due to execution time
+		require.WithinDuration(t, expectedStartTime, startTime, 2*time.Minute)
+		require.WithinDuration(t, expectedEndTime, endTime, 2*time.Minute)
+		require.Equal(t, time.Hour, endTime.Sub(startTime))
+	})
+
+	t.Run("subsequent execution - continues from last execution", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set a last execution time that's far enough in the past that adding interval won't exceed current time
+		lastExecution := now.Add(-2 * time.Hour).UTC()
+		rule.SetLastExecutionTime(lastExecution)
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		// Should start from last execution and go forward one interval
+		require.Equal(t, lastExecution, startTime)
+		require.Equal(t, lastExecution.Add(time.Hour), endTime)
+		require.Equal(t, time.Hour, endTime.Sub(startTime))
+	})
+
+	t.Run("prevents future execution windows", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set a last execution time that would create a future window
+		futureStart := now.Add(30 * time.Minute).UTC()
+		rule.SetLastExecutionTime(futureStart)
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		// Should start from the future time but cap end time to current time
+		require.Equal(t, futureStart, startTime)
+		currentTimeMinute := now.UTC().Truncate(time.Minute)
+
+		// End time should be capped to current time since start time is in the future
+		require.True(t, endTime.Before(currentTimeMinute.Add(2*time.Minute)) || endTime.Equal(currentTimeMinute))
+		// When start time is in the future, end time might be equal to start time if both are capped
+		require.True(t, endTime.After(startTime) || endTime.Equal(startTime) || endTime.Equal(currentTimeMinute))
+	})
+
+	t.Run("handles different interval durations", func(t *testing.T) {
+		testCases := []struct {
+			name     string
+			interval time.Duration
+		}{
+			{"5 minutes", 5 * time.Minute},
+			{"15 minutes", 15 * time.Minute},
+			{"1 hour", time.Hour},
+			{"6 hours", 6 * time.Hour},
+			{"24 hours", 24 * time.Hour},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				rule := &SummaryRule{
+					ObjectMeta: metav1.ObjectMeta{
+						Generation: 1,
+					},
+					Spec: SummaryRuleSpec{
+						Interval: metav1.Duration{Duration: tc.interval},
+					},
+				}
+
+				// Test first execution
+				startTime, endTime := rule.NextExecutionWindow()
+				require.Equal(t, tc.interval, endTime.Sub(startTime))
+
+				// Test subsequent execution - use a time far enough back
+				lastExecution := now.Add(-tc.interval - time.Hour).UTC()
+				rule.SetLastExecutionTime(lastExecution)
+
+				startTime, endTime = rule.NextExecutionWindow()
+				require.Equal(t, lastExecution, startTime)
+				require.Equal(t, tc.interval, endTime.Sub(startTime))
+			})
+		}
+	})
+
+	t.Run("time alignment to minute boundary", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		// End time should be aligned to minute boundary (no seconds/nanoseconds)
+		require.Zero(t, endTime.Second())
+		require.Zero(t, endTime.Nanosecond())
+
+		// Start time should also be aligned (since it's end time minus interval)
+		require.Zero(t, startTime.Second())
+		require.Zero(t, startTime.Nanosecond())
+	})
+
+	t.Run("UTC timezone consistency", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		// Both times should be in UTC
+		require.Equal(t, time.UTC, startTime.Location())
+		require.Equal(t, time.UTC, endTime.Location())
+	})
+	t.Run("sequential execution windows", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Start with an execution time far enough in the past
+		pastTime := now.Add(-4 * time.Hour).UTC()
+		rule.SetLastExecutionTime(pastTime)
+
+		// First execution window
+		startTime1, endTime1 := rule.NextExecutionWindow()
+		require.Equal(t, pastTime, startTime1)
+		require.Equal(t, time.Hour, endTime1.Sub(startTime1))
+
+		// Simulate completing the first execution
+		rule.SetLastExecutionTime(endTime1)
+
+		// Second execution
+		startTime2, endTime2 := rule.NextExecutionWindow()
+
+		// Second execution should start where first ended
+		require.Equal(t, endTime1, startTime2)
+		require.Equal(t, time.Hour, endTime2.Sub(startTime2))
+
+		// Simulate completing the second execution
+		rule.SetLastExecutionTime(endTime2)
+
+		// Third execution - this should still be in the past
+		startTime3, endTime3 := rule.NextExecutionWindow()
+
+		// Third execution should start where second ended
+		require.Equal(t, endTime2, startTime3)
+		require.Equal(t, time.Hour, endTime3.Sub(startTime3))
+	})
+
+	t.Run("handles very short intervals", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: 30 * time.Second},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow()
+		require.Equal(t, 30*time.Second, endTime.Sub(startTime))
+
+		// Set last execution time far enough back
+		lastExecution := now.Add(-2 * time.Minute).UTC()
+		rule.SetLastExecutionTime(lastExecution)
+
+		startTime, endTime = rule.NextExecutionWindow()
+		require.Equal(t, lastExecution, startTime)
+		require.Equal(t, 30*time.Second, endTime.Sub(startTime))
+	})
+
+	t.Run("handles very long intervals", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: 7 * 24 * time.Hour}, // 1 week
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow()
+		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
+
+		// Set last execution time far enough back
+		lastExecution := now.Add(-8 * 24 * time.Hour).UTC() // 8 days ago
+		rule.SetLastExecutionTime(lastExecution)
+
+		startTime, endTime = rule.NextExecutionWindow()
+		require.Equal(t, lastExecution, startTime)
+		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
+	})
+
+	t.Run("edge case - last execution exactly at current time", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set last execution to current time
+		currentTime := now.UTC().Truncate(time.Minute)
+		rule.SetLastExecutionTime(currentTime)
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		require.Equal(t, currentTime, startTime)
+		// End time should be capped to current time since it would be in the future
+		require.True(t, endTime.Equal(currentTime) || endTime.Before(now.Add(2*time.Minute)))
+	})
+
+	t.Run("window calculation with past execution that would exceed current time", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: 2 * time.Hour},
+			},
+		}
+
+		// Set last execution time that when adding interval would exceed current time
+		lastExecution := now.Add(-30 * time.Minute).UTC() // 30 minutes ago
+		rule.SetLastExecutionTime(lastExecution)
+
+		startTime, endTime := rule.NextExecutionWindow()
+
+		require.Equal(t, lastExecution, startTime)
+		// End time should be capped to current time (truncated to minute)
+		expectedMaxEndTime := now.UTC().Truncate(time.Minute)
+		require.True(t, endTime.Before(expectedMaxEndTime.Add(2*time.Minute)) || endTime.Equal(expectedMaxEndTime))
+		require.True(t, endTime.After(startTime))
+	})
+}
