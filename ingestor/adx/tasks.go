@@ -315,7 +315,7 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
-	summaryRules, kustoAsyncOperations, err := t.initializeRun(ctx)
+	summaryRules, kustoAsyncOperations, getOperationsSucceeded, err := t.initializeRun(ctx)
 	if err != nil {
 		return err
 	}
@@ -330,7 +330,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		err := t.handleRuleExecution(ctx, &rule)
 
 		// Process any outstanding async operations for this rule
-		t.trackAsyncOperations(ctx, &rule, kustoAsyncOperations)
+		t.trackAsyncOperations(ctx, &rule, kustoAsyncOperations, getOperationsSucceeded)
 
 		// Update the rule's primary status condition
 		if err := t.updateSummaryRuleStatus(ctx, &rule, err); err != nil {
@@ -342,23 +342,24 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	return nil
 }
 
-func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, []AsyncOperationStatus, error) {
+func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, []AsyncOperationStatus, bool, error) {
 	// Fetch all summary rules from storage
 	summaryRules := &v1.SummaryRuleList{}
 	if err := t.store.List(ctx, summaryRules); err != nil {
-		return nil, nil, fmt.Errorf("failed to list summary rules: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to list summary rules: %w", err)
 	}
 
 	// Get the status of all async operations currently tracked in Kusto
 	// to match against our rules' operations. If this fails (e.g., Kusto unavailable),
 	// we can still process rules and store new async operations in CRD subresources.
 	kustoAsyncOperations, err := t.GetOperations(ctx)
+	getOperationsSucceeded := err == nil
 	if err != nil {
 		logger.Warnf("Failed to get async operations from Kusto, continuing with rule processing: %v", err)
 		kustoAsyncOperations = []AsyncOperationStatus{}
 	}
 
-	return summaryRules, kustoAsyncOperations, nil
+	return summaryRules, kustoAsyncOperations, getOperationsSucceeded, nil
 }
 
 func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
@@ -417,7 +418,7 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	return nil
 }
 
-func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus) {
+func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus, getOperationsSucceeded bool) {
 	operations := rule.GetAsyncOperations()
 	for _, op := range operations {
 
@@ -435,8 +436,9 @@ func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.Sum
 		// If the operation wasn't found in the Kusto operations list after checking all operations,
 		// it might have fallen out of the backlog window OR completed very quickly.
 		// Only remove it if it's older than 25 hours (giving some buffer beyond Kusto's 24h window)
+		// However, if GetOperations failed, we should be more conservative about removing operations
 		if index == -1 {
-			t.handleStaleOperation(rule, op)
+			t.handleStaleOperation(rule, op, getOperationsSucceeded)
 			continue
 		}
 
@@ -476,8 +478,42 @@ func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1
 	rule.RemoveAsyncOperation(kustoOp.OperationId)
 }
 
-func (t *SummaryRuleTask) handleStaleOperation(rule *v1.SummaryRule, operation v1.AsyncOperation) {
+func (t *SummaryRuleTask) handleStaleOperation(rule *v1.SummaryRule, operation v1.AsyncOperation, getOperationsSucceeded bool) {
 	if startTime, err := time.Parse(time.RFC3339Nano, operation.StartTime); err == nil {
+		// If GetOperations failed, be more conservative about removing operations
+		// Only remove them if they're much older (25+ hours)
+		if !getOperationsSucceeded {
+			if time.Since(startTime) > 25*time.Hour {
+				logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
+					operation.OperationId, rule.Name)
+				rule.RemoveAsyncOperation(operation.OperationId)
+			} else {
+				logger.Debugf("Async operation %s for rule %s not found in Kusto operations but GetOperations failed, keeping",
+					operation.OperationId, rule.Name)
+			}
+			return
+		}
+
+		// If GetOperations succeeded but the operation wasn't found, it likely completed
+		// If the operation has both start and end times, and the end time is in the past,
+		// it has likely completed and should be removed since it's no longer in Kusto's operations list
+		if operation.EndTime != "" {
+			if endTime, endErr := time.Parse(time.RFC3339Nano, operation.EndTime); endErr == nil {
+				// Only remove if the end time was at least a few minutes ago to allow for processing time
+				if time.Since(endTime) > 5*time.Minute {
+					logger.Infof("Async operation %s for rule %s has completed (end time %s passed) and is no longer in Kusto operations list, removing",
+						operation.OperationId, rule.Name, operation.EndTime)
+					rule.RemoveAsyncOperation(operation.OperationId)
+					return
+				} else {
+					logger.Debugf("Async operation %s for rule %s has end time but is very recent, keeping for now",
+						operation.OperationId, rule.Name)
+					return
+				}
+			}
+		}
+
+		// For operations without end times, use the original logic of 25-hour window
 		if time.Since(startTime) > 25*time.Hour {
 			logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
 				operation.OperationId, rule.Name)
