@@ -33,7 +33,7 @@ require (
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.22.0
 	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.64.0
+	github.com/prometheus/common v0.65.0
 	github.com/siderolabs/go-kmsg v0.1.4
 	github.com/stretchr/testify v1.10.0
 	github.com/tenebris-tech/tail v1.0.5
