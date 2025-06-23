@@ -160,3 +160,294 @@ func TestBacklog(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldSubmitRule(t *testing.T) {
+	// Use current time but truncate to seconds for deterministic tests
+	now := time.Now().Truncate(time.Second)
+
+	t.Run("should submit on first execution - no condition", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// No condition set, should submit for first execution
+		require.True(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should submit on first execution - condition with old timestamp", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set a condition with old timestamp (more than interval ago)
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Hour)},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		require.True(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should not submit - recent condition, no last execution time", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set a condition with recent timestamp (less than interval ago)
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now.Add(-30 * time.Minute)},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		require.False(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should submit when interval has elapsed since last execution", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set condition
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		// Set last execution time to more than interval ago
+		lastExecution := now.Add(-2 * time.Hour)
+		rule.SetLastExecutionTime(lastExecution)
+
+		require.True(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should not submit when interval has not elapsed since last execution", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set condition
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		// Set last execution time to less than interval ago
+		lastExecution := now.Add(-30 * time.Minute)
+		rule.SetLastExecutionTime(lastExecution)
+
+		require.False(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should submit when rule has been updated (new generation)", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1, // Start with generation 1
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set condition with generation 1
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		// Set recent last execution time
+		lastExecution := now.Add(-10 * time.Minute)
+		rule.SetLastExecutionTime(lastExecution)
+
+		// Now update the generation to simulate rule update
+		rule.ObjectMeta.Generation = 2
+
+		require.True(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should submit when rule is being deleted", func(t *testing.T) {
+		deletionTime := metav1.Time{Time: now}
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation:        1,
+				DeletionTimestamp: &deletionTime,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set condition
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		// Set recent last execution time
+		lastExecution := now.Add(-10 * time.Minute)
+		rule.SetLastExecutionTime(lastExecution)
+
+		require.True(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("should handle different interval durations", func(t *testing.T) {
+		testCases := []struct {
+			name           string
+			interval       time.Duration
+			lastExecution  time.Time
+			expectedSubmit bool
+		}{
+			{
+				name:           "5 minute interval - should submit",
+				interval:       5 * time.Minute,
+				lastExecution:  now.Add(-6 * time.Minute),
+				expectedSubmit: true,
+			},
+			{
+				name:           "5 minute interval - should not submit",
+				interval:       5 * time.Minute,
+				lastExecution:  now.Add(-3 * time.Minute),
+				expectedSubmit: false,
+			},
+			{
+				name:           "24 hour interval - should submit",
+				interval:       24 * time.Hour,
+				lastExecution:  now.Add(-25 * time.Hour),
+				expectedSubmit: true,
+			},
+			{
+				name:           "24 hour interval - should not submit",
+				interval:       24 * time.Hour,
+				lastExecution:  now.Add(-23 * time.Hour),
+				expectedSubmit: false,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				rule := &SummaryRule{
+					ObjectMeta: metav1.ObjectMeta{
+						Generation: 1,
+					},
+					Spec: SummaryRuleSpec{
+						Interval: metav1.Duration{Duration: tc.interval},
+					},
+				}
+
+				// Set condition
+				condition := metav1.Condition{
+					Type:               SummaryRuleOwner,
+					Status:             metav1.ConditionTrue,
+					LastTransitionTime: metav1.Time{Time: now},
+					ObservedGeneration: 1,
+				}
+				rule.SetCondition(condition)
+
+				// Set last execution time
+				rule.SetLastExecutionTime(tc.lastExecution)
+
+				require.Equal(t, tc.expectedSubmit, rule.ShouldSubmitRule())
+			})
+		}
+	})
+
+	t.Run("edge case - exactly at interval boundary", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set condition
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		// Set last execution time to exactly interval ago
+		lastExecution := now.Add(-time.Hour)
+		rule.SetLastExecutionTime(lastExecution)
+
+		require.True(t, rule.ShouldSubmitRule())
+	})
+
+	t.Run("multiple conditions should prioritize execution triggers", func(t *testing.T) {
+		deletionTime := metav1.Time{Time: now}
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation:        1,             // Start with generation 1
+				DeletionTimestamp: &deletionTime, // Being deleted
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set condition with generation 1
+		condition := metav1.Condition{
+			Type:               SummaryRuleOwner,
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: metav1.Time{Time: now},
+			ObservedGeneration: 1,
+		}
+		rule.SetCondition(condition)
+
+		// Set very recent last execution time (normally would prevent submission)
+		lastExecution := now.Add(-1 * time.Minute)
+		rule.SetLastExecutionTime(lastExecution)
+
+		// Update generation to simulate rule update
+		rule.ObjectMeta.Generation = 2
+
+		// Should still submit because of deletion and generation change
+		require.True(t, rule.ShouldSubmitRule())
+	})
+}

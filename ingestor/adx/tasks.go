@@ -380,16 +380,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 			}
 		}
 
-		// Determine if the rule should be executed based on several criteria:
-		// 1. The rule is being deleted
-		// 2. Rule has been updated (new generation)
-		// 3. It's time for the next interval execution (based on actual time windows)
-		shouldSubmitRule := rule.DeletionTimestamp != nil || // Rule is being deleted
-			cnd.ObservedGeneration != rule.GetGeneration() || // A new version of this CRD was created
-			(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= rule.Spec.Interval.Duration) || // Time for next interval
-			(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= rule.Spec.Interval.Duration) // First execution timing
-
-		if shouldSubmitRule {
+		if rule.ShouldSubmitRule() {
 			// Prepare a new async operation with calculated time range
 			asyncOp := v1.AsyncOperation{
 				StartTime: windowStartTime.Format(time.RFC3339Nano),

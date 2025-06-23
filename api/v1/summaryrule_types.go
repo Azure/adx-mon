@@ -256,6 +256,26 @@ func (s *SummaryRule) RemoveAsyncOperation(operationId string) {
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
+func (s *SummaryRule) ShouldSubmitRule() bool {
+	lastSuccessfulEndTime := s.GetLastExecutionTime()
+	cnd := s.GetCondition()
+	if cnd == nil {
+		// For first-time execution, initialize the condition with a timestamp
+		// that's one interval back from current time
+		cnd = &metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: time.Now().Add(-s.Spec.Interval.Duration)},
+		}
+	}
+	// Determine if the rule should be executed based on several criteria:
+	// 1. The rule is being deleted
+	// 2. Rule has been updated (new generation)
+	// 3. It's time for the next interval execution (based on actual time windows)
+	return s.DeletionTimestamp != nil || // Rule is being deleted
+		cnd.ObservedGeneration != s.GetGeneration() || // A new version of this CRD was created
+		(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
+		(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
+}
+
 // +kubebuilder:object:root=true
 
 // SummaryRuleList contains a list of SummaryRule
