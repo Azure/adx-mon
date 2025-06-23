@@ -45,8 +45,8 @@ type SummaryRuleSpec struct {
 	Database string `json:"database"`
 	// Table is rule output destination
 	Table string `json:"table"`
-	// Name is the name of the rule
-	Name string `json:"name"`
+	// Name is the name of the rule (deprecated and not used - use `metadata.name` instead)
+	Name string `json:"name,omitempty"`
 	// Body is the KQL body of the function
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
