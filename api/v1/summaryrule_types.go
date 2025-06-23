@@ -22,6 +22,7 @@ import (
 
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -256,14 +257,18 @@ func (s *SummaryRule) RemoveAsyncOperation(operationId string) {
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
-func (s *SummaryRule) ShouldSubmitRule() bool {
+func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	cnd := s.GetCondition()
 	if cnd == nil {
 		// For first-time execution, initialize the condition with a timestamp
 		// that's one interval back from current time
 		cnd = &metav1.Condition{
-			LastTransitionTime: metav1.Time{Time: time.Now().Add(-s.Spec.Interval.Duration)},
+			LastTransitionTime: metav1.Time{Time: clk.Now().Add(-s.Spec.Interval.Duration)},
 		}
 	}
 	// Determine if the rule should be executed based on several criteria:
@@ -272,16 +277,20 @@ func (s *SummaryRule) ShouldSubmitRule() bool {
 	// 3. It's time for the next interval execution (based on actual time windows)
 	return s.DeletionTimestamp != nil || // Rule is being deleted
 		cnd.ObservedGeneration != s.GetGeneration() || // A new version of this CRD was created
-		(lastSuccessfulEndTime != nil && time.Since(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
-		(lastSuccessfulEndTime == nil && time.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
+		(lastSuccessfulEndTime != nil && clk.Since(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
+		(lastSuccessfulEndTime == nil && clk.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
 }
 
-func (s *SummaryRule) NextExecutionWindow() (windowStartTime time.Time, windowEndTime time.Time) {
+func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
 	// Calculate the next execution window based on the last successful execution
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	if lastSuccessfulEndTime == nil {
 		// First execution: start from current time aligned to interval boundary, going back one interval
-		now := time.Now().UTC()
+		now := clk.Now().UTC()
 		// Align to minute boundary for consistency
 		alignedNow := now.Truncate(time.Minute)
 		windowEndTime = alignedNow
@@ -292,7 +301,7 @@ func (s *SummaryRule) NextExecutionWindow() (windowStartTime time.Time, windowEn
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
 		// Ensure we don't execute future windows
-		now := time.Now().UTC().Truncate(time.Minute)
+		now := clk.Now().UTC().Truncate(time.Minute)
 		if windowEndTime.After(now) {
 			windowEndTime = now
 		}

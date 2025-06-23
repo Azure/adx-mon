@@ -358,9 +358,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		}
 
 		// Calculate the next execution window based on the last successful execution
-		windowStartTime, windowEndTime := rule.NextExecutionWindow()
+		windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
 
-		if rule.ShouldSubmitRule() {
+		if rule.ShouldSubmitRule(nil) {
 			// Prepare a new async operation with calculated time range
 			asyncOp := v1.AsyncOperation{
 				StartTime: windowStartTime.Format(time.RFC3339Nano),

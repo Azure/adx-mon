@@ -8,8 +8,50 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/yaml"
 )
+
+// FakeClock implements clock.Clock for testing
+type FakeClock struct {
+	time time.Time
+}
+
+func NewFakeClock(t time.Time) *FakeClock {
+	return &FakeClock{time: t}
+}
+
+func (f *FakeClock) Now() time.Time {
+	return f.time
+}
+
+func (f *FakeClock) Since(ts time.Time) time.Duration {
+	return f.time.Sub(ts)
+}
+
+func (f *FakeClock) Until(ts time.Time) time.Duration {
+	return ts.Sub(f.time)
+}
+
+func (f *FakeClock) NewTimer(d time.Duration) clock.Timer {
+	return clock.RealClock{}.NewTimer(d)
+}
+
+func (f *FakeClock) NewTicker(d time.Duration) clock.Ticker {
+	return clock.RealClock{}.NewTicker(d)
+}
+
+func (f *FakeClock) Sleep(d time.Duration) {
+	f.time = f.time.Add(d)
+}
+
+func (f *FakeClock) After(d time.Duration) <-chan time.Time {
+	return clock.RealClock{}.After(d)
+}
+
+func (f *FakeClock) Tick(d time.Duration) <-chan time.Time {
+	return clock.RealClock{}.Tick(d)
+}
 
 func TestSummaryRulesSpecFromYAML(t *testing.T) {
 	yamlStr := `apiVersion: adx-mon.azure.com/v1
@@ -162,8 +204,9 @@ func TestBacklog(t *testing.T) {
 }
 
 func TestShouldSubmitRule(t *testing.T) {
-	// Use current time but truncate to seconds for deterministic tests
-	now := time.Now().Truncate(time.Second)
+	// Use fixed time for deterministic tests
+	fixedTime := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
+	fakeClock := NewFakeClock(fixedTime)
 
 	t.Run("should submit on first execution - no condition", func(t *testing.T) {
 		rule := &SummaryRule{
@@ -176,7 +219,7 @@ func TestShouldSubmitRule(t *testing.T) {
 		}
 
 		// No condition set, should submit for first execution
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should submit on first execution - condition with old timestamp", func(t *testing.T) {
@@ -193,12 +236,12 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Hour)},
+			LastTransitionTime: metav1.Time{Time: fixedTime.Add(-2 * time.Hour)},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should not submit - recent condition, no last execution time", func(t *testing.T) {
@@ -215,12 +258,12 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now.Add(-30 * time.Minute)},
+			LastTransitionTime: metav1.Time{Time: fixedTime.Add(-30 * time.Minute)},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
-		require.False(t, rule.ShouldSubmitRule())
+		require.False(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should submit when interval has elapsed since last execution", func(t *testing.T) {
@@ -237,16 +280,16 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
 		// Set last execution time to more than interval ago
-		lastExecution := now.Add(-2 * time.Hour)
+		lastExecution := fixedTime.Add(-2 * time.Hour)
 		rule.SetLastExecutionTime(lastExecution)
 
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should not submit when interval has not elapsed since last execution", func(t *testing.T) {
@@ -263,16 +306,16 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
 		// Set last execution time to less than interval ago
-		lastExecution := now.Add(-30 * time.Minute)
+		lastExecution := fixedTime.Add(-30 * time.Minute)
 		rule.SetLastExecutionTime(lastExecution)
 
-		require.False(t, rule.ShouldSubmitRule())
+		require.False(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should submit when rule has been updated (new generation)", func(t *testing.T) {
@@ -289,23 +332,23 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
 		// Set recent last execution time
-		lastExecution := now.Add(-10 * time.Minute)
+		lastExecution := fixedTime.Add(-10 * time.Minute)
 		rule.SetLastExecutionTime(lastExecution)
 
 		// Now update the generation to simulate rule update
 		rule.ObjectMeta.Generation = 2
 
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should submit when rule is being deleted", func(t *testing.T) {
-		deletionTime := metav1.Time{Time: now}
+		deletionTime := metav1.Time{Time: fixedTime}
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Generation:        1,
@@ -320,16 +363,16 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
 		// Set recent last execution time
-		lastExecution := now.Add(-10 * time.Minute)
+		lastExecution := fixedTime.Add(-10 * time.Minute)
 		rule.SetLastExecutionTime(lastExecution)
 
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("should handle different interval durations", func(t *testing.T) {
@@ -342,25 +385,25 @@ func TestShouldSubmitRule(t *testing.T) {
 			{
 				name:           "5 minute interval - should submit",
 				interval:       5 * time.Minute,
-				lastExecution:  now.Add(-6 * time.Minute),
+				lastExecution:  fixedTime.Add(-6 * time.Minute),
 				expectedSubmit: true,
 			},
 			{
 				name:           "5 minute interval - should not submit",
 				interval:       5 * time.Minute,
-				lastExecution:  now.Add(-3 * time.Minute),
+				lastExecution:  fixedTime.Add(-3 * time.Minute),
 				expectedSubmit: false,
 			},
 			{
 				name:           "24 hour interval - should submit",
 				interval:       24 * time.Hour,
-				lastExecution:  now.Add(-25 * time.Hour),
+				lastExecution:  fixedTime.Add(-25 * time.Hour),
 				expectedSubmit: true,
 			},
 			{
 				name:           "24 hour interval - should not submit",
 				interval:       24 * time.Hour,
-				lastExecution:  now.Add(-23 * time.Hour),
+				lastExecution:  fixedTime.Add(-23 * time.Hour),
 				expectedSubmit: false,
 			},
 		}
@@ -380,7 +423,7 @@ func TestShouldSubmitRule(t *testing.T) {
 				condition := metav1.Condition{
 					Type:               SummaryRuleOwner,
 					Status:             metav1.ConditionTrue,
-					LastTransitionTime: metav1.Time{Time: now},
+					LastTransitionTime: metav1.Time{Time: fixedTime},
 					ObservedGeneration: 1,
 				}
 				rule.SetCondition(condition)
@@ -388,7 +431,7 @@ func TestShouldSubmitRule(t *testing.T) {
 				// Set last execution time
 				rule.SetLastExecutionTime(tc.lastExecution)
 
-				require.Equal(t, tc.expectedSubmit, rule.ShouldSubmitRule())
+				require.Equal(t, tc.expectedSubmit, rule.ShouldSubmitRule(fakeClock))
 			})
 		}
 	})
@@ -407,20 +450,20 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
 		// Set last execution time to exactly interval ago
-		lastExecution := now.Add(-time.Hour)
+		lastExecution := fixedTime.Add(-time.Hour)
 		rule.SetLastExecutionTime(lastExecution)
 
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 
 	t.Run("multiple conditions should prioritize execution triggers", func(t *testing.T) {
-		deletionTime := metav1.Time{Time: now}
+		deletionTime := metav1.Time{Time: fixedTime}
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Generation:        1,             // Start with generation 1
@@ -435,26 +478,27 @@ func TestShouldSubmitRule(t *testing.T) {
 		condition := metav1.Condition{
 			Type:               SummaryRuleOwner,
 			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Time{Time: now},
+			LastTransitionTime: metav1.Time{Time: fixedTime},
 			ObservedGeneration: 1,
 		}
 		rule.SetCondition(condition)
 
 		// Set very recent last execution time (normally would prevent submission)
-		lastExecution := now.Add(-1 * time.Minute)
+		lastExecution := fixedTime.Add(-1 * time.Minute)
 		rule.SetLastExecutionTime(lastExecution)
 
 		// Update generation to simulate rule update
 		rule.ObjectMeta.Generation = 2
 
 		// Should still submit because of deletion and generation change
-		require.True(t, rule.ShouldSubmitRule())
+		require.True(t, rule.ShouldSubmitRule(fakeClock))
 	})
 }
 
 func TestNextExecutionWindow(t *testing.T) {
-	// Use current time but truncate to seconds for deterministic tests
-	now := time.Now().Truncate(time.Second)
+	// Use fixed time for deterministic tests
+	fixedTime := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
+	fakeClock := NewFakeClock(fixedTime)
 
 	t.Run("first execution - no last execution time", func(t *testing.T) {
 		rule := &SummaryRule{
@@ -466,15 +510,14 @@ func TestNextExecutionWindow(t *testing.T) {
 			},
 		}
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		// First execution should go back one interval from current time (aligned to minute)
-		expectedEndTime := now.UTC().Truncate(time.Minute)
+		expectedEndTime := fixedTime.UTC().Truncate(time.Minute)
 		expectedStartTime := expectedEndTime.Add(-time.Hour)
 
-		// Allow for small time differences due to execution time
-		require.WithinDuration(t, expectedStartTime, startTime, 2*time.Minute)
-		require.WithinDuration(t, expectedEndTime, endTime, 2*time.Minute)
+		require.Equal(t, expectedStartTime, startTime)
+		require.Equal(t, expectedEndTime, endTime)
 		require.Equal(t, time.Hour, endTime.Sub(startTime))
 	})
 
@@ -489,10 +532,10 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Set a last execution time that's far enough in the past that adding interval won't exceed current time
-		lastExecution := now.Add(-2 * time.Hour).UTC()
+		lastExecution := fixedTime.Add(-2 * time.Hour).UTC()
 		rule.SetLastExecutionTime(lastExecution)
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		// Should start from last execution and go forward one interval
 		require.Equal(t, lastExecution, startTime)
@@ -511,21 +554,18 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Set a last execution time that would create a future window
-		futureStart := now.Add(30 * time.Minute).UTC()
+		futureStart := fixedTime.Add(30 * time.Minute).UTC()
 		rule.SetLastExecutionTime(futureStart)
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		// Should start from the future time but cap end time to current time
 		require.Equal(t, futureStart, startTime)
-		currentTimeMinute := now.UTC().Truncate(time.Minute)
+		currentTimeMinute := fixedTime.UTC().Truncate(time.Minute)
 
 		// End time should be capped to current time since start time is in the future
-		require.True(t, endTime.Before(currentTimeMinute.Add(2*time.Minute)) || endTime.Equal(currentTimeMinute))
-		// When start time is in the future, end time might be equal to start time if both are capped
-		require.True(t, endTime.After(startTime) || endTime.Equal(startTime) || endTime.Equal(currentTimeMinute))
+		require.Equal(t, currentTimeMinute, endTime)
 	})
-
 	t.Run("handles different interval durations", func(t *testing.T) {
 		testCases := []struct {
 			name     string
@@ -550,14 +590,14 @@ func TestNextExecutionWindow(t *testing.T) {
 				}
 
 				// Test first execution
-				startTime, endTime := rule.NextExecutionWindow()
+				startTime, endTime := rule.NextExecutionWindow(fakeClock)
 				require.Equal(t, tc.interval, endTime.Sub(startTime))
 
 				// Test subsequent execution - use a time far enough back
-				lastExecution := now.Add(-tc.interval - time.Hour).UTC()
+				lastExecution := fixedTime.Add(-tc.interval - time.Hour).UTC()
 				rule.SetLastExecutionTime(lastExecution)
 
-				startTime, endTime = rule.NextExecutionWindow()
+				startTime, endTime = rule.NextExecutionWindow(fakeClock)
 				require.Equal(t, lastExecution, startTime)
 				require.Equal(t, tc.interval, endTime.Sub(startTime))
 			})
@@ -574,7 +614,7 @@ func TestNextExecutionWindow(t *testing.T) {
 			},
 		}
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		// End time should be aligned to minute boundary (no seconds/nanoseconds)
 		require.Zero(t, endTime.Second())
@@ -595,7 +635,7 @@ func TestNextExecutionWindow(t *testing.T) {
 			},
 		}
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		// Both times should be in UTC
 		require.Equal(t, time.UTC, startTime.Location())
@@ -612,11 +652,11 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Start with an execution time far enough in the past
-		pastTime := now.Add(-4 * time.Hour).UTC()
+		pastTime := fixedTime.Add(-4 * time.Hour).UTC()
 		rule.SetLastExecutionTime(pastTime)
 
 		// First execution window
-		startTime1, endTime1 := rule.NextExecutionWindow()
+		startTime1, endTime1 := rule.NextExecutionWindow(fakeClock)
 		require.Equal(t, pastTime, startTime1)
 		require.Equal(t, time.Hour, endTime1.Sub(startTime1))
 
@@ -624,7 +664,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		rule.SetLastExecutionTime(endTime1)
 
 		// Second execution
-		startTime2, endTime2 := rule.NextExecutionWindow()
+		startTime2, endTime2 := rule.NextExecutionWindow(fakeClock)
 
 		// Second execution should start where first ended
 		require.Equal(t, endTime1, startTime2)
@@ -634,7 +674,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		rule.SetLastExecutionTime(endTime2)
 
 		// Third execution - this should still be in the past
-		startTime3, endTime3 := rule.NextExecutionWindow()
+		startTime3, endTime3 := rule.NextExecutionWindow(fakeClock)
 
 		// Third execution should start where second ended
 		require.Equal(t, endTime2, startTime3)
@@ -651,14 +691,14 @@ func TestNextExecutionWindow(t *testing.T) {
 			},
 		}
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 		require.Equal(t, 30*time.Second, endTime.Sub(startTime))
 
 		// Set last execution time far enough back
-		lastExecution := now.Add(-2 * time.Minute).UTC()
+		lastExecution := fixedTime.Add(-2 * time.Minute).UTC()
 		rule.SetLastExecutionTime(lastExecution)
 
-		startTime, endTime = rule.NextExecutionWindow()
+		startTime, endTime = rule.NextExecutionWindow(fakeClock)
 		require.Equal(t, lastExecution, startTime)
 		require.Equal(t, 30*time.Second, endTime.Sub(startTime))
 	})
@@ -673,14 +713,14 @@ func TestNextExecutionWindow(t *testing.T) {
 			},
 		}
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
 
 		// Set last execution time far enough back
-		lastExecution := now.Add(-8 * 24 * time.Hour).UTC() // 8 days ago
+		lastExecution := fixedTime.Add(-8 * 24 * time.Hour).UTC() // 8 days ago
 		rule.SetLastExecutionTime(lastExecution)
 
-		startTime, endTime = rule.NextExecutionWindow()
+		startTime, endTime = rule.NextExecutionWindow(fakeClock)
 		require.Equal(t, lastExecution, startTime)
 		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
 	})
@@ -696,14 +736,14 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Set last execution to current time
-		currentTime := now.UTC().Truncate(time.Minute)
+		currentTime := fixedTime.UTC().Truncate(time.Minute)
 		rule.SetLastExecutionTime(currentTime)
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		require.Equal(t, currentTime, startTime)
 		// End time should be capped to current time since it would be in the future
-		require.True(t, endTime.Equal(currentTime) || endTime.Before(now.Add(2*time.Minute)))
+		require.Equal(t, currentTime, endTime)
 	})
 
 	t.Run("window calculation with past execution that would exceed current time", func(t *testing.T) {
@@ -717,15 +757,15 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Set last execution time that when adding interval would exceed current time
-		lastExecution := now.Add(-30 * time.Minute).UTC() // 30 minutes ago
+		lastExecution := fixedTime.Add(-30 * time.Minute).UTC() // 30 minutes ago
 		rule.SetLastExecutionTime(lastExecution)
 
-		startTime, endTime := rule.NextExecutionWindow()
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		require.Equal(t, lastExecution, startTime)
 		// End time should be capped to current time (truncated to minute)
-		expectedMaxEndTime := now.UTC().Truncate(time.Minute)
-		require.True(t, endTime.Before(expectedMaxEndTime.Add(2*time.Minute)) || endTime.Equal(expectedMaxEndTime))
+		expectedMaxEndTime := fixedTime.UTC().Truncate(time.Minute)
+		require.Equal(t, expectedMaxEndTime, endTime)
 		require.True(t, endTime.After(startTime))
 	})
 }
