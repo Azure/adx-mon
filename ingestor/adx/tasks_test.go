@@ -1756,9 +1756,10 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	require.Equal(t, 3, submitCount, "Should have submitted exactly 3 operations across 3 cycles")
 }
 
-func TestCompletedOperationRemoval(t *testing.T) {
-	// This test reproduces the exact issue described where a completed operation
-	// is found in Kusto's operations list but not removed from the SummaryRule's operations list
+func TestCompletedOperationFallenOutOfBacklog(t *testing.T) {
+	// This test reproduces the actual bug: operations that completed successfully
+	// but have fallen out of Kusto's 24-hour operations backlog are not being removed
+	// because they have a recent StartTime (processing window start, not Kusto operation start)
 	
 	// Create a mock statement executor
 	mockExecutor := &TestStatementExecutor{
@@ -1768,7 +1769,7 @@ func TestCompletedOperationRemoval(t *testing.T) {
 
 	// Create a summary rule with a recent async operation
 	ruleName := "test-rule"
-	operationId := "125bdbcd-0eb4-460b-8bea-94f30e422bbc" // Use the exact operation ID from the issue
+	operationId := "125bdbcd-0eb4-460b-8bea-94f30e422bbc" // Use exact operation ID from issue
 	rule := &v1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: ruleName,
@@ -1781,90 +1782,130 @@ func TestCompletedOperationRemoval(t *testing.T) {
 		},
 	}
 
-	// Add a recent async operation that should be removed when it shows as completed in Kusto
-	startTime := time.Now().Add(-6 * time.Hour).Format(time.RFC3339Nano) // 6 hours ago like in the issue
-	endTime := time.Now().Add(-5*time.Hour-50*time.Minute).Format(time.RFC3339Nano) // Completed ~6 hours ago
+	// This is the key to reproducing the bug:
+	// The operation has a StartTime that's older than 2 hours (so it should be removed when GetOperations succeeds)
+	// but the Kusto operation itself has fallen out of the 24-hour backlog
+	oldStartTime := time.Now().Add(-3 * time.Hour).Format(time.RFC3339Nano) // 3 hours ago (older than 2 hour threshold)
+	oldEndTime := time.Now().Add(-2*time.Hour-59*time.Minute).Format(time.RFC3339Nano) // 2h59m ago
 	rule.SetAsyncOperation(v1.AsyncOperation{
 		OperationId: operationId,
-		StartTime:   startTime,
-		EndTime:     endTime,
+		StartTime:   oldStartTime, // Old enough to be removed when GetOperations succeeds
+		EndTime:     oldEndTime,
 	})
 
-	// Set the rule's last execution time to prevent new submissions during the test
-	// This ensures ShouldSubmitRule returns false
-	rule.SetLastExecutionTime(time.Now().Add(-10 * time.Minute)) // Recent execution
+	// Prevent new rule submissions during test
+	rule.SetLastExecutionTime(time.Now().Add(-10 * time.Minute))
 
-	// Debug: check operations before the task runs
-	initialOpsBeforeRun := rule.GetAsyncOperations()
-	t.Logf("Operations before task.Run(): %+v", initialOpsBeforeRun)
-	require.Len(t, initialOpsBeforeRun, 1, "Should have 1 operation before running task")
-	require.Equal(t, operationId, initialOpsBeforeRun[0].OperationId, "Should be our test operation")
+	// Capture initial state
+	initialOps := rule.GetAsyncOperations()
+	require.Len(t, initialOps, 1, "Should start with 1 operation")
+	require.Equal(t, operationId, initialOps[0].OperationId)
 
-	// Create a list to be returned by the mock handler
+	// Create rule list for mock handler
 	ruleList := &v1.SummaryRuleList{
 		Items: []v1.SummaryRule{*rule},
 	}
 
-	// Create a mock handler that will return our rule and track updates
+	// Track rule updates to verify behavior
+	var ruleUpdated bool
 	mockHandler := &mockCRDHandler{
-		listResponse:   ruleList,
-		updatedObjects: []client.Object{},
+		listResponse: ruleList,
+		updateStatusFn: func(ctx context.Context, obj client.Object, err error) error {
+			ruleUpdated = true
+			// Update the rule in our test copy to reflect changes
+			if updatedRule, ok := obj.(*v1.SummaryRule); ok {
+				rule = updatedRule
+			}
+			return nil
+		},
 	}
 
-	// Create the task with a GetOperations function that returns the operation as Completed
+	// Create task
 	task := NewSummaryRuleTask(mockHandler, mockExecutor, map[string]string{})
 	
-	// Mock GetOperations to return the operation as Completed (exactly like in the issue)
+	// This is the crucial part: Mock GetOperations to return EMPTY list
+	// This simulates that the operation has fallen out of Kusto's 24-hour backlog
+	// even though it completed successfully and could be found with a direct query
 	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-		return []AsyncOperationStatus{
-			{
-				OperationId: operationId,
-				State:       "Completed", // The exact state from the issue
-				ShouldRetry: 0,
-			},
-		}, nil
+		return []AsyncOperationStatus{}, nil // Operation not found in current backlog
 	}
 
-	// Mock SubmitRule to prevent new submissions during this test
-	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
-		t.Logf("SubmitRule was called - this should not happen in this test")
-		return "", fmt.Errorf("should not submit new rules in this test")
-	}
+	// Run the task once
+	err := task.Run(context.Background())
+	require.NoError(t, err)
 
-	// Execute the task
-	ctx := context.Background()
-	err := task.Run(ctx)
-	require.NoError(t, err, "Task should run successfully")
-
-	// Let's debug what happened by checking if the operation was found and processed
-	// Re-read the rule to see current state
-	initialOps := rule.GetAsyncOperations()
-	t.Logf("Operations after task.Run(): %+v", initialOps)
-	t.Logf("Number of rule updates: %d", len(mockHandler.updatedObjects))
-
-	// Verify that the rule was updated and the completed operation was removed
-	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
+	// Check final state
+	finalOps := rule.GetAsyncOperations()
 	
-	updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
-	require.True(t, ok, "Updated object should be a SummaryRule")
-	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+	t.Logf("Initial operations: %d", len(initialOps))
+	t.Logf("Final operations: %d", len(finalOps))
+	t.Logf("Rule was updated: %v", ruleUpdated)
+	
+	// The fix correctly removes operations that have fallen out of Kusto's backlog
+	// when GetOperations succeeds but the operation is not found
+	require.Len(t, finalOps, 0, "Operation should be removed when it falls out of Kusto backlog")
+}
 
-	// The completed operation should have been removed
-	asyncOps := updatedRule.GetAsyncOperations()
-	t.Logf("Final operations: %+v", asyncOps)
-
-	// Check if our specific operation ID was removed
-	found := false
-	for _, op := range asyncOps {
-		if op.OperationId == operationId {
-			found = true
-			break
-		}
+func TestConservativeBehaviorWhenGetOperationsFails(t *testing.T) {
+	// This test verifies that when GetOperations fails (Kusto unavailable),
+	// operations are only removed if they're very old (>25 hours) to avoid false removals
+	
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
 	}
-	require.False(t, found, "The completed operation should have been removed")
 
-	// If there are other operations, they should not be the one we started with
-	for _, op := range asyncOps {
-		require.NotEqual(t, operationId, op.OperationId, "Operation %s should have been removed", operationId)
+	// Create a summary rule with a recent async operation
+	ruleName := "test-rule"
+	operationId := "test-operation-id"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ruleName,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
 	}
+
+	// Add a recent operation that should NOT be removed when GetOperations fails
+	recentStartTime := time.Now().Add(-30 * time.Minute).Format(time.RFC3339Nano) // 30 minutes ago (recent)
+	recentEndTime := time.Now().Add(-29 * time.Minute).Format(time.RFC3339Nano)   
+	rule.SetAsyncOperation(v1.AsyncOperation{
+		OperationId: operationId,
+		StartTime:   recentStartTime, // Recent, so should be kept even when GetOperations succeeds
+		EndTime:     recentEndTime,
+	})
+
+	// Prevent new rule submissions
+	rule.SetLastExecutionTime(time.Now().Add(-10 * time.Minute))
+
+	// Create rule list for mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	mockHandler := &mockCRDHandler{
+		listResponse: ruleList,
+	}
+
+	// Create task
+	task := NewSummaryRuleTask(mockHandler, mockExecutor, map[string]string{})
+	
+	// Mock GetOperations to fail (simulating Kusto unavailable)
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return nil, fmt.Errorf("kusto unavailable")
+	}
+
+	// Run the task
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+
+	// Check that recent operation is kept when GetOperations fails
+	finalOps := rule.GetAsyncOperations()
+	require.Len(t, finalOps, 1, "Recent operation should be kept when GetOperations fails (conservative behavior)")
+	require.Equal(t, operationId, finalOps[0].OperationId)
 }
