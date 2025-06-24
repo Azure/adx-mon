@@ -470,7 +470,12 @@ func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1
 		// Use detailed status message if available, otherwise fall back to generic message
 		var err error
 		if kustoOp.Status != "" {
-			err = fmt.Errorf("async operation %s failed: %s", kustoOp.OperationId, kustoOp.Status)
+			// Truncate status message to prevent excessively long condition messages
+			status := kustoOp.Status
+			if len(status) > 200 { // Leave room for "async operation {id} failed: " prefix
+				status = status[:200]
+			}
+			err = fmt.Errorf("async operation %s failed: %s", kustoOp.OperationId, status)
 		} else {
 			err = fmt.Errorf("async operation %s failed", kustoOp.OperationId)
 		}
