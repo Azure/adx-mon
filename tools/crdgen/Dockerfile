@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS builder
+FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 
 # docker build --file tools/crdgen/Dockerfile --build-arg crd=TestTest -t my-crdgen .
 ARG crd
@@ -20,7 +20,7 @@ ADD . /code
 WORKDIR /code
 
 # controller-gen and operator-sdk expect a specific directory structure, so we need
-# to move some things around. 
+# to move some things around.
 #
 # 1. Create the directory structure config/crd/bases and config/default
 RUN mkdir -p config/crd/bases config/default
