@@ -4,9 +4,8 @@ FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 ARG crd
 ARG cmd=create
 
-# Install go, make, and python3 with PyYAML
-RUN tdnf install -y golang ca-certificates make python3 python3-pip
-RUN pip3 install PyYAML
+# Install go, make, and ca-certificates
+RUN tdnf install -y golang ca-certificates make
 
 # Install controller-gen
 RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest && \
@@ -57,7 +56,7 @@ RUN if [ "$cmd" = "create" ]; then \
     controller-gen rbac:roleName=manager-role crd paths="./..." output:crd:artifacts:config=config/crd/bases && \
     controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./api/..." && \
     echo "Running CEL validation patching..." && \
-    python3 /code/tools/crdgen/patch_cel_validations.py /code/api/v1 /code/config/crd/bases
+    go run /code/tools/cmd/patch-cel-validations/main.go -api-dir=/code/api/v1 -crd-dir=/code/config/crd/bases
 
 # Copy generated files into the "bin" directory
 RUN mkdir -p /code/bin && \

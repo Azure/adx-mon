@@ -80,8 +80,8 @@ generate-crd:
 
 # Apply CEL validations to existing CRDs without regenerating them
 patch-cel-validations:
-	python3 tools/crdgen/patch_cel_validations.py api/v1 kustomize/bases
-	python3 tools/crdgen/patch_cel_validations.py api/v1 operator/manifests/crds
+	go run tools/cmd/patch-cel-validations/main.go -api-dir=api/v1 -crd-dir=kustomize/bases
+	go run tools/cmd/patch-cel-validations/main.go -api-dir=api/v1 -crd-dir=operator/manifests/crds
 .PHONY: patch-cel-validations
 
 k8s-bundle:
