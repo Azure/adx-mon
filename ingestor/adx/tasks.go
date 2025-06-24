@@ -495,27 +495,10 @@ func (t *SummaryRuleTask) handleStaleOperation(rule *v1.SummaryRule, operation v
 		}
 
 		// If GetOperations succeeded but the operation wasn't found, it likely completed
-		// If the operation has both start and end times, and the end time is in the past,
-		// it has likely completed and should be removed since it's no longer in Kusto's operations list
-		if operation.EndTime != "" {
-			if endTime, endErr := time.Parse(time.RFC3339Nano, operation.EndTime); endErr == nil {
-				// Only remove if the end time was at least a few minutes ago to allow for processing time
-				if time.Since(endTime) > 5*time.Minute {
-					logger.Infof("Async operation %s for rule %s has completed (end time %s passed) and is no longer in Kusto operations list, removing",
-						operation.OperationId, rule.Name, operation.EndTime)
-					rule.RemoveAsyncOperation(operation.OperationId)
-					return
-				} else {
-					logger.Debugf("Async operation %s for rule %s has end time but is very recent, keeping for now",
-						operation.OperationId, rule.Name)
-					return
-				}
-			}
-		}
-
-		// For operations without end times, use the original logic of 25-hour window
-		if time.Since(startTime) > 25*time.Hour {
-			logger.Infof("Async operation %s for rule %s has fallen out of the Kusto backlog window, removing",
+		// and dropped out of Kusto's operations list. Use a shorter timeout when Kusto is available
+		// since completed operations drop out much faster than the 25-hour window
+		if time.Since(startTime) > 2*time.Hour {
+			logger.Infof("Async operation %s for rule %s not found in Kusto operations list (likely completed), removing",
 				operation.OperationId, rule.Name)
 			rule.RemoveAsyncOperation(operation.OperationId)
 		} else {
