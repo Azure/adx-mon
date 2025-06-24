@@ -1754,3 +1754,185 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 
 	require.Equal(t, 3, submitCount, "Should have submitted exactly 3 operations across 3 cycles")
 }
+
+func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
+	// This test simulates a bug scenario where there are multiple outstanding async operations:
+	// - First operation: Failed state but marked for retry (ShouldRetry=1)
+	// - Subsequent operations: Completed state (ShouldRetry=0)
+	// Expected behavior:
+	// - Failed operation should be retried (new operation created)
+	// - All Completed operations should be removed
+	// - Final state: Operations from both new rule execution and retry
+
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	// Create a summary rule that already has multiple async operations
+	ruleName := "test-rule"
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       ruleName,
+			Generation: 1,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Setup initial async operations - simulating the buggy production state
+	// First operation: Failed but retriable
+	failedOp := v1.AsyncOperation{
+		OperationId: "failed-op-1",
+		StartTime:   "2024-06-23T10:00:00Z",
+		EndTime:     "2024-06-23T11:00:00Z",
+	}
+	rule.SetAsyncOperation(failedOp)
+
+	// Subsequent operations: All completed successfully
+	completedOps := []v1.AsyncOperation{
+		{
+			OperationId: "completed-op-2",
+			StartTime:   "2024-06-23T11:00:00Z",
+			EndTime:     "2024-06-23T12:00:00Z",
+		},
+		{
+			OperationId: "completed-op-3",
+			StartTime:   "2024-06-23T12:00:00Z",
+			EndTime:     "2024-06-23T13:00:00Z",
+		},
+		{
+			OperationId: "completed-op-4",
+			StartTime:   "2024-06-23T13:00:00Z",
+			EndTime:     "2024-06-23T14:00:00Z",
+		},
+	}
+
+	for _, op := range completedOps {
+		rule.SetAsyncOperation(op)
+	}
+
+	// Verify initial state - should have 4 operations total
+	initialOps := rule.GetAsyncOperations()
+	require.Len(t, initialOps, 4, "Should start with 4 async operations")
+
+	// Create a list to be returned by the mock handler
+	ruleList := &v1.SummaryRuleList{
+		Items: []v1.SummaryRule{*rule},
+	}
+
+	// Create a mock handler that will return our rule and track updates
+	mockHandler := &mockCRDHandler{
+		listResponse:   ruleList,
+		updatedObjects: []client.Object{},
+	}
+
+	// Create the task with our mocks
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Mock GetOperations to return the mixed states from Kusto
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{
+			{
+				OperationId: "failed-op-1",
+				State:       string(KustoAsyncOperationStateFailed),
+				ShouldRetry: 1, // This is the key - Failed but retriable
+			},
+			{
+				OperationId: "completed-op-2",
+				State:       string(KustoAsyncOperationStateCompleted),
+				ShouldRetry: 0, // Completed successfully
+			},
+			{
+				OperationId: "completed-op-3",
+				State:       string(KustoAsyncOperationStateCompleted),
+				ShouldRetry: 0, // Completed successfully
+			},
+			{
+				OperationId: "completed-op-4",
+				State:       string(KustoAsyncOperationStateCompleted),
+				ShouldRetry: 0, // Completed successfully
+			},
+		}, nil
+	}
+	// Track SubmitRule calls - we expect both new execution and retry
+	type submitCall struct {
+		startTime string
+		endTime   string
+		opId      string
+	}
+	var submitCalls []submitCall
+
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		opId := fmt.Sprintf("op-%d", len(submitCalls)+1)
+		submitCalls = append(submitCalls, submitCall{
+			startTime: startTime,
+			endTime:   endTime,
+			opId:      opId,
+		})
+		return opId, nil
+	}
+
+	// Execute the task
+	err := task.Run(context.Background())
+	require.NoError(t, err, "Task should execute successfully")
+
+	// We expect 2 SubmitRule calls:
+	// 1. New rule execution (for current time window)
+	// 2. Retry of failed operation (with original time window)
+	require.Len(t, submitCalls, 2, "Should have 2 SubmitRule calls: new execution + retry")
+
+	// Find the retry call - it should match the failed operation's time window
+	var retryCall *submitCall
+	for i := range submitCalls {
+		if submitCalls[i].startTime == "2024-06-23T10:00:00Z" && submitCalls[i].endTime == "2024-06-23T11:00:00Z" {
+			retryCall = &submitCalls[i]
+			break
+		}
+	}
+	require.NotNil(t, retryCall, "Should have a retry call with the failed operation's time window")
+
+	// Verify the rule was updated (could be multiple times due to both new execution and retries)
+	require.GreaterOrEqual(t, len(mockHandler.updatedObjects), 1, "Rule should have been updated at least once")
+
+	// Get the final updated rule
+	updatedRule, ok := mockHandler.updatedObjects[len(mockHandler.updatedObjects)-1].(*v1.SummaryRule)
+	require.True(t, ok, "Updated object should be a SummaryRule")
+	require.Equal(t, ruleName, updatedRule.Name, "Rule name should match")
+
+	// Critical verification: All completed operations should be removed
+	finalOps := updatedRule.GetAsyncOperations()
+
+	// Verify none of the completed operations remain
+	for _, completedOp := range completedOps {
+		for _, finalOp := range finalOps {
+			require.NotEqual(t, completedOp.OperationId, finalOp.OperationId,
+				"Completed operation %s should have been removed", completedOp.OperationId)
+		}
+	}
+
+	// Verify the original failed operation was removed
+	for _, finalOp := range finalOps {
+		require.NotEqual(t, "failed-op-1", finalOp.OperationId, "Original failed operation should have been removed")
+	}
+
+	// Verify that the retry operation is present
+	retryOpFound := false
+	for _, finalOp := range finalOps {
+		if finalOp.OperationId == retryCall.opId {
+			retryOpFound = true
+			require.Equal(t, "2024-06-23T10:00:00Z", finalOp.StartTime, "Retry operation should have correct start time")
+			require.Equal(t, "2024-06-23T11:00:00Z", finalOp.EndTime, "Retry operation should have correct end time")
+			break
+		}
+	}
+	require.True(t, retryOpFound, "Retry operation should be present in final operations")
+}
