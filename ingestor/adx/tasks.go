@@ -466,8 +466,17 @@ func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1
 	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 		// Operation failed - mark the rule as failed
 		logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
-		if err := t.updateSummaryRuleStatus(ctx, rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
-			logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
+
+		// Use detailed status message if available, otherwise fall back to generic message
+		var err error
+		if kustoOp.Status != "" {
+			err = fmt.Errorf("async operation %s failed: %s", kustoOp.OperationId, kustoOp.Status)
+		} else {
+			err = fmt.Errorf("async operation %s failed", kustoOp.OperationId)
+		}
+
+		if updateErr := t.updateSummaryRuleStatus(ctx, rule, err); updateErr != nil {
+			logger.Errorf("Failed to update summary rule status for failed operation: %v", updateErr)
 		}
 	}
 	// We're done polling this async operation, so we can remove it from the list
@@ -518,7 +527,7 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
-	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry) | sort by LastUpdatedOn asc")
+	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status | sort by LastUpdatedOn asc")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve async operations: %w", err)
@@ -587,6 +596,7 @@ type AsyncOperationStatus struct {
 	LastUpdatedOn time.Time `kusto:"LastUpdatedOn"`
 	State         string    `kusto:"State"`
 	ShouldRetry   float64   `kusto:"ShouldRetry"`
+	Status        string    `kusto:"Status"`
 }
 
 type AuditDiskSpaceTask struct {
