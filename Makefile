@@ -78,6 +78,12 @@ generate-crd:
 	cp kustomize/bases/*.yaml operator/manifests/crds
 .PHONY: generate-crd
 
+# Apply CEL validations to existing CRDs without regenerating them
+patch-cel-validations:
+	python3 tools/crdgen/patch_cel_validations.py api/v1 kustomize/bases
+	python3 tools/crdgen/patch_cel_validations.py api/v1 operator/manifests/crds
+.PHONY: patch-cel-validations
+
 k8s-bundle:
 	./build/scripts/generate-bundle.sh
 .PHONY: k8s-bundle
