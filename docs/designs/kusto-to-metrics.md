@@ -86,16 +86,7 @@ type MetricsExporterSpec struct {
     Transform TransformConfig `json:"transform"`
 }
 
-type SummaryRuleRef struct {
-    // LabelSelector to automatically discover SummaryRules to export from
-    // This enables dynamic discovery of SummaryRules based on common labeling,
-    // eliminating the need to manually maintain lists of rule names
-    LabelSelector *metav1.LabelSelector `json:"labelSelector"`
-    
-    // Database and Table to query for export
-    Database string `json:"database"`
-    Table    string `json:"table"`
-}
+
 
 type TransformConfig struct {
     // MetricNameColumn specifies which column contains the metric name
