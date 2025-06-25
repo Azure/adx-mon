@@ -9,6 +9,7 @@ kind: ServiceAccount
 metadata:
   name: ingestor
   namespace: {{ .Namespace }}
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -108,10 +109,19 @@ spec:
         adx-mon/log-destination: "Logs:Ingestor"
         adx-mon/log-parsers: json
     spec:
+      automountServiceAccountToken: true
+      securityContext: {}
       serviceAccountName: ingestor
       containers:
         - name: ingestor
           image: {{ .Image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 9090
               name: ingestor

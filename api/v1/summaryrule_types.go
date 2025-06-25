@@ -22,6 +22,7 @@ import (
 
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -31,6 +32,8 @@ const (
 	SummaryRuleOwner = "summaryrule.adx-mon.azure.com"
 	// SummaryRuleOperationIdOwner is the owner of the summary rule operation id
 	SummaryRuleOperationIdOwner = "summaryrule.adx-mon.azure.com/OperationId"
+	// SummaryRuleLastSuccessfulExecution tracks the end time of the last successful query execution
+	SummaryRuleLastSuccessfulExecution = "summaryrule.adx-mon.azure.com/LastSuccessfulExecution"
 	// SummaryRuleAsyncOperationPollInterval acts as a cooldown period between checking
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
@@ -43,12 +46,18 @@ type SummaryRuleSpec struct {
 	Database string `json:"database"`
 	// Table is rule output destination
 	Table string `json:"table"`
-	// Name is the name of the rule
-	Name string `json:"name"`
+	// Name is the name of the rule (deprecated and not used - use `metadata.name` instead)
+	Name string `json:"name,omitempty"`
 	// Body is the KQL body of the function
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
 	Interval metav1.Duration `json:"interval"`
+
+	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
+	// are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
+	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
+	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
+	Criteria map[string][]string `json:"criteria,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -72,6 +81,38 @@ type SummaryRuleStatus struct {
 
 func (s *SummaryRule) GetCondition() *metav1.Condition {
 	return meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOwner)
+}
+
+func (s *SummaryRule) GetLastExecutionTime() *time.Time {
+	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleLastSuccessfulExecution)
+	if condition == nil {
+		return nil
+	}
+
+	// Parse the time from the message field
+	if condition.Message == "" {
+		return nil
+	}
+
+	t, err := time.Parse(time.RFC3339Nano, condition.Message)
+	if err != nil {
+		return nil
+	}
+
+	return &t
+}
+
+func (s *SummaryRule) SetLastExecutionTime(endTime time.Time) {
+	condition := &metav1.Condition{
+		Type:               SummaryRuleLastSuccessfulExecution,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ExecutionCompleted",
+		Message:            endTime.UTC().Format(time.RFC3339Nano),
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: s.GetGeneration(),
+	}
+
+	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
 func (s *SummaryRule) SetCondition(c metav1.Condition) {
@@ -127,7 +168,21 @@ func (s *SummaryRule) SetAsyncOperation(operation AsyncOperation) {
 	// Check if the operation already exists
 	found := false
 	for i, op := range asyncOperations {
-		if op.OperationId == operation.OperationId {
+		// If we're unable to submit an AsyncOperation, we add it to our backlog for
+		// future submission. Once we're able to submit the operation, we set the
+		// operation-id, which means we need to detect this case and match operations
+		// based on their time windows.
+		if op.OperationId == "" {
+			if op.StartTime == operation.StartTime &&
+				op.EndTime == operation.EndTime &&
+				op.StartTime != "" && op.EndTime != "" {
+				// If the operation is in the backlog, we need to update it with the new
+				// operation-id and the start and end times.
+				asyncOperations[i] = operation
+				found = true
+				break
+			}
+		} else if op.OperationId == operation.OperationId {
 			// Update the existing operation
 			asyncOperations[i] = operation
 			found = true
@@ -200,6 +255,58 @@ func (s *SummaryRule) RemoveAsyncOperation(operationId string) {
 	}
 
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
+}
+
+func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	lastSuccessfulEndTime := s.GetLastExecutionTime()
+	cnd := s.GetCondition()
+	if cnd == nil {
+		// For first-time execution, initialize the condition with a timestamp
+		// that's one interval back from current time
+		cnd = &metav1.Condition{
+			LastTransitionTime: metav1.Time{Time: clk.Now().Add(-s.Spec.Interval.Duration)},
+		}
+	}
+	// Determine if the rule should be executed based on several criteria:
+	// 1. The rule is being deleted
+	// 2. Rule has been updated (new generation)
+	// 3. It's time for the next interval execution (based on actual time windows)
+	return s.DeletionTimestamp != nil || // Rule is being deleted
+		cnd.ObservedGeneration != s.GetGeneration() || // A new version of this CRD was created
+		(lastSuccessfulEndTime != nil && clk.Since(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
+		(lastSuccessfulEndTime == nil && clk.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
+}
+
+func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	// Calculate the next execution window based on the last successful execution
+	lastSuccessfulEndTime := s.GetLastExecutionTime()
+	if lastSuccessfulEndTime == nil {
+		// First execution: start from current time aligned to interval boundary, going back one interval
+		now := clk.Now().UTC()
+		// Align to minute boundary for consistency
+		alignedNow := now.Truncate(time.Minute)
+		windowEndTime = alignedNow
+		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
+	} else {
+		// Subsequent executions: start from where the last successful execution ended
+		windowStartTime = *lastSuccessfulEndTime
+		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
+
+		// Ensure we don't execute future windows
+		now := clk.Now().UTC().Truncate(time.Minute)
+		if windowEndTime.After(now) {
+			windowEndTime = now
+		}
+	}
+	return
 }
 
 // +kubebuilder:object:root=true

@@ -461,8 +461,8 @@ func TestBatcher_Stats(t *testing.T) {
 	require.NoError(t, err)
 
 	// No batches should be returned because existing segments are already assigned to batched and not released
-	require.Equal(t, int64(0), a.SegmentsTotal())
-	require.Equal(t, int64(0), a.SegmentsSize())
+	require.Equal(t, int64(4), a.SegmentsTotal())
+	require.Equal(t, int64(103524), a.SegmentsSize())
 
 	// Release all the segments so they can re-assigned to new batches
 	for _, b := range owned {

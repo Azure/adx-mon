@@ -428,7 +428,7 @@ func VerifyIngestorRunning(ctx context.Context, restConfig *rest.Config) (bool, 
 func createFillerContainer(mountPath string) corev1.Container {
 	return corev1.Container{
 		Name:            "storage-filler",
-		Image:           "mcr.microsoft.com/cbl-mariner/base/core:2.0.20250304",
+		Image:           "mcr.microsoft.com/azurelinux/base/core:3.0",
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command: []string{
 			"/bin/bash",

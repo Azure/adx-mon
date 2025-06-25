@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"io"
-	"os"
 	"testing"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -76,9 +75,9 @@ func (f *fakeUploader) upload(ctx context.Context) {
 
 			for _, si := range segments {
 				logger.Warnf("Uploading segment %s", si.Path)
-				if err := os.RemoveAll(si.Path); err != nil {
-					logger.Errorf("Failed to remove segment: %s", err.Error())
-				}
+			}
+			if err := batch.Remove(); err != nil {
+				logger.Errorf("Failed to remove batch: %s", err.Error())
 			}
 			batch.Release()
 		}

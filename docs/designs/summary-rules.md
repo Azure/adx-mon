@@ -55,6 +55,38 @@ let _endTime = datetime(...);
 When the query is executed successfully, the `SummaryRule` CRD will be updated with the last execution time and start
 and end time used in the query.  These fields will be used to determine the next execution time and interval.
 
+## Conditional Execution with Criteria
+
+SummaryRules support criteria to enable conditional execution based on cluster labels. This allows the same rule to be deployed across multiple environments while only executing where appropriate.
+
+For example, if an ingestor is started with `--cluster-labels=region=eastus,environment=production`, then a SummaryRule with:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: regional-summary
+spec:
+  database: SomeDatabase
+  name: HourlyAvg
+  body: |
+    SomeMetric
+    | where Timestamp between (_startTime .. _endtime)
+    | summarize avg(Value) by bin(Timestamp, 1h)
+  table: SomeMetricHourlyAvg
+  interval: 1h
+  criteria:
+    region:
+      - eastus
+      - westus
+    environment:
+      - production
+```
+
+Would execute because the cluster has `region=eastus` (which matches one of the allowed regions) OR `environment=production` (which matches the required environment). The matching logic uses case-insensitive comparison and OR semantics - any single criteria match allows execution.
+
+If no criteria are specified, the rule executes on all ingestor instances regardless of cluster labels.
+
 ## Recent Changes
 
 To simplify querying summarized data with recent data, a view can be used to union the summarized data with the

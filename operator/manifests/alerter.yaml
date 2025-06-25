@@ -9,6 +9,7 @@ kind: ServiceAccount
 metadata:
   name: alerter
   namespace: {{ .Namespace }}
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -93,6 +94,12 @@ spec:
       labels:
         app: alerter
     spec:
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 65534
       containers:
       - args:
         - --alerter-address={{ .AlerterEndpoint }}
@@ -108,6 +115,13 @@ spec:
         image: {{ .Image }}
         imagePullPolicy: Always
         name: alerter
+        securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
         ports:
         - containerPort: 8080
           protocol: TCP

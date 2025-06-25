@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Defines KQL summary/aggregation automation   | database, name, body, table, interval | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
 
@@ -151,19 +151,94 @@ spec:
   name: HourlyAvg
   body: |
     SomeMetric
-    | where Timestamp between (_startTime .. _endtime)
+    | where Timestamp between (_startTime .. _endTime)
     | summarize avg(Value) by bin(Timestamp, 1h)
   table: SomeMetricHourlyAvg
   interval: 1h
 ```
+
+**Environment-Specific Example with Cluster Labels:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: environment-specific-summary
+spec:
+  database: MyDB
+  name: EnvSummary
+  body: |
+    MyTable
+    | where Timestamp between (_startTime .. _endTime)
+    | where Environment == "_environment"
+    | where Region == "_region" 
+    | summarize count() by bin(Timestamp, 1h)
+  table: MySummaryTable
+  interval: 1h
+```
+
+**Criteria-Based Example for Conditional Execution:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: region-specific-summary
+spec:
+  database: MyDB
+  name: RegionalSummary
+  body: |
+    MyTable
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize count() by bin(Timestamp, 1h)
+  table: MySummaryTable
+  interval: 1h
+  criteria:
+    region:
+      - eastus
+      - westus
+    environment:
+      - production
+```
+
 **Key Fields:**
 - `database`: Target ADX database.
 - `name`: Logical name for the rule.
-- `body`: KQL query to run (can use `_startTime`/`_endtime`).
+- `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally use `<key>` placeholders for environment-specific values.
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
+- `criteria`: _(Optional)_ Key/value pairs used to determine when a summary rule can execute. If empty or omitted, the rule always executes. Keys and values are deployment-specific and configured on ingestor instances via `--cluster-labels`. For a rule to execute, any one of the criteria must match (OR logic). Matching is case-insensitive.
 
-**Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries.
+**Required Placeholders:**
+- `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
+- `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`.
+
+**Optional Cluster Label Substitutions:**
+- `<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.
+
+**Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries. Use cluster label substitutions to create environment-agnostic rules that work across different deployments.
+
+### How SummaryRules Work Internally
+
+SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodically to:
+
+1. **Time Window Management**: Calculate precise execution windows based on the last successful execution time and the rule's interval. First execution starts from current time minus one interval; subsequent executions continue from where the previous execution ended.
+
+2. **Async Operation Lifecycle**: Submit KQL queries to ADX using `.set-or-append async <table> <| <query>` and track the resulting async operations through completion. Each operation gets an OperationId that's monitored until completion.
+
+3. **State Tracking**: Uses Kubernetes conditions to track:
+   - `SummaryRuleOwner`: Overall rule status (True/False/Unknown)
+   - `SummaryRuleOperationIdOwner`: Stores up to 200 async operations as JSON in the condition message
+   - `SummaryRuleLastSuccessfulExecution`: Tracks the end time of the last successful execution
+
+4. **Operation Polling**: Regularly polls ADX's `.show operations` to check status of tracked async operations. Operations can be in states: `Completed`, `Failed`, `InProgress`, `Throttled`, or `Scheduled`.
+
+5. **Resilience**: Handles ADX cluster restarts, network issues, and operation retries. Operations older than 25 hours are automatically cleaned up if they fall out of ADX's 24-hour operations window.
+
+**Execution Triggers**: Rules are submitted when:
+- Rule is being deleted
+- Rule was updated (new generation)
+- Time for next interval has elapsed
+
+**Error Handling**: Uses `UpdateStatusWithKustoErrorParsing()` to extract meaningful error messages from ADX responses and truncate long errors to 256 characters.
 
 ---
 

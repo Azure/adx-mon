@@ -377,3 +377,102 @@ func TestIngestorReconciler_handleADXClusterSelectorChange(t *testing.T) {
 	require.False(t, changed, "Expected no change when stored spec is nil")
 	require.ElementsMatch(t, expectedArgs, sts.Spec.Template.Spec.Containers[0].Args, "Args should not change when stored spec is nil")
 }
+
+func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image: "test-image:v1",
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app": "adx-mon",
+			},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				{DatabaseName: "LogsDB", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+
+	require.NoError(t, client.Create(context.Background(), cluster))
+	require.NoError(t, client.Create(context.Background(), ingestor))
+
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that a statefulset was created
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "ingestor",
+		Namespace: "default",
+	}, sts))
+
+	// Validate pod security context (c0055 - Linux hardening)
+	require.NotNil(t, sts.Spec.Template.Spec.SecurityContext, "Pod security context should be set")
+	// Note: runAsNonRoot, runAsUser, runAsGroup, and fsGroup are omitted for ingestor as it needs root access to write to /mnt/ingestor
+
+	// Validate container security context
+	require.Len(t, sts.Spec.Template.Spec.Containers, 1, "Should have exactly one container")
+	container := sts.Spec.Template.Spec.Containers[0]
+	require.NotNil(t, container.SecurityContext, "Container security context should be set")
+
+	// c0016 - Allow privilege escalation should be false
+	require.NotNil(t, container.SecurityContext.AllowPrivilegeEscalation, "allowPrivilegeEscalation should be set")
+	require.False(t, *container.SecurityContext.AllowPrivilegeEscalation, "allowPrivilegeEscalation should be false")
+
+	// c0013 - Privileged containers should be false
+	require.NotNil(t, container.SecurityContext.Privileged, "privileged should be set")
+	require.False(t, *container.SecurityContext.Privileged, "privileged should be false")
+
+	// c0017 - Immutable container filesystem
+	require.NotNil(t, container.SecurityContext.ReadOnlyRootFilesystem, "readOnlyRootFilesystem should be set")
+	require.True(t, *container.SecurityContext.ReadOnlyRootFilesystem, "readOnlyRootFilesystem should be true")
+
+	// c0055 - Linux hardening (capabilities)
+	require.NotNil(t, container.SecurityContext.Capabilities, "capabilities should be set")
+	require.NotNil(t, container.SecurityContext.Capabilities.Drop, "capabilities.drop should be set")
+	require.Contains(t, container.SecurityContext.Capabilities.Drop, corev1.Capability("ALL"), "ALL capabilities should be dropped")
+
+	// c0034 - Service account token mounting
+	require.NotNil(t, sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
+	require.True(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be true in statefulset")
+
+	// Verify that service account has automountServiceAccountToken set to false
+	sa := &corev1.ServiceAccount{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "ingestor",
+		Namespace: "default",
+	}, sa))
+	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
+	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
+}

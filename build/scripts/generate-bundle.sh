@@ -16,27 +16,26 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Run bundle generation in Docker container for cross-platform compatibility
-docker run --rm -v "$K8S_DIR:/build" ubuntu:latest bash -c '
-    cd /build || exit 1
-    
-    # Remove existing bundle.sh if present
-    rm -f ./bundle.sh
-    
-    # Create tarball excluding bundle.sh, with deterministic timestamps
-    tar czf /tmp/bundle.tar.gz --exclude=bundle.sh --mtime="1970-01-01 00:00:00" .
-    
-    # Encode to base64
-    base64 /tmp/bundle.tar.gz > /tmp/bundle.tar.gz.b64
-    
-    # Generate new bundle.sh
-    echo "#!/bin/bash" > bundle.sh
-    echo "base64 -d << \"EOF\" | tar xz" >> bundle.sh
-    cat /tmp/bundle.tar.gz.b64 >> bundle.sh
-    echo "EOF" >> bundle.sh
-    echo "./setup.sh" >> bundle.sh
-    
-    # Make it executable
-    chmod +x bundle.sh
+docker run --rm -v "$K8S_DIR:/build" ubuntu:latest bash -eu -o pipefail -c '
+  cd /build
+
+  GZIP=-n \
+  tar --sort=name \
+      --owner=0 --group=0 --numeric-owner \
+      --mtime="UTC 1970-01-01 00:00:00" \
+      --exclude=bundle.sh \
+      -cf - . \
+  | gzip -n > /tmp/bundle.tar.gz
+
+  base64 /tmp/bundle.tar.gz > /tmp/bundle.tar.gz.b64
+
+  {
+    printf "#!/bin/bash\nbase64 -d << \"EOF\" | tar xz\n"
+    cat /tmp/bundle.tar.gz.b64
+    printf "EOF\n./setup.sh\n"
+  } > bundle.sh
+
+  chmod +x bundle.sh
 '
 
 echo "Bundle generated successfully at $K8S_DIR/bundle.sh"
