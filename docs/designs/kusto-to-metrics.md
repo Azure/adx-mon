@@ -255,6 +255,123 @@ This approach allows any Kusto query result to be transformed into OTLP metrics 
 3. **Mapping all other relevant columns as dimensional attributes**
 4. **Optionally specifying a dynamic or static metric name**
 
+#### Complete OTLP Output Example
+
+Building on the **customer-analytics** example above, here's what the complete OTLP metric output would look like when exported by the MetricsExporter:
+
+**Sample KQL Result Row:**
+```
+Value: 0.987
+LocationId: "datacenter-west"
+CustomerResourceId: "customer-abc123"
+ServiceTier: "Premium"
+Numerator: 2456
+Denominator: 2489
+StartTimeUTC: 2025-06-25T10:00:00Z
+EndTimeUTC: 2025-06-25T10:15:00Z
+AvgLatency: 145.3
+metric_name: "customer_success_rate_premium"
+```
+
+**Complete OTLP Metrics Payload:**
+```json
+{
+  "resourceMetrics": [{
+    "resource": {
+      "attributes": [
+        {
+          "key": "service.name",
+          "value": {
+            "stringValue": "adx-mon-metrics-exporter"
+          }
+        },
+        {
+          "key": "service.version", 
+          "value": {
+            "stringValue": "1.0.0"
+          }
+        }
+      ]
+    },
+    "scopeMetrics": [{
+      "scope": {
+        "name": "adx-mon.azure.com/metrics-exporter",
+        "version": "v1"
+      },
+      "metrics": [{
+        "name": "customer_success_rate_premium",
+        "description": "Customer success rate analytics exported from ADX",
+        "unit": "1",
+        "gauge": {
+          "dataPoints": [{
+            "attributes": [
+              {
+                "key": "LocationId",
+                "value": {
+                  "stringValue": "datacenter-west"
+                }
+              },
+              {
+                "key": "CustomerResourceId", 
+                "value": {
+                  "stringValue": "customer-abc123"
+                }
+              },
+              {
+                "key": "ServiceTier",
+                "value": {
+                  "stringValue": "Premium"
+                }
+              },
+              {
+                "key": "Numerator",
+                "value": {
+                  "stringValue": "2456"
+                }
+              },
+              {
+                "key": "Denominator", 
+                "value": {
+                  "stringValue": "2489"
+                }
+              },
+              {
+                "key": "EndTimeUTC",
+                "value": {
+                  "stringValue": "2025-06-25T10:15:00Z"
+                }
+              },
+              {
+                "key": "AvgLatency",
+                "value": {
+                  "stringValue": "145.3"
+                }
+              }
+            ],
+            "timeUnixNano": "1719403200000000000",
+            "asDouble": 0.987
+          }]
+        }
+      }]
+    }]
+  }]
+}
+```
+
+**Key Transformation Points:**
+
+1. **Dynamic Metric Naming**: The `metric_name` column value `"customer_success_rate_premium"` becomes the OTLP metric name, enabling flexible naming strategies per service tier
+2. **Primary Value Mapping**: The `Value` column (0.987) maps directly to `asDouble` in the OTLP data point, representing the 98.7% success rate
+3. **Timestamp Conversion**: `StartTimeUTC` is converted from ISO 8601 format to Unix nanoseconds (`timeUnixNano`)
+4. **Rich Attribute Preservation**: All `labelColumns` become OTLP attributes, including:
+   - **Business Dimensions**: `LocationId`, `CustomerResourceId`, `ServiceTier` for filtering and grouping
+   - **Supporting Metrics**: `Numerator`, `Denominator` for rate calculations and debugging
+   - **Auxiliary Data**: `AvgLatency`, `EndTimeUTC` for additional context and correlation
+5. **Type Flexibility**: Numeric values are converted to strings in attributes, while the primary metric value maintains its numeric type
+6. **OTLP Standards Compliance**: Full resource and scope metadata for proper observability platform integration
+
+This demonstrates how complex ADX analytics with rich dimensional data translates seamlessly into standardized OTLP metrics suitable for any observability platform (Prometheus, DataDog, Grafana, etc.).
+
 ### MetricsExporter CRD Example
 
 ```yaml
