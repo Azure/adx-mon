@@ -85,8 +85,10 @@ type MetricsExporterSpec struct {
 }
 
 type SummaryRuleRef struct {
-    // Name of the SummaryRule in the same namespace
-    Name string `json:"name"`
+    // LabelSelector to automatically discover SummaryRules to export from
+    // This enables dynamic discovery of SummaryRules based on common labeling,
+    // eliminating the need to manually maintain lists of rule names
+    LabelSelector *metav1.LabelSelector `json:"labelSelector"`
     
     // Database and Table to query for export
     Database string `json:"database"`
@@ -113,10 +115,12 @@ type TransformConfig struct {
 
 **Pros:**
 - Clean separation of concerns
-- Reusable across multiple SummaryRules
+- **Dynamic Discovery**: Automatically includes new SummaryRules based on labels without manual configuration
+- **Scalable Management**: Teams can add SummaryRules with appropriate labels and have them automatically exported
 - Easier to extend with new export targets
 - Can aggregate metrics from multiple sources
 - Follows Kubernetes CRD design patterns
+- **Reduced Operational Overhead**: No need to update MetricsExporter when adding/removing SummaryRules
 
 **Cons:**
 - Additional CRD to manage
@@ -127,10 +131,12 @@ type TransformConfig struct {
 We recommend **Approach 2** (New MetricsExporter CRD) for the following reasons:
 
 1. **Better Architecture**: Separates data aggregation concerns (SummaryRule) from metrics export concerns (MetricsExporter)
-2. **Flexibility**: One MetricsExporter can reference multiple SummaryRules, enabling composite metrics
-3. **Reusability**: Multiple MetricsExporters can reference the same SummaryRule with different configurations
-4. **Extensibility**: Easier to add new export targets and transformation options
-5. **Kubernetes Best Practices**: Follows single-responsibility principle for CRDs
+2. **Dynamic Discovery**: Label selectors enable automatic inclusion of SummaryRules without manual maintenance
+3. **Flexibility**: One MetricsExporter can reference multiple SummaryRules through flexible label matching
+4. **Reusability**: Multiple MetricsExporters can reference the same SummaryRules with different label selections
+5. **Extensibility**: Easier to add new export targets and transformation options
+6. **Kubernetes Best Practices**: Follows single-responsibility principle and uses standard label selector patterns
+7. **Operational Efficiency**: Teams can independently manage SummaryRules and MetricsExporters through consistent labeling
 
 ## Detailed Implementation
 
@@ -259,10 +265,20 @@ metadata:
   namespace: monitoring
 spec:
   sourceRules:
-    - name: response-time-summary
+    - labelSelector:
+        matchLabels:
+          metrics-export: "enabled"
+          team: "platform"
       database: TelemetryDB
       table: ResponseTimeSummary
-    - name: error-rate-summary  
+    - labelSelector:
+        matchExpressions:
+          - key: "metric-type"
+            operator: In
+            values: ["performance", "availability"]
+          - key: "environment"
+            operator: NotIn
+            values: ["development"]
       database: TelemetryDB
       table: ErrorRateSummary
   exporters:
@@ -277,6 +293,10 @@ spec:
     defaultMetricName: "adx_exported_metric"
 ```
 
+This example demonstrates two label selector patterns:
+1. **Simple Labels**: Match SummaryRules with `metrics-export: enabled` and `team: platform` labels
+2. **Expression Matching**: More complex logic to include rules where `metric-type` is "performance" or "availability" but exclude "development" environment
+
 ### Integration with Existing Components
 
 The MetricsExporter will integrate with existing ADX-Mon components:
@@ -288,15 +308,17 @@ The MetricsExporter will integrate with existing ADX-Mon components:
 ### Execution Flow
 
 1. **SummaryRule Execution**: SummaryRuleTask executes KQL queries on schedule, stores results in tables
-2. **Metrics Export Trigger**: MetricsExporterTask runs on its own schedule (independent of SummaryRule cadence)
-3. **Data Retrieval**: Query the SummaryRule output tables for data since last export
-4. **Transformation**: Convert query results to OTLP metrics according to Transform configuration
-5. **Export**: Send metrics to configured OTLP exporters
+2. **Label-Based Discovery**: MetricsExporter controller discovers SummaryRules matching configured label selectors
+3. **Metrics Export Trigger**: MetricsExporterTask runs on its own schedule (independent of SummaryRule cadence)
+4. **Data Retrieval**: Query the discovered SummaryRule output tables for data since last export
+5. **Transformation**: Convert query results to OTLP metrics according to Transform configuration
+6. **Export**: Send metrics to configured OTLP exporters
 
 ### Validation and Error Handling
 
 The MetricsExporter controller will validate:
-- Referenced SummaryRules exist and are in Ready state
+- Label selectors match at least one existing SummaryRule in the namespace
+- Referenced SummaryRules are in Ready state
 - Output tables contain required columns (metric_value, timestamp)
 - Specified label columns exist in the output table
 - OTLP exporters are configured and available
@@ -306,11 +328,16 @@ The MetricsExporter controller will validate:
 ### Use Case 1: Service Performance Metrics
 
 ```yaml
-# SummaryRule for response time aggregation
+# SummaryRule for response time aggregation with labels for metrics export
 apiVersion: adx-mon.azure.com/v1
 kind: SummaryRule
 metadata:
   name: service-response-times
+  labels:
+    metrics-export: "enabled"
+    team: "platform"
+    metric-type: "performance"
+    environment: "production"
 spec:
   database: TelemetryDB
   name: ServiceResponseTimes
@@ -326,14 +353,18 @@ spec:
     | extend metric_name = "service_response_time_avg"
 
 ---
-# MetricsExporter for Prometheus
+# MetricsExporter that automatically discovers SummaryRules by labels
 apiVersion: adx-mon.azure.com/v1
 kind: MetricsExporter
 metadata:
   name: service-metrics-to-prometheus
 spec:
   sourceRules:
-    - name: service-response-times
+    - labelSelector:
+        matchLabels:
+          metrics-export: "enabled"
+          team: "platform"
+          metric-type: "performance"
       database: TelemetryDB
       table: ServiceResponseTimeSummary
   exporters: ["prometheus"]
@@ -345,14 +376,26 @@ spec:
     labelColumns: ["ServiceName", "Environment"]
 ```
 
+**Key Benefits of Label Selector Approach:**
+- **Automatic Discovery**: When new SummaryRules are created with `metrics-export: enabled` and `team: platform` labels, they are automatically included
+- **Team Ownership**: Teams can independently manage their SummaryRules by applying consistent labels
+- **Environment Control**: Easy to include/exclude rules based on environment labels
+- **No Manual Maintenance**: MetricsExporter configurations don't need updates when SummaryRules are added/removed
+
 ### Use Case 2: Advanced Analytics with Rich Metadata
 
 ```yaml
-# SummaryRule for complex analytics with multiple dimensions
+# SummaryRule for complex analytics with labels for targeted export
 apiVersion: adx-mon.azure.com/v1
 kind: SummaryRule
 metadata:
   name: customer-analytics
+  labels:
+    metrics-export: "enabled"
+    team: "analytics"
+    metric-type: "business"
+    data-sensitivity: "customer"
+    environment: "production"
 spec:
   database: AnalyticsDB
   name: CustomerPerformanceAnalytics
@@ -372,14 +415,22 @@ spec:
     | extend metric_name = strcat("customer_success_rate_", tolower(ServiceTier))
 
 ---
-# MetricsExporter that maps rich metadata to OTLP attributes
+# MetricsExporter that targets analytics team's business metrics
 apiVersion: adx-mon.azure.com/v1
 kind: MetricsExporter
 metadata:
   name: customer-analytics-exporter
 spec:
   sourceRules:
-    - name: customer-analytics
+    - labelSelector:
+        matchLabels:
+          metrics-export: "enabled"
+          team: "analytics"
+          metric-type: "business"
+        matchExpressions:
+          - key: "data-sensitivity" 
+            operator: In
+            values: ["customer", "public"]
       database: AnalyticsDB
       table: CustomerAnalyticsSummary
   exporters: ["datadog", "custom-analytics-endpoint"]
@@ -399,22 +450,34 @@ spec:
 ### Use Case 3: Multi-Source Dashboard Metrics
 
 ```yaml
-# Export from multiple SummaryRules to create a comprehensive dashboard
+# Export from multiple SummaryRules discovered by infrastructure team labels
 apiVersion: adx-mon.azure.com/v1
 kind: MetricsExporter
 metadata:
   name: dashboard-metrics
 spec:
   sourceRules:
-    - name: cpu-utilization-summary
+    - labelSelector:
+        matchLabels:
+          metrics-export: "enabled"
+          team: "infrastructure"
+          environment: "production"
+        matchExpressions:
+          - key: "metric-type"
+            operator: In
+            values: ["system", "performance"]
       database: InfraDB
       table: CPUUtilizationSummary
-    - name: memory-usage-summary
+    - labelSelector:
+        matchLabels:
+          metrics-export: "enabled"
+          team: "infrastructure"
+        matchExpressions:
+          - key: "resource-type"
+            operator: In  
+            values: ["memory", "disk"]
       database: InfraDB
-      table: MemoryUsageSummary
-    - name: disk-io-summary
-      database: InfraDB
-      table: DiskIOSummary
+      table: ResourceUsageSummary
   exporters: ["datadog", "grafana-cloud"]
   interval: 30s
   transform:
@@ -424,6 +487,12 @@ spec:
     labelColumns: ["NodeName", "ClusterName", "Region"]
 ```
 
+**Advanced Label Selector Benefits:**
+- **Team Boundaries**: Infrastructure team manages their SummaryRules independently
+- **Resource Classification**: Automatic grouping by system vs performance metrics
+- **Environment Filtering**: Easy production vs staging separation
+- **Resource Type Grouping**: Memory and disk metrics can be managed separately
+
 ### Use Case 4: Cross-Cluster Data Aggregation
 
 ```yaml
@@ -432,6 +501,12 @@ apiVersion: adx-mon.azure.com/v1
 kind: SummaryRule
 metadata:
   name: global-error-rates
+  labels:
+    metrics-export: "enabled"
+    team: "sre"
+    scope: "global"
+    metric-type: "reliability"
+    priority: "high"
 spec:
   database: GlobalMetrics
   name: GlobalErrorRates
@@ -451,14 +526,22 @@ spec:
     | extend metric_name = "global_error_count"
 
 ---
-# Export global metrics to central monitoring
+# Export global metrics to central monitoring using SRE team labels
 apiVersion: adx-mon.azure.com/v1
 kind: MetricsExporter
 metadata:
   name: global-metrics-exporter
 spec:
   sourceRules:
-    - name: global-error-rates
+    - labelSelector:
+        matchLabels:
+          metrics-export: "enabled"
+          team: "sre"
+          scope: "global"
+        matchExpressions:
+          - key: "priority"
+            operator: In
+            values: ["high", "critical"]
       database: GlobalMetrics
       table: GlobalErrorRateSummary
   exporters: ["central-prometheus"]
@@ -469,6 +552,98 @@ spec:
     timestampColumn: "timestamp"
     labelColumns: ["Region", "ServiceName", "error_rate"]
 ```
+
+**Global Monitoring Benefits:**
+- **SRE Team Ownership**: Clear ownership through team labels
+- **Priority-Based Selection**: Only export high/critical priority metrics
+- **Scope-Based Grouping**: Distinguish global vs regional metrics
+- **Automatic Inclusion**: New global SummaryRules are automatically discovered
+
+## Label Selector Strategy and Best Practices
+
+### Recommended Labeling Conventions
+
+To maximize the benefits of label-based discovery, teams should adopt consistent labeling conventions for SummaryRules:
+
+#### Core Labels
+- **`metrics-export`**: Set to `"enabled"` to indicate the SummaryRule should be considered for metrics export
+- **`team`**: Identifies the owning team (e.g., `"platform"`, `"sre"`, `"analytics"`)
+- **`environment`**: Environment classification (e.g., `"production"`, `"staging"`, `"development"`)
+
+#### Classification Labels  
+- **`metric-type`**: Type of metrics produced (e.g., `"performance"`, `"business"`, `"security"`, `"reliability"`)
+- **`priority`**: Importance level (e.g., `"critical"`, `"high"`, `"medium"`, `"low"`)
+- **`scope`**: Geographic or logical scope (e.g., `"global"`, `"regional"`, `"cluster"`)
+
+#### Functional Labels
+- **`data-sensitivity`**: Data classification (e.g., `"public"`, `"internal"`, `"customer"`, `"confidential"`)
+- **`resource-type`**: Resource being monitored (e.g., `"cpu"`, `"memory"`, `"disk"`, `"network"`)
+- **`service`**: Service or component name (e.g., `"api-gateway"`, `"database"`, `"cache"`)
+
+### Label Selector Patterns
+
+#### Pattern 1: Team-Based Export
+```yaml
+labelSelector:
+  matchLabels:
+    metrics-export: "enabled"
+    team: "platform"
+    environment: "production"
+```
+**Use Case**: Platform team wants to export all their production metrics
+
+#### Pattern 2: Multi-Team Collaboration
+```yaml
+labelSelector:
+  matchExpressions:
+    - key: "metrics-export"
+      operator: In
+      values: ["enabled"]
+    - key: "team"
+      operator: In
+      values: ["platform", "sre", "infrastructure"]
+    - key: "priority"
+      operator: In
+      values: ["high", "critical"]
+```
+**Use Case**: Cross-team dashboard showing high-priority metrics from multiple teams
+
+#### Pattern 3: Environment and Type Filtering
+```yaml
+labelSelector:
+  matchLabels:
+    metrics-export: "enabled"
+    metric-type: "performance"
+  matchExpressions:
+    - key: "environment"
+      operator: NotIn
+      values: ["development", "testing"]
+```
+**Use Case**: Performance metrics from all non-dev environments
+
+#### Pattern 4: Data Sensitivity Controls
+```yaml
+labelSelector:
+  matchLabels:
+    metrics-export: "enabled"
+    team: "analytics"
+  matchExpressions:
+    - key: "data-sensitivity"
+      operator: In
+      values: ["public", "internal"]
+    - key: "environment"
+      operator: In
+      values: ["production"]
+```
+**Use Case**: Analytics team exporting only non-sensitive production data
+
+### Benefits of Consistent Labeling
+
+1. **Autonomous Team Management**: Teams can add/remove SummaryRules without coordinating MetricsExporter changes
+2. **Policy Enforcement**: Use labels to enforce data governance and access controls
+3. **Organizational Alignment**: Labels reflect organizational structure and responsibilities
+4. **Operational Flexibility**: Easy to create different export configurations for different purposes
+5. **Scalability**: New teams and services can adopt the labeling convention without central coordination
 
 ## Implementation Timeline
 
