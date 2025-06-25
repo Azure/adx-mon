@@ -729,54 +729,168 @@ summaryRuleSelector:
 4. **Operational Flexibility**: Easy to create different export configurations for different purposes
 5. **Scalability**: New teams and services can adopt the labeling convention without central coordination
 
-## Implementation Timeline
+## Implementation Roadmap
 
-### Phase 1: Core CRD and Controller
-- Define MetricsExporter CRD in `api/v1/metricsexporter_types.go`
-- Implement MetricsExporter controller
-- Add MetricsExporterTask to ingestor package
-- Basic validation and error handling
+This section provides a methodical breakdown of implementing the Kusto-to-Metrics feature across multiple PRs, each focused on a specific deliverable to ensure manageable code reviews and incremental progress.
 
-### Phase 2: Integration and Testing
-- Integration with existing OTLP exporters
-- Comprehensive test suite
-- Documentation and examples
-- Performance optimization
+### 1. Foundation: MetricsExporter CRD Definition
+**Goal**: Establish the core data structures and API types
+- **Deliverables**:
+  - Create `api/v1/metricsexporter_types.go` with complete CRD spec
+  - Define `MetricsExporterSpec`, `TransformConfig`, and status types
+  - Add deepcopy generation markers and JSON tags
+  - Update `api/v1/groupversion_info.go` to register new types
+  - Generate CRD manifests using `make generate-crd CMD=update`
+- **Testing**: Unit tests for struct validation and JSON marshaling/unmarshaling
+- **Acceptance Criteria**: CRD can be applied to cluster and kubectl can describe the schema
 
-### Phase 3: Advanced Features
-- Support for custom transformation functions
-- Metrics aggregation across time windows
-- Dead letter queues for failed exports
-- Monitoring and observability for the export pipeline itself
+### 2. Controller Scaffolding and Basic Reconciliation
+**Goal**: Create the MetricsExporter controller infrastructure
+- **Deliverables**:
+  - Generate controller boilerplate in `operator/metricsexporter.go`
+  - Implement basic reconciliation loop with status updates
+  - Add controller registration to operator main function
+  - Implement label selector validation and SummaryRule discovery
+  - Add RBAC permissions for MetricsExporter and SummaryRule access
+- **Testing**: Integration tests for controller registration and basic reconciliation
+- **Acceptance Criteria**: Controller starts successfully and can discover SummaryRules by labels
 
-## Backwards Compatibility
+### 3. Transform Engine: KQL to OTLP Conversion
+**Goal**: Implement the core transformation logic
+- **Deliverables**:
+  - Create `transform/kusto_to_otlp.go` with transformation engine
+  - Implement column mapping (value, timestamp, metric name, labels)
+  - Add data type validation and conversion (numeric values, datetime parsing)
+  - Handle missing columns and default values
+  - Add comprehensive error handling for malformed data
+- **Testing**: Extensive unit tests with various KQL result schemas and edge cases
+- **Acceptance Criteria**: Transformer can convert any valid KQL result to OTLP metrics
 
-This feature is entirely additive and maintains full backwards compatibility:
-- Existing SummaryRules continue to work unchanged
-- No modifications to existing OTLP exporter configurations
-- New MetricsExporter CRD is optional and independent
+### 4. Data Retrieval: ADX Query Integration
+**Goal**: Connect to ADX and query SummaryRule output tables
+- **Deliverables**:
+  - Create `ingestor/export/adx_client.go` for querying SummaryRule tables
+  - Implement incremental data retrieval (track last export timestamp)
+  - Add connection pooling and query optimization
+  - Handle ADX authentication and connection management
+  - Implement query result caching and batching
+- **Testing**: Integration tests with mock ADX responses and real ADX cluster
+- **Acceptance Criteria**: Can reliably query SummaryRule tables and retrieve incremental data
 
-## Security Considerations
+### 5. OTLP Export Integration
+**Goal**: Integrate with existing OTLP exporter infrastructure
+- **Deliverables**:
+  - Extend `collector/export/metric_otlp.go` to support MetricsExporter
+  - Add exporter discovery and configuration validation
+  - Implement batch processing and retry logic
+  - Add metrics for export success/failure rates
+  - Handle exporter unavailability and circuit breaking
+- **Testing**: Integration tests with mock OTLP endpoints and real exporters
+- **Acceptance Criteria**: Successfully exports metrics to configured OTLP endpoints
 
-- MetricsExporter will reuse existing RBAC for SummaryRule access
-- Export credentials managed through existing OTLP exporter configuration
-- Data transformation happens in-memory without persistent storage of intermediate results
-- Audit logging for metrics export operations
+### 6. MetricsExporterTask: Scheduled Execution
+**Goal**: Implement the scheduled export task
+- **Deliverables**:
+  - Create `ingestor/export/metrics_exporter_task.go`
+  - Implement interval-based scheduling independent of SummaryRule execution
+  - Add task registration to ingestor service
+  - Implement distributed locking for multi-replica deployments
+  - Add graceful shutdown and task cancellation
+- **Testing**: Integration tests for scheduling, execution, and concurrency control
+- **Acceptance Criteria**: Tasks execute on schedule without conflicts across replicas
 
-## Alternative Considerations
+### 7. End-to-End Integration and Validation
+**Goal**: Complete the integration pipeline with full validation
+- **Deliverables**:
+  - Wire together all components in the MetricsExporter controller
+  - Implement comprehensive validation (schema, exporters, SummaryRules)
+  - Add status reporting and condition management
+  - Create health checks and readiness probes
+  - Add comprehensive logging and observability
+- **Testing**: End-to-end tests with real SummaryRules and OTLP exporters
+- **Acceptance Criteria**: Complete MetricsExporter workflow functions from label discovery to metric export
 
-### Custom Resource vs ConfigMap
-We chose a CRD over ConfigMap for:
-- Better validation and schema enforcement
-- Native Kubernetes controller patterns
-- Status reporting and condition management
-- Integration with existing ADX-Mon CRD ecosystem
+### 8. Error Handling and Resilience
+**Goal**: Implement robust error handling and recovery
+- **Deliverables**:
+  - Add comprehensive error classification (transient vs permanent)
+  - Implement exponential backoff and retry logic
+  - Add dead letter queue for failed exports
+  - Create alerting and monitoring for export failures
+  - Implement graceful degradation when dependencies are unavailable
+- **Testing**: Chaos engineering tests with various failure scenarios
+- **Acceptance Criteria**: System gracefully handles and recovers from all failure modes
 
-### Pull vs Push Model
-We chose a push model (MetricsExporter actively queries and exports) over pull model because:
-- Consistent with existing SummaryRule execution pattern
-- Better control over export timing and retry logic
-- Easier to implement transformation and batching
-- Aligns with OTLP exporter design patterns
+### 9. Performance Optimization and Scalability
+**Goal**: Optimize for production workloads
+- **Deliverables**:
+  - Add connection pooling and query batching optimizations
+  - Implement parallel processing for multiple SummaryRules
+  - Add resource usage monitoring and throttling
+  - Optimize memory usage for large result sets
+  - Add configurable limits and resource constraints
+- **Testing**: Load testing with high-volume data and multiple MetricsExporters
+- **Acceptance Criteria**: Handles production-scale workloads within resource constraints
 
-This design provides a robust, extensible foundation for connecting ADX-Mon's data aggregation capabilities with external metrics systems while maintaining clean architectural boundaries and following Kubernetes best practices.
+### 10. Comprehensive Test Suite
+**Goal**: Ensure complete test coverage across all scenarios
+- **Deliverables**:
+  - Unit tests for all packages with >90% coverage
+  - Integration tests for ADX connectivity and OTLP export
+  - End-to-end tests covering full workflow scenarios
+  - Performance benchmarks and load tests
+  - Chaos engineering tests for failure scenarios
+- **Testing**: Automated test execution in CI/CD pipeline
+- **Acceptance Criteria**: All tests pass consistently in CI environment
+
+### 11. Documentation and Examples
+**Goal**: Provide comprehensive documentation for users
+- **Deliverables**:
+  - Update CRD documentation in `docs/crds.md`
+  - Create detailed configuration guide with examples
+  - Add troubleshooting guide with common issues
+  - Create video/demo showing feature usage
+  - Update API reference documentation
+- **Testing**: Documentation review and validation of all examples
+- **Acceptance Criteria**: Users can successfully configure MetricsExporter using documentation
+
+### 12. Observability and Monitoring
+**Goal**: Add comprehensive observability for the feature
+- **Deliverables**:
+  - Add Prometheus metrics for export rates, latency, and errors
+  - Implement structured logging with correlation IDs
+  - Add distributed tracing for export pipeline
+  - Create Grafana dashboards for monitoring
+  - Add health check endpoints for load balancers
+- **Testing**: Validate all metrics and tracing in staging environment
+- **Acceptance Criteria**: Operations team can monitor and troubleshoot MetricsExporter effectively
+
+### 13. Security and RBAC
+**Goal**: Implement proper security controls
+- **Deliverables**:
+  - Define minimal RBAC permissions for MetricsExporter
+  - Add input validation and sanitization for all user inputs
+  - Implement audit logging for security events
+  - Add secrets management for export credentials
+  - Create security documentation and threat model
+- **Testing**: Security testing including permission validation and input fuzzing
+- **Acceptance Criteria**: Security team approves RBAC model and threat assessment
+
+### 14. Migration and Compatibility
+**Goal**: Ensure smooth deployment and backwards compatibility
+- **Deliverables**:
+  - Create migration guide for existing users
+  - Add feature flags for gradual rollout
+  - Implement version compatibility checks
+  - Create rollback procedures and documentation
+  - Add deployment validation tests
+- **Testing**: Test deployment on various Kubernetes versions and configurations
+- **Acceptance Criteria**: Feature can be safely deployed to production without disrupting existing functionality
+
+### Dependencies and Sequencing
+
+**Critical Path**: Steps 1-7 must be completed in order as each builds on the previous
+**Parallel Development**: Steps 8-14 can be developed in parallel once step 7 is complete
+**Milestone Reviews**: Conduct technical review after steps 3, 7, and 10 before proceeding
+
+This roadmap ensures each PR is focused, reviewable, and incrementally builds toward the complete feature while maintaining system stability throughout the development process.
