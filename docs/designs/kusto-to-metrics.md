@@ -71,8 +71,10 @@ Create a separate CRD that references SummaryRules and manages metrics export:
 ```go
 // MetricsExporterSpec defines the desired state of MetricsExporter
 type MetricsExporterSpec struct {
-    // SourceRules defines which SummaryRules to export metrics from
-    SourceRules []SummaryRuleRef `json:"sourceRules"`
+    // SummaryRuleSelector defines which SummaryRules to export metrics from
+    // Uses label selectors to automatically discover SummaryRules based on labels,
+    // eliminating the need to manually maintain lists of rule names
+    SummaryRuleSelector *metav1.LabelSelector `json:"summaryRuleSelector"`
     
     // Exporters defines the OTLP exporters to send metrics to
     Exporters []string `json:"exporters"`
@@ -381,23 +383,17 @@ metadata:
   name: service-metrics-exporter
   namespace: monitoring
 spec:
-  sourceRules:
-    - labelSelector:
-        matchLabels:
-          metrics-export: "enabled"
-          team: "platform"
-      database: TelemetryDB
-      table: ResponseTimeSummary
-    - labelSelector:
-        matchExpressions:
-          - key: "metric-type"
-            operator: In
-            values: ["performance", "availability"]
-          - key: "environment"
-            operator: NotIn
-            values: ["development"]
-      database: TelemetryDB
-      table: ErrorRateSummary
+  summaryRuleSelector:
+    matchLabels:
+      metrics-export: "enabled"
+      team: "platform"
+    matchExpressions:
+      - key: "metric-type"
+        operator: In
+        values: ["performance", "availability"]
+      - key: "environment"
+        operator: NotIn
+        values: ["development"]
   exporters:
     - prometheus-exporter
     - datadog-exporter
@@ -410,7 +406,7 @@ spec:
     defaultMetricName: "adx_exported_metric"
 ```
 
-This example demonstrates two label selector patterns:
+This example demonstrates label selector patterns:
 1. **Simple Labels**: Match SummaryRules with `metrics-export: enabled` and `team: platform` labels
 2. **Expression Matching**: More complex logic to include rules where `metric-type` is "performance" or "availability" but exclude "development" environment
 
@@ -425,7 +421,7 @@ The MetricsExporter will integrate with existing ADX-Mon components:
 ### Execution Flow
 
 1. **SummaryRule Execution**: SummaryRuleTask executes KQL queries on schedule, stores results in tables
-2. **Label-Based Discovery**: MetricsExporter controller discovers SummaryRules matching configured label selectors
+2. **Label-Based Discovery**: MetricsExporter controller discovers SummaryRules matching the configured label selector
 3. **Metrics Export Trigger**: MetricsExporterTask runs on its own schedule (independent of SummaryRule cadence)
 4. **Data Retrieval**: Query the discovered SummaryRule output tables for data since last export
 5. **Transformation**: Convert query results to OTLP metrics according to Transform configuration
@@ -434,10 +430,10 @@ The MetricsExporter will integrate with existing ADX-Mon components:
 ### Validation and Error Handling
 
 The MetricsExporter controller will validate:
-- Label selectors match at least one existing SummaryRule in the namespace
-- Referenced SummaryRules are in Ready state
-- Output tables contain required columns (metric_value, timestamp)
-- Specified label columns exist in the output table
+- Label selector matches at least one existing SummaryRule in the namespace
+- Matched SummaryRules are in Ready state
+- SummaryRule output tables contain required columns (metric_value, timestamp)
+- Specified label columns exist in the SummaryRule output tables
 - OTLP exporters are configured and available
 
 ## Use Cases
@@ -476,14 +472,11 @@ kind: MetricsExporter
 metadata:
   name: service-metrics-to-prometheus
 spec:
-  sourceRules:
-    - labelSelector:
-        matchLabels:
-          metrics-export: "enabled"
-          team: "platform"
-          metric-type: "performance"
-      database: TelemetryDB
-      table: ServiceResponseTimeSummary
+  summaryRuleSelector:
+    matchLabels:
+      metrics-export: "enabled"
+      team: "platform"
+      metric-type: "performance"
   exporters: ["prometheus"]
   interval: 1m
   transform:
@@ -538,18 +531,15 @@ kind: MetricsExporter
 metadata:
   name: customer-analytics-exporter
 spec:
-  sourceRules:
-    - labelSelector:
-        matchLabels:
-          metrics-export: "enabled"
-          team: "analytics"
-          metric-type: "business"
-        matchExpressions:
-          - key: "data-sensitivity" 
-            operator: In
-            values: ["customer", "public"]
-      database: AnalyticsDB
-      table: CustomerAnalyticsSummary
+  summaryRuleSelector:
+    matchLabels:
+      metrics-export: "enabled"
+      team: "analytics"
+      metric-type: "business"
+    matchExpressions:
+      - key: "data-sensitivity" 
+        operator: In
+        values: ["customer", "public"]
   exporters: ["datadog", "custom-analytics-endpoint"]
   interval: 5m
   transform:
@@ -573,28 +563,17 @@ kind: MetricsExporter
 metadata:
   name: dashboard-metrics
 spec:
-  sourceRules:
-    - labelSelector:
-        matchLabels:
-          metrics-export: "enabled"
-          team: "infrastructure"
-          environment: "production"
-        matchExpressions:
-          - key: "metric-type"
-            operator: In
-            values: ["system", "performance"]
-      database: InfraDB
-      table: CPUUtilizationSummary
-    - labelSelector:
-        matchLabels:
-          metrics-export: "enabled"
-          team: "infrastructure"
-        matchExpressions:
-          - key: "resource-type"
-            operator: In  
-            values: ["memory", "disk"]
-      database: InfraDB
-      table: ResourceUsageSummary
+  summaryRuleSelector:
+    matchLabels:
+      metrics-export: "enabled"
+      team: "infrastructure"
+    matchExpressions:
+      - key: "environment"
+        operator: In
+        values: ["production", "staging"]
+      - key: "metric-type"
+        operator: In
+        values: ["system", "performance"]
   exporters: ["datadog", "grafana-cloud"]
   interval: 30s
   transform:
@@ -606,9 +585,9 @@ spec:
 
 **Advanced Label Selector Benefits:**
 - **Team Boundaries**: Infrastructure team manages their SummaryRules independently
-- **Resource Classification**: Automatic grouping by system vs performance metrics
+- **Unified Selection**: Single label selector can match multiple SummaryRules across different databases and tables
 - **Environment Filtering**: Easy production vs staging separation
-- **Resource Type Grouping**: Memory and disk metrics can be managed separately
+- **Metric Type Grouping**: System and performance metrics managed together
 
 ### Use Case 4: Cross-Cluster Data Aggregation
 
@@ -649,18 +628,15 @@ kind: MetricsExporter
 metadata:
   name: global-metrics-exporter
 spec:
-  sourceRules:
-    - labelSelector:
-        matchLabels:
-          metrics-export: "enabled"
-          team: "sre"
-          scope: "global"
-        matchExpressions:
-          - key: "priority"
-            operator: In
-            values: ["high", "critical"]
-      database: GlobalMetrics
-      table: GlobalErrorRateSummary
+  summaryRuleSelector:
+    matchLabels:
+      metrics-export: "enabled"
+      team: "sre"
+      scope: "global"
+    matchExpressions:
+      - key: "priority"
+        operator: In
+        values: ["high", "critical"]
   exporters: ["central-prometheus"]
   interval: 2m
   transform:
@@ -701,7 +677,7 @@ To maximize the benefits of label-based discovery, teams should adopt consistent
 
 #### Pattern 1: Team-Based Export
 ```yaml
-labelSelector:
+summaryRuleSelector:
   matchLabels:
     metrics-export: "enabled"
     team: "platform"
@@ -711,7 +687,7 @@ labelSelector:
 
 #### Pattern 2: Multi-Team Collaboration
 ```yaml
-labelSelector:
+summaryRuleSelector:
   matchExpressions:
     - key: "metrics-export"
       operator: In
@@ -727,7 +703,7 @@ labelSelector:
 
 #### Pattern 3: Environment and Type Filtering
 ```yaml
-labelSelector:
+summaryRuleSelector:
   matchLabels:
     metrics-export: "enabled"
     metric-type: "performance"
@@ -740,7 +716,7 @@ labelSelector:
 
 #### Pattern 4: Data Sensitivity Controls
 ```yaml
-labelSelector:
+summaryRuleSelector:
   matchLabels:
     metrics-export: "enabled"
     team: "analytics"
