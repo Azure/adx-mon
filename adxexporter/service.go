@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -31,6 +32,10 @@ type MetricsExporterReconciler struct {
 	MetricsPort           string
 	MetricsPath           string
 
+	// Query execution components
+	QueryExecutors map[string]*QueryExecutor // keyed by database name
+	Clock          clock.Clock
+
 	Meter metric.Meter
 }
 
@@ -41,7 +46,9 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, &metricsExporter); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// MetricsExporter was deleted, nothing to do
-			logger.Debugf("MetricsExporter %s/%s not found, likely deleted", req.Namespace, req.Name)
+			if logger.IsDebug() {
+				logger.Debugf("MetricsExporter %s/%s not found, likely deleted", req.Namespace, req.Name)
+			}
 			return ctrl.Result{}, nil
 		}
 		logger.Errorf("Failed to get MetricsExporter %s/%s: %v", req.Namespace, req.Name, err)
@@ -50,16 +57,21 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Check if this MetricsExporter should be processed by this instance
 	if !r.shouldProcessMetricsExporter(metricsExporter) {
-		logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
-			req.Namespace, req.Name)
+		if logger.IsDebug() {
+			logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
+				req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, nil
 	}
 
 	logger.Infof("Processing MetricsExporter %s/%s with database: %s, interval: %s",
 		req.Namespace, req.Name, metricsExporter.Spec.Database, metricsExporter.Spec.Interval.Duration)
 
-	// TODO: Implement actual query execution and metrics exposure (Tasks 3-5)
-	// For now, we just log that we would process this MetricsExporter
+	// Execute KQL query if it's time
+	if err := r.executeMetricsExporter(ctx, &metricsExporter); err != nil {
+		logger.Errorf("Failed to execute MetricsExporter %s/%s: %v", req.Namespace, req.Name, err)
+		// Continue with requeue even on error to retry later
+	}
 
 	// Requeue for next interval (for continuous processing)
 	requeueAfter := metricsExporter.Spec.Interval.Duration
@@ -124,7 +136,7 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 		for labelKey, labelValue := range clusterLabels {
 			if strings.ToLower(labelKey) == lowerKey {
 				for _, value := range v {
-					if strings.ToLower(labelValue) == strings.ToLower(value) {
+					if strings.EqualFold(labelValue, value) {
 						return true // Found a match, return immediately
 					}
 				}
@@ -145,4 +157,136 @@ func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.MetricsExporter{}).
 		Complete(r)
+}
+
+// executeMetricsExporter handles the execution logic for a MetricsExporter
+func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) error {
+	// Get or create query executor for this database
+	executor, err := r.getQueryExecutor(me.Spec.Database)
+	if err != nil {
+		return fmt.Errorf("failed to get query executor for database %s: %w", me.Spec.Database, err)
+	}
+
+	// Get the last execution time from the CRD status
+	lastExecutionTime := r.getLastExecutionTime(me)
+
+	// Check if it's time to execute
+	if !executor.ShouldExecuteQuery(
+		lastExecutionTime,
+		me.Spec.Interval.Duration,
+		r.getLastTransitionTime(me),
+		me.GetGeneration(),
+		r.getObservedGeneration(me),
+	) {
+		if logger.IsDebug() {
+			logger.Debugf("Not time to execute MetricsExporter %s/%s yet", me.Namespace, me.Name)
+		}
+		return nil
+	}
+
+	// Calculate the execution window
+	startTime, endTime := executor.CalculateNextExecutionWindow(lastExecutionTime, me.Spec.Interval.Duration)
+
+	logger.Infof("Executing MetricsExporter %s/%s for window %s to %s",
+		me.Namespace, me.Name, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+
+	// Execute the KQL query
+	result, err := executor.ExecuteQuery(ctx, me.Spec.Body, startTime, endTime, r.ClusterLabels)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %w", err)
+	}
+
+	if result.Error != nil {
+		return fmt.Errorf("query execution failed: %w", result.Error)
+	}
+
+	logger.Infof("Query executed successfully in %v, returned %d rows",
+		result.Duration, len(result.Rows))
+
+	// TODO: Transform results to metrics and expose them (Task 4-5)
+	// For now, we just log the successful execution
+
+	// Update the last execution time
+	r.setLastExecutionTime(me, endTime)
+
+	return nil
+}
+
+// getQueryExecutor gets or creates a QueryExecutor for the specified database
+func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExecutor, error) {
+	if r.QueryExecutors == nil {
+		r.QueryExecutors = make(map[string]*QueryExecutor)
+	}
+
+	if executor, exists := r.QueryExecutors[database]; exists {
+		return executor, nil
+	}
+
+	// Create a new Kusto client for this database
+	// TODO: Make endpoint configurable - for now use a placeholder
+	endpoint := "https://your-cluster.kusto.windows.net" // This should be configurable
+	kustoClient, err := NewKustoClient(endpoint, database)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	executor := NewQueryExecutor(kustoClient)
+	if r.Clock != nil {
+		executor.SetClock(r.Clock)
+	}
+
+	r.QueryExecutors[database] = executor
+	return executor, nil
+}
+
+// getLastExecutionTime extracts the last execution time from MetricsExporter status
+func (r *MetricsExporterReconciler) getLastExecutionTime(me *adxmonv1.MetricsExporter) *time.Time {
+	// Look for a condition that tracks last execution time
+	// This follows the pattern used in SummaryRule
+	for _, condition := range me.Status.Conditions {
+		if condition.Type == "LastSuccessfulExecution" && condition.Message != "" {
+			if t, err := time.Parse(time.RFC3339Nano, condition.Message); err == nil {
+				return &t
+			}
+		}
+	}
+	return nil
+}
+
+// setLastExecutionTime updates the last execution time in MetricsExporter status
+func (r *MetricsExporterReconciler) setLastExecutionTime(me *adxmonv1.MetricsExporter, t time.Time) {
+	// This would need to be implemented to update the CRD status
+	// For now, we'll leave this as a placeholder since we need to
+	// implement the status update mechanism
+	logger.Debugf("Would set last execution time to %s for MetricsExporter %s/%s",
+		t.Format(time.RFC3339), me.Namespace, me.Name)
+}
+
+// getLastTransitionTime gets the last transition time for timing calculations
+func (r *MetricsExporterReconciler) getLastTransitionTime(me *adxmonv1.MetricsExporter) time.Time {
+	// Find the most recent condition transition time
+	var latest time.Time
+	for _, condition := range me.Status.Conditions {
+		if condition.LastTransitionTime.Time.After(latest) {
+			latest = condition.LastTransitionTime.Time
+		}
+	}
+
+	// If no conditions exist, use creation time
+	if latest.IsZero() {
+		latest = me.CreationTimestamp.Time
+	}
+
+	return latest
+}
+
+// getObservedGeneration gets the observed generation from status
+func (r *MetricsExporterReconciler) getObservedGeneration(me *adxmonv1.MetricsExporter) int64 {
+	// Look for a condition with observed generation
+	for _, condition := range me.Status.Conditions {
+		if condition.ObservedGeneration > 0 {
+			return condition.ObservedGeneration
+		}
+	}
+	return 0
 }
