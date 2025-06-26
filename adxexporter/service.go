@@ -27,6 +27,7 @@ type MetricsExporterReconciler struct {
 
 	// Configuration
 	ClusterLabels         map[string]string
+	KustoClusters         map[string]string // database name -> endpoint URL
 	OTLPEndpoint          string
 	EnableMetricsEndpoint bool
 	MetricsPort           string
@@ -74,10 +75,7 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Requeue for next interval (for continuous processing)
-	requeueAfter := metricsExporter.Spec.Interval.Duration
-	if requeueAfter < time.Minute {
-		requeueAfter = time.Minute // Minimum requeue interval
-	}
+	requeueAfter := max(metricsExporter.Spec.Interval.Duration, time.Minute)
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
@@ -225,9 +223,12 @@ func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExe
 		return executor, nil
 	}
 
-	// Create a new Kusto client for this database
-	// TODO: Make endpoint configurable - for now use a placeholder
-	endpoint := "https://your-cluster.kusto.windows.net" // This should be configurable
+	// Get the endpoint for this database from KustoClusters
+	endpoint, exists := r.KustoClusters[database]
+	if !exists {
+		return nil, fmt.Errorf("no kusto endpoint configured for database %s", database)
+	}
+
 	kustoClient, err := NewKustoClient(endpoint, database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kusto client: %w", err)
