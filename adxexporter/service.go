@@ -167,25 +167,22 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 		return fmt.Errorf("failed to get query executor for database %s: %w", me.Spec.Database, err)
 	}
 
-	// Get the last execution time from the CRD status
-	lastExecutionTime := r.getLastExecutionTime(me)
+	// Set the clock on the CRD for testing
+	var clk clock.Clock = r.Clock
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
 
-	// Check if it's time to execute
-	if !executor.ShouldExecuteQuery(
-		lastExecutionTime,
-		me.Spec.Interval.Duration,
-		r.getLastTransitionTime(me),
-		me.GetGeneration(),
-		r.getObservedGeneration(me),
-	) {
+	// Check if it's time to execute using the CRD method
+	if !me.ShouldExecuteQuery(clk) {
 		if logger.IsDebug() {
 			logger.Debugf("Not time to execute MetricsExporter %s/%s yet", me.Namespace, me.Name)
 		}
 		return nil
 	}
 
-	// Calculate the execution window
-	startTime, endTime := executor.CalculateNextExecutionWindow(lastExecutionTime, me.Spec.Interval.Duration)
+	// Calculate the execution window using the CRD method
+	startTime, endTime := me.NextExecutionWindow(clk)
 
 	logger.Infof("Executing MetricsExporter %s/%s for window %s to %s",
 		me.Namespace, me.Name, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
@@ -206,8 +203,14 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 	// TODO: Transform results to metrics and expose them (Task 4-5)
 	// For now, we just log the successful execution
 
-	// Update the last execution time
-	r.setLastExecutionTime(me, endTime)
+	// Update the last execution time using the CRD method
+	me.SetLastExecutionTime(endTime)
+
+	// TODO: Update the CRD status in the cluster
+	// For now, we'll leave this as a placeholder since we need to
+	// implement the status update mechanism
+	logger.Debugf("Updated last execution time to %s for MetricsExporter %s/%s",
+		endTime.Format(time.RFC3339), me.Namespace, me.Name)
 
 	return nil
 }
@@ -237,56 +240,4 @@ func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExe
 
 	r.QueryExecutors[database] = executor
 	return executor, nil
-}
-
-// getLastExecutionTime extracts the last execution time from MetricsExporter status
-func (r *MetricsExporterReconciler) getLastExecutionTime(me *adxmonv1.MetricsExporter) *time.Time {
-	// Look for a condition that tracks last execution time
-	// This follows the pattern used in SummaryRule
-	for _, condition := range me.Status.Conditions {
-		if condition.Type == "LastSuccessfulExecution" && condition.Message != "" {
-			if t, err := time.Parse(time.RFC3339Nano, condition.Message); err == nil {
-				return &t
-			}
-		}
-	}
-	return nil
-}
-
-// setLastExecutionTime updates the last execution time in MetricsExporter status
-func (r *MetricsExporterReconciler) setLastExecutionTime(me *adxmonv1.MetricsExporter, t time.Time) {
-	// This would need to be implemented to update the CRD status
-	// For now, we'll leave this as a placeholder since we need to
-	// implement the status update mechanism
-	logger.Debugf("Would set last execution time to %s for MetricsExporter %s/%s",
-		t.Format(time.RFC3339), me.Namespace, me.Name)
-}
-
-// getLastTransitionTime gets the last transition time for timing calculations
-func (r *MetricsExporterReconciler) getLastTransitionTime(me *adxmonv1.MetricsExporter) time.Time {
-	// Find the most recent condition transition time
-	var latest time.Time
-	for _, condition := range me.Status.Conditions {
-		if condition.LastTransitionTime.Time.After(latest) {
-			latest = condition.LastTransitionTime.Time
-		}
-	}
-
-	// If no conditions exist, use creation time
-	if latest.IsZero() {
-		latest = me.CreationTimestamp.Time
-	}
-
-	return latest
-}
-
-// getObservedGeneration gets the observed generation from status
-func (r *MetricsExporterReconciler) getObservedGeneration(me *adxmonv1.MetricsExporter) int64 {
-	// Look for a condition with observed generation
-	for _, condition := range me.Status.Conditions {
-		if condition.ObservedGeneration > 0 {
-			return condition.ObservedGeneration
-		}
-	}
-	return 0
 }
