@@ -497,7 +497,7 @@ func TestShouldSubmitRule(t *testing.T) {
 
 func TestNextExecutionWindow(t *testing.T) {
 	// Use fixed time for deterministic tests
-	fixedTime := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
+	fixedTime := time.Date(2025, 6, 23, 12, 1, 2, 3, time.UTC)
 	fakeClock := NewFakeClock(fixedTime)
 
 	t.Run("first execution - no last execution time", func(t *testing.T) {
@@ -512,8 +512,8 @@ func TestNextExecutionWindow(t *testing.T) {
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		// First execution should go back one interval from current time (aligned to minute)
-		expectedEndTime := fixedTime.UTC().Truncate(time.Minute)
+		// First execution should go back one interval from current time (aligned to interval)
+		expectedEndTime := fixedTime.UTC().Truncate(rule.Spec.Interval.Duration)
 		expectedStartTime := expectedEndTime.Add(-time.Hour)
 
 		require.Equal(t, expectedStartTime, startTime)
@@ -532,7 +532,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Set a last execution time that's far enough in the past that adding interval won't exceed current time
-		lastExecution := fixedTime.Add(-2 * time.Hour).UTC()
+		lastExecution := fixedTime.Add(-2 * time.Hour).UTC().Truncate(rule.Spec.Interval.Duration)
 		rule.SetLastExecutionTime(lastExecution)
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
@@ -554,28 +554,101 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Set a last execution time that would create a future window
-		futureStart := fixedTime.Add(30 * time.Minute).UTC()
+		futureStart := fixedTime.Add(3 * time.Hour).UTC()
 		rule.SetLastExecutionTime(futureStart)
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		// Should start from the future time but cap end time to current time
-		require.Equal(t, futureStart, startTime)
+		require.Equal(t, futureStart.Truncate(rule.Spec.Interval.Duration), startTime)
 		currentTimeMinute := fixedTime.UTC().Truncate(time.Minute)
 
 		// End time should be capped to current time since start time is in the future
 		require.Equal(t, currentTimeMinute, endTime)
 	})
+
+	t.Run("should correct a wrongly set last execution time", func(t *testing.T) {
+		// fixedTime := time.Date(2025, 6, 23, 12, 1, 2, 3, time.UTC)
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+			Status: SummaryRuleStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               SummaryRuleLastSuccessfulExecution,
+						Status:             metav1.ConditionTrue,
+						LastTransitionTime: metav1.Time{Time: time.Date(2025, 6, 23, 8, 20, 0, 0, time.UTC)},
+						ObservedGeneration: 1,
+						Message:            time.Date(2025, 6, 23, 8, 20, 0, 0, time.UTC).Format(time.RFC3339Nano),
+					},
+				},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+		// Should correct the last execution time to the nearest hour boundary
+		expectedStartTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
+		expectedEndTime := time.Date(2025, 6, 23, 9, 0, 0, 0, time.UTC)
+
+		require.Equal(t, expectedStartTime, startTime)
+		require.Equal(t, expectedEndTime, endTime)
+		require.Equal(t, time.Hour, endTime.Sub(startTime))
+	})
+
 	t.Run("handles different interval durations", func(t *testing.T) {
+		// fixedTime := time.Date(2025, 6, 23, 12, 1, 2, 3, time.UTC)
 		testCases := []struct {
-			name     string
-			interval time.Duration
+			name          string
+			interval      time.Duration
+			expectedStart time.Time
+			expectedEnd   time.Time
 		}{
-			{"5 minutes", 5 * time.Minute},
-			{"15 minutes", 15 * time.Minute},
-			{"1 hour", time.Hour},
-			{"6 hours", 6 * time.Hour},
-			{"24 hours", 24 * time.Hour},
+			{
+				name:     "5 minutes",
+				interval: 5 * time.Minute,
+				// 2025-06-23 12:01:02.003 − 5 m → 11:56:02.003 → truncate to 11:55:00
+				expectedStart: time.Date(2025, 6, 23, 11, 55, 0, 0, time.UTC),
+				expectedEnd:   time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				name:     "15 minutes",
+				interval: 15 * time.Minute,
+				// 12:01:02.003 − 15 m → 11:46:02.003 → truncate to 11:45:00
+				expectedStart: time.Date(2025, 6, 23, 11, 45, 0, 0, time.UTC),
+				expectedEnd:   time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				name:     "30 minutes",
+				interval: 30 * time.Minute,
+				// 12:01:02.003 − 30 m → 11:31:02.003 → truncate to 11:30:00
+				expectedStart: time.Date(2025, 6, 23, 11, 30, 0, 0, time.UTC),
+				expectedEnd:   time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				name:     "1 hour",
+				interval: time.Hour,
+				// 12:01:02.003 − 1 h → 11:01:02.003 → truncate to 11:00:00
+				expectedStart: time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC),
+				expectedEnd:   time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				name:     "6 hours",
+				interval: 6 * time.Hour,
+				// 12:01:02.003 − 6 h → 06:01:02.003 → truncate to 06:00:00
+				expectedStart: time.Date(2025, 6, 23, 6, 0, 0, 0, time.UTC),
+				expectedEnd:   time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				name:     "24 hours",
+				interval: 24 * time.Hour,
+				// 12:01:02.003 − 24 h → 2025-06-22 12:01:02.003 → truncate to 2025-06-22 00:00:00
+				expectedStart: time.Date(2025, 6, 22, 0, 0, 0, 0, time.UTC),
+				expectedEnd:   time.Date(2025, 6, 23, 0, 0, 0, 0, time.UTC),
+			},
 		}
 
 		for _, tc := range testCases {
@@ -591,14 +664,16 @@ func TestNextExecutionWindow(t *testing.T) {
 
 				// Test first execution
 				startTime, endTime := rule.NextExecutionWindow(fakeClock)
+				require.Equal(t, tc.expectedStart, startTime)
+				require.Equal(t, tc.expectedEnd, endTime)
+
 				require.Equal(t, tc.interval, endTime.Sub(startTime))
-
-				// Test subsequent execution - use a time far enough back
-				lastExecution := fixedTime.Add(-tc.interval - time.Hour).UTC()
-				rule.SetLastExecutionTime(lastExecution)
-
+				// Set last execution time to the expected start time
+				rule.SetLastExecutionTime(tc.expectedStart)
+				// Test subsequent execution
 				startTime, endTime = rule.NextExecutionWindow(fakeClock)
-				require.Equal(t, lastExecution, startTime)
+				require.Equal(t, tc.expectedStart, startTime)
+				require.Equal(t, tc.expectedEnd, endTime)
 				require.Equal(t, tc.interval, endTime.Sub(startTime))
 			})
 		}
@@ -652,7 +727,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		// Start with an execution time far enough in the past
-		pastTime := fixedTime.Add(-4 * time.Hour).UTC()
+		pastTime := fixedTime.Add(-4 * time.Hour).UTC().Truncate(rule.Spec.Interval.Duration)
 		rule.SetLastExecutionTime(pastTime)
 
 		// First execution window
@@ -699,7 +774,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		rule.SetLastExecutionTime(lastExecution)
 
 		startTime, endTime = rule.NextExecutionWindow(fakeClock)
-		require.Equal(t, lastExecution, startTime)
+		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
 		require.Equal(t, 30*time.Second, endTime.Sub(startTime))
 	})
 
@@ -721,7 +796,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		rule.SetLastExecutionTime(lastExecution)
 
 		startTime, endTime = rule.NextExecutionWindow(fakeClock)
-		require.Equal(t, lastExecution, startTime)
+		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
 		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
 	})
 
@@ -731,7 +806,7 @@ func TestNextExecutionWindow(t *testing.T) {
 				Generation: 1,
 			},
 			Spec: SummaryRuleSpec{
-				Interval: metav1.Duration{Duration: time.Hour},
+				Interval: metav1.Duration{Duration: time.Minute},
 			},
 		}
 
@@ -762,9 +837,9 @@ func TestNextExecutionWindow(t *testing.T) {
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		require.Equal(t, lastExecution, startTime)
-		// End time should be capped to current time (truncated to minute)
-		expectedMaxEndTime := fixedTime.UTC().Truncate(time.Minute)
+		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
+		// End time should be capped to current time (truncated to the interval)
+		expectedMaxEndTime := fixedTime.UTC().Truncate(rule.Spec.Interval.Duration)
 		require.Equal(t, expectedMaxEndTime, endTime)
 		require.True(t, endTime.After(startTime))
 	})
