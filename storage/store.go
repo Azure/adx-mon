@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -65,6 +66,8 @@ type LocalStore struct {
 
 	metricsMu sync.RWMutex
 	metrics   map[string]prometheus.Counter
+
+	inflightWriteBytes int64
 }
 
 type StoreOpts struct {
@@ -125,7 +128,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 			return err
 		}
 
-		wal, err := s.GetWAL(ctx, key)
+		w, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
 		}
@@ -137,9 +140,19 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 			return err
 		}
 
-		if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
+
+		if s.Size() > s.opts.MaxDiskUsage {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			return wal.ErrMaxDiskUsageExceeded
+		}
+
+		if err := w.Write(ctx, enc.Bytes()); err != nil {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			return err
 		}
+		// Decrement the inflight write bytes after writing to avoid double counting.
+		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 	}
 	return nil
 }
@@ -175,6 +188,13 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	enc.Reset()
 	if err := enc.MarshalLog(logs); err != nil {
 		return err
+	}
+
+	atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
+	defer atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+
+	if s.Size() > s.opts.MaxDiskUsage {
+		return wal.ErrMaxDiskUsageExceeded
 	}
 
 	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
@@ -230,7 +250,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		key = fmt.Appendf(key[:0], "%s_%s_", sanitizedDB, sanitizedTable)
 		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
 
-		wal, err := s.GetWAL(ctx, key)
+		w, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
 		}
@@ -241,10 +261,20 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		if err := enc.MarshalNativeLog(log); err != nil {
 			return err
 		}
+		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 
-		if err := wal.Write(ctx, enc.Bytes()); err != nil {
+		if s.Size() > s.opts.MaxDiskUsage {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			return wal.ErrMaxDiskUsageExceeded
+		}
+
+		if err := w.Write(ctx, enc.Bytes()); err != nil {
+			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			return err
 		}
+
+		// Decrement the inflight write bytes after writing to avoid double counting.
+		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 	}
 
 	if noDestinationCount > 0 {
@@ -276,7 +306,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		key = fmt.Appendf(key[:0], "%s_%s", db, table)
 	}
 
-	wal, err := s.GetWAL(context.Background(), key)
+	w, err := s.GetWAL(context.Background(), key)
 	if err != nil {
 		return 0, err
 	}
@@ -290,7 +320,14 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return 0, err
 	}
 
-	return int(n), wal.Append(context.Background(), buf.Bytes())
+	atomic.AddInt64(&s.inflightWriteBytes, n)
+	defer atomic.AddInt64(&s.inflightWriteBytes, -n)
+
+	if s.Size() > s.opts.MaxDiskUsage {
+		return 0, wal.ErrMaxDiskUsageExceeded
+	}
+
+	return int(n), w.Append(context.Background(), buf.Bytes())
 }
 
 func (s *LocalStore) Remove(path string) error {
@@ -336,6 +373,12 @@ func (s *LocalStore) incMetrics(value []byte, n int) {
 
 func (s *LocalStore) Index() *wal.Index {
 	return s.repository.Index()
+}
+
+// Size returns the total size of the LocalStore, including the size of the repository (active WAL segments),
+// inflight write bytes, and index size (closed WAL segments).
+func (s *LocalStore) Size() int64 {
+	return s.repository.Size() + atomic.LoadInt64(&s.inflightWriteBytes) + s.Index().TotalSize()
 }
 
 // WriteDebug writes debug information to the given writer.
