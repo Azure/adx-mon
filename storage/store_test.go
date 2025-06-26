@@ -59,6 +59,7 @@ func TestStore_Open(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -116,6 +117,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -154,6 +156,7 @@ func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -204,6 +207,7 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	require.NoError(t, s.Open(context.Background()))
@@ -288,6 +292,7 @@ func TestStore_Import_Append(t *testing.T) {
 		StorageDir:     dir,
 		SegmentMaxSize: 1024 * 1025,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
 	})
 
 	seg1, err := wal.NewSegment(dir, "Database_Metric")
