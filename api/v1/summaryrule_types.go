@@ -292,12 +292,13 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		// First execution: start from current time aligned to interval boundary, going back one interval
 		now := clk.Now().UTC()
 		// Align to minute boundary for consistency
-		alignedNow := now.Truncate(time.Minute)
+		alignedNow := now.Truncate(s.Spec.Interval.Duration)
 		windowEndTime = alignedNow
 		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
 	} else {
 		// Subsequent executions: start from where the last successful execution ended
 		windowStartTime = *lastSuccessfulEndTime
+		windowStartTime = windowStartTime.Truncate(s.Spec.Interval.Duration)
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
 		// Ensure we don't execute future windows
