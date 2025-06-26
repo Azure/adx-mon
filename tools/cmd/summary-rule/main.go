@@ -512,7 +512,7 @@ func calculateTimeInfo(rule *v1.SummaryRule) TimeInfo {
 	timeInfo := TimeInfo{}
 
 	// Get last successful execution time
-	timeInfo.LastExecutionTime = rule.GetLastSuccessfulExecutionTime()
+	timeInfo.LastExecutionTime = rule.GetLastExecutionTime()
 
 	// Calculate current window based on the same logic as SummaryRuleTask
 	if timeInfo.LastExecutionTime == nil {
