@@ -72,7 +72,7 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 func (r *MetricsExporterReconciler) exposeMetrics() error {
 	if !r.EnableMetricsEndpoint {
-		noop.NewMeterProvider().Meter("noop")
+		r.Meter = noop.NewMeterProvider().Meter("noop")
 		return nil
 	}
 
