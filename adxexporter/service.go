@@ -94,7 +94,9 @@ func (r *MetricsExporterReconciler) exposeMetrics() error {
 	go func() {
 		err := metricsServer.ListenAndServe()
 		if err != nil && err != http.ErrServerClosed {
-			panic(err)
+			logger.Errorf("Metrics server failed: %v", err)
+			// Optionally, shut down the application gracefully if needed
+			return
 		}
 	}()
 
