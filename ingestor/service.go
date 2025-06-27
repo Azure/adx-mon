@@ -388,6 +388,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing filename", http.StatusBadRequest)
 		return
 	}
+	requestId := r.Header.Get("X-Request-ID")
 
 	xff := r.Header.Get("X-Forwarded-For")
 	// If the header is present, split it by comma and take the first IP address
@@ -408,10 +409,10 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		metrics.RequestsBytesReceived.Add(float64(cr.Count()))
 		dur := time.Since(start)
 		if s.opts.SlowRequestThreshold > 0 && dur.Seconds() > s.opts.SlowRequestThreshold {
-			logger.Warnf("Slow request: path=/transfer duration=%s from=%s size=%d file=%s", dur.String(), originalIP, cr.Count(), filename)
+			logger.Warnf("Slow request: requestId=%s path=/transfer duration=%s from=%s size=%d file=%s", requestId, dur.String(), originalIP, cr.Count(), filename)
 		}
 		if err := body.Close(); err != nil {
-			logger.Errorf("Close http body: %s, path=/transfer duration=%s from=%s", err.Error(), dur.String(), originalIP)
+			logger.Errorf("Close http body: requestId=%s %s, path=/transfer duration=%s from=%s", requestId, err.Error(), dur.String(), originalIP)
 		}
 	}()
 
@@ -426,6 +427,9 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.health.IsHealthy() {
+		r.Close = true
+		w.Header().Set("Connection", "close")
+
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
@@ -435,7 +439,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	// Check for possible traversal attacks.
 	f := s.validateFileName(filename)
 	if f == "" {
-		logger.Errorf("Transfer requested with an invalid filename %q", filename)
+		logger.Errorf("Failed to import: invalid filename %s from=%s requestId=%s", filename, originalIP, requestId)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "Filename is invalid", http.StatusBadRequest)
 		return
@@ -445,7 +449,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		gzipReader, err := gzip.NewReader(body)
 		if err != nil {
-			logger.Errorf("Failed to create gzip reader: %s", err.Error())
+			logger.Errorf("Failed to import: create gzip reader: %s from=%s requestId=%s", err.Error(), originalIP, requestId)
 			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 			http.Error(w, "Invalid gzip encoding", http.StatusBadRequest)
 			return
@@ -456,6 +460,9 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 
 	n, err := s.store.Import(f, body)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+		r.Close = true
+		w.Header().Set("Connection", "close")
+
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
@@ -463,12 +470,15 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusLocked)
 		return
 	} else if err != nil && strings.Contains(err.Error(), "block checksum verification failed") {
-		logger.Errorf("Transfer requested with checksum error %q from=%s", filename, originalIP)
+		logger.Errorf("Failed to import checksum error: %s from=%s requestId=%s", filename, originalIP, requestId)
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "Block checksum verification failed", http.StatusBadRequest)
 		return
 	} else if err != nil {
-		logger.Errorf("Failed to import %s: %s from=%s", filename, err.Error(), originalIP)
+		r.Close = true
+		w.Header().Set("Connection", "close")
+
+		logger.Errorf("Failed to import %s: %s from=%s requestId=%s", filename, err.Error(), originalIP, requestId)
 		m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
