@@ -28,6 +28,10 @@ func main() {
 				Name:  "cluster-labels",
 				Usage: "Labels used to identify and distinguish adxexporter clusters. Format: <key>=<value>",
 			},
+			&cli.StringSliceFlag{
+				Name:  "kusto-endpoints",
+				Usage: "Kusto endpoint in the format of <db>=<endpoint> for query execution",
+			},
 			&cli.StringFlag{
 				Name:  "otlp-endpoint",
 				Usage: "OTLP endpoint URL for direct push mode (Phase 2)",
@@ -59,6 +63,11 @@ func main() {
 
 func realMain(ctx *cli.Context) error {
 	clusterLabels, err := parseClusterLabels(ctx.StringSlice("cluster-labels"))
+	if err != nil {
+		return err
+	}
+
+	kustoClusters, err := parseKustoEndpoints(ctx.StringSlice("kusto-endpoints"))
 	if err != nil {
 		return err
 	}
@@ -106,6 +115,7 @@ func realMain(ctx *cli.Context) error {
 		Scheme: mgr.GetScheme(),
 
 		ClusterLabels:         clusterLabels,
+		KustoClusters:         kustoClusters,
 		OTLPEndpoint:          ctx.String("otlp-endpoint"),
 		EnableMetricsEndpoint: ctx.Bool("enable-metrics-endpoint"),
 		MetricsPort:           ctx.String("metrics-port"),
@@ -146,4 +156,32 @@ func parseClusterLabels(labels []string) (map[string]string, error) {
 	}
 
 	return clusterLabels, nil
+}
+
+// parseKustoEndpoints processes --kusto-endpoints CLI arguments into a map
+// Following the same pattern as the ingestor implementation
+func parseKustoEndpoints(endpoints []string) (map[string]string, error) {
+	kustoClusters := make(map[string]string)
+
+	for _, endpoint := range endpoints {
+		if !strings.Contains(endpoint, "=") {
+			return nil, fmt.Errorf("invalid kusto endpoint: %s, expected <database>=<endpoint>", endpoint)
+		}
+
+		split := strings.Split(endpoint, "=")
+		database := split[0]
+		addr := split[1]
+
+		if database == "" {
+			return nil, fmt.Errorf("database name is required in kusto endpoint: %s", endpoint)
+		}
+
+		if addr == "" {
+			return nil, fmt.Errorf("endpoint address is required in kusto endpoint: %s", endpoint)
+		}
+
+		kustoClusters[database] = addr
+	}
+
+	return kustoClusters, nil
 }
