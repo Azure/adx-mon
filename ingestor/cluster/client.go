@@ -15,21 +15,90 @@ import (
 	"github.com/klauspost/compress/gzip"
 )
 
-var (
-	ErrPeerOverloaded = fmt.Errorf("peer overloaded")
-	ErrSegmentExists  = fmt.Errorf("segment already exists")
-	ErrSegmentLocked  = fmt.Errorf("segment is locked")
-)
+// PeerOverloadedError represents a peer overloaded error with optional requestId.
+type PeerOverloadedError struct {
+	requestId string
+}
+
+func (e *PeerOverloadedError) Error() string {
+	msg := "peer overloaded"
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
+}
+func (e *PeerOverloadedError) Is(target error) bool {
+	_, ok := target.(*PeerOverloadedError)
+	return ok
+}
+func (e *PeerOverloadedError) WithRequestId(id string) error {
+	return &PeerOverloadedError{requestId: id}
+}
+
+var ErrPeerOverloaded error = &PeerOverloadedError{}
+
+// SegmentExistsError represents a segment already exists error with optional requestId.
+type SegmentExistsError struct {
+	requestId string
+}
+
+func (e *SegmentExistsError) Error() string {
+	msg := "segment already exists"
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
+}
+func (e *SegmentExistsError) Is(target error) bool {
+	_, ok := target.(*SegmentExistsError)
+	return ok
+}
+func (e *SegmentExistsError) WithRequestId(id string) error {
+	return &SegmentExistsError{requestId: id}
+}
+
+var ErrSegmentExists error = &SegmentExistsError{}
+
+// SegmentLockedError represents a segment locked error with optional requestId.
+type SegmentLockedError struct {
+	requestId string
+}
+
+func (e *SegmentLockedError) Error() string {
+	msg := "segment is locked"
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
+}
+func (e *SegmentLockedError) Is(target error) bool {
+	_, ok := target.(*SegmentLockedError)
+	return ok
+}
+func (e *SegmentLockedError) WithRequestId(id string) error {
+	return &SegmentLockedError{requestId: id}
+}
+
+var ErrSegmentLocked error = &SegmentLockedError{}
 
 type ErrBadRequest struct {
-	Msg string
+	Msg       string
+	requestId string
 }
 
-func (e ErrBadRequest) Error() string {
-	return fmt.Sprintf("bad request: %s", e.Msg)
+func (e *ErrBadRequest) Error() string {
+	msg := fmt.Sprintf("bad request: %s", e.Msg)
+	if e.requestId != "" {
+		msg += " requestId=" + e.requestId
+	}
+	return msg
 }
-func (e ErrBadRequest) Is(target error) bool {
-	return target == ErrBadRequest{}
+func (e *ErrBadRequest) Is(target error) bool {
+	_, ok := target.(*ErrBadRequest)
+	return ok
+}
+func (e *ErrBadRequest) WithRequestId(id string) error {
+	return &ErrBadRequest{Msg: e.Msg, requestId: id}
 }
 
 type Client struct {
@@ -142,6 +211,8 @@ func NewClient(opts ClientOpts) (*Client, error) {
 // merged into the first file at the destination.  This ensures we transfer the full batch
 // atomimcally.
 func (c *Client) Write(ctx context.Context, endpoint string, filename string, body io.Reader) error {
+	rid := c.idGen.NextId()
+	requestId := rid.String()
 
 	br := bufio.NewReaderSize(body, 4*1024)
 	// Send the body with gzip compression unless the client has that option disabled.
@@ -153,7 +224,7 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 			defer gzipCompressor.Close()
 			if _, err := io.Copy(gzipCompressor, body); err != nil {
 				if err := gzipWriter.CloseWithError(err); err != nil {
-					logger.Errorf("failed to close gzip writer: %v", err)
+					logger.Errorf("failed to close gzip writer: %s requestId=%s", err, requestId)
 				}
 			}
 		}()
@@ -174,13 +245,11 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 	req.Header.Set("Content-Type", "text/csv")
 	req.Header.Set("User-Agent", "adx-mon")
-
-	requestId := c.idGen.NextId()
-	req.Header.Set("X-Request-ID", requestId.String())
+	req.Header.Set("X-Request-ID", requestId)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("http post: %w", err)
+		return fmt.Errorf("http post: %w requestId=%s", err, requestId)
 	}
 	defer func() {
 		io.Copy(io.Discard, resp.Body)
@@ -190,26 +259,35 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 	if resp.StatusCode != 202 {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("read resp: %w", err)
+			return fmt.Errorf("read resp: %w requestId=%s", err, requestId)
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			if perr, ok := ErrPeerOverloaded.(*PeerOverloadedError); ok {
+				return perr.WithRequestId(requestId)
+			}
 			return ErrPeerOverloaded
 		}
 
 		if resp.StatusCode == http.StatusConflict {
+			if serr, ok := ErrSegmentExists.(*SegmentExistsError); ok {
+				return serr.WithRequestId(requestId)
+			}
 			return ErrSegmentExists
 		}
 
 		if resp.StatusCode == http.StatusLocked {
+			if lerr, ok := ErrSegmentLocked.(*SegmentLockedError); ok {
+				return lerr.WithRequestId(requestId)
+			}
 			return ErrSegmentLocked
 		}
 
 		if resp.StatusCode == http.StatusBadRequest {
-			return &ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", strings.TrimSpace(string(body)))}
+			return (&ErrBadRequest{Msg: fmt.Sprintf("write failed: %s", strings.TrimSpace(string(body)))}).WithRequestId(requestId)
 		}
 
-		return fmt.Errorf("write failed: %s", strings.TrimSpace(string(body)))
+		return fmt.Errorf("write failed: %s requestId=%s", strings.TrimSpace(string(body)), requestId)
 	}
 	return nil
 }
