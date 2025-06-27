@@ -173,7 +173,7 @@ func (r *replicator) transfer(ctx context.Context) {
 
 				start := time.Now()
 				if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
-					if errors.Is(err, ErrBadRequest{}) {
+					if errors.Is(err, &ErrBadRequest{}) {
 						// If ingestor returns a bad request, we should drop the segments as it means we're sending something
 						// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
 						// and log the error.
@@ -212,7 +212,7 @@ func (r *replicator) transfer(ctx context.Context) {
 
 				return nil
 			}(); err != nil {
-				logger.Errorf("Failed to transfer batch: %v", err)
+				logger.Errorf("Failed to transfer batch to peer: %v", err)
 			}
 
 			batch.Release()
