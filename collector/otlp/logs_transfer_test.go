@@ -1138,7 +1138,8 @@ func makeRequest(t *testing.T, msg *v1.ExportLogsServiceRequest) (*httptest.Resp
 
 	store := storage.NewLocalStore(
 		storage.StoreOpts{
-			StorageDir: dir,
+			StorageDir:   dir,
+			MaxDiskUsage: 1024 * 1024,
 		})
 
 	require.NoError(t, store.Open(context.Background()))

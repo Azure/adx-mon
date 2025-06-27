@@ -211,7 +211,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
-		MaxDiskUsage:     opts.MaxDiskUsage,
+		MaxDiskUsage:     maxDiskUsage,
 		LiftedLabels:     opts.LiftLabels,
 		LiftedAttributes: opts.LiftAttributes,
 		LiftedResources:  opts.LiftResources,

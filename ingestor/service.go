@@ -151,6 +151,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentMaxSize: opts.MaxSegmentSize,
 		SegmentMaxAge:  opts.MaxSegmentAge,
 		EnableWALFsync: opts.EnableWALFsync,
+		MaxDiskUsage:   opts.MaxDiskUsage,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
@@ -197,7 +198,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		TransfersDisabled:  opts.DisablePeerTransfer,
 	})
 
-	health.QueueSizer = batcher
+	health.QueueSizer = &queueSizerAdapter{
+		store:   store,
+		batcher: batcher,
+	}
 
 	allKustoCli := make([]metrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
 	allKustoCli = append(allKustoCli, opts.MetricsKustoCli...)
@@ -548,4 +552,32 @@ func (s *Service) validateFileName(filename string) string {
 	}
 
 	return wal.Filename(db, table, schema, epoch)
+}
+
+// queueSizerAdapter is an adapter that implements the cluster.QueueSizer interface by wrapping the
+// storage.LocalStore and cluster.Batcher interfaces. It provides methods to get the sizes of the transfer
+// and upload queues, the total number of segments, the size of segments, and the maximum age of segments.
+type queueSizerAdapter struct {
+	store   *storage.LocalStore
+	batcher cluster.Batcher
+}
+
+func (q *queueSizerAdapter) TransferQueueSize() int {
+	return q.batcher.TransferQueueSize()
+}
+
+func (q *queueSizerAdapter) UploadQueueSize() int {
+	return q.batcher.UploadQueueSize()
+}
+
+func (q *queueSizerAdapter) SegmentsTotal() int64 {
+	return int64(q.store.Index().TotalSegments())
+}
+
+func (q *queueSizerAdapter) SegmentsSize() int64 {
+	return q.store.Size()
+}
+
+func (q *queueSizerAdapter) MaxSegmentAge() time.Duration {
+	return q.store.Index().OldestSegmentAge()
 }

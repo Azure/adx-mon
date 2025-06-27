@@ -20,7 +20,12 @@ build-operator:
 	CGO_ENABLED=0 go build -o bin/operator ./cmd/operator/...
 .PHONY: build
 
-build: build-alerter build-ingestor build-collector build-operator
+build-adxexporter:
+	mkdir -p bin
+	CGO_ENABLED=0 go build -o bin/adxexporter ./cmd/adxexporter/...
+.PHONY: build
+
+build: build-alerter build-ingestor build-collector build-operator build-adxexporter
 .PHONY: build
 
 image: image-ingestor image-alerter image-collector image-operator
