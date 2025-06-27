@@ -11,6 +11,7 @@ import (
 
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/gzip"
 )
 
@@ -34,6 +35,7 @@ func (e ErrBadRequest) Is(target error) bool {
 type Client struct {
 	httpClient *http.Client
 	opts       ClientOpts
+	idGen      *flake.Flake
 }
 
 type ClientOpts struct {
@@ -123,9 +125,16 @@ func NewClient(opts ClientOpts) (*Client, error) {
 			DisableKeepAlives:     opts.DisableKeepAlives,
 		})
 
+	idGen, err := flake.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ID generator: %w", err)
+	}
+
 	return &Client{
 		httpClient: httpClient,
 		opts:       opts,
+
+		idGen: idGen,
 	}, nil
 }
 
@@ -165,6 +174,9 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 
 	req.Header.Set("Content-Type", "text/csv")
 	req.Header.Set("User-Agent", "adx-mon")
+
+	requestId := c.idGen.NextId()
+	req.Header.Set("X-Request-ID", requestId.String())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
