@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -23,6 +24,10 @@ type Repository struct {
 	index *Index
 
 	wals *partmap.Map[*WAL]
+
+	// Total size of all wals in the repository.  This is updated
+	// lazily in the background.
+	size int64
 }
 
 type RepositoryOpts struct {
@@ -157,6 +162,8 @@ func (s *Repository) Open(ctx context.Context) error {
 		}
 	}
 
+	go s.sampleWALs(ctx)
+
 	return nil
 }
 
@@ -268,4 +275,29 @@ func (s *Repository) WriteDebug(w io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(w, "\nWAL: Disk Usage: %d, Segments: %d\n", walsSize, count)
 	return tw.Flush()
+}
+
+func (s *Repository) sampleWALs(ctx context.Context) {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+
+		var sz int64
+		if err := s.wals.Each(func(key string, value *WAL) error {
+			sz += int64(value.Size())
+			return nil
+		}); err != nil {
+			logger.Errorf("Failed to sample WALs: %s", err.Error())
+		}
+		atomic.StoreInt64(&s.size, sz)
+	}
+}
+
+func (s *Repository) Size() int64 {
+	return atomic.LoadInt64(&s.size)
 }
