@@ -257,7 +257,11 @@ func (c *coordinator) syncPeers() error {
 		}
 	}
 
+	wasLeader := c.leader
 	c.leader = c.opts.Hostname == leastNode
+	if c.leader != wasLeader {
+		logger.Infof("Leader change: WasLeader=%t IsLeader=%t, Hostname=%s, LeastNode=%s", wasLeader, c.leader, c.opts.Hostname, leastNode)
+	}
 
 	if len(set) == 0 {
 		return nil
