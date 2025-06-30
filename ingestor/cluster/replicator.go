@@ -201,11 +201,12 @@ func (r *replicator) transfer(ctx context.Context) {
 					return err
 				}
 
-				for _, seg := range segments {
-					if logger.IsDebug() {
+				if logger.IsDebug() {
+					for _, seg := range segments {
 						logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
 					}
 				}
+
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to batch segment: %s", err)
 				}
