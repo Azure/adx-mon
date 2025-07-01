@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"k8s.io/utils/clock"
@@ -93,7 +94,7 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 	start := qe.clock.Now()
 
 	// Apply time window and cluster label substitutions to the query
-	processedQuery := qe.applySubstitutions(queryBody, startTime, endTime, clusterLabels)
+	processedQuery := kustoutil.ApplySubstitutions(queryBody, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano), clusterLabels)
 
 	// Create KQL statement
 	stmt := kql.New("").AddUnsafe(processedQuery)
@@ -116,30 +117,6 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 		Error:    err,
 		Duration: qe.clock.Since(start),
 	}, nil
-}
-
-// applySubstitutions applies time window and cluster label substitutions to the query body
-// This follows the same pattern as SummaryRule's applySubstitutions function
-func (qe *QueryExecutor) applySubstitutions(body string, startTime, endTime time.Time, clusterLabels map[string]string) string {
-	var letStatements []string
-
-	// Add time window parameters
-	letStatements = append(letStatements, fmt.Sprintf("let _startTime = datetime(%s);", startTime.UTC().Format(time.RFC3339Nano)))
-	letStatements = append(letStatements, fmt.Sprintf("let _endTime = datetime(%s);", endTime.UTC().Format(time.RFC3339Nano)))
-
-	// Add cluster label substitutions
-	for templateKey, templateValue := range clusterLabels {
-		// Escape single quotes in the value to prevent KQL injection
-		escapedValue := strings.ReplaceAll(templateValue, "'", "''")
-		letStatements = append(letStatements, fmt.Sprintf("let %s='%s';", templateKey, escapedValue))
-	}
-
-	// Construct the full query with let statements
-	query := fmt.Sprintf("%s\n%s",
-		strings.Join(letStatements, "\n"),
-		strings.TrimSpace(body))
-
-	return query
 }
 
 // iteratorToRows converts a Kusto RowIterator to a slice of maps

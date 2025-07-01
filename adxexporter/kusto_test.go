@@ -129,74 +129,6 @@ func createMockRowIterator(rows [][]interface{}) *kusto.RowIterator {
 	return &kusto.RowIterator{}
 }
 
-func TestQueryExecutor_applySubstitutions(t *testing.T) {
-	mockClient := NewMockKustoExecutor("TestDB", "https://test.kusto.windows.net")
-	executor := NewQueryExecutor(mockClient)
-
-	tests := []struct {
-		name          string
-		queryBody     string
-		startTime     time.Time
-		endTime       time.Time
-		clusterLabels map[string]string
-		expectedQuery string
-	}{
-		{
-			name:          "basic time window substitution",
-			queryBody:     "MyTable | where Timestamp between (_startTime .. _endTime)",
-			startTime:     time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
-			endTime:       time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
-			clusterLabels: map[string]string{},
-			expectedQuery: `let _startTime = datetime(2023-01-01T12:00:00Z);
-let _endTime = datetime(2023-01-01T13:00:00Z);
-MyTable | where Timestamp between (_startTime .. _endTime)`,
-		},
-		{
-			name:      "with cluster labels",
-			queryBody: "MyTable | where Timestamp between (_startTime .. _endTime) and Region == region",
-			startTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
-			endTime:   time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
-			clusterLabels: map[string]string{
-				"region":      "us-east-1",
-				"environment": "production",
-			},
-			// Note: cluster labels are added in map iteration order which is not guaranteed
-			// We'll test that both labels are present, not the exact order
-			expectedQuery: "", // We'll check manually in the test
-		},
-		{
-			name:      "escape single quotes in cluster labels",
-			queryBody: "MyTable | where Description == description",
-			startTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
-			endTime:   time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
-			clusterLabels: map[string]string{
-				"description": "test's value",
-			},
-			expectedQuery: `let _startTime = datetime(2023-01-01T12:00:00Z);
-let _endTime = datetime(2023-01-01T13:00:00Z);
-let description='test''s value';
-MyTable | where Description == description`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := executor.applySubstitutions(tt.queryBody, tt.startTime, tt.endTime, tt.clusterLabels)
-
-			if tt.expectedQuery != "" {
-				require.Equal(t, tt.expectedQuery, result)
-			} else {
-				// For the cluster labels test, check that all expected parts are present
-				require.Contains(t, result, "let _startTime = datetime(2023-01-01T12:00:00Z);")
-				require.Contains(t, result, "let _endTime = datetime(2023-01-01T13:00:00Z);")
-				require.Contains(t, result, "let region='us-east-1';")
-				require.Contains(t, result, "let environment='production';")
-				require.Contains(t, result, "MyTable | where Timestamp between (_startTime .. _endTime) and Region == region")
-			}
-		})
-	}
-}
-
 func TestQueryExecutor_ExecuteQuery(t *testing.T) {
 	mockClient := NewMockKustoExecutor("TestDB", "https://test.kusto.windows.net")
 	executor := NewQueryExecutor(mockClient)
@@ -227,9 +159,9 @@ func TestQueryExecutor_ExecuteQuery(t *testing.T) {
 		queries := mockClient.GetQueries()
 		require.Len(t, queries, 1)
 
-		expectedQuery := `let _startTime = datetime(2023-01-01T12:00:00Z);
-let _endTime = datetime(2023-01-01T13:00:00Z);
-let region='us-east-1';
+		expectedQuery := `let _startTime=datetime(2023-01-01T12:00:00Z);
+let _endTime=datetime(2023-01-01T13:00:00Z);
+let _region="us-east-1";
 MyTable | summarize avg_value = avg(Value) by ServiceName`
 
 		require.Equal(t, expectedQuery, queries[0])
