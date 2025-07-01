@@ -1,11 +1,23 @@
 package metrics
 
 import (
+	"os"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+func init() {
+	if os.Getenv("METRICS_DEBUG") != "" {
+		DebugMetricsEnabled = true
+	}
+}
+
 var (
+	// DebugMetricsEnabled is a flag to enable debug metrics.  If set, additional metrics will be collected that are
+	// useful for debugging but may be too verbose for regular production use.
+	DebugMetricsEnabled bool
+
 	Namespace = "adxmon"
 
 	// Ingestor metrics
