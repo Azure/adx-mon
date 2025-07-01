@@ -186,7 +186,10 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 		me.Namespace, me.Name, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
 
 	// Execute the KQL query
-	result, err := executor.ExecuteQuery(ctx, me.Spec.Body, startTime, endTime, r.ClusterLabels)
+	tCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	result, err := executor.ExecuteQuery(tCtx, me.Spec.Body, startTime, endTime, r.ClusterLabels)
 	if err != nil {
 		return fmt.Errorf("failed to execute query: %w", err)
 	}
