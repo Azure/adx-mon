@@ -259,6 +259,8 @@ func (b *batcher) BatchSegments() error {
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
 func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
+	metrics.IngestorSegmentsSizeBytes.Set(float64(b.SegmentsSize()))
+
 	// Groups is b map of metrics name to b list of segments for that metric.
 	groups := make(map[string][]wal.SegmentInfo)
 
@@ -308,7 +310,6 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		totalSize += int64(groupSize)
 
 		metrics.IngestorSegmentsMaxAge.WithLabelValues(prefix).Set(time.Since(oldestSegment).Seconds())
-		metrics.IngestorSegmentsSizeBytes.WithLabelValues(prefix).Set(float64(groupSize))
 		metrics.IngestorSegmentsTotal.WithLabelValues(prefix).Set(float64(len(b.tempSet)))
 		if v := time.Since(oldestSegment); v > b.maxSegmentAge {
 			b.maxSegmentAge = v
