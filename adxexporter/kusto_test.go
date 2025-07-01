@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
@@ -185,14 +184,14 @@ MyTable | where Description == description`,
 			result := executor.applySubstitutions(tt.queryBody, tt.startTime, tt.endTime, tt.clusterLabels)
 
 			if tt.expectedQuery != "" {
-				assert.Equal(t, tt.expectedQuery, result)
+				require.Equal(t, tt.expectedQuery, result)
 			} else {
 				// For the cluster labels test, check that all expected parts are present
-				assert.Contains(t, result, "let _startTime = datetime(2023-01-01T12:00:00Z);")
-				assert.Contains(t, result, "let _endTime = datetime(2023-01-01T13:00:00Z);")
-				assert.Contains(t, result, "let region='us-east-1';")
-				assert.Contains(t, result, "let environment='production';")
-				assert.Contains(t, result, "MyTable | where Timestamp between (_startTime .. _endTime) and Region == region")
+				require.Contains(t, result, "let _startTime = datetime(2023-01-01T12:00:00Z);")
+				require.Contains(t, result, "let _endTime = datetime(2023-01-01T13:00:00Z);")
+				require.Contains(t, result, "let region='us-east-1';")
+				require.Contains(t, result, "let environment='production';")
+				require.Contains(t, result, "MyTable | where Timestamp between (_startTime .. _endTime) and Region == region")
 			}
 		})
 	}
@@ -221,8 +220,8 @@ func TestQueryExecutor_ExecuteQuery(t *testing.T) {
 
 		require.NoError(t, err) // No error from the function itself
 		require.NotNil(t, result)
-		assert.Error(t, result.Error) // The mock error we set
-		assert.Greater(t, result.Duration, time.Duration(0))
+		require.Error(t, result.Error) // The mock error we set
+		require.Greater(t, result.Duration, time.Duration(0))
 
 		// Verify the query was called with proper substitutions
 		queries := mockClient.GetQueries()
@@ -233,7 +232,7 @@ let _endTime = datetime(2023-01-01T13:00:00Z);
 let region='us-east-1';
 MyTable | summarize avg_value = avg(Value) by ServiceName`
 
-		assert.Equal(t, expectedQuery, queries[0])
+		require.Equal(t, expectedQuery, queries[0])
 	})
 
 	t.Run("query execution with connection error", func(t *testing.T) {
@@ -244,9 +243,9 @@ MyTable | summarize avg_value = avg(Value) by ServiceName`
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		assert.Error(t, result.Error)
-		assert.Contains(t, result.Error.Error(), "failed to execute query")
-		assert.Contains(t, result.Error.Error(), "connection failed")
+		require.Error(t, result.Error)
+		require.Contains(t, result.Error.Error(), "failed to execute query")
+		require.Contains(t, result.Error.Error(), "connection failed")
 	})
 }
 
@@ -261,9 +260,9 @@ func TestNewKustoClient(t *testing.T) {
 			// not the client creation logic itself
 			t.Logf("Expected error for test environment: %v", err)
 		} else {
-			assert.NotNil(t, client)
-			assert.Equal(t, "TestDB", client.Database())
-			assert.Equal(t, "https://test.kusto.windows.net", client.Endpoint())
+			require.NotNil(t, client)
+			require.Equal(t, "TestDB", client.Database())
+			require.Equal(t, "https://test.kusto.windows.net", client.Endpoint())
 		}
 	})
 
@@ -272,7 +271,7 @@ func TestNewKustoClient(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
 				// Expected panic from empty connection string
-				assert.Contains(t, fmt.Sprintf("%v", r), "Connection string cannot be empty")
+				require.Contains(t, fmt.Sprintf("%v", r), "Connection string cannot be empty")
 			}
 		}()
 
@@ -288,7 +287,7 @@ func TestNewQueryExecutor(t *testing.T) {
 	mockClient := NewMockKustoExecutor("TestDB", "https://test.kusto.windows.net")
 	executor := NewQueryExecutor(mockClient)
 
-	assert.NotNil(t, executor)
-	assert.NotNil(t, executor.clock)
-	assert.Equal(t, mockClient, executor.kustoClient)
+	require.NotNil(t, executor)
+	require.NotNil(t, executor.clock)
+	require.Equal(t, mockClient, executor.kustoClient)
 }

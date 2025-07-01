@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseKustoEndpoints(t *testing.T) {
@@ -66,11 +66,11 @@ func TestParseKustoEndpoints(t *testing.T) {
 			result, err := parseKustoEndpoints(tt.endpoints)
 
 			if tt.expectedError {
-				assert.Error(t, err)
-				assert.Nil(t, result)
+				require.Error(t, err)
+				require.Nil(t, result)
 			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, result)
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, result)
 			}
 		})
 	}
@@ -126,11 +126,11 @@ func TestParseClusterLabels(t *testing.T) {
 			result, err := parseClusterLabels(tt.labels)
 
 			if tt.expectedError {
-				assert.Error(t, err)
-				assert.Nil(t, result)
+				require.Error(t, err)
+				require.Nil(t, result)
 			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, result)
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, result)
 			}
 		})
 	}
