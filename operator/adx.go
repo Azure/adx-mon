@@ -1235,7 +1235,7 @@ type FunctionKind struct {
 }
 
 func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, error) {
-	q := kql.New(".show function ").AddLiteral(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
+	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
 	result, err := client.Mgmt(ctx, database, q)
 	if err != nil {
 		return false, fmt.Errorf("failed to query function schema: %w", err)
