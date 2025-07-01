@@ -644,6 +644,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		if err != nil {
 			return fmt.Errorf("failed to query functions: %w", err)
 		}
+		defer result.Stop()
 
 		for {
 			row, errInline, errFinal := result.NextRowOrError()
