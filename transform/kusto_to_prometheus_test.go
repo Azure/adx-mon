@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
 )
 
@@ -16,12 +17,8 @@ func TestNewKustoToPrometheusTransformer(t *testing.T) {
 
 	transformer := NewKustoToPrometheusTransformer(config, meter)
 
-	if transformer.config.ValueColumn != "value" {
-		t.Errorf("Expected ValueColumn to be 'value', got '%s'", transformer.config.ValueColumn)
-	}
-	if transformer.meter == nil {
-		t.Error("Expected meter to be set")
-	}
+	require.Equal(t, "value", transformer.config.ValueColumn)
+	require.NotNil(t, transformer.meter)
 }
 
 func TestTransformBasic(t *testing.T) {
@@ -39,21 +36,12 @@ func TestTransformBasic(t *testing.T) {
 	}
 
 	metrics, err := transformer.Transform(results)
-	if err != nil {
-		t.Fatalf("Transform failed: %v", err)
-	}
-
-	if len(metrics) != 1 {
-		t.Fatalf("Expected 1 metric, got %d", len(metrics))
-	}
+	require.NoError(t, err)
+	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	if metric.Name != "test_metric" {
-		t.Errorf("Expected metric name 'test_metric', got '%s'", metric.Name)
-	}
-	if metric.Value != 42.0 {
-		t.Errorf("Expected metric value 42.0, got %f", metric.Value)
-	}
+	require.Equal(t, "test_metric", metric.Name)
+	require.Equal(t, 42.0, metric.Value)
 }
 
 func TestTransformWithMetricNameColumn(t *testing.T) {
@@ -72,21 +60,12 @@ func TestTransformWithMetricNameColumn(t *testing.T) {
 	}
 
 	metrics, err := transformer.Transform(results)
-	if err != nil {
-		t.Fatalf("Transform failed: %v", err)
-	}
-
-	if len(metrics) != 1 {
-		t.Fatalf("Expected 1 metric, got %d", len(metrics))
-	}
+	require.NoError(t, err)
+	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	if metric.Name != "cpu_usage" {
-		t.Errorf("Expected metric name 'cpu_usage', got '%s'", metric.Name)
-	}
-	if metric.Value != 85.5 {
-		t.Errorf("Expected metric value 85.5, got %f", metric.Value)
-	}
+	require.Equal(t, "cpu_usage", metric.Name)
+	require.Equal(t, 85.5, metric.Value)
 }
 
 func TestTransformWithLabels(t *testing.T) {
@@ -107,24 +86,13 @@ func TestTransformWithLabels(t *testing.T) {
 	}
 
 	metrics, err := transformer.Transform(results)
-	if err != nil {
-		t.Fatalf("Transform failed: %v", err)
-	}
-
-	if len(metrics) != 1 {
-		t.Fatalf("Expected 1 metric, got %d", len(metrics))
-	}
+	require.NoError(t, err)
+	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	if len(metric.Labels) != 2 {
-		t.Fatalf("Expected 2 labels, got %d", len(metric.Labels))
-	}
-	if metric.Labels["host"] != "server1" {
-		t.Errorf("Expected host label 'server1', got '%s'", metric.Labels["host"])
-	}
-	if metric.Labels["service"] != "api" {
-		t.Errorf("Expected service label 'api', got '%s'", metric.Labels["service"])
-	}
+	require.Len(t, metric.Labels, 2)
+	require.Equal(t, "server1", metric.Labels["host"])
+	require.Equal(t, "api", metric.Labels["service"])
 }
 
 func TestTransformWithTimestamp(t *testing.T) {
@@ -145,18 +113,11 @@ func TestTransformWithTimestamp(t *testing.T) {
 	}
 
 	metrics, err := transformer.Transform(results)
-	if err != nil {
-		t.Fatalf("Transform failed: %v", err)
-	}
-
-	if len(metrics) != 1 {
-		t.Fatalf("Expected 1 metric, got %d", len(metrics))
-	}
+	require.NoError(t, err)
+	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	if !metric.Timestamp.Equal(testTime) {
-		t.Errorf("Expected timestamp %v, got %v", testTime, metric.Timestamp)
-	}
+	require.True(t, metric.Timestamp.Equal(testTime))
 }
 
 func TestTransformValueTypes(t *testing.T) {
@@ -187,17 +148,9 @@ func TestTransformValueTypes(t *testing.T) {
 			}
 
 			metrics, err := transformer.Transform(results)
-			if err != nil {
-				t.Fatalf("Transform failed: %v", err)
-			}
-
-			if len(metrics) != 1 {
-				t.Fatalf("Expected 1 metric, got %d", len(metrics))
-			}
-
-			if metrics[0].Value != tc.expected {
-				t.Errorf("Expected value %f, got %f", tc.expected, metrics[0].Value)
-			}
+			require.NoError(t, err)
+			require.Len(t, metrics, 1)
+			require.Equal(t, tc.expected, metrics[0].Value)
 		})
 	}
 }
@@ -233,17 +186,9 @@ func TestTransformTimestampTypes(t *testing.T) {
 			}
 
 			metrics, err := transformer.Transform(results)
-			if err != nil {
-				t.Fatalf("Transform failed: %v", err)
-			}
-
-			if len(metrics) != 1 {
-				t.Fatalf("Expected 1 metric, got %d", len(metrics))
-			}
-
-			if !metrics[0].Timestamp.Equal(tc.expected) {
-				t.Errorf("Expected timestamp %v, got %v", tc.expected, metrics[0].Timestamp)
-			}
+			require.NoError(t, err)
+			require.Len(t, metrics, 1)
+			require.True(t, metrics[0].Timestamp.Equal(tc.expected))
 		})
 	}
 }
@@ -328,11 +273,10 @@ func TestTransformErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			transformer := NewKustoToPrometheusTransformer(tc.config, meter)
 			_, err := transformer.Transform(tc.results)
-			if tc.wantErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("Unexpected error: %v", err)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -405,11 +349,10 @@ func TestValidate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			transformer := NewKustoToPrometheusTransformer(tc.config, meter)
 			err := transformer.Validate(tc.results)
-			if tc.wantErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("Unexpected error: %v", err)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -436,9 +379,7 @@ func TestRegisterMetrics(t *testing.T) {
 
 	ctx := context.Background()
 	err := transformer.RegisterMetrics(ctx, metrics)
-	if err != nil {
-		t.Fatalf("RegisterMetrics failed: %v", err)
-	}
+	require.NoError(t, err)
 }
 
 func TestTransformMultipleRows(t *testing.T) {
@@ -469,26 +410,21 @@ func TestTransformMultipleRows(t *testing.T) {
 	}
 
 	metrics, err := transformer.Transform(results)
-	if err != nil {
-		t.Fatalf("Transform failed: %v", err)
-	}
-
-	if len(metrics) != 3 {
-		t.Fatalf("Expected 3 metrics, got %d", len(metrics))
-	}
+	require.NoError(t, err)
+	require.Len(t, metrics, 3)
 
 	// Verify first metric
-	if metrics[0].Name != "cpu_usage" || metrics[0].Value != 85.5 || metrics[0].Labels["host"] != "server1" {
-		t.Errorf("First metric incorrect: %+v", metrics[0])
-	}
+	require.Equal(t, "cpu_usage", metrics[0].Name)
+	require.Equal(t, 85.5, metrics[0].Value)
+	require.Equal(t, "server1", metrics[0].Labels["host"])
 
 	// Verify second metric
-	if metrics[1].Name != "memory_usage" || metrics[1].Value != 60.2 || metrics[1].Labels["host"] != "server1" {
-		t.Errorf("Second metric incorrect: %+v", metrics[1])
-	}
+	require.Equal(t, "memory_usage", metrics[1].Name)
+	require.Equal(t, 60.2, metrics[1].Value)
+	require.Equal(t, "server1", metrics[1].Labels["host"])
 
 	// Verify third metric
-	if metrics[2].Name != "cpu_usage" || metrics[2].Value != 92.1 || metrics[2].Labels["host"] != "server2" {
-		t.Errorf("Third metric incorrect: %+v", metrics[2])
-	}
+	require.Equal(t, "cpu_usage", metrics[2].Name)
+	require.Equal(t, 92.1, metrics[2].Value)
+	require.Equal(t, "server2", metrics[2].Labels["host"])
 }
