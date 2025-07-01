@@ -161,12 +161,15 @@ func (me *MetricsExporter) ShouldExecuteQuery(clk clock.Clock) bool {
 		}
 	}
 
+	// Don't execute queries if the MetricsExporter is being deleted
+	if me.DeletionTimestamp != nil {
+		return false
+	}
+
 	// Determine if the query should be executed based on several criteria:
-	// 1. The MetricsExporter is being deleted
-	// 2. MetricsExporter has been updated (new generation)
-	// 3. It's time for the next interval execution (based on actual time windows)
-	return me.DeletionTimestamp != nil || // MetricsExporter is being deleted
-		cnd.ObservedGeneration != me.GetGeneration() || // A new version of this CRD was created
+	// 1. MetricsExporter has been updated (new generation)
+	// 2. It's time for the next interval execution (based on actual time windows)
+	return cnd.ObservedGeneration != me.GetGeneration() || // A new version of this CRD was created
 		(lastSuccessfulEndTime != nil && clk.Since(*lastSuccessfulEndTime) >= me.Spec.Interval.Duration) || // Time for next interval
 		(lastSuccessfulEndTime == nil && clk.Since(cnd.LastTransitionTime.Time) >= me.Spec.Interval.Duration) // First execution timing
 }

@@ -203,7 +203,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 		require.True(t, me.ShouldExecuteQuery(fakeClock))
 	})
 
-	t.Run("deletion timestamp set - should execute", func(t *testing.T) {
+	t.Run("deletion timestamp set - should not execute", func(t *testing.T) {
 		now := metav1.NewTime(fixedTime)
 		me := &MetricsExporter{
 			ObjectMeta: metav1.ObjectMeta{
@@ -221,7 +221,7 @@ func TestMetricsExporter_ShouldExecuteQuery(t *testing.T) {
 		condition.ObservedGeneration = 1
 		meta.SetStatusCondition(&me.Status.Conditions, *condition)
 
-		require.True(t, me.ShouldExecuteQuery(fakeClock))
+		require.False(t, me.ShouldExecuteQuery(fakeClock))
 	})
 
 	t.Run("no conditions - first execution timing", func(t *testing.T) {
