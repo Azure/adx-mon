@@ -58,12 +58,12 @@ var (
 		Help:      "Gauge indicating the size of the queue for an ingestor instance",
 	}, []string{"queue"})
 
-	IngestorSegmentsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	IngestorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "wal_segments_count",
 		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
-	}, []string{"metric"})
+	})
 
 	IngestorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
@@ -72,12 +72,12 @@ var (
 		Help:      "Gauge indicating the size of WAL segments for an ingestor instance",
 	})
 
-	IngestorSegmentsMaxAge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	IngestorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "wal_segments_max_age_seconds",
 		Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
-	}, []string{"metric"})
+	})
 
 	MetricsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,

@@ -186,8 +186,6 @@ func (s *service) collect(ctx context.Context) {
 			lastCount = currentTotal
 
 			// Clear the gauges to prune old metrics that may not be collected anymore.
-			IngestorSegmentsMaxAge.Reset()
-			IngestorSegmentsTotal.Reset()
 			LogsProxyUploaded.Reset()
 		}
 	}
