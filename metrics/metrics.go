@@ -37,13 +37,6 @@ var (
 		Help:      "Counter of dropped prefixes for an ingestor instance",
 	}, []string{"prefix"})
 
-	SamplesStored = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "samples_stored_total",
-		Help:      "Counter of samples stored for an ingestor instance",
-	}, []string{"metric"})
-
 	IngestorActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -220,4 +213,11 @@ var (
 		Name:      "exporter_failed_total",
 		Help:      "Counter of the number of telemetry points that failed to be sent by an exporter",
 	}, []string{"exporter", "endpoint"})
+
+	SamplesStored = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "samples_stored_total",
+		Help:      "Counter of samples stored for an collector instance",
+	})
 )
