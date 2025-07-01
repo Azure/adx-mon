@@ -646,6 +646,10 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 
 	err := filepath.Walk(t.StorageDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// Ignore no such file or directory errors
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".wal") {

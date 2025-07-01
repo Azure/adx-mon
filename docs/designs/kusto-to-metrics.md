@@ -6,91 +6,178 @@ ADX-Mon currently provides two distinct capabilities:
 1. **SummaryRules** - Execute KQL queries on a schedule and ingest results into ADX tables ([`api/v1/summaryrule_types.go`](https://github.com/Azure/adx-mon/blob/main/api/v1/summaryrule_types.go))
 2. **OTLP Metrics Exporters** - Export metrics to external observability systems ([`collector/export/metric_otlp.go`](https://github.com/Azure/adx-mon/blob/main/collector/export/metric_otlp.go))
 
-However, there's no mechanism to connect these two capabilities. Organizations often need to:
-- Transform aggregated ADX data (computed via SummaryRules) into standardized OTLP metrics
+However, there's no direct mechanism to execute KQL queries and export the results as metrics to observability platforms. Organizations often need to:
+- Execute KQL queries on ADX data and export results as standardized metrics
 - Export these metrics to external systems (Prometheus, DataDog, etc.) at regular intervals
 - Create derived metrics from complex KQL aggregations for dashboards and alerting
 
-Currently, users must implement custom solutions outside of ADX-Mon to bridge this gap, leading to:
+Currently, users must either:
+- Use SummaryRules to materialize data in ADX tables, then build custom exporters to transform and export
+- Implement entirely separate infrastructure outside of ADX-Mon
+
+This leads to:
 - Duplicated infrastructure for metric transformation and export
 - Inconsistent metric schemas across different teams
-- Manual synchronization between SummaryRule execution and metrics export
+- Additional storage costs for intermediate table materialization
+- Complex multi-step pipelines that are difficult to maintain
 
 ## Solution Overview
 
-We propose implementing a feature that enables SummaryRule outputs to be automatically transformed and exported as OTLP metrics. This integration will provide a standardized, declarative way to create metrics pipelines from ADX data.
+We propose implementing a new `adxexporter` component that processes `MetricsExporter` CRDs to execute KQL queries and export results as metrics. This provides a streamlined, declarative way to create KQL-to-metrics pipelines with two complementary output modes:
+
+1. **Prometheus Scraping Mode** (Phase 1): Execute queries and expose results as Prometheus metrics on `/metrics` endpoint for Collector to scrape
+2. **Direct OTLP Push Mode** (Phase 2): Execute queries and push results directly to OTLP endpoints with backlog/retry capabilities
 
 ### Key Requirements
 
-1. **Generic Design**: Solution must work with any SummaryRule output, not tied to specific schemas
-2. **Standardized Transformation**: Define clear schema requirements for converting KQL results to OTLP metrics
-3. **Configurable Export**: Allow flexible configuration of export targets and cadence
-4. **Separation of Concerns**: Maintain clean boundaries between data aggregation and metrics export
+1. **Direct KQL Execution**: Execute KQL queries directly without requiring intermediate table storage
+2. **SummaryRule-like Behavior**: Share time management, scheduling, and criteria-based execution patterns
+3. **Criteria-Based Deployment**: Support cluster-label based filtering for secure, distributed execution
+4. **Resilient Operation**: Provide backlog and retry capabilities for reliable metric delivery
 
-## Design Approaches
+## Architecture Overview
 
-### Approach 1: Extend SummaryRule CRD
+The solution introduces a new `adxexporter` component that operates as a Kubernetes controller, watching `MetricsExporter` CRDs and executing their configured KQL queries on schedule.
 
-Add metrics export configuration directly to the existing `SummaryRuleSpec`:
+### Core Components
 
-```go
-type SummaryRuleSpec struct {
-    Database string            `json:"database"`
-    Table    string            `json:"table"`
-    Name     string            `json:"name"`
-    Body     string            `json:"body"`
-    Interval metav1.Duration   `json:"interval"`
-    
-    // New fields for metrics export
-    MetricsExport *MetricsExportConfig `json:"metricsExport,omitempty"`
-}
+1. **`adxexporter`** - New standalone component (`cmd/adxexporter`) that:
+   - Watches `MetricsExporter` CRDs via Kubernetes API
+   - Executes KQL queries against ADX on specified intervals
+   - Transforms results to metrics format
+   - Outputs metrics via Prometheus scraping or direct OTLP push
 
-type MetricsExportConfig struct {
-    Enabled    bool              `json:"enabled"`
-    Exporters  []string          `json:"exporters"`
-    Interval   metav1.Duration   `json:"interval,omitempty"`
-    Transform  TransformConfig   `json:"transform"`
-}
+2. **`MetricsExporter` CRD** - Kubernetes custom resource defining:
+   - KQL query to execute
+   - Transform configuration for metric conversion
+   - Execution criteria and scheduling
+   - Output mode configuration
+
+3. **Integration with Existing Components**:
+   - **Collector** discovers and scrapes `adxexporter` instances via pod annotations
+   - **Operator** manages `MetricsExporter` CRD lifecycle (optional integration)
+
+### Deployment Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Collector     │    │   adxexporter   │    │      ADX        │
+│                 │    │                 │    │   Clusters      │
+│ ┌─────────────┐ │    │ ┌─────────────┐ │    │                 │
+│ │Pod Discovery│◄├────┤ │/metrics     │ │    │                 │
+│ │& Scraping   │ │    │ │endpoint     │ │    │                 │
+│ └─────────────┘ │    │ └─────────────┘ │    │                 │
+│ ┌─────────────┐ │    │ ┌─────────────┐ │    │                 │
+│ │OTLP Export  │ │    │ │KQL Query    │◄├────┤                 │
+│ │Targets      │ │    │ │Execution    │ │    │                 │
+│ └─────────────┘ │    │ └─────────────┘ │    │                 │
+└─────────────────┘    │ ┌─────────────┐ │    └─────────────────┘
+                       │ │CRD Watch &  │ │
+       ┌───────────────┤ │Reconciliation│ │
+       │               │ └─────────────┘ │
+       │               └─────────────────┘
+       │
+       ▼
+┌─────────────────┐
+│  Kubernetes     │
+│   API Server    │
+│                 │
+│ MetricsExporter │
+│     CRDs        │
+└─────────────────┘
 ```
 
-**Pros:**
-- Single CRD to manage
-- Direct coupling ensures consistency
-- Simpler for basic use cases
+### Output Modes
 
-**Cons:**
-- Violates single responsibility principle
-- Limits reusability (can't export from multiple SummaryRules to same exporter)
-- Makes SummaryRule CRD more complex
-- Harder to extend with additional export targets
+#### Phase 1: Prometheus Scraping Mode
+- `adxexporter` exposes `/metrics` endpoint with OpenTelemetry metrics library
+- Metrics refreshed per `MetricsExporter.Interval`
+- Collector discovers via pod annotations: `adx-mon/scrape: "true"`
+- Simple, fast implementation leveraging existing Collector scraping infrastructure
 
-### Approach 2: New MetricsExporter CRD (Recommended)
+#### Phase 2: Direct OTLP Push Mode  
+- `adxexporter` pushes metrics directly to OTLP endpoints
+- Failed exports queued in CRD backlog for retry
+- Supports historical data backfill capabilities
+- More resilient but requires additional backlog management infrastructure
 
-Create a separate CRD that references SummaryRules and manages metrics export:
+## Design Approach
+
+### adxexporter Component
+
+The `adxexporter` is a new standalone Kubernetes component with its own binary at `cmd/adxexporter`. It functions as a Kubernetes controller that watches `MetricsExporter` CRDs and executes their KQL queries on schedule.
+
+#### Command Line Interface
+
+```bash
+adxexporter \
+  --cluster-labels="region=eastus,environment=production,team=platform" \
+  --otlp-endpoint="http://otel-collector:4317" \
+  --web.enable-lifecycle=true \
+  --web.listen-address=":8080" \
+  --web.telemetry-path="/metrics"
+```
+
+**Parameters:**
+
+- **`--cluster-labels`**: Comma-separated key=value pairs defining this instance's cluster identity. Used for criteria-based filtering of MetricsExporter CRDs. This follows the same pattern as the Ingestor component documented in [ADX-Mon Configuration](../config.md).
+
+- **`--otlp-endpoint`**: (Phase 2) OTLP endpoint URL for direct push mode. When specified, enables direct OTLP export with backlog capabilities.
+
+- **`--web.enable-lifecycle`**: (Phase 1) Boolean flag to enable the Prometheus metrics HTTP server. When enabled, exposes query results as Prometheus metrics on the specified address/path for Collector scraping. This follows Prometheus naming conventions.
+
+- **`--web.listen-address`**: Address and port for the Prometheus metrics server (default: ":8080")
+
+- **`--web.telemetry-path`**: HTTP path for metrics endpoint (default: "/metrics")
+
+#### Criteria-Based Execution
+
+Similar to the Ingestor component, `adxexporter` uses cluster labels to determine which `MetricsExporter` CRDs it should process. This enables:
+
+- **Security Boundaries**: Only process MetricsExporters appropriate for this cluster's data classification
+- **Geographic Distribution**: Deploy region-specific adxexporter instances
+- **Team Isolation**: Separate processing by team ownership
+- **Resource Optimization**: Distribute load across appropriate instances
+
+**Example Criteria Matching:**
+```yaml
+# MetricsExporter CRD
+spec:
+  criteria:
+    region: ["eastus", "westus"]
+    environment: ["production"]
+    
+# adxexporter instance
+--cluster-labels="region=eastus,environment=production,team=sre"
+# ✅ Matches: region=eastus AND environment=production
+```
+
+### MetricsExporter CRD
+
+The `MetricsExporter` CRD defines KQL queries and their transformation to metrics format. It shares core patterns with `SummaryRule` but targets metrics output instead of ADX table ingestion.
 
 ```go
 // MetricsExporterSpec defines the desired state of MetricsExporter
 type MetricsExporterSpec struct {
-    // SummaryRuleSelector defines which SummaryRules to export metrics from
-    // Uses label selectors to automatically discover SummaryRules based on labels,
-    // eliminating the need to manually maintain lists of rule names
-    SummaryRuleSelector *metav1.LabelSelector `json:"summaryRuleSelector"`
+    // Database is the name of the database to query
+    Database string `json:"database"`
     
-    // Exporters defines the OTLP exporters to send metrics to
-    Exporters []string `json:"exporters"`
+    // Body is the KQL query to execute
+    Body string `json:"body"`
     
-    // Interval defines how often to export metrics
+    // Interval defines how often to execute the query and refresh metrics
     Interval metav1.Duration `json:"interval"`
     
     // Transform defines how to convert query results to metrics
     Transform TransformConfig `json:"transform"`
+    
+    // Criteria for cluster-based execution selection (same pattern as SummaryRule)
+    Criteria map[string][]string `json:"criteria,omitempty"`
 }
-
-
 
 type TransformConfig struct {
     // MetricNameColumn specifies which column contains the metric name
-    MetricNameColumn string `json:"metricNameColumn"`
+    MetricNameColumn string `json:"metricNameColumn,omitempty"`
     
     // ValueColumn specifies which column contains the metric value  
     ValueColumn string `json:"valueColumn"`
@@ -106,55 +193,135 @@ type TransformConfig struct {
 }
 ```
 
-**Pros:**
-- Clean separation of concerns
-- **Dynamic Discovery**: Automatically includes new SummaryRules based on labels without manual configuration
-- **Scalable Management**: Teams can add SummaryRules with appropriate labels and have them automatically exported
-- Easier to extend with new export targets
-- Can aggregate metrics from multiple sources
-- Follows Kubernetes CRD design patterns
-- **Reduced Operational Overhead**: No need to update MetricsExporter when adding/removing SummaryRules
+### Key Design Principles
 
-**Cons:**
-- Additional CRD to manage
-- More complex initial setup
+1. **Standalone Operation**: `adxexporter` operates independently from existing ingestor/operator infrastructure, providing clear separation of concerns and deployment flexibility.
 
-## Recommended Solution: Approach 2
+2. **Dual Output Strategy**: 
+   - **Phase 1 (Prometheus)**: Fast implementation using existing Collector scraping capabilities
+   - **Phase 2 (Direct OTLP)**: Enhanced resilience with backlog and retry mechanisms
 
-We recommend **Approach 2** (New MetricsExporter CRD) for the following reasons:
+3. **Criteria-Based Filtering**: Leverages the same cluster-label approach as Ingestor for secure, distributed execution across different environments and teams.
 
-1. **Better Architecture**: Separates data aggregation concerns (SummaryRule) from metrics export concerns (MetricsExporter)
-2. **Dynamic Discovery**: Label selectors enable automatic inclusion of SummaryRules without manual maintenance
-3. **Flexibility**: One MetricsExporter can reference multiple SummaryRules through flexible label matching
-4. **Reusability**: Multiple MetricsExporters can reference the same SummaryRules with different label selections
-5. **Extensibility**: Easier to add new export targets and transformation options
-6. **Kubernetes Best Practices**: Follows single-responsibility principle and uses standard label selector patterns
-7. **Operational Efficiency**: Teams can independently manage SummaryRules and MetricsExporters through consistent labeling
+4. **SummaryRule Consistency**: Shares core behavioral patterns including time management, scheduling logic, and KQL query execution patterns.
+
+5. **Cloud-Native Integration**: Seamless discovery via Kubernetes pod annotations and integration with existing Collector infrastructure.
 
 ## Detailed Implementation
 
+### Phase 1: Prometheus Scraping Mode
+
+In the initial implementation, `adxexporter` exposes transformed KQL query results as Prometheus metrics on a `/metrics` endpoint.
+
+#### Metrics Exposure Workflow
+
+1. **CRD Discovery**: `adxexporter` watches Kubernetes API for `MetricsExporter` CRDs matching its cluster labels
+2. **Query Execution**: Execute KQL queries on specified intervals using `_startTime` and `_endTime` parameters
+3. **Metrics Transformation**: Convert query results to Prometheus metrics using OpenTelemetry metrics library
+4. **Metrics Registration**: Register/update metrics in the OpenTelemetry metrics registry
+5. **HTTP Exposure**: Serve metrics via HTTP endpoint for Collector scraping
+
+#### Collector Integration
+
+The existing Collector component discovers `adxexporter` instances via Kubernetes pod annotations:
+
+```yaml
+# adxexporter Deployment/Pod
+metadata:
+  annotations:
+    adx-mon/scrape: "true"
+    adx-mon/port: "8080"
+    adx-mon/path: "/metrics"
+```
+
+The Collector's pod discovery mechanism automatically detects these annotations and adds the `adxexporter` instances to its scraping targets.
+
+#### Limitations of Phase 1
+
+- **Point-in-Time Metrics**: Prometheus metrics represent current state; no historical backfill capability
+- **Scraping Dependency**: Relies on Collector's scraping schedule, not direct control over export timing
+- **No Retry Logic**: Failed queries result in stale metrics until next successful execution
+
+### Phase 2: Direct OTLP Push Mode
+
+In the enhanced implementation, `adxexporter` can push metrics directly to OTLP endpoints with full backlog and retry capabilities.
+
+#### Enhanced Workflow
+
+1. **CRD Discovery**: Same as Phase 1
+2. **Query Execution**: Same as Phase 1
+3. **OTLP Transformation**: Convert query results directly to OTLP metrics format
+4. **Direct Push**: Send metrics to configured OTLP endpoint
+5. **Backlog Management**: Queue failed exports in CRD status for retry
+6. **Historical Backfill**: Process backlogged time windows on successful reconnection
+
+#### Backlog Strategy
+
+Unlike Prometheus scraping, direct OTLP push enables sophisticated backlog management:
+
+```go
+type MetricsExporterStatus struct {
+    Conditions []metav1.Condition `json:"conditions,omitempty"`
+    
+    // LastSuccessfulExecution tracks the last successfully exported time window
+    LastSuccessfulExecution *metav1.Time `json:"lastSuccessfulExecution,omitempty"`
+    
+    // Backlog contains failed export attempts pending retry
+    Backlog []BacklogEntry `json:"backlog,omitempty"`
+}
+
+type BacklogEntry struct {
+    StartTime metav1.Time `json:"startTime"`
+    EndTime   metav1.Time `json:"endTime"`
+    Attempts  int         `json:"attempts"`
+    LastAttempt metav1.Time `json:"lastAttempt"`
+    Error     string      `json:"error,omitempty"`
+}
+```
+
+### Shared Infrastructure Patterns
+
+`adxexporter` leverages proven patterns from SummaryRule implementation while operating as an independent component:
+
+| Component | SummaryRule | adxexporter |
+|-----------|-------------|-------------|
+| **Time Management** | `NextExecutionWindow()`, interval-based scheduling | Same patterns, independent implementation |
+| **Criteria Matching** | Cluster label filtering | Same logic, different component |
+| **KQL Execution** | ADX query with time parameters | Same patterns for query execution |
+| **Status Tracking** | CRD conditions and backlog | Similar condition management |
+| **Backlog Handling** | Async operation queues | Export retry queues (Phase 2) |
+
+### Component Independence
+
+Unlike the original design that integrated with ingestor infrastructure, `adxexporter` operates independently:
+
+- **Separate Binary**: Own entrypoint at `cmd/adxexporter`
+- **Independent Deployment**: Deployed as separate Kubernetes workload
+- **Dedicated Configuration**: Own command-line parameters and configuration
+- **Isolated Dependencies**: Direct ADX connectivity without shared connection pools
+
 ### Standard Schema Requirements
 
-For SummaryRule outputs to be exportable as metrics, the result table must contain columns that can be mapped to the OTLP metrics format. The transformation is highly flexible and supports both simple and complex schemas.
+For `MetricsExporter` KQL queries to produce valid metrics, the result table must contain columns that can be mapped to the metrics format. The transformation is highly flexible and supports both simple and complex schemas.
 
-#### Core OTLP Mapping
+#### Core Metrics Mapping
 
-The MetricsExporter transforms Kusto query results to OTLP metrics using this mapping:
+The `adxexporter` transforms KQL query results to metrics using this mapping:
 
-| Kusto Column | OTLP Field | Purpose |
-|--------------|------------|---------|
-| Configured via `valueColumn` | `NumberDataPoint.Value` | The numeric metric value |
-| Configured via `timestampColumn` | `NumberDataPoint.TimeUnixNano` | Metric timestamp |
-| Configured via `metricNameColumn` | `Metric.Name` | Metric name identifier |
-| Any columns in `labelColumns` | `NumberDataPoint.Attributes[]` | Dimensional labels/metadata |
+| KQL Column | Prometheus/OTLP Field | Purpose |
+|------------|----------------------|---------|
+| Configured via `valueColumn` | Metric value | The numeric metric value |
+| Configured via `timestampColumn` | Metric timestamp | Temporal alignment (OTLP mode) |
+| Configured via `metricNameColumn` | Metric name | Metric name identifier |
+| Any columns in `labelColumns` | Metric labels/attributes | Dimensional metadata |
 
 #### Required Columns
 - **Value Column**: Must contain numeric data (real/double/int)
-- **Timestamp Column**: Must contain datetime data
+- **Timestamp Column**: Must contain datetime data (used in OTLP mode for temporal accuracy)
 
 #### Optional Columns
 - **Metric Name Column**: If not specified, uses `Transform.DefaultMetricName`
-- **Label Columns**: Any additional columns become OTLP attributes
+- **Label Columns**: Any additional columns become metric labels/attributes
 
 #### Simple Example - Generic Use Case
 
@@ -178,7 +345,18 @@ transform:
   labelColumns: ["ServiceName", "Region"]
 ```
 
-**Resulting OTLP Metric:**
+**Resulting Prometheus Metric (Phase 1):**
+```
+# HELP service_response_time_avg Average response time by service and region
+# TYPE service_response_time_avg gauge
+service_response_time_avg{ServiceName="api-gateway",Region="us-east-1"} 245.7
+
+# HELP service_response_time_avg Average response time by service and region  
+# TYPE service_response_time_avg gauge
+service_response_time_avg{ServiceName="user-service",Region="us-west-2"} 189.3
+```
+
+**Resulting OTLP Metric (Phase 2):**
 ```json
 {
   "name": "service_response_time_avg",
@@ -222,7 +400,14 @@ transform:
   labelColumns: ["LocationId", "CustomerResourceId", "Numerator", "Denominator", "EndTimeUTC"]
 ```
 
-**Resulting OTLP Metric:**
+**Resulting Prometheus Metrics (Phase 1):**
+```
+# HELP success_rate_analytics Success rate analytics by location and customer
+# TYPE success_rate_analytics gauge
+success_rate_analytics{LocationId="datacenter-01",CustomerResourceId="customer-12345",Numerator="1974",Denominator="2000",EndTimeUTC="2022-01-01T10:05:00Z"} 0.987
+```
+
+**Resulting OTLP Metric (Phase 2):**
 ```json
 {
   "name": "success_rate_analytics",
@@ -242,128 +427,11 @@ transform:
 }
 ```
 
-This approach allows any Kusto query result to be transformed into OTLP metrics by:
+This approach allows any KQL query result to be transformed into metrics by:
 1. **Selecting which column contains the primary metric value**
-2. **Choosing the timestamp column for temporal alignment**  
-3. **Mapping all other relevant columns as dimensional attributes**
+2. **Choosing the timestamp column for temporal alignment (OTLP mode)**  
+3. **Mapping all other relevant columns as dimensional labels**
 4. **Optionally specifying a dynamic or static metric name**
-
-#### Complete OTLP Output Example
-
-Building on the **customer-analytics** example above, here's what the complete OTLP metric output would look like when exported by the MetricsExporter:
-
-**Sample KQL Result Row:**
-```
-Value: 0.987
-LocationId: "datacenter-west"
-CustomerResourceId: "customer-abc123"
-ServiceTier: "Premium"
-Numerator: 2456
-Denominator: 2489
-StartTimeUTC: 2025-06-25T10:00:00Z
-EndTimeUTC: 2025-06-25T10:15:00Z
-AvgLatency: 145.3
-metric_name: "customer_success_rate_premium"
-```
-
-**Complete OTLP Metrics Payload:**
-```json
-{
-  "resourceMetrics": [{
-    "resource": {
-      "attributes": [
-        {
-          "key": "service.name",
-          "value": {
-            "stringValue": "adx-mon-metrics-exporter"
-          }
-        },
-        {
-          "key": "service.version", 
-          "value": {
-            "stringValue": "1.0.0"
-          }
-        }
-      ]
-    },
-    "scopeMetrics": [{
-      "scope": {
-        "name": "adx-mon.azure.com/metrics-exporter",
-        "version": "v1"
-      },
-      "metrics": [{
-        "name": "customer_success_rate_premium",
-        "description": "Customer success rate analytics exported from ADX",
-        "unit": "1",
-        "gauge": {
-          "dataPoints": [{
-            "attributes": [
-              {
-                "key": "LocationId",
-                "value": {
-                  "stringValue": "datacenter-west"
-                }
-              },
-              {
-                "key": "CustomerResourceId", 
-                "value": {
-                  "stringValue": "customer-abc123"
-                }
-              },
-              {
-                "key": "ServiceTier",
-                "value": {
-                  "stringValue": "Premium"
-                }
-              },
-              {
-                "key": "Numerator",
-                "value": {
-                  "stringValue": "2456"
-                }
-              },
-              {
-                "key": "Denominator", 
-                "value": {
-                  "stringValue": "2489"
-                }
-              },
-              {
-                "key": "EndTimeUTC",
-                "value": {
-                  "stringValue": "2025-06-25T10:15:00Z"
-                }
-              },
-              {
-                "key": "AvgLatency",
-                "value": {
-                  "stringValue": "145.3"
-                }
-              }
-            ],
-            "timeUnixNano": "1719403200000000000",
-            "asDouble": 0.987
-          }]
-        }
-      }]
-    }]
-  }]
-}
-```
-
-**Key Transformation Points:**
-
-1. **Dynamic Metric Naming**: The `metric_name` column value `"customer_success_rate_premium"` becomes the OTLP metric name, enabling flexible naming strategies per service tier
-2. **Primary Value Mapping**: The `Value` column (0.987) maps directly to `asDouble` in the OTLP data point, representing the 98.7% success rate
-3. **Timestamp Conversion**: `StartTimeUTC` is converted from ISO 8601 format to Unix nanoseconds (`timeUnixNano`)
-4. **Rich Attribute Preservation**: All `labelColumns` become OTLP attributes, including:
-   - **Business Dimensions**: `LocationId`, `CustomerResourceId`, `ServiceTier` for filtering and grouping
-   - **Supporting Metrics**: `Numerator`, `Denominator` for rate calculations and debugging
-   - **Auxiliary Data**: `AvgLatency`, `EndTimeUTC` for additional context and correlation
-5. **Type Flexibility**: Numeric values are converted to strings in attributes, while the primary metric value maintains its numeric type
-6. **OTLP Standards Compliance**: Full resource and scope metadata for proper observability platform integration
-
-This demonstrates how complex ADX analytics with rich dimensional data translates seamlessly into standardized OTLP metrics suitable for any observability platform (Prometheus, DataDog, Grafana, etc.).
 
 ### MetricsExporter CRD Example
 
@@ -371,82 +439,14 @@ This demonstrates how complex ADX analytics with rich dimensional data translate
 apiVersion: adx-mon.azure.com/v1
 kind: MetricsExporter
 metadata:
-  name: service-metrics-exporter
+  name: service-response-times
   namespace: monitoring
 spec:
-  summaryRuleSelector:
-    matchLabels:
-      metrics-export: "enabled"
-      team: "platform"
-    matchExpressions:
-      - key: "metric-type"
-        operator: In
-        values: ["performance", "availability"]
-      - key: "environment"
-        operator: NotIn
-        values: ["development"]
-  exporters:
-    - prometheus-exporter
-    - datadog-exporter
-  interval: 5m
-  transform:
-    metricNameColumn: "metric_name"
-    valueColumn: "metric_value"
-    timestampColumn: "timestamp"
-    labelColumns: ["ServiceName", "Region", "Environment"]
-    defaultMetricName: "adx_exported_metric"
-```
-
-This example demonstrates label selector patterns:
-1. **Simple Labels**: Match SummaryRules with `metrics-export: enabled` and `team: platform` labels
-2. **Expression Matching**: More complex logic to include rules where `metric-type` is "performance" or "availability" but exclude "development" environment
-
-### Integration with Existing Components
-
-The MetricsExporter will integrate with existing ADX-Mon components:
-
-1. **SummaryRuleTask** ([`ingestor/adx/tasks.go`](https://github.com/Azure/adx-mon/blob/main/ingestor/adx/tasks.go)): Continue executing SummaryRules as normal
-2. **OTLP Exporters** ([`collector/export/metric_otlp.go`](https://github.com/Azure/adx-mon/blob/main/collector/export/metric_otlp.go)): Reuse existing exporter infrastructure
-3. **New MetricsExporterTask**: Query SummaryRule output tables, transform to OTLP metrics, and export
-
-### Execution Flow
-
-1. **SummaryRule Execution**: SummaryRuleTask executes KQL queries on schedule, stores results in tables
-2. **Label-Based Discovery**: MetricsExporter controller discovers SummaryRules matching the configured label selector
-3. **Metrics Export Trigger**: MetricsExporterTask runs on its own schedule (independent of SummaryRule cadence)
-4. **Data Retrieval**: Query the discovered SummaryRule output tables for data since last export
-5. **Transformation**: Convert query results to OTLP metrics according to Transform configuration
-6. **Export**: Send metrics to configured OTLP exporters
-
-### Validation and Error Handling
-
-The MetricsExporter controller will validate:
-- Label selector matches at least one existing SummaryRule in the namespace
-- Matched SummaryRules are in Ready state
-- SummaryRule output tables contain required columns (metric_value, timestamp)
-- Specified label columns exist in the SummaryRule output tables
-- OTLP exporters are configured and available
-
-## Use Cases
-
-### Use Case 1: Service Performance Metrics
-
-```yaml
-# SummaryRule for response time aggregation with labels for metrics export
-apiVersion: adx-mon.azure.com/v1
-kind: SummaryRule
-metadata:
-  name: service-response-times
-  labels:
-    metrics-export: "enabled"
-    team: "platform"
-    metric-type: "performance"
-    environment: "production"
-spec:
   database: TelemetryDB
-  name: ServiceResponseTimes
-  table: ServiceResponseTimeSummary
   interval: 5m
+  criteria:
+    region: ["eastus", "westus"]
+    environment: ["production"]
   body: |
     ServiceTelemetry
     | where Timestamp between (_startTime .. _endTime)
@@ -455,21 +455,6 @@ spec:
         timestamp = bin(Timestamp, 1m)
         by ServiceName, Environment
     | extend metric_name = "service_response_time_avg"
-
----
-# MetricsExporter that automatically discovers SummaryRules by labels
-apiVersion: adx-mon.azure.com/v1
-kind: MetricsExporter
-metadata:
-  name: service-metrics-to-prometheus
-spec:
-  summaryRuleSelector:
-    matchLabels:
-      metrics-export: "enabled"
-      team: "platform"
-      metric-type: "performance"
-  exporters: ["prometheus"]
-  interval: 1m
   transform:
     metricNameColumn: "metric_name"
     valueColumn: "metric_value"
@@ -477,31 +462,167 @@ spec:
     labelColumns: ["ServiceName", "Environment"]
 ```
 
-**Key Benefits of Label Selector Approach:**
-- **Automatic Discovery**: When new SummaryRules are created with `metrics-export: enabled` and `team: platform` labels, they are automatically included
-- **Team Ownership**: Teams can independently manage their SummaryRules by applying consistent labels
-- **Environment Control**: Easy to include/exclude rules based on environment labels
-- **No Manual Maintenance**: MetricsExporter configurations don't need updates when SummaryRules are added/removed
+This example demonstrates:
+1. **Direct KQL Execution**: Query executes directly without intermediate table storage
+2. **Criteria-Based Selection**: Only processed by `adxexporter` instances with matching cluster labels
+3. **Flexible Output**: Works with both Prometheus scraping (Phase 1) and OTLP push (Phase 2) modes
+4. **Time Window Parameters**: KQL query uses `_startTime` and `_endTime` parameters (same as SummaryRule)
+
+### adxexporter Deployment Example
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adxexporter
+  namespace: adx-mon-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: adxexporter
+  template:
+    metadata:
+      labels:
+        app: adxexporter
+      annotations:
+        # Enable Collector discovery and scraping
+        adx-mon/scrape: "true"
+        adx-mon/port: "8080"
+        adx-mon/path: "/metrics"
+    spec:
+      containers:
+      - name: adxexporter
+        image: adx-mon/adxexporter:latest
+        args:
+        - --cluster-labels=region=eastus,environment=production,team=platform
+        - --web.enable-lifecycle=true
+        - --web.listen-address=:8080
+        - --web.telemetry-path=/metrics
+        ports:
+        - containerPort: 8080
+          name: metrics
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+```
+
+### Integration with Existing Components
+
+The `adxexporter` component integrates with existing ADX-Mon infrastructure while maintaining independence:
+
+1. **Collector Integration**: 
+   - Collector automatically discovers `adxexporter` instances via pod annotations
+   - Scrapes `/metrics` endpoint and forwards to configured destinations
+   - No additional Collector configuration required
+
+2. **Kubernetes API Integration**:
+   - `adxexporter` watches `MetricsExporter` CRDs via standard Kubernetes client-go
+   - Leverages existing RBAC and authentication mechanisms
+   - Operates within standard Kubernetes security boundaries
+
+3. **ADX Connectivity**:
+   - Direct ADX connection using same authentication patterns as other components
+   - Independent connection management and pooling
+   - Reuses existing ADX client libraries and connection patterns
+
+### Execution Flow
+
+#### Phase 1: Prometheus Scraping Mode
+
+1. **CRD Discovery**: `adxexporter` discovers `MetricsExporter` CRDs matching its cluster labels
+2. **Scheduling**: Determines execution windows based on `Interval` and last execution time
+3. **Query Execution**: Execute KQL query with `_startTime` and `_endTime` parameters
+4. **Metrics Transformation**: Convert query results to Prometheus metrics format
+5. **Registry Update**: Update OpenTelemetry metrics registry with new values
+6. **HTTP Exposure**: Serve updated metrics on `/metrics` endpoint
+7. **Collector Scraping**: Collector discovers and scrapes metrics endpoint
+8. **Status Update**: Update CRD status with execution results
+
+#### Phase 2: Direct OTLP Push Mode
+
+1. **CRD Discovery**: Same as Phase 1
+2. **Scheduling**: Same as Phase 1, plus backlog processing
+3. **Query Execution**: Same as Phase 1
+4. **OTLP Transformation**: Convert query results directly to OTLP format
+5. **Direct Push**: Send metrics to configured OTLP endpoint
+6. **Backlog Management**: Queue failed exports for retry
+7. **Status Update**: Update CRD status with execution and backlog state
+
+### Validation and Error Handling
+
+The `adxexporter` controller validates:
+- KQL query syntax and database accessibility
+- Transform configuration matches query result schema
+- Cluster label criteria for CRD processing eligibility
+- Required columns (value, timestamp) are present in query results
+- OTLP endpoint connectivity (Phase 2)
+
+## Use Cases
+
+### Use Case 1: Service Performance Metrics
+
+```yaml
+# MetricsExporter for service response time monitoring
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: service-response-times
+  namespace: monitoring
+spec:
+  database: TelemetryDB
+  interval: 1m
+  criteria:
+    environment: ["production"]
+    team: ["platform"]
+  body: |
+    ServiceTelemetry
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize 
+        metric_value = avg(ResponseTimeMs),
+        timestamp = bin(Timestamp, 1m)
+        by ServiceName, Environment
+    | extend metric_name = "service_response_time_avg"
+  transform:
+    metricNameColumn: "metric_name"
+    valueColumn: "metric_value"
+    timestampColumn: "timestamp"
+    labelColumns: ["ServiceName", "Environment"]
+```
+
+**Deployment Configuration:**
+```bash
+# adxexporter instance matching criteria
+adxexporter \
+  --cluster-labels="environment=production,team=platform,region=eastus" \
+  --web.enable-lifecycle=true
+```
+
+**Key Benefits:**
+- **Direct Execution**: No intermediate table storage required
+- **Real-time Metrics**: Fresh data exposed every minute via `/metrics` endpoint
+- **Environment Isolation**: Only processed by `adxexporter` instances with matching criteria
+- **Standard Integration**: Collector automatically discovers and scrapes metrics
 
 ### Use Case 2: Advanced Analytics with Rich Metadata
 
 ```yaml
-# SummaryRule for complex analytics with labels for targeted export
+# MetricsExporter for complex customer analytics
 apiVersion: adx-mon.azure.com/v1
-kind: SummaryRule
+kind: MetricsExporter
 metadata:
   name: customer-analytics
-  labels:
-    metrics-export: "enabled"
-    team: "analytics"
-    metric-type: "business"
-    data-sensitivity: "customer"
-    environment: "production"
+  namespace: analytics
 spec:
   database: AnalyticsDB
-  name: CustomerPerformanceAnalytics
-  table: CustomerAnalyticsSummary
   interval: 15m
+  criteria:
+    team: ["analytics"]
+    data-classification: ["customer-approved"]
   body: |
     CustomerEvents
     | where EventTime between (_startTime .. _endTime)
@@ -514,25 +635,6 @@ spec:
         AvgLatency = avg(LatencyMs)
         by LocationId, CustomerResourceId, ServiceTier
     | extend metric_name = strcat("customer_success_rate_", tolower(ServiceTier))
-
----
-# MetricsExporter that targets analytics team's business metrics
-apiVersion: adx-mon.azure.com/v1
-kind: MetricsExporter
-metadata:
-  name: customer-analytics-exporter
-spec:
-  summaryRuleSelector:
-    matchLabels:
-      metrics-export: "enabled"
-      team: "analytics"
-      metric-type: "business"
-    matchExpressions:
-      - key: "data-sensitivity" 
-        operator: In
-        values: ["customer", "public"]
-  exporters: ["datadog", "custom-analytics-endpoint"]
-  interval: 5m
   transform:
     metricNameColumn: "metric_name"
     valueColumn: "Value"
@@ -540,33 +642,44 @@ spec:
     labelColumns: ["LocationId", "CustomerResourceId", "ServiceTier", "Numerator", "Denominator", "EndTimeUTC", "AvgLatency"]
 ```
 
-**Resulting OTLP metrics will contain:**
-- **Primary value**: Success rate percentage
-- **Rich attributes**: Location, customer, service tier, raw counts, time ranges, and auxiliary metrics
-- **Flexible naming**: Dynamic metric names based on service tier
+**Deployment Configuration:**
+```bash
+# adxexporter instance for analytics team
+adxexporter \
+  --cluster-labels="team=analytics,data-classification=customer-approved,region=westus" \
+  --web.enable-lifecycle=true \
+  --otlp-endpoint="http://analytics-otel-collector:4317"  # Phase 2
+```
 
-### Use Case 3: Multi-Source Dashboard Metrics
+**Resulting Metrics:**
+- **Primary value**: Success rate percentage  
+- **Rich labels**: Location, customer, service tier, raw counts, time ranges, and auxiliary metrics
+- **Flexible naming**: Dynamic metric names based on service tier
+- **Data Governance**: Only processed by appropriately classified `adxexporter` instances
+
+### Use Case 3: Multi-Region Infrastructure Monitoring
 
 ```yaml
-# Export from multiple SummaryRules discovered by infrastructure team labels
+# MetricsExporter for infrastructure metrics across regions
 apiVersion: adx-mon.azure.com/v1
 kind: MetricsExporter
 metadata:
-  name: dashboard-metrics
+  name: infrastructure-monitoring
+  namespace: sre
 spec:
-  summaryRuleSelector:
-    matchLabels:
-      metrics-export: "enabled"
-      team: "infrastructure"
-    matchExpressions:
-      - key: "environment"
-        operator: In
-        values: ["production", "staging"]
-      - key: "metric-type"
-        operator: In
-        values: ["system", "performance"]
-  exporters: ["datadog", "grafana-cloud"]
+  database: InfrastructureDB
   interval: 30s
+  criteria:
+    role: ["infrastructure"]
+    region: ["eastus", "westus", "europe"]
+  body: |
+    SystemMetrics
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize 
+        metric_value = avg(CpuUtilization),
+        timestamp = bin(Timestamp, 30s)
+        by NodeName, ClusterName, Region
+    | extend metric_name = "node_cpu_utilization"
   transform:
     metricNameColumn: "metric_name"
     valueColumn: "metric_value"
@@ -574,31 +687,39 @@ spec:
     labelColumns: ["NodeName", "ClusterName", "Region"]
 ```
 
-**Advanced Label Selector Benefits:**
-- **Team Boundaries**: Infrastructure team manages their SummaryRules independently
-- **Unified Selection**: Single label selector can match multiple SummaryRules across different databases and tables
-- **Environment Filtering**: Easy production vs staging separation
-- **Metric Type Grouping**: System and performance metrics managed together
+**Multi-Region Deployment:**
+```bash
+# East US adxexporter
+adxexporter --cluster-labels="role=infrastructure,region=eastus" --web.enable-lifecycle=true
 
-### Use Case 4: Cross-Cluster Data Aggregation
+# West US adxexporter  
+adxexporter --cluster-labels="role=infrastructure,region=westus" --web.enable-lifecycle=true
+
+# Europe adxexporter
+adxexporter --cluster-labels="role=infrastructure,region=europe" --web.enable-lifecycle=true
+```
+
+**Key Benefits:**
+- **High-Frequency Monitoring**: 30-second metric refresh intervals
+- **Geographic Distribution**: Each region processes the same MetricsExporter with regional data
+- **Centralized Collection**: All regional `adxexporter` instances scraped by their respective Collectors
+- **SRE Team Focus**: Clear ownership through criteria-based filtering
+
+### Use Case 4: Cross-Cluster Error Rate Monitoring with Direct Push
 
 ```yaml
-# SummaryRule that imports and aggregates data from multiple clusters
+# MetricsExporter for global error rate aggregation
 apiVersion: adx-mon.azure.com/v1
-kind: SummaryRule
+kind: MetricsExporter
 metadata:
   name: global-error-rates
-  labels:
-    metrics-export: "enabled"
-    team: "sre"
-    scope: "global"
-    metric-type: "reliability"
-    priority: "high"
+  namespace: sre
 spec:
   database: GlobalMetrics
-  name: GlobalErrorRates
-  table: GlobalErrorRateSummary
-  interval: 10m
+  interval: 2m
+  criteria:
+    scope: ["global"]
+    priority: ["high", "critical"]
   body: |
     union
       cluster('eastus-cluster').TelemetryDB.ErrorEvents,
@@ -607,29 +728,10 @@ spec:
     | where Timestamp between (_startTime .. _endTime)
     | summarize 
         metric_value = count() * 1.0,
-        timestamp = bin(Timestamp, 5m),
+        timestamp = bin(Timestamp, 1m),
         error_rate = count() * 100.0 / countif(isnotempty(SuccessEvent))
         by Region = tostring(split(ClusterName, '-')[0]), ServiceName
     | extend metric_name = "global_error_count"
-
----
-# Export global metrics to central monitoring using SRE team labels
-apiVersion: adx-mon.azure.com/v1
-kind: MetricsExporter
-metadata:
-  name: global-metrics-exporter
-spec:
-  summaryRuleSelector:
-    matchLabels:
-      metrics-export: "enabled"
-      team: "sre"
-      scope: "global"
-    matchExpressions:
-      - key: "priority"
-        operator: In
-        values: ["high", "critical"]
-  exporters: ["central-prometheus"]
-  interval: 2m
   transform:
     metricNameColumn: "metric_name"
     valueColumn: "metric_value"
@@ -637,103 +739,125 @@ spec:
     labelColumns: ["Region", "ServiceName", "error_rate"]
 ```
 
+**Phase 2 Deployment with Direct Push:**
+```bash
+# Global monitoring adxexporter with OTLP push
+adxexporter \
+  --cluster-labels="scope=global,priority=high" \
+  --otlp-endpoint="http://central-prometheus-gateway:4317" \
+  --web.enable-lifecycle=false  # Disable scraping, use direct push only
+```
+
 **Global Monitoring Benefits:**
-- **SRE Team Ownership**: Clear ownership through team labels
-- **Priority-Based Selection**: Only export high/critical priority metrics
-- **Scope-Based Grouping**: Distinguish global vs regional metrics
-- **Automatic Inclusion**: New global SummaryRules are automatically discovered
+- **Cross-Cluster Aggregation**: Single query across multiple ADX clusters
+- **Priority-Based Processing**: Only runs on high/critical priority `adxexporter` instances  
+- **Direct Push Reliability**: OTLP endpoint receives metrics with backlog/retry capabilities
+- **Rich Context**: Includes both raw counts and calculated error rates in labels
 
-## Label Selector Strategy and Best Practices
+## Configuration Strategy and Best Practices
 
-### Recommended Labeling Conventions
+### adxexporter Configuration
 
-To maximize the benefits of label-based discovery, teams should adopt consistent labeling conventions for SummaryRules:
+The `adxexporter` component provides flexible configuration for different deployment scenarios:
 
-#### Core Labels
-- **`metrics-export`**: Set to `"enabled"` to indicate the SummaryRule should be considered for metrics export
-- **`team`**: Identifies the owning team (e.g., `"platform"`, `"sre"`, `"analytics"`)
-- **`environment`**: Environment classification (e.g., `"production"`, `"staging"`, `"development"`)
-
-#### Classification Labels  
-- **`metric-type`**: Type of metrics produced (e.g., `"performance"`, `"business"`, `"security"`, `"reliability"`)
-- **`priority`**: Importance level (e.g., `"critical"`, `"high"`, `"medium"`, `"low"`)
-- **`scope`**: Geographic or logical scope (e.g., `"global"`, `"regional"`, `"cluster"`)
-
-#### Functional Labels
-- **`data-sensitivity`**: Data classification (e.g., `"public"`, `"internal"`, `"customer"`, `"confidential"`)
-- **`resource-type`**: Resource being monitored (e.g., `"cpu"`, `"memory"`, `"disk"`, `"network"`)
-- **`service`**: Service or component name (e.g., `"api-gateway"`, `"database"`, `"cache"`)
-
-### Label Selector Patterns
-
-#### Pattern 1: Team-Based Export
-```yaml
-summaryRuleSelector:
-  matchLabels:
-    metrics-export: "enabled"
-    team: "platform"
-    environment: "production"
+#### Phase 1: Prometheus Scraping Mode
+```bash
+adxexporter \
+  --cluster-labels="team=platform,environment=production,region=eastus" \
+  --web.enable-lifecycle=true \
+  --web.listen-address=":8080" \
+  --web.telemetry-path="/metrics"
 ```
-**Use Case**: Platform team wants to export all their production metrics
 
-#### Pattern 2: Multi-Team Collaboration
-```yaml
-summaryRuleSelector:
-  matchExpressions:
-    - key: "metrics-export"
-      operator: In
-      values: ["enabled"]
-    - key: "team"
-      operator: In
-      values: ["platform", "sre", "infrastructure"]
-    - key: "priority"
-      operator: In
-      values: ["high", "critical"]
+#### Phase 2: Direct OTLP Push Mode  
+```bash
+adxexporter \
+  --cluster-labels="team=analytics,data-classification=approved" \
+  --otlp-endpoint="http://otel-collector:4317" \
+  --web.enable-lifecycle=false
 ```
-**Use Case**: Cross-team dashboard showing high-priority metrics from multiple teams
 
-#### Pattern 3: Environment and Type Filtering
-```yaml
-summaryRuleSelector:
-  matchLabels:
-    metrics-export: "enabled"
-    metric-type: "performance"
-  matchExpressions:
-    - key: "environment"
-      operator: NotIn
-      values: ["development", "testing"]
+#### Hybrid Mode (Both Scraping and Push)
+```bash
+adxexporter \
+  --cluster-labels="team=sre,priority=critical" \
+  --web.enable-lifecycle=true \
+  --web.listen-address=":8080" \
+  --otlp-endpoint="http://central-monitoring:4317"
 ```
-**Use Case**: Performance metrics from all non-dev environments
 
-#### Pattern 4: Data Sensitivity Controls
+### Criteria-Based Deployment Strategy
+
+Use the `criteria` field in MetricsExporter CRDs to control which `adxexporter` instances process them. This follows the same pattern as documented in [ADX-Mon Ingestor Configuration](../config.md).
+
+#### Example: Environment-Based Processing
 ```yaml
-summaryRuleSelector:
-  matchLabels:
-    metrics-export: "enabled"
-    team: "analytics"
-  matchExpressions:
-    - key: "data-sensitivity"
-      operator: In
-      values: ["public", "internal"]
-    - key: "environment"
-      operator: In
-      values: ["production"]
+spec:
+  criteria:
+    environment: ["production"]
 ```
-**Use Case**: Analytics team exporting only non-sensitive production data
+**adxexporter Configuration:**
+```bash
+--cluster-labels="environment=production,region=eastus"
+```
+**Result**: Only `adxexporter` instances with `environment=production` cluster labels process this MetricsExporter
 
-### Benefits of Consistent Labeling
+#### Example: Team and Region-Based Processing  
+```yaml
+spec:
+  criteria:
+    team: ["analytics", "data-science"]
+    region: ["eastus", "westus"]
+```
+**adxexporter Configuration:**
+```bash
+--cluster-labels="team=analytics,region=eastus,data-classification=approved"
+```
+**Result**: Processes MetricsExporter because team=analytics AND region=eastus both match
 
-1. **Autonomous Team Management**: Teams can add/remove SummaryRules without coordinating MetricsExporter changes
-2. **Policy Enforcement**: Use labels to enforce data governance and access controls
-3. **Organizational Alignment**: Labels reflect organizational structure and responsibilities
-4. **Operational Flexibility**: Easy to create different export configurations for different purposes
-5. **Scalability**: New teams and services can adopt the labeling convention without central coordination
+#### Example: Data Classification Controls
+```yaml
+spec:
+  criteria:
+    data-classification: ["public", "internal"]
+    priority: ["high"]
+```
+**adxexporter Configuration:**
+```bash
+--cluster-labels="data-classification=internal,priority=high,team=platform"
+```
+**Result**: Processes MetricsExporter because data-classification=internal AND priority=high both match
+
+### Benefits of Criteria-Based Architecture
+
+1. **Security Boundaries**: Control data access based on `adxexporter` deployment classification
+2. **Performance Isolation**: Deploy separate `adxexporter` instances for high-frequency vs. low-frequency metrics
+3. **Geographic Distribution**: Regional `adxexporter` instances process region-appropriate MetricsExporters
+4. **Team Autonomy**: Teams deploy their own `adxexporter` instances with appropriate cluster labels
+5. **Resource Optimization**: Distribute MetricsExporter processing load across appropriate instances
+
+### Collector Integration
+
+The existing Collector component automatically discovers `adxexporter` instances through Kubernetes pod annotations:
+
+```yaml
+# Pod annotations for Collector discovery
+metadata:
+  annotations:
+    adx-mon/scrape: "true"        # Enable scraping
+    adx-mon/port: "8080"          # Metrics port
+    adx-mon/path: "/metrics"      # Metrics path
+```
+
+No additional Collector configuration is required - discovery and scraping happen automatically.
 
 ## Implementation Roadmap
 
-This section provides a methodical breakdown of implementing the Kusto-to-Metrics feature across multiple PRs, each focused on a specific deliverable to ensure manageable code reviews and incremental progress.
+This section provides a methodical breakdown of implementing the `adxexporter` component and `MetricsExporter` CRD across multiple PRs, with Phase 1 focusing on Prometheus scraping and Phase 2 adding direct OTLP push capabilities.
 
-### 1. Foundation: MetricsExporter CRD Definition
+### Phase 1: Prometheus Scraping Implementation
+
+#### 1. Foundation: MetricsExporter CRD Definition
 **Goal**: Establish the core data structures and API types
 - **Deliverables**:
   - Create `api/v1/metricsexporter_types.go` with complete CRD spec
@@ -744,153 +868,180 @@ This section provides a methodical breakdown of implementing the Kusto-to-Metric
 - **Testing**: Unit tests for struct validation and JSON marshaling/unmarshaling
 - **Acceptance Criteria**: CRD can be applied to cluster and kubectl can describe the schema
 
-### 2. Controller Scaffolding and Basic Reconciliation
-**Goal**: Create the MetricsExporter controller infrastructure
+#### 2. adxexporter Component Scaffolding
+**Goal**: Create the standalone `adxexporter` component infrastructure
 - **Deliverables**:
-  - Generate controller boilerplate in `operator/metricsexporter.go`
-  - Implement basic reconciliation loop with status updates
-  - Add controller registration to operator main function
-  - Implement label selector validation and SummaryRule discovery
-  - Add RBAC permissions for MetricsExporter and SummaryRule access
-- **Testing**: Integration tests for controller registration and basic reconciliation
-- **Acceptance Criteria**: Controller starts successfully and can discover SummaryRules by labels
+  - Create `cmd/adxexporter/main.go` with command-line argument parsing
+  - Implement cluster-labels parsing and criteria matching logic
+  - Add Kubernetes client-go setup for CRD watching
+  - Create basic controller framework for MetricsExporter reconciliation
+  - Add graceful shutdown and signal handling
+- **Testing**: Integration tests for component startup and CRD discovery
+- **Acceptance Criteria**: `adxexporter` starts successfully and can discover MetricsExporter CRDs
 
-### 3. Transform Engine: KQL to OTLP Conversion
-**Goal**: Implement the core transformation logic
+#### 3. KQL Query Execution Engine
+**Goal**: Implement KQL query execution with time window management
 - **Deliverables**:
-  - Create `transform/kusto_to_otlp.go` with transformation engine
-  - Implement column mapping (value, timestamp, metric name, labels)
-  - Add data type validation and conversion (numeric values, datetime parsing)
-  - Handle missing columns and default values
-  - Add comprehensive error handling for malformed data
+  - Create ADX client connection management in `adxexporter`
+  - Implement time window calculation logic (adapted from SummaryRule patterns)
+  - Add KQL query execution with `_startTime`/`_endTime` parameter injection
+  - Implement scheduling logic based on `Interval` and last execution tracking
+  - Add comprehensive error handling for query failures
+- **Testing**: Unit tests with mock ADX responses and integration tests with real ADX
+- **Acceptance Criteria**: Can execute KQL queries on schedule with proper time window management
+
+#### 4. Transform Engine: KQL to Prometheus Metrics
+**Goal**: Transform KQL query results to Prometheus metrics format
+- **Deliverables**:
+  - Create `transform/kusto_to_prometheus.go` with transformation engine
+  - Implement column mapping (value, metric name, labels) for Prometheus format
+  - Add data type validation and conversion (numeric values, string labels)
+  - Handle missing columns and default metric names
+  - Integrate with OpenTelemetry metrics library for Prometheus exposition
 - **Testing**: Extensive unit tests with various KQL result schemas and edge cases
-- **Acceptance Criteria**: Transformer can convert any valid KQL result to OTLP metrics
+- **Acceptance Criteria**: Can transform any valid KQL result to Prometheus metrics
 
-### 4. Data Retrieval: ADX Query Integration
-**Goal**: Connect to ADX and query SummaryRule output tables
+#### 5. Prometheus Metrics Server
+**Goal**: Expose transformed metrics via HTTP endpoint for Collector scraping
 - **Deliverables**:
-  - Create `ingestor/export/adx_client.go` for querying SummaryRule tables
-  - Implement incremental data retrieval (track last export timestamp)
-  - Add connection pooling and query optimization
-  - Handle ADX authentication and connection management
-  - Implement query result caching and batching
-- **Testing**: Integration tests with mock ADX responses and real ADX cluster
-- **Acceptance Criteria**: Can reliably query SummaryRule tables and retrieve incremental data
+  - Implement HTTP server with configurable port and path
+  - Integrate OpenTelemetry Prometheus exporter library
+  - Add metrics registry management and lifecycle handling
+  - Implement graceful shutdown of HTTP server
+  - Add health check endpoints for liveness/readiness probes
+- **Testing**: HTTP endpoint tests and Prometheus format validation
+- **Acceptance Criteria**: Serves valid Prometheus metrics on `/metrics` endpoint
 
-### 5. OTLP Export Integration
-**Goal**: Integrate with existing OTLP exporter infrastructure
+#### 6. Collector Discovery Integration
+**Goal**: Enable automatic discovery by existing Collector infrastructure
 - **Deliverables**:
-  - Extend `collector/export/metric_otlp.go` to support MetricsExporter
-  - Add exporter discovery and configuration validation
-  - Implement batch processing and retry logic
-  - Add metrics for export success/failure rates
-  - Handle exporter unavailability and circuit breaking
-- **Testing**: Integration tests with mock OTLP endpoints and real exporters
-- **Acceptance Criteria**: Successfully exports metrics to configured OTLP endpoints
+  - Add pod annotation configuration to `adxexporter` deployment manifests
+  - Document Collector integration patterns and discovery mechanism
+  - Create example Kubernetes manifests with proper annotations
+  - Validate end-to-end scraping workflow with Collector
+- **Testing**: End-to-end tests with real Collector scraping `adxexporter` metrics
+- **Acceptance Criteria**: Collector automatically discovers and scrapes `adxexporter` metrics
 
-### 6. MetricsExporterTask: Scheduled Execution
-**Goal**: Implement the scheduled export task
+#### 7. Status Management and Error Handling
+**Goal**: Implement comprehensive status tracking and error recovery
 - **Deliverables**:
-  - Create `ingestor/export/metrics_exporter_task.go`
-  - Implement interval-based scheduling independent of SummaryRule execution
-  - Add task registration to ingestor service
-  - Implement distributed locking for multi-replica deployments
-  - Add graceful shutdown and task cancellation
-- **Testing**: Integration tests for scheduling, execution, and concurrency control
-- **Acceptance Criteria**: Tasks execute on schedule without conflicts across replicas
-
-### 7. End-to-End Integration and Validation
-**Goal**: Complete the integration pipeline with full validation
-- **Deliverables**:
-  - Wire together all components in the MetricsExporter controller
-  - Implement comprehensive validation (schema, exporters, SummaryRules)
-  - Add status reporting and condition management
-  - Create health checks and readiness probes
-  - Add comprehensive logging and observability
-- **Testing**: End-to-end tests with real SummaryRules and OTLP exporters
-- **Acceptance Criteria**: Complete MetricsExporter workflow functions from label discovery to metric export
-
-### 8. Error Handling and Resilience
-**Goal**: Implement robust error handling and recovery
-- **Deliverables**:
-  - Add comprehensive error classification (transient vs permanent)
-  - Implement exponential backoff and retry logic
-  - Add dead letter queue for failed exports
-  - Create alerting and monitoring for export failures
-  - Implement graceful degradation when dependencies are unavailable
+  - Add MetricsExporter CRD status updates with condition management
+  - Implement retry logic for transient query failures
+  - Add structured logging with correlation IDs and trace information
+  - Create error classification (transient vs permanent failures)
+  - Add metrics for `adxexporter` operational monitoring
 - **Testing**: Chaos engineering tests with various failure scenarios
-- **Acceptance Criteria**: System gracefully handles and recovers from all failure modes
+- **Acceptance Criteria**: Graceful error handling with proper status reporting
 
-### 9. Performance Optimization and Scalability
-**Goal**: Optimize for production workloads
+### Phase 2: Direct OTLP Push Implementation
+
+#### 8. OTLP Client Integration
+**Goal**: Add direct OTLP endpoint push capabilities
 - **Deliverables**:
-  - Add connection pooling and query batching optimizations
-  - Implement parallel processing for multiple SummaryRules
-  - Add resource usage monitoring and throttling
+  - Integrate OpenTelemetry OTLP exporter client
+  - Add OTLP endpoint configuration and connection management
+  - Implement OTLP metrics format transformation (separate from Prometheus)
+  - Add connection health checking and circuit breaker patterns
+  - Support both HTTP and gRPC OTLP protocols
+- **Testing**: Integration tests with mock and real OTLP endpoints
+- **Acceptance Criteria**: Can push metrics directly to OTLP endpoints
+
+#### 9. Backlog and Retry Infrastructure
+**Goal**: Implement sophisticated backlog management for reliable delivery
+- **Deliverables**:
+  - Extend MetricsExporter CRD status with backlog tracking
+  - Implement failed export queuing in CRD status
+  - Add exponential backoff retry logic with configurable limits
+  - Create backlog processing scheduler for historical data
+  - Add dead letter queue for permanently failed exports
+- **Testing**: Reliability tests with network partitions and endpoint failures
+- **Acceptance Criteria**: Reliable metric delivery with historical backfill capabilities
+
+#### 10. Hybrid Mode Operation
+**Goal**: Support both Prometheus scraping and OTLP push simultaneously
+- **Deliverables**:
+  - Enable concurrent operation of both output modes
+  - Add configuration options for selective output mode per MetricsExporter
+  - Implement shared query execution with dual output transformation
+  - Add performance optimization for dual-mode operation
+- **Testing**: Load tests with both output modes active
+- **Acceptance Criteria**: Efficient operation in hybrid mode without performance degradation
+
+### Quality and Operations
+
+#### 11. Performance Optimization and Scalability
+**Goal**: Optimize for production workloads and multi-tenancy
+- **Deliverables**:
+  - Add connection pooling and query optimization
+  - Implement parallel processing for multiple MetricsExporter CRDs
+  - Add resource usage monitoring and throttling mechanisms
   - Optimize memory usage for large result sets
-  - Add configurable limits and resource constraints
-- **Testing**: Load testing with high-volume data and multiple MetricsExporters
+  - Add configurable resource limits and circuit breakers
+- **Testing**: Load testing with high-volume data and many MetricsExporter CRDs
 - **Acceptance Criteria**: Handles production-scale workloads within resource constraints
 
-### 10. Comprehensive Test Suite
+#### 12. Comprehensive Test Suite
 **Goal**: Ensure complete test coverage across all scenarios
 - **Deliverables**:
   - Unit tests for all packages with >90% coverage
-  - Integration tests for ADX connectivity and OTLP export
+  - Integration tests for ADX connectivity and metrics output
   - End-to-end tests covering full workflow scenarios
-  - Performance benchmarks and load tests
-  - Chaos engineering tests for failure scenarios
+  - Performance benchmarks and scalability tests
+  - Chaos engineering tests for resilience validation
 - **Testing**: Automated test execution in CI/CD pipeline
 - **Acceptance Criteria**: All tests pass consistently in CI environment
 
-### 11. Documentation and Examples
-**Goal**: Provide comprehensive documentation for users
+#### 13. Documentation and Examples
+**Goal**: Provide comprehensive documentation for users and operators
 - **Deliverables**:
   - Update CRD documentation in `docs/crds.md`
-  - Create detailed configuration guide with examples
-  - Add troubleshooting guide with common issues
-  - Create video/demo showing feature usage
-  - Update API reference documentation
+  - Create detailed configuration guide with deployment examples
+  - Add troubleshooting guide for common issues and debugging
+  - Document best practices for criteria-based deployment
+  - Create operational runbooks for production deployment
 - **Testing**: Documentation review and validation of all examples
-- **Acceptance Criteria**: Users can successfully configure MetricsExporter using documentation
+- **Acceptance Criteria**: Users can successfully deploy and operate `adxexporter` using documentation
 
-### 12. Observability and Monitoring
-**Goal**: Add comprehensive observability for the feature
+#### 14. Observability and Monitoring
+**Goal**: Add comprehensive observability for operational excellence
 - **Deliverables**:
-  - Add Prometheus metrics for export rates, latency, and errors
-  - Implement structured logging with correlation IDs
-  - Add distributed tracing for export pipeline
-  - Create Grafana dashboards for monitoring
-  - Add health check endpoints for load balancers
-- **Testing**: Validate all metrics and tracing in staging environment
-- **Acceptance Criteria**: Operations team can monitor and troubleshoot MetricsExporter effectively
-
-### 13. Security and RBAC
-**Goal**: Implement proper security controls
-- **Deliverables**:
-  - Define minimal RBAC permissions for MetricsExporter
-  - Add input validation and sanitization for all user inputs
-  - Implement audit logging for security events
-  - Add secrets management for export credentials
-  - Create security documentation and threat model
-- **Testing**: Security testing including permission validation and input fuzzing
-- **Acceptance Criteria**: Security team approves RBAC model and threat assessment
-
-### 14. Migration and Compatibility
-**Goal**: Ensure smooth deployment and backwards compatibility
-- **Deliverables**:
-  - Create migration guide for existing users
-  - Add feature flags for gradual rollout
-  - Implement version compatibility checks
-  - Create rollback procedures and documentation
-  - Add deployment validation tests
-- **Testing**: Test deployment on various Kubernetes versions and configurations
-- **Acceptance Criteria**: Feature can be safely deployed to production without disrupting existing functionality
+  - Add Prometheus metrics for `adxexporter` operational metrics (query rates, errors, latency)
+  - Implement structured logging with correlation IDs and distributed tracing
+  - Create Grafana dashboards for `adxexporter` monitoring
+  - Add alerting rules for common failure scenarios
+  - Add health check endpoints for load balancer integration
+- **Testing**: Validate all metrics and observability in staging environment
+- **Acceptance Criteria**: Operations team can monitor and troubleshoot `adxexporter` effectively
 
 ### Dependencies and Sequencing
 
-**Critical Path**: Steps 1-7 must be completed in order as each builds on the previous
-**Parallel Development**: Steps 8-14 can be developed in parallel once step 7 is complete
-**Milestone Reviews**: Conduct technical review after steps 3, 7, and 10 before proceeding
+**Phase 1 Critical Path**: Steps 1-7 must be completed sequentially for basic functionality
+**Phase 2 Critical Path**: Steps 8-10 build on Phase 1 for enhanced capabilities  
+**Parallel Development**: Steps 11-14 can be developed in parallel with Phase 2
+**Milestone Reviews**: Technical review after steps 3, 7, 10, and 12
 
-This roadmap ensures each PR is focused, reviewable, and incrementally builds toward the complete feature while maintaining system stability throughout the development process.
+**Key Dependencies:**
+- Step 2 enables independent `adxexporter` development
+- Step 4 provides foundation for both Phase 1 and Phase 2 output modes
+- Step 7 completes Phase 1 for production readiness
+- Step 10 completes Phase 2 for enhanced reliability
+
+This roadmap ensures incremental delivery with Phase 1 providing immediate value through Prometheus integration, while Phase 2 adds sophisticated reliability features for enterprise deployments.
+
+## Conclusion
+
+The `adxexporter` component and `MetricsExporter` CRD provide a comprehensive solution for transforming ADX data into standardized metrics for observability platforms. The phased approach ensures rapid time-to-value while building toward enterprise-grade reliability:
+
+**Phase 1 Benefits:**
+- **Fast Implementation**: Leverages existing Collector scraping infrastructure
+- **Immediate Value**: Enables KQL-to-metrics transformation without intermediate storage
+- **Cloud-Native**: Kubernetes-native discovery and deployment patterns
+- **Criteria-Based Security**: Secure, distributed processing with team and environment isolation
+
+**Phase 2 Enhancements:**
+- **Enterprise Reliability**: Backlog management and retry capabilities for guaranteed delivery
+- **Historical Backfill**: Process historical data gaps during outages
+- **Direct Integration**: Push metrics directly to OTLP endpoints without scraping dependency
+- **Hybrid Flexibility**: Support both scraping and push modes simultaneously
+
+This design provides a scalable, secure, and maintainable foundation for organizations to operationalize their ADX analytics data across their observability infrastructure.

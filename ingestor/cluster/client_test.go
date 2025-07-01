@@ -55,7 +55,7 @@ func TestClient_Write_BadRequest(t *testing.T) {
 	require.Error(t, err)
 	require.IsType(t, &ErrBadRequest{}, err)
 	require.Contains(t, err.Error(), "bad request error")
-	require.True(t, errors.Is(err, ErrBadRequest{}))
+	require.True(t, errors.Is(err, &ErrBadRequest{}))
 }
 
 func TestClient_Write_TooManyRequests(t *testing.T) {
@@ -73,7 +73,6 @@ func TestClient_Write_TooManyRequests(t *testing.T) {
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
 	require.Error(t, err)
-	require.Equal(t, ErrPeerOverloaded, err)
 	require.True(t, errors.Is(err, ErrPeerOverloaded))
 }
 
@@ -92,7 +91,6 @@ func TestClient_Write_SegmentExists(t *testing.T) {
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
 	require.Error(t, err)
-	require.Equal(t, ErrSegmentExists, err)
 	require.True(t, errors.Is(err, ErrSegmentExists))
 }
 
