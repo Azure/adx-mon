@@ -41,7 +41,7 @@ func ExampleUsage() {
 	meter := noop.NewMeterProvider().Meter("adx-exporter")
 
 	// Create the transformer
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	// Validate the configuration against the query results
 	if err := transformer.Validate(kustoResults); err != nil {
@@ -96,7 +96,7 @@ func ExampleWithDefaultMetricName() {
 	}
 
 	meter := noop.NewMeterProvider().Meter("adx-exporter")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	metrics, err := transformer.Transform(kustoResults)
 	if err != nil {

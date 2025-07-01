@@ -15,7 +15,7 @@ func TestNewKustoToPrometheusTransformer(t *testing.T) {
 	}
 	meter := noop.NewMeterProvider().Meter("test")
 
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	require.Equal(t, "value", transformer.config.ValueColumn)
 	require.NotNil(t, transformer.meter)
@@ -27,7 +27,7 @@ func TestTransformBasic(t *testing.T) {
 		DefaultMetricName: "test_metric",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	results := []map[string]any{
 		{
@@ -50,7 +50,7 @@ func TestTransformWithMetricNameColumn(t *testing.T) {
 		ValueColumn:      "value",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	results := []map[string]any{
 		{
@@ -75,7 +75,7 @@ func TestTransformWithLabels(t *testing.T) {
 		LabelColumns:      []string{"host", "service"},
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	results := []map[string]any{
 		{
@@ -102,7 +102,7 @@ func TestTransformWithTimestamp(t *testing.T) {
 		TimestampColumn:   "timestamp",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	testTime := time.Date(2023, 12, 25, 12, 0, 0, 0, time.UTC)
 	results := []map[string]any{
@@ -126,7 +126,7 @@ func TestTransformValueTypes(t *testing.T) {
 		DefaultMetricName: "test_metric",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	testCases := []struct {
 		name     string
@@ -162,7 +162,7 @@ func TestTransformTimestampTypes(t *testing.T) {
 		TimestampColumn:   "timestamp",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	testTime := time.Date(2023, 12, 25, 12, 0, 0, 0, time.UTC)
 	testCases := []struct {
@@ -271,7 +271,7 @@ func TestTransformErrors(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			transformer := NewKustoToPrometheusTransformer(tc.config, meter)
+			transformer := NewKustoToMetricsTransformer(tc.config, meter)
 			_, err := transformer.Transform(tc.results)
 			if tc.wantErr {
 				require.Error(t, err)
@@ -347,7 +347,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			transformer := NewKustoToPrometheusTransformer(tc.config, meter)
+			transformer := NewKustoToMetricsTransformer(tc.config, meter)
 			err := transformer.Validate(tc.results)
 			if tc.wantErr {
 				require.Error(t, err)
@@ -360,7 +360,7 @@ func TestValidate(t *testing.T) {
 
 func TestRegisterMetrics(t *testing.T) {
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(TransformConfig{}, meter)
+	transformer := NewKustoToMetricsTransformer(TransformConfig{}, meter)
 
 	metrics := []MetricData{
 		{
@@ -389,7 +389,7 @@ func TestTransformMultipleRows(t *testing.T) {
 		LabelColumns:     []string{"host"},
 	}
 	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToPrometheusTransformer(config, meter)
+	transformer := NewKustoToMetricsTransformer(config, meter)
 
 	results := []map[string]any{
 		{

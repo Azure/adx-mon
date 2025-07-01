@@ -28,8 +28,8 @@ type TransformConfig struct {
 	DefaultMetricName string `json:"defaultMetricName,omitempty"`
 }
 
-// KustoToPrometheusTransformer transforms KQL query results to Prometheus metrics
-type KustoToPrometheusTransformer struct {
+// KustoToMetricsTransformer transforms KQL query results to Prometheus metrics
+type KustoToMetricsTransformer struct {
 	config TransformConfig
 	meter  metric.Meter
 }
@@ -42,16 +42,16 @@ type MetricData struct {
 	Labels    map[string]string
 }
 
-// NewKustoToPrometheusTransformer creates a new transformer instance
-func NewKustoToPrometheusTransformer(config TransformConfig, meter metric.Meter) *KustoToPrometheusTransformer {
-	return &KustoToPrometheusTransformer{
+// NewKustoToMetricsTransformer creates a new transformer instance
+func NewKustoToMetricsTransformer(config TransformConfig, meter metric.Meter) *KustoToMetricsTransformer {
+	return &KustoToMetricsTransformer{
 		config: config,
 		meter:  meter,
 	}
 }
 
 // Transform converts KQL query results to Prometheus metrics
-func (t *KustoToPrometheusTransformer) Transform(results []map[string]any) ([]MetricData, error) {
+func (t *KustoToMetricsTransformer) Transform(results []map[string]any) ([]MetricData, error) {
 	if len(results) == 0 {
 		return []MetricData{}, nil
 	}
@@ -70,7 +70,7 @@ func (t *KustoToPrometheusTransformer) Transform(results []map[string]any) ([]Me
 }
 
 // transformRow converts a single KQL result row to metric data
-func (t *KustoToPrometheusTransformer) transformRow(row map[string]any) (MetricData, error) {
+func (t *KustoToMetricsTransformer) transformRow(row map[string]any) (MetricData, error) {
 	// Extract metric name
 	metricName, err := t.extractMetricName(row)
 	if err != nil {
@@ -104,7 +104,7 @@ func (t *KustoToPrometheusTransformer) transformRow(row map[string]any) (MetricD
 }
 
 // extractMetricName extracts the metric name from the row
-func (t *KustoToPrometheusTransformer) extractMetricName(row map[string]any) (string, error) {
+func (t *KustoToMetricsTransformer) extractMetricName(row map[string]any) (string, error) {
 	// If metric name column is specified, use it
 	if t.config.MetricNameColumn != "" {
 		rawValue, exists := row[t.config.MetricNameColumn]
@@ -134,7 +134,7 @@ func (t *KustoToPrometheusTransformer) extractMetricName(row map[string]any) (st
 }
 
 // extractValue extracts the numeric value from the row
-func (t *KustoToPrometheusTransformer) extractValue(row map[string]any) (float64, error) {
+func (t *KustoToMetricsTransformer) extractValue(row map[string]any) (float64, error) {
 	rawValue, exists := row[t.config.ValueColumn]
 	if !exists {
 		return 0, fmt.Errorf("value column '%s' not found in row", t.config.ValueColumn)
@@ -169,7 +169,7 @@ func (t *KustoToPrometheusTransformer) extractValue(row map[string]any) (float64
 }
 
 // extractTimestamp extracts the timestamp from the row
-func (t *KustoToPrometheusTransformer) extractTimestamp(row map[string]any) (time.Time, error) {
+func (t *KustoToMetricsTransformer) extractTimestamp(row map[string]any) (time.Time, error) {
 	// If no timestamp column is configured, use current time
 	if t.config.TimestampColumn == "" {
 		return time.Now(), nil
@@ -212,7 +212,7 @@ func (t *KustoToPrometheusTransformer) extractTimestamp(row map[string]any) (tim
 }
 
 // extractLabels extracts label key-value pairs from the row
-func (t *KustoToPrometheusTransformer) extractLabels(row map[string]any) (map[string]string, error) {
+func (t *KustoToMetricsTransformer) extractLabels(row map[string]any) (map[string]string, error) {
 	labels := make(map[string]string)
 
 	for _, labelColumn := range t.config.LabelColumns {
@@ -237,7 +237,7 @@ func (t *KustoToPrometheusTransformer) extractLabels(row map[string]any) (map[st
 }
 
 // RegisterMetrics registers the metrics with the OpenTelemetry meter
-func (t *KustoToPrometheusTransformer) RegisterMetrics(ctx context.Context, metrics []MetricData) error {
+func (t *KustoToMetricsTransformer) RegisterMetrics(ctx context.Context, metrics []MetricData) error {
 	// Group metrics by name for efficient registration
 	metricsByName := make(map[string][]MetricData)
 	for _, metric := range metrics {
@@ -268,7 +268,7 @@ func (t *KustoToPrometheusTransformer) RegisterMetrics(ctx context.Context, metr
 }
 
 // Validate checks if the transform configuration is valid for the given query results
-func (t *KustoToPrometheusTransformer) Validate(results []map[string]any) error {
+func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 	if len(results) == 0 {
 		return nil // Empty results are valid
 	}
