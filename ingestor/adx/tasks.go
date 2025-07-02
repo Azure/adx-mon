@@ -249,7 +249,6 @@ type SummaryRuleTask struct {
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 	ClusterLabels map[string]string
-	ruleExecution sync.Map // Tracks currently executing rules to prevent concurrent execution
 }
 
 func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
@@ -389,35 +388,6 @@ func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
 // and if so, submits the rule as an async operation to Kusto.
 // Returns any submission error that occurred.
 func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) error {
-	// Create a unique key for this rule
-	ruleKey := fmt.Sprintf("%s/%s", rule.Namespace, rule.Name)
-
-	// Try to mark this rule as executing. If it's already executing, skip it.
-	if _, loaded := t.ruleExecution.LoadOrStore(ruleKey, true); loaded {
-		logger.Infof("Skipping rule %s/%s in database %s as it's already being executed",
-			rule.Namespace, rule.Name, rule.Spec.Database)
-		metrics.IngestorSummaryRuleConcurrentSkipped.WithLabelValues(
-			rule.Spec.Database, rule.Namespace, rule.Name).Inc()
-		return nil
-	}
-
-	// Ensure we remove the execution marker when done
-	defer t.ruleExecution.Delete(ruleKey)
-
-	// Track execution duration
-	start := time.Now()
-	var executionStatus string
-	defer func() {
-		duration := time.Since(start).Seconds()
-		metrics.IngestorSummaryRuleExecutionDuration.WithLabelValues(
-			rule.Spec.Database, rule.Namespace, rule.Name, executionStatus).Observe(duration)
-
-		// Update number of active operations
-		operations := rule.GetAsyncOperations()
-		metrics.IngestorSummaryRuleAsyncOperations.WithLabelValues(
-			rule.Spec.Database, rule.Namespace, rule.Name).Set(float64(len(operations)))
-	}()
-
 	// Get the current condition of the rule
 	cnd := rule.GetCondition()
 	if cnd == nil {
@@ -443,12 +413,8 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 		rule.SetLastExecutionTime(windowEndTime)
 
 		if err != nil {
-			executionStatus = "error"
 			return fmt.Errorf("failed to submit rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 		}
-		executionStatus = "success"
-	} else {
-		executionStatus = "skipped"
 	}
 
 	return nil

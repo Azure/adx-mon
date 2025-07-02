@@ -135,12 +135,6 @@ var (
 		Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300},
 	}, []string{"database", "namespace", "name", "status"})
 
-	IngestorSummaryRuleConcurrentSkipped = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "summary_rule_concurrent_skipped_total",
-		Help:      "Counter of summary rules skipped due to concurrent execution",
-	}, []string{"database", "namespace", "name"})
 
 	IngestorSummaryRuleSubmissions = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
