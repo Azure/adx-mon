@@ -156,6 +156,7 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	// If ingestor doesn't exist, create it with proper double-checked locking
 	if !exists {
 		n.mu.Lock()
+		defer n.mu.Unlock()
 		// Check again with write lock held
 		ingestor, exists = n.ingestors[table]
 		if !exists {
@@ -166,13 +167,11 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 				var err error
 				ingestor, err = ingest.New(n.KustoCli, n.database, table)
 				if err != nil {
-					n.mu.Unlock()
 					return err
 				}
 			}
 			n.ingestors[table] = ingestor
 		}
-		n.mu.Unlock()
 	}
 
 	// Set up a maximum time for completion to be 10 minutes.
