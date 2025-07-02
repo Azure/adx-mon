@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -37,7 +40,13 @@ type MetricsExporterReconciler struct {
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
 	Clock          clock.Clock
 
-	Meter metric.Meter
+	// Metrics server components
+	Meter         metric.Meter
+	metricsServer *http.Server
+	gaugeCache    map[string]metric.Float64Gauge // Cache for metric instruments
+
+	// Synchronization for shared state
+	mu sync.RWMutex // Protects QueryExecutors and gaugeCache maps
 }
 
 // Reconcile handles MetricsExporter reconciliation
@@ -57,7 +66,7 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Check if this MetricsExporter should be processed by this instance
-	if !r.shouldProcessMetricsExporter(metricsExporter) {
+	if !matchesCriteria(metricsExporter.Spec.Criteria, r.ClusterLabels) {
 		if logger.IsDebug() {
 			logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
 				req.Namespace, req.Name)
@@ -80,7 +89,7 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-func (r *MetricsExporterReconciler) exposeMetrics() error {
+func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	if !r.EnableMetricsEndpoint {
 		r.Meter = noop.NewMeterProvider().Meter("noop")
 		return nil
@@ -89,34 +98,40 @@ func (r *MetricsExporterReconciler) exposeMetrics() error {
 	exporter, err := prometheus.New(
 		// Adds a namespace prefix to all metrics
 		prometheus.WithNamespace("adxexporter"),
-		// Disables the long otel specific scope string since we're only exposing through prometheus
+		// Disables the long otel specific scope string since we're only exposing through metrics
 		prometheus.WithoutScopeInfo(),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create Prometheus exporter: %w", err)
+		return fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	r.Meter = provider.Meter("adxexporter")
 
-	metricsServer := &http.Server{Addr: r.MetricsPort}
-	http.Handle(r.MetricsPath, promhttp.Handler())
+	// Initialize gauge cache for metric instruments
+	r.gaugeCache = make(map[string]metric.Float64Gauge)
+
+	// Set up HTTP handlers
+	mux := http.NewServeMux()
+	mux.Handle(r.MetricsPath, promhttp.Handler())
+	mux.HandleFunc("/healthz", r.healthzHandler)
+	mux.HandleFunc("/readyz", r.readyzHandler)
+
+	// Create and store server reference for graceful shutdown
+	r.metricsServer = &http.Server{
+		Addr:    r.MetricsPort,
+		Handler: mux,
+	}
 
 	go func() {
-		err := metricsServer.ListenAndServe()
+		err := r.metricsServer.ListenAndServe()
 		if err != nil && err != http.ErrServerClosed {
 			logger.Errorf("Metrics server failed: %v", err)
-			// Optionally, shut down the application gracefully if needed
 			return
 		}
 	}()
 
+	logger.Infof("Metrics server started on %s with endpoints: %s, /healthz, /readyz", r.MetricsPort, r.MetricsPath)
 	return nil
-}
-
-// shouldProcessMetricsExporter determines if this instance should process the given MetricsExporter
-// based on criteria matching against cluster labels
-func (r *MetricsExporterReconciler) shouldProcessMetricsExporter(me adxmonv1.MetricsExporter) bool {
-	return matchesCriteria(me.Spec.Criteria, r.ClusterLabels)
 }
 
 // matchesCriteria checks if the given criteria matches any of the cluster labels.
@@ -148,7 +163,7 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 
 // SetupWithManager sets up the service with the Manager
 func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := r.exposeMetrics(); err != nil {
+	if err := r.exposeMetricsServer(); err != nil {
 		return err
 	}
 
@@ -201,8 +216,10 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 	logger.Infof("Query executed successfully in %v, returned %d rows",
 		result.Duration, len(result.Rows))
 
-	// TODO: Transform results to metrics and expose them (Task 4-5)
-	// For now, we just log the successful execution
+	// Transform results to metrics and expose them
+	if err := r.transformAndRegisterMetrics(ctx, me, result.Rows); err != nil {
+		return fmt.Errorf("failed to transform and register metrics: %w", err)
+	}
 
 	// Update the last execution time using the CRD method
 	me.SetLastExecutionTime(endTime)
@@ -210,18 +227,140 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 	// TODO: Update the CRD status in the cluster
 	// For now, we'll leave this as a placeholder since we need to
 	// implement the status update mechanism
-	logger.Debugf("Updated last execution time to %s for MetricsExporter %s/%s",
-		endTime.Format(time.RFC3339), me.Namespace, me.Name)
+	if logger.IsDebug() {
+		logger.Debugf("Updated last execution time to %s for MetricsExporter %s/%s",
+			endTime.Format(time.RFC3339), me.Namespace, me.Name)
+	}
 
 	return nil
 }
 
+// transformAndRegisterMetrics converts KQL query results to metrics and registers them
+func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Context, me *adxmonv1.MetricsExporter, rows []map[string]any) error {
+	if len(rows) == 0 {
+		if logger.IsDebug() {
+			logger.Debugf("No rows returned from query for MetricsExporter %s/%s", me.Namespace, me.Name)
+		}
+		return nil
+	}
+
+	// Create transformer with the MetricsExporter's transform configuration
+	transformer := transform.NewKustoToMetricsTransformer(
+		transform.TransformConfig{
+			MetricNameColumn:  me.Spec.Transform.MetricNameColumn,
+			ValueColumn:       me.Spec.Transform.ValueColumn,
+			TimestampColumn:   me.Spec.Transform.TimestampColumn,
+			LabelColumns:      me.Spec.Transform.LabelColumns,
+			DefaultMetricName: me.Spec.Transform.DefaultMetricName,
+		},
+		r.Meter,
+	)
+
+	// Validate the transform configuration against the query results
+	if err := transformer.Validate(rows); err != nil {
+		return fmt.Errorf("transform validation failed: %w", err)
+	}
+
+	// Transform the rows to metric data
+	metrics, err := transformer.Transform(rows)
+	if err != nil {
+		return fmt.Errorf("failed to transform rows to metrics: %w", err)
+	}
+
+	// Register the metrics using cached gauge instruments
+	if err := r.registerMetricsWithCache(ctx, metrics); err != nil {
+		return fmt.Errorf("failed to register metrics: %w", err)
+	}
+
+	logger.Infof("Successfully transformed and registered %d metrics for MetricsExporter %s/%s",
+		len(metrics), me.Namespace, me.Name)
+
+	return nil
+}
+
+// registerMetricsWithCache registers metrics using cached gauge instruments to avoid duplicate registrations
+func (r *MetricsExporterReconciler) registerMetricsWithCache(ctx context.Context, metrics []transform.MetricData) error {
+	// Group metrics by name for efficient registration
+	metricsByName := make(map[string][]transform.MetricData)
+	for _, metric := range metrics {
+		metricsByName[metric.Name] = append(metricsByName[metric.Name], metric)
+	}
+
+	// Register each unique metric name as a gauge (using cache to avoid duplicates)
+	for metricName, metricData := range metricsByName {
+		gauge, err := r.getOrCreateGauge(metricName)
+		if err != nil {
+			return fmt.Errorf("failed to get or create gauge for metric '%s': %w", metricName, err)
+		}
+
+		// Record all data points for this metric
+		for _, data := range metricData {
+			// Convert labels to OpenTelemetry attributes
+			attrs := make([]attribute.KeyValue, 0, len(data.Labels))
+			for key, value := range data.Labels {
+				attrs = append(attrs, attribute.String(key, value))
+			}
+
+			// Record the metric value
+			gauge.Record(ctx, data.Value, metric.WithAttributes(attrs...))
+		}
+	}
+
+	return nil
+}
+
+// getOrCreateGauge returns a cached gauge instrument or creates a new one
+func (r *MetricsExporterReconciler) getOrCreateGauge(metricName string) (metric.Float64Gauge, error) {
+	// Check if gauge already exists in cache (read lock)
+	r.mu.RLock()
+	if gauge, exists := r.gaugeCache[metricName]; exists {
+		r.mu.RUnlock()
+		return gauge, nil
+	}
+	r.mu.RUnlock()
+
+	// Need to create new gauge - acquire write lock
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Double-check pattern: another goroutine might have created it while we waited
+	if gauge, exists := r.gaugeCache[metricName]; exists {
+		return gauge, nil
+	}
+
+	// Create new gauge instrument
+	gauge, err := r.Meter.Float64Gauge(metricName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gauge: %w", err)
+	}
+
+	// Cache the gauge for future use
+	r.gaugeCache[metricName] = gauge
+	return gauge, nil
+}
+
 // getQueryExecutor gets or creates a QueryExecutor for the specified database
 func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExecutor, error) {
+	// Initialize map if needed (write lock for safety)
+	r.mu.Lock()
 	if r.QueryExecutors == nil {
 		r.QueryExecutors = make(map[string]*QueryExecutor)
 	}
+	r.mu.Unlock()
 
+	// Check if executor already exists (read lock)
+	r.mu.RLock()
+	if executor, exists := r.QueryExecutors[database]; exists {
+		r.mu.RUnlock()
+		return executor, nil
+	}
+	r.mu.RUnlock()
+
+	// Need to create new executor - acquire write lock
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Double-check pattern: another goroutine might have created it while we waited
 	if executor, exists := r.QueryExecutors[database]; exists {
 		return executor, nil
 	}
@@ -244,4 +383,31 @@ func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExe
 
 	r.QueryExecutors[database] = executor
 	return executor, nil
+}
+
+// healthzHandler provides a liveness probe endpoint
+func (r *MetricsExporterReconciler) healthzHandler(w http.ResponseWriter, req *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
+}
+
+// readyzHandler provides a readiness probe endpoint
+func (r *MetricsExporterReconciler) readyzHandler(w http.ResponseWriter, req *http.Request) {
+	// Check if metrics server is ready (basic check)
+	if r.Meter == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("metrics not ready"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ready"))
+}
+
+// shutdownMetricsServer gracefully shuts down the metrics server
+func (r *MetricsExporterReconciler) shutdownMetricsServer(ctx context.Context) error {
+	if r.metricsServer == nil {
+		return nil
+	}
+	logger.Infof("Shutting down metrics server...")
+	return r.metricsServer.Shutdown(ctx)
 }
