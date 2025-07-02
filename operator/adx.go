@@ -1101,11 +1101,11 @@ func queryHeartbeatTable(ctx context.Context, client *kusto.Client, database, ta
 }
 
 // Helper: Parse heartbeat rows into endpoint->schema and endpoint->partitionMetadata
-func parseHeartbeatRows(rows []HeartbeatRow) (map[string]ADXClusterSchema, map[string]map[string]string) {
-	schemaByEndpoint := make(map[string]ADXClusterSchema)
+func parseHeartbeatRows(rows []HeartbeatRow) (map[string][]ADXClusterSchema, map[string]map[string]string) {
+	schemaByEndpoint := make(map[string][]ADXClusterSchema)
 	partitionMetaByEndpoint := make(map[string]map[string]string)
 	for _, row := range rows {
-		var schema ADXClusterSchema
+		var schema []ADXClusterSchema
 		_ = json.Unmarshal(row.Schema, &schema)
 		schemaByEndpoint[row.ClusterEndpoint] = schema
 		partitionMetaByEndpoint[row.ClusterEndpoint] = row.PartitionMetadata
@@ -1114,24 +1114,28 @@ func parseHeartbeatRows(rows []HeartbeatRow) (map[string]ADXClusterSchema, map[s
 }
 
 // Helper: Extract unique databases from schemas
-func extractDatabasesFromSchemas(schemas map[string]ADXClusterSchema) map[string]struct{} {
+func extractDatabasesFromSchemas(schemas map[string][]ADXClusterSchema) map[string]struct{} {
 	dbSet := make(map[string]struct{})
-	for _, schema := range schemas {
-		dbSet[schema.Database] = struct{}{}
+	for _, dbSchemas := range schemas {
+		for _, schema := range dbSchemas {
+			dbSet[schema.Database] = struct{}{}
+		}
 	}
 	return dbSet
 }
 
 // Helper: Map tables to endpoints for each database
-func mapTablesToEndpoints(schemas map[string]ADXClusterSchema) map[string]map[string][]string {
+func mapTablesToEndpoints(schemas map[string][]ADXClusterSchema) map[string]map[string][]string {
 	dbTableEndpoints := make(map[string]map[string][]string)
-	for endpoint, schema := range schemas {
-		db := schema.Database
-		if dbTableEndpoints[db] == nil {
-			dbTableEndpoints[db] = make(map[string][]string)
-		}
-		for _, table := range schema.Tables {
-			dbTableEndpoints[db][table] = append(dbTableEndpoints[db][table], endpoint)
+	for endpoint, dbSchemas := range schemas {
+		for _, schema := range dbSchemas {
+			db := schema.Database
+			if dbTableEndpoints[db] == nil {
+				dbTableEndpoints[db] = make(map[string][]string)
+			}
+			for _, table := range schema.Tables {
+				dbTableEndpoints[db][table] = append(dbTableEndpoints[db][table], endpoint)
+			}
 		}
 	}
 	return dbTableEndpoints
