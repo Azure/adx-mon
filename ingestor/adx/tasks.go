@@ -454,8 +454,8 @@ func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.Sum
 }
 
 func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation, kustoOp AsyncOperationStatus) {
-	logger.Infof("Async operation %s for rule %s/%s in database %s is marked for retry, retrying submission",
-		kustoOp.OperationId, rule.Namespace, rule.Name, rule.Spec.Database)
+	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission",
+		kustoOp.OperationId, rule.Spec.Database, rule.Name)
 
 	metrics.IngestorSummaryRuleRetries.WithLabelValues(
 		rule.Spec.Database, rule.Namespace, rule.Name).Inc()
@@ -470,25 +470,24 @@ func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.Sum
 		operation.OperationId = operationId
 		rule.SetAsyncOperation(operation)
 
-		logger.Infof("Successfully retried operation for rule %s/%s, new operation ID: %s",
-			rule.Namespace, rule.Name, operationId)
+		logger.Infof("Successfully retried operation for rule %s.%s, new operation ID: %s",
+			rule.Spec.Database, rule.Name, operationId)
 	} else if err != nil {
-		logger.Errorf("Failed to retry operation for rule %s/%s: %v",
-			rule.Namespace, rule.Name, err)
+		logger.Errorf("Failed to retry operation for rule %s.%s: %v",
+			rule.Spec.Database, rule.Name, err)
 	}
 }
 
 func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1.SummaryRule, kustoOp AsyncOperationStatus) {
 	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 		// Operation failed - mark the rule as failed
-		logger.Errorf("Async operation %s for rule %s/%s in database %s failed",
-			kustoOp.OperationId, rule.Namespace, rule.Name, rule.Spec.Database)
+		logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
 		if err := t.updateSummaryRuleStatus(ctx, rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
 			logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
 		}
 	} else {
-		logger.Infof("Async operation %s for rule %s/%s in database %s completed successfully",
-			kustoOp.OperationId, rule.Namespace, rule.Name, rule.Spec.Database)
+		logger.Infof("Async operation %s for rule %s.%s completed successfully",
+			kustoOp.OperationId, rule.Spec.Database, rule.Name)
 	}
 	// We're done polling this async operation, so we can remove it from the list
 	rule.RemoveAsyncOperation(kustoOp.OperationId)
@@ -513,18 +512,18 @@ func (t *SummaryRuleTask) handleStaleOperation(rule *v1.SummaryRule, operation v
 }
 
 func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation) {
-	logger.Infof("Processing backlog operation for rule %s/%s in database %s (time window: %s to %s)",
-		rule.Namespace, rule.Name, rule.Spec.Database, operation.StartTime, operation.EndTime)
+	logger.Infof("Processing backlog operation for rule %s.%s (time window: %s to %s)",
+		rule.Spec.Database, rule.Name, operation.StartTime, operation.EndTime)
 
 	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil {
 		// Great, we were able to recover the failed submission window.
 		operation.OperationId = operationId
 		rule.SetAsyncOperation(operation)
-		logger.Infof("Successfully recovered backlog operation for rule %s/%s, operation ID: %s",
-			rule.Namespace, rule.Name, operationId)
+		logger.Infof("Successfully recovered backlog operation for rule %s.%s, operation ID: %s",
+			rule.Spec.Database, rule.Name, operationId)
 	} else {
-		logger.Errorf("Failed to recover backlog operation for rule %s/%s: %v",
-			rule.Namespace, rule.Name, err)
+		logger.Errorf("Failed to recover backlog operation for rule %s.%s: %v",
+			rule.Spec.Database, rule.Name, err)
 	}
 }
 
@@ -600,8 +599,8 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	}
 
 	status = "success"
-	logger.Infof("Successfully submitted summary rule %s/%s to database %s, operation ID: %s",
-		rule.Namespace, rule.Name, rule.Spec.Database, operationId)
+	logger.Infof("Successfully submitted summary rule %s.%s, operation ID: %s",
+		rule.Spec.Database, rule.Name, operationId)
 	return operationId, nil
 }
 
