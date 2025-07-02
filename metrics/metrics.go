@@ -1,11 +1,23 @@
 package metrics
 
 import (
+	"os"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+func init() {
+	if os.Getenv("METRICS_DEBUG") != "" {
+		DebugMetricsEnabled = true
+	}
+}
+
 var (
+	// DebugMetricsEnabled is a flag to enable debug metrics.  If set, additional metrics will be collected that are
+	// useful for debugging but may be too verbose for regular production use.
+	DebugMetricsEnabled bool
+
 	Namespace = "adxmon"
 
 	// Ingestor metrics
@@ -37,13 +49,6 @@ var (
 		Help:      "Counter of dropped prefixes for an ingestor instance",
 	}, []string{"prefix"})
 
-	SamplesStored = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "samples_stored_total",
-		Help:      "Counter of samples stored for an ingestor instance",
-	}, []string{"metric"})
-
 	IngestorActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -65,26 +70,26 @@ var (
 		Help:      "Gauge indicating the size of the queue for an ingestor instance",
 	}, []string{"queue"})
 
-	IngestorSegmentsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	IngestorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "wal_segments_count",
 		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
-	}, []string{"metric"})
+	})
 
-	IngestorSegmentsSizeBytes = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	IngestorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "wal_segments_size_bytes",
 		Help:      "Gauge indicating the size of WAL segments for an ingestor instance",
-	}, []string{"metric"})
+	})
 
-	IngestorSegmentsMaxAge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	IngestorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "wal_segments_max_age_seconds",
 		Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
-	}, []string{"metric"})
+	})
 
 	MetricsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
@@ -220,4 +225,11 @@ var (
 		Name:      "exporter_failed_total",
 		Help:      "Counter of the number of telemetry points that failed to be sent by an exporter",
 	}, []string{"exporter", "endpoint"})
+
+	SamplesStored = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "samples_stored_total",
+		Help:      "Counter of samples stored for an collector instance",
+	})
 )
