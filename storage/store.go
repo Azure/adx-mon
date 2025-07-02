@@ -24,7 +24,6 @@ import (
 	"github.com/Azure/adx-mon/schema"
 	transform2 "github.com/Azure/adx-mon/transform"
 	gbp "github.com/libp2p/go-buffer-pool"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
@@ -64,9 +63,6 @@ type LocalStore struct {
 	mu         sync.RWMutex
 	repository *wal.Repository
 
-	metricsMu sync.RWMutex
-	metrics   map[string]prometheus.Counter
-
 	inflightWriteBytes int64
 }
 
@@ -94,7 +90,6 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			WALFlushInterval: opts.WALFlushInterval,
 			EnableWALFsync:   opts.EnableWALFsync,
 		}),
-		metrics: make(map[string]prometheus.Counter),
 	}
 }
 
@@ -133,7 +128,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 			return err
 		}
 
-		s.incMetrics(v.Labels[0].Value, len(v.Samples))
+		metrics.SamplesStored.Add(float64(len(v.Samples)))
 
 		enc.Reset()
 		if err := enc.MarshalCSV(v); err != nil {
@@ -182,8 +177,6 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	if err != nil {
 		return err
 	}
-
-	metrics.SamplesStored.WithLabelValues(sanitizedTable).Add(float64(len(logs.Logs)))
 
 	enc.Reset()
 	if err := enc.MarshalLog(logs); err != nil {
@@ -254,8 +247,6 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		if err != nil {
 			return err
 		}
-
-		metrics.SamplesStored.WithLabelValues(table).Inc()
 
 		enc.Reset()
 		if err := enc.MarshalNativeLog(log); err != nil {
@@ -348,27 +339,6 @@ func (s *LocalStore) Remove(path string) error {
 		return err
 	}
 	return wal.Remove(path)
-}
-
-func (s *LocalStore) incMetrics(value []byte, n int) {
-	s.metricsMu.RLock()
-	counter := s.metrics[string(value)]
-	s.metricsMu.RUnlock()
-
-	if counter != nil {
-		counter.Add(float64(n))
-		return
-	}
-
-	s.metricsMu.Lock()
-	counter = s.metrics[string(value)]
-	if counter == nil {
-		counter = metrics.SamplesStored.WithLabelValues(string(value))
-		s.metrics[string(value)] = counter
-	}
-	s.metricsMu.Unlock()
-
-	counter.Add(float64(n))
 }
 
 func (s *LocalStore) Index() *wal.Index {
