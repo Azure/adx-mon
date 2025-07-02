@@ -1106,7 +1106,10 @@ func parseHeartbeatRows(rows []HeartbeatRow) (map[string][]ADXClusterSchema, map
 	partitionMetaByEndpoint := make(map[string]map[string]string)
 	for _, row := range rows {
 		var schema []ADXClusterSchema
-		_ = json.Unmarshal(row.Schema, &schema)
+		if err := json.Unmarshal(row.Schema, &schema); err != nil {
+			logger.Errorf("failed to parse schema for endpoint %s: %v", row.ClusterEndpoint, err)
+			continue
+		}
 		schemaByEndpoint[row.ClusterEndpoint] = schema
 		partitionMetaByEndpoint[row.ClusterEndpoint] = row.PartitionMetadata
 	}
