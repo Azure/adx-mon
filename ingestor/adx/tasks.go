@@ -55,13 +55,15 @@ func NewDropUnusedTablesTask(kustoCli StatementExecutor) *DropUnusedTablesTask {
 }
 
 func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
+	// Load table details outside of the lock to avoid blocking while querying Kusto
 	details, err := t.loadTableDetails(ctx)
 	if err != nil {
 		return fmt.Errorf("error loading table details: %w", err)
 	}
+
+	// Only hold the lock when updating the map
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	for _, v := range details {
 		if v.TotalRowCount > 0 {
@@ -246,6 +248,7 @@ type SummaryRuleTask struct {
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 	ClusterLabels map[string]string
+	ruleExecution sync.Map // Tracks currently executing rules to prevent concurrent execution
 }
 
 func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
@@ -385,6 +388,18 @@ func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
 // and if so, submits the rule as an async operation to Kusto.
 // Returns any submission error that occurred.
 func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) error {
+	// Create a unique key for this rule
+	ruleKey := fmt.Sprintf("%s/%s", rule.Namespace, rule.Name)
+	
+	// Try to mark this rule as executing. If it's already executing, skip it.
+	if _, loaded := t.ruleExecution.LoadOrStore(ruleKey, true); loaded {
+		logger.Infof("Skipping rule %s as it's already being executed", ruleKey)
+		return nil
+	}
+	
+	// Ensure we remove the execution marker when done
+	defer t.ruleExecution.Delete(ruleKey)
+	
 	// Get the current condition of the rule
 	cnd := rule.GetCondition()
 	if cnd == nil {
@@ -544,6 +559,10 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	// preceding let-statements.
 	body := applySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
 
+	// Add timeout to prevent indefinite blocking on Kusto operations
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	// Execute asynchronously
 	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
 	res, err := t.kustoCli.Mgmt(ctx, stmt)
@@ -557,6 +576,11 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
+	
+	// Add timeout to prevent indefinite blocking on Kusto operations
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	
 	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry) | sort by LastUpdatedOn asc")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {

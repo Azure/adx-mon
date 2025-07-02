@@ -148,37 +148,31 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 		return err
 	}
 
+	// First check without lock (fast path)
 	n.mu.RLock()
-	ingestor := n.ingestors[table]
+	ingestor, exists := n.ingestors[table]
 	n.mu.RUnlock()
 
-	if ingestor == nil {
-		ingestor, err = func() (ingest.Ingestor, error) {
-			n.mu.Lock()
-			defer n.mu.Unlock()
-
-			ingestor = n.ingestors[table]
-			if ingestor != nil {
-				return ingestor, nil
-			}
-
+	// If ingestor doesn't exist, create it with proper double-checked locking
+	if !exists {
+		n.mu.Lock()
+		// Check again with write lock held
+		ingestor, exists = n.ingestors[table]
+		if !exists {
+			// Create the ingestor while holding the write lock
 			if n.requireDirectIngest {
 				ingestor = testutils.NewUploadReader(n.KustoCli, database, table)
-				n.ingestors[table] = ingestor
-				return ingestor, nil
-			}
-
-			ingestor, err = ingest.New(n.KustoCli, n.database, table)
-			if err != nil {
-				return nil, err
+			} else {
+				var err error
+				ingestor, err = ingest.New(n.KustoCli, n.database, table)
+				if err != nil {
+					n.mu.Unlock()
+					return err
+				}
 			}
 			n.ingestors[table] = ingestor
-			return ingestor, nil
-		}()
-
-		if err != nil {
-			return err
 		}
+		n.mu.Unlock()
 	}
 
 	// Set up a maximum time for completion to be 10 minutes.
