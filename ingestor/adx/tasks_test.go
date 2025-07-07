@@ -1995,8 +1995,6 @@ func createMockRowIterator(tables []TableDetail) *kusto.RowIterator {
 	return iter
 }
 
-
-
 func TestDropUnusedTablesTaskLockScope(t *testing.T) {
 	// Test that loadTableDetails is called outside the mutex lock
 	// and concurrent access doesn't block on Kusto operations

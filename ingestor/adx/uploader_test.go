@@ -39,28 +39,28 @@ func TestClusterRequiresDirectIngest(t *testing.T) {
 func TestUploaderDoubleCheckedLocking(t *testing.T) {
 	// Test that concurrent access to the ingestors map is properly synchronized
 	// This test focuses on the locking behavior rather than mocking ingest.New
-	
+
 	u := &uploader{
 		ingestors: make(map[string]ingest.Ingestor),
 		opts: UploaderOpts{
 			Database: "test-db",
 		},
 	}
-	
+
 	table := "test-table"
 	mockIngestor := &mockIngestor{}
-	
+
 	// Create multiple goroutines that try to add the same ingestor concurrently
 	const numGoroutines = 10
 	errors := make(chan error, numGoroutines)
-	
+
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			// Simulate the double-checked locking pattern
 			u.mu.RLock()
 			_, exists := u.ingestors[table]
 			u.mu.RUnlock()
-			
+
 			if !exists {
 				u.mu.Lock()
 				defer u.mu.Unlock()
@@ -75,13 +75,13 @@ func TestUploaderDoubleCheckedLocking(t *testing.T) {
 			errors <- nil
 		}()
 	}
-	
+
 	// Wait for all goroutines to complete
 	for i := 0; i < numGoroutines; i++ {
 		err := <-errors
 		require.NoError(t, err, "Goroutine %d should not error", i)
 	}
-	
+
 	// Verify that the ingestor is properly stored in the map
 	require.Len(t, u.ingestors, 1, "Should have exactly one ingestor in the map")
 	require.Contains(t, u.ingestors, table, "Should contain the test table")
@@ -90,16 +90,16 @@ func TestUploaderDoubleCheckedLocking(t *testing.T) {
 
 func TestUploaderLockCleanupOnPanic(t *testing.T) {
 	// Test that defer unlock properly handles panics
-	
+
 	u := &uploader{
 		ingestors: make(map[string]ingest.Ingestor),
 		opts: UploaderOpts{
 			Database: "test-db",
 		},
 	}
-	
+
 	table := "test-table"
-	
+
 	// This function should recover from panic and verify the lock is released
 	func() {
 		defer func() {
@@ -112,7 +112,7 @@ func TestUploaderLockCleanupOnPanic(t *testing.T) {
 					u.mu.Unlock()
 					lockAcquired <- true
 				}()
-				
+
 				select {
 				case <-lockAcquired:
 					// Good, lock was released properly
@@ -121,12 +121,12 @@ func TestUploaderLockCleanupOnPanic(t *testing.T) {
 				}
 			}
 		}()
-		
+
 		// Simulate the locking pattern that should handle panics
 		u.mu.RLock()
 		_, exists := u.ingestors[table]
 		u.mu.RUnlock()
-		
+
 		if !exists {
 			u.mu.Lock()
 			defer u.mu.Unlock() // This defer should handle the panic
@@ -138,7 +138,7 @@ func TestUploaderLockCleanupOnPanic(t *testing.T) {
 			}
 		}
 	}()
-	
+
 	// If we reach here, the test passed - the defer unlock handled the panic correctly
 }
 

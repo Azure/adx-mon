@@ -135,7 +135,6 @@ var (
 		Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300},
 	}, []string{"database", "namespace", "name", "status"})
 
-
 	IngestorSummaryRuleSubmissions = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
