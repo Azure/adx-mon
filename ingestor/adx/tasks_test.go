@@ -17,6 +17,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -1874,4 +1876,135 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 		}
 	}
 	require.True(t, retryOpFound, "Retry operation should be present in final operations")
+}
+
+// mockStatementExecutor is a test double for StatementExecutor
+type mockStatementExecutor struct {
+	database string
+	endpoint string
+	mgmtFunc func(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+}
+
+func (m *mockStatementExecutor) Database() string {
+	return m.database
+}
+
+func (m *mockStatementExecutor) Endpoint() string {
+	return m.endpoint
+}
+
+func (m *mockStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	if m.mgmtFunc != nil {
+		return m.mgmtFunc(ctx, query, options...)
+	}
+	return &kusto.RowIterator{}, nil
+}
+
+// createMockRowIterator creates a mock RowIterator for testing TableDetail results
+func createMockRowIterator(tables []TableDetail) *kusto.RowIterator {
+	rows, err := kusto.NewMockRows(table.Columns{
+		{Name: "TableName", Type: "string"},
+		{Name: "HotExtentSize", Type: "real"},
+		{Name: "TotalExtentSize", Type: "real"},
+		{Name: "TotalExtents", Type: "long"},
+		{Name: "HotRowCount", Type: "long"},
+		{Name: "TotalRowCount", Type: "long"},
+	})
+	if err != nil {
+		panic(err) // This should never happen in tests
+	}
+
+	// Add mock data for each table
+	for _, table := range tables {
+		rows.Row(value.Values{
+			value.String{Value: table.TableName, Valid: true},
+			value.Real{Value: table.HotExtentSize, Valid: true},
+			value.Real{Value: table.TotalExtentSize, Valid: true},
+			value.Long{Value: table.TotalExtents, Valid: true},
+			value.Long{Value: table.HotRowCount, Valid: true},
+			value.Long{Value: table.TotalRowCount, Valid: true},
+		})
+	}
+
+	// Signal end of data
+	rows.Error(io.EOF)
+
+	iter := &kusto.RowIterator{}
+	iter.Mock(rows)
+	return iter
+}
+
+func TestDropUnusedTablesTaskLockScope(t *testing.T) {
+	// Test that loadTableDetails is called outside the mutex lock
+	// and concurrent access doesn't block on Kusto operations
+
+	// Create a mock executor that tracks when it's called
+	loadDetailsCalled := make(chan struct{}, 1)
+	loadDetailsFinished := make(chan struct{})
+
+	mockExecutor := &mockStatementExecutor{
+		database: "test-db",
+		endpoint: "https://test.kusto.windows.net",
+		mgmtFunc: func(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+			// Signal that loadTableDetails was called
+			select {
+			case loadDetailsCalled <- struct{}{}:
+			default:
+			}
+
+			// Block until we signal to continue (simulates slow Kusto query)
+			<-loadDetailsFinished
+
+			// Return mock table details
+			return createMockRowIterator([]TableDetail{
+				{TableName: "table1", TotalRowCount: 0},
+				{TableName: "table2", TotalRowCount: 100},
+			}), nil
+		},
+	}
+
+	task := NewDropUnusedTablesTask(mockExecutor)
+
+	ctx := context.Background()
+
+	// Start the first Run() call in a goroutine
+	firstRunError := make(chan error, 1)
+	go func() {
+		err := task.Run(ctx)
+		firstRunError <- err
+	}()
+
+	// Wait for the first Run() to call loadTableDetails
+	<-loadDetailsCalled
+
+	// At this point, the first Run() is blocked in loadTableDetails (outside the mutex)
+	// Try to access the task's mutex directly to verify it's not held
+	mutexAcquired := make(chan bool, 1)
+	go func() {
+		task.mu.Lock()
+		task.mu.Unlock()
+		mutexAcquired <- true
+	}()
+
+	// This should succeed quickly if the mutex is not held during loadTableDetails
+	select {
+	case <-mutexAcquired:
+		// Good! The mutex was not held during loadTableDetails
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Mutex appears to be held during loadTableDetails - this violates the lock scope fix")
+	}
+
+	// Release the first Run() call
+	close(loadDetailsFinished)
+
+	// Wait for the first Run() to complete
+	err := <-firstRunError
+	require.NoError(t, err, "First run should succeed")
+
+	// Verify that the unused table was tracked
+	task.mu.Lock()
+	require.Contains(t, task.unusedTables, "table1", "table1 should be marked as unused")
+	require.Equal(t, 1, task.unusedTables["table1"], "table1 should have count of 1")
+	require.NotContains(t, task.unusedTables, "table2", "table2 should not be in unused tables")
+	task.mu.Unlock()
 }
