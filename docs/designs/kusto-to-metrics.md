@@ -935,16 +935,19 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
 
 ### Phase 2: Direct OTLP Push Implementation
 
-#### 8. OTLP Client Integration
-**Goal**: Add direct OTLP endpoint push capabilities
+#### 8. OTLP Client Integration and Prometheus Remote Write Support
+**Goal**: Add direct push capabilities with multiple protocol support
 - **Deliverables**:
   - Integrate OpenTelemetry OTLP exporter client
+  - **Leverage `pkg/prompb` for Prometheus remote write support**
   - Add OTLP endpoint configuration and connection management
   - Implement OTLP metrics format transformation (separate from Prometheus)
+  - **Add Prometheus remote write transformation using `pkg/prompb.TimeSeries`**
   - Add connection health checking and circuit breaker patterns
   - Support both HTTP and gRPC OTLP protocols
-- **Testing**: Integration tests with mock and real OTLP endpoints
-- **Acceptance Criteria**: Can push metrics directly to OTLP endpoints
+  - **Support Prometheus remote write protocol via `pkg/prompb.WriteRequest`**
+- **Testing**: Integration tests with mock and real OTLP endpoints and Prometheus remote write
+- **Acceptance Criteria**: Can push metrics directly to OTLP endpoints and Prometheus remote write endpoints
 
 #### 9. Backlog and Retry Infrastructure
 **Goal**: Implement sophisticated backlog management for reliable delivery
@@ -953,19 +956,98 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
   - Implement failed export queuing in CRD status
   - Add exponential backoff retry logic with configurable limits
   - Create backlog processing scheduler for historical data
+  - **Leverage `pkg/prompb` pooling mechanisms (`WriteRequestPool`, `TimeSeriesPool`) for memory efficiency**
   - Add dead letter queue for permanently failed exports
 - **Testing**: Reliability tests with network partitions and endpoint failures
 - **Acceptance Criteria**: Reliable metric delivery with historical backfill capabilities
 
-#### 10. Hybrid Mode Operation
-**Goal**: Support both Prometheus scraping and OTLP push simultaneously
+#### 9.1. Leveraging `pkg/prompb` for Enhanced Performance and Timestamp Fidelity
+**Goal**: Utilize existing high-performance protobuf implementation for Phase 2
 - **Deliverables**:
-  - Enable concurrent operation of both output modes
+  - **Transform Engine Enhancement**: Create `transform/kusto_to_prompb.go` to convert KQL results directly to `pkg/prompb.TimeSeries`
+  - **Timestamp Preservation**: Use `pkg/prompb.Sample` to preserve actual timestamps from `TimestampColumn` (unlike Phase 1 gauges)
+  - **Memory Optimization**: Implement object pooling using `pkg/prompb.WriteRequestPool` and `pkg/prompb.TimeSeriesPool`
+  - **Historical Data Support**: Enable proper temporal ordering for backfill scenarios using `pkg/prompb.Sample.Timestamp`
+  - **Efficient Batching**: Group multiple time series into `pkg/prompb.WriteRequest` for batch processing
+  - **Label Optimization**: Use `pkg/prompb.Sort()` for proper label ordering and efficient serialization
+- **Key Benefits**:
+  - **Reduced GC Pressure**: Object pooling minimizes memory allocations during high-frequency processing
+  - **Timestamp Fidelity**: Preserve actual query result timestamps instead of current time
+  - **Prometheus Compatibility**: Native support for Prometheus remote write protocol
+  - **Performance**: Optimized protobuf marshaling for large result sets
+  - **Backfill Capability**: Support historical data with proper temporal alignment
+- **Testing**: Performance benchmarks comparing pooled vs non-pooled implementations
+- **Acceptance Criteria**: Significantly reduced memory allocation and improved timestamp accuracy
+
+#### 10. Hybrid Mode Operation
+**Goal**: Support multiple output modes simultaneously with shared query execution
+- **Deliverables**:
+  - Enable concurrent operation of Prometheus scraping, OTLP push, and Prometheus remote write
   - Add configuration options for selective output mode per MetricsExporter
-  - Implement shared query execution with dual output transformation
-  - Add performance optimization for dual-mode operation
-- **Testing**: Load tests with both output modes active
+  - Implement shared query execution with multiple output transformations:
+    - **OpenTelemetry metrics** (Phase 1) for `/metrics` endpoint scraping
+    - **OTLP format** for direct OTLP push  
+    - **`pkg/prompb.TimeSeries`** for Prometheus remote write
+  - **Dual Transform Architecture**: Create separate transform paths while sharing KQL execution
+  - Add performance optimization for multi-mode operation
+- **Testing**: Load tests with all output modes active simultaneously
 - **Acceptance Criteria**: Efficient operation in hybrid mode without performance degradation
+
+### Phase 2 Architecture Enhancement: `pkg/prompb` Integration
+
+#### Motivation for `pkg/prompb` Integration
+
+The existing `pkg/prompb` package provides significant advantages for Phase 2 implementation:
+
+1. **Timestamp Fidelity**: Unlike Phase 1 OpenTelemetry gauges (which represent current state), `pkg/prompb.Sample` preserves actual timestamps from KQL `TimestampColumn`
+2. **Memory Efficiency**: Object pooling (`WriteRequestPool`, `TimeSeriesPool`) reduces GC pressure during high-frequency processing  
+3. **Historical Data Support**: Proper temporal ordering enables backfill scenarios with accurate timestamps
+4. **Prometheus Compatibility**: Native support for Prometheus remote write protocol
+5. **Performance**: Optimized protobuf marshaling for large result sets
+
+#### Implementation Strategy
+
+**Dual Transform Architecture:**
+```go
+// Phase 1: OpenTelemetry metrics (current)
+func (r *MetricsExporterReconciler) transformToOTelMetrics(rows []map[string]any) ([]transform.MetricData, error)
+
+// Phase 2: Add prompb transformation
+func (r *MetricsExporterReconciler) transformToPromTimeSeries(rows []map[string]any) ([]*prompb.TimeSeries, error)
+```
+
+**Key Integration Points:**
+
+1. **Transform Engine**: Create `transform/kusto_to_prompb.go` alongside existing `transform/kusto_to_metrics.go`
+2. **Memory Management**: Use `prompb.WriteRequestPool.Get()` and `prompb.TimeSeriesPool.Get()` for efficient object reuse
+3. **Timestamp Handling**: Extract timestamps from `TimestampColumn` and convert to `int64` for `prompb.Sample.Timestamp`
+4. **Label Processing**: Use `prompb.Sort()` for proper label ordering and efficient serialization
+5. **Batching**: Group multiple time series into `prompb.WriteRequest` for batch transmission
+
+**Configuration Extensions:**
+```go
+type MetricsExporterReconciler struct {
+    // ... existing fields ...
+    PrometheusRemoteWriteEndpoint string
+    EnablePrometheusRemoteWrite   bool
+    EnableOTLP                    bool
+}
+```
+
+**Output Mode Selection:**
+- **Phase 1 Only**: OpenTelemetry metrics for `/metrics` scraping
+- **Phase 2 Hybrid**: OpenTelemetry + Prometheus remote write + OTLP push
+- **Phase 2 Direct**: Skip OpenTelemetry, use only push modes for better performance
+
+#### Benefits Over Current Implementation
+
+| Aspect | Phase 1 (OpenTelemetry) | Phase 2 (with prompb) |
+|--------|--------------------------|------------------------|
+| **Timestamp Handling** | Current time only | Preserves actual query timestamps |
+| **Memory Usage** | Standard allocation | Pooled objects, reduced GC pressure |
+| **Historical Data** | Not supported | Full backfill capability |
+| **Protocol Support** | Prometheus scraping only | Prometheus remote write + OTLP |
+| **Performance** | Good for scraping | Optimized for high-volume push |
 
 ### Quality and Operations
 
@@ -974,8 +1056,10 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
 - **Deliverables**:
   - Add connection pooling and query optimization
   - Implement parallel processing for multiple MetricsExporter CRDs
+  - **Leverage `pkg/prompb` pooling for memory-efficient metric processing**
   - Add resource usage monitoring and throttling mechanisms
-  - Optimize memory usage for large result sets
+  - Optimize memory usage for large result sets using pooled objects
+  - **Implement efficient label sorting and deduplication using `pkg/prompb.Sort()`**
   - Add configurable resource limits and circuit breakers
 - **Testing**: Load testing with high-volume data and many MetricsExporter CRDs
 - **Acceptance Criteria**: Handles production-scale workloads within resource constraints
@@ -1040,8 +1124,18 @@ The `adxexporter` component and `MetricsExporter` CRD provide a comprehensive so
 
 **Phase 2 Enhancements:**
 - **Enterprise Reliability**: Backlog management and retry capabilities for guaranteed delivery
-- **Historical Backfill**: Process historical data gaps during outages
-- **Direct Integration**: Push metrics directly to OTLP endpoints without scraping dependency
-- **Hybrid Flexibility**: Support both scraping and push modes simultaneously
+- **Historical Backfill**: Process historical data gaps during outages with proper timestamp preservation
+- **Direct Integration**: Push metrics directly to OTLP and Prometheus remote write endpoints
+- **Hybrid Flexibility**: Support scraping and multiple push modes simultaneously
+- **Performance Optimization**: Leverage `pkg/prompb` pooling for memory efficiency and reduced GC pressure
+- **Timestamp Fidelity**: Preserve actual query result timestamps instead of current time
 
-This design provides a scalable, secure, and maintainable foundation for organizations to operationalize their ADX analytics data across their observability infrastructure.
+**Key Technical Advantage: `pkg/prompb` Integration**
+
+Phase 2 implementation should leverage the existing `pkg/prompb` package for:
+- **Memory Efficiency**: Object pooling reduces allocation overhead during high-frequency processing
+- **Timestamp Accuracy**: Preserve temporal fidelity from KQL query results for proper historical analysis
+- **Protocol Compatibility**: Native Prometheus remote write support alongside OTLP
+- **Performance**: Optimized protobuf serialization for large-scale deployments
+
+This design provides a scalable, secure, and maintainable foundation for organizations to operationalize their ADX analytics data across their observability infrastructure with both immediate scraping capabilities and future-ready push architectures.

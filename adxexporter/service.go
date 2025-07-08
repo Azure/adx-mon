@@ -43,10 +43,9 @@ type MetricsExporterReconciler struct {
 	// Metrics server components
 	Meter         metric.Meter
 	metricsServer *http.Server
-	gaugeCache    map[string]metric.Float64Gauge // Cache for metric instruments
 
 	// Synchronization for shared state
-	mu sync.RWMutex // Protects QueryExecutors and gaugeCache maps
+	mu sync.RWMutex // Protects QueryExecutors map
 }
 
 // Reconcile handles MetricsExporter reconciliation
@@ -106,9 +105,6 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	}
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	r.Meter = provider.Meter("adxexporter")
-
-	// Initialize gauge cache for metric instruments
-	r.gaugeCache = make(map[string]metric.Float64Gauge)
 
 	// Set up HTTP handlers
 	mux := http.NewServeMux()
@@ -267,8 +263,7 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 		return fmt.Errorf("failed to transform rows to metrics: %w", err)
 	}
 
-	// Register the metrics using cached gauge instruments
-	if err := r.registerMetricsWithCache(ctx, metrics); err != nil {
+	if err := r.registerMetrics(ctx, metrics); err != nil {
 		return fmt.Errorf("failed to register metrics: %w", err)
 	}
 
@@ -278,19 +273,18 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 	return nil
 }
 
-// registerMetricsWithCache registers metrics using cached gauge instruments to avoid duplicate registrations
-func (r *MetricsExporterReconciler) registerMetricsWithCache(ctx context.Context, metrics []transform.MetricData) error {
+func (r *MetricsExporterReconciler) registerMetrics(ctx context.Context, metrics []transform.MetricData) error {
 	// Group metrics by name for efficient registration
 	metricsByName := make(map[string][]transform.MetricData)
 	for _, metric := range metrics {
 		metricsByName[metric.Name] = append(metricsByName[metric.Name], metric)
 	}
 
-	// Register each unique metric name as a gauge (using cache to avoid duplicates)
+	// Register each unique metric name as a gauge
 	for metricName, metricData := range metricsByName {
-		gauge, err := r.getOrCreateGauge(metricName)
+		gauge, err := r.Meter.Float64Gauge(metricName)
 		if err != nil {
-			return fmt.Errorf("failed to get or create gauge for metric '%s': %w", metricName, err)
+			return fmt.Errorf("failed to create gauge for metric '%s': %w", metricName, err)
 		}
 
 		// Record all data points for this metric
@@ -307,36 +301,6 @@ func (r *MetricsExporterReconciler) registerMetricsWithCache(ctx context.Context
 	}
 
 	return nil
-}
-
-// getOrCreateGauge returns a cached gauge instrument or creates a new one
-func (r *MetricsExporterReconciler) getOrCreateGauge(metricName string) (metric.Float64Gauge, error) {
-	// Check if gauge already exists in cache (read lock)
-	r.mu.RLock()
-	if gauge, exists := r.gaugeCache[metricName]; exists {
-		r.mu.RUnlock()
-		return gauge, nil
-	}
-	r.mu.RUnlock()
-
-	// Need to create new gauge - acquire write lock
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Double-check pattern: another goroutine might have created it while we waited
-	if gauge, exists := r.gaugeCache[metricName]; exists {
-		return gauge, nil
-	}
-
-	// Create new gauge instrument
-	gauge, err := r.Meter.Float64Gauge(metricName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gauge: %w", err)
-	}
-
-	// Cache the gauge for future use
-	r.gaugeCache[metricName] = gauge
-	return gauge, nil
 }
 
 // getQueryExecutor gets or creates a QueryExecutor for the specified database
@@ -401,13 +365,4 @@ func (r *MetricsExporterReconciler) readyzHandler(w http.ResponseWriter, req *ht
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ready"))
-}
-
-// shutdownMetricsServer gracefully shuts down the metrics server
-func (r *MetricsExporterReconciler) shutdownMetricsServer(ctx context.Context) error {
-	if r.metricsServer == nil {
-		return nil
-	}
-	logger.Infof("Shutting down metrics server...")
-	return r.metricsServer.Shutdown(ctx)
 }
