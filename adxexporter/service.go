@@ -11,7 +11,6 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/transform"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
@@ -106,27 +105,6 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
 	r.Meter = provider.Meter("adxexporter")
 
-	// Set up HTTP handlers
-	mux := http.NewServeMux()
-	mux.Handle(r.MetricsPath, promhttp.Handler())
-	mux.HandleFunc("/healthz", r.healthzHandler)
-	mux.HandleFunc("/readyz", r.readyzHandler)
-
-	// Create and store server reference for graceful shutdown
-	r.metricsServer = &http.Server{
-		Addr:    r.MetricsPort,
-		Handler: mux,
-	}
-
-	go func() {
-		err := r.metricsServer.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
-			logger.Errorf("Metrics server failed: %v", err)
-			return
-		}
-	}()
-
-	logger.Infof("Metrics server started on %s with endpoints: %s, /healthz, /readyz", r.MetricsPort, r.MetricsPath)
 	return nil
 }
 
@@ -305,26 +283,13 @@ func (r *MetricsExporterReconciler) registerMetrics(ctx context.Context, metrics
 
 // getQueryExecutor gets or creates a QueryExecutor for the specified database
 func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExecutor, error) {
-	// Initialize map if needed (write lock for safety)
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.QueryExecutors == nil {
 		r.QueryExecutors = make(map[string]*QueryExecutor)
 	}
-	r.mu.Unlock()
 
 	// Check if executor already exists (read lock)
-	r.mu.RLock()
-	if executor, exists := r.QueryExecutors[database]; exists {
-		r.mu.RUnlock()
-		return executor, nil
-	}
-	r.mu.RUnlock()
-
-	// Need to create new executor - acquire write lock
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Double-check pattern: another goroutine might have created it while we waited
 	if executor, exists := r.QueryExecutors[database]; exists {
 		return executor, nil
 	}
@@ -347,22 +312,4 @@ func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExe
 
 	r.QueryExecutors[database] = executor
 	return executor, nil
-}
-
-// healthzHandler provides a liveness probe endpoint
-func (r *MetricsExporterReconciler) healthzHandler(w http.ResponseWriter, req *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
-}
-
-// readyzHandler provides a readiness probe endpoint
-func (r *MetricsExporterReconciler) readyzHandler(w http.ResponseWriter, req *http.Request) {
-	// Check if metrics server is ready (basic check)
-	if r.Meter == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("metrics not ready"))
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ready"))
 }
