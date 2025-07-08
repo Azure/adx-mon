@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -26,10 +27,15 @@ type MetricsExporterReconciler struct {
 
 	// Configuration
 	ClusterLabels         map[string]string
+	KustoClusters         map[string]string // database name -> endpoint URL
 	OTLPEndpoint          string
 	EnableMetricsEndpoint bool
 	MetricsPort           string
 	MetricsPath           string
+
+	// Query execution components
+	QueryExecutors map[string]*QueryExecutor // keyed by database name
+	Clock          clock.Clock
 
 	Meter metric.Meter
 }
@@ -41,7 +47,9 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, &metricsExporter); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// MetricsExporter was deleted, nothing to do
-			logger.Debugf("MetricsExporter %s/%s not found, likely deleted", req.Namespace, req.Name)
+			if logger.IsDebug() {
+				logger.Debugf("MetricsExporter %s/%s not found, likely deleted", req.Namespace, req.Name)
+			}
 			return ctrl.Result{}, nil
 		}
 		logger.Errorf("Failed to get MetricsExporter %s/%s: %v", req.Namespace, req.Name, err)
@@ -50,22 +58,24 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Check if this MetricsExporter should be processed by this instance
 	if !r.shouldProcessMetricsExporter(metricsExporter) {
-		logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
-			req.Namespace, req.Name)
+		if logger.IsDebug() {
+			logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
+				req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, nil
 	}
 
 	logger.Infof("Processing MetricsExporter %s/%s with database: %s, interval: %s",
 		req.Namespace, req.Name, metricsExporter.Spec.Database, metricsExporter.Spec.Interval.Duration)
 
-	// TODO: Implement actual query execution and metrics exposure (Tasks 3-5)
-	// For now, we just log that we would process this MetricsExporter
+	// Execute KQL query if it's time
+	if err := r.executeMetricsExporter(ctx, &metricsExporter); err != nil {
+		logger.Errorf("Failed to execute MetricsExporter %s/%s: %v", req.Namespace, req.Name, err)
+		// Continue with requeue even on error to retry later
+	}
 
 	// Requeue for next interval (for continuous processing)
-	requeueAfter := metricsExporter.Spec.Interval.Duration
-	if requeueAfter < time.Minute {
-		requeueAfter = time.Minute // Minimum requeue interval
-	}
+	requeueAfter := max(metricsExporter.Spec.Interval.Duration, time.Minute)
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
@@ -124,7 +134,7 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 		for labelKey, labelValue := range clusterLabels {
 			if strings.ToLower(labelKey) == lowerKey {
 				for _, value := range v {
-					if strings.ToLower(labelValue) == strings.ToLower(value) {
+					if strings.EqualFold(labelValue, value) {
 						return true // Found a match, return immediately
 					}
 				}
@@ -145,4 +155,93 @@ func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.MetricsExporter{}).
 		Complete(r)
+}
+
+// executeMetricsExporter handles the execution logic for a MetricsExporter
+func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) error {
+	// Get or create query executor for this database
+	executor, err := r.getQueryExecutor(me.Spec.Database)
+	if err != nil {
+		return fmt.Errorf("failed to get query executor for database %s: %w", me.Spec.Database, err)
+	}
+
+	// Set the clock on the CRD for testing
+	var clk clock.Clock = r.Clock
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	// Check if it's time to execute using the CRD method
+	if !me.ShouldExecuteQuery(clk) {
+		if logger.IsDebug() {
+			logger.Debugf("Not time to execute MetricsExporter %s/%s yet", me.Namespace, me.Name)
+		}
+		return nil
+	}
+
+	// Calculate the execution window using the CRD method
+	startTime, endTime := me.NextExecutionWindow(clk)
+
+	logger.Infof("Executing MetricsExporter %s/%s for window %s to %s",
+		me.Namespace, me.Name, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+
+	// Execute the KQL query
+	tCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	result, err := executor.ExecuteQuery(tCtx, me.Spec.Body, startTime, endTime, r.ClusterLabels)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %w", err)
+	}
+
+	if result.Error != nil {
+		return fmt.Errorf("query execution failed: %w", result.Error)
+	}
+
+	logger.Infof("Query executed successfully in %v, returned %d rows",
+		result.Duration, len(result.Rows))
+
+	// TODO: Transform results to metrics and expose them (Task 4-5)
+	// For now, we just log the successful execution
+
+	// Update the last execution time using the CRD method
+	me.SetLastExecutionTime(endTime)
+
+	// TODO: Update the CRD status in the cluster
+	// For now, we'll leave this as a placeholder since we need to
+	// implement the status update mechanism
+	logger.Debugf("Updated last execution time to %s for MetricsExporter %s/%s",
+		endTime.Format(time.RFC3339), me.Namespace, me.Name)
+
+	return nil
+}
+
+// getQueryExecutor gets or creates a QueryExecutor for the specified database
+func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExecutor, error) {
+	if r.QueryExecutors == nil {
+		r.QueryExecutors = make(map[string]*QueryExecutor)
+	}
+
+	if executor, exists := r.QueryExecutors[database]; exists {
+		return executor, nil
+	}
+
+	// Get the endpoint for this database from KustoClusters
+	endpoint, exists := r.KustoClusters[database]
+	if !exists {
+		return nil, fmt.Errorf("no kusto endpoint configured for database %s", database)
+	}
+
+	kustoClient, err := NewKustoClient(endpoint, database)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	executor := NewQueryExecutor(kustoClient)
+	if r.Clock != nil {
+		executor.SetClock(r.Clock)
+	}
+
+	r.QueryExecutors[database] = executor
+	return executor, nil
 }

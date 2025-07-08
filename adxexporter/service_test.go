@@ -137,6 +137,9 @@ func TestShouldProcessMetricsExporter(t *testing.T) {
 			"env":    "prod",
 			"region": "us-east",
 		},
+		KustoClusters: map[string]string{
+			"test-db": "https://test-cluster.kusto.windows.net",
+		},
 	}
 
 	tests := []struct {
@@ -279,6 +282,9 @@ func TestReconcile(t *testing.T) {
 				Client:        fakeClient,
 				Scheme:        s,
 				ClusterLabels: tt.clusterLabels,
+				KustoClusters: map[string]string{
+					"test-db": "https://test-cluster.kusto.windows.net",
+				},
 			}
 
 			req := reconcile.Request{
@@ -317,6 +323,9 @@ func TestReconcile_NotFound(t *testing.T) {
 	reconciler := &MetricsExporterReconciler{
 		Client: fakeClient,
 		Scheme: s,
+		KustoClusters: map[string]string{
+			"test-db": "https://test-cluster.kusto.windows.net",
+		},
 	}
 
 	req := reconcile.Request{
@@ -358,6 +367,9 @@ func TestExposeMetrics(t *testing.T) {
 				EnableMetricsEndpoint: tt.enableMetricsEndpoint,
 				MetricsPort:           ":0", // Use random port to avoid conflicts
 				MetricsPath:           "/metrics",
+				KustoClusters: map[string]string{
+					"test-db": "https://test-cluster.kusto.windows.net",
+				},
 			}
 
 			err := reconciler.exposeMetrics()
@@ -372,5 +384,31 @@ func TestExposeMetrics(t *testing.T) {
 				assert.NotNil(t, reconciler.Meter, "Meter should be initialized when metrics are enabled")
 			}
 		})
+	}
+}
+
+func TestGetQueryExecutor_MissingEndpoint(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		KustoClusters: map[string]string{
+			"existing-db": "https://cluster.kusto.windows.net",
+		},
+	}
+
+	// Test with database that doesn't exist in KustoClusters
+	_, err := reconciler.getQueryExecutor("missing-db")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no kusto endpoint configured for database missing-db")
+
+	// Test with database that exists in KustoClusters
+	// The Kusto client creation might succeed even with non-existent endpoints
+	// as it doesn't validate connectivity during construction
+	executor, err := reconciler.getQueryExecutor("existing-db")
+	if err != nil {
+		// If it fails, it should be due to Kusto client creation, not missing endpoint
+		assert.Contains(t, err.Error(), "failed to create Kusto client")
+		assert.NotContains(t, err.Error(), "no kusto endpoint configured")
+	} else {
+		// If it succeeds, we should have an executor
+		assert.NotNil(t, executor)
 	}
 }

@@ -241,7 +241,9 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			name := prompb.MetricName(ts)
 			if s.requestTransformer.ShouldDropMetric(ts, name) {
 				prompb.TimeSeriesPool.Put(ts)
-				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
+				if metrics.DebugMetricsEnabled {
+					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
+				}
 				continue
 			}
 
