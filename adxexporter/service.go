@@ -92,9 +92,8 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 		return nil
 	}
 
-	// Register with controller-runtime's shared metrics registry
+	// Register with controller-runtime's shared metrics registry, replacing the default registry
 	exporter, err := prometheus.New(
-		// Register with controller-runtime's shared registry instead of default
 		prometheus.WithRegisterer(crmetrics.Registry),
 		// Adds a namespace prefix to all metrics
 		prometheus.WithNamespace("adxexporter"),
