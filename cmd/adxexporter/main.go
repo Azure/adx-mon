@@ -1,13 +1,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/Azure/adx-mon/adxexporter"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -82,18 +79,8 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to add adxmonv1 scheme: %w", err)
 	}
 
-	// Create cancellable context
-	svcCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Set up signal handling
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
-		logger.Infof("Received signal %s, initiating graceful shutdown...", sig.String())
-		cancel()
-	}()
+	// Let controller-runtime handle signals
+	svcCtx := ctrl.SetupSignalHandler()
 
 	// Set the controller-runtime logger to use our logger
 	log.SetLogger(logger.AsLogr())
@@ -160,14 +147,10 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	// Start manager
-	go func() {
-		if err := mgr.Start(svcCtx); err != nil {
-			logger.Errorf("Problem running manager: %v", err)
-			cancel()
-		}
-	}()
+	if err := mgr.Start(svcCtx); err != nil {
+		logger.Errorf("Problem running manager: %v", err)
+	}
 
-	<-svcCtx.Done()
 	return nil
 }
 

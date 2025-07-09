@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/transform"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
@@ -109,7 +110,9 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 		return fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
-	r.Meter = provider.Meter("adxexporter")
+	otel.SetMeterProvider(provider)
+
+	r.Meter = otel.GetMeterProvider().Meter("adxexporter")
 
 	return nil
 }
