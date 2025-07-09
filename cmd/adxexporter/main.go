@@ -44,7 +44,7 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:  "metrics-port",
-				Usage: "Address and port for the Prometheus metrics server",
+				Usage: "Address and port for the health checks and metrics server",
 				Value: ":8080",
 			},
 			&cli.StringFlag{
@@ -100,11 +100,20 @@ func realMain(ctx *cli.Context) error {
 
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
+
+	// Configure server address - use same port for health checks and metrics
+	var serverBindAddress string
+	if ctx.Bool("enable-metrics-endpoint") {
+		serverBindAddress = ctx.String("metrics-port")
+	} else {
+		serverBindAddress = "0" // Disable server
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
-		HealthProbeBindAddress: ":8081", // Port for health endpoints
+		HealthProbeBindAddress: ctx.String("metrics-port"), // If metrics are disabled, we still need a health probe address
 		Metrics: metricsserver.Options{
-			BindAddress: "0", // Disable metrics server
+			BindAddress: serverBindAddress,
 		},
 	})
 	if err != nil {

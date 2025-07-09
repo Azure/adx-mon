@@ -857,10 +857,10 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
 
 ### 📊 Phase 1 Status Summary
 
-**Overall Progress: 4/7 tasks complete (57%)**
+**Overall Progress: 5/7 tasks complete (71%)**
 
-- ✅ **Complete (4 tasks)**: Foundation, Scaffolding, Query Execution, Transform Engine  
-- 🔄 **Partially Complete (2 tasks)**: Metrics Server, Status Management  
+- ✅ **Complete (5 tasks)**: Foundation, Scaffolding, Query Execution, Transform Engine, Metrics Server  
+- 🔄 **Partially Complete (1 task)**: Status Management  
 - ❌ **Not Started (1 task)**: Collector Discovery Integration
 
 **Key Achievements:**
@@ -868,11 +868,10 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
 - Functional adxexporter component with Kubernetes controller framework
 - Working KQL query execution with ADX integration and time window management
 - Full transform engine for KQL to OpenTelemetry metrics conversion with validation
-- OpenTelemetry Prometheus exporter setup and health checks
+- Complete Prometheus metrics server using controller-runtime's shared registry
 - Comprehensive unit tests for all core functionality
 
 **Remaining Work for Phase 1:**
-- **Task 5**: Start HTTP server to serve `/metrics` endpoint (OpenTelemetry backend is ready)
 - **Task 6**: Create Kubernetes deployment manifests with collector discovery annotations  
 - **Task 7**: Implement CRD status updates to cluster (methods exist, need cluster integration)
 - **Integration**: Add end-to-end tests with Collector discovery and scraping
@@ -954,16 +953,16 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
 - **Testing**: ✅ Extensive unit tests with various KQL result schemas and edge cases
 - **Acceptance Criteria**: ✅ Can transform any valid KQL result to Prometheus metrics
 
-#### 5. Prometheus Metrics Server 🔄 PARTIALLY COMPLETE
+#### 5. Prometheus Metrics Server ✅ COMPLETE
 **Goal**: Expose transformed metrics via HTTP endpoint for Collector scraping
 - **Deliverables**:
-  - ❌ Implement HTTP server with configurable port and path (OpenTelemetry setup complete, missing HTTP server startup)
+  - ✅ Implement HTTP server with configurable port and path (uses controller-runtime's shared metrics server)
   - ✅ Integrate OpenTelemetry Prometheus exporter library
   - ✅ Add metrics registry management and lifecycle handling
-  - ❌ Implement graceful shutdown of HTTP server
+  - ✅ Implement graceful shutdown of HTTP server (handled by controller-runtime)
   - ✅ Add health check endpoints for liveness/readiness probes
 - **Testing**: ✅ HTTP endpoint tests and Prometheus format validation
-- **Acceptance Criteria**: 🔄 Serves valid Prometheus metrics on `/metrics` endpoint (OpenTelemetry backend ready, needs HTTP server to expose endpoint)
+- **Acceptance Criteria**: ✅ Serves valid Prometheus metrics on `/metrics` endpoint via controller-runtime's shared registry
 
 #### 6. Collector Discovery Integration ❌ NOT COMPLETE
 **Goal**: Enable automatic discovery by existing Collector infrastructure

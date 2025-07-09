@@ -3,7 +3,6 @@ package adxexporter
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // MetricsExporterReconciler reconciles MetricsExporter objects
@@ -32,16 +32,15 @@ type MetricsExporterReconciler struct {
 	KustoClusters         map[string]string // database name -> endpoint URL
 	OTLPEndpoint          string
 	EnableMetricsEndpoint bool
-	MetricsPort           string
-	MetricsPath           string
+	MetricsPort           string // Used for controller-runtime metrics server configuration
+	MetricsPath           string // For documentation/consistency (controller-runtime uses /metrics)
 
 	// Query execution components
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
 	Clock          clock.Clock
 
-	// Metrics server components
-	Meter         metric.Meter
-	metricsServer *http.Server
+	// Metrics components
+	Meter metric.Meter
 
 	// Synchronization for shared state
 	mu sync.RWMutex // Protects QueryExecutors map
@@ -93,7 +92,10 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 		return nil
 	}
 
+	// Register with controller-runtime's shared metrics registry
 	exporter, err := prometheus.New(
+		// Register with controller-runtime's shared registry instead of default
+		prometheus.WithRegisterer(crmetrics.Registry),
 		// Adds a namespace prefix to all metrics
 		prometheus.WithNamespace("adxexporter"),
 		// Disables the long otel specific scope string since we're only exposing through metrics
