@@ -107,6 +107,12 @@ type AlertRuleStatus struct {
 	Message       string      `json:"message,omitempty"`
 	LastQueryTime metav1.Time `json:"lastQueryTime,omitempty"`
 	LastAlertTime metav1.Time `json:"lastAlertTime,omitempty"`
+	
+	// LastExecutionTime indicates when the AlertRule was last executed by the alerter
+	LastExecutionTime *metav1.Time `json:"lastExecutionTime,omitempty"`
+	
+	// NumberOfAlertsGenerated indicates the number of alerts generated during the last execution
+	NumberOfAlertsGenerated *int `json:"numberOfAlertsGenerated,omitempty"`
 }
 
 // +kubebuilder:object:root=true
