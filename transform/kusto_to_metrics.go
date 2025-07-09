@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -156,6 +157,21 @@ func (t *KustoToMetricsTransformer) extractValue(row map[string]any) (float64, e
 		return float64(v), nil
 	case int64:
 		return float64(v), nil
+	case value.Long:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+		return float64(v.Value), nil
+	case value.Real:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+		return v.Value, nil
+	case value.Int:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+		return float64(v.Value), nil
 	case string:
 		// Try to parse string as float
 		parsed, err := strconv.ParseFloat(v, 64)
@@ -283,9 +299,21 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 	}
 
 	// Check if value is numeric type
-	switch rawValue.(type) {
+	switch v := rawValue.(type) {
 	case float64, float32, int, int32, int64, string:
 		// Valid numeric types (string will be validated during parsing)
+	case value.Long:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+	case value.Real:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+	case value.Int:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
 	case nil:
 		return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
 	default:
