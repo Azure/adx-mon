@@ -101,6 +101,61 @@ spec:
   interval: 5m
 ```
 
+### Using Ingestion Delay for Data Completeness
+
+To account for ingestion delay, summary rules can be configured with the `ingestionDelay` property.
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: external-data-summary
+spec:
+  database: ExternalMetrics
+  name: ExternalDataSummary
+  body: |
+    ExternalMetrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Source == "external_api"
+    | summarize
+        request_count = count(),
+        avg_response_time = avg(ResponseTime),
+        error_rate = countif(StatusCode >= 400) * 100.0 / count()
+      by bin(Timestamp, 15m), Endpoint
+  table: ExternalDataSummary
+  interval: 15m
+  ingestionDelay: 5m
+```
+
+**When to use Ingestion Delay:**
+- **All Kusto tables have ingestion delay**: Every table in Kusto has some amount of delay between when data is observed and when it becomes queryable. Use ingestion delay to ensure your summary rules process complete data.
+- **External data sources**: External data explorer clusters might have longer ingestion delays.
+
+**Measuring ingestion delay for a table:**
+Use this query to understand the typical ingestion delay for your data:
+
+```kql
+TableName
+| where Timestamp > ago(1d)
+| project ObservedTimestamp, IngestionTimestamp=ingestion_time()
+| extend diff = IngestionTimestamp-ObservedTimestamp
+| summarize percentiles(diff, 50, 90, 99, 100)
+```
+
+**Recommended minimum delays:**
+- **Logs**: At least 15 minutes
+- **Metrics**: At least 5 minutes
+
+**Balancing delay vs. latency:**
+- Longer delays ensure better data consistency but add latency to summary rule results
+- Use Kusto views to union current data with summary data for up-to-date queries
+
+**How it works:**
+- The execution window is shifted back by the specified delay before being aligned to the interval boundary
+- For example, with `interval: 1h` and `ingestionDelay: 15m`:
+  - Current time: 14:05
+  - Without delay: Process 13:00-14:00 data
+  - With delay: Process 12:00-13:00 data (shifted back by 10 minutes, then aligned to hour boundary)
 
 ## Alerting
 
@@ -214,6 +269,14 @@ table: MetricsHourly           # Hourly rollups of metrics
 table: ErrorRate15Min         # 15-minute error rate calculations  
 table: DailyResourceUsage     # Daily resource usage summaries
 ```
+
+#### Mitigate Latency with Views
+When using longer ingestion delays for data consistency, create views that combine historical summaries with recent data for up-to-date queries. See the [Function CRD documentation](crds.md#function) for examples of creating views that union historical summary data with recent raw data.
+
+This approach allows you to:
+- Use longer ingestion delays (e.g., 30 minutes) for consistent historical data
+- Provide up-to-date data through views that union recent raw data
+- Balance data consistency with query freshness
 
 #### Environment Separation
 Use cluster labels to create environment-agnostic rules:

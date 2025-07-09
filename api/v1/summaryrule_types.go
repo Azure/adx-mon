@@ -52,6 +52,11 @@ type SummaryRuleSpec struct {
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
 	Interval metav1.Duration `json:"interval"`
+	// IngestionDelay is the delay to subtract from the execution window start and end times
+	// to account for data ingestion latency. This ensures the query processes data that has
+	// been fully ingested. If not specified, no delay is applied.
+	// +optional
+	IngestionDelay *metav1.Duration `json:"ingestionDelay,omitempty"`
 
 	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
 	// are deployment specific and configured on ingestor instances. For example, an ingestor instance may be
@@ -286,23 +291,26 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		clk = clock.RealClock{}
 	}
 
-	// Calculate the next execution window based on the last successful execution
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	if lastSuccessfulEndTime == nil {
-		// First execution: start from current time aligned to interval boundary, going back one interval
-		now := clk.Now().UTC()
-		// Align to minute boundary for consistency
+		// First execution: start from current time minus delay, aligned to interval boundary
+		now := clk.Now().UTC().Add(-delay)
 		alignedNow := now.Truncate(s.Spec.Interval.Duration)
 		windowEndTime = alignedNow
 		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
 	} else {
-		// Subsequent executions: start from where the last successful execution ended
-		windowStartTime = *lastSuccessfulEndTime
-		windowStartTime = windowStartTime.Truncate(s.Spec.Interval.Duration)
+		// Subsequent executions: start from where the last successful execution ended, minus delay, aligned to interval boundary
+		start := lastSuccessfulEndTime.Add(-delay)
+		windowStartTime = start.Truncate(s.Spec.Interval.Duration)
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
 		// Ensure we don't execute future windows
-		now := clk.Now().UTC().Truncate(time.Minute)
+		now := clk.Now().UTC().Add(-delay).Truncate(time.Minute)
 		if windowEndTime.After(now) {
 			windowEndTime = now
 		}

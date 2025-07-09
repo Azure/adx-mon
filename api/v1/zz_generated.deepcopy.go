@@ -1038,6 +1038,11 @@ func (in *SummaryRuleList) DeepCopyObject() runtime.Object {
 func (in *SummaryRuleSpec) DeepCopyInto(out *SummaryRuleSpec) {
 	*out = *in
 	out.Interval = in.Interval
+	if in.IngestionDelay != nil {
+		in, out := &in.IngestionDelay, &out.IngestionDelay
+		*out = new(metav1.Duration)
+		**out = **in
+	}
 	if in.Criteria != nil {
 		in, out := &in.Criteria, &out.Criteria
 		*out = make(map[string][]string, len(*in))
