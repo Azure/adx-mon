@@ -111,7 +111,7 @@ func realMain(ctx *cli.Context) error {
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
-		HealthProbeBindAddress: ctx.String("metrics-port"), // If metrics are disabled, we still need a health probe address
+		HealthProbeBindAddress: ":8081", // Port for health endpoints
 		Metrics: metricsserver.Options{
 			BindAddress: serverBindAddress,
 		},
