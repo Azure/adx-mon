@@ -182,7 +182,7 @@ func TestShouldProcessMetricsExporter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := reconciler.shouldProcessMetricsExporter(tt.metricsExporter)
+			result := matchesCriteria(tt.metricsExporter.Spec.Criteria, reconciler.ClusterLabels)
 			assert.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -372,7 +372,7 @@ func TestExposeMetrics(t *testing.T) {
 				},
 			}
 
-			err := reconciler.exposeMetrics()
+			err := reconciler.exposeMetricsServer()
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -411,4 +411,105 @@ func TestGetQueryExecutor_MissingEndpoint(t *testing.T) {
 		// If it succeeds, we should have an executor
 		assert.NotNil(t, executor)
 	}
+}
+
+func TestTransformAndRegisterMetrics(t *testing.T) {
+	// Test the integration between transformation and metrics registration
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Create test MetricsExporter with transform configuration
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumn:       "value",
+				MetricNameColumn:  "metric_name",
+				TimestampColumn:   "timestamp",
+				LabelColumns:      []string{"label1", "label2"},
+				DefaultMetricName: "default_metric",
+			},
+		},
+	}
+
+	// Create test data that matches the transform configuration
+	rows := []map[string]any{
+		{
+			"metric_name": "test_metric_1",
+			"value":       42.5,
+			"timestamp":   time.Now(),
+			"label1":      "value1",
+			"label2":      "value2",
+		},
+		{
+			"metric_name": "test_metric_2",
+			"value":       100.0,
+			"timestamp":   time.Now(),
+			"label1":      "different_value",
+			"label2":      "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
+	// Test transformation when using default metric name (no metric name column)
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+
+	// Create MetricsExporter with default metric name (no MetricNameColumn)
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-default-metric",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumn:       "value",
+				TimestampColumn:   "timestamp",
+				LabelColumns:      []string{"label1", "label2"},
+				DefaultMetricName: "default_metric_name", // No MetricNameColumn specified
+			},
+		},
+	}
+
+	// Create test data without metric_name column
+	rows := []map[string]any{
+		{
+			"value":     42.5,
+			"timestamp": time.Now(),
+			"label1":    "value1",
+			"label2":    "value2",
+		},
+		{
+			"value":     100.0,
+			"timestamp": time.Now(),
+			"label1":    "different_value",
+			"label2":    "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
 }

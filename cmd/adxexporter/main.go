@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -100,7 +101,8 @@ func realMain(ctx *cli.Context) error {
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme: scheme,
+		Scheme:                 scheme,
+		HealthProbeBindAddress: ":8081", // Port for health endpoints
 		Metrics: metricsserver.Options{
 			BindAddress: "0", // Disable metrics server
 		},
@@ -123,6 +125,29 @@ func realMain(ctx *cli.Context) error {
 	}
 	if err = adxexp.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)
+	}
+
+	if err := mgr.AddReadyzCheck("metrics-ready", func(req *http.Request) error {
+		if !adxexp.EnableMetricsEndpoint {
+			return nil // Always ready if metrics are disabled
+		}
+
+		if adxexp.Meter == nil {
+			return fmt.Errorf("metrics not ready")
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("unable to add readyz check: %w", err)
+	}
+
+	if err := mgr.AddHealthzCheck("healthz", func(req *http.Request) error {
+		if adxexp.Meter == nil {
+			return fmt.Errorf("metrics not ready")
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("unable to add healthz check: %w", err)
 	}
 
 	// Start manager
