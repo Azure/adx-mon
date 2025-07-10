@@ -224,10 +224,12 @@ func (e *worker) updateAlertRuleStatus(ctx context.Context, executionTime time.T
 		return
 	}
 
-	// Update the status fields
+	// Update the status fields using existing fields
 	executionTimeMeta := metav1.NewTime(executionTime)
-	alertRule.Status.LastExecutionTime = &executionTimeMeta
-	alertRule.Status.NumberOfAlertsGenerated = &alertsGenerated
+	alertRule.Status.LastQueryTime = executionTimeMeta
+	if alertsGenerated > 0 {
+		alertRule.Status.LastAlertTime = executionTimeMeta
+	}
 	alertRule.Status.Status = status
 	alertRule.Status.Message = message
 
@@ -238,8 +240,8 @@ func (e *worker) updateAlertRuleStatus(ctx context.Context, executionTime time.T
 		return
 	}
 
-	logger.Debugf("Updated AlertRule %s/%s status: LastExecutionTime=%v, NumberOfAlertsGenerated=%d, Status=%s",
-		e.rule.Namespace, e.rule.Name, executionTime, alertsGenerated, status)
+	logger.Debugf("Updated AlertRule %s/%s status: LastQueryTime=%v, LastAlertTime=%v, Status=%s",
+		e.rule.Namespace, e.rule.Name, executionTime, alertRule.Status.LastAlertTime, status)
 }
 
 func (e *worker) Close() {
