@@ -387,30 +387,30 @@ func TestExposeMetrics(t *testing.T) {
 	}
 }
 
-func TestGetQueryExecutor_MissingEndpoint(t *testing.T) {
+func TestInitializeQueryExecutors(t *testing.T) {
 	reconciler := &MetricsExporterReconciler{
 		KustoClusters: map[string]string{
 			"existing-db": "https://cluster.kusto.windows.net",
 		},
 	}
 
-	// Test with database that doesn't exist in KustoClusters
-	_, err := reconciler.getQueryExecutor("missing-db")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no kusto endpoint configured for database missing-db")
-
-	// Test with database that exists in KustoClusters
-	// The Kusto client creation might succeed even with non-existent endpoints
-	// as it doesn't validate connectivity during construction
-	executor, err := reconciler.getQueryExecutor("existing-db")
+	// Test successful initialization
+	err := reconciler.initializeQueryExecutors()
 	if err != nil {
 		// If it fails, it should be due to Kusto client creation, not missing endpoint
 		assert.Contains(t, err.Error(), "failed to create Kusto client")
-		assert.NotContains(t, err.Error(), "no kusto endpoint configured")
 	} else {
-		// If it succeeds, we should have an executor
-		assert.NotNil(t, executor)
+		// If it succeeds, we should have executors for all databases
+		assert.NotNil(t, reconciler.QueryExecutors)
+		assert.Len(t, reconciler.QueryExecutors, 1)
+		assert.Contains(t, reconciler.QueryExecutors, "existing-db")
 	}
+
+	// Test direct access behavior - missing database
+	reconciler.QueryExecutors = map[string]*QueryExecutor{}
+	executor, exists := reconciler.QueryExecutors["missing-db"]
+	assert.False(t, exists)
+	assert.Nil(t, executor)
 }
 
 func TestTransformAndRegisterMetrics(t *testing.T) {
