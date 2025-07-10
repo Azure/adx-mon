@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/stretchr/testify/require"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWorker_StatusUpdate_NoKubernetesClient(t *testing.T) {

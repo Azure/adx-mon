@@ -11,9 +11,9 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,9 +38,9 @@ type worker struct {
 	AlertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
-	ctrlCli          client.Client
-	alertsGenerated  int // Track alerts generated in current execution
+	HandlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	ctrlCli         client.Client
+	alertsGenerated int // Track alerts generated in current execution
 }
 
 func (e *worker) Run(ctx context.Context) {
@@ -106,10 +106,10 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	defer cancel()
 
 	endTime := time.Now().UTC()
-	
+
 	// Reset alerts counter for this execution
 	e.alertsGenerated = 0
-	
+
 	queryContext, err := NewQueryContext(e.rule, endTime, e.Region)
 	if err != nil {
 		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
@@ -118,7 +118,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	}
 
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	
+
 	// Create a wrapper handler that tracks alerts generated
 	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
 		err := e.HandlerFn(ctx, endpoint, qc, row)
@@ -128,7 +128,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		}
 		return err
 	}
-	
+
 	err, rows := e.kustoClient.Query(ctx, queryContext, wrappedHandler)
 	if err != nil {
 		// This failed because we sent too many notifications.
@@ -159,7 +159,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 		// Store the original query error before it gets overwritten
 		originalQueryErr := err
-		
+
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", originalQueryErr.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
@@ -197,7 +197,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	metrics.QueriesRunTotal.WithLabelValues().Inc()
 	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(endTime))
 	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
-	
+
 	// Update AlertRule status with execution information
 	e.updateAlertRuleStatus(ctx, endTime, e.alertsGenerated, "Success", "")
 }
