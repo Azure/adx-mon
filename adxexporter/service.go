@@ -76,9 +76,12 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		req.Namespace, req.Name, metricsExporter.Spec.Database, metricsExporter.Spec.Interval.Duration)
 
 	// Execute KQL query if it's time
-	if err := r.executeMetricsExporter(ctx, &metricsExporter); err != nil {
-		logger.Errorf("Failed to execute MetricsExporter %s/%s: %v", req.Namespace, req.Name, err)
-		// Continue with requeue even on error to retry later
+	execErr := r.executeMetricsExporter(ctx, &metricsExporter)
+
+	// Always update status, whether success or failure
+	if statusErr := r.updateStatus(ctx, &metricsExporter, execErr); statusErr != nil {
+		logger.Errorf("Failed to update status for MetricsExporter %s/%s: %v", req.Namespace, req.Name, statusErr)
+		// Don't return error here - we want to continue processing
 	}
 
 	// Requeue for next interval (for continuous processing)
@@ -146,6 +149,33 @@ func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// updateStatus updates the MetricsExporter status with proper Kusto error parsing
+func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmonv1.MetricsExporter, err error) error {
+	condition := metav1.Condition{
+		Type:               adxmonv1.MetricsExporterOwner,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ExecutionSuccessful",
+		Message:            "Query executed successfully",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: me.GetGeneration(),
+	}
+
+	if err != nil {
+		logger.Errorf("Failed to execute MetricsExporter %s/%s: %v", me.GetNamespace(), me.GetName(), err)
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = "ExecutionFailed"
+		condition.Message = kustoutil.ParseError(err)
+	}
+
+	me.SetCondition(condition)
+
+	if statusErr := r.Status().Update(ctx, me); statusErr != nil {
+		return fmt.Errorf("failed to update status: %w", statusErr)
+	}
+
+	return nil
+}
+
 // executeMetricsExporter handles the execution logic for a MetricsExporter
 func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) error {
 	// Get or create query executor for this database
@@ -197,14 +227,6 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 
 	// Update the last execution time using the CRD method
 	me.SetLastExecutionTime(endTime)
-
-	// TODO: Update the CRD status in the cluster
-	// For now, we'll leave this as a placeholder since we need to
-	// implement the status update mechanism
-	if logger.IsDebug() {
-		logger.Debugf("Updated last execution time to %s for MetricsExporter %s/%s",
-			endTime.Format(time.RFC3339), me.Namespace, me.Name)
-	}
 
 	return nil
 }
