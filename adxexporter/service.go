@@ -39,12 +39,8 @@ type MetricsExporterReconciler struct {
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
 	Clock          clock.Clock
 
-	// Metrics server components
-	Meter         metric.Meter
-	metricsServer *http.Server
-
-	// Synchronization for shared state
-	mu sync.RWMutex // Protects QueryExecutors map
+	// Metrics components
+	Meter metric.Meter
 }
 
 // Reconcile handles MetricsExporter reconciliation
@@ -144,6 +140,11 @@ func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// Initialize QueryExecutors for all configured databases
+	if err := r.initializeQueryExecutors(); err != nil {
+		return fmt.Errorf("failed to initialize query executors: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.MetricsExporter{}).
 		Complete(r)
@@ -178,10 +179,10 @@ func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmon
 
 // executeMetricsExporter handles the execution logic for a MetricsExporter
 func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) error {
-	// Get or create query executor for this database
-	executor, err := r.getQueryExecutor(me.Spec.Database)
-	if err != nil {
-		return fmt.Errorf("failed to get query executor for database %s: %w", me.Spec.Database, err)
+	// Get query executor for this database
+	executor, exists := r.QueryExecutors[me.Spec.Database]
+	if !exists {
+		return fmt.Errorf("no query executor configured for database %s", me.Spec.Database)
 	}
 
 	// Set the clock on the CRD for testing
@@ -303,28 +304,14 @@ func (r *MetricsExporterReconciler) registerMetrics(ctx context.Context, metrics
 	return nil
 }
 
-// getQueryExecutor gets or creates a QueryExecutor for the specified database
-func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExecutor, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.QueryExecutors == nil {
+// initializeQueryExecutors creates QueryExecutors for all configured databases
+func (r *MetricsExporterReconciler) initializeQueryExecutors() error {
 		r.QueryExecutors = make(map[string]*QueryExecutor)
-	}
 
-	// Check if executor already exists (read lock)
-	if executor, exists := r.QueryExecutors[database]; exists {
-		return executor, nil
-	}
-
-	// Get the endpoint for this database from KustoClusters
-	endpoint, exists := r.KustoClusters[database]
-	if !exists {
-		return nil, fmt.Errorf("no kusto endpoint configured for database %s", database)
-	}
-
+	for database, endpoint := range r.KustoClusters {
 	kustoClient, err := NewKustoClient(endpoint, database)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Kusto client: %w", err)
+			return fmt.Errorf("failed to create Kusto client for database %s: %w", database, err)
 	}
 
 	executor := NewQueryExecutor(kustoClient)
@@ -333,5 +320,7 @@ func (r *MetricsExporterReconciler) getQueryExecutor(database string) (*QueryExe
 	}
 
 	r.QueryExecutors[database] = executor
-	return executor, nil
+	}
+
+	return nil
 }
