@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
 )
@@ -149,6 +150,51 @@ func TestTransformValueTypes(t *testing.T) {
 
 			metrics, err := transformer.Transform(results)
 			require.NoError(t, err)
+			require.Len(t, metrics, 1)
+			require.Equal(t, tc.expected, metrics[0].Value)
+		})
+	}
+}
+
+func TestTransformKustoValueTypes(t *testing.T) {
+	config := TransformConfig{
+		ValueColumn:       "value",
+		DefaultMetricName: "test_metric",
+	}
+	meter := noop.NewMeterProvider().Meter("test")
+	transformer := NewKustoToMetricsTransformer(config, meter)
+
+	testCases := []struct {
+		name     string
+		value    any
+		expected float64
+	}{
+		{"value.Long valid", value.Long{Value: 42, Valid: true}, 42.0},
+		{"value.Real valid", value.Real{Value: 42.5, Valid: true}, 42.5},
+		{"value.Int valid", value.Int{Value: 42, Valid: true}, 42.0},
+		{"value.Long invalid", value.Long{Value: 42, Valid: false}, 0.0},   // Should fail validation
+		{"value.Real invalid", value.Real{Value: 42.5, Valid: false}, 0.0}, // Should fail validation
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := []map[string]any{
+				{"value": tc.value},
+			}
+
+			// Test validation first
+			err := transformer.Validate(results)
+			if tc.name == "value.Long invalid" || tc.name == "value.Real invalid" {
+				// These should fail validation due to Valid=false
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "null value")
+				return
+			}
+			require.NoError(t, err, "Validation should pass for valid Kusto types")
+
+			// Test transformation
+			metrics, err := transformer.Transform(results)
+			require.NoError(t, err, "Transform should handle Kusto types")
 			require.Len(t, metrics, 1)
 			require.Equal(t, tc.expected, metrics[0].Value)
 		})
@@ -427,4 +473,87 @@ func TestTransformMultipleRows(t *testing.T) {
 	require.Equal(t, "cpu_usage", metrics[2].Name)
 	require.Equal(t, 92.1, metrics[2].Value)
 	require.Equal(t, "server2", metrics[2].Labels["host"])
+}
+
+func TestValidateKustoValueTypes(t *testing.T) {
+	meter := noop.NewMeterProvider().Meter("test")
+
+	testCases := []struct {
+		name    string
+		config  TransformConfig
+		results []map[string]any
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "value.Long valid should pass validation",
+			config: TransformConfig{
+				ValueColumn:       "value",
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value": value.Long{Value: 42, Valid: true}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "value.Real valid should pass validation",
+			config: TransformConfig{
+				ValueColumn:       "value",
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value": value.Real{Value: 42.5, Valid: true}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "value.Int valid should pass validation",
+			config: TransformConfig{
+				ValueColumn:       "value",
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value": value.Int{Value: 42, Valid: true}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "value.Long invalid should fail validation",
+			config: TransformConfig{
+				ValueColumn:       "value",
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value": value.Long{Value: 42, Valid: false}},
+			},
+			wantErr: true,
+			errMsg:  "null value",
+		},
+		{
+			name: "value.Real invalid should fail validation",
+			config: TransformConfig{
+				ValueColumn:       "value",
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value": value.Real{Value: 42.5, Valid: false}},
+			},
+			wantErr: true,
+			errMsg:  "null value",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			transformer := NewKustoToMetricsTransformer(tc.config, meter)
+			err := transformer.Validate(tc.results)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.errMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

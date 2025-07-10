@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -112,16 +114,23 @@ func (t *KustoToMetricsTransformer) extractMetricName(row map[string]any) (strin
 			return "", fmt.Errorf("metric name column '%s' not found in row", t.config.MetricNameColumn)
 		}
 
-		name, ok := rawValue.(string)
-		if !ok {
+		switch v := rawValue.(type) {
+		case string:
+			if v == "" {
+				return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
+			}
+			return v, nil
+		case value.String:
+			if !v.Valid {
+				return "", fmt.Errorf("metric name column '%s' contains null value", t.config.MetricNameColumn)
+			}
+			if v.Value == "" {
+				return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
+			}
+			return v.Value, nil
+		default:
 			return "", fmt.Errorf("metric name column '%s' contains non-string value: %T", t.config.MetricNameColumn, rawValue)
 		}
-
-		if name == "" {
-			return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
-		}
-
-		return name, nil
 	}
 
 	// If default metric name is provided, use it
@@ -156,6 +165,21 @@ func (t *KustoToMetricsTransformer) extractValue(row map[string]any) (float64, e
 		return float64(v), nil
 	case int64:
 		return float64(v), nil
+	case value.Long:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+		return float64(v.Value), nil
+	case value.Real:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+		return v.Value, nil
+	case value.Int:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+		return float64(v.Value), nil
 	case string:
 		// Try to parse string as float
 		parsed, err := strconv.ParseFloat(v, 64)
@@ -206,6 +230,11 @@ func (t *KustoToMetricsTransformer) extractTimestamp(row map[string]any) (time.T
 			return time.Time{}, fmt.Errorf("timestamp column '%s' contains unparseable string value '%s': %w", t.config.TimestampColumn, v, err)
 		}
 		return parsed, nil
+	case value.DateTime:
+		if !v.Valid {
+			return time.Time{}, fmt.Errorf("timestamp column '%s' contains null value", t.config.TimestampColumn)
+		}
+		return v.Value, nil
 	default:
 		return time.Time{}, fmt.Errorf("timestamp column '%s' contains unsupported type %T", t.config.TimestampColumn, rawValue)
 	}
@@ -222,15 +251,18 @@ func (t *KustoToMetricsTransformer) extractLabels(row map[string]any) (map[strin
 			continue
 		}
 
-		// Convert value to string
-		var labelValue string
-		if rawValue == nil {
-			labelValue = ""
-		} else {
-			labelValue = fmt.Sprintf("%v", rawValue)
+		switch v := rawValue.(type) {
+		case string:
+			labels[labelColumn] = v
+		case value.String:
+			if !v.Valid {
+				return nil, fmt.Errorf("label column '%s' contains invalid value: %T", labelColumn, rawValue)
+			}
+			labels[labelColumn] = v.Value
+		default:
+			// Lables must be string key:value pairs.
+			return nil, fmt.Errorf("label column '%s' contains unsupported type %T", labelColumn, rawValue)
 		}
-
-		labels[labelColumn] = labelValue
 	}
 
 	return labels, nil
@@ -283,9 +315,21 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 	}
 
 	// Check if value is numeric type
-	switch rawValue.(type) {
+	switch v := rawValue.(type) {
 	case float64, float32, int, int32, int64, string:
 		// Valid numeric types (string will be validated during parsing)
+	case value.Long:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+	case value.Real:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
+	case value.Int:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+		}
 	case nil:
 		return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
 	default:
@@ -325,8 +369,7 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 
 	// Log warning about missing label columns but don't fail validation
 	if len(missingLabelColumns) > 0 {
-		// Note: In a real implementation, this would use a proper logger
-		// For now, we'll just document that missing label columns are skipped
+		logger.Warnf("Missing label columns: %v. These columns will be skipped in the transformation.", missingLabelColumns)
 	}
 
 	return nil

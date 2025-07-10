@@ -111,6 +111,13 @@ func (me *MetricsExporter) GetCondition() *metav1.Condition {
 	return meta.FindStatusCondition(me.Status.Conditions, MetricsExporterOwner)
 }
 
+// SetCondition sets the main condition for the MetricsExporter
+func (me *MetricsExporter) SetCondition(condition metav1.Condition) {
+	condition.Type = MetricsExporterOwner
+	condition.ObservedGeneration = me.GetGeneration()
+	meta.SetStatusCondition(&me.Status.Conditions, condition)
+}
+
 // GetLastExecutionTime extracts the last execution time from MetricsExporter status
 func (me *MetricsExporter) GetLastExecutionTime() *time.Time {
 	condition := meta.FindStatusCondition(me.Status.Conditions, MetricsExporterLastSuccessfulExecution)
