@@ -113,16 +113,23 @@ func (t *KustoToMetricsTransformer) extractMetricName(row map[string]any) (strin
 			return "", fmt.Errorf("metric name column '%s' not found in row", t.config.MetricNameColumn)
 		}
 
-		name, ok := rawValue.(string)
-		if !ok {
+		switch v := rawValue.(type) {
+		case string:
+			if v == "" {
+				return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
+			}
+			return v, nil
+		case value.String:
+			if !v.Valid {
+				return "", fmt.Errorf("metric name column '%s' contains null value", t.config.MetricNameColumn)
+			}
+			if v.Value == "" {
+				return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
+			}
+			return v.Value, nil
+		default:
 			return "", fmt.Errorf("metric name column '%s' contains non-string value: %T", t.config.MetricNameColumn, rawValue)
 		}
-
-		if name == "" {
-			return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
-		}
-
-		return name, nil
 	}
 
 	// If default metric name is provided, use it
