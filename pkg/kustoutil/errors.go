@@ -24,16 +24,20 @@ func ParseError(err error) string {
 
 	var kustoerr *kustoerrors.HttpError
 	if errors.As(err, &kustoerr) {
-		decoded := kustoerr.UnmarshalREST()
-		if errMap, ok := decoded["error"].(map[string]interface{}); ok {
-			if errMsgVal, ok := errMap["@message"].(string); ok {
-				errMsg = errMsgVal
+		// Try to extract the @message field from the Kusto error response
+		if decoded := kustoerr.UnmarshalREST(); decoded != nil {
+			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
+				if errMsgVal, ok := errMap["@message"].(string); ok && errMsgVal != "" {
+					errMsg = errMsgVal
+				}
 			}
 		}
 	}
 
+	// Truncate if necessary
 	if len(errMsg) > MaxErrorMessageLength {
 		errMsg = errMsg[:MaxErrorMessageLength]
 	}
+
 	return errMsg
 }
