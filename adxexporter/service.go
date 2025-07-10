@@ -3,23 +3,25 @@ package adxexporter
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/transform"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // MetricsExporterReconciler reconciles MetricsExporter objects
@@ -32,8 +34,8 @@ type MetricsExporterReconciler struct {
 	KustoClusters         map[string]string // database name -> endpoint URL
 	OTLPEndpoint          string
 	EnableMetricsEndpoint bool
-	MetricsPort           string
-	MetricsPath           string
+	MetricsPort           string // Used for controller-runtime metrics server configuration
+	MetricsPath           string // For documentation/consistency (controller-runtime uses /metrics)
 
 	// Query execution components
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
@@ -92,7 +94,9 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 		return nil
 	}
 
+	// Register with controller-runtime's shared metrics registry, replacing the default registry
 	exporter, err := prometheus.New(
+		prometheus.WithRegisterer(crmetrics.Registry),
 		// Adds a namespace prefix to all metrics
 		prometheus.WithNamespace("adxexporter"),
 		// Disables the long otel specific scope string since we're only exposing through metrics
@@ -102,7 +106,9 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 		return fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
-	r.Meter = provider.Meter("adxexporter")
+	otel.SetMeterProvider(provider)
+
+	r.Meter = otel.GetMeterProvider().Meter("adxexporter")
 
 	return nil
 }
@@ -306,20 +312,20 @@ func (r *MetricsExporterReconciler) registerMetrics(ctx context.Context, metrics
 
 // initializeQueryExecutors creates QueryExecutors for all configured databases
 func (r *MetricsExporterReconciler) initializeQueryExecutors() error {
-		r.QueryExecutors = make(map[string]*QueryExecutor)
+	r.QueryExecutors = make(map[string]*QueryExecutor)
 
 	for database, endpoint := range r.KustoClusters {
-	kustoClient, err := NewKustoClient(endpoint, database)
-	if err != nil {
+		kustoClient, err := NewKustoClient(endpoint, database)
+		if err != nil {
 			return fmt.Errorf("failed to create Kusto client for database %s: %w", database, err)
-	}
+		}
 
-	executor := NewQueryExecutor(kustoClient)
-	if r.Clock != nil {
-		executor.SetClock(r.Clock)
-	}
+		executor := NewQueryExecutor(kustoClient)
+		if r.Clock != nil {
+			executor.SetClock(r.Clock)
+		}
 
-	r.QueryExecutors[database] = executor
+		r.QueryExecutors[database] = executor
 	}
 
 	return nil
