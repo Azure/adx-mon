@@ -1,13 +1,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/Azure/adx-mon/adxexporter"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -44,7 +41,7 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:  "metrics-port",
-				Usage: "Address and port for the Prometheus metrics server",
+				Usage: "Address and port for the health checks and metrics server",
 				Value: ":8080",
 			},
 			&cli.StringFlag{
@@ -82,29 +79,28 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to add adxmonv1 scheme: %w", err)
 	}
 
-	// Create cancellable context
-	svcCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Set up signal handling
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
-		logger.Infof("Received signal %s, initiating graceful shutdown...", sig.String())
-		cancel()
-	}()
+	// Let controller-runtime handle signals
+	svcCtx := ctrl.SetupSignalHandler()
 
 	// Set the controller-runtime logger to use our logger
 	log.SetLogger(logger.AsLogr())
 
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
+
+	// Configure server address - use same port for health checks and metrics
+	var serverBindAddress string
+	if ctx.Bool("enable-metrics-endpoint") {
+		serverBindAddress = ctx.String("metrics-port")
+	} else {
+		serverBindAddress = "0" // Disable server
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: ":8081", // Port for health endpoints
 		Metrics: metricsserver.Options{
-			BindAddress: "0", // Disable metrics server
+			BindAddress: serverBindAddress,
 		},
 	})
 	if err != nil {
@@ -151,14 +147,10 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	// Start manager
-	go func() {
-		if err := mgr.Start(svcCtx); err != nil {
-			logger.Errorf("Problem running manager: %v", err)
-			cancel()
-		}
-	}()
+	if err := mgr.Start(svcCtx); err != nil {
+		logger.Errorf("Problem running manager: %v", err)
+	}
 
-	<-svcCtx.Done()
 	return nil
 }
 
