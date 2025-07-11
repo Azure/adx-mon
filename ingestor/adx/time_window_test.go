@@ -341,7 +341,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 }
 
 func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
-	t.Run("addOneTick compensates for subtractOneTick to maintain window continuity", func(t *testing.T) {
+	t.Run("addOneTick maintains time window continuity", func(t *testing.T) {
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -356,21 +356,17 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 			},
 		}
 
-		// Track submitted KQL and time windows
+		// Track submitted time windows
 		var submissions []struct {
-			KQL       string
 			startTime string
 			endTime   string
 		}
 
 		mockSubmitRule := func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
-			// Apply the same substitution logic as the real implementation
-			kql := kustoutil.ApplySubstitutions(rule.Spec.Body, startTime, endTime, nil)
 			submissions = append(submissions, struct {
-				KQL       string
 				startTime string
 				endTime   string
-			}{kql, startTime, endTime})
+			}{startTime, endTime})
 			return "test-operation-id", nil
 		}
 
@@ -409,14 +405,50 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		require.True(t, secondStartParsed.Equal(firstEndParsed) || secondStartParsed.Equal(firstEndParsed.Add(kustoutil.OneTick)),
 			"Second window should start where first ended (with 1 tick adjustment): %v vs %v",
 			secondStartParsed, firstEndParsed)
+	})
 
-		// Verify both KQL queries have adjusted endTime for between syntax
-		require.Contains(t, submissions[0].KQL, "let _endTime=datetime(")
-		require.Contains(t, submissions[1].KQL, "let _endTime=datetime(")
+	t.Run("subtractOneTick adjusts KQL endTime for between syntax", func(t *testing.T) {
+		// Create a rule with between syntax
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-rule",
+				Generation: 1,
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody | where PreciseTimeStamp between (_startTime .. _endTime)",
+			},
+		}
+
+		// Track submitted KQL
+		var kqlSubmissions []string
+
+		mockSubmitRule := func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+			// Apply the same substitution logic as the real implementation
+			kql := kustoutil.ApplySubstitutions(rule.Spec.Body, startTime, endTime, nil)
+			kqlSubmissions = append(kqlSubmissions, kql)
+			return "test-operation-id", nil
+		}
+
+		// Execute rule with precise nanosecond timestamp
+		start := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+		end := time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC)
+
+		_, err := mockSubmitRule(context.Background(), *rule,
+			start.Format(time.RFC3339Nano),
+			end.Format(time.RFC3339Nano))
+		require.NoError(t, err)
+
+		// Should have one submission
+		require.Len(t, kqlSubmissions, 1)
+
+		// Verify KQL query has adjusted endTime for between syntax
+		require.Contains(t, kqlSubmissions[0], "let _endTime=datetime(")
 
 		// The KQL endTime should be 1 tick less than the window endTime
-		require.Contains(t, submissions[0].KQL, ".9999999Z);") // Should end with adjusted nanoseconds
-		require.Contains(t, submissions[1].KQL, ".9999999Z);") // Should end with adjusted nanoseconds
+		require.Contains(t, kqlSubmissions[0], ".9999999Z);") // Should end with adjusted nanoseconds
 	})
 
 	t.Run("time window calculation preserves interval boundaries despite tick adjustments", func(t *testing.T) {
