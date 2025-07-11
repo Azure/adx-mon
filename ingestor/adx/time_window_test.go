@@ -242,7 +242,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 		require.NoError(t, err)
 		expectedAdjustedEndTime := kustoutil.AddOneTick(expectedEndTime)
 		require.True(t, lastExecution.Equal(expectedAdjustedEndTime),
-			"Last execution time should match the submitted window end time plus 1 tick: got %v, expected %v", 
+			"Last execution time should match the submitted window end time plus 1 tick: got %v, expected %v",
 			lastExecution, expectedAdjustedEndTime)
 
 		// Verify an async operation was created
@@ -377,9 +377,9 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		// First execution - simulate time window 10:00-11:00
 		firstStart := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 		firstEnd := time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC)
-		
-		_, err := mockSubmitRule(context.Background(), *rule, 
-			firstStart.Format(time.RFC3339Nano), 
+
+		_, err := mockSubmitRule(context.Background(), *rule,
+			firstStart.Format(time.RFC3339Nano),
 			firstEnd.Format(time.RFC3339Nano))
 		require.NoError(t, err)
 
@@ -407,7 +407,7 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		// Verify windows are contiguous (second starts exactly where first ended)
 		// The addOneTick compensation should ensure this despite KQL adjustments
 		require.True(t, secondStartParsed.Equal(firstEndParsed) || secondStartParsed.Equal(firstEndParsed.Add(kustoutil.OneTick)),
-			"Second window should start where first ended (with 1 tick adjustment): %v vs %v", 
+			"Second window should start where first ended (with 1 tick adjustment): %v vs %v",
 			secondStartParsed, firstEndParsed)
 
 		// Verify both KQL queries have adjusted endTime for between syntax
@@ -442,7 +442,7 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 
 		// Verify the window is properly aligned despite the +1 tick in stored time
 		expectedStart := baseTime // Should truncate back to the boundary
-		
+
 		require.True(t, startTime.Equal(expectedStart) || startTime.Equal(expectedStart.Truncate(rule.Spec.Interval.Duration)),
 			"Start time should align to interval boundary")
 		require.Equal(t, 30*time.Minute, endTime.Sub(startTime),

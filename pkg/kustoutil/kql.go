@@ -17,7 +17,7 @@ func ApplySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 
 	// Add time parameter definitions with direct datetime substitution
 	letStatements = append(letStatements, fmt.Sprintf("let _startTime=datetime(%s);", startTime))
-	
+
 	// Subtract 1 tick (100ns) from endTime to support inclusive 'between' syntax
 	// This allows users to write: where PreciseTimeStamp between (_startTime .. _endTime)
 	// instead of: where PreciseTimeStamp >= _startTime and PreciseTimeStamp < _endTime
@@ -55,8 +55,8 @@ func ApplySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 const (
 	// OneTick represents the smallest time unit in Kusto/Azure Data Explorer (100 nanoseconds).
 	// This is used for time window adjustments to ensure non-overlapping windows while maintaining
-	// continuity between summary rule executions. The 100ns adjustment trades minimal precision
-	// for simplified between syntax support in KQL queries.
+	// continuity between summary rule executions. The 100ns adjustment accounts for the smallest
+	// increment of time in Kusto, enabling simplified between syntax support in KQL queries.
 	OneTick = 100 * time.Nanosecond
 )
 
@@ -71,10 +71,10 @@ func subtractOneTick(timeStr string) string {
 		// This maintains backward compatibility
 		return timeStr
 	}
-	
+
 	// Subtract 1 tick using the defined constant
 	adjustedTime := t.Add(-OneTick)
-	
+
 	// Return in the same format
 	return adjustedTime.Format(time.RFC3339Nano)
 }
