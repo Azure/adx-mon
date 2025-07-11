@@ -1,0 +1,414 @@
+# Multi-Value Column Enhancement for MetricsExporter
+
+## Problem Statement
+
+The `MetricsExporter` CRD design requires a new multi-value column capability to address several limitations for advanced analytics use cases:
+
+### Cardinality Explosion Issue
+
+In complex analytics scenarios, users need to export multiple related numeric values (e.g., `Numerator`, `Denominator`, `AvgLatency`) from a single KQL query. Without multi-value column support, users must include these values as metric labels, which causes severe cardinality explosion:
+
+**Problematic Single-Value Approach:**
+```yaml
+transform:
+  valueColumn: "Value"
+  labelColumns: ["LocationId", "CustomerResourceId", "Numerator", "Denominator", "AvgLatency"]
+```
+
+**Resulting High-Cardinality Metric:**
+```
+customer_success_rate{LocationId="datacenter-01",CustomerResourceId="customer-12345",Numerator="1974",Denominator="2000",AvgLatency="150.2"} 0.987
+```
+
+This approach leads to:
+- **Cardinality explosion**: Each unique combination of numeric values creates a new time series
+- **Storage inefficiency**: Prometheus/observability systems struggle with high-cardinality metrics
+- **Query performance degradation**: High cardinality makes aggregations and queries slower
+- **Cost implications**: Storage and compute costs increase exponentially with cardinality
+
+### Multi-Team Namespace Collision
+
+With multiple teams using `MetricsExporter`, there's risk of metric name collisions when teams choose similar base metric names. A new design needs a mechanism to namespace metrics by team or project.
+
+### Semantic Data Loss
+
+Related numeric values (like numerator/denominator pairs) lose their semantic relationship when forced into separate label dimensions instead of being represented as distinct but related metrics.
+
+## Solution Overview
+
+We propose implementing the `MetricsExporter` transform configuration to support **multi-value column transformation** with two key features:
+
+1. **`valueColumns` Array**: Use `valueColumns` array where each column generates a separate metric
+2. **`metricNamePrefix` Field**: Add optional prefix for team/project namespacing
+
+### Key Benefits
+
+- **Cardinality Control**: Convert high-cardinality labels into separate metrics with shared dimensional labels
+- **Team Isolation**: Prevent metric name collisions through configurable prefixes
+- **Semantic Preservation**: Maintain relationships between related metrics (e.g., numerator/denominator)
+- **Prometheus Best Practices**: Align with Prometheus metric naming conventions and cardinality guidelines
+
+## Design Specification
+
+### Enhanced TransformConfig Schema
+
+```go
+type TransformConfig struct {
+    // MetricNameColumn specifies which column contains the base metric name
+    MetricNameColumn string `json:"metricNameColumn,omitempty"`
+    
+    // MetricNamePrefix provides optional team/project namespacing for all metrics
+    MetricNamePrefix string `json:"metricNamePrefix,omitempty"`
+    
+    // ValueColumns specifies columns to use as metric values
+    ValueColumns []string `json:"valueColumns"`
+    
+    // TimestampColumn specifies which column contains the timestamp
+    TimestampColumn string `json:"timestampColumn"`
+    
+    // LabelColumns specifies columns to use as metric labels/attributes
+    LabelColumns []string `json:"labelColumns,omitempty"`
+    
+    // DefaultMetricName provides a fallback if MetricNameColumn is not specified
+    DefaultMetricName string `json:"defaultMetricName,omitempty"`
+}
+```
+
+### Metric Name Construction Algorithm
+
+For each value column, the final metric name follows this pattern:
+```
+[metricNamePrefix_]<base_metric_name>_<prometheus_normalized_column_name>
+```
+
+**Normalization Rules:**
+1. Convert column name to lowercase
+2. Replace non-alphanumeric characters with underscores
+3. Remove consecutive underscores
+4. Ensure name starts with letter or underscore
+
+**Examples:**
+- `SuccessfulRequests` → `successful_requests`
+- `AvgLatency` → `avg_latency`
+- `Total-Count` → `total_count`
+
+## Implementation Examples
+
+### Example 1: Basic Multi-Value Transformation
+
+**KQL Query Result:**
+```
+LocationId | CustomerResourceId | ServiceTier | Numerator | Denominator | AvgLatency
+datacenter-01 | customer-12345 | premium | 1974 | 2000 | 150.2
+```
+
+**MetricsExporter Configuration:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: customer-analytics
+  namespace: analytics
+spec:
+  database: AnalyticsDB
+  interval: 15m
+  body: |
+    CustomerEvents
+    | where EventTime between (_startTime .. _endTime)
+    | summarize 
+        Numerator = sum(SuccessfulRequests),
+        Denominator = sum(TotalRequests),
+        AvgLatency = avg(LatencyMs)
+        by LocationId, CustomerResourceId, ServiceTier
+    | extend metric_name = "customer_success_rate"
+  transform:
+    metricNameColumn: "metric_name"
+    valueColumns: ["Numerator", "Denominator", "AvgLatency"]
+    timestampColumn: "StartTimeUTC"
+    labelColumns: ["LocationId", "CustomerResourceId", "ServiceTier"]
+```
+
+**Resulting Metrics:**
+```
+customer_success_rate_numerator{LocationId="datacenter-01",CustomerResourceId="customer-12345",ServiceTier="premium"} 1974
+customer_success_rate_denominator{LocationId="datacenter-01",CustomerResourceId="customer-12345",ServiceTier="premium"} 2000
+customer_success_rate_avg_latency{LocationId="datacenter-01",CustomerResourceId="customer-12345",ServiceTier="premium"} 150.2
+```
+
+### Example 2: Team Namespacing with Prefix
+
+**MetricsExporter Configuration:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: customer-analytics
+  namespace: analytics
+spec:
+  database: AnalyticsDB
+  interval: 15m
+  criteria:
+    team: ["analytics"]
+    data-classification: ["customer-approved"]
+  body: |
+    CustomerEvents
+    | where EventTime between (_startTime .. _endTime)
+    | summarize 
+        Numerator = sum(SuccessfulRequests),
+        Denominator = sum(TotalRequests),
+        StartTimeUTC = min(EventTime),
+        EndTimeUTC = max(EventTime),
+        AvgLatency = avg(LatencyMs)
+        by LocationId, CustomerResourceId, ServiceTier
+    | extend metric_name = "customer_success_rate"
+  transform:
+    metricNameColumn: "metric_name"
+    metricNamePrefix: "teama"
+    valueColumns: ["Numerator", "Denominator"]
+    timestampColumn: "StartTimeUTC"
+    labelColumns: ["LocationId", "CustomerResourceId", "ServiceTier"]
+```
+
+**Resulting Metrics:**
+```
+teama_customer_success_rate_numerator{LocationId="datacenter-01",CustomerResourceId="customer-12345",ServiceTier="premium"} 1974
+teama_customer_success_rate_denominator{LocationId="datacenter-01",CustomerResourceId="customer-12345",ServiceTier="premium"} 2000
+```
+
+## Technical Implementation Details
+
+### Transform Engine Changes
+
+The transform engine (`transform/kusto_to_metrics.go`) requires enhancement to:
+
+1. **Multi-Value Processing**: Process each column in `valueColumns` array
+2. **Name Generation**: Apply prefix and normalization rules for metric names
+3. **Validation**: Ensure all value columns contain numeric data
+4. **Error Handling**: Provide clear errors for missing or invalid value columns
+
+### Data Type Support
+
+**Supported Value Column Types:**
+- `int`, `long` → Integer metrics
+- `real`, `double` → Float metrics  
+- `decimal` → Float metrics (with precision conversion)
+
+**Unsupported Types:**
+- `string`, `datetime`, `bool` → Validation error
+
+### Memory and Performance Considerations
+
+**Memory Impact:**
+- Multiple metrics per row increase memory usage linearly with `valueColumns` count
+- Object pooling (`pkg/prompb`) becomes more important with higher metric volume
+
+**Performance Optimization:**
+- Batch metric creation for efficiency
+- Validate column types once per query execution
+- Cache normalized column names to avoid repeated string processing
+
+## Validation and Error Handling
+
+### Transform Configuration Validation
+
+**Required Validations:**
+1. `valueColumns` must not be empty
+2. All columns in `valueColumns` must exist in query results
+3. All value columns must contain numeric data types
+4. `metricNamePrefix` must follow Prometheus naming conventions (if specified)
+5. Generated metric names must be valid Prometheus identifiers
+
+### Runtime Error Handling
+
+**Column Missing Errors:**
+```
+Error: Value column 'Numerator' not found in query results. Available columns: [LocationId, CustomerResourceId, AvgLatency]
+```
+
+**Type Conversion Errors:**
+```
+Error: Value column 'CustomerName' contains non-numeric data (string). Value columns must contain numeric types (int, real, decimal).
+```
+
+**Metric Name Validation Errors:**
+```
+Error: Generated metric name 'team-a_metric_name_123column' is invalid. Metric names must start with letter or underscore and contain only alphanumeric characters and underscores.
+```
+
+## Benefits and Impact Analysis
+
+### Cardinality Reduction Example
+
+**Before (High Cardinality):**
+```
+service_metrics{service="api",region="us-east",numerator="1000",denominator="1200",avg_latency="45.6"} 0.833
+```
+- **Cardinality**: Potentially unlimited (each unique numeric value combination creates new series)
+- **Storage**: Exponential growth with unique value combinations
+
+**After (Controlled Cardinality):**
+```
+service_metrics_numerator{service="api",region="us-east"} 1000
+service_metrics_denominator{service="api",region="us-east"} 1200
+service_metrics_avg_latency{service="api",region="us-east"} 45.6
+```
+- **Cardinality**: Predictable (3 metrics × unique label combinations)
+- **Storage**: Linear growth with label combinations
+
+### Team Isolation Benefits
+
+**Scenario**: Multiple teams (TeamA, TeamB) create similar metrics
+
+**Without Prefix:**
+```
+customer_success_rate_numerator{team="teama"} 1000    # TeamA metric
+customer_success_rate_numerator{team="teamb"} 500     # TeamB metric - same name!
+```
+
+**With Prefix:**
+```
+teama_customer_success_rate_numerator{...} 1000       # TeamA metric  
+teamb_customer_success_rate_numerator{...} 500        # TeamB metric
+```
+
+**Benefits:**
+- **Namespace isolation**: Teams can't accidentally override each other's metrics
+- **Clear ownership**: Metric prefix immediately identifies responsible team
+- **Aggregation flexibility**: Can aggregate across teams or focus on specific team metrics
+
+## Implementation Planning
+
+### Phase 1: Core Multi-Value Column Support
+
+**Target**: Enable `valueColumns` array with basic metric generation
+
+#### Task 1.1: Update CRD Schema ✅ **PRIORITY: HIGH**
+- **File**: `api/v1/metricsexporter_types.go`
+- **Changes**:
+  - Add `ValueColumns []string` field to `TransformConfig`
+  - Add `MetricNamePrefix string` field to `TransformConfig`
+- **Acceptance**: CRD validates and accepts new fields
+
+#### Task 1.2: Update Transform Engine ✅ **PRIORITY: HIGH**
+- **File**: `transform/kusto_to_metrics.go`
+- **Changes**:
+  - Modify `Transform()` function to handle multiple value columns
+  - Implement metric name normalization (snake_case, lowercase)
+  - Add prefix support for generated metric names
+- **Acceptance**: Transform engine generates multiple metrics from single query row
+
+#### Task 1.3: Enhanced Validation Logic ✅ **PRIORITY: HIGH**
+- **File**: `transform/kusto_to_metrics.go` and `adxexporter/service.go`
+- **Changes**:
+  - Validate all value columns exist in query results
+  - Validate all value columns contain numeric data
+  - Validate metric name prefix follows Prometheus conventions
+- **Acceptance**: Clear error messages for invalid configurations
+
+#### Task 1.4: Update Unit Tests ✅ **PRIORITY: HIGH**
+- **Files**: `transform/kusto_to_metrics_test.go`, `adxexporter/service_test.go`
+- **Changes**:
+  - Add test cases for multi-value column scenarios
+  - Test metric name normalization and prefix generation
+  - Test validation error cases
+- **Acceptance**: >90% test coverage for new functionality
+
+### Phase 2: Advanced Features and Polish
+
+#### Task 2.1: CRD Manifest Generation ✅ **PRIORITY: MEDIUM**
+- **Command**: `make generate-crd CMD=update`
+- **Changes**: Regenerate CRD manifests with new fields
+- **Acceptance**: Kubernetes can apply updated CRD definition
+
+#### Task 2.2: Documentation Updates ✅ **PRIORITY: MEDIUM**
+- **Files**: `docs/crds.md`, existing examples in `docs/designs/kusto-to-metrics.md`
+- **Changes**:
+  - Update CRD documentation with new fields
+  - Add examples showing multi-value column usage
+  - Update troubleshooting guide with new validation errors
+- **Acceptance**: Documentation accurately reflects new functionality
+
+#### Task 2.3: Integration Testing ✅ **PRIORITY: MEDIUM**
+- **Files**: Integration test suites
+- **Changes**:
+  - End-to-end tests with real ADX queries returning multiple value columns
+  - Test Prometheus metrics output format validation
+  - Test adxexporter component behavior with new configurations
+- **Acceptance**: Full workflow works with multi-value columns
+
+#### Task 2.4: Performance Testing ✅ **PRIORITY: LOW**
+- **Changes**:
+  - Benchmark memory usage with various `valueColumns` counts
+  - Test query performance with high-cardinality to low-cardinality conversion
+  - Validate object pooling efficiency with increased metric volume
+- **Acceptance**: No significant performance regression
+
+### Phase 3: Advanced Enhancements (Future)
+
+#### Task 3.1: Advanced Naming Strategies
+- **Feature**: Support custom naming templates for metric generation
+- **Example**: `metricNameTemplate: "{{.prefix}}_{{.base}}_{{.column}}_{{.suffix}}"`
+- **Priority**: LOW (post-MVP)
+
+#### Task 3.2: Value Column Type Conversion
+- **Feature**: Support automatic type conversion (e.g., string numbers to numeric)
+- **Priority**: LOW (current validation is sufficient)
+
+#### Task 3.3: Conditional Value Columns
+- **Feature**: Support conditional inclusion of value columns based on data
+- **Priority**: LOW (can be handled in KQL query)
+
+## Success Metrics and Acceptance Criteria
+
+### Phase 1 Success Criteria
+
+1. **Functional Requirements**:
+   - ✅ MetricsExporter CRD accepts `valueColumns` array and `metricNamePrefix` fields
+   - ✅ Transform engine generates separate metrics for each value column
+   - ✅ Metric names follow Prometheus conventions with proper normalization
+
+2. **Quality Requirements**:
+   - ✅ >90% unit test coverage for new functionality
+   - ✅ Clear validation error messages for invalid configurations
+
+3. **Performance Requirements**:
+   - ✅ Memory usage scales linearly with number of value columns
+   - ✅ No significant latency increase for transform operations
+
+### Phase 2 Success Criteria
+
+1. **Integration Requirements**:
+   - ✅ End-to-end workflow functions with real ADX queries
+   - ✅ Prometheus metrics output validates against Prometheus standards
+   - ✅ Documentation enables users to successfully implement multi-value column configurations
+
+2. **Operational Requirements**:
+   - ✅ Clear error messages guide users through configuration issues
+   - ✅ Generated CRD manifests deploy successfully to Kubernetes clusters
+
+## Risk Analysis and Mitigation
+
+### Risk 1: Performance Degradation with Many Value Columns
+**Probability**: Medium  
+**Impact**: Medium  
+**Mitigation**: Implement performance testing and optimize object pooling for high-volume scenarios
+
+### Risk 2: Metric Name Collision After Normalization
+**Probability**: Low  
+**Impact**: Medium  
+**Mitigation**: Implement collision detection and provide clear error messages when generated names conflict
+
+### Risk 3: Configuration Complexity for Users
+**Probability**: Low  
+**Impact**: Low  
+**Mitigation**: Provide comprehensive documentation and clear examples for multi-value column usage
+
+## Conclusion
+
+The multi-value column enhancement addresses critical cardinality and namespace management issues in MetricsExporter design. By enabling multiple metrics per query row and team-based prefixing, this enhancement:
+
+- **Solves cardinality explosion** by moving numeric values from labels to separate metrics
+- **Enables team isolation** through configurable metric name prefixes  
+- **Follows Prometheus best practices** for metric naming and cardinality management
+
+The phased implementation approach ensures rapid delivery of core functionality while maintaining high quality standards and comprehensive testing. 
