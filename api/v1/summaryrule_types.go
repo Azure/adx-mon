@@ -304,9 +304,22 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		windowEndTime = alignedNow
 		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
 	} else {
-		// Subsequent executions: start from where the last successful execution ended, minus delay, aligned to interval boundary
+		// Subsequent executions: start from where the last successful execution ended, minus delay
 		start := lastSuccessfulEndTime.Add(-delay)
-		windowStartTime = start.Truncate(s.Spec.Interval.Duration)
+		
+		// Check if the start time is aligned to interval boundary
+		aligned := start.Truncate(s.Spec.Interval.Duration)
+		
+		// Special case: if the difference is exactly 1 tick (100ns), preserve it for continuity
+		// This handles the case where AddOneTick was used for time window continuity
+		const oneTick = 100 * time.Nanosecond
+		if start.Sub(aligned) == oneTick {
+			// Time is off by exactly 1 tick, preserve exact time for continuity
+			windowStartTime = start
+		} else {
+			// Use truncation for consistency with existing behavior
+			windowStartTime = aligned
+		}
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
 		// Ensure we don't execute future windows

@@ -400,11 +400,12 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		secondStartParsed, err := time.Parse(time.RFC3339Nano, submissions[1].startTime)
 		require.NoError(t, err)
 
-		// Verify windows are contiguous (second starts exactly where first ended)
+		// Verify windows are contiguous (second starts with 1 tick after first ended)
 		// The addOneTick compensation ensures proper time window continuity
-		require.Equal(t, firstEndParsed, secondStartParsed,
-			"Second window should start exactly where first ended: %v vs %v",
-			secondStartParsed, firstEndParsed)
+		expectedSecondStart := firstEndParsed.Add(kustoutil.OneTick)
+		require.Equal(t, expectedSecondStart, secondStartParsed,
+			"Second window should start at firstEnd + 1 tick: got %v, expected %v",
+			secondStartParsed, expectedSecondStart)
 	})
 
 	t.Run("subtractOneTick adjusts KQL endTime for between syntax", func(t *testing.T) {
@@ -451,8 +452,8 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		require.Contains(t, kqlSubmissions[0], ".9999999Z);") // Should end with adjusted nanoseconds
 	})
 
-	t.Run("time window calculation preserves interval boundaries despite tick adjustments", func(t *testing.T) {
-		// Test that even with tick adjustments, the windows align to interval boundaries
+	t.Run("time window calculation maintains exact continuity with tick adjustments", func(t *testing.T) {
+		// Test that tick adjustments are preserved for exact time window continuity
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "test-rule",
@@ -472,11 +473,11 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		// Calculate next window
 		startTime, endTime := rule.NextExecutionWindow(nil)
 
-		// Verify the window is properly aligned despite the +1 tick in stored time
-		expectedStart := baseTime // Should truncate back to the boundary
-
-		require.True(t, startTime.Equal(expectedStart) || startTime.Equal(expectedStart.Truncate(rule.Spec.Interval.Duration)),
-			"Start time should align to interval boundary")
+		// Verify the window preserves exact continuity with the tick adjustment
+		expectedStart := kustoutil.AddOneTick(baseTime) // Should preserve the +1 tick
+		
+		require.Equal(t, expectedStart, startTime,
+			"Start time should preserve tick adjustment for exact continuity")
 		require.Equal(t, 30*time.Minute, endTime.Sub(startTime),
 			"Window duration should match interval")
 	})
