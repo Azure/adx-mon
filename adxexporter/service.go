@@ -251,7 +251,9 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 	transformer := transform.NewKustoToMetricsTransformer(
 		transform.TransformConfig{
 			MetricNameColumn:  me.Spec.Transform.MetricNameColumn,
+			MetricNamePrefix:  me.Spec.Transform.MetricNamePrefix,
 			ValueColumn:       me.Spec.Transform.ValueColumn,
+			ValueColumns:      me.Spec.Transform.ValueColumns,
 			TimestampColumn:   me.Spec.Transform.TimestampColumn,
 			LabelColumns:      me.Spec.Transform.LabelColumns,
 			DefaultMetricName: me.Spec.Transform.DefaultMetricName,

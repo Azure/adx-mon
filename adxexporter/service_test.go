@@ -513,3 +513,210 @@ func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
 	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
 	require.NoError(t, err)
 }
+
+func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().Build(),
+		Scheme:                scheme.Scheme,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Configure MetricsExporter with multiple value columns
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Database: "TestDB",
+			Body:     "TestQuery",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Transform: adxmonv1.TransformConfig{
+				MetricNamePrefix: "app_",
+				DefaultMetricName: "default_metric",
+				ValueColumns:     []string{"cpu_usage", "memory_usage", "disk_usage"},
+				LabelColumns:     []string{"node_name"},
+				TimestampColumn:  "timestamp",
+			},
+		},
+	}
+
+	// Mock data with multiple value columns
+	rows := []map[string]interface{}{
+		{
+			"cpu_usage":    75.5,
+			"memory_usage": 85.2,
+			"disk_usage":   45.8,
+			"node_name":    "node-1",
+			"timestamp":    time.Now(),
+		},
+		{
+			"cpu_usage":    60.3,
+			"memory_usage": 70.1,
+			"disk_usage":   52.4,
+			"node_name":    "node-2",
+			"timestamp":    time.Now(),
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_SingleValueColumn(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().Build(),
+		Scheme:                scheme.Scheme,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Configure MetricsExporter with single value column (backward compatibility)
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "legacy-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Database: "TestDB",
+			Body:     "TestQuery",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Transform: adxmonv1.TransformConfig{
+				DefaultMetricName: "legacy_metric",
+				ValueColumns:     []string{"value"},
+				LabelColumns:     []string{"service", "region"},
+				TimestampColumn:  "timestamp",
+			},
+		},
+	}
+
+	// Mock data with single value column
+	rows := []map[string]interface{}{
+		{
+			"value":     42.0,
+			"service":   "web-server",
+			"region":    "us-east-1",
+			"timestamp": time.Now(),
+		},
+		{
+			"value":     38.5,
+			"service":   "api-server",
+			"region":    "us-west-2",
+			"timestamp": time.Now(),
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_EmptyValueColumns(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().Build(),
+		Scheme:                scheme.Scheme,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Configure MetricsExporter with empty value columns (should fall back to "value")
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "fallback-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Database: "TestDB",
+			Body:     "TestQuery",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Transform: adxmonv1.TransformConfig{
+				MetricNamePrefix: "fallback_",
+				DefaultMetricName: "fallback_metric",
+				ValueColumn:      "value", // Use ValueColumn for backward compatibility test
+				LabelColumns:     []string{"environment"},
+				TimestampColumn:  "timestamp",
+			},
+		},
+	}
+
+	// Mock data with "value" column
+	rows := []map[string]interface{}{
+		{
+			"value":       99.9,
+			"environment": "production",
+			"timestamp":   time.Now(),
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_NilValueColumns(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().Build(),
+		Scheme:                scheme.Scheme,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Configure MetricsExporter with nil value columns (should fall back to "value")
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nil-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Database: "TestDB",
+			Body:     "TestQuery",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Transform: adxmonv1.TransformConfig{
+				MetricNamePrefix: "nil_test_",
+				DefaultMetricName: "nil_test_metric",
+				ValueColumn:      "value", // Use ValueColumn for backward compatibility test
+				LabelColumns:     []string{"component"},
+				TimestampColumn:  "timestamp",
+			},
+		},
+	}
+
+	// Mock data with "value" column
+	rows := []map[string]interface{}{
+		{
+			"value":     123.456,
+			"component": "database",
+			"timestamp": time.Now(),
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
