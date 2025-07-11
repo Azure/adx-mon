@@ -313,7 +313,12 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
-	summaryRules, kustoAsyncOperations, err := t.initializeRun(ctx)
+	// Set a timeout to prevent hanging.
+	// If the loop takes more than 5 minutes, something is wrong and we should just cancel and try again next iteration.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	summaryRules, kustoAsyncOperations, err := t.initializeRun(timeoutCtx)
 	if err != nil {
 		return err
 	}
@@ -325,13 +330,13 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		}
 
 		// Handle rule execution logic (timing evaluation and submission)
-		err := t.handleRuleExecution(ctx, &rule)
+		err := t.handleRuleExecution(timeoutCtx, &rule)
 
 		// Process any outstanding async operations for this rule
-		t.trackAsyncOperations(ctx, &rule, kustoAsyncOperations)
+		t.trackAsyncOperations(timeoutCtx, &rule, kustoAsyncOperations)
 
 		// Update the rule's primary status condition
-		if err := t.updateSummaryRuleStatus(ctx, &rule, err); err != nil {
+		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
 			logger.Errorf("Failed to update summary rule status: %v", err)
 			// Not a lot we can do here, we'll end up just retrying next interval.
 		}
