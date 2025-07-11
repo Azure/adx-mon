@@ -37,11 +37,8 @@ type TransformConfig struct {
 	// MetricNamePrefix provides optional team/project namespacing for all metrics
 	MetricNamePrefix string `json:"metricNamePrefix,omitempty"`
 
-	// ValueColumn specifies which column contains the metric value (legacy single-value mode)
-	ValueColumn string `json:"valueColumn,omitempty"`
-
-	// ValueColumns specifies columns to use as metric values (multi-value mode)
-	ValueColumns []string `json:"valueColumns,omitempty"`
+	// ValueColumns specifies columns to use as metric values (required)
+	ValueColumns []string `json:"valueColumns"`
 
 	// TimestampColumn specifies which column contains the timestamp
 	TimestampColumn string `json:"timestampColumn"`
@@ -201,8 +198,7 @@ func (t *KustoToMetricsTransformer) Transform(results []map[string]any) ([]Metri
 }
 
 // transformRow converts a single KQL result row to metric data
-// Returns multiple MetricData objects when ValueColumns are configured (multi-value mode)
-// Returns single MetricData object when ValueColumn is configured (legacy single-value mode)
+// Generates multiple MetricData objects from ValueColumns
 func (t *KustoToMetricsTransformer) transformRow(row map[string]any) ([]MetricData, error) {
 	// Extract base metric name
 	baseName, err := t.extractMetricName(row)
@@ -222,14 +218,8 @@ func (t *KustoToMetricsTransformer) transformRow(row map[string]any) ([]MetricDa
 		return nil, fmt.Errorf("failed to extract labels: %w", err)
 	}
 
-	// Determine if we're in multi-value mode (ValueColumns) or single-value mode (ValueColumn)
-	if len(t.config.ValueColumns) > 0 {
-		// Multi-value mode: generate multiple metrics from ValueColumns
-		return t.transformRowMultiValue(baseName, row, timestamp, labels)
-	} else {
-		// Single-value mode: generate single metric from ValueColumn (backward compatibility)
-		return t.transformRowSingleValue(baseName, row, timestamp, labels)
-	}
+	// Multi-value mode: generate multiple metrics from ValueColumns
+	return t.transformRowMultiValue(baseName, row, timestamp, labels)
 }
 
 // transformRowMultiValue handles multi-value column transformation
@@ -262,33 +252,6 @@ func (t *KustoToMetricsTransformer) transformRowMultiValue(baseName string, row 
 	}
 
 	return metrics, nil
-}
-
-// transformRowSingleValue handles single-value column transformation (legacy mode)
-// Generates single metric from ValueColumn for backward compatibility
-func (t *KustoToMetricsTransformer) transformRowSingleValue(baseName string, row map[string]any, timestamp time.Time, labels map[string]string) ([]MetricData, error) {
-	// Extract metric value using legacy method
-	value, err := t.extractValue(row)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract value: %w", err)
-	}
-
-	// In single-value mode, use base name as-is (no column name suffix)
-	// Apply prefix if configured
-	metricName := baseName
-	if t.config.MetricNamePrefix != "" {
-		normalizedPrefix := normalizeColumnName(t.config.MetricNamePrefix)
-		if normalizedPrefix != "" && normalizedPrefix != "metric" {
-			metricName = normalizedPrefix + "_" + baseName
-		}
-	}
-
-	return []MetricData{{
-		Name:      metricName,
-		Value:     value,
-		Timestamp: timestamp,
-		Labels:    labels,
-	}}, nil
 }
 
 // extractMetricName extracts the metric name from the row
@@ -326,56 +289,6 @@ func (t *KustoToMetricsTransformer) extractMetricName(row map[string]any) (strin
 
 	// No metric name configuration
 	return "", fmt.Errorf("no metric name configuration: neither metricNameColumn nor defaultMetricName specified")
-}
-
-// extractValue extracts the numeric value from the row
-func (t *KustoToMetricsTransformer) extractValue(row map[string]any) (float64, error) {
-	rawValue, exists := row[t.config.ValueColumn]
-	if !exists {
-		return 0, fmt.Errorf("value column '%s' not found in row", t.config.ValueColumn)
-	}
-
-	if rawValue == nil {
-		return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-	}
-
-	// Handle different numeric types from KQL
-	switch v := rawValue.(type) {
-	case float64:
-		return v, nil
-	case float32:
-		return float64(v), nil
-	case int:
-		return float64(v), nil
-	case int32:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case value.Long:
-		if !v.Valid {
-			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-		}
-		return float64(v.Value), nil
-	case value.Real:
-		if !v.Valid {
-			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-		}
-		return v.Value, nil
-	case value.Int:
-		if !v.Valid {
-			return 0, fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-		}
-		return float64(v.Value), nil
-	case string:
-		// Try to parse string as float
-		parsed, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return 0, fmt.Errorf("value column '%s' contains unparseable string value '%s': %w", t.config.ValueColumn, v, err)
-		}
-		return parsed, nil
-	default:
-		return 0, fmt.Errorf("value column '%s' contains unsupported type %T", t.config.ValueColumn, rawValue)
-	}
 }
 
 // extractValues extracts numeric values from multiple columns in the row
@@ -562,25 +475,13 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 	firstRow := results[0]
 
 	// Validate value columns configuration and existence
-	if len(t.config.ValueColumns) > 0 {
-		// Multi-value mode: validate all ValueColumns
-		if len(t.config.ValueColumns) == 0 {
-			return fmt.Errorf("at least one value column must be specified in ValueColumns")
-		}
+	if len(t.config.ValueColumns) == 0 {
+		return fmt.Errorf("at least one value column must be specified in ValueColumns")
+	}
 
-		for _, valueColumn := range t.config.ValueColumns {
-			if err := t.validateValueColumn(firstRow, valueColumn); err != nil {
-				return fmt.Errorf("invalid value column %q: %w", valueColumn, err)
-			}
-		}
-	} else {
-		// Single-value mode: validate ValueColumn (backward compatibility)
-		if t.config.ValueColumn == "" {
-			return fmt.Errorf("either ValueColumn or ValueColumns must be specified")
-		}
-
-		if err := t.validateValueColumn(firstRow, t.config.ValueColumn); err != nil {
-			return fmt.Errorf("invalid value column %q: %w", t.config.ValueColumn, err)
+	for _, valueColumn := range t.config.ValueColumns {
+		if err := t.validateValueColumn(firstRow, valueColumn); err != nil {
+			return fmt.Errorf("invalid value column %q: %w", valueColumn, err)
 		}
 	}
 

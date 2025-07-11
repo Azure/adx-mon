@@ -25,7 +25,7 @@ func TestNewKustoToPrometheusTransformer(t *testing.T) {
 
 func TestTransformBasic(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn:       "value",
+		ValueColumns:      []string{"value"},
 		DefaultMetricName: "test_metric",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
@@ -42,14 +42,14 @@ func TestTransformBasic(t *testing.T) {
 	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	require.Equal(t, "test_metric", metric.Name)
+	require.Equal(t, "test_metric_value", metric.Name)
 	require.Equal(t, 42.0, metric.Value)
 }
 
 func TestTransformWithMetricNameColumn(t *testing.T) {
 	config := TransformConfig{
 		MetricNameColumn: "metric_name",
-		ValueColumn:      "value",
+		ValueColumns:     []string{"value"},
 	}
 	meter := noop.NewMeterProvider().Meter("test")
 	transformer := NewKustoToMetricsTransformer(config, meter)
@@ -66,13 +66,13 @@ func TestTransformWithMetricNameColumn(t *testing.T) {
 	require.Len(t, metrics, 1)
 
 	metric := metrics[0]
-	require.Equal(t, "cpu_usage", metric.Name)
+	require.Equal(t, "cpu_usage_value", metric.Name)
 	require.Equal(t, 85.5, metric.Value)
 }
 
 func TestTransformWithLabels(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn:       "value",
+		ValueColumns:      []string{"value"},
 		DefaultMetricName: "test_metric",
 		LabelColumns:      []string{"host", "service"},
 	}
@@ -99,7 +99,7 @@ func TestTransformWithLabels(t *testing.T) {
 
 func TestTransformWithTimestamp(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn:       "value",
+		ValueColumns:      []string{"value"},
 		DefaultMetricName: "test_metric",
 		TimestampColumn:   "timestamp",
 	}
@@ -124,7 +124,7 @@ func TestTransformWithTimestamp(t *testing.T) {
 
 func TestTransformValueTypes(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn:       "value",
+		ValueColumns:      []string{"value"},
 		DefaultMetricName: "test_metric",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
@@ -159,7 +159,7 @@ func TestTransformValueTypes(t *testing.T) {
 
 func TestTransformKustoValueTypes(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn:       "value",
+		ValueColumns:      []string{"value"},
 		DefaultMetricName: "test_metric",
 	}
 	meter := noop.NewMeterProvider().Meter("test")
@@ -204,7 +204,7 @@ func TestTransformKustoValueTypes(t *testing.T) {
 
 func TestTransformTimestampTypes(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn:       "value",
+		ValueColumns:      []string{"value"},
 		DefaultMetricName: "test_metric",
 		TimestampColumn:   "timestamp",
 	}
@@ -252,7 +252,7 @@ func TestTransformErrors(t *testing.T) {
 		{
 			name: "missing value column",
 			config: TransformConfig{
-				ValueColumn:       "missing",
+				ValueColumns:      []string{"missing"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -263,7 +263,7 @@ func TestTransformErrors(t *testing.T) {
 		{
 			name: "null value",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -274,7 +274,7 @@ func TestTransformErrors(t *testing.T) {
 		{
 			name: "no metric name config",
 			config: TransformConfig{
-				ValueColumn: "value",
+				ValueColumns: []string{"value"},
 			},
 			results: []map[string]any{
 				{"value": 42.0},
@@ -284,7 +284,7 @@ func TestTransformErrors(t *testing.T) {
 		{
 			name: "missing metric name column",
 			config: TransformConfig{
-				ValueColumn:      "value",
+				ValueColumns:     []string{"value"},
 				MetricNameColumn: "missing",
 			},
 			results: []map[string]any{
@@ -295,7 +295,7 @@ func TestTransformErrors(t *testing.T) {
 		{
 			name: "empty metric name",
 			config: TransformConfig{
-				ValueColumn:      "value",
+				ValueColumns:     []string{"value"},
 				MetricNameColumn: "name",
 			},
 			results: []map[string]any{
@@ -306,7 +306,7 @@ func TestTransformErrors(t *testing.T) {
 		{
 			name: "invalid value type",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -342,7 +342,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -353,7 +353,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "empty results",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{},
@@ -362,7 +362,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing value column",
 			config: TransformConfig{
-				ValueColumn:       "missing",
+				ValueColumns:      []string{"missing"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -374,7 +374,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "null value",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -386,7 +386,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "no metric name config",
 			config: TransformConfig{
-				ValueColumn: "value",
+				ValueColumns: []string{"value"},
 			},
 			results: []map[string]any{
 				{"value": 42.0},
@@ -451,7 +451,7 @@ func TestValidate(t *testing.T) {
 				{"value": 42.0},
 			},
 			wantErr: true,
-			errMsg:  "either ValueColumn or ValueColumns must be specified",
+			errMsg:  "at least one value column must be specified in ValueColumns",
 		},
 	}
 
@@ -499,7 +499,7 @@ func TestRegisterMetrics(t *testing.T) {
 func TestTransformMultipleRows(t *testing.T) {
 	config := TransformConfig{
 		MetricNameColumn: "metric",
-		ValueColumn:      "value",
+		ValueColumns:     []string{"value"},
 		LabelColumns:     []string{"host"},
 	}
 	meter := noop.NewMeterProvider().Meter("test")
@@ -528,17 +528,17 @@ func TestTransformMultipleRows(t *testing.T) {
 	require.Len(t, metrics, 3)
 
 	// Verify first metric
-	require.Equal(t, "cpu_usage", metrics[0].Name)
+	require.Equal(t, "cpu_usage_value", metrics[0].Name)
 	require.Equal(t, 85.5, metrics[0].Value)
 	require.Equal(t, "server1", metrics[0].Labels["host"])
 
 	// Verify second metric
-	require.Equal(t, "memory_usage", metrics[1].Name)
+	require.Equal(t, "memory_usage_value", metrics[1].Name)
 	require.Equal(t, 60.2, metrics[1].Value)
 	require.Equal(t, "server1", metrics[1].Labels["host"])
 
 	// Verify third metric
-	require.Equal(t, "cpu_usage", metrics[2].Name)
+	require.Equal(t, "cpu_usage_value", metrics[2].Name)
 	require.Equal(t, 92.1, metrics[2].Value)
 	require.Equal(t, "server2", metrics[2].Labels["host"])
 }
@@ -798,7 +798,7 @@ func TestTransformBackwardCompatibility(t *testing.T) {
 	t.Run("single value mode still works", func(t *testing.T) {
 		config := TransformConfig{
 			DefaultMetricName: "legacy_metric",
-			ValueColumn:       "value", // Legacy single-value mode
+			ValueColumns:      []string{"value"}, // Multi-value mode with single column
 			LabelColumns:      []string{"host"},
 		}
 		meter := noop.NewMeterProvider().Meter("test")
@@ -816,7 +816,7 @@ func TestTransformBackwardCompatibility(t *testing.T) {
 		require.Len(t, metrics, 1)
 
 		metric := metrics[0]
-		require.Equal(t, "legacy_metric", metric.Name)
+		require.Equal(t, "legacy_metric_value", metric.Name)
 		require.Equal(t, 42.0, metric.Value)
 		require.Equal(t, map[string]string{"host": "server1"}, metric.Labels)
 	})
@@ -825,7 +825,7 @@ func TestTransformBackwardCompatibility(t *testing.T) {
 		config := TransformConfig{
 			DefaultMetricName: "legacy_metric",
 			MetricNamePrefix:  "team",
-			ValueColumn:       "value", // Legacy single-value mode
+			ValueColumns:      []string{"value"}, // Multi-value mode with single column
 			LabelColumns:      []string{"host"},
 		}
 		meter := noop.NewMeterProvider().Meter("test")
@@ -843,44 +843,9 @@ func TestTransformBackwardCompatibility(t *testing.T) {
 		require.Len(t, metrics, 1)
 
 		metric := metrics[0]
-		require.Equal(t, "team_legacy_metric", metric.Name)
+		require.Equal(t, "team_legacy_metric_value", metric.Name)
 		require.Equal(t, 42.0, metric.Value)
 		require.Equal(t, map[string]string{"host": "server1"}, metric.Labels)
-	})
-
-	t.Run("prefer ValueColumns over ValueColumn when both are set", func(t *testing.T) {
-		config := TransformConfig{
-			DefaultMetricName: "test_metric",
-			ValueColumn:       "old_value",                          // Should be ignored
-			ValueColumns:      []string{"new_value1", "new_value2"}, // Should be used
-			LabelColumns:      []string{"host"},
-		}
-		meter := noop.NewMeterProvider().Meter("test")
-		transformer := NewKustoToMetricsTransformer(config, meter)
-
-		results := []map[string]any{
-			{
-				"old_value":  100.0, // Should be ignored
-				"new_value1": 200.0, // Should be used
-				"new_value2": 300.0, // Should be used
-				"host":       "server1",
-			},
-		}
-
-		metrics, err := transformer.Transform(results)
-		require.NoError(t, err)
-		require.Len(t, metrics, 2) // Should generate 2 metrics from ValueColumns
-
-		// Sort metrics by name for consistent assertion
-		if metrics[0].Name > metrics[1].Name {
-			metrics[0], metrics[1] = metrics[1], metrics[0]
-		}
-
-		require.Equal(t, "test_metric_new_value1", metrics[0].Name)
-		require.Equal(t, 200.0, metrics[0].Value)
-
-		require.Equal(t, "test_metric_new_value2", metrics[1].Name)
-		require.Equal(t, 300.0, metrics[1].Value)
 	})
 }
 
@@ -897,7 +862,7 @@ func TestValidateKustoValueTypes(t *testing.T) {
 		{
 			name: "value.Long valid should pass validation",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -908,7 +873,7 @@ func TestValidateKustoValueTypes(t *testing.T) {
 		{
 			name: "value.Real valid should pass validation",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -919,7 +884,7 @@ func TestValidateKustoValueTypes(t *testing.T) {
 		{
 			name: "value.Int valid should pass validation",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -930,7 +895,7 @@ func TestValidateKustoValueTypes(t *testing.T) {
 		{
 			name: "value.Long invalid should fail validation",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -942,7 +907,7 @@ func TestValidateKustoValueTypes(t *testing.T) {
 		{
 			name: "value.Real invalid should fail validation",
 			config: TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				DefaultMetricName: "test",
 			},
 			results: []map[string]any{
@@ -1537,21 +1502,11 @@ func TestTransformConfigMultiValue(t *testing.T) {
 			name: "legacy single-value config",
 			config: TransformConfig{
 				MetricNameColumn: "metric_name",
-				ValueColumn:      "value",
+				ValueColumns:     []string{"value"},
 				TimestampColumn:  "timestamp",
 				LabelColumns:     []string{"service"},
 			},
 			description: "legacy single-value configuration for backward compatibility",
-		},
-		{
-			name: "mixed config (should prefer ValueColumns)",
-			config: TransformConfig{
-				MetricNameColumn: "metric_name",
-				ValueColumn:      "old_value",
-				ValueColumns:     []string{"new_value"},
-				TimestampColumn:  "timestamp",
-			},
-			description: "config with both ValueColumn and ValueColumns",
 		},
 	}
 
@@ -1562,7 +1517,6 @@ func TestTransformConfigMultiValue(t *testing.T) {
 
 			require.Equal(t, tt.config.MetricNameColumn, transformer.config.MetricNameColumn)
 			require.Equal(t, tt.config.MetricNamePrefix, transformer.config.MetricNamePrefix)
-			require.Equal(t, tt.config.ValueColumn, transformer.config.ValueColumn)
 			require.Equal(t, tt.config.ValueColumns, transformer.config.ValueColumns)
 			require.Equal(t, tt.config.TimestampColumn, transformer.config.TimestampColumn)
 			require.Equal(t, tt.config.LabelColumns, transformer.config.LabelColumns)
