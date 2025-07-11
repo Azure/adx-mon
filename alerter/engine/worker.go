@@ -209,8 +209,8 @@ func (e *worker) updateAlertRuleStatus(ctx context.Context, executionTime time.T
 		return
 	}
 
-	// Create a background context for the status update to avoid timeout issues
-	updateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Create a context for the status update using the passed-in context as parent
+	updateCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	// Get the current AlertRule
