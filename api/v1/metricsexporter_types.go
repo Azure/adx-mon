@@ -61,8 +61,11 @@ type TransformConfig struct {
 	// MetricNameColumn specifies which column contains the metric name
 	MetricNameColumn string `json:"metricNameColumn,omitempty"`
 
-	// ValueColumn specifies which column contains the metric value
-	ValueColumn string `json:"valueColumn"`
+	// MetricNamePrefix provides optional team/project namespacing for all metrics
+	MetricNamePrefix string `json:"metricNamePrefix,omitempty"`
+
+	// ValueColumns specifies columns to use as metric values
+	ValueColumns []string `json:"valueColumns"`
 
 	// TimestampColumn specifies which column contains the timestamp
 	TimestampColumn string `json:"timestampColumn"`
