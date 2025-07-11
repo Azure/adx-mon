@@ -85,10 +85,6 @@ spec:
                     description: TimestampColumn specifies which column contains the
                       timestamp
                     type: string
-                  valueColumn:
-                    description: ValueColumn specifies which column contains the metric
-                      value
-                    type: string
                   valueColumns:
                     description: ValueColumns specifies columns to use as metric values
                     items:
@@ -96,7 +92,6 @@ spec:
                     type: array
                 required:
                 - timestampColumn
-                - valueColumn
                 - valueColumns
                 type: object
             required:

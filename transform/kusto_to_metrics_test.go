@@ -13,13 +13,13 @@ import (
 
 func TestNewKustoToPrometheusTransformer(t *testing.T) {
 	config := TransformConfig{
-		ValueColumn: "value",
+		ValueColumns: []string{"value"},
 	}
 	meter := noop.NewMeterProvider().Meter("test")
 
 	transformer := NewKustoToMetricsTransformer(config, meter)
 
-	require.Equal(t, "value", transformer.config.ValueColumn)
+	require.Equal(t, []string{"value"}, transformer.config.ValueColumns)
 	require.NotNil(t, transformer.meter)
 }
 

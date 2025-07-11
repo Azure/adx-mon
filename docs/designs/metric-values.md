@@ -585,12 +585,12 @@ All tasks have been verified as complete through:
 
 **⚠️ Breaking Change Warning**: This task involves removing backward compatibility with the `ValueColumn` field. Any existing MetricsExporter resources using `ValueColumn` will need to be migrated to use `ValueColumns` instead.
 
-#### Task 4.1.1: Update CRD Schema ⚠️ **PRIORITY: HIGH** - **BREAKING**
+#### Task 4.1.1: Update CRD Schema ✅ **PRIORITY: HIGH** - **COMPLETE**
 - **File**: `api/v1/metricsexporter_types.go`
 - **Changes**:
-  - Remove `ValueColumn string` field from `TransformConfig`
-  - Update field comments to reflect `ValueColumns` as the only option
-  - Make `ValueColumns` a required field instead of optional
+  - ✅ Removed `ValueColumn string` field from `TransformConfig`
+  - ✅ Updated field comments to reflect `ValueColumns` as the only option
+  - ✅ Made `ValueColumns` a required field in CRD schema
 - **Breaking Change**: Existing MetricsExporter resources using `ValueColumn` will become invalid
 - **Migration Path**: Users must update their MetricsExporter manifests to use `valueColumns: ["old_value_column"]`
 
@@ -708,10 +708,10 @@ func TestTransformAndRegisterMetrics_NilValueColumns(t *testing.T)
 - Remove tests verifying "either ValueColumn or ValueColumns" logic
 - Update error message assertions to match new validation messages
 
-#### Task 4.1.5: Update CRD Manifests ⚠️ **PRIORITY: HIGH** - **BREAKING**
+#### Task 4.1.5: Update CRD Manifests ✅ **PRIORITY: HIGH** - **COMPLETE**
 - **Command**: `make generate-crd CMD=update`
 - **Files**: `kustomize/bases/metricsexporters_crd.yaml`, `operator/manifests/crds/metricsexporters_crd.yaml`
-- **Changes**: Regenerate CRD manifests without `valueColumn` field
+- **Changes**: ✅ Regenerated CRD manifests without `valueColumn` field
 - **Breaking Change**: Kubernetes will reject MetricsExporter resources using `valueColumn`
 
 **Manifest Changes:**
