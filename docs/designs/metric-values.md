@@ -282,12 +282,13 @@ teamb_customer_success_rate_numerator{...} 500        # TeamB metric
 
 **Target**: Enable `valueColumns` array with basic metric generation
 
-#### Task 1.1: Update CRD Schema ✅ **PRIORITY: HIGH**
+#### Task 1.1: Update CRD Schema ✅ **PRIORITY: HIGH** - **COMPLETE**
 - **File**: `api/v1/metricsexporter_types.go`
 - **Changes**:
   - Add `ValueColumns []string` field to `TransformConfig`
   - Add `MetricNamePrefix string` field to `TransformConfig`
 - **Acceptance**: CRD validates and accepts new fields
+- **Status**: ✅ **COMPLETED** - Fields added, CRD manifests generated successfully
 
 #### Task 1.2: Update Transform Engine ✅ **PRIORITY: HIGH**
 - **File**: `transform/kusto_to_metrics.go`
@@ -315,10 +316,11 @@ teamb_customer_success_rate_numerator{...} 500        # TeamB metric
 
 ### Phase 2: Advanced Features and Polish
 
-#### Task 2.1: CRD Manifest Generation ✅ **PRIORITY: MEDIUM**
+#### Task 2.1: CRD Manifest Generation ✅ **PRIORITY: MEDIUM** - **COMPLETE**
 - **Command**: `make generate-crd CMD=update`
 - **Changes**: Regenerate CRD manifests with new fields
 - **Acceptance**: Kubernetes can apply updated CRD definition
+- **Status**: ✅ **COMPLETED** - CRD manifests updated in kustomize/bases/ and operator/manifests/crds/
 
 #### Task 2.2: Documentation Updates ✅ **PRIORITY: MEDIUM**
 - **Files**: `docs/crds.md`, existing examples in `docs/designs/kusto-to-metrics.md`
