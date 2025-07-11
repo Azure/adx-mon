@@ -52,6 +52,14 @@ func ApplySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 	return query
 }
 
+const (
+	// OneTick represents the smallest time unit in Kusto/Azure Data Explorer (100 nanoseconds).
+	// This is used for time window adjustments to ensure non-overlapping windows while maintaining
+	// continuity between summary rule executions. The 100ns adjustment trades minimal precision
+	// for simplified between syntax support in KQL queries.
+	OneTick = 100 * time.Nanosecond
+)
+
 // subtractOneTick subtracts 1 tick (100ns) from a time string in RFC3339Nano format.
 // This enables the use of inclusive 'between' syntax in KQL while maintaining
 // non-overlapping time windows.
@@ -64,17 +72,16 @@ func subtractOneTick(timeStr string) string {
 		return timeStr
 	}
 	
-	// Subtract 1 tick (100 nanoseconds)
-	adjustedTime := t.Add(-100 * time.Nanosecond)
+	// Subtract 1 tick using the defined constant
+	adjustedTime := t.Add(-OneTick)
 	
 	// Return in the same format
 	return adjustedTime.Format(time.RFC3339Nano)
 }
 
 // AddOneTick adds 1 tick (100ns) to a time.Time value.
-// A tick is the smallest time unit in Kusto/Azure Data Explorer (100 nanoseconds).
 // This function compensates for the tick subtracted in ApplySubstitutions to ensure
 // proper time window continuity between summary rule executions while avoiding gaps.
 func AddOneTick(t time.Time) time.Time {
-	return t.Add(100 * time.Nanosecond)
+	return t.Add(OneTick)
 }
