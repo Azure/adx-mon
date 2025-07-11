@@ -18,13 +18,13 @@ import (
 var (
 	// camelCaseRegex matches lowercase/digit followed by uppercase (camelCase transition)
 	camelCaseRegex = regexp.MustCompile(`([a-z0-9])([A-Z])`)
-	
+
 	// acronymRegex matches uppercase followed by uppercase then lowercase (acronym transition)
 	acronymRegex = regexp.MustCompile(`([A-Z])([A-Z][a-z])`)
-	
+
 	// nonAlphanumericRegex matches anything that's not a letter, digit, or underscore
 	nonAlphanumericRegex = regexp.MustCompile(`[^a-z0-9_]`)
-	
+
 	// consecutiveUnderscoresRegex matches one or more consecutive underscores
 	consecutiveUnderscoresRegex = regexp.MustCompile(`_+`)
 )
@@ -85,7 +85,7 @@ func normalizeColumnName(columnName string) string {
 	// Handle sequences of uppercase letters (like "CPU" -> "CPU") but split at transitions
 	// Pattern 1: lowercase/digit followed by uppercase (camelCase transition)
 	normalized := camelCaseRegex.ReplaceAllString(columnName, `${1}_${2}`)
-	
+
 	// Pattern 2: uppercase followed by uppercase then lowercase (acronym transition)
 	// Example: "CPUUtilization" -> "CPU_Utilization"
 	normalized = acronymRegex.ReplaceAllString(normalized, `${1}_${2}`)
@@ -114,6 +114,62 @@ func normalizeColumnName(columnName string) string {
 	}
 
 	return normalized
+}
+
+// constructMetricName builds a complete metric name following the pattern: [prefix_]baseName_normalizedColumnName
+// Parameters:
+//   - baseName: the base metric name (e.g., "customer_success_rate")
+//   - prefix: optional team/project prefix (e.g., "teama")
+//   - columnName: the value column name to be normalized (e.g., "Numerator")
+// Examples:
+//   - constructMetricName("customer_success_rate", "teama", "Numerator") → "teama_customer_success_rate_numerator"
+//   - constructMetricName("response_time", "", "AvgLatency") → "response_time_avg_latency"
+//   - constructMetricName("", "teamb", "Count") → "teamb_count"
+func constructMetricName(baseName, prefix, columnName string) string {
+	// Normalize the column name to follow Prometheus conventions
+	normalizedColumn := normalizeColumnName(columnName)
+	
+	// Handle edge case where column normalization returns empty or default
+	if normalizedColumn == "" || normalizedColumn == "metric" {
+		normalizedColumn = "value"
+	}
+	
+	var parts []string
+	
+	// Add prefix if provided and valid after normalization
+	if prefix != "" {
+		normalizedPrefix := normalizeColumnName(prefix)
+		if normalizedPrefix != "" && normalizedPrefix != "metric" {
+			parts = append(parts, normalizedPrefix)
+		}
+	}
+	
+	// Add base name if provided and valid after normalization
+	if baseName != "" {
+		normalizedBase := normalizeColumnName(baseName)
+		if normalizedBase != "" && normalizedBase != "metric" {
+			parts = append(parts, normalizedBase)
+		}
+	}
+	
+	// Always add the normalized column name
+	parts = append(parts, normalizedColumn)
+	
+	// Join all parts with underscores and clean up
+	result := strings.Join(parts, "_")
+	
+	// Clean up any double underscores that might have been created
+	result = consecutiveUnderscoresRegex.ReplaceAllString(result, "_")
+	
+	// Remove leading and trailing underscores
+	result = strings.Trim(result, "_")
+	
+	// Ensure we have a valid metric name
+	if result == "" {
+		return "metric_value"
+	}
+	
+	return result
 }
 
 // Transform converts KQL query results to Prometheus metrics

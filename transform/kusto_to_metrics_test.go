@@ -581,7 +581,7 @@ func TestNormalizeColumnName(t *testing.T) {
 			input:    "AvgLatency99",
 			expected: "avg_latency99",
 		},
-		
+
 		// Special character handling
 		{
 			name:     "hyphen replacement",
@@ -603,7 +603,7 @@ func TestNormalizeColumnName(t *testing.T) {
 			input:    "Server@Health#Status!",
 			expected: "server_health_status",
 		},
-		
+
 		// Consecutive underscore handling
 		{
 			name:     "multiple consecutive underscores",
@@ -620,7 +620,7 @@ func TestNormalizeColumnName(t *testing.T) {
 			input:    "metric--with..multiple@@chars",
 			expected: "metric_with_multiple_chars",
 		},
-		
+
 		// Number handling
 		{
 			name:     "starting with number",
@@ -637,7 +637,7 @@ func TestNormalizeColumnName(t *testing.T) {
 			input:    "P99Latency",
 			expected: "p99_latency",
 		},
-		
+
 		// Edge cases
 		{
 			name:     "empty string",
@@ -664,7 +664,7 @@ func TestNormalizeColumnName(t *testing.T) {
 			input:    "5",
 			expected: "_5",
 		},
-		
+
 		// Real-world examples
 		{
 			name:     "azure metric style",
@@ -691,7 +691,7 @@ func TestNormalizeColumnName(t *testing.T) {
 			input:    "API-Response.Time_ms",
 			expected: "api_response_time_ms",
 		},
-		
+
 		// Unicode and international characters
 		{
 			name:     "unicode characters",
@@ -709,9 +709,259 @@ func TestNormalizeColumnName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := normalizeColumnName(tt.input)
 			require.Equal(t, tt.expected, result, "normalizeColumnName(%q) = %q, want %q", tt.input, result, tt.expected)
-			
+
 			// Verify the result follows Prometheus naming conventions
 			if tt.expected != "" && tt.expected != "metric" {
+				// Should be lowercase
+				require.Equal(t, strings.ToLower(result), result, "result should be lowercase")
+
+				// Should start with letter or underscore
+				if len(result) > 0 {
+					firstChar := result[0]
+					require.True(t,
+						(firstChar >= 'a' && firstChar <= 'z') || firstChar == '_',
+						"result should start with letter or underscore, got %c", firstChar)
+				}
+
+				// Should contain only valid characters
+				for i, char := range result {
+					isValid := (char >= 'a' && char <= 'z') ||
+						(char >= '0' && char <= '9') ||
+						char == '_'
+					require.True(t, isValid, "invalid character %c at position %d in result %q", char, i, result)
+				}
+
+				// Should not have consecutive underscores
+				require.NotContains(t, result, "__", "result should not contain consecutive underscores")
+			}
+		})
+	}
+}
+
+func TestNormalizeColumnNamePerformance(t *testing.T) {
+	// Test with a reasonably complex input
+	input := "Very-Complex@Metric#Name$With%Many^Special&Characters*And(Numbers)123[Brackets]"
+
+	// Run multiple iterations to ensure consistent behavior
+	var results []string
+	for i := 0; i < 100; i++ {
+		result := normalizeColumnName(input)
+		results = append(results, result)
+	}
+
+	// Verify all results are identical (deterministic)
+	expected := results[0]
+	for i, result := range results {
+		require.Equal(t, expected, result, "result at iteration %d differs from first result", i)
+	}
+
+	// Verify the expected transformation
+	require.Equal(t, "very_complex_metric_name_with_many_special_characters_and_numbers_123_brackets", expected)
+}
+
+func BenchmarkNormalizeColumnName(b *testing.B) {
+	testCases := []struct {
+		name  string
+		input string
+	}{
+		{"simple", "SimpleMetric"},
+		{"complex", "Very-Complex@Metric#Name$With%Many^Special&Characters*123"},
+		{"long", "ThisIsAVeryLongMetricNameWithManyWordsAndSpecialCharacters@#$%^&*()1234567890"},
+		{"already_normalized", "already_normalized_metric_name"},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_ = normalizeColumnName(tc.input)
+			}
+		})
+	}
+}
+
+func TestConstructMetricName(t *testing.T) {
+	tests := []struct {
+		name       string
+		baseName   string
+		prefix     string
+		columnName string
+		expected   string
+	}{
+		// Basic cases
+		{
+			name:       "full metric with all components",
+			baseName:   "customer_success_rate",
+			prefix:     "teama",
+			columnName: "Numerator",
+			expected:   "teama_customer_success_rate_numerator",
+		},
+		{
+			name:       "no prefix provided",
+			baseName:   "response_time",
+			prefix:     "",
+			columnName: "AvgLatency",
+			expected:   "response_time_avg_latency",
+		},
+		{
+			name:       "no base name provided",
+			baseName:   "",
+			prefix:     "teamb",
+			columnName: "Count",
+			expected:   "teamb_count",
+		},
+		{
+			name:       "only column name provided",
+			baseName:   "",
+			prefix:     "",
+			columnName: "SuccessfulRequests",
+			expected:   "successful_requests",
+		},
+		
+		// Real-world examples from design document
+		{
+			name:       "design doc example 1",
+			baseName:   "customer_success_rate",
+			prefix:     "teama",
+			columnName: "Numerator",
+			expected:   "teama_customer_success_rate_numerator",
+		},
+		{
+			name:       "design doc example 2",
+			baseName:   "customer_success_rate",
+			prefix:     "teama",
+			columnName: "Denominator",
+			expected:   "teama_customer_success_rate_denominator",
+		},
+		{
+			name:       "no prefix example",
+			baseName:   "api_response",
+			prefix:     "",
+			columnName: "AvgLatency",
+			expected:   "api_response_avg_latency",
+		},
+		
+		// CamelCase handling
+		{
+			name:       "camelCase base name",
+			baseName:   "CustomerSuccessRate",
+			prefix:     "teamc",
+			columnName: "Numerator",
+			expected:   "teamc_customer_success_rate_numerator",
+		},
+		{
+			name:       "camelCase prefix",
+			baseName:   "api_metrics",
+			prefix:     "TeamABC",
+			columnName: "Count",
+			expected:   "team_abc_api_metrics_count",
+		},
+		{
+			name:       "complex camelCase column",
+			baseName:   "service_health",
+			prefix:     "prod",
+			columnName: "CPUUtilizationPercent",
+			expected:   "prod_service_health_cpu_utilization_percent",
+		},
+		
+		// Special character handling
+		{
+			name:       "special chars in base name",
+			baseName:   "API-Response.Time",
+			prefix:     "team-a",
+			columnName: "P99_Latency",
+			expected:   "team_a_api_response_time_p99_latency",
+		},
+		{
+			name:       "mixed separators",
+			baseName:   "http.requests@total",
+			prefix:     "monitoring_team",
+			columnName: "Success-Rate",
+			expected:   "monitoring_team_http_requests_total_success_rate",
+		},
+		
+		// Edge cases
+		{
+			name:       "empty column name",
+			baseName:   "test_metric",
+			prefix:     "team",
+			columnName: "",
+			expected:   "team_test_metric_value",
+		},
+		{
+			name:       "all empty strings",
+			baseName:   "",
+			prefix:     "",
+			columnName: "",
+			expected:   "value",
+		},
+		{
+			name:       "special chars only in column",
+			baseName:   "valid_metric",
+			prefix:     "team",
+			columnName: "@#$%",
+			expected:   "team_valid_metric_value",
+		},
+		{
+			name:       "numbers in column name",
+			baseName:   "latency",
+			prefix:     "",
+			columnName: "95thPercentile",
+			expected:   "latency_95th_percentile",
+		},
+		{
+			name:       "column starting with number",
+			baseName:   "response",
+			prefix:     "api",
+			columnName: "99Percentile",
+			expected:   "api_response_99_percentile",
+		},
+		
+		// Unicode and international characters
+		{
+			name:       "unicode in column name",
+			baseName:   "metrics",
+			prefix:     "team",
+			columnName: "latência_média",
+			expected:   "team_metrics_lat_ncia_m_dia",
+		},
+		
+		// Long names
+		{
+			name:       "very long metric name",
+			baseName:   "very_long_service_name_with_many_components",
+			prefix:     "extremely_long_team_name_prefix",
+			columnName: "VeryLongColumnNameWithManyWords",
+			expected:   "extremely_long_team_name_prefix_very_long_service_name_with_many_components_very_long_column_name_with_many_words",
+		},
+		
+		// Already normalized components
+		{
+			name:       "already normalized components",
+			baseName:   "http_requests_total",
+			prefix:     "monitoring_team",
+			columnName: "success_rate",
+			expected:   "monitoring_team_http_requests_total_success_rate",
+		},
+		
+		// Single character components
+		{
+			name:       "single character components",
+			baseName:   "x",
+			prefix:     "a",
+			columnName: "y",
+			expected:   "a_x_y",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
+			require.Equal(t, tt.expected, result, 
+				"constructMetricName(%q, %q, %q) = %q, want %q", 
+				tt.baseName, tt.prefix, tt.columnName, result, tt.expected)
+			
+			// Verify the result follows Prometheus naming conventions
+			if tt.expected != "metric_value" && tt.expected != "value" {
 				// Should be lowercase
 				require.Equal(t, strings.ToLower(result), result, "result should be lowercase")
 				
@@ -733,47 +983,116 @@ func TestNormalizeColumnName(t *testing.T) {
 				
 				// Should not have consecutive underscores
 				require.NotContains(t, result, "__", "result should not contain consecutive underscores")
+				
+				// Should not start or end with underscore (unless it's a number-prefixed metric)
+				if len(result) > 0 && result[0] != '_' {
+					require.False(t, strings.HasSuffix(result, "_"), "result should not end with underscore")
+				}
 			}
 		})
 	}
 }
 
-func TestNormalizeColumnNamePerformance(t *testing.T) {
-	// Test with a reasonably complex input
-	input := "Very-Complex@Metric#Name$With%Many^Special&Characters*And(Numbers)123[Brackets]"
-	
-	// Run multiple iterations to ensure consistent behavior
-	var results []string
-	for i := 0; i < 100; i++ {
-		result := normalizeColumnName(input)
-		results = append(results, result)
+func TestConstructMetricNameEdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		baseName    string
+		prefix      string
+		columnName  string
+		description string
+	}{
+		{
+			name:        "normalization fallback to value",
+			baseName:    "test",
+			prefix:      "",
+			columnName:  "____", // Will normalize to empty, should fallback to "value"
+			description: "column that normalizes to empty should use 'value' fallback",
+		},
+		{
+			name:        "prefix normalization fallback",
+			baseName:    "test",
+			prefix:      "@@@", // Will normalize to "metric", should be ignored
+			columnName:  "count",
+			description: "prefix that normalizes to 'metric' should be ignored",
+		},
+		{
+			name:        "base name normalization fallback",
+			baseName:    "###", // Will normalize to "metric", should be ignored
+			prefix:      "team",
+			columnName:  "value",
+			description: "base name that normalizes to 'metric' should be ignored",
+		},
 	}
-	
-	// Verify all results are identical (deterministic)
-	expected := results[0]
-	for i, result := range results {
-		require.Equal(t, expected, result, "result at iteration %d differs from first result", i)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
+			
+			// Result should always be a valid metric name
+			require.NotEmpty(t, result, "result should never be empty")
+			require.True(t, len(result) > 0, "result should have content")
+			
+			// Should follow Prometheus conventions
+			require.Equal(t, strings.ToLower(result), result, "result should be lowercase")
+			if len(result) > 0 {
+				firstChar := result[0]
+				require.True(t, 
+					(firstChar >= 'a' && firstChar <= 'z') || firstChar == '_',
+					"result should start with letter or underscore")
+			}
+			
+			t.Logf("Test case: %s", tt.description)
+			t.Logf("Result: %s", result)
+		})
 	}
-	
-	// Verify the expected transformation
-	require.Equal(t, "very_complex_metric_name_with_many_special_characters_and_numbers_123_brackets", expected)
 }
 
-func BenchmarkNormalizeColumnName(b *testing.B) {
-	testCases := []struct {
-		name  string
-		input string
+func TestConstructMetricNamePerformance(t *testing.T) {
+	// Test with various complexity scenarios
+	scenarios := []struct {
+		baseName   string
+		prefix     string
+		columnName string
 	}{
-		{"simple", "SimpleMetric"},
-		{"complex", "Very-Complex@Metric#Name$With%Many^Special&Characters*123"},
-		{"long", "ThisIsAVeryLongMetricNameWithManyWordsAndSpecialCharacters@#$%^&*()1234567890"},
-		{"already_normalized", "already_normalized_metric_name"},
+		{"simple", "", "count"},
+		{"complex_service_name", "team_prefix", "ComplexColumnName"},
+		{"very_long_service_name_with_many_components", "extremely_long_team_prefix", "VeryLongColumnNameWithManyWordsAndNumbers123"},
+	}
+	
+	// Run multiple iterations to ensure consistent behavior
+	for _, scenario := range scenarios {
+		var results []string
+		for i := 0; i < 100; i++ {
+			result := constructMetricName(scenario.baseName, scenario.prefix, scenario.columnName)
+			results = append(results, result)
+		}
+		
+		// Verify all results are identical (deterministic)
+		expected := results[0]
+		for i, result := range results {
+			require.Equal(t, expected, result, "result at iteration %d differs from first result", i)
+		}
+	}
+}
+
+func BenchmarkConstructMetricName(b *testing.B) {
+	testCases := []struct {
+		name       string
+		baseName   string
+		prefix     string
+		columnName string
+	}{
+		{"simple", "metric", "", "count"},
+		{"with_prefix", "service_metric", "team", "value"},
+		{"complex", "complex_service_name", "team_prefix", "ComplexColumnName"},
+		{"long", "very_long_service_name_with_many_components", "extremely_long_team_prefix", "VeryLongColumnNameWithManyWords"},
+		{"camelcase_heavy", "CustomerServiceMetrics", "TeamABCDEF", "CPUUtilizationPercentileP99"},
 	}
 	
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				_ = normalizeColumnName(tc.input)
+				_ = constructMetricName(tc.baseName, tc.prefix, tc.columnName)
 			}
 		})
 	}
