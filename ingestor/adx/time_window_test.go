@@ -401,9 +401,9 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify windows are contiguous (second starts exactly where first ended)
-		// The addOneTick compensation should ensure this despite KQL adjustments
-		require.True(t, secondStartParsed.Equal(firstEndParsed) || secondStartParsed.Equal(firstEndParsed.Add(kustoutil.OneTick)),
-			"Second window should start where first ended (with 1 tick adjustment): %v vs %v",
+		// The addOneTick compensation ensures proper time window continuity
+		require.Equal(t, firstEndParsed, secondStartParsed,
+			"Second window should start exactly where first ended: %v vs %v",
 			secondStartParsed, firstEndParsed)
 	})
 
