@@ -559,8 +559,8 @@ func TestNextExecutionWindow(t *testing.T) {
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		// Should start from the future time but cap end time to current time
-		require.Equal(t, futureStart.Truncate(rule.Spec.Interval.Duration), startTime)
+		// Should start from the future time (no truncation for exact time continuity)
+		require.Equal(t, futureStart, startTime)
 		currentTimeMinute := fixedTime.UTC().Truncate(time.Minute)
 
 		// End time should be capped to current time since start time is in the future
@@ -590,9 +590,9 @@ func TestNextExecutionWindow(t *testing.T) {
 		}
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
-		// Should correct the last execution time to the nearest hour boundary
-		expectedStartTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
-		expectedEndTime := time.Date(2025, 6, 23, 9, 0, 0, 0, time.UTC)
+		// Should preserve the exact execution time for continuity (no truncation)
+		expectedStartTime := time.Date(2025, 6, 23, 8, 20, 0, 0, time.UTC)
+		expectedEndTime := time.Date(2025, 6, 23, 9, 20, 0, 0, time.UTC)
 
 		require.Equal(t, expectedStartTime, startTime)
 		require.Equal(t, expectedEndTime, endTime)
@@ -774,7 +774,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		rule.SetLastExecutionTime(lastExecution)
 
 		startTime, endTime = rule.NextExecutionWindow(fakeClock)
-		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
+		require.Equal(t, lastExecution, startTime)
 		require.Equal(t, 30*time.Second, endTime.Sub(startTime))
 	})
 
@@ -796,7 +796,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		rule.SetLastExecutionTime(lastExecution)
 
 		startTime, endTime = rule.NextExecutionWindow(fakeClock)
-		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
+		require.Equal(t, lastExecution, startTime)
 		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
 	})
 
@@ -837,9 +837,9 @@ func TestNextExecutionWindow(t *testing.T) {
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
-		// End time should be capped to current time (truncated to the interval)
-		expectedMaxEndTime := fixedTime.UTC().Truncate(rule.Spec.Interval.Duration)
+		require.Equal(t, lastExecution, startTime)
+		// End time should be capped to current time (truncated to minute)
+		expectedMaxEndTime := fixedTime.UTC().Truncate(time.Minute)
 		require.Equal(t, expectedMaxEndTime, endTime)
 		require.True(t, endTime.After(startTime))
 	})
@@ -939,10 +939,10 @@ spec:
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		// lastExecution - 15min = 10:45:00, truncated to hour = 10:00:00
-		// End time: 11:00:00
-		expectedStart := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
-		expectedEnd := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		// lastExecution - 15min = 10:45:00 (no truncation for exact time continuity)
+		// End time: 11:45:00 (start + interval)
+		expectedStart := time.Date(2025, 6, 23, 10, 45, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 11, 45, 0, 0, time.UTC)
 
 		require.Equal(t, expectedStart, startTime)
 		require.Equal(t, expectedEnd, endTime)
@@ -1008,10 +1008,10 @@ spec:
 		lastExecution := fixedTime.Add(-30 * time.Minute).UTC() // 30 minutes ago
 		rule.SetLastExecutionTime(lastExecution)
 
-		// lastExecution - 30min = 11:31:02, truncated to hour = 11:00:00
-		// End time: 12:00:00 (capped to now - delay = 11:31:02, truncated to minute = 11:31:00)
+		// lastExecution - 30min = 11:01:02.003 (no truncation for exact time continuity)
+		// End time: 12:01:02.003 (capped to now - delay = 11:31:02.003, truncated to minute = 11:31:00)
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
-		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		expectedStart := time.Date(2025, 6, 23, 11, 1, 2, 3000000, time.UTC)
 		expectedEnd := time.Date(2025, 6, 23, 11, 31, 0, 0, time.UTC)
 
 		require.Equal(t, expectedStart, startTime)
@@ -1112,8 +1112,8 @@ spec:
 		require.NotNil(t, retrievedTime)
 		require.Equal(t, originalTime, *retrievedTime)
 
-		// Start time: 11:00:00, end time: 12:00:00, but capped to 11:51:00
-		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		// Start time: 11:50:00 (originalTime - delay, no truncation), end time: 12:50:00, but capped to 11:51:00
+		expectedStart := time.Date(2025, 6, 23, 11, 50, 0, 0, time.UTC)
 		expectedEnd := time.Date(2025, 6, 23, 11, 51, 0, 0, time.UTC)
 		require.Equal(t, expectedStart, startTime)
 		require.Equal(t, expectedEnd, endTime)
