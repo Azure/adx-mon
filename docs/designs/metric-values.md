@@ -573,4 +573,230 @@ All tasks have been verified as complete through:
 - ✅ Service integration passes all configuration correctly
 - ✅ Backward compatibility maintained with single-value mode
 - ✅ Comprehensive error handling and validation
-- ✅ Performance benchmarks show no regression 
+- ✅ Performance benchmarks show no regression
+
+---
+
+## Phase 4: Legacy Cleanup (Optional Enhancement)
+
+### Task 4.1: Remove Legacy Single-Value Support ⚠️ **BREAKING CHANGE**
+
+**Rationale**: With multi-value column functionality fully implemented and verified, the legacy single-value `ValueColumn` field is no longer needed. Removing it simplifies the API, reduces maintenance burden, and eliminates configuration confusion.
+
+**⚠️ Breaking Change Warning**: This task involves removing backward compatibility with the `ValueColumn` field. Any existing MetricsExporter resources using `ValueColumn` will need to be migrated to use `ValueColumns` instead.
+
+#### Task 4.1.1: Update CRD Schema ⚠️ **PRIORITY: HIGH** - **BREAKING**
+- **File**: `api/v1/metricsexporter_types.go`
+- **Changes**:
+  - Remove `ValueColumn string` field from `TransformConfig`
+  - Update field comments to reflect `ValueColumns` as the only option
+  - Make `ValueColumns` a required field instead of optional
+- **Breaking Change**: Existing MetricsExporter resources using `ValueColumn` will become invalid
+- **Migration Path**: Users must update their MetricsExporter manifests to use `valueColumns: ["old_value_column"]`
+
+**Code Changes Required:**
+```go
+// BEFORE (current):
+type TransformConfig struct {
+    ValueColumn string `json:"valueColumn"`           // REMOVE THIS
+    ValueColumns []string `json:"valueColumns"`       // KEEP, make required
+}
+
+// AFTER (target):
+type TransformConfig struct {
+    ValueColumns []string `json:"valueColumns"`       // Now required, not optional
+}
+```
+
+#### Task 4.1.2: Update Transform Engine ⚠️ **PRIORITY: HIGH** - **BREAKING**
+- **File**: `transform/kusto_to_metrics.go`
+- **Changes**: Remove all single-value mode code paths and simplify logic
+- **Functions to Modify**:
+  - `transformRow()`: Remove dual-mode logic, always use multi-value path
+  - `transformRowSingleValue()`: **DELETE** entire function (no longer needed)
+  - `extractValue()`: **DELETE** entire function (replaced by `extractValues()`)
+  - `Validate()`: Remove single-value validation logic
+- **Acceptance**: Transform engine only supports multi-value mode
+
+**Detailed Sub-tasks:**
+- **Task 4.1.2.1**: Remove Single-Value Transform Logic
+  - Delete `transformRowSingleValue()` function (lines ~268-290)
+  - Delete `extractValue()` function (lines ~330-380)
+  - Simplify `transformRow()` to only call `transformRowMultiValue()`
+  - Remove mode detection logic in `transformRow()`
+
+- **Task 4.1.2.2**: Update TransformConfig Struct
+  - Remove `ValueColumn string` field from internal TransformConfig
+  - Update struct comments to reflect multi-value only design
+  - Ensure `ValueColumns` field is properly validated as required
+
+- **Task 4.1.2.3**: Simplify Validation Logic
+  - Remove `ValueColumn` validation from `Validate()` method
+  - Remove "either ValueColumn or ValueColumns must be specified" logic
+  - Simplify to require `len(ValueColumns) > 0`
+  - Update error messages to only reference `ValueColumns`
+
+**Code Removal Targets:**
+```go
+// DELETE these functions entirely:
+func (t *KustoToMetricsTransformer) transformRowSingleValue(...) ([]MetricData, error)
+func (t *KustoToMetricsTransformer) extractValue(row map[string]any) (float64, error)
+
+// SIMPLIFY this function (remove dual-mode logic):
+func (t *KustoToMetricsTransformer) transformRow(row map[string]any) ([]MetricData, error) {
+    // Remove: if len(t.config.ValueColumns) > 0 { ... } else { ... }
+    // Keep only: return t.transformRowMultiValue(...)
+}
+```
+
+#### Task 4.1.3: Update Service Integration ⚠️ **PRIORITY: HIGH** - **BREAKING**
+- **File**: `adxexporter/service.go`
+- **Changes**: Remove `ValueColumn` field from TransformConfig construction
+- **Impact**: Service no longer passes legacy field to transformer
+
+**Code Changes:**
+```go
+// BEFORE (current):
+transformer := transform.NewKustoToMetricsTransformer(
+    transform.TransformConfig{
+        MetricNameColumn:  me.Spec.Transform.MetricNameColumn,
+        MetricNamePrefix:  me.Spec.Transform.MetricNamePrefix,
+        ValueColumn:       me.Spec.Transform.ValueColumn,        // REMOVE THIS LINE
+        ValueColumns:      me.Spec.Transform.ValueColumns,
+        TimestampColumn:   me.Spec.Transform.TimestampColumn,
+        LabelColumns:      me.Spec.Transform.LabelColumns,
+        DefaultMetricName: me.Spec.Transform.DefaultMetricName,
+    },
+    r.Meter,
+)
+
+// AFTER (target):
+transformer := transform.NewKustoToMetricsTransformer(
+    transform.TransformConfig{
+        MetricNameColumn:  me.Spec.Transform.MetricNameColumn,
+        MetricNamePrefix:  me.Spec.Transform.MetricNamePrefix,
+        ValueColumns:      me.Spec.Transform.ValueColumns,       // Only field needed
+        TimestampColumn:   me.Spec.Transform.TimestampColumn,
+        LabelColumns:      me.Spec.Transform.LabelColumns,
+        DefaultMetricName: me.Spec.Transform.DefaultMetricName,
+    },
+    r.Meter,
+)
+```
+
+#### Task 4.1.4: Update Unit Tests ⚠️ **PRIORITY: HIGH** - **BREAKING**
+- **Files**: `transform/kusto_to_metrics_test.go`, `adxexporter/service_test.go`
+- **Changes**: Remove all single-value mode tests and update remaining tests
+- **Breaking Change**: Tests validating backward compatibility will be removed
+
+**Tests to Remove/Update:**
+```go
+// REMOVE these test functions entirely:
+func TestTransformAndRegisterMetrics_SingleValueColumn(t *testing.T)
+func TestTransformAndRegisterMetrics_EmptyValueColumns(t *testing.T)  
+func TestTransformAndRegisterMetrics_NilValueColumns(t *testing.T)
+
+// UPDATE existing tests to remove ValueColumn field:
+- All test cases in transform/kusto_to_metrics_test.go using ValueColumn
+- Update validation tests to expect errors when ValueColumns is empty
+- Remove backward compatibility test scenarios
+```
+
+**Test Updates Required:**
+- Remove ~50+ test cases using `ValueColumn` field
+- Update validation tests to only check `ValueColumns` requirements
+- Remove tests verifying "either ValueColumn or ValueColumns" logic
+- Update error message assertions to match new validation messages
+
+#### Task 4.1.5: Update CRD Manifests ⚠️ **PRIORITY: HIGH** - **BREAKING**
+- **Command**: `make generate-crd CMD=update`
+- **Files**: `kustomize/bases/metricsexporters_crd.yaml`, `operator/manifests/crds/metricsexporters_crd.yaml`
+- **Changes**: Regenerate CRD manifests without `valueColumn` field
+- **Breaking Change**: Kubernetes will reject MetricsExporter resources using `valueColumn`
+
+**Manifest Changes:**
+```yaml
+# REMOVE these lines from CRD schema:
+valueColumn:
+  description: ValueColumn specifies which column contains the metric value
+  type: string
+
+# UPDATE required fields (remove valueColumn, keep valueColumns):
+required:
+- valueColumns  # Remove valueColumn from required list
+```
+
+#### Task 4.1.6: Update Documentation ⚠️ **PRIORITY: MEDIUM** - **BREAKING**
+- **Files**: 
+  - `docs/designs/metric-values.md` (this file)
+  - `docs/designs/kusto-to-metrics.md`
+  - `docs/crds.md`
+  - `README.md` examples
+- **Changes**: Remove all references to `valueColumn` and update examples
+- **Migration Guide**: Add breaking change documentation with migration instructions
+
+**Documentation Updates:**
+- Remove all `valueColumn` examples from documentation
+- Update all YAML examples to use `valueColumns` instead
+- Add migration guide section explaining how to convert existing configs
+- Update API reference documentation
+- Update troubleshooting guides to reflect new validation messages
+
+#### Task 4.1.7: Update Example Files ⚠️ **PRIORITY: MEDIUM** - **BREAKING**
+- **Files**: `transform/example_usage.go`, example manifests, tutorials
+- **Changes**: Update all examples to use multi-value syntax
+- **Migration Examples**: Provide before/after examples for common use cases
+
+**Example Migration:**
+```yaml
+# BEFORE (legacy single-value):
+transform:
+  valueColumn: "cpu_percent"
+  
+# AFTER (multi-value):
+transform:
+  valueColumns: ["cpu_percent"]
+```
+
+### Migration Guide for Task 4.1
+
+#### Breaking Change Impact Assessment
+- **Scope**: All existing MetricsExporter resources using `valueColumn` field
+- **Timeline**: Immediate upon deployment of updated CRDs
+- **Mitigation**: Automated migration scripts and clear documentation
+
+#### Required User Actions
+1. **Update MetricsExporter Manifests**: 
+   ```bash
+   # Replace this pattern:
+   sed -i 's/valueColumn: "\([^"]*\)"/valueColumns: ["\1"]/' your-manifest.yaml
+   ```
+
+2. **Validate Updated Manifests**:
+   ```bash
+   kubectl apply --dry-run=client -f updated-manifest.yaml
+   ```
+
+3. **Test Multi-Value Behavior**: Verify metrics are generated correctly with new configuration
+
+#### Rollback Strategy
+- Keep old CRD version available for emergency rollback
+- Maintain ability to downgrade to previous version if issues arise
+- Document rollback procedure for critical production environments
+
+### Benefits of Legacy Removal
+
+1. **Simplified API**: Single configuration pattern reduces user confusion
+2. **Reduced Maintenance**: Less code to maintain, test, and document  
+3. **Cleaner Architecture**: Eliminates dual-mode complexity in transform engine
+4. **Better Performance**: Single code path is more efficient than mode detection
+5. **Future-Proof**: Positions codebase for easier future enhancements
+
+### Risk Mitigation
+
+1. **Comprehensive Testing**: Ensure all multi-value scenarios work before removal
+2. **Documentation**: Clear migration guide with automated conversion tools
+3. **Gradual Rollout**: Deploy to test environments first, monitor for issues
+4. **Rollback Plan**: Maintain ability to revert if critical issues discovered
+
+**Task 4.1 Status**: ❌ **PENDING** - Breaking change requiring careful planning and migration strategy 
