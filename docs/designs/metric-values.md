@@ -292,25 +292,74 @@ teamb_customer_success_rate_numerator{...} 500        # TeamB metric
 
 #### Task 1.2: Update Transform Engine ✅ **PRIORITY: HIGH**
 - **File**: `transform/kusto_to_metrics.go`
-- **Changes**:
-  - Modify `Transform()` function to handle multiple value columns
-  - Implement metric name normalization (snake_case, lowercase)
-  - Add prefix support for generated metric names
+- **Changes**: Complete overhaul to support multi-value column transformation
 - **Acceptance**: Transform engine generates multiple metrics from single query row
 
-#### Task 1.3: Enhanced Validation Logic ✅ **PRIORITY: HIGH**
-- **File**: `transform/kusto_to_metrics.go` and `adxexporter/service.go`
-- **Changes**:
-  - Validate all value columns exist in query results
-  - Validate all value columns contain numeric data
-  - Validate metric name prefix follows Prometheus conventions
-- **Acceptance**: Clear error messages for invalid configurations
+**Sub-tasks:**
+- **Task 1.2.1**: Update TransformConfig Struct
+  - Add `MetricNamePrefix string` field
+  - Add `ValueColumns []string` field
+  - Keep existing `ValueColumn string` for reference
+  
+- **Task 1.2.2**: Add Metric Name Normalization Function
+  - Create `normalizeColumnName(columnName string) string` function
+  - Implement Prometheus naming rules: lowercase, replace non-alphanumeric with underscores
+  - Remove consecutive underscores, ensure starts with letter/underscore
+  - Example: `"SuccessfulRequests"` → `"successful_requests"`
+  
+- **Task 1.2.3**: Add Metric Name Construction Function
+  - Create `constructMetricName(baseName, prefix, columnName string) string`
+  - Pattern: `[prefix_]baseName_normalizedColumnName`
+  - Example: `"teama"` + `"customer_success_rate"` + `"Numerator"` → `"teama_customer_success_rate_numerator"`
+  - Pattern: `[prefix_]baseName_normalizedColumnName`
+  - Handle empty prefix and base name cases
+  
+- **Task 1.2.4**: Modify Value Extraction
+  - Replace `extractValue()` with `extractValues(row, valueColumns)`
+  - Return `map[string]float64` (column name → value)
+  - Reuse existing numeric type conversion logic
+  
+- **Task 1.2.5**: Update Row Transformation
+  - Modify `transformRow()` to generate multiple `MetricData` objects per row
+  - Each metric gets constructed name using new naming function
+  - Share timestamp and labels across all metrics from same row
+  
+- **Task 1.2.6**: Update Transform Method
+  - Modify main `Transform()` method to handle multiple metrics per row
+  - Flatten results from multiple `MetricData` arrays
+  - Maintain same return signature `[]MetricData`
+  
+- **Task 1.2.7**: Update Validation Method
+  - Modify `Validate()` to check all `ValueColumns`
+    ```go
+    for _, col := range t.config.ValueColumns {
+        if err := validateColumnName(col.ColumnName); err != nil {
+            return fmt.Errorf("invalid value column %q: %w", col.ColumnName, err)
+        }
+    }
+    ```
+  - Validate `MetricNamePrefix` format if provided (snake_case, lowercase)
+  - Ensure at least one value column specified
+    ```go
+    if len(t.config.ValueColumns) == 0 {
+        return errors.New("at least one value column must be specified")
+    }
+    ```
+  
+- **Task 1.2.8**: Update Service Integration
+  - Modify `adxexporter/service.go` to pass new fields to transformer
+  - Update TransformConfig construction with `MetricNamePrefix` and `ValueColumns`
 
-#### Task 1.4: Update Unit Tests ✅ **PRIORITY: HIGH**
+#### Task 1.3: Update Unit Tests ✅ **PRIORITY: HIGH**
 - **Files**: `transform/kusto_to_metrics_test.go`, `adxexporter/service_test.go`
 - **Changes**:
   - Add test cases for multi-value column scenarios
   - Test metric name normalization and prefix generation
+  - Test validation error cases for invalid configurations
+  - Update existing tests to use new multi-value approach
+- **Acceptance**: >90% test coverage for new functionality with comprehensive validation testing
+
+#### Task 1.4: Integration Testing ✅ **PRIORITY: MEDIUM**
   - Test validation error cases
 - **Acceptance**: >90% test coverage for new functionality
 
