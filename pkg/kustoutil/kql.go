@@ -5,7 +5,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// OneTick represents 1 tick in Kusto datetime, which is 100 nanoseconds.
+// This is the smallest time unit supported by Kusto datetime.
+const OneTick = 100 * time.Nanosecond
 
 // ApplySubstitutions applies time and cluster label substitutions to a KQL query body
 func ApplySubstitutions(body, startTime, endTime string, clusterLabels map[string]string) string {
