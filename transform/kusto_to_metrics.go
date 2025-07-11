@@ -34,8 +34,14 @@ type TransformConfig struct {
 	// MetricNameColumn specifies which column contains the metric name
 	MetricNameColumn string `json:"metricNameColumn,omitempty"`
 
-	// ValueColumn specifies which column contains the metric value
-	ValueColumn string `json:"valueColumn"`
+	// MetricNamePrefix provides optional team/project namespacing for all metrics
+	MetricNamePrefix string `json:"metricNamePrefix,omitempty"`
+
+	// ValueColumn specifies which column contains the metric value (legacy single-value mode)
+	ValueColumn string `json:"valueColumn,omitempty"`
+
+	// ValueColumns specifies columns to use as metric values (multi-value mode)
+	ValueColumns []string `json:"valueColumns,omitempty"`
 
 	// TimestampColumn specifies which column contains the timestamp
 	TimestampColumn string `json:"timestampColumn"`
@@ -121,6 +127,7 @@ func normalizeColumnName(columnName string) string {
 //   - baseName: the base metric name (e.g., "customer_success_rate")
 //   - prefix: optional team/project prefix (e.g., "teama")
 //   - columnName: the value column name to be normalized (e.g., "Numerator")
+//
 // Examples:
 //   - constructMetricName("customer_success_rate", "teama", "Numerator") → "teama_customer_success_rate_numerator"
 //   - constructMetricName("response_time", "", "AvgLatency") → "response_time_avg_latency"
@@ -128,14 +135,14 @@ func normalizeColumnName(columnName string) string {
 func constructMetricName(baseName, prefix, columnName string) string {
 	// Normalize the column name to follow Prometheus conventions
 	normalizedColumn := normalizeColumnName(columnName)
-	
+
 	// Handle edge case where column normalization returns empty or default
 	if normalizedColumn == "" || normalizedColumn == "metric" {
 		normalizedColumn = "value"
 	}
-	
+
 	var parts []string
-	
+
 	// Add prefix if provided and valid after normalization
 	if prefix != "" {
 		normalizedPrefix := normalizeColumnName(prefix)
@@ -143,7 +150,7 @@ func constructMetricName(baseName, prefix, columnName string) string {
 			parts = append(parts, normalizedPrefix)
 		}
 	}
-	
+
 	// Add base name if provided and valid after normalization
 	if baseName != "" {
 		normalizedBase := normalizeColumnName(baseName)
@@ -151,24 +158,24 @@ func constructMetricName(baseName, prefix, columnName string) string {
 			parts = append(parts, normalizedBase)
 		}
 	}
-	
+
 	// Always add the normalized column name
 	parts = append(parts, normalizedColumn)
-	
+
 	// Join all parts with underscores and clean up
 	result := strings.Join(parts, "_")
-	
+
 	// Clean up any double underscores that might have been created
 	result = consecutiveUnderscoresRegex.ReplaceAllString(result, "_")
-	
+
 	// Remove leading and trailing underscores
 	result = strings.Trim(result, "_")
-	
+
 	// Ensure we have a valid metric name
 	if result == "" {
 		return "metric_value"
 	}
-	
+
 	return result
 }
 
@@ -309,6 +316,73 @@ func (t *KustoToMetricsTransformer) extractValue(row map[string]any) (float64, e
 		return parsed, nil
 	default:
 		return 0, fmt.Errorf("value column '%s' contains unsupported type %T", t.config.ValueColumn, rawValue)
+	}
+}
+
+// extractValues extracts numeric values from multiple columns in the row
+// Returns a map of column name to value for multi-value column transformation
+func (t *KustoToMetricsTransformer) extractValues(row map[string]any, valueColumns []string) (map[string]float64, error) {
+	values := make(map[string]float64)
+
+	for _, columnName := range valueColumns {
+		value, err := t.extractValueFromColumn(row, columnName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract value from column '%s': %w", columnName, err)
+		}
+		values[columnName] = value
+	}
+
+	return values, nil
+}
+
+// extractValueFromColumn extracts a numeric value from a specific column
+// This is a helper function that reuses the existing numeric type conversion logic
+func (t *KustoToMetricsTransformer) extractValueFromColumn(row map[string]any, columnName string) (float64, error) {
+	rawValue, exists := row[columnName]
+	if !exists {
+		return 0, fmt.Errorf("value column '%s' not found in row", columnName)
+	}
+
+	if rawValue == nil {
+		return 0, fmt.Errorf("value column '%s' contains null value", columnName)
+	}
+
+	// Handle different numeric types from KQL (reuse existing logic)
+	switch v := rawValue.(type) {
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case value.Long:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", columnName)
+		}
+		return float64(v.Value), nil
+	case value.Real:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", columnName)
+		}
+		return v.Value, nil
+	case value.Int:
+		if !v.Valid {
+			return 0, fmt.Errorf("value column '%s' contains null value", columnName)
+		}
+		return float64(v.Value), nil
+	case string:
+		// Try to parse string as float
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, fmt.Errorf("value column '%s' contains unparseable string value '%s': %w", columnName, v, err)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("value column '%s' contains unsupported type %T", columnName, rawValue)
 	}
 }
 

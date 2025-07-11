@@ -296,10 +296,11 @@ teamb_customer_success_rate_numerator{...} 500        # TeamB metric
 - **Acceptance**: Transform engine generates multiple metrics from single query row
 
 **Sub-tasks:**
-- **Task 1.2.1**: Update TransformConfig Struct
+- **Task 1.2.1**: Update TransformConfig Struct ✅ **COMPLETE**
   - Add `MetricNamePrefix string` field
-  - Add `ValueColumns []string` field
-  - Keep existing `ValueColumn string` for reference
+  - Add `ValueColumns []string` field  
+  - Keep existing `ValueColumn string` for backward compatibility
+  - **Status**: ✅ **COMPLETED** - Struct updated with comprehensive configuration options
   
 - **Task 1.2.2**: Add Metric Name Normalization Function ✅ **COMPLETE**
   - Create `normalizeColumnName(columnName string) string` function
@@ -315,10 +316,11 @@ teamb_customer_success_rate_numerator{...} 500        # TeamB metric
   - Handle empty prefix and base name cases
   - **Status**: ✅ **COMPLETED** - Function implemented with comprehensive tests covering 25+ scenarios including edge cases
   
-- **Task 1.2.4**: Modify Value Extraction
+- **Task 1.2.4**: Modify Value Extraction ✅ **COMPLETE**
   - Replace `extractValue()` with `extractValues(row, valueColumns)`
   - Return `map[string]float64` (column name → value)
   - Reuse existing numeric type conversion logic
+  - **Status**: ✅ **COMPLETED** - New functions `extractValues()` and `extractValueFromColumn()` implemented with comprehensive tests
   
 - **Task 1.2.5**: Update Row Transformation
   - Modify `transformRow()` to generate multiple `MetricData` objects per row

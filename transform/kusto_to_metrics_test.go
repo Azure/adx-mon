@@ -816,7 +816,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "SuccessfulRequests",
 			expected:   "successful_requests",
 		},
-		
+
 		// Real-world examples from design document
 		{
 			name:       "design doc example 1",
@@ -839,7 +839,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "AvgLatency",
 			expected:   "api_response_avg_latency",
 		},
-		
+
 		// CamelCase handling
 		{
 			name:       "camelCase base name",
@@ -862,7 +862,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "CPUUtilizationPercent",
 			expected:   "prod_service_health_cpu_utilization_percent",
 		},
-		
+
 		// Special character handling
 		{
 			name:       "special chars in base name",
@@ -878,7 +878,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "Success-Rate",
 			expected:   "monitoring_team_http_requests_total_success_rate",
 		},
-		
+
 		// Edge cases
 		{
 			name:       "empty column name",
@@ -915,7 +915,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "99Percentile",
 			expected:   "api_response_99_percentile",
 		},
-		
+
 		// Unicode and international characters
 		{
 			name:       "unicode in column name",
@@ -924,7 +924,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "latência_média",
 			expected:   "team_metrics_lat_ncia_m_dia",
 		},
-		
+
 		// Long names
 		{
 			name:       "very long metric name",
@@ -933,7 +933,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "VeryLongColumnNameWithManyWords",
 			expected:   "extremely_long_team_name_prefix_very_long_service_name_with_many_components_very_long_column_name_with_many_words",
 		},
-		
+
 		// Already normalized components
 		{
 			name:       "already normalized components",
@@ -942,7 +942,7 @@ func TestConstructMetricName(t *testing.T) {
 			columnName: "success_rate",
 			expected:   "monitoring_team_http_requests_total_success_rate",
 		},
-		
+
 		// Single character components
 		{
 			name:       "single character components",
@@ -956,34 +956,34 @@ func TestConstructMetricName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
-			require.Equal(t, tt.expected, result, 
-				"constructMetricName(%q, %q, %q) = %q, want %q", 
+			require.Equal(t, tt.expected, result,
+				"constructMetricName(%q, %q, %q) = %q, want %q",
 				tt.baseName, tt.prefix, tt.columnName, result, tt.expected)
-			
+
 			// Verify the result follows Prometheus naming conventions
 			if tt.expected != "metric_value" && tt.expected != "value" {
 				// Should be lowercase
 				require.Equal(t, strings.ToLower(result), result, "result should be lowercase")
-				
+
 				// Should start with letter or underscore
 				if len(result) > 0 {
 					firstChar := result[0]
-					require.True(t, 
+					require.True(t,
 						(firstChar >= 'a' && firstChar <= 'z') || firstChar == '_',
 						"result should start with letter or underscore, got %c", firstChar)
 				}
-				
+
 				// Should contain only valid characters
 				for i, char := range result {
-					isValid := (char >= 'a' && char <= 'z') || 
-							  (char >= '0' && char <= '9') || 
-							  char == '_'
+					isValid := (char >= 'a' && char <= 'z') ||
+						(char >= '0' && char <= '9') ||
+						char == '_'
 					require.True(t, isValid, "invalid character %c at position %d in result %q", char, i, result)
 				}
-				
+
 				// Should not have consecutive underscores
 				require.NotContains(t, result, "__", "result should not contain consecutive underscores")
-				
+
 				// Should not start or end with underscore (unless it's a number-prefixed metric)
 				if len(result) > 0 && result[0] != '_' {
 					require.False(t, strings.HasSuffix(result, "_"), "result should not end with underscore")
@@ -1027,20 +1027,20 @@ func TestConstructMetricNameEdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
-			
+
 			// Result should always be a valid metric name
 			require.NotEmpty(t, result, "result should never be empty")
 			require.True(t, len(result) > 0, "result should have content")
-			
+
 			// Should follow Prometheus conventions
 			require.Equal(t, strings.ToLower(result), result, "result should be lowercase")
 			if len(result) > 0 {
 				firstChar := result[0]
-				require.True(t, 
+				require.True(t,
 					(firstChar >= 'a' && firstChar <= 'z') || firstChar == '_',
 					"result should start with letter or underscore")
 			}
-			
+
 			t.Logf("Test case: %s", tt.description)
 			t.Logf("Result: %s", result)
 		})
@@ -1058,7 +1058,7 @@ func TestConstructMetricNamePerformance(t *testing.T) {
 		{"complex_service_name", "team_prefix", "ComplexColumnName"},
 		{"very_long_service_name_with_many_components", "extremely_long_team_prefix", "VeryLongColumnNameWithManyWordsAndNumbers123"},
 	}
-	
+
 	// Run multiple iterations to ensure consistent behavior
 	for _, scenario := range scenarios {
 		var results []string
@@ -1066,7 +1066,7 @@ func TestConstructMetricNamePerformance(t *testing.T) {
 			result := constructMetricName(scenario.baseName, scenario.prefix, scenario.columnName)
 			results = append(results, result)
 		}
-		
+
 		// Verify all results are identical (deterministic)
 		expected := results[0]
 		for i, result := range results {
@@ -1088,11 +1088,440 @@ func BenchmarkConstructMetricName(b *testing.B) {
 		{"long", "very_long_service_name_with_many_components", "extremely_long_team_prefix", "VeryLongColumnNameWithManyWords"},
 		{"camelcase_heavy", "CustomerServiceMetrics", "TeamABCDEF", "CPUUtilizationPercentileP99"},
 	}
-	
+
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				_ = constructMetricName(tc.baseName, tc.prefix, tc.columnName)
+			}
+		})
+	}
+}
+
+func TestTransformConfigMultiValue(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      TransformConfig
+		description string
+	}{
+		{
+			name: "multi-value config with prefix",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				MetricNamePrefix: "teama",
+				ValueColumns:     []string{"Numerator", "Denominator", "AvgLatency"},
+				TimestampColumn:  "timestamp",
+				LabelColumns:     []string{"LocationId", "ServiceTier"},
+			},
+			description: "full multi-value configuration with team prefix",
+		},
+		{
+			name: "multi-value config without prefix",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumns:     []string{"Count", "ErrorRate"},
+				TimestampColumn:  "timestamp",
+				LabelColumns:     []string{"Region"},
+			},
+			description: "multi-value configuration without prefix",
+		},
+		{
+			name: "legacy single-value config",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumn:      "value",
+				TimestampColumn:  "timestamp",
+				LabelColumns:     []string{"service"},
+			},
+			description: "legacy single-value configuration for backward compatibility",
+		},
+		{
+			name: "mixed config (should prefer ValueColumns)",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumn:      "old_value",
+				ValueColumns:     []string{"new_value"},
+				TimestampColumn:  "timestamp",
+			},
+			description: "config with both ValueColumn and ValueColumns",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meter := noop.NewMeterProvider().Meter("test")
+			transformer := NewKustoToMetricsTransformer(tt.config, meter)
+
+			require.Equal(t, tt.config.MetricNameColumn, transformer.config.MetricNameColumn)
+			require.Equal(t, tt.config.MetricNamePrefix, transformer.config.MetricNamePrefix)
+			require.Equal(t, tt.config.ValueColumn, transformer.config.ValueColumn)
+			require.Equal(t, tt.config.ValueColumns, transformer.config.ValueColumns)
+			require.Equal(t, tt.config.TimestampColumn, transformer.config.TimestampColumn)
+			require.Equal(t, tt.config.LabelColumns, transformer.config.LabelColumns)
+
+			t.Logf("Test case: %s", tt.description)
+		})
+	}
+}
+
+func TestExtractValues(t *testing.T) {
+	config := TransformConfig{
+		ValueColumns: []string{"Numerator", "Denominator", "AvgLatency"},
+	}
+	meter := noop.NewMeterProvider().Meter("test")
+	transformer := NewKustoToMetricsTransformer(config, meter)
+
+	tests := []struct {
+		name         string
+		row          map[string]any
+		valueColumns []string
+		expected     map[string]float64
+		wantErr      bool
+		errMsg       string
+	}{
+		{
+			name: "successful extraction of multiple values",
+			row: map[string]any{
+				"Numerator":   1974.0,
+				"Denominator": 2000.0,
+				"AvgLatency":  150.2,
+				"LocationId":  "datacenter-01",
+			},
+			valueColumns: []string{"Numerator", "Denominator", "AvgLatency"},
+			expected: map[string]float64{
+				"Numerator":   1974.0,
+				"Denominator": 2000.0,
+				"AvgLatency":  150.2,
+			},
+			wantErr: false,
+		},
+		{
+			name: "extraction with different numeric types",
+			row: map[string]any{
+				"IntValue":   int(42),
+				"Int32Value": int32(123),
+				"Int64Value": int64(456),
+				"Float32Val": float32(3.14),
+				"Float64Val": float64(2.718),
+			},
+			valueColumns: []string{"IntValue", "Int32Value", "Int64Value", "Float32Val", "Float64Val"},
+			expected: map[string]float64{
+				"IntValue":   42.0,
+				"Int32Value": 123.0,
+				"Int64Value": 456.0,
+				"Float32Val": 3.140000104904175, // float32 precision
+				"Float64Val": 2.718,
+			},
+			wantErr: false,
+		},
+		{
+			name: "extraction with Kusto value types",
+			row: map[string]any{
+				"LongValue": value.Long{Value: 12345, Valid: true},
+				"RealValue": value.Real{Value: 98.76, Valid: true},
+				"IntValue":  value.Int{Value: 999, Valid: true},
+			},
+			valueColumns: []string{"LongValue", "RealValue", "IntValue"},
+			expected: map[string]float64{
+				"LongValue": 12345.0,
+				"RealValue": 98.76,
+				"IntValue":  999.0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "extraction with string numeric values",
+			row: map[string]any{
+				"StringInt":   "42",
+				"StringFloat": "3.14159",
+				"RegularInt":  100,
+			},
+			valueColumns: []string{"StringInt", "StringFloat", "RegularInt"},
+			expected: map[string]float64{
+				"StringInt":   42.0,
+				"StringFloat": 3.14159,
+				"RegularInt":  100.0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing column error",
+			row: map[string]any{
+				"ExistingColumn": 42.0,
+			},
+			valueColumns: []string{"ExistingColumn", "MissingColumn"},
+			expected:     nil,
+			wantErr:      true,
+			errMsg:       "value column 'MissingColumn' not found in row",
+		},
+		{
+			name: "null value error",
+			row: map[string]any{
+				"ValidColumn": 42.0,
+				"NullColumn":  nil,
+			},
+			valueColumns: []string{"ValidColumn", "NullColumn"},
+			expected:     nil,
+			wantErr:      true,
+			errMsg:       "value column 'NullColumn' contains null value",
+		},
+		{
+			name: "invalid Kusto value",
+			row: map[string]any{
+				"ValidColumn":  42.0,
+				"InvalidValue": value.Long{Value: 0, Valid: false},
+			},
+			valueColumns: []string{"ValidColumn", "InvalidValue"},
+			expected:     nil,
+			wantErr:      true,
+			errMsg:       "value column 'InvalidValue' contains null value",
+		},
+		{
+			name: "unparseable string value",
+			row: map[string]any{
+				"ValidColumn":      42.0,
+				"InvalidStringVal": "not-a-number",
+			},
+			valueColumns: []string{"ValidColumn", "InvalidStringVal"},
+			expected:     nil,
+			wantErr:      true,
+			errMsg:       "contains unparseable string value",
+		},
+		{
+			name: "unsupported type",
+			row: map[string]any{
+				"ValidColumn": 42.0,
+				"InvalidType": []string{"array", "not", "supported"},
+			},
+			valueColumns: []string{"ValidColumn", "InvalidType"},
+			expected:     nil,
+			wantErr:      true,
+			errMsg:       "contains unsupported type",
+		},
+		{
+			name: "empty value columns list",
+			row: map[string]any{
+				"SomeColumn": 42.0,
+			},
+			valueColumns: []string{},
+			expected:     map[string]float64{},
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := transformer.extractValues(tt.row, tt.valueColumns)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errMsg)
+				require.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, len(tt.expected), len(result))
+
+				for key, expectedValue := range tt.expected {
+					actualValue, exists := result[key]
+					require.True(t, exists, "missing key %s in result", key)
+					require.InDelta(t, expectedValue, actualValue, 0.000001,
+						"value mismatch for key %s: expected %f, got %f", key, expectedValue, actualValue)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractValueFromColumn(t *testing.T) {
+	config := TransformConfig{ValueColumns: []string{"test"}}
+	meter := noop.NewMeterProvider().Meter("test")
+	transformer := NewKustoToMetricsTransformer(config, meter)
+
+	tests := []struct {
+		name       string
+		row        map[string]any
+		columnName string
+		expected   float64
+		wantErr    bool
+		errMsg     string
+	}{
+		{
+			name:       "extract float64",
+			row:        map[string]any{"test_col": 42.5},
+			columnName: "test_col",
+			expected:   42.5,
+			wantErr:    false,
+		},
+		{
+			name:       "extract int",
+			row:        map[string]any{"test_col": 100},
+			columnName: "test_col",
+			expected:   100.0,
+			wantErr:    false,
+		},
+		{
+			name:       "extract Kusto Long",
+			row:        map[string]any{"test_col": value.Long{Value: 12345, Valid: true}},
+			columnName: "test_col",
+			expected:   12345.0,
+			wantErr:    false,
+		},
+		{
+			name:       "extract string number",
+			row:        map[string]any{"test_col": "3.14159"},
+			columnName: "test_col",
+			expected:   3.14159,
+			wantErr:    false,
+		},
+		{
+			name:       "missing column",
+			row:        map[string]any{"other_col": 42.0},
+			columnName: "missing_col",
+			expected:   0,
+			wantErr:    true,
+			errMsg:     "value column 'missing_col' not found in row",
+		},
+		{
+			name:       "null value",
+			row:        map[string]any{"test_col": nil},
+			columnName: "test_col",
+			expected:   0,
+			wantErr:    true,
+			errMsg:     "value column 'test_col' contains null value",
+		},
+		{
+			name:       "invalid Kusto Real",
+			row:        map[string]any{"test_col": value.Real{Value: 0, Valid: false}},
+			columnName: "test_col",
+			expected:   0,
+			wantErr:    true,
+			errMsg:     "value column 'test_col' contains null value",
+		},
+		{
+			name:       "unparseable string",
+			row:        map[string]any{"test_col": "not-a-number"},
+			columnName: "test_col",
+			expected:   0,
+			wantErr:    true,
+			errMsg:     "contains unparseable string value",
+		},
+		{
+			name:       "unsupported type",
+			row:        map[string]any{"test_col": map[string]string{"key": "value"}},
+			columnName: "test_col",
+			expected:   0,
+			wantErr:    true,
+			errMsg:     "contains unsupported type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := transformer.extractValueFromColumn(tt.row, tt.columnName)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				require.NoError(t, err)
+				require.InDelta(t, tt.expected, result, 0.000001)
+			}
+		})
+	}
+}
+
+func TestExtractValuesPerformance(t *testing.T) {
+	config := TransformConfig{
+		ValueColumns: []string{"Col1", "Col2", "Col3", "Col4", "Col5"},
+	}
+	meter := noop.NewMeterProvider().Meter("test")
+	transformer := NewKustoToMetricsTransformer(config, meter)
+
+	// Create a test row with multiple columns
+	row := map[string]any{
+		"Col1":  1.0,
+		"Col2":  2.0,
+		"Col3":  3.0,
+		"Col4":  4.0,
+		"Col5":  5.0,
+		"Col6":  6.0,
+		"Col7":  7.0,
+		"Col8":  8.0,
+		"Col9":  9.0,
+		"Col10": 10.0,
+	}
+
+	// Test different numbers of columns
+	testCases := []struct {
+		name    string
+		columns []string
+	}{
+		{"single_column", []string{"Col1"}},
+		{"three_columns", []string{"Col1", "Col2", "Col3"}},
+		{"five_columns", []string{"Col1", "Col2", "Col3", "Col4", "Col5"}},
+		{"ten_columns", []string{"Col1", "Col2", "Col3", "Col4", "Col5", "Col6", "Col7", "Col8", "Col9", "Col10"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Run multiple iterations to ensure consistent behavior
+			var results []map[string]float64
+			for i := 0; i < 100; i++ {
+				result, err := transformer.extractValues(row, tc.columns)
+				require.NoError(t, err)
+				results = append(results, result)
+			}
+
+			// Verify all results are identical (deterministic)
+			expected := results[0]
+			for i, result := range results {
+				require.Equal(t, expected, result, "result at iteration %d differs from first result", i)
+			}
+
+			// Verify correct number of values extracted
+			require.Equal(t, len(tc.columns), len(expected))
+		})
+	}
+}
+
+func BenchmarkExtractValues(b *testing.B) {
+	config := TransformConfig{ValueColumns: []string{"test"}}
+	meter := noop.NewMeterProvider().Meter("test")
+	transformer := NewKustoToMetricsTransformer(config, meter)
+
+	testCases := []struct {
+		name    string
+		row     map[string]any
+		columns []string
+	}{
+		{
+			"single_column",
+			map[string]any{"col1": 42.0},
+			[]string{"col1"},
+		},
+		{
+			"three_columns",
+			map[string]any{"col1": 42.0, "col2": 43.0, "col3": 44.0},
+			[]string{"col1", "col2", "col3"},
+		},
+		{
+			"five_columns_mixed_types",
+			map[string]any{
+				"col1": 42.0,
+				"col2": int(43),
+				"col3": value.Long{Value: 44, Valid: true},
+				"col4": "45.5",
+				"col5": float32(46.5),
+			},
+			[]string{"col1", "col2", "col3", "col4", "col5"},
+		},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_, _ = transformer.extractValues(tc.row, tc.columns)
 			}
 		})
 	}
