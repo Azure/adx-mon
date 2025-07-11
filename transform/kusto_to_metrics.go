@@ -3,13 +3,30 @@ package transform
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+)
+
+// Pre-compiled regular expressions for metric name normalization
+var (
+	// camelCaseRegex matches lowercase/digit followed by uppercase (camelCase transition)
+	camelCaseRegex = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	
+	// acronymRegex matches uppercase followed by uppercase then lowercase (acronym transition)
+	acronymRegex = regexp.MustCompile(`([A-Z])([A-Z][a-z])`)
+	
+	// nonAlphanumericRegex matches anything that's not a letter, digit, or underscore
+	nonAlphanumericRegex = regexp.MustCompile(`[^a-z0-9_]`)
+	
+	// consecutiveUnderscoresRegex matches one or more consecutive underscores
+	consecutiveUnderscoresRegex = regexp.MustCompile(`_+`)
 )
 
 // TransformConfig defines how to convert KQL query results to metrics format
@@ -50,6 +67,53 @@ func NewKustoToMetricsTransformer(config TransformConfig, meter metric.Meter) *K
 		config: config,
 		meter:  meter,
 	}
+}
+
+// normalizeColumnName converts a column name to a valid Prometheus metric name component
+// following Prometheus naming conventions:
+// - Convert to lowercase
+// - Replace non-alphanumeric characters with underscores
+// - Remove consecutive underscores
+// - Ensure name starts with letter or underscore
+// Example: "SuccessfulRequests" → "successful_requests"
+func normalizeColumnName(columnName string) string {
+	if columnName == "" {
+		return ""
+	}
+
+	// Convert camelCase to snake_case by inserting underscores before uppercase letters
+	// Handle sequences of uppercase letters (like "CPU" -> "CPU") but split at transitions
+	// Pattern 1: lowercase/digit followed by uppercase (camelCase transition)
+	normalized := camelCaseRegex.ReplaceAllString(columnName, `${1}_${2}`)
+	
+	// Pattern 2: uppercase followed by uppercase then lowercase (acronym transition)
+	// Example: "CPUUtilization" -> "CPU_Utilization"
+	normalized = acronymRegex.ReplaceAllString(normalized, `${1}_${2}`)
+
+	// Convert to lowercase
+	normalized = strings.ToLower(normalized)
+
+	// Replace non-alphanumeric characters with underscores
+	normalized = nonAlphanumericRegex.ReplaceAllString(normalized, "_")
+
+	// Remove consecutive underscores
+	normalized = consecutiveUnderscoresRegex.ReplaceAllString(normalized, "_")
+
+	// Remove leading and trailing underscores
+	normalized = strings.Trim(normalized, "_")
+
+	// Ensure name starts with letter or underscore (Prometheus requirement)
+	// If it starts with a digit, prepend underscore
+	if len(normalized) > 0 && normalized[0] >= '0' && normalized[0] <= '9' {
+		normalized = "_" + normalized
+	}
+
+	// If somehow we end up with empty string, return a default
+	if normalized == "" {
+		return "metric"
+	}
+
+	return normalized
 }
 
 // Transform converts KQL query results to Prometheus metrics

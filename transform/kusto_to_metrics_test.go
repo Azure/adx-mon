@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -553,6 +554,226 @@ func TestValidateKustoValueTypes(t *testing.T) {
 				require.Contains(t, err.Error(), tc.errMsg)
 			} else {
 				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestNormalizeColumnName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Basic cases
+		{
+			name:     "simple lowercase",
+			input:    "metric",
+			expected: "metric",
+		},
+		{
+			name:     "camelCase to snake_case",
+			input:    "SuccessfulRequests",
+			expected: "successful_requests",
+		},
+		{
+			name:     "mixed case with numbers",
+			input:    "AvgLatency99",
+			expected: "avg_latency99",
+		},
+		
+		// Special character handling
+		{
+			name:     "hyphen replacement",
+			input:    "Total-Count",
+			expected: "total_count",
+		},
+		{
+			name:     "dot replacement",
+			input:    "response.time",
+			expected: "response_time",
+		},
+		{
+			name:     "space replacement",
+			input:    "Success Rate",
+			expected: "success_rate",
+		},
+		{
+			name:     "multiple special chars",
+			input:    "Server@Health#Status!",
+			expected: "server_health_status",
+		},
+		
+		// Consecutive underscore handling
+		{
+			name:     "multiple consecutive underscores",
+			input:    "metric__with___many____underscores",
+			expected: "metric_with_many_underscores",
+		},
+		{
+			name:     "leading and trailing underscores",
+			input:    "_metric_name_",
+			expected: "metric_name",
+		},
+		{
+			name:     "mixed special chars creating underscores",
+			input:    "metric--with..multiple@@chars",
+			expected: "metric_with_multiple_chars",
+		},
+		
+		// Number handling
+		{
+			name:     "starting with number",
+			input:    "95thPercentile",
+			expected: "_95th_percentile",
+		},
+		{
+			name:     "only numbers",
+			input:    "123",
+			expected: "_123",
+		},
+		{
+			name:     "numbers in middle",
+			input:    "P99Latency",
+			expected: "p99_latency",
+		},
+		
+		// Edge cases
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only special characters",
+			input:    "@#$%",
+			expected: "metric",
+		},
+		{
+			name:     "only underscores",
+			input:    "____",
+			expected: "metric",
+		},
+		{
+			name:     "single character",
+			input:    "A",
+			expected: "a",
+		},
+		{
+			name:     "single number",
+			input:    "5",
+			expected: "_5",
+		},
+		
+		// Real-world examples
+		{
+			name:     "azure metric style",
+			input:    "CPUUtilizationPercent",
+			expected: "cpu_utilization_percent",
+		},
+		{
+			name:     "kubernetes style",
+			input:    "container_memory_usage_bytes",
+			expected: "container_memory_usage_bytes",
+		},
+		{
+			name:     "prometheus style already normalized",
+			input:    "http_requests_total",
+			expected: "http_requests_total",
+		},
+		{
+			name:     "database column style",
+			input:    "TotalRequestCount",
+			expected: "total_request_count",
+		},
+		{
+			name:     "mixed separators",
+			input:    "API-Response.Time_ms",
+			expected: "api_response_time_ms",
+		},
+		
+		// Unicode and international characters
+		{
+			name:     "unicode characters",
+			input:    "métrïc_nåme",
+			expected: "m_tr_c_n_me",
+		},
+		{
+			name:     "accented characters",
+			input:    "latência_média",
+			expected: "lat_ncia_m_dia",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeColumnName(tt.input)
+			require.Equal(t, tt.expected, result, "normalizeColumnName(%q) = %q, want %q", tt.input, result, tt.expected)
+			
+			// Verify the result follows Prometheus naming conventions
+			if tt.expected != "" && tt.expected != "metric" {
+				// Should be lowercase
+				require.Equal(t, strings.ToLower(result), result, "result should be lowercase")
+				
+				// Should start with letter or underscore
+				if len(result) > 0 {
+					firstChar := result[0]
+					require.True(t, 
+						(firstChar >= 'a' && firstChar <= 'z') || firstChar == '_',
+						"result should start with letter or underscore, got %c", firstChar)
+				}
+				
+				// Should contain only valid characters
+				for i, char := range result {
+					isValid := (char >= 'a' && char <= 'z') || 
+							  (char >= '0' && char <= '9') || 
+							  char == '_'
+					require.True(t, isValid, "invalid character %c at position %d in result %q", char, i, result)
+				}
+				
+				// Should not have consecutive underscores
+				require.NotContains(t, result, "__", "result should not contain consecutive underscores")
+			}
+		})
+	}
+}
+
+func TestNormalizeColumnNamePerformance(t *testing.T) {
+	// Test with a reasonably complex input
+	input := "Very-Complex@Metric#Name$With%Many^Special&Characters*And(Numbers)123[Brackets]"
+	
+	// Run multiple iterations to ensure consistent behavior
+	var results []string
+	for i := 0; i < 100; i++ {
+		result := normalizeColumnName(input)
+		results = append(results, result)
+	}
+	
+	// Verify all results are identical (deterministic)
+	expected := results[0]
+	for i, result := range results {
+		require.Equal(t, expected, result, "result at iteration %d differs from first result", i)
+	}
+	
+	// Verify the expected transformation
+	require.Equal(t, "very_complex_metric_name_with_many_special_characters_and_numbers_123_brackets", expected)
+}
+
+func BenchmarkNormalizeColumnName(b *testing.B) {
+	testCases := []struct {
+		name  string
+		input string
+	}{
+		{"simple", "SimpleMetric"},
+		{"complex", "Very-Complex@Metric#Name$With%Many^Special&Characters*123"},
+		{"long", "ThisIsAVeryLongMetricNameWithManyWordsAndSpecialCharacters@#$%^&*()1234567890"},
+		{"already_normalized", "already_normalized_metric_name"},
+	}
+	
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_ = normalizeColumnName(tc.input)
 			}
 		})
 	}
