@@ -53,11 +53,26 @@ func (e *worker) Run(ctx context.Context) {
 	go func() {
 		defer e.wg.Done()
 
-		logger.Infof("Creating query executor for %s/%s in %s executing every %s",
-			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
+		// Calculate the next execution time based on last execution
+		nextQueryTime := e.calculateNextQueryTime()
 
-		// do-while
-		e.ExecuteQuery(ctx)
+		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
+			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
+
+		// If we should execute immediately (e.g., first time or overdue), do so
+		if nextQueryTime.Before(time.Now()) {
+			e.ExecuteQuery(ctx)
+		} else {
+			// Wait until the calculated next execution time before starting the ticker
+			waitDuration := time.Until(nextQueryTime)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(waitDuration):
+				e.ExecuteQuery(ctx)
+			}
+		}
 
 		ticker := time.NewTicker(e.rule.Interval)
 		defer ticker.Stop()
@@ -70,6 +85,21 @@ func (e *worker) Run(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// calculateNextQueryTime determines when the next execution should occur
+// based on the last execution time from the AlertRule status
+func (e *worker) calculateNextQueryTime() time.Time {
+	// If no last query time, this is the first execution
+	if e.rule.LastQueryTime.IsZero() {
+		return time.Now().Add(-time.Second) // Immediate execution
+	}
+
+	// Calculate next execution time based on last execution + interval
+	lastQueryTime := e.rule.LastQueryTime
+	nextQueryTime := lastQueryTime.Add(e.rule.Interval)
+
+	return nextQueryTime
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {

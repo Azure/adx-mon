@@ -86,6 +86,7 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 		AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
 		Criteria:          r.Spec.Criteria,
 		IsMgmtQuery:       false,
+		LastQueryTime:     r.Status.LastQueryTime.Time,
 	}
 
 	// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
@@ -168,4 +169,7 @@ type Rule struct {
 
 	// Stmt specifies the underlayEtcdPeersQuery to execute.
 	Stmt kusto.Stmt
+
+	// LastQueryTime from the AlertRule status, used for smart scheduling
+	LastQueryTime time.Time
 }
