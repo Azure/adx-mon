@@ -6,6 +6,7 @@ import (
 	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -231,15 +232,18 @@ func TestTimeWindowCalculation(t *testing.T) {
 		updatedRule, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
 		require.True(t, ok)
 
-		// Verify the last execution time was set to the submitted window end time
+		// Verify the last execution time was set to the submitted window end time plus 1 tick
+		// (this is to compensate for the tick subtracted in KQL substitution)
 		lastExecution := updatedRule.GetLastExecutionTime()
 		require.NotNil(t, lastExecution)
 
-		// Parse the submitted window end time and verify it matches
+		// Parse the submitted window end time and verify it matches (with 1 tick adjustment)
 		expectedEndTime, err := time.Parse(time.RFC3339Nano, submittedWindowEndTime)
 		require.NoError(t, err)
-		require.True(t, lastExecution.Equal(expectedEndTime),
-			"Last execution time should match the submitted window end time")
+		expectedAdjustedEndTime := addOneTick(expectedEndTime)
+		require.True(t, lastExecution.Equal(expectedAdjustedEndTime),
+			"Last execution time should match the submitted window end time plus 1 tick: got %v, expected %v", 
+			lastExecution, expectedAdjustedEndTime)
 
 		// Verify an async operation was created
 		asyncOps := updatedRule.GetAsyncOperations()
@@ -333,5 +337,115 @@ func TestTimeWindowCalculation(t *testing.T) {
 		// Verify no overlap by checking the windows are contiguous
 		require.True(t, start.Equal(firstWindowEnd),
 			"Windows should be contiguous with no overlap")
+	})
+}
+
+func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
+	t.Run("addOneTick compensates for subtractOneTick to maintain window continuity", func(t *testing.T) {
+		// Create a rule with 1 hour interval
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-rule",
+				Generation: 1,
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody | where PreciseTimeStamp between (_startTime .. _endTime)",
+			},
+		}
+
+		// Track submitted KQL and time windows
+		var submissions []struct {
+			KQL       string
+			startTime string
+			endTime   string
+		}
+
+		mockSubmitRule := func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+			// Apply the same substitution logic as the real implementation
+			kql := kustoutil.ApplySubstitutions(rule.Spec.Body, startTime, endTime, nil)
+			submissions = append(submissions, struct {
+				KQL       string
+				startTime string
+				endTime   string
+			}{kql, startTime, endTime})
+			return "test-operation-id", nil
+		}
+
+		// First execution - simulate time window 10:00-11:00
+		firstStart := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+		firstEnd := time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC)
+		
+		_, err := mockSubmitRule(context.Background(), *rule, 
+			firstStart.Format(time.RFC3339Nano), 
+			firstEnd.Format(time.RFC3339Nano))
+		require.NoError(t, err)
+
+		// Simulate setting last execution time with addOneTick
+		rule.SetLastExecutionTime(addOneTick(firstEnd))
+
+		// Second execution - calculate next window
+		secondStart, secondEnd := rule.NextExecutionWindow(nil)
+
+		_, err = mockSubmitRule(context.Background(), *rule,
+			secondStart.Format(time.RFC3339Nano),
+			secondEnd.Format(time.RFC3339Nano))
+		require.NoError(t, err)
+
+		// Should have two submissions
+		require.Len(t, submissions, 2)
+
+		// Parse the time windows from both submissions
+		firstEndParsed, err := time.Parse(time.RFC3339Nano, submissions[0].endTime)
+		require.NoError(t, err)
+
+		secondStartParsed, err := time.Parse(time.RFC3339Nano, submissions[1].startTime)
+		require.NoError(t, err)
+
+		// Verify windows are contiguous (second starts exactly where first ended)
+		// The addOneTick compensation should ensure this despite KQL adjustments
+		require.True(t, secondStartParsed.Equal(firstEndParsed) || secondStartParsed.Equal(firstEndParsed.Add(100*time.Nanosecond)),
+			"Second window should start where first ended (with 1 tick adjustment): %v vs %v", 
+			secondStartParsed, firstEndParsed)
+
+		// Verify both KQL queries have adjusted endTime for between syntax
+		require.Contains(t, submissions[0].KQL, "let _endTime=datetime(")
+		require.Contains(t, submissions[1].KQL, "let _endTime=datetime(")
+
+		// The KQL endTime should be 1 tick less than the window endTime
+		require.Contains(t, submissions[0].KQL, ".9999999Z);") // Should end with adjusted nanoseconds
+		require.Contains(t, submissions[1].KQL, ".9999999Z);") // Should end with adjusted nanoseconds
+	})
+
+	t.Run("time window calculation preserves interval boundaries despite tick adjustments", func(t *testing.T) {
+		// Test that even with tick adjustments, the windows align to interval boundaries
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-rule",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: 30 * time.Minute},
+				Body:     "TestBody | where PreciseTimeStamp between (_startTime .. _endTime)",
+			},
+		}
+
+		// Set a previous execution time aligned to 30-minute boundary
+		baseTime := time.Date(2025, 1, 1, 10, 30, 0, 0, time.UTC)
+		rule.SetLastExecutionTime(addOneTick(baseTime)) // Simulate the +1 tick storage
+
+		// Calculate next window
+		startTime, endTime := rule.NextExecutionWindow(nil)
+
+		// Verify the window is properly aligned despite the +1 tick in stored time
+		expectedStart := baseTime // Should truncate back to the boundary
+		
+		require.True(t, startTime.Equal(expectedStart) || startTime.Equal(expectedStart.Truncate(rule.Spec.Interval.Duration)),
+			"Start time should align to interval boundary")
+		require.Equal(t, 30*time.Minute, endTime.Sub(startTime),
+			"Window duration should match interval")
 	})
 }

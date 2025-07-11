@@ -405,7 +405,7 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 		operationId, err := t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
 		asyncOp.OperationId = operationId
 		rule.SetAsyncOperation(asyncOp)
-		rule.SetLastExecutionTime(windowEndTime)
+		rule.SetLastExecutionTime(addOneTick(windowEndTime))
 
 		if err != nil {
 			return fmt.Errorf("failed to submit rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
@@ -647,4 +647,11 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d", actualSize, expectedSize, actualCount, expectedCount)
 	}
 	return nil
+}
+
+// addOneTick adds 1 tick (100ns) to a time.Time value.
+// This compensates for the tick subtracted in ApplySubstitutions to ensure
+// proper time window continuity between summary rule executions.
+func addOneTick(t time.Time) time.Time {
+	return t.Add(100 * time.Nanosecond)
 }
