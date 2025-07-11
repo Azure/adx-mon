@@ -209,14 +209,14 @@ spec:
 
 **Required Placeholders:**
 - `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
-- `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`. **Note**: When using the `between` operator, `_endTime` is automatically adjusted by subtracting 1 tick (100ns) to make the inclusive `between` operator work correctly with non-overlapping time windows.
+- `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`. **Note**: When using the `between` operator, `_endTime` is automatically adjusted by subtracting 1 tick (100ns) to ensure non-overlapping time windows. This trades 100ns of precision for simplified syntax.
 
 **Time Range Filtering:**
 You can use either of these patterns for time range filtering in your KQL:
-- **Recommended**: `where Timestamp between (_startTime .. _endTime)` - Uses Kusto's inclusive `between` operator
-- **Legacy**: `where Timestamp >= _startTime and Timestamp < _endTime` - Traditional exclusive upper bound
+- **Standard**: `where Timestamp >= _startTime and Timestamp < _endTime` - Uses exclusive upper bound, captures all data with precise boundaries
+- **Alternative**: `where Timestamp between (_startTime .. _endTime)` - Uses Kusto's inclusive `between` operator with automatic 1-tick (100ns) adjustment for non-overlapping windows
 
-Both patterns ensure non-overlapping time windows. The `between` syntax is preferred for readability and is automatically handled by the 1-tick adjustment.
+Both patterns ensure non-overlapping time windows. The exclusive upper bound pattern (`>= and <`) is the most precise for data completeness, while the `between` syntax trades 100 nanoseconds of precision for improved readability.
 
 **Optional Cluster Label Substitutions:**
 - `<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.

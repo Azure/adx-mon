@@ -70,3 +70,11 @@ func subtractOneTick(timeStr string) string {
 	// Return in the same format
 	return adjustedTime.Format(time.RFC3339Nano)
 }
+
+// AddOneTick adds 1 tick (100ns) to a time.Time value.
+// A tick is the smallest time unit in Kusto/Azure Data Explorer (100 nanoseconds).
+// This function compensates for the tick subtracted in ApplySubstitutions to ensure
+// proper time window continuity between summary rule executions while avoiding gaps.
+func AddOneTick(t time.Time) time.Time {
+	return t.Add(100 * time.Nanosecond)
+}

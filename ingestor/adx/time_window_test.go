@@ -240,7 +240,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 		// Parse the submitted window end time and verify it matches (with 1 tick adjustment)
 		expectedEndTime, err := time.Parse(time.RFC3339Nano, submittedWindowEndTime)
 		require.NoError(t, err)
-		expectedAdjustedEndTime := addOneTick(expectedEndTime)
+		expectedAdjustedEndTime := kustoutil.AddOneTick(expectedEndTime)
 		require.True(t, lastExecution.Equal(expectedAdjustedEndTime),
 			"Last execution time should match the submitted window end time plus 1 tick: got %v, expected %v", 
 			lastExecution, expectedAdjustedEndTime)
@@ -384,7 +384,7 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 		require.NoError(t, err)
 
 		// Simulate setting last execution time with addOneTick
-		rule.SetLastExecutionTime(addOneTick(firstEnd))
+		rule.SetLastExecutionTime(kustoutil.AddOneTick(firstEnd))
 
 		// Second execution - calculate next window
 		secondStart, secondEnd := rule.NextExecutionWindow(nil)
@@ -435,7 +435,7 @@ func TestBetweenSyntaxTimeWindowContinuity(t *testing.T) {
 
 		// Set a previous execution time aligned to 30-minute boundary
 		baseTime := time.Date(2025, 1, 1, 10, 30, 0, 0, time.UTC)
-		rule.SetLastExecutionTime(addOneTick(baseTime)) // Simulate the +1 tick storage
+		rule.SetLastExecutionTime(kustoutil.AddOneTick(baseTime)) // Simulate the +1 tick storage
 
 		// Calculate next window
 		startTime, endTime := rule.NextExecutionWindow(nil)
