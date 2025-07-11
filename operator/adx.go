@@ -639,6 +639,36 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 			s.Tables = append(s.Tables, tbl.TableName)
 		}
 
+		q = kql.New(".show functions")
+		result, err = client.Mgmt(ctx, database, q)
+		if err != nil {
+			return fmt.Errorf("failed to query functions: %w", err)
+		}
+		defer result.Stop()
+
+		for {
+			row, errInline, errFinal := result.NextRowOrError()
+			if errFinal == io.EOF {
+				break
+			}
+			if errInline != nil {
+				continue
+			}
+			if errFinal != nil {
+				return fmt.Errorf("failed to retrieve functions: %w", errFinal)
+			}
+
+			var fn FunctionRec
+			if err := row.ToStruct(&fn); err != nil {
+				return fmt.Errorf("failed to parse function: %w", err)
+			}
+
+			isView, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
+			if err == nil && isView {
+				s.Views = append(s.Views, fn.Name)
+			}
+		}
+
 		schema = append(schema, s)
 	}
 
@@ -692,6 +722,7 @@ type DatabaseRec struct {
 type ADXClusterSchema struct {
 	Database string   `json:"database"`
 	Tables   []string `json:"tables"`
+	Views    []string `json:"views"`
 }
 
 func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -1196,4 +1227,46 @@ func executeKustoScripts(ctx context.Context, client *kusto.Client, database str
 		}
 	}
 	return nil
+}
+
+type FunctionRec struct {
+	Name       string `kusto:"Name"`
+	Parameters string `kusto:"Parameters"`
+	Body       string `kusto:"Body"`
+	Folder     string `kusto:"Folder"`
+	DocString  string `kusto:"DocString"`
+}
+
+type FunctionKind struct {
+	Kind string `kusto:"FunctionKind"`
+}
+
+func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, error) {
+	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
+	result, err := client.Mgmt(ctx, database, q)
+	if err != nil {
+		return false, fmt.Errorf("failed to query function schema: %w", err)
+	}
+	defer result.Stop()
+
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to retrieve function schema: %w", errFinal)
+		}
+
+		var fk FunctionKind
+		if err := row.ToStruct(&fk); err != nil {
+			return false, fmt.Errorf("failed to parse function kind: %w", err)
+		}
+		return fk.Kind == "ViewFunction", nil
+	}
+
+	return false, nil
 }
