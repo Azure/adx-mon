@@ -211,7 +211,10 @@ spec:
 - `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
 - `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`. **Note**: `_endTime` is automatically adjusted by subtracting 1 tick (100ns) to ensure non-overlapping time windows while maintaining data completeness.
 
-**Time Range Filtering:**
+**Recommendations:**
+
+**Configure ingestionDelay:** Highly recommended to set `ingestionDelay` in your SummaryRule spec to account for data ingestion delays. This ensures your summary rules process complete data rather than missing recently ingested data. See the [cookbook guide](cookbook.md#using-ingestion-delay-for-data-completeness) for recommended delay values and configuration examples.
+
 **Use this recommended pattern for time range filtering in your KQL:**
 - **Recommended**: `where Timestamp between (_startTime .. _endTime)` - Uses Kusto's inclusive `between` operator with automatic 1-tick (100ns) adjustment for non-overlapping windows
 
