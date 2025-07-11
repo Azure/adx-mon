@@ -337,6 +337,7 @@ func TestValidate(t *testing.T) {
 		config  TransformConfig
 		results []map[string]any
 		wantErr bool
+		errMsg  string
 	}{
 		{
 			name: "valid config",
@@ -368,6 +369,7 @@ func TestValidate(t *testing.T) {
 				{"value": 42.0},
 			},
 			wantErr: true,
+			errMsg:  "value column 'missing' not found in query results",
 		},
 		{
 			name: "null value",
@@ -379,6 +381,7 @@ func TestValidate(t *testing.T) {
 				{"value": nil},
 			},
 			wantErr: true,
+			errMsg:  "value column 'value' contains null value",
 		},
 		{
 			name: "no metric name config",
@@ -389,6 +392,66 @@ func TestValidate(t *testing.T) {
 				{"value": 42.0},
 			},
 			wantErr: true,
+			errMsg:  "no metric name configuration",
+		},
+		{
+			name: "valid multi-value config",
+			config: TransformConfig{
+				ValueColumns:      []string{"value1", "value2"},
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value1": 42.0, "value2": 24.0},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multi-value config with missing column",
+			config: TransformConfig{
+				ValueColumns:      []string{"value1", "missing"},
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value1": 42.0},
+			},
+			wantErr: true,
+			errMsg:  "invalid value column \"missing\": value column 'missing' not found in query results",
+		},
+		{
+			name: "multi-value config with null value",
+			config: TransformConfig{
+				ValueColumns:      []string{"value1", "value2"},
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value1": 42.0, "value2": nil},
+			},
+			wantErr: true,
+			errMsg:  "invalid value column \"value2\": value column 'value2' contains null value",
+		},
+		{
+			name: "multi-value config with invalid prefix",
+			config: TransformConfig{
+				ValueColumns:      []string{"value1"},
+				DefaultMetricName: "test",
+				MetricNamePrefix:  "---",
+			},
+			results: []map[string]any{
+				{"value1": 42.0},
+			},
+			wantErr: true,
+			errMsg:  "MetricNamePrefix \"---\" results in invalid normalized name \"metric\"",
+		},
+		{
+			name: "empty ValueColumns and ValueColumn",
+			config: TransformConfig{
+				DefaultMetricName: "test",
+			},
+			results: []map[string]any{
+				{"value": 42.0},
+			},
+			wantErr: true,
+			errMsg:  "either ValueColumn or ValueColumns must be specified",
 		},
 	}
 
@@ -396,8 +459,12 @@ func TestValidate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			transformer := NewKustoToMetricsTransformer(tc.config, meter)
 			err := transformer.Validate(tc.results)
+
 			if tc.wantErr {
 				require.Error(t, err)
+				if tc.errMsg != "" {
+					require.Contains(t, err.Error(), tc.errMsg)
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -474,6 +541,347 @@ func TestTransformMultipleRows(t *testing.T) {
 	require.Equal(t, "cpu_usage", metrics[2].Name)
 	require.Equal(t, 92.1, metrics[2].Value)
 	require.Equal(t, "server2", metrics[2].Labels["host"])
+}
+
+func TestTransformMultiValueColumns(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   TransformConfig
+		results  []map[string]any
+		expected []MetricData
+	}{
+		{
+			name: "multi-value columns with prefix",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				MetricNamePrefix: "teama",
+				ValueColumns:     []string{"Numerator", "Denominator", "AvgLatency"},
+				TimestampColumn:  "timestamp",
+				LabelColumns:     []string{"LocationId", "ServiceTier"},
+			},
+			results: []map[string]any{
+				{
+					"metric_name": "customer_success_rate",
+					"Numerator":   1974.0,
+					"Denominator": 2000.0,
+					"AvgLatency":  150.2,
+					"LocationId":  "datacenter-01",
+					"ServiceTier": "premium",
+					"timestamp":   time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+				},
+			},
+			expected: []MetricData{
+				{
+					Name:      "teama_customer_success_rate_numerator",
+					Value:     1974.0,
+					Timestamp: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					Labels:    map[string]string{"LocationId": "datacenter-01", "ServiceTier": "premium"},
+				},
+				{
+					Name:      "teama_customer_success_rate_denominator",
+					Value:     2000.0,
+					Timestamp: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					Labels:    map[string]string{"LocationId": "datacenter-01", "ServiceTier": "premium"},
+				},
+				{
+					Name:      "teama_customer_success_rate_avg_latency",
+					Value:     150.2,
+					Timestamp: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					Labels:    map[string]string{"LocationId": "datacenter-01", "ServiceTier": "premium"},
+				},
+			},
+		},
+		{
+			name: "multi-value columns without prefix",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumns:     []string{"Count", "ErrorRate"},
+				LabelColumns:     []string{"service", "region"},
+			},
+			results: []map[string]any{
+				{
+					"metric_name": "service_metrics",
+					"Count":       1000.0,
+					"ErrorRate":   0.05,
+					"service":     "api",
+					"region":      "us-east",
+				},
+			},
+			expected: []MetricData{
+				{
+					Name:   "service_metrics_count",
+					Value:  1000.0,
+					Labels: map[string]string{"service": "api", "region": "us-east"},
+				},
+				{
+					Name:   "service_metrics_error_rate",
+					Value:  0.05,
+					Labels: map[string]string{"service": "api", "region": "us-east"},
+				},
+			},
+		},
+		{
+			name: "multi-value columns with default metric name",
+			config: TransformConfig{
+				DefaultMetricName: "default_metric",
+				ValueColumns:      []string{"Value1", "Value2"},
+				LabelColumns:      []string{"label1"},
+			},
+			results: []map[string]any{
+				{
+					"Value1": 100.0,
+					"Value2": 200.0,
+					"label1": "test",
+				},
+			},
+			expected: []MetricData{
+				{
+					Name:   "default_metric_value1",
+					Value:  100.0,
+					Labels: map[string]string{"label1": "test"},
+				},
+				{
+					Name:   "default_metric_value2",
+					Value:  200.0,
+					Labels: map[string]string{"label1": "test"},
+				},
+			},
+		},
+		{
+			name: "multi-value columns multiple rows",
+			config: TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumns:     []string{"Requests", "Errors"},
+				LabelColumns:     []string{"host"},
+			},
+			results: []map[string]any{
+				{
+					"metric_name": "app_metrics",
+					"Requests":    1000.0,
+					"Errors":      10.0,
+					"host":        "server1",
+				},
+				{
+					"metric_name": "app_metrics",
+					"Requests":    1500.0,
+					"Errors":      5.0,
+					"host":        "server2",
+				},
+			},
+			expected: []MetricData{
+				{
+					Name:   "app_metrics_requests",
+					Value:  1000.0,
+					Labels: map[string]string{"host": "server1"},
+				},
+				{
+					Name:   "app_metrics_errors",
+					Value:  10.0,
+					Labels: map[string]string{"host": "server1"},
+				},
+				{
+					Name:   "app_metrics_requests",
+					Value:  1500.0,
+					Labels: map[string]string{"host": "server2"},
+				},
+				{
+					Name:   "app_metrics_errors",
+					Value:  5.0,
+					Labels: map[string]string{"host": "server2"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meter := noop.NewMeterProvider().Meter("test")
+			transformer := NewKustoToMetricsTransformer(tt.config, meter)
+
+			metrics, err := transformer.Transform(tt.results)
+			require.NoError(t, err)
+			require.Len(t, metrics, len(tt.expected))
+
+			// Sort both slices by metric name for consistent comparison
+			sortMetricsByName := func(metrics []MetricData) {
+				for i := 0; i < len(metrics)-1; i++ {
+					for j := i + 1; j < len(metrics); j++ {
+						if metrics[i].Name > metrics[j].Name {
+							metrics[i], metrics[j] = metrics[j], metrics[i]
+						}
+					}
+				}
+			}
+
+			sortMetricsByName(metrics)
+			sortMetricsByName(tt.expected)
+
+			for i, expected := range tt.expected {
+				actual := metrics[i]
+				require.Equal(t, expected.Name, actual.Name, "Metric name mismatch at index %d", i)
+				require.Equal(t, expected.Value, actual.Value, "Metric value mismatch at index %d", i)
+				require.Equal(t, expected.Labels, actual.Labels, "Metric labels mismatch at index %d", i)
+
+				// Check timestamp if expected is set
+				if !expected.Timestamp.IsZero() {
+					require.Equal(t, expected.Timestamp, actual.Timestamp, "Metric timestamp mismatch at index %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestTransformMultiValueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  TransformConfig
+		results []map[string]any
+		wantErr string
+	}{
+		{
+			name: "missing value column in multi-value mode",
+			config: TransformConfig{
+				DefaultMetricName: "test_metric",
+				ValueColumns:      []string{"ExistingColumn", "MissingColumn"},
+			},
+			results: []map[string]any{
+				{
+					"ExistingColumn": 100.0,
+					// MissingColumn is not present
+				},
+			},
+			wantErr: "failed to extract values: failed to extract value from column 'MissingColumn': value column 'MissingColumn' not found in row",
+		},
+		{
+			name: "null value in multi-value column",
+			config: TransformConfig{
+				DefaultMetricName: "test_metric",
+				ValueColumns:      []string{"ValidColumn", "NullColumn"},
+			},
+			results: []map[string]any{
+				{
+					"ValidColumn": 100.0,
+					"NullColumn":  nil,
+				},
+			},
+			wantErr: "failed to extract values: failed to extract value from column 'NullColumn': value column 'NullColumn' contains null value",
+		},
+		{
+			name: "invalid type in multi-value column",
+			config: TransformConfig{
+				DefaultMetricName: "test_metric",
+				ValueColumns:      []string{"ValidColumn", "InvalidColumn"},
+			},
+			results: []map[string]any{
+				{
+					"ValidColumn":   100.0,
+					"InvalidColumn": map[string]any{"nested": "object"},
+				},
+			},
+			wantErr: "failed to extract values: failed to extract value from column 'InvalidColumn': value column 'InvalidColumn' contains unsupported type map[string]interface {}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meter := noop.NewMeterProvider().Meter("test")
+			transformer := NewKustoToMetricsTransformer(tt.config, meter)
+
+			_, err := transformer.Transform(tt.results)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestTransformBackwardCompatibility(t *testing.T) {
+	t.Run("single value mode still works", func(t *testing.T) {
+		config := TransformConfig{
+			DefaultMetricName: "legacy_metric",
+			ValueColumn:       "value", // Legacy single-value mode
+			LabelColumns:      []string{"host"},
+		}
+		meter := noop.NewMeterProvider().Meter("test")
+		transformer := NewKustoToMetricsTransformer(config, meter)
+
+		results := []map[string]any{
+			{
+				"value": 42.0,
+				"host":  "server1",
+			},
+		}
+
+		metrics, err := transformer.Transform(results)
+		require.NoError(t, err)
+		require.Len(t, metrics, 1)
+
+		metric := metrics[0]
+		require.Equal(t, "legacy_metric", metric.Name)
+		require.Equal(t, 42.0, metric.Value)
+		require.Equal(t, map[string]string{"host": "server1"}, metric.Labels)
+	})
+
+	t.Run("single value mode with prefix", func(t *testing.T) {
+		config := TransformConfig{
+			DefaultMetricName: "legacy_metric",
+			MetricNamePrefix:  "team",
+			ValueColumn:       "value", // Legacy single-value mode
+			LabelColumns:      []string{"host"},
+		}
+		meter := noop.NewMeterProvider().Meter("test")
+		transformer := NewKustoToMetricsTransformer(config, meter)
+
+		results := []map[string]any{
+			{
+				"value": 42.0,
+				"host":  "server1",
+			},
+		}
+
+		metrics, err := transformer.Transform(results)
+		require.NoError(t, err)
+		require.Len(t, metrics, 1)
+
+		metric := metrics[0]
+		require.Equal(t, "team_legacy_metric", metric.Name)
+		require.Equal(t, 42.0, metric.Value)
+		require.Equal(t, map[string]string{"host": "server1"}, metric.Labels)
+	})
+
+	t.Run("prefer ValueColumns over ValueColumn when both are set", func(t *testing.T) {
+		config := TransformConfig{
+			DefaultMetricName: "test_metric",
+			ValueColumn:       "old_value",                          // Should be ignored
+			ValueColumns:      []string{"new_value1", "new_value2"}, // Should be used
+			LabelColumns:      []string{"host"},
+		}
+		meter := noop.NewMeterProvider().Meter("test")
+		transformer := NewKustoToMetricsTransformer(config, meter)
+
+		results := []map[string]any{
+			{
+				"old_value":  100.0, // Should be ignored
+				"new_value1": 200.0, // Should be used
+				"new_value2": 300.0, // Should be used
+				"host":       "server1",
+			},
+		}
+
+		metrics, err := transformer.Transform(results)
+		require.NoError(t, err)
+		require.Len(t, metrics, 2) // Should generate 2 metrics from ValueColumns
+
+		// Sort metrics by name for consistent assertion
+		if metrics[0].Name > metrics[1].Name {
+			metrics[0], metrics[1] = metrics[1], metrics[0]
+		}
+
+		require.Equal(t, "test_metric_new_value1", metrics[0].Name)
+		require.Equal(t, 200.0, metrics[0].Value)
+
+		require.Equal(t, "test_metric_new_value2", metrics[1].Name)
+		require.Equal(t, 300.0, metrics[1].Value)
+	})
 }
 
 func TestValidateKustoValueTypes(t *testing.T) {

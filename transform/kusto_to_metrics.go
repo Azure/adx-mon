@@ -180,56 +180,115 @@ func constructMetricName(baseName, prefix, columnName string) string {
 }
 
 // Transform converts KQL query results to Prometheus metrics
+// Supports both single-value and multi-value column modes
 func (t *KustoToMetricsTransformer) Transform(results []map[string]any) ([]MetricData, error) {
 	if len(results) == 0 {
 		return []MetricData{}, nil
 	}
 
-	var metrics []MetricData
+	var allMetrics []MetricData
 
 	for i, row := range results {
-		metric, err := t.transformRow(row)
+		rowMetrics, err := t.transformRow(row)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform row %d: %w", i, err)
 		}
-		metrics = append(metrics, metric)
+		// Append all metrics from this row (could be multiple in multi-value mode)
+		allMetrics = append(allMetrics, rowMetrics...)
+	}
+
+	return allMetrics, nil
+}
+
+// transformRow converts a single KQL result row to metric data
+// Returns multiple MetricData objects when ValueColumns are configured (multi-value mode)
+// Returns single MetricData object when ValueColumn is configured (legacy single-value mode)
+func (t *KustoToMetricsTransformer) transformRow(row map[string]any) ([]MetricData, error) {
+	// Extract base metric name
+	baseName, err := t.extractMetricName(row)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract metric name: %w", err)
+	}
+
+	// Extract timestamp (shared across all metrics from this row)
+	timestamp, err := t.extractTimestamp(row)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract timestamp: %w", err)
+	}
+
+	// Extract labels (shared across all metrics from this row)
+	labels, err := t.extractLabels(row)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract labels: %w", err)
+	}
+
+	// Determine if we're in multi-value mode (ValueColumns) or single-value mode (ValueColumn)
+	if len(t.config.ValueColumns) > 0 {
+		// Multi-value mode: generate multiple metrics from ValueColumns
+		return t.transformRowMultiValue(baseName, row, timestamp, labels)
+	} else {
+		// Single-value mode: generate single metric from ValueColumn (backward compatibility)
+		return t.transformRowSingleValue(baseName, row, timestamp, labels)
+	}
+}
+
+// transformRowMultiValue handles multi-value column transformation
+// Generates one metric per value column with constructed names
+func (t *KustoToMetricsTransformer) transformRowMultiValue(baseName string, row map[string]any, timestamp time.Time, labels map[string]string) ([]MetricData, error) {
+	// Extract values from all configured value columns
+	values, err := t.extractValues(row, t.config.ValueColumns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract values: %w", err)
+	}
+
+	var metrics []MetricData
+
+	// Generate one metric per value column
+	for _, columnName := range t.config.ValueColumns {
+		value, exists := values[columnName]
+		if !exists {
+			return nil, fmt.Errorf("value for column '%s' not found in extracted values", columnName)
+		}
+
+		// Construct metric name using prefix, base name, and normalized column name
+		metricName := constructMetricName(baseName, t.config.MetricNamePrefix, columnName)
+
+		metrics = append(metrics, MetricData{
+			Name:      metricName,
+			Value:     value,
+			Timestamp: timestamp,
+			Labels:    labels, // Shared labels across all metrics from this row
+		})
 	}
 
 	return metrics, nil
 }
 
-// transformRow converts a single KQL result row to metric data
-func (t *KustoToMetricsTransformer) transformRow(row map[string]any) (MetricData, error) {
-	// Extract metric name
-	metricName, err := t.extractMetricName(row)
-	if err != nil {
-		return MetricData{}, fmt.Errorf("failed to extract metric name: %w", err)
-	}
-
-	// Extract metric value
+// transformRowSingleValue handles single-value column transformation (legacy mode)
+// Generates single metric from ValueColumn for backward compatibility
+func (t *KustoToMetricsTransformer) transformRowSingleValue(baseName string, row map[string]any, timestamp time.Time, labels map[string]string) ([]MetricData, error) {
+	// Extract metric value using legacy method
 	value, err := t.extractValue(row)
 	if err != nil {
-		return MetricData{}, fmt.Errorf("failed to extract value: %w", err)
+		return nil, fmt.Errorf("failed to extract value: %w", err)
 	}
 
-	// Extract timestamp
-	timestamp, err := t.extractTimestamp(row)
-	if err != nil {
-		return MetricData{}, fmt.Errorf("failed to extract timestamp: %w", err)
+	// In single-value mode, use base name as-is (no column name suffix)
+	// Apply prefix if configured
+	metricName := baseName
+	if t.config.MetricNamePrefix != "" {
+		normalizedPrefix := normalizeColumnName(t.config.MetricNamePrefix)
+		if normalizedPrefix != "" && normalizedPrefix != "metric" {
+			metricName = normalizedPrefix + "_" + baseName
+		}
 	}
 
-	// Extract labels
-	labels, err := t.extractLabels(row)
-	if err != nil {
-		return MetricData{}, fmt.Errorf("failed to extract labels: %w", err)
-	}
-
-	return MetricData{
+	return []MetricData{{
 		Name:      metricName,
 		Value:     value,
 		Timestamp: timestamp,
 		Labels:    labels,
-	}, nil
+	}}, nil
 }
 
 // extractMetricName extracts the metric name from the row
@@ -502,32 +561,35 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 	// Check the first row to validate schema
 	firstRow := results[0]
 
-	// Validate value column exists and is numeric
-	rawValue, exists := firstRow[t.config.ValueColumn]
-	if !exists {
-		return fmt.Errorf("required value column '%s' not found in query results", t.config.ValueColumn)
+	// Validate value columns configuration and existence
+	if len(t.config.ValueColumns) > 0 {
+		// Multi-value mode: validate all ValueColumns
+		if len(t.config.ValueColumns) == 0 {
+			return fmt.Errorf("at least one value column must be specified in ValueColumns")
+		}
+
+		for _, valueColumn := range t.config.ValueColumns {
+			if err := t.validateValueColumn(firstRow, valueColumn); err != nil {
+				return fmt.Errorf("invalid value column %q: %w", valueColumn, err)
+			}
+		}
+	} else {
+		// Single-value mode: validate ValueColumn (backward compatibility)
+		if t.config.ValueColumn == "" {
+			return fmt.Errorf("either ValueColumn or ValueColumns must be specified")
+		}
+
+		if err := t.validateValueColumn(firstRow, t.config.ValueColumn); err != nil {
+			return fmt.Errorf("invalid value column %q: %w", t.config.ValueColumn, err)
+		}
 	}
 
-	// Check if value is numeric type
-	switch v := rawValue.(type) {
-	case float64, float32, int, int32, int64, string:
-		// Valid numeric types (string will be validated during parsing)
-	case value.Long:
-		if !v.Valid {
-			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
+	// Validate MetricNamePrefix format if provided
+	if t.config.MetricNamePrefix != "" {
+		normalizedPrefix := normalizeColumnName(t.config.MetricNamePrefix)
+		if normalizedPrefix == "" || normalizedPrefix == "metric" {
+			return fmt.Errorf("MetricNamePrefix %q results in invalid normalized name %q", t.config.MetricNamePrefix, normalizedPrefix)
 		}
-	case value.Real:
-		if !v.Valid {
-			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-		}
-	case value.Int:
-		if !v.Valid {
-			return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-		}
-	case nil:
-		return fmt.Errorf("value column '%s' contains null value", t.config.ValueColumn)
-	default:
-		return fmt.Errorf("value column '%s' contains non-numeric type %T", t.config.ValueColumn, rawValue)
 	}
 
 	// Validate metric name configuration
@@ -564,6 +626,38 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 	// Log warning about missing label columns but don't fail validation
 	if len(missingLabelColumns) > 0 {
 		logger.Warnf("Missing label columns: %v. These columns will be skipped in the transformation.", missingLabelColumns)
+	}
+
+	return nil
+}
+
+// validateValueColumn validates that a specific value column exists and contains numeric data
+func (t *KustoToMetricsTransformer) validateValueColumn(row map[string]any, columnName string) error {
+	rawValue, exists := row[columnName]
+	if !exists {
+		return fmt.Errorf("value column '%s' not found in query results", columnName)
+	}
+
+	// Check if value is numeric type
+	switch v := rawValue.(type) {
+	case float64, float32, int, int32, int64, string:
+		// Valid numeric types (string will be validated during parsing)
+	case value.Long:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", columnName)
+		}
+	case value.Real:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", columnName)
+		}
+	case value.Int:
+		if !v.Valid {
+			return fmt.Errorf("value column '%s' contains null value", columnName)
+		}
+	case nil:
+		return fmt.Errorf("value column '%s' contains null value", columnName)
+	default:
+		return fmt.Errorf("value column '%s' contains non-numeric type %T", columnName, rawValue)
 	}
 
 	return nil
