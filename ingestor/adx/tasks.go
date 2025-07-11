@@ -399,9 +399,9 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	if rule.ShouldSubmitRule(nil) {
 		// Subtract 1 tick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
 		// from endTime for the query to avoid boundary issues while keeping the original
-		// windowEndTime for status tracking. This allows users to use `between(_startTime .. _endTIme)`
+		// windowEndTime for status tracking. This allows users to use `between(_startTime .. _endTime)`
 		// in their query without worrying about the boundary issue.
-		queryEndTime := windowEndTime.Add(-100 * time.Nanosecond)
+		queryEndTime := windowEndTime.Add(-kustoutil.OneTick)
 
 		// Prepare a new async operation with calculated time range
 		asyncOp := v1.AsyncOperation{

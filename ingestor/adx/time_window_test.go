@@ -6,6 +6,7 @@ import (
 	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,7 +76,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Verify the window duration is exactly the interval minus 1 tick (100 nanoseconds)
 		windowDuration := endTime.Sub(startTime)
-		expectedDuration := rule.Spec.Interval.Duration - 100*time.Nanosecond
+		expectedDuration := rule.Spec.Interval.Duration - kustoutil.OneTick
 		require.Equal(t, expectedDuration, windowDuration,
 			"Window duration should match the configured interval minus 1 tick")
 
@@ -163,7 +164,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Verify the window duration is exactly the interval minus 1 tick (100 nanoseconds)
 		windowDuration := endTime.Sub(startTime)
-		expectedDuration := rule.Spec.Interval.Duration - 100*time.Nanosecond
+		expectedDuration := rule.Spec.Interval.Duration - kustoutil.OneTick
 		require.Equal(t, expectedDuration, windowDuration,
 			"Window duration should match the configured interval minus 1 tick")
 	})
@@ -241,7 +242,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 		submittedEndTime, err := time.Parse(time.RFC3339Nano, submittedWindowEndTime)
 		require.NoError(t, err)
 		// The last execution time should be 1 tick (100 nanoseconds) more than the submitted end time
-		expectedLastExecution := submittedEndTime.Add(100 * time.Nanosecond)
+		expectedLastExecution := submittedEndTime.Add(kustoutil.OneTick)
 		require.True(t, lastExecution.Equal(expectedLastExecution),
 			"Last execution time should be 1 tick more than the submitted window end time")
 
@@ -331,7 +332,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 
 		// Verify correct duration (minus 1 tick)
 		duration := end.Sub(start)
-		expectedDuration := 30*time.Minute - 100*time.Nanosecond
+		expectedDuration := 30*time.Minute - kustoutil.OneTick
 		require.Equal(t, expectedDuration, duration,
 			"Window duration should match the configured interval minus 1 tick")
 
