@@ -73,10 +73,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 		endTime, err := time.Parse(time.RFC3339Nano, capturedEndTime)
 		require.NoError(t, err)
 
-		// Verify the window duration is exactly the interval
+		// Verify the window duration is exactly the interval minus 1 tick (100 nanoseconds)
 		windowDuration := endTime.Sub(startTime)
-		require.Equal(t, rule.Spec.Interval.Duration, windowDuration,
-			"Window duration should match the configured interval")
+		expectedDuration := rule.Spec.Interval.Duration - 100*time.Nanosecond
+		require.Equal(t, expectedDuration, windowDuration,
+			"Window duration should match the configured interval minus 1 tick")
 
 		// Verify the window ends at or before a fixed reference time
 		// Using a fixed timestamp well into the future for deterministic testing
@@ -160,10 +161,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 		require.True(t, startTime.Equal(lastSuccessfulEndTime),
 			"Start time should equal the last successful execution end time")
 
-		// Verify the window duration is exactly the interval
+		// Verify the window duration is exactly the interval minus 1 tick (100 nanoseconds)
 		windowDuration := endTime.Sub(startTime)
-		require.Equal(t, rule.Spec.Interval.Duration, windowDuration,
-			"Window duration should match the configured interval")
+		expectedDuration := rule.Spec.Interval.Duration - 100*time.Nanosecond
+		require.Equal(t, expectedDuration, windowDuration,
+			"Window duration should match the configured interval minus 1 tick")
 	})
 
 	t.Run("execution time is updated when shouldSubmitRule is true", func(t *testing.T) {
@@ -235,11 +237,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 		lastExecution := updatedRule.GetLastExecutionTime()
 		require.NotNil(t, lastExecution)
 
-		// Parse the submitted window end time and verify it matches
-		expectedEndTime, err := time.Parse(time.RFC3339Nano, submittedWindowEndTime)
+		// Parse the submitted window end time and verify it matches (accounting for 1 tick adjustment)
+		submittedEndTime, err := time.Parse(time.RFC3339Nano, submittedWindowEndTime)
 		require.NoError(t, err)
-		require.True(t, lastExecution.Equal(expectedEndTime),
-			"Last execution time should match the submitted window end time")
+		// The last execution time should be 1 tick (100 nanoseconds) more than the submitted end time
+		expectedLastExecution := submittedEndTime.Add(100 * time.Nanosecond)
+		require.True(t, lastExecution.Equal(expectedLastExecution),
+			"Last execution time should be 1 tick more than the submitted window end time")
 
 		// Verify an async operation was created
 		asyncOps := updatedRule.GetAsyncOperations()
@@ -325,10 +329,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 		require.True(t, start.Equal(firstWindowEnd),
 			"Second window should start exactly where first window ended (no gap)")
 
-		// Verify correct duration
+		// Verify correct duration (minus 1 tick)
 		duration := end.Sub(start)
-		require.Equal(t, 30*time.Minute, duration,
-			"Window duration should match the configured interval")
+		expectedDuration := 30*time.Minute - 100*time.Nanosecond
+		require.Equal(t, expectedDuration, duration,
+			"Window duration should match the configured interval minus 1 tick")
 
 		// Verify no overlap by checking the windows are contiguous
 		require.True(t, start.Equal(firstWindowEnd),
