@@ -17,7 +17,6 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
-	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -457,9 +456,6 @@ func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.Sum
 	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission",
 		kustoOp.OperationId, rule.Spec.Database, rule.Name)
 
-	metrics.IngestorSummaryRuleRetries.WithLabelValues(
-		rule.Spec.Database, rule.Namespace, rule.Name).Inc()
-
 	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil && operationId != operation.OperationId {
 		// We've resubmitted an async operation due to a recoverable failure but this has created a new operation-id to track.
 		// Remove the existing async operation, we're done processing it, but save the newly created async operation for tracking.
@@ -565,17 +561,6 @@ func applySubstitutions(body, startTime, endTime string, clusterLabels map[strin
 }
 
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
-	// Track operation duration
-	start := time.Now()
-	var status string
-	defer func() {
-		duration := time.Since(start).Seconds()
-		metrics.IngestorKustoOperationDuration.WithLabelValues(
-			rule.Spec.Database, "submit_rule", status).Observe(duration)
-		metrics.IngestorSummaryRuleSubmissions.WithLabelValues(
-			rule.Spec.Database, rule.Namespace, rule.Name, status).Inc()
-	}()
-
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
 	body := applySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
@@ -588,32 +573,20 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
 	res, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
-		status = "error"
 		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 	}
 
 	operationId, err := operationIDFromResult(res)
 	if err != nil {
-		status = "error"
 		return "", err
 	}
 
-	status = "success"
 	logger.Infof("Successfully submitted summary rule %s.%s, operation ID: %s",
 		rule.Spec.Database, rule.Name, operationId)
 	return operationId, nil
 }
 
 func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
-	// Track operation duration
-	start := time.Now()
-	var status string
-	defer func() {
-		duration := time.Since(start).Seconds()
-		metrics.IngestorKustoOperationDuration.WithLabelValues(
-			t.kustoCli.Database(), "get_operations", status).Observe(duration)
-	}()
-
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
 
@@ -624,7 +597,6 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry) | sort by LastUpdatedOn asc")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
-		status = "error"
 		return nil, fmt.Errorf("failed to retrieve async operations: %w", err)
 	}
 	defer rows.Stop()
@@ -653,7 +625,6 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 		operations = append(operations, status)
 	}
 
-	status = "success"
 	return operations, nil
 }
 

@@ -119,50 +119,6 @@ var (
 		Help:      "Latency of a sample in seconds as determined by epoch in the filename vs the time the sample was uploaded.",
 	}, []string{"database", "table"})
 
-	IngestorKustoOperationDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "kusto_operation_duration_seconds",
-		Help:      "Histogram of Kusto operation durations in seconds",
-		Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300},
-	}, []string{"database", "operation", "status"})
-
-	IngestorSummaryRuleExecutionDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "summary_rule_execution_duration_seconds",
-		Help:      "Histogram of summary rule execution durations in seconds",
-		Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300},
-	}, []string{"database", "namespace", "name", "status"})
-
-	IngestorSummaryRuleSubmissions = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "summary_rule_submissions_total",
-		Help:      "Counter of summary rule submissions to Kusto",
-	}, []string{"database", "namespace", "name", "status"})
-
-	IngestorSummaryRuleAsyncOperations = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "summary_rule_async_operations_active",
-		Help:      "Gauge of active async operations per summary rule",
-	}, []string{"database", "namespace", "name"})
-
-	IngestorSummaryRuleRetries = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "summary_rule_retries_total",
-		Help:      "Counter of summary rule operation retries",
-	}, []string{"database", "namespace", "name"})
-
-	IngestorCircuitBreakerState = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "circuit_breaker_state",
-		Help:      "Gauge indicating circuit breaker state (0=closed, 1=open, 2=half-open)",
-	}, []string{"database", "resource"})
-
 	// Alerting metrics
 	AlerterHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
