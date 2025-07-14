@@ -576,7 +576,7 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
 
-  // Add timeout to prevent indefinite blocking on Kusto operations
+	// Add timeout to prevent indefinite blocking on Kusto operations
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
