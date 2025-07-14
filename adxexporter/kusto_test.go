@@ -3,11 +3,15 @@ package adxexporter
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	"github.com/Azure/azure-kusto-go/kusto/data/types"
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
@@ -63,7 +67,8 @@ type MockKustoExecutor struct {
 	callIdx  int
 }
 
-func NewMockKustoExecutor(database, endpoint string) *MockKustoExecutor {
+func NewMockKustoExecutor(t *testing.T, database, endpoint string) *MockKustoExecutor {
+	t.Helper()
 	return &MockKustoExecutor{
 		database: database,
 		endpoint: endpoint,
@@ -97,15 +102,16 @@ func (m *MockKustoExecutor) Query(ctx context.Context, query kusto.Statement, op
 	}
 
 	// Return empty iterator if no specific result configured
-	return createMockRowIterator([][]interface{}{}), nil
+	return createEmptyMockRowIterator(), nil
 }
 
 func (m *MockKustoExecutor) SetNextError(err error) {
 	m.errors = append(m.errors, err)
 }
 
-func (m *MockKustoExecutor) SetNextResult(rows [][]interface{}) {
-	iter := createMockRowIterator(rows)
+func (m *MockKustoExecutor) SetNextResult(t *testing.T, rows [][]interface{}) {
+	t.Helper()
+	iter := createMockRowIterator(t, rows)
 	m.results = append(m.results, iter)
 }
 
@@ -120,17 +126,107 @@ func (m *MockKustoExecutor) Reset() {
 	m.callIdx = 0
 }
 
-// createMockRowIterator creates a mock RowIterator for testing
-// Note: This is simplified for testing - we focus on testing the query logic
-// rather than the complex Kusto result parsing
-func createMockRowIterator(rows [][]interface{}) *kusto.RowIterator {
-	// Return an empty iterator - we'll test the query construction and execution logic
-	// without worrying about the complex internal structure of RowIterator
-	return &kusto.RowIterator{}
+// createMockRowIterator creates a mock RowIterator for testing with actual data
+func createMockRowIterator(t *testing.T, rows [][]interface{}) *kusto.RowIterator {
+	t.Helper()
+	iter := &kusto.RowIterator{}
+
+	// If no rows provided, return empty iterator
+	if len(rows) == 0 {
+		// Create empty mock rows to avoid nil pointer issues
+		mockRows, err := kusto.NewMockRows(table.Columns{})
+		require.NoError(t, err, "Failed to create empty mock rows")
+
+		// Work-around for Azure Kusto SDK's test environment check.
+		// The SDK's RowIterator.Mock() method explicitly checks if it's running in a test
+		// by calling isTest() which looks for the "test.v" flag (set by `go test`).
+		// If not found, Mock() panics with "cannot call Mock outside a test".
+		// We ensure the flag exists to bypass this safety check.
+		if flag.Lookup("test.v") == nil {
+			flag.String("test.v", "", "")
+			err := flag.CommandLine.Set("test.v", "true")
+			require.NoError(t, err, "Failed to set test.v flag")
+		}
+		err = iter.Mock(mockRows)
+		require.NoError(t, err, "Failed to mock empty iterator")
+		return iter
+	}
+
+	// Create columns based on the first row structure
+	// For simplicity, assume first row has: metric_name, value, timestamp
+	columns := table.Columns{
+		{Name: "metric_name", Type: types.String},
+		{Name: "value", Type: types.Real},
+		{Name: "timestamp", Type: types.DateTime},
+	}
+
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err, "Failed to create mock rows")
+
+	// Add each row to the mock
+	for _, rowData := range rows {
+		var values value.Values
+		for _, col := range rowData {
+			switch v := col.(type) {
+			case string:
+				values = append(values, value.String{Value: v, Valid: true})
+			case float64:
+				values = append(values, value.Real{Value: v, Valid: true})
+			case time.Time:
+				values = append(values, value.DateTime{Value: v, Valid: true})
+			default:
+				// Convert to string as fallback
+				values = append(values, value.String{Value: fmt.Sprintf("%v", v), Valid: true})
+			}
+		}
+		mockRows.Row(values)
+	}
+
+	// Work-around for Azure Kusto SDK's test environment check.
+	// The SDK's RowIterator.Mock() method explicitly checks if it's running in a test
+	// by calling isTest() which looks for the "test.v" flag (set by `go test`).
+	// If not found, Mock() panics with "cannot call Mock outside a test".
+	// We ensure the flag exists to bypass this safety check.
+	if flag.Lookup("test.v") == nil {
+		flag.String("test.v", "", "")
+		err := flag.CommandLine.Set("test.v", "true")
+		require.NoError(t, err, "Failed to set test.v flag")
+	}
+	err = iter.Mock(mockRows)
+	require.NoError(t, err, "Failed to mock iterator")
+	return iter
+}
+
+// createEmptyMockRowIterator creates an empty mock RowIterator without requiring *testing.T
+// This is used internally by MockKustoExecutor when no specific result is configured
+func createEmptyMockRowIterator() *kusto.RowIterator {
+	iter := &kusto.RowIterator{}
+
+	// Create empty mock rows to avoid nil pointer issues
+	mockRows, err := kusto.NewMockRows(table.Columns{})
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create empty mock rows: %v", err))
+	}
+
+	// Work-around for Azure Kusto SDK's test environment check.
+	// The SDK's RowIterator.Mock() method explicitly checks if it's running in a test
+	// by calling isTest() which looks for the "test.v" flag (set by `go test`).
+	// If not found, Mock() panics with "cannot call Mock outside a test".
+	// We ensure the flag exists to bypass this safety check.
+	if flag.Lookup("test.v") == nil {
+		flag.String("test.v", "", "")
+		if err := flag.CommandLine.Set("test.v", "true"); err != nil {
+			panic(err)
+		}
+	}
+	if err := iter.Mock(mockRows); err != nil {
+		panic(fmt.Sprintf("Failed to mock empty iterator: %v", err))
+	}
+	return iter
 }
 
 func TestQueryExecutor_ExecuteQuery(t *testing.T) {
-	mockClient := NewMockKustoExecutor("TestDB", "https://test.kusto.windows.net")
+	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
 	executor := NewQueryExecutor(mockClient)
 
 	ctx := context.Background()
@@ -216,7 +312,7 @@ func TestNewKustoClient(t *testing.T) {
 }
 
 func TestNewQueryExecutor(t *testing.T) {
-	mockClient := NewMockKustoExecutor("TestDB", "https://test.kusto.windows.net")
+	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
 	executor := NewQueryExecutor(mockClient)
 
 	require.NotNil(t, executor)
