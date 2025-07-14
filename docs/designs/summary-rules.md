@@ -13,6 +13,9 @@ cluster may not have the same retention policies as the local cluster which can 
 We will define a CRD, `SummaryRule`, that enables a user to define a KQL query, a interval and a destination Table for the results of the query.  The query will be executed on a schedule and the results will be stored in the destination Table.
 ADX-Mon will maintain the last execution time and the start and end time of the query.  The start and end time will be passed to the query, similar to `AlertRules`, to ensure consistent results.
 
+> **Best Practice:**
+> Always use `between(_startTime .. _endTime)` for time filtering in your summary rule KQL queries. This ensures correct, non-overlapping, and gap-free time windows. The system guarantees that `_endTime` is exclusive by subtracting 1 tick (100ns) from the window, so you can safely use inclusive `between` logic.
+
 ## CRD
 
 Our CRD could simply enable a user to specify any arbitrary KQL; however, to prevent admin commands from being executed, we'll instead specify all the possible fields for a Function and construct the KQL scaffolding ourselves.
@@ -35,7 +38,7 @@ spec:
   name: HourlyAvg
   body: |
     SomeMetric
-    | where Timestamp between (_startTime .. _endtime)
+    | where Timestamp between (_startTime .. _endTime)
     | summarize avg(Value) by bin(Timestamp, 1h)
   table: SomeMetricHourlyAvg
   interval: 1h
@@ -48,9 +51,12 @@ let _startTime = datetime(...);
 let _endTime = datetime(...);
 .set-or-append async SomeMetricHourlyAvg <|
     SomeMetric
-    | where Timestamp between (_startTime .. _endtime)
+    | where Timestamp between (_startTime .. _endTime)
     | summarize avg(Value) by bin(Timestamp, 1h)
 ```
+
+> **Note:**
+> The use of `between(_startTime .. _endTime)` is required for correct time windowing. Do not use `>= _startTime and < _endTime` or other variants; the system already ensures no overlap or gap by adjusting `_endTime`.
 
 When the query is executed successfully, the `SummaryRule` CRD will be updated with the last execution time and start
 and end time used in the query.  These fields will be used to determine the next execution time and interval.
@@ -71,7 +77,7 @@ spec:
   name: HourlyAvg
   body: |
     SomeMetric
-    | where Timestamp between (_startTime .. _endtime)
+    | where Timestamp between (_startTime .. _endTime)
     | summarize avg(Value) by bin(Timestamp, 1h)
   table: SomeMetricHourlyAvg
   interval: 1h

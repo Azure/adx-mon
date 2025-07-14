@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type ruleStore interface {
@@ -32,6 +33,7 @@ type Executor struct {
 	kustoClient Client
 	ruleStore   ruleStore
 	region      string
+	ctrlCli     client.Client
 
 	// tags are access by the worker concurrently outside a mutex.  This is safe because
 	// the map is never modified after creation.
@@ -51,6 +53,7 @@ type ExecutorOpts struct {
 	RuleStore   ruleStore
 	Region      string
 	Tags        map[string]string
+	CtrlCli     client.Client
 }
 
 // TODO make AlertAddr string part of alertcli
@@ -62,6 +65,7 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 		ruleStore:   opts.RuleStore,
 		region:      opts.Region,
 		tags:        opts.Tags,
+		ctrlCli:     opts.CtrlCli,
 		workers:     make(map[string]*worker),
 	}
 }
@@ -92,6 +96,7 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		HandlerFn:   e.HandlerFn,
 		AlertCli:    e.alertCli,
 		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
+		ctrlCli:     e.ctrlCli,
 	}
 }
 
