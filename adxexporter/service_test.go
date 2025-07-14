@@ -137,6 +137,9 @@ func TestShouldProcessMetricsExporter(t *testing.T) {
 			"env":    "prod",
 			"region": "us-east",
 		},
+		KustoClusters: map[string]string{
+			"test-db": "https://test-cluster.kusto.windows.net",
+		},
 	}
 
 	tests := []struct {
@@ -179,7 +182,7 @@ func TestShouldProcessMetricsExporter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := reconciler.shouldProcessMetricsExporter(tt.metricsExporter)
+			result := matchesCriteria(tt.metricsExporter.Spec.Criteria, reconciler.ClusterLabels)
 			assert.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -279,6 +282,9 @@ func TestReconcile(t *testing.T) {
 				Client:        fakeClient,
 				Scheme:        s,
 				ClusterLabels: tt.clusterLabels,
+				KustoClusters: map[string]string{
+					"test-db": "https://test-cluster.kusto.windows.net",
+				},
 			}
 
 			req := reconcile.Request{
@@ -317,6 +323,9 @@ func TestReconcile_NotFound(t *testing.T) {
 	reconciler := &MetricsExporterReconciler{
 		Client: fakeClient,
 		Scheme: s,
+		KustoClusters: map[string]string{
+			"test-db": "https://test-cluster.kusto.windows.net",
+		},
 	}
 
 	req := reconcile.Request{
@@ -358,9 +367,12 @@ func TestExposeMetrics(t *testing.T) {
 				EnableMetricsEndpoint: tt.enableMetricsEndpoint,
 				MetricsPort:           ":0", // Use random port to avoid conflicts
 				MetricsPath:           "/metrics",
+				KustoClusters: map[string]string{
+					"test-db": "https://test-cluster.kusto.windows.net",
+				},
 			}
 
-			err := reconciler.exposeMetrics()
+			err := reconciler.exposeMetricsServer()
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -373,4 +385,131 @@ func TestExposeMetrics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInitializeQueryExecutors(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		KustoClusters: map[string]string{
+			"existing-db": "https://cluster.kusto.windows.net",
+		},
+	}
+
+	// Test successful initialization
+	err := reconciler.initializeQueryExecutors()
+	if err != nil {
+		// If it fails, it should be due to Kusto client creation, not missing endpoint
+		assert.Contains(t, err.Error(), "failed to create Kusto client")
+	} else {
+		// If it succeeds, we should have executors for all databases
+		assert.NotNil(t, reconciler.QueryExecutors)
+		assert.Len(t, reconciler.QueryExecutors, 1)
+		assert.Contains(t, reconciler.QueryExecutors, "existing-db")
+	}
+
+	// Test direct access behavior - missing database
+	reconciler.QueryExecutors = map[string]*QueryExecutor{}
+	executor, exists := reconciler.QueryExecutors["missing-db"]
+	assert.False(t, exists)
+	assert.Nil(t, executor)
+}
+
+func TestTransformAndRegisterMetrics(t *testing.T) {
+	// Test the integration between transformation and metrics registration
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Create test MetricsExporter with transform configuration
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumn:       "value",
+				MetricNameColumn:  "metric_name",
+				TimestampColumn:   "timestamp",
+				LabelColumns:      []string{"label1", "label2"},
+				DefaultMetricName: "default_metric",
+			},
+		},
+	}
+
+	// Create test data that matches the transform configuration
+	rows := []map[string]any{
+		{
+			"metric_name": "test_metric_1",
+			"value":       42.5,
+			"timestamp":   time.Now(),
+			"label1":      "value1",
+			"label2":      "value2",
+		},
+		{
+			"metric_name": "test_metric_2",
+			"value":       100.0,
+			"timestamp":   time.Now(),
+			"label1":      "different_value",
+			"label2":      "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
+	// Test transformation when using default metric name (no metric name column)
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+
+	// Create MetricsExporter with default metric name (no MetricNameColumn)
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-default-metric",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumn:       "value",
+				TimestampColumn:   "timestamp",
+				LabelColumns:      []string{"label1", "label2"},
+				DefaultMetricName: "default_metric_name", // No MetricNameColumn specified
+			},
+		},
+	}
+
+	// Create test data without metric_name column
+	rows := []map[string]any{
+		{
+			"value":     42.5,
+			"timestamp": time.Now(),
+			"label1":    "value1",
+			"label2":    "value2",
+		},
+		{
+			"value":     100.0,
+			"timestamp": time.Now(),
+			"label1":    "different_value",
+			"label2":    "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
 }

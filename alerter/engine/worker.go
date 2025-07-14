@@ -11,10 +11,14 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -34,7 +38,9 @@ type worker struct {
 	AlertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	HandlerFn func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	HandlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	ctrlCli         client.Client
+	alertsGenerated int // Track alerts generated in current execution
 }
 
 func (e *worker) Run(ctx context.Context) {
@@ -47,11 +53,26 @@ func (e *worker) Run(ctx context.Context) {
 	go func() {
 		defer e.wg.Done()
 
-		logger.Infof("Creating query executor for %s/%s in %s executing every %s",
-			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String())
+		// Calculate the next execution time based on last execution
+		nextQueryTime := e.calculateNextQueryTime()
 
-		// do-while
-		e.ExecuteQuery(ctx)
+		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
+			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
+
+		// If we should execute immediately (e.g., first time or overdue), do so
+		if nextQueryTime.Before(time.Now()) {
+			e.ExecuteQuery(ctx)
+		} else {
+			// Wait until the calculated next execution time before starting the ticker
+			waitDuration := time.Until(nextQueryTime)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(waitDuration):
+				e.ExecuteQuery(ctx)
+			}
+		}
 
 		ticker := time.NewTicker(e.rule.Interval)
 		defer ticker.Stop()
@@ -64,6 +85,21 @@ func (e *worker) Run(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// calculateNextQueryTime determines when the next execution should occur
+// based on the last execution time from the AlertRule status
+func (e *worker) calculateNextQueryTime() time.Time {
+	// If no last query time, this is the first execution
+	if e.rule.LastQueryTime.IsZero() {
+		return time.Now().Add(-time.Second) // Immediate execution
+	}
+
+	// Calculate next execution time based on last execution + interval
+	lastQueryTime := e.rule.LastQueryTime
+	nextQueryTime := lastQueryTime.Add(e.rule.Interval)
+
+	return nextQueryTime
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
@@ -100,14 +136,30 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	defer cancel()
 
 	endTime := time.Now().UTC()
+
+	// Reset alerts counter for this execution
+	e.alertsGenerated = 0
+
 	queryContext, err := NewQueryContext(e.rule, endTime, e.Region)
 	if err != nil {
 		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		e.updateAlertRuleStatus(ctx, endTime, 0, "Error", fmt.Sprintf("Failed to wrap query: %v", err))
 		return
 	}
 
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-	err, rows := e.kustoClient.Query(ctx, queryContext, e.HandlerFn)
+
+	// Create a wrapper handler that tracks alerts generated
+	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+		err := e.HandlerFn(ctx, endpoint, qc, row)
+		if err == nil {
+			// If HandlerFn succeeded, it means an alert was generated
+			e.alertsGenerated++
+		}
+		return err
+	}
+
+	err, rows := e.kustoClient.Query(ctx, queryContext, wrappedHandler)
 	if err != nil {
 		// This failed because we sent too many notifications.
 		if errors.Is(err, alert.ErrTooManyRequests) {
@@ -122,6 +174,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 			if err != nil {
 				logger.Errorf("Failed to send alert for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			}
+			e.updateAlertRuleStatus(ctx, endTime, 0, "Throttled", "Too many notifications sent")
 			return
 		}
 
@@ -130,13 +183,18 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 		if !isUserError(err) {
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+			e.updateAlertRuleStatus(ctx, endTime, 0, "Error", fmt.Sprintf("Query execution failed: %v", err))
 			return
 		}
 
-		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", err.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+		// Store the original query error before it gets overwritten
+		originalQueryErr := err
+
+		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", originalQueryErr.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			e.updateAlertRuleStatus(ctx, endTime, 0, "Error", fmt.Sprintf("Query failed and unable to create failure alert: %v", originalQueryErr))
 			return
 		}
 
@@ -154,12 +212,14 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 			logger.Errorf("Failed to send failure alert for %s/%s/%s: %s", endpointBaseName, e.rule.Namespace, e.rule.Name, err)
 			// Only set the notification as failed if we are not able to send a failure alert directly.
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			e.updateAlertRuleStatus(ctx, endTime, 0, "Error", fmt.Sprintf("Query failed and unable to send failure alert: %v", originalQueryErr))
 			return
 		} else {
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		}
 		// Query failed due to user error, so return the query to healthy.
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+		e.updateAlertRuleStatus(ctx, endTime, 0, "Error", fmt.Sprintf("Query failed with user error: %v", originalQueryErr))
 		return
 	}
 
@@ -167,6 +227,51 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	metrics.QueriesRunTotal.WithLabelValues().Inc()
 	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(endTime))
 	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, rows)
+
+	// Update AlertRule status with execution information
+	e.updateAlertRuleStatus(ctx, endTime, e.alertsGenerated, "Success", "")
+}
+
+// updateAlertRuleStatus updates the AlertRule status with the execution information
+func (e *worker) updateAlertRuleStatus(ctx context.Context, executionTime time.Time, alertsGenerated int, status, message string) {
+	// Skip status update if we don't have a Kubernetes client
+	if e.ctrlCli == nil {
+		return
+	}
+
+	// Create a context for the status update using the passed-in context as parent
+	updateCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Get the current AlertRule
+	alertRule := &alertrulev1.AlertRule{}
+	err := e.ctrlCli.Get(updateCtx, types.NamespacedName{
+		Namespace: e.rule.Namespace,
+		Name:      e.rule.Name,
+	}, alertRule)
+	if err != nil {
+		logger.Errorf("Failed to get AlertRule %s/%s for status update: %v", e.rule.Namespace, e.rule.Name, err)
+		return
+	}
+
+	// Update the status fields using existing fields
+	executionTimeMeta := metav1.NewTime(executionTime)
+	alertRule.Status.LastQueryTime = executionTimeMeta
+	if alertsGenerated > 0 {
+		alertRule.Status.LastAlertTime = executionTimeMeta
+	}
+	alertRule.Status.Status = status
+	alertRule.Status.Message = message
+
+	// Update the AlertRule status
+	err = e.ctrlCli.Status().Update(updateCtx, alertRule)
+	if err != nil {
+		logger.Errorf("Failed to update AlertRule %s/%s status: %v", e.rule.Namespace, e.rule.Name, err)
+		return
+	}
+
+	logger.Debugf("Updated AlertRule %s/%s status: LastQueryTime=%v, LastAlertTime=%v, Status=%s",
+		e.rule.Namespace, e.rule.Name, executionTime, alertRule.Status.LastAlertTime, status)
 }
 
 func (e *worker) Close() {

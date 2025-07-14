@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -317,7 +315,12 @@ func matchesCriteria(criteria map[string][]string, clusterLabels map[string]stri
 // Run executes the SummaryRuleTask which manages summary rules and their associated
 // Kusto async operations. It handles rule submission, operation tracking, and status updates.
 func (t *SummaryRuleTask) Run(ctx context.Context) error {
-	summaryRules, kustoAsyncOperations, err := t.initializeRun(ctx)
+	// Set a timeout to prevent hanging.
+	// If the loop takes more than 5 minutes, something is wrong and we should just cancel and try again next iteration.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	summaryRules, kustoAsyncOperations, err := t.initializeRun(timeoutCtx)
 	if err != nil {
 		return err
 	}
@@ -329,13 +332,13 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		}
 
 		// Handle rule execution logic (timing evaluation and submission)
-		err := t.handleRuleExecution(ctx, &rule)
+		err := t.handleRuleExecution(timeoutCtx, &rule)
 
 		// Process any outstanding async operations for this rule
-		t.trackAsyncOperations(ctx, &rule, kustoAsyncOperations)
+		t.trackAsyncOperations(timeoutCtx, &rule, kustoAsyncOperations)
 
 		// Update the rule's primary status condition
-		if err := t.updateSummaryRuleStatus(ctx, &rule, err); err != nil {
+		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
 			logger.Errorf("Failed to update summary rule status: %v", err)
 			// Not a lot we can do here, we'll end up just retrying next interval.
 		}
@@ -401,10 +404,16 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
 
 	if rule.ShouldSubmitRule(nil) {
+		// Subtract 1 tick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
+		// from endTime for the query to avoid boundary issues while keeping the original
+		// windowEndTime for status tracking. This allows users to use `between(_startTime .. _endTime)`
+		// in their query without worrying about the boundary issue.
+		queryEndTime := windowEndTime.Add(-kustoutil.OneTick)
+
 		// Prepare a new async operation with calculated time range
 		asyncOp := v1.AsyncOperation{
 			StartTime: windowStartTime.Format(time.RFC3339Nano),
-			EndTime:   windowEndTime.Format(time.RFC3339Nano),
+			EndTime:   queryEndTime.Format(time.RFC3339Nano),
 		}
 		operationId, err := t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
 		asyncOp.OperationId = operationId
@@ -478,8 +487,22 @@ func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1
 	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
 		// Operation failed - mark the rule as failed
 		logger.Errorf("Async operation %s for rule %s.%s failed", kustoOp.OperationId, rule.Spec.Database, rule.Name)
-		if err := t.updateSummaryRuleStatus(ctx, rule, fmt.Errorf("async operation %s failed", kustoOp.OperationId)); err != nil {
-			logger.Errorf("Failed to update summary rule status for failed operation: %v", err)
+
+		// Use detailed status message if available, otherwise fall back to generic message
+		var err error
+		if kustoOp.Status != "" {
+			// Truncate status message to prevent excessively long condition messages
+			status := kustoOp.Status
+			if len(status) > 200 { // Leave room for "async operation {id} failed: " prefix
+				status = status[:200]
+			}
+			err = fmt.Errorf("async operation %s failed: %s", kustoOp.OperationId, status)
+		} else {
+			err = fmt.Errorf("async operation %s failed", kustoOp.OperationId)
+		}
+
+		if updateErr := t.updateSummaryRuleStatus(ctx, rule, err); updateErr != nil {
+			logger.Errorf("Failed to update summary rule status for failed operation: %v", updateErr)
 		}
 	} else {
 		logger.Infof("Async operation %s for rule %s.%s completed successfully",
@@ -523,47 +546,10 @@ func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.
 	}
 }
 
-// applySubstitutions applies time and cluster label substitutions to a KQL query body
-func applySubstitutions(body, startTime, endTime string, clusterLabels map[string]string) string {
-	// Build the wrapped query with let statements, with direct value substitution
-	var letStatements []string
-
-	// Add time parameter definitions with direct datetime substitution
-	letStatements = append(letStatements, fmt.Sprintf("let _startTime=datetime(%s);", startTime))
-	letStatements = append(letStatements, fmt.Sprintf("let _endTime=datetime(%s);", endTime))
-
-	// Add cluster label parameter definitions with direct value substitution
-	// Sort keys to ensure deterministic output
-	var keys []string
-	for k := range clusterLabels {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, k := range keys {
-		v := clusterLabels[k]
-		// Escape any double quotes in the value
-		escapedValue := strconv.Quote(v)
-		// Add underscore prefix for template substitution
-		templateKey := k
-		if !strings.HasPrefix(templateKey, "_") {
-			templateKey = "_" + templateKey
-		}
-		letStatements = append(letStatements, fmt.Sprintf("let %s=%s;", templateKey, escapedValue))
-	}
-
-	// Construct the full query with let statements
-	query := fmt.Sprintf("%s\n%s",
-		strings.Join(letStatements, "\n"),
-		strings.TrimSpace(body))
-
-	return query
-}
-
 func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
 	// NOTE: We cannot do something like `let _startTime = datetime();` as dot-command do not permit
 	// preceding let-statements.
-	body := applySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
+	body := kustoutil.ApplySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
 
 	// Add timeout to prevent indefinite blocking on Kusto operations
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -590,7 +576,7 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
 
-	// Add timeout to prevent indefinite blocking on Kusto operations
+  // Add timeout to prevent indefinite blocking on Kusto operations
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -663,6 +649,7 @@ type AsyncOperationStatus struct {
 	LastUpdatedOn time.Time `kusto:"LastUpdatedOn"`
 	State         string    `kusto:"State"`
 	ShouldRetry   float64   `kusto:"ShouldRetry"`
+	Status        string    `kusto:"Status"`
 }
 
 type AuditDiskSpaceTask struct {

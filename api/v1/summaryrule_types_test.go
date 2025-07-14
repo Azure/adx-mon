@@ -844,3 +844,278 @@ func TestNextExecutionWindow(t *testing.T) {
 		require.True(t, endTime.After(startTime))
 	})
 }
+
+func TestSummaryRuleIngestionDelay(t *testing.T) {
+	fixedTime := time.Date(2025, 6, 23, 12, 1, 2, 3000000, time.UTC)
+	fakeClock := NewFakeClock(fixedTime)
+
+	t.Run("YAML parsing with ingestion delay", func(t *testing.T) {
+		yamlStr := `apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: HourlyAvg
+  namespace: adx-mon
+spec:
+  database: Metrics
+  body: |
+    SomeMetric
+    | where Timestamp between (_startTime .. _endtime)
+    | summarize avg(Value) by bin(Timestamp, 1h)
+  table: SomeMetricHourlyAvg
+  interval: 1h
+  ingestionDelay: 5m`
+
+		var sr SummaryRule
+		err := yaml.Unmarshal([]byte(yamlStr), &sr)
+		require.NoError(t, err)
+		require.Equal(t, "Metrics", sr.Spec.Database)
+		require.Equal(t, "HourlyAvg", sr.GetName())
+		require.Equal(t, "adx-mon", sr.GetNamespace())
+		require.Equal(t, "SomeMetricHourlyAvg", sr.Spec.Table)
+		require.Equal(t, metav1.Duration{Duration: time.Hour}, sr.Spec.Interval)
+		require.NotNil(t, sr.Spec.IngestionDelay)
+		require.Equal(t, metav1.Duration{Duration: 5 * time.Minute}, *sr.Spec.IngestionDelay)
+	})
+
+	t.Run("YAML parsing without ingestion delay", func(t *testing.T) {
+		yamlStr := `apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: HourlyAvg
+  namespace: adx-mon
+spec:
+  database: Metrics
+  body: |
+    SomeMetric
+    | where Timestamp between (_startTime .. _endtime)
+    | summarize avg(Value) by bin(Timestamp, 1h)
+  table: SomeMetricHourlyAvg
+  interval: 1h`
+
+		var sr SummaryRule
+		err := yaml.Unmarshal([]byte(yamlStr), &sr)
+		require.NoError(t, err)
+		require.Nil(t, sr.Spec.IngestionDelay)
+	})
+
+	t.Run("NextExecutionWindow with ingestion delay - first execution", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 10 * time.Minute},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+
+		// Expected: current time (12:01:02) minus 10min = 11:51:02, truncated to hour = 11:00:00
+		// End time: 11:00:00
+		// Start time: 10:00:00
+		expectedStart := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
+		require.Equal(t, time.Hour, endTime.Sub(startTime))
+	})
+
+	t.Run("NextExecutionWindow with ingestion delay - subsequent execution", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 15 * time.Minute},
+			},
+		}
+
+		// Set last execution time
+		lastExecution := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		rule.SetLastExecutionTime(lastExecution)
+
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+
+		// lastExecution - 15min = 10:45:00, truncated to hour = 10:00:00
+		// End time: 11:00:00
+		expectedStart := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
+		require.Equal(t, time.Hour, endTime.Sub(startTime))
+	})
+
+	t.Run("NextExecutionWindow with zero ingestion delay", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 0},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+
+		// Should behave the same as no ingestion delay
+		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
+
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
+	})
+
+	t.Run("NextExecutionWindow with very large ingestion delay", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 2 * time.Hour},
+			},
+		}
+
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+
+		// 12:01:02 - 2h = 10:01:02, truncated to hour = 10:00:00
+		// End time: 10:00:00
+		// Start time: 9:00:00
+		expectedStart := time.Date(2025, 6, 23, 9, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
+	})
+
+	t.Run("NextExecutionWindow with ingestion delay and future window capping", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 30 * time.Minute},
+			},
+		}
+
+		// Set last execution time that would create a future window
+		lastExecution := fixedTime.Add(-30 * time.Minute).UTC() // 30 minutes ago
+		rule.SetLastExecutionTime(lastExecution)
+
+		// lastExecution - 30min = 11:31:02, truncated to hour = 11:00:00
+		// End time: 12:00:00 (capped to now - delay = 11:31:02, truncated to minute = 11:31:00)
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 11, 31, 0, 0, time.UTC)
+
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
+		require.True(t, endTime.Before(fixedTime))
+	})
+
+	t.Run("NextExecutionWindow with different interval and ingestion delay combinations", func(t *testing.T) {
+		testCases := []struct {
+			name           string
+			interval       time.Duration
+			ingestionDelay time.Duration
+			expectedStart  time.Time
+			expectedEnd    time.Time
+		}{
+			{
+				name:           "30min interval with 5min delay",
+				interval:       30 * time.Minute,
+				ingestionDelay: 5 * time.Minute,
+				expectedStart:  time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC),
+				expectedEnd:    time.Date(2025, 6, 23, 11, 30, 0, 0, time.UTC),
+			},
+			{
+				name:           "2h interval with 15min delay",
+				interval:       2 * time.Hour,
+				ingestionDelay: 15 * time.Minute,
+				expectedStart:  time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC),
+				expectedEnd:    time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC),
+			},
+			{
+				name:           "1day interval with 1h delay",
+				interval:       24 * time.Hour,
+				ingestionDelay: time.Hour,
+				expectedStart:  time.Date(2025, 6, 22, 0, 0, 0, 0, time.UTC),
+				expectedEnd:    time.Date(2025, 6, 23, 0, 0, 0, 0, time.UTC),
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				rule := &SummaryRule{
+					ObjectMeta: metav1.ObjectMeta{
+						Generation: 1,
+					},
+					Spec: SummaryRuleSpec{
+						Interval:       metav1.Duration{Duration: tc.interval},
+						IngestionDelay: &metav1.Duration{Duration: tc.ingestionDelay},
+					},
+				}
+
+				startTime, endTime := rule.NextExecutionWindow(fakeClock)
+				t.Logf("TestCase: %s", tc.name)
+				t.Logf("Actual start: %v", startTime)
+				t.Logf("Actual end: %v", endTime)
+				t.Logf("Expected start: %v", tc.expectedStart)
+				t.Logf("Expected end: %v", tc.expectedEnd)
+				require.Equal(t, tc.expectedStart, startTime)
+				require.Equal(t, tc.expectedEnd, endTime)
+				require.Equal(t, tc.interval, endTime.Sub(startTime))
+			})
+		}
+	})
+
+	// Status conditions test: last execution time is 12:00:00, delay is 10min, so window starts at 11:00:00, ends at 12:00:00
+	// But if now - delay is before window end, it will be capped
+	// 12:01:02 - 10min = 11:51:02, truncated to minute = 11:51:00
+	t.Run("Status conditions unchanged by ingestion delay", func(t *testing.T) {
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 10 * time.Minute},
+			},
+		}
+
+		// Set a condition before applying ingestion delay
+		originalTime := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
+		rule.SetLastExecutionTime(originalTime)
+
+		// Verify the condition is set correctly
+		retrievedTime := rule.GetLastExecutionTime()
+		require.NotNil(t, retrievedTime)
+		require.Equal(t, originalTime, *retrievedTime)
+
+		// Calculate next execution window (this should not affect the stored condition)
+		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+
+		// Debug output
+		t.Logf("Original time: %v", originalTime)
+		t.Logf("Calculated start time: %v", startTime)
+		t.Logf("Calculated end time: %v", endTime)
+		t.Logf("Current time (fake clock): %v", fakeClock.Now())
+
+		// The stored condition should remain unchanged
+		retrievedTime = rule.GetLastExecutionTime()
+		require.NotNil(t, retrievedTime)
+		require.Equal(t, originalTime, *retrievedTime)
+
+		// Start time: 11:00:00, end time: 12:00:00, but capped to 11:51:00
+		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 11, 51, 0, 0, time.UTC)
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
+	})
+}

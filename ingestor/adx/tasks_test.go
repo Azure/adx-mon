@@ -1495,67 +1495,6 @@ var severalFunctions = `// function a
   print "b"
 }`
 
-func TestApplySubstitutions(t *testing.T) {
-	tests := []struct {
-		Name          string
-		RuleBody      string
-		ClusterLabels map[string]string
-		Want          string
-	}{
-		{
-			Name: "timestamps",
-			RuleBody: `T
-| where Timestamp between( _startTime .. _endTime )`,
-			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
-let _endTime=datetime(2024-01-01T01:00:00Z);
-T
-| where Timestamp between( _startTime .. _endTime )`,
-		},
-		{
-			Name: "region",
-			RuleBody: `T
-| where Timestamp between( _startTime .. _endTime )
-| where Region == _region`,
-			ClusterLabels: map[string]string{
-				"_region": "eastus",
-			},
-			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
-let _endTime=datetime(2024-01-01T01:00:00Z);
-let _region="eastus";
-T
-| where Timestamp between( _startTime .. _endTime )
-| where Region == _region`,
-		},
-		{
-			Name: "region and environment",
-			RuleBody: `T
-| where Timestamp between( _startTime .. _endTime )
-| where Region == _region
-| where Environment != _environment`,
-			ClusterLabels: map[string]string{
-				"_region":      "eastus",
-				"_environment": "production",
-			},
-			Want: `let _startTime=datetime(2024-01-01T00:00:00Z);
-let _endTime=datetime(2024-01-01T01:00:00Z);
-let _environment="production";
-let _region="eastus";
-T
-| where Timestamp between( _startTime .. _endTime )
-| where Region == _region
-| where Environment != _environment`,
-		},
-	}
-	startTime := "2024-01-01T00:00:00Z"
-	endTime := "2024-01-01T01:00:00Z"
-	for _, tt := range tests {
-		t.Run(tt.Name, func(t *testing.T) {
-			have := applySubstitutions(tt.RuleBody, startTime, endTime, tt.ClusterLabels)
-			require.Equal(t, tt.Want, have)
-		})
-	}
-}
-
 func TestSummaryRuleCriteriaMatching(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1677,6 +1616,232 @@ func TestSummaryRuleCriteriaMatching(t *testing.T) {
 			require.Equal(t, tt.shouldMatch, shouldExecute, tt.description)
 		})
 	}
+}
+
+func TestHandleCompletedOperationDetailedErrorMessages(t *testing.T) {
+	t.Run("uses detailed status message when available", func(t *testing.T) {
+		// Create a summary rule with an async operation
+		ruleName := "test-rule"
+		operationId := "op-failed-123"
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ruleName,
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody",
+			},
+		}
+
+		// Add an async operation to the rule
+		rule.SetAsyncOperation(v1.AsyncOperation{
+			OperationId: operationId,
+			StartTime:   "2025-05-22T19:20:00Z",
+			EndTime:     "2025-05-22T19:30:00Z",
+		})
+
+		// Create a mock handler to track status updates
+		mockHandler := &mockCRDHandler{
+			updatedObjects: []client.Object{},
+		}
+
+		// Create the task
+		task := &SummaryRuleTask{
+			store: mockHandler,
+		}
+
+		// Create an async operation with detailed status
+		kustoOp := AsyncOperationStatus{
+			OperationId: operationId,
+			State:       string(KustoAsyncOperationStateFailed),
+			Status:      "Syntax error in KQL query: Invalid column name 'NonExistentColumn'",
+		}
+
+		// Test handleCompletedOperation with detailed error
+		task.handleCompletedOperation(context.Background(), rule, kustoOp)
+
+		// Verify the condition contains the detailed error message
+		condition := rule.GetCondition()
+		require.NotNil(t, condition, "Rule should have a condition")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Condition status should be False")
+		require.Contains(t, condition.Message, "async operation op-failed-123 failed: Syntax error in KQL query",
+			"Condition message should contain detailed error from Status field")
+		require.Contains(t, condition.Message, "Invalid column name 'NonExistentColumn'",
+			"Condition message should contain the complete detailed error")
+	})
+
+	t.Run("falls back to generic message when status is empty", func(t *testing.T) {
+		// Create a summary rule with an async operation
+		ruleName := "test-rule"
+		operationId := "op-failed-456"
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ruleName,
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody",
+			},
+		}
+
+		// Add an async operation to the rule
+		rule.SetAsyncOperation(v1.AsyncOperation{
+			OperationId: operationId,
+			StartTime:   "2025-05-22T19:20:00Z",
+			EndTime:     "2025-05-22T19:30:00Z",
+		})
+
+		// Create a mock handler to track status updates
+		mockHandler := &mockCRDHandler{
+			updatedObjects: []client.Object{},
+		}
+
+		// Create the task
+		task := &SummaryRuleTask{
+			store: mockHandler,
+		}
+
+		// Create an async operation with empty status (should fall back to generic message)
+		kustoOp := AsyncOperationStatus{
+			OperationId: operationId,
+			State:       string(KustoAsyncOperationStateFailed),
+			Status:      "", // Empty status should trigger fallback
+		}
+
+		// Test handleCompletedOperation with empty status
+		task.handleCompletedOperation(context.Background(), rule, kustoOp)
+
+		// Verify the condition contains the generic error message
+		condition := rule.GetCondition()
+		require.NotNil(t, condition, "Rule should have a condition")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Condition status should be False")
+		require.Equal(t, "async operation op-failed-456 failed", condition.Message,
+			"Condition message should contain generic error when Status is empty")
+	})
+
+	t.Run("truncates very long status messages", func(t *testing.T) {
+		// Create a summary rule with an async operation
+		ruleName := "test-rule"
+		operationId := "op-failed-789"
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ruleName,
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody",
+			},
+		}
+
+		// Add an async operation to the rule
+		rule.SetAsyncOperation(v1.AsyncOperation{
+			OperationId: operationId,
+			StartTime:   "2025-05-22T19:20:00Z",
+			EndTime:     "2025-05-22T19:30:00Z",
+		})
+
+		// Create a mock handler to track status updates
+		mockHandler := &mockCRDHandler{
+			updatedObjects: []client.Object{},
+		}
+
+		// Create the task
+		task := &SummaryRuleTask{
+			store: mockHandler,
+		}
+
+		// Create a very long status message (over 200 chars to trigger truncation)
+		longStatus := "This is a very long error message that contains detailed information about what went wrong during the execution of the KQL query including column names, syntax errors, and other diagnostic information that could be very helpful for debugging but might be too long for the condition message field and should be truncated to prevent issues with storage or display"
+
+		kustoOp := AsyncOperationStatus{
+			OperationId: operationId,
+			State:       string(KustoAsyncOperationStateFailed),
+			Status:      longStatus,
+		}
+
+		// Test handleCompletedOperation with long status
+		task.handleCompletedOperation(context.Background(), rule, kustoOp)
+
+		// Verify the condition message is truncated but still contains the operation ID
+		condition := rule.GetCondition()
+		require.NotNil(t, condition, "Rule should have a condition")
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Condition status should be False")
+
+		// The message should start with the operation failure prefix
+		require.True(t, strings.HasPrefix(condition.Message, "async operation op-failed-789 failed: "),
+			"Condition message should start with operation failure prefix")
+
+		// The total message should not exceed the reasonable length
+		require.LessOrEqual(t, len(condition.Message), 256,
+			"Condition message should be truncated to reasonable length")
+
+		// Should contain the beginning of the status message
+		require.Contains(t, condition.Message, "This is a very long error message",
+			"Condition message should contain the beginning of the long status")
+	})
+
+	t.Run("removes completed operation from rule", func(t *testing.T) {
+		// Create a summary rule with multiple async operations
+		ruleName := "test-rule"
+		operationId1 := "op-completed-1"
+		operationId2 := "op-pending-2"
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ruleName,
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "TestTable",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Body:     "TestBody",
+			},
+		}
+
+		// Add two async operations to the rule
+		rule.SetAsyncOperation(v1.AsyncOperation{
+			OperationId: operationId1,
+			StartTime:   "2025-05-22T19:20:00Z",
+			EndTime:     "2025-05-22T19:30:00Z",
+		})
+		rule.SetAsyncOperation(v1.AsyncOperation{
+			OperationId: operationId2,
+			StartTime:   "2025-05-22T19:25:00Z",
+			EndTime:     "2025-05-22T19:35:00Z",
+		})
+
+		// Verify we start with 2 operations
+		require.Len(t, rule.GetAsyncOperations(), 2, "Rule should start with 2 async operations")
+
+		// Create a mock handler
+		mockHandler := &mockCRDHandler{
+			updatedObjects: []client.Object{},
+		}
+
+		// Create the task
+		task := &SummaryRuleTask{
+			store: mockHandler,
+		}
+
+		// Create a completed async operation
+		kustoOp := AsyncOperationStatus{
+			OperationId: operationId1,
+			State:       string(KustoAsyncOperationStateCompleted),
+		}
+
+		// Test handleCompletedOperation - this should remove the completed operation
+		task.handleCompletedOperation(context.Background(), rule, kustoOp)
+
+		// Verify only the pending operation remains
+		asyncOps := rule.GetAsyncOperations()
+		require.Len(t, asyncOps, 1, "Rule should have only 1 async operation remaining")
+		require.Equal(t, operationId2, asyncOps[0].OperationId, "Should be the pending operation")
+	})
 }
 
 func TestSummaryRuleDoubleExecutionFix(t *testing.T) {

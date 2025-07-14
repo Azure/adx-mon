@@ -46,7 +46,7 @@ func KustoQueryLinks(preText, query, endpoint, database string) (string, error) 
 	link += fmt.Sprintf(`<a href="%s%s?query=%s&saw=1">[Desktop (SAW)]</a>`, endpoint, database, url)
 
 	escapedQuery := html.EscapeString(query) // Escape html within the kusto query since we are rendering it within html tags
-	summary := fmt.Sprintf("%s<br/><br/>%s</br><pre>%s</pre>", preText, link, escapedQuery)
+	summary := fmt.Sprintf("%s<br/><br/>%s<br/><details><summary>Click here to show query</summary><pre>%s</pre></details>", preText, link, escapedQuery)
 	summary = strings.TrimSpace(summary)
 	return summary, nil
 }

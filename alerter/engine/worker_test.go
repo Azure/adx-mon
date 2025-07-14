@@ -551,6 +551,40 @@ func TestWorker_NotificationHealth(t *testing.T) {
 	require.Equal(t, NotificationHealthHealthy, notificationHealthValue)
 }
 
+func TestCalculateNextQueryTime(t *testing.T) {
+	now := time.Now()
+	interval := 5 * time.Minute
+
+	t.Run("first execution returns immediate", func(t *testing.T) {
+		w := &worker{
+			rule: &rules.Rule{
+				Namespace:     "ns",
+				Name:          "rule",
+				Interval:      interval,
+				LastQueryTime: time.Time{}, // zero value
+			},
+		}
+		result := w.calculateNextQueryTime()
+		// Should be in the past (immediate execution)
+		require.True(t, result.Before(time.Now().Add(1*time.Second)), "expected immediate execution")
+	})
+
+	t.Run("scheduled execution returns lastQueryTime+interval", func(t *testing.T) {
+		last := now.Add(-10 * time.Minute)
+		w := &worker{
+			rule: &rules.Rule{
+				Namespace:     "ns",
+				Name:          "rule",
+				Interval:      interval,
+				LastQueryTime: last,
+			},
+		}
+		result := w.calculateNextQueryTime()
+		expected := last.Add(interval)
+		require.Equal(t, expected, result)
+	})
+}
+
 func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
 	t.Helper()
 

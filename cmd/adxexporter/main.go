@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/Azure/adx-mon/adxexporter"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -28,6 +26,10 @@ func main() {
 				Name:  "cluster-labels",
 				Usage: "Labels used to identify and distinguish adxexporter clusters. Format: <key>=<value>",
 			},
+			&cli.StringSliceFlag{
+				Name:  "kusto-endpoints",
+				Usage: "Kusto endpoint in the format of <db>=<endpoint> for query execution",
+			},
 			&cli.StringFlag{
 				Name:  "otlp-endpoint",
 				Usage: "OTLP endpoint URL for direct push mode (Phase 2)",
@@ -39,7 +41,7 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:  "metrics-port",
-				Usage: "Address and port for the Prometheus metrics server",
+				Usage: "Address and port for the health checks and metrics server",
 				Value: ":8080",
 			},
 			&cli.StringFlag{
@@ -63,6 +65,11 @@ func realMain(ctx *cli.Context) error {
 		return err
 	}
 
+	kustoClusters, err := parseKustoEndpoints(ctx.StringSlice("kusto-endpoints"))
+	if err != nil {
+		return err
+	}
+
 	// Build scheme
 	scheme := clientgoscheme.Scheme
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -72,28 +79,28 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to add adxmonv1 scheme: %w", err)
 	}
 
-	// Create cancellable context
-	svcCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Set up signal handling
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
-		logger.Infof("Received signal %s, initiating graceful shutdown...", sig.String())
-		cancel()
-	}()
+	// Let controller-runtime handle signals
+	svcCtx := ctrl.SetupSignalHandler()
 
 	// Set the controller-runtime logger to use our logger
 	log.SetLogger(logger.AsLogr())
 
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
+
+	// Configure server address - use same port for health checks and metrics
+	var serverBindAddress string
+	if ctx.Bool("enable-metrics-endpoint") {
+		serverBindAddress = ctx.String("metrics-port")
+	} else {
+		serverBindAddress = "0" // Disable server
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme: scheme,
+		Scheme:                 scheme,
+		HealthProbeBindAddress: ":8081", // Port for health endpoints
 		Metrics: metricsserver.Options{
-			BindAddress: "0", // Disable metrics server
+			BindAddress: serverBindAddress,
 		},
 	})
 	if err != nil {
@@ -106,6 +113,7 @@ func realMain(ctx *cli.Context) error {
 		Scheme: mgr.GetScheme(),
 
 		ClusterLabels:         clusterLabels,
+		KustoClusters:         kustoClusters,
 		OTLPEndpoint:          ctx.String("otlp-endpoint"),
 		EnableMetricsEndpoint: ctx.Bool("enable-metrics-endpoint"),
 		MetricsPort:           ctx.String("metrics-port"),
@@ -115,15 +123,34 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)
 	}
 
-	// Start manager
-	go func() {
-		if err := mgr.Start(svcCtx); err != nil {
-			logger.Errorf("Problem running manager: %v", err)
-			cancel()
+	if err := mgr.AddReadyzCheck("metrics-ready", func(req *http.Request) error {
+		if !adxexp.EnableMetricsEndpoint {
+			return nil // Always ready if metrics are disabled
 		}
-	}()
 
-	<-svcCtx.Done()
+		if adxexp.Meter == nil {
+			return fmt.Errorf("metrics not ready")
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("unable to add readyz check: %w", err)
+	}
+
+	if err := mgr.AddHealthzCheck("healthz", func(req *http.Request) error {
+		if adxexp.Meter == nil {
+			return fmt.Errorf("metrics not ready")
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("unable to add healthz check: %w", err)
+	}
+
+	// Start manager
+	if err := mgr.Start(svcCtx); err != nil {
+		logger.Errorf("Problem running manager: %v", err)
+	}
+
 	return nil
 }
 
@@ -146,4 +173,32 @@ func parseClusterLabels(labels []string) (map[string]string, error) {
 	}
 
 	return clusterLabels, nil
+}
+
+// parseKustoEndpoints processes --kusto-endpoints CLI arguments into a map
+// Following the same pattern as the ingestor implementation
+func parseKustoEndpoints(endpoints []string) (map[string]string, error) {
+	kustoClusters := make(map[string]string)
+
+	for _, endpoint := range endpoints {
+		if !strings.Contains(endpoint, "=") {
+			return nil, fmt.Errorf("invalid kusto endpoint: %s, expected <database>=<endpoint>", endpoint)
+		}
+
+		split := strings.Split(endpoint, "=")
+		database := split[0]
+		addr := split[1]
+
+		if database == "" {
+			return nil, fmt.Errorf("database name is required in kusto endpoint: %s", endpoint)
+		}
+
+		if addr == "" {
+			return nil, fmt.Errorf("endpoint address is required in kusto endpoint: %s", endpoint)
+		}
+
+		kustoClusters[database] = addr
+	}
+
+	return kustoClusters, nil
 }
