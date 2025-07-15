@@ -219,7 +219,7 @@ func TestReconcile(t *testing.T) {
 					Body:     "MyTable | project metric_name='test_metric', value=42.5, timestamp=now()",
 					Transform: adxmonv1.TransformConfig{
 						MetricNameColumn: "metric_name",
-						ValueColumn:      "value",
+						ValueColumns:     []string{"value"},
 						TimestampColumn:  "timestamp",
 					},
 					Criteria: map[string][]string{
@@ -253,7 +253,7 @@ func TestReconcile(t *testing.T) {
 					Body:     "MyTable | project metric_name='long_interval_metric', value=100.0",
 					Transform: adxmonv1.TransformConfig{
 						MetricNameColumn: "metric_name",
-						ValueColumn:      "value",
+						ValueColumns:     []string{"value"},
 						TimestampColumn:  "timestamp",
 					},
 					Criteria: map[string][]string{},
@@ -285,7 +285,7 @@ func TestReconcile(t *testing.T) {
 					Body:     "MyTable | project metric_name='skipped_metric', value=0",
 					Transform: adxmonv1.TransformConfig{
 						MetricNameColumn: "metric_name",
-						ValueColumn:      "value",
+						ValueColumns:     []string{"value"},
 					},
 					Criteria: map[string][]string{
 						"env": {"dev"},
@@ -314,7 +314,7 @@ func TestReconcile(t *testing.T) {
 					Interval: metav1.Duration{Duration: 30 * time.Second},
 					Body:     "InvalidTable | project invalid_query",
 					Transform: adxmonv1.TransformConfig{
-						ValueColumn: "value",
+						ValueColumns: []string{"value"},
 					},
 					Criteria: map[string][]string{},
 				},
