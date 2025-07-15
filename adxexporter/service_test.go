@@ -2,6 +2,7 @@ package adxexporter
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -202,6 +203,8 @@ func TestReconcile(t *testing.T) {
 		clusterLabels       map[string]string
 		expectRequeue       bool
 		expectedRequeueTime time.Duration
+		setupMockResults    func(t *testing.T, mock *MockKustoExecutor) // Setup function for mock responses
+		expectedQueryCount  int                                         // Expected number of queries executed
 	}{
 		{
 			name: "successful reconciliation with matching criteria",
@@ -213,6 +216,12 @@ func TestReconcile(t *testing.T) {
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
+					Body:     "MyTable | project metric_name='test_metric', value=42.5, timestamp=now()",
+					Transform: adxmonv1.TransformConfig{
+						MetricNameColumn: "metric_name",
+						ValueColumn:      "value",
+						TimestampColumn:  "timestamp",
+					},
 					Criteria: map[string][]string{
 						"env": {"prod"},
 					},
@@ -223,6 +232,13 @@ func TestReconcile(t *testing.T) {
 			},
 			expectRequeue:       true,
 			expectedRequeueTime: time.Minute, // Minimum requeue interval
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// Return successful query results
+				mock.SetNextResult(t, [][]interface{}{
+					{"test_metric", 42.5, time.Now()},
+				})
+			},
+			expectedQueryCount: 1,
 		},
 		{
 			name: "successful reconciliation with longer interval",
@@ -234,6 +250,12 @@ func TestReconcile(t *testing.T) {
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 5 * time.Minute},
+					Body:     "MyTable | project metric_name='long_interval_metric', value=100.0",
+					Transform: adxmonv1.TransformConfig{
+						MetricNameColumn: "metric_name",
+						ValueColumn:      "value",
+						TimestampColumn:  "timestamp",
+					},
 					Criteria: map[string][]string{},
 				},
 			},
@@ -242,6 +264,13 @@ func TestReconcile(t *testing.T) {
 			},
 			expectRequeue:       true,
 			expectedRequeueTime: 5 * time.Minute,
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// Return successful query results
+				mock.SetNextResult(t, [][]interface{}{
+					{"long_interval_metric", 100.0, time.Now()},
+				})
+			},
+			expectedQueryCount: 1,
 		},
 		{
 			name: "skipped reconciliation due to non-matching criteria",
@@ -253,6 +282,11 @@ func TestReconcile(t *testing.T) {
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
+					Body:     "MyTable | project metric_name='skipped_metric', value=0",
+					Transform: adxmonv1.TransformConfig{
+						MetricNameColumn: "metric_name",
+						ValueColumn:      "value",
+					},
 					Criteria: map[string][]string{
 						"env": {"dev"},
 					},
@@ -263,6 +297,38 @@ func TestReconcile(t *testing.T) {
 			},
 			expectRequeue:       false,
 			expectedRequeueTime: 0,
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// No mock setup needed since query shouldn't execute
+			},
+			expectedQueryCount: 0, // No query should be executed due to criteria mismatch
+		},
+		{
+			name: "query execution failure",
+			metricsExporter: &adxmonv1.MetricsExporter{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-exporter-error",
+					Namespace: "default",
+				},
+				Spec: adxmonv1.MetricsExporterSpec{
+					Database: "test-db",
+					Interval: metav1.Duration{Duration: 30 * time.Second},
+					Body:     "InvalidTable | project invalid_query",
+					Transform: adxmonv1.TransformConfig{
+						ValueColumn: "value",
+					},
+					Criteria: map[string][]string{},
+				},
+			},
+			clusterLabels: map[string]string{
+				"env": "prod",
+			},
+			expectRequeue:       true,
+			expectedRequeueTime: time.Minute, // Still requeue even on error
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// Set up mock to return an error
+				mock.SetNextError(fmt.Errorf("table 'InvalidTable' not found"))
+			},
+			expectedQueryCount: 1, // Query should be attempted even if it fails
 		},
 	}
 
@@ -278,6 +344,13 @@ func TestReconcile(t *testing.T) {
 				WithObjects(objs...).
 				Build()
 
+			// Create mock Kusto client and set up expected results
+			mockKustoClient := NewMockKustoExecutor(t, "test-db", "https://test-cluster.kusto.windows.net")
+			if tt.setupMockResults != nil {
+				tt.setupMockResults(t, mockKustoClient)
+			}
+
+			// Create reconciler with mock QueryExecutors
 			reconciler := &MetricsExporterReconciler{
 				Client:        fakeClient,
 				Scheme:        s,
@@ -285,7 +358,15 @@ func TestReconcile(t *testing.T) {
 				KustoClusters: map[string]string{
 					"test-db": "https://test-cluster.kusto.windows.net",
 				},
+				QueryExecutors: map[string]*QueryExecutor{
+					"test-db": NewQueryExecutor(mockKustoClient),
+				},
+				EnableMetricsEndpoint: false, // Disable metrics to avoid initialization complexity
 			}
+
+			// Initialize the meter (this sets up r.Meter)
+			err := reconciler.exposeMetricsServer()
+			require.NoError(t, err)
 
 			req := reconcile.Request{
 				NamespacedName: types.NamespacedName{
@@ -302,6 +383,16 @@ func TestReconcile(t *testing.T) {
 				assert.Equal(t, tt.expectedRequeueTime, result.RequeueAfter)
 			} else {
 				assert.Equal(t, time.Duration(0), result.RequeueAfter, "Expected no requeue")
+			}
+
+			// Verify query execution
+			queries := mockKustoClient.GetQueries()
+			assert.Len(t, queries, tt.expectedQueryCount, "Unexpected number of queries executed")
+
+			if tt.expectedQueryCount > 0 {
+				// Verify that the query contains expected elements
+				query := queries[0]
+				assert.Contains(t, query, tt.metricsExporter.Spec.Body, "Query should contain the body from MetricsExporter spec")
 			}
 		})
 	}
