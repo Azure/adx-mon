@@ -53,13 +53,15 @@ func NewDropUnusedTablesTask(kustoCli StatementExecutor) *DropUnusedTablesTask {
 }
 
 func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
+	// Load table details outside of the lock to avoid blocking while querying Kusto
 	details, err := t.loadTableDetails(ctx)
 	if err != nil {
 		return fmt.Errorf("error loading table details: %w", err)
 	}
+
+	// Only hold the lock when updating the map
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	for _, v := range details {
 		if v.TotalRowCount > 0 {
@@ -460,7 +462,9 @@ func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.Sum
 }
 
 func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation, kustoOp AsyncOperationStatus) {
-	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission", kustoOp.OperationId, rule.Spec.Database, rule.Name)
+	logger.Infof("Async operation %s for rule %s.%s is marked for retry, retrying submission",
+		kustoOp.OperationId, rule.Spec.Database, rule.Name)
+
 	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil && operationId != operation.OperationId {
 		// We've resubmitted an async operation due to a recoverable failure but this has created a new operation-id to track.
 		// Remove the existing async operation, we're done processing it, but save the newly created async operation for tracking.
@@ -470,6 +474,12 @@ func (t *SummaryRuleTask) handleRetryOperation(ctx context.Context, rule *v1.Sum
 		// need to update the OperationId.
 		operation.OperationId = operationId
 		rule.SetAsyncOperation(operation)
+
+		logger.Infof("Successfully retried operation for rule %s.%s, new operation ID: %s",
+			rule.Spec.Database, rule.Name, operationId)
+	} else if err != nil {
+		logger.Errorf("Failed to retry operation for rule %s.%s: %v",
+			rule.Spec.Database, rule.Name, err)
 	}
 }
 
@@ -494,6 +504,9 @@ func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1
 		if updateErr := t.updateSummaryRuleStatus(ctx, rule, err); updateErr != nil {
 			logger.Errorf("Failed to update summary rule status for failed operation: %v", updateErr)
 		}
+	} else {
+		logger.Infof("Async operation %s for rule %s.%s completed successfully",
+			kustoOp.OperationId, rule.Spec.Database, rule.Name)
 	}
 	// We're done polling this async operation, so we can remove it from the list
 	rule.RemoveAsyncOperation(kustoOp.OperationId)
@@ -518,10 +531,18 @@ func (t *SummaryRuleTask) handleStaleOperation(rule *v1.SummaryRule, operation v
 }
 
 func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation) {
+	logger.Infof("Processing backlog operation for rule %s.%s (time window: %s to %s)",
+		rule.Spec.Database, rule.Name, operation.StartTime, operation.EndTime)
+
 	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil {
 		// Great, we were able to recover the failed submission window.
 		operation.OperationId = operationId
 		rule.SetAsyncOperation(operation)
+		logger.Infof("Successfully recovered backlog operation for rule %s.%s, operation ID: %s",
+			rule.Spec.Database, rule.Name, operationId)
+	} else {
+		logger.Errorf("Failed to recover backlog operation for rule %s.%s: %v",
+			rule.Spec.Database, rule.Name, err)
 	}
 }
 
@@ -530,6 +551,10 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	// preceding let-statements.
 	body := kustoutil.ApplySubstitutions(rule.Spec.Body, startTime, endTime, t.ClusterLabels)
 
+	// Add timeout to prevent indefinite blocking on Kusto operations
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	// Execute asynchronously
 	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
 	res, err := t.kustoCli.Mgmt(ctx, stmt)
@@ -537,12 +562,24 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 	}
 
-	return operationIDFromResult(res)
+	operationId, err := operationIDFromResult(res)
+	if err != nil {
+		return "", err
+	}
+
+	logger.Infof("Successfully submitted summary rule %s.%s, operation ID: %s",
+		rule.Spec.Database, rule.Name, operationId)
+	return operationId, nil
 }
 
 func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
 	// List all the async operations that have been executed in the last 24 hours. If one of our
 	// async operations falls out of this window, it's time to stop trying that particular operation.
+
+	// Add timeout to prevent indefinite blocking on Kusto operations
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status | sort by LastUpdatedOn asc")
 	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
