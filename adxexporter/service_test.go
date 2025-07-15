@@ -219,7 +219,7 @@ func TestReconcile(t *testing.T) {
 					Body:     "MyTable | project metric_name='test_metric', value=42.5, timestamp=now()",
 					Transform: adxmonv1.TransformConfig{
 						MetricNameColumn: "metric_name",
-						ValueColumn:      "value",
+						ValueColumns:     []string{"value"},
 						TimestampColumn:  "timestamp",
 					},
 					Criteria: map[string][]string{
@@ -253,7 +253,7 @@ func TestReconcile(t *testing.T) {
 					Body:     "MyTable | project metric_name='long_interval_metric', value=100.0",
 					Transform: adxmonv1.TransformConfig{
 						MetricNameColumn: "metric_name",
-						ValueColumn:      "value",
+						ValueColumns:     []string{"value"},
 						TimestampColumn:  "timestamp",
 					},
 					Criteria: map[string][]string{},
@@ -285,7 +285,7 @@ func TestReconcile(t *testing.T) {
 					Body:     "MyTable | project metric_name='skipped_metric', value=0",
 					Transform: adxmonv1.TransformConfig{
 						MetricNameColumn: "metric_name",
-						ValueColumn:      "value",
+						ValueColumns:     []string{"value"},
 					},
 					Criteria: map[string][]string{
 						"env": {"dev"},
@@ -314,7 +314,7 @@ func TestReconcile(t *testing.T) {
 					Interval: metav1.Duration{Duration: 30 * time.Second},
 					Body:     "InvalidTable | project invalid_query",
 					Transform: adxmonv1.TransformConfig{
-						ValueColumn: "value",
+						ValueColumns: []string{"value"},
 					},
 					Criteria: map[string][]string{},
 				},
@@ -525,7 +525,7 @@ func TestTransformAndRegisterMetrics(t *testing.T) {
 		},
 		Spec: adxmonv1.MetricsExporterSpec{
 			Transform: adxmonv1.TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				MetricNameColumn:  "metric_name",
 				TimestampColumn:   "timestamp",
 				LabelColumns:      []string{"label1", "label2"},
@@ -576,7 +576,7 @@ func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
 		},
 		Spec: adxmonv1.MetricsExporterSpec{
 			Transform: adxmonv1.TransformConfig{
-				ValueColumn:       "value",
+				ValueColumns:      []string{"value"},
 				TimestampColumn:   "timestamp",
 				LabelColumns:      []string{"label1", "label2"},
 				DefaultMetricName: "default_metric_name", // No MetricNameColumn specified
@@ -597,6 +597,63 @@ func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
 			"timestamp": time.Now(),
 			"label1":    "different_value",
 			"label2":    "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().Build(),
+		Scheme:                scheme.Scheme,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Configure MetricsExporter with multiple value columns
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Database: "TestDB",
+			Body:     "TestQuery",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Transform: adxmonv1.TransformConfig{
+				MetricNamePrefix:  "app_",
+				DefaultMetricName: "default_metric",
+				ValueColumns:      []string{"cpu_usage", "memory_usage", "disk_usage"},
+				LabelColumns:      []string{"node_name"},
+				TimestampColumn:   "timestamp",
+			},
+		},
+	}
+
+	// Mock data with multiple value columns
+	rows := []map[string]interface{}{
+		{
+			"cpu_usage":    75.5,
+			"memory_usage": 85.2,
+			"disk_usage":   45.8,
+			"node_name":    "node-1",
+			"timestamp":    time.Now(),
+		},
+		{
+			"cpu_usage":    60.3,
+			"memory_usage": 70.1,
+			"disk_usage":   52.4,
+			"node_name":    "node-2",
+			"timestamp":    time.Now(),
 		},
 	}
 

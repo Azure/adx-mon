@@ -93,6 +93,9 @@ func (qe *QueryExecutor) SetClock(clk clock.Clock) {
 func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, startTime, endTime time.Time, clusterLabels map[string]string) (*QueryResult, error) {
 	start := qe.clock.Now()
 
+	tCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	// Apply time window and cluster label substitutions to the query
 	processedQuery := kustoutil.ApplySubstitutions(queryBody, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano), clusterLabels)
 
@@ -100,7 +103,7 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 	stmt := kql.New("").AddUnsafe(processedQuery)
 
 	// Execute the query
-	iter, err := qe.kustoClient.Query(ctx, stmt)
+	iter, err := qe.kustoClient.Query(tCtx, stmt)
 	if err != nil {
 		return &QueryResult{
 			Error:    fmt.Errorf("failed to execute query: %w", err),
