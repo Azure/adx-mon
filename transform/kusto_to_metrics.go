@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -79,9 +80,9 @@ func NewKustoToMetricsTransformer(config TransformConfig, meter metric.Meter) *K
 // - Remove consecutive underscores
 // - Ensure name starts with letter or underscore
 // Example: "SuccessfulRequests" → "successful_requests"
-func normalizeColumnName(columnName string) string {
+func normalizeColumnName(columnName string) (string, error) {
 	if columnName == "" {
-		return ""
+		return "", errors.New("column name cannot be empty")
 	}
 
 	// Convert camelCase to snake_case by inserting underscores before uppercase letters
@@ -113,10 +114,10 @@ func normalizeColumnName(columnName string) string {
 
 	// If somehow we end up with empty string, return a default
 	if normalized == "" {
-		return "metric"
+		return "", errors.New("normalized column name cannot be empty")
 	}
 
-	return normalized
+	return normalized, nil
 }
 
 // constructMetricName builds a complete metric name following the pattern: [prefix_]baseName_normalizedColumnName
@@ -129,31 +130,31 @@ func normalizeColumnName(columnName string) string {
 //   - constructMetricName("customer_success_rate", "teama", "Numerator") → "teama_customer_success_rate_numerator"
 //   - constructMetricName("response_time", "", "AvgLatency") → "response_time_avg_latency"
 //   - constructMetricName("", "teamb", "Count") → "teamb_count"
-func constructMetricName(baseName, prefix, columnName string) string {
+func constructMetricName(baseName, prefix, columnName string) (string, error) {
 	// Normalize the column name to follow Prometheus conventions
-	normalizedColumn := normalizeColumnName(columnName)
-
-	// Handle edge case where column normalization returns empty or default
-	if normalizedColumn == "" || normalizedColumn == "metric" {
-		normalizedColumn = "value"
+	normalizedColumn, err := normalizeColumnName(columnName)
+	if err != nil {
+		return "", fmt.Errorf("failed to normalize column name '%s': %w", columnName, err)
 	}
 
 	var parts []string
 
 	// Add prefix if provided and valid after normalization
 	if prefix != "" {
-		normalizedPrefix := normalizeColumnName(prefix)
-		if normalizedPrefix != "" && normalizedPrefix != "metric" {
-			parts = append(parts, normalizedPrefix)
+		normalizedPrefix, err := normalizeColumnName(prefix)
+		if err != nil {
+			return "", fmt.Errorf("failed to normalize prefix '%s': %w", prefix, err)
 		}
+		parts = append(parts, normalizedPrefix)
 	}
 
 	// Add base name if provided and valid after normalization
 	if baseName != "" {
-		normalizedBase := normalizeColumnName(baseName)
-		if normalizedBase != "" && normalizedBase != "metric" {
-			parts = append(parts, normalizedBase)
+		normalizedBase, err := normalizeColumnName(baseName)
+		if err != nil {
+			return "", fmt.Errorf("failed to normalize base name '%s': %w", baseName, err)
 		}
+		parts = append(parts, normalizedBase)
 	}
 
 	// Always add the normalized column name
@@ -170,10 +171,10 @@ func constructMetricName(baseName, prefix, columnName string) string {
 
 	// Ensure we have a valid metric name
 	if result == "" {
-		return "metric_value"
+		return "", errors.New("constructed metric name cannot be empty")
 	}
 
-	return result
+	return result, nil
 }
 
 // Transform converts KQL query results to Prometheus metrics
@@ -241,7 +242,10 @@ func (t *KustoToMetricsTransformer) transformRowMultiValue(baseName string, row 
 		}
 
 		// Construct metric name using prefix, base name, and normalized column name
-		metricName := constructMetricName(baseName, t.config.MetricNamePrefix, columnName)
+		metricName, err := constructMetricName(baseName, t.config.MetricNamePrefix, columnName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to construct metric name for column '%s': %w", columnName, err)
+		}
 
 		metrics = append(metrics, MetricData{
 			Name:      metricName,
@@ -487,8 +491,8 @@ func (t *KustoToMetricsTransformer) Validate(results []map[string]any) error {
 
 	// Validate MetricNamePrefix format if provided
 	if t.config.MetricNamePrefix != "" {
-		normalizedPrefix := normalizeColumnName(t.config.MetricNamePrefix)
-		if normalizedPrefix == "" || normalizedPrefix == "metric" {
+		normalizedPrefix, err := normalizeColumnName(t.config.MetricNamePrefix)
+		if err != nil {
 			return fmt.Errorf("MetricNamePrefix %q results in invalid normalized name %q", t.config.MetricNamePrefix, normalizedPrefix)
 		}
 	}

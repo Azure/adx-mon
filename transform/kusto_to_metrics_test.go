@@ -440,7 +440,7 @@ func TestValidate(t *testing.T) {
 				{"value1": 42.0},
 			},
 			wantErr: true,
-			errMsg:  "MetricNamePrefix \"---\" results in invalid normalized name \"metric\"",
+			errMsg:  "MetricNamePrefix \"---\" results in invalid normalized name",
 		},
 		{
 			name: "empty ValueColumns and ValueColumn",
@@ -934,9 +934,10 @@ func TestValidateKustoValueTypes(t *testing.T) {
 
 func TestNormalizeColumnName(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		expected string
+		name        string
+		input       string
+		expected    string
+		expectError bool
 	}{
 		// Basic cases
 		{
@@ -1013,19 +1014,19 @@ func TestNormalizeColumnName(t *testing.T) {
 
 		// Edge cases
 		{
-			name:     "empty string",
-			input:    "",
-			expected: "",
+			name:        "empty string",
+			input:       "",
+			expectError: true,
 		},
 		{
-			name:     "only special characters",
-			input:    "@#$%",
-			expected: "metric",
+			name:        "only special characters",
+			input:       "@#$%",
+			expectError: true,
 		},
 		{
-			name:     "only underscores",
-			input:    "____",
-			expected: "metric",
+			name:        "only underscores",
+			input:       "____",
+			expectError: true,
 		},
 		{
 			name:     "single character",
@@ -1080,7 +1081,14 @@ func TestNormalizeColumnName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeColumnName(tt.input)
+			result, err := normalizeColumnName(tt.input)
+
+			if tt.expectError {
+				require.Error(t, err, "normalizeColumnName(%q) should return error", tt.input)
+				return
+			}
+
+			require.NoError(t, err, "normalizeColumnName(%q) should not return error", tt.input)
 			require.Equal(t, tt.expected, result, "normalizeColumnName(%q) = %q, want %q", tt.input, result, tt.expected)
 
 			// Verify the result follows Prometheus naming conventions
@@ -1118,7 +1126,8 @@ func TestNormalizeColumnNamePerformance(t *testing.T) {
 	// Run multiple iterations to ensure consistent behavior
 	var results []string
 	for i := 0; i < 100; i++ {
-		result := normalizeColumnName(input)
+		result, err := normalizeColumnName(input)
+		require.NoError(t, err, "normalizeColumnName should not return error for valid input")
 		results = append(results, result)
 	}
 
@@ -1146,7 +1155,7 @@ func BenchmarkNormalizeColumnName(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				_ = normalizeColumnName(tc.input)
+				_, _ = normalizeColumnName(tc.input)
 			}
 		})
 	}
@@ -1154,11 +1163,12 @@ func BenchmarkNormalizeColumnName(b *testing.B) {
 
 func TestConstructMetricName(t *testing.T) {
 	tests := []struct {
-		name       string
-		baseName   string
-		prefix     string
-		columnName string
-		expected   string
+		name        string
+		baseName    string
+		prefix      string
+		columnName  string
+		expected    string
+		expectError bool
 	}{
 		// Basic cases
 		{
@@ -1254,25 +1264,25 @@ func TestConstructMetricName(t *testing.T) {
 
 		// Edge cases
 		{
-			name:       "empty column name",
-			baseName:   "test_metric",
-			prefix:     "team",
-			columnName: "",
-			expected:   "team_test_metric_value",
+			name:        "empty column name",
+			baseName:    "test_metric",
+			prefix:      "team",
+			columnName:  "",
+			expectError: true,
 		},
 		{
-			name:       "all empty strings",
-			baseName:   "",
-			prefix:     "",
-			columnName: "",
-			expected:   "value",
+			name:        "all empty strings",
+			baseName:    "",
+			prefix:      "",
+			columnName:  "",
+			expectError: true,
 		},
 		{
-			name:       "special chars only in column",
-			baseName:   "valid_metric",
-			prefix:     "team",
-			columnName: "@#$%",
-			expected:   "team_valid_metric_value",
+			name:        "special chars only in column",
+			baseName:    "valid_metric",
+			prefix:      "team",
+			columnName:  "@#$%",
+			expectError: true,
 		},
 		{
 			name:       "numbers in column name",
@@ -1328,7 +1338,14 @@ func TestConstructMetricName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
+			result, err := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
+
+			if tt.expectError {
+				require.Error(t, err, "constructMetricName(%q, %q, %q) should return error", tt.baseName, tt.prefix, tt.columnName)
+				return
+			}
+
+			require.NoError(t, err, "constructMetricName(%q, %q, %q) should not return error", tt.baseName, tt.prefix, tt.columnName)
 			require.Equal(t, tt.expected, result,
 				"constructMetricName(%q, %q, %q) = %q, want %q",
 				tt.baseName, tt.prefix, tt.columnName, result, tt.expected)
@@ -1373,33 +1390,46 @@ func TestConstructMetricNameEdgeCases(t *testing.T) {
 		prefix      string
 		columnName  string
 		description string
+		expectError bool
 	}{
 		{
-			name:        "normalization fallback to value",
+			name:        "column that normalizes to empty should error",
 			baseName:    "test",
 			prefix:      "",
-			columnName:  "____", // Will normalize to empty, should fallback to "value"
-			description: "column that normalizes to empty should use 'value' fallback",
+			columnName:  "____", // Will normalize to empty, should error
+			expectError: true,
+			description: "column that normalizes to empty should return error",
 		},
 		{
-			name:        "prefix normalization fallback",
+			name:        "prefix with special chars should error",
 			baseName:    "test",
-			prefix:      "@@@", // Will normalize to "metric", should be ignored
+			prefix:      "@@@", // Will normalize to empty, should error
 			columnName:  "count",
-			description: "prefix that normalizes to 'metric' should be ignored",
+			expectError: true,
+			description: "prefix that normalizes to empty should return error",
 		},
 		{
-			name:        "base name normalization fallback",
-			baseName:    "###", // Will normalize to "metric", should be ignored
+			name:        "base name with special chars should error",
+			baseName:    "###", // Will normalize to empty, should error
 			prefix:      "team",
 			columnName:  "value",
-			description: "base name that normalizes to 'metric' should be ignored",
+			expectError: true,
+			description: "base name that normalizes to empty should return error",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
+			result, err := constructMetricName(tt.baseName, tt.prefix, tt.columnName)
+
+			if tt.expectError {
+				require.Error(t, err, "constructMetricName(%q, %q, %q) should return error", tt.baseName, tt.prefix, tt.columnName)
+				t.Logf("Test case: %s", tt.description)
+				t.Logf("Expected error and got: %v", err)
+				return
+			}
+
+			require.NoError(t, err, "constructMetricName(%q, %q, %q) should not return error", tt.baseName, tt.prefix, tt.columnName)
 
 			// Result should always be a valid metric name
 			require.NotEmpty(t, result, "result should never be empty")
@@ -1436,7 +1466,8 @@ func TestConstructMetricNamePerformance(t *testing.T) {
 	for _, scenario := range scenarios {
 		var results []string
 		for i := 0; i < 100; i++ {
-			result := constructMetricName(scenario.baseName, scenario.prefix, scenario.columnName)
+			result, err := constructMetricName(scenario.baseName, scenario.prefix, scenario.columnName)
+			require.NoError(t, err, "constructMetricName should not return error for valid inputs")
 			results = append(results, result)
 		}
 
@@ -1465,7 +1496,7 @@ func BenchmarkConstructMetricName(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				_ = constructMetricName(tc.baseName, tc.prefix, tc.columnName)
+				_, _ = constructMetricName(tc.baseName, tc.prefix, tc.columnName)
 			}
 		})
 	}
