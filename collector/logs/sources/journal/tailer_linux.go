@@ -217,8 +217,23 @@ func (t *tailer) seekCursorAtStart(reader journalReader) {
 			t.logger.Warn(fmt.Sprintf("failed to seek to cursor %s", existingCursor), "err", err)
 			reader.SeekHead()
 		} else {
-			// Cursor points at the last read entry, so skip it
-			reader.NextSkip(1)
+			// After seeking to the cursor, we need to test the cursor to see if we went to the right place.
+			// If not, we will end up somewhere else (or potentially in a spot where we will never get new entries) because of time skew or something else.
+			// This can lead to cases where we _never_ get new entries, so we need to test the cursor.
+			// We must call next() prior to testing the cursor to actually set a position in the journal.
+			// Usage in man 3 SD_JOURNAL_GET_CURSOR
+			_, err = reader.Next()
+			if err != nil {
+				t.logger.Warn(fmt.Sprintf("failed to advance journal after seeking to cursor %s, seeking to head", existingCursor), "err", err)
+				reader.SeekHead()
+				return
+			}
+
+			err = reader.TestCursor(existingCursor)
+			if err != nil {
+				t.logger.Warn(fmt.Sprintf("failed to test cursor %s, seeking to head", existingCursor), "err", err)
+				reader.SeekHead()
+			}
 		}
 	}
 }
