@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -152,7 +153,7 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using storage dir: %s", cfg.StorageDir)
 	}
 	sort.Slice(cfg.LiftLabels, func(i, j int) bool {
-		return cfg.LiftLabels[i].Name < cfg.LiftLabels[j].Name
+		return strings.ToLower(cfg.LiftLabels[i].Name) < strings.ToLower(cfg.LiftLabels[j].Name)
 	})
 
 	defaultMapping := schema.DefaultMetricsMapping

@@ -131,6 +131,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Tags:        opts.Tags,
 			KustoClient: kclient,
 			RuleStore:   ruleStore,
+			CtrlCli:     opts.CtrlCli,
 		})
 
 	l2m.executor = executor
@@ -163,6 +164,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		RuleStore:   ruleStore,
 		Region:      opts.Region,
 		Tags:        opts.Tags,
+		CtrlCli:     nil, // No Kubernetes client for linting
 	})
 
 	executor.RunOnce(ctx)

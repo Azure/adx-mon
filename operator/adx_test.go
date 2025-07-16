@@ -576,7 +576,7 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 }
 
 func TestParseHeartbeatRows(t *testing.T) {
-	rawSchema := `{"database":"db1","tables":["t1","t2"]}`
+	rawSchema := `[{"database":"db1","tables":["t1","t2"]}]`
 	rawMeta := map[string]string{"geo": "us"}
 	rows := []HeartbeatRow{
 		{
@@ -588,14 +588,14 @@ func TestParseHeartbeatRows(t *testing.T) {
 	}
 	schemaByEndpoint, metaByEndpoint := parseHeartbeatRows(rows)
 	require.Contains(t, schemaByEndpoint, "ep1")
-	require.Equal(t, "db1", schemaByEndpoint["ep1"].Database)
+	require.Equal(t, "db1", schemaByEndpoint["ep1"][0].Database)
 	require.Equal(t, rawMeta, metaByEndpoint["ep1"])
 }
 
 func TestExtractDatabasesFromSchemas(t *testing.T) {
-	schemas := map[string]ADXClusterSchema{
-		"ep1": {Database: "db1"},
-		"ep2": {Database: "db2"},
+	schemas := map[string][]ADXClusterSchema{
+		"ep1": {{Database: "db1"}},
+		"ep2": {{Database: "db2"}},
 	}
 	dbs := extractDatabasesFromSchemas(schemas)
 	require.Contains(t, dbs, "db1")
@@ -603,9 +603,9 @@ func TestExtractDatabasesFromSchemas(t *testing.T) {
 }
 
 func TestMapTablesToEndpoints(t *testing.T) {
-	schemas := map[string]ADXClusterSchema{
-		"ep1": {Database: "db1", Tables: []string{"t1", "t2"}},
-		"ep2": {Database: "db1", Tables: []string{"t2"}},
+	schemas := map[string][]ADXClusterSchema{
+		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}}},
+		"ep2": {{Database: "db1", Tables: []string{"t2"}}},
 	}
 	m := mapTablesToEndpoints(schemas)
 	require.ElementsMatch(t, m["db1"]["t1"], []string{"ep1"})

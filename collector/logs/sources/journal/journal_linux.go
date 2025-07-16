@@ -26,6 +26,7 @@ type journalReader interface {
 	NextSkip(skip uint64) (uint64, error)
 	SeekHead() error
 	SeekCursor(cursor string) error
+	TestCursor(cursor string) error
 	Wait(timeout time.Duration) int
 	Close() error
 }

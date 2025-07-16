@@ -71,7 +71,9 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 		name := prompb.MetricName(v)
 
 		if f.ShouldDropMetric(v, name) {
-			metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+			if metrics.DebugMetricsEnabled {
+				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+			}
 			continue
 		}
 
@@ -85,7 +87,9 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 			}
 
 			if _, ok := f.AllowedDatabase[string(db)]; !ok {
-				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+				if metrics.DebugMetricsEnabled {
+					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+				}
 				continue
 			}
 		}

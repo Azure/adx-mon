@@ -2,6 +2,7 @@ package adxexporter
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -137,6 +138,9 @@ func TestShouldProcessMetricsExporter(t *testing.T) {
 			"env":    "prod",
 			"region": "us-east",
 		},
+		KustoClusters: map[string]string{
+			"test-db": "https://test-cluster.kusto.windows.net",
+		},
 	}
 
 	tests := []struct {
@@ -179,7 +183,7 @@ func TestShouldProcessMetricsExporter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := reconciler.shouldProcessMetricsExporter(tt.metricsExporter)
+			result := matchesCriteria(tt.metricsExporter.Spec.Criteria, reconciler.ClusterLabels)
 			assert.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -199,6 +203,8 @@ func TestReconcile(t *testing.T) {
 		clusterLabels       map[string]string
 		expectRequeue       bool
 		expectedRequeueTime time.Duration
+		setupMockResults    func(t *testing.T, mock *MockKustoExecutor) // Setup function for mock responses
+		expectedQueryCount  int                                         // Expected number of queries executed
 	}{
 		{
 			name: "successful reconciliation with matching criteria",
@@ -210,6 +216,12 @@ func TestReconcile(t *testing.T) {
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
+					Body:     "MyTable | project metric_name='test_metric', value=42.5, timestamp=now()",
+					Transform: adxmonv1.TransformConfig{
+						MetricNameColumn: "metric_name",
+						ValueColumns:     []string{"value"},
+						TimestampColumn:  "timestamp",
+					},
 					Criteria: map[string][]string{
 						"env": {"prod"},
 					},
@@ -220,6 +232,13 @@ func TestReconcile(t *testing.T) {
 			},
 			expectRequeue:       true,
 			expectedRequeueTime: time.Minute, // Minimum requeue interval
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// Return successful query results
+				mock.SetNextResult(t, [][]interface{}{
+					{"test_metric", 42.5, time.Now()},
+				})
+			},
+			expectedQueryCount: 1,
 		},
 		{
 			name: "successful reconciliation with longer interval",
@@ -231,6 +250,12 @@ func TestReconcile(t *testing.T) {
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 5 * time.Minute},
+					Body:     "MyTable | project metric_name='long_interval_metric', value=100.0",
+					Transform: adxmonv1.TransformConfig{
+						MetricNameColumn: "metric_name",
+						ValueColumns:     []string{"value"},
+						TimestampColumn:  "timestamp",
+					},
 					Criteria: map[string][]string{},
 				},
 			},
@@ -239,6 +264,13 @@ func TestReconcile(t *testing.T) {
 			},
 			expectRequeue:       true,
 			expectedRequeueTime: 5 * time.Minute,
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// Return successful query results
+				mock.SetNextResult(t, [][]interface{}{
+					{"long_interval_metric", 100.0, time.Now()},
+				})
+			},
+			expectedQueryCount: 1,
 		},
 		{
 			name: "skipped reconciliation due to non-matching criteria",
@@ -250,6 +282,11 @@ func TestReconcile(t *testing.T) {
 				Spec: adxmonv1.MetricsExporterSpec{
 					Database: "test-db",
 					Interval: metav1.Duration{Duration: 30 * time.Second},
+					Body:     "MyTable | project metric_name='skipped_metric', value=0",
+					Transform: adxmonv1.TransformConfig{
+						MetricNameColumn: "metric_name",
+						ValueColumns:     []string{"value"},
+					},
 					Criteria: map[string][]string{
 						"env": {"dev"},
 					},
@@ -260,6 +297,38 @@ func TestReconcile(t *testing.T) {
 			},
 			expectRequeue:       false,
 			expectedRequeueTime: 0,
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// No mock setup needed since query shouldn't execute
+			},
+			expectedQueryCount: 0, // No query should be executed due to criteria mismatch
+		},
+		{
+			name: "query execution failure",
+			metricsExporter: &adxmonv1.MetricsExporter{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-exporter-error",
+					Namespace: "default",
+				},
+				Spec: adxmonv1.MetricsExporterSpec{
+					Database: "test-db",
+					Interval: metav1.Duration{Duration: 30 * time.Second},
+					Body:     "InvalidTable | project invalid_query",
+					Transform: adxmonv1.TransformConfig{
+						ValueColumns: []string{"value"},
+					},
+					Criteria: map[string][]string{},
+				},
+			},
+			clusterLabels: map[string]string{
+				"env": "prod",
+			},
+			expectRequeue:       true,
+			expectedRequeueTime: time.Minute, // Still requeue even on error
+			setupMockResults: func(t *testing.T, mock *MockKustoExecutor) {
+				// Set up mock to return an error
+				mock.SetNextError(fmt.Errorf("table 'InvalidTable' not found"))
+			},
+			expectedQueryCount: 1, // Query should be attempted even if it fails
 		},
 	}
 
@@ -275,11 +344,29 @@ func TestReconcile(t *testing.T) {
 				WithObjects(objs...).
 				Build()
 
+			// Create mock Kusto client and set up expected results
+			mockKustoClient := NewMockKustoExecutor(t, "test-db", "https://test-cluster.kusto.windows.net")
+			if tt.setupMockResults != nil {
+				tt.setupMockResults(t, mockKustoClient)
+			}
+
+			// Create reconciler with mock QueryExecutors
 			reconciler := &MetricsExporterReconciler{
 				Client:        fakeClient,
 				Scheme:        s,
 				ClusterLabels: tt.clusterLabels,
+				KustoClusters: map[string]string{
+					"test-db": "https://test-cluster.kusto.windows.net",
+				},
+				QueryExecutors: map[string]*QueryExecutor{
+					"test-db": NewQueryExecutor(mockKustoClient),
+				},
+				EnableMetricsEndpoint: false, // Disable metrics to avoid initialization complexity
 			}
+
+			// Initialize the meter (this sets up r.Meter)
+			err := reconciler.exposeMetricsServer()
+			require.NoError(t, err)
 
 			req := reconcile.Request{
 				NamespacedName: types.NamespacedName{
@@ -296,6 +383,16 @@ func TestReconcile(t *testing.T) {
 				assert.Equal(t, tt.expectedRequeueTime, result.RequeueAfter)
 			} else {
 				assert.Equal(t, time.Duration(0), result.RequeueAfter, "Expected no requeue")
+			}
+
+			// Verify query execution
+			queries := mockKustoClient.GetQueries()
+			assert.Len(t, queries, tt.expectedQueryCount, "Unexpected number of queries executed")
+
+			if tt.expectedQueryCount > 0 {
+				// Verify that the query contains expected elements
+				query := queries[0]
+				assert.Contains(t, query, tt.metricsExporter.Spec.Body, "Query should contain the body from MetricsExporter spec")
 			}
 		})
 	}
@@ -317,6 +414,9 @@ func TestReconcile_NotFound(t *testing.T) {
 	reconciler := &MetricsExporterReconciler{
 		Client: fakeClient,
 		Scheme: s,
+		KustoClusters: map[string]string{
+			"test-db": "https://test-cluster.kusto.windows.net",
+		},
 	}
 
 	req := reconcile.Request{
@@ -358,9 +458,12 @@ func TestExposeMetrics(t *testing.T) {
 				EnableMetricsEndpoint: tt.enableMetricsEndpoint,
 				MetricsPort:           ":0", // Use random port to avoid conflicts
 				MetricsPath:           "/metrics",
+				KustoClusters: map[string]string{
+					"test-db": "https://test-cluster.kusto.windows.net",
+				},
 			}
 
-			err := reconciler.exposeMetrics()
+			err := reconciler.exposeMetricsServer()
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -373,4 +476,188 @@ func TestExposeMetrics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInitializeQueryExecutors(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		KustoClusters: map[string]string{
+			"existing-db": "https://cluster.kusto.windows.net",
+		},
+	}
+
+	// Test successful initialization
+	err := reconciler.initializeQueryExecutors()
+	if err != nil {
+		// If it fails, it should be due to Kusto client creation, not missing endpoint
+		assert.Contains(t, err.Error(), "failed to create Kusto client")
+	} else {
+		// If it succeeds, we should have executors for all databases
+		assert.NotNil(t, reconciler.QueryExecutors)
+		assert.Len(t, reconciler.QueryExecutors, 1)
+		assert.Contains(t, reconciler.QueryExecutors, "existing-db")
+	}
+
+	// Test direct access behavior - missing database
+	reconciler.QueryExecutors = map[string]*QueryExecutor{}
+	executor, exists := reconciler.QueryExecutors["missing-db"]
+	assert.False(t, exists)
+	assert.Nil(t, executor)
+}
+
+func TestTransformAndRegisterMetrics(t *testing.T) {
+	// Test the integration between transformation and metrics registration
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Create test MetricsExporter with transform configuration
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumns:      []string{"value"},
+				MetricNameColumn:  "metric_name",
+				TimestampColumn:   "timestamp",
+				LabelColumns:      []string{"label1", "label2"},
+				DefaultMetricName: "default_metric",
+			},
+		},
+	}
+
+	// Create test data that matches the transform configuration
+	rows := []map[string]any{
+		{
+			"metric_name": "test_metric_1",
+			"value":       42.5,
+			"timestamp":   time.Now(),
+			"label1":      "value1",
+			"label2":      "value2",
+		},
+		{
+			"metric_name": "test_metric_2",
+			"value":       100.0,
+			"timestamp":   time.Now(),
+			"label1":      "different_value",
+			"label2":      "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
+	// Test transformation when using default metric name (no metric name column)
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+
+	// Create MetricsExporter with default metric name (no MetricNameColumn)
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-default-metric",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumns:      []string{"value"},
+				TimestampColumn:   "timestamp",
+				LabelColumns:      []string{"label1", "label2"},
+				DefaultMetricName: "default_metric_name", // No MetricNameColumn specified
+			},
+		},
+	}
+
+	// Create test data without metric_name column
+	rows := []map[string]any{
+		{
+			"value":     42.5,
+			"timestamp": time.Now(),
+			"label1":    "value1",
+			"label2":    "value2",
+		},
+		{
+			"value":     100.0,
+			"timestamp": time.Now(),
+			"label1":    "different_value",
+			"label2":    "another_value",
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+}
+
+func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().Build(),
+		Scheme:                scheme.Scheme,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	// Initialize the metrics server to set up the meter
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+	require.NotNil(t, reconciler.Meter)
+
+	// Configure MetricsExporter with multiple value columns
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-exporter",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Database: "TestDB",
+			Body:     "TestQuery",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Transform: adxmonv1.TransformConfig{
+				MetricNamePrefix:  "app_",
+				DefaultMetricName: "default_metric",
+				ValueColumns:      []string{"cpu_usage", "memory_usage", "disk_usage"},
+				LabelColumns:      []string{"node_name"},
+				TimestampColumn:   "timestamp",
+			},
+		},
+	}
+
+	// Mock data with multiple value columns
+	rows := []map[string]interface{}{
+		{
+			"cpu_usage":    75.5,
+			"memory_usage": 85.2,
+			"disk_usage":   45.8,
+			"node_name":    "node-1",
+			"timestamp":    time.Now(),
+		},
+		{
+			"cpu_usage":    60.3,
+			"memory_usage": 70.1,
+			"disk_usage":   52.4,
+			"node_name":    "node-2",
+			"timestamp":    time.Now(),
+		},
+	}
+
+	// Execute transformation and registration
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
 }
