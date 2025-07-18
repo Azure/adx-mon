@@ -119,10 +119,20 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	// If the cluster already has an Endpoint, we assume it exists (either user-provided or previously created),
 	// so the create routine has no work left to do.
 	if cluster.Spec.Endpoint != "" {
-		if err := setClusterStatusCondition(ADXClusterWaitingReason, fmt.Sprintf("Waiting for ADX cluster %s", cluster.Name)); err != nil {
-			return ctrl.Result{}, err
+		c := metav1.Condition{
+			Type:               adxmonv1.ADXClusterConditionOwner,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: cluster.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             "ClusterReady",
+			Message:            fmt.Sprintf("Cluster %s is ready", cluster.Spec.ClusterName),
 		}
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+			if err := r.Status().Update(ctx, cluster); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+			}
+		}
+		return ctrl.Result{}, nil // Goal state reached, cluster is ready
 	}
 
 	// Ensure the ADX provider is registered for this subscription.
