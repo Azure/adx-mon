@@ -349,14 +349,6 @@ func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleLis
 	// Fetch all summary rules from storage
 	summaryRules := &v1.SummaryRuleList{}
 	if err := t.store.List(ctx, summaryRules); err != nil {
-		// Check if this is a duration parsing error and log it appropriately
-		errStr := err.Error()
-		if strings.Contains(errStr, "time: unknown unit") || strings.Contains(errStr, "duration") {
-			logger.Errorf("Failed to list summary rules due to invalid duration field in one or more rules: %v", err)
-			logger.Errorf("Please check and fix the duration fields (interval, ingestionDelay) in your SummaryRule CRDs to use valid Go duration format (e.g., '5m', '1h30m')")
-			// Return an empty list so we can continue processing other tasks
-			return &v1.SummaryRuleList{}, []AsyncOperationStatus{}, nil
-		}
 		return nil, nil, fmt.Errorf("failed to list summary rules: %w", err)
 	}
 
