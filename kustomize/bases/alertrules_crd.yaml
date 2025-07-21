@@ -40,8 +40,10 @@ spec:
             description: AlertRuleSpec defines the desired state of AlertRule
             properties:
               autoMitigateAfter:
-                pattern: ^[+-]?((\d*\.?\d+|\d+\.)(ns|us|μs|ms|s|m|h))+$
                 type: string
+                x-kubernetes-validations:
+                - message: autoMitigateAfter must be a valid duration
+                  rule: self == '' || duration(self) >= duration('0s')
               criteria:
                 additionalProperties:
                   items:
@@ -58,8 +60,10 @@ spec:
               destination:
                 type: string
               interval:
-                pattern: ^[+-]?((\d*\.?\d+|\d+\.)(ns|us|μs|ms|s|m|h))+$
                 type: string
+                x-kubernetes-validations:
+                - message: interval must be a valid positive duration
+                  rule: self == '' || duration(self) > duration('0s')
               query:
                 type: string
             type: object
