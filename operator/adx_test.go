@@ -727,3 +727,35 @@ func TestAzureSDKErrorHandling(t *testing.T) {
 		require.False(t, isResponseError, "Should not be able to cast generic error to azcore.ResponseError")
 	})
 }
+
+func TestDatabaseExists(t *testing.T) {
+	testutils.IntegrationTest(t)
+	ctx := context.Background()
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "adxmon-test",
+			Endpoint:    kustoContainer.ConnectionUrl(),
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "NetDefaultDB"},
+			},
+		},
+	}
+
+	// Test that the default database exists (NetDefaultDB is created by kustainer)
+	exists, err := databaseExists(ctx, cluster, "NetDefaultDB")
+	require.NoError(t, err)
+	require.True(t, exists, "NetDefaultDB should exist")
+
+	// Test that a non-existent database returns false
+	exists, err = databaseExists(ctx, cluster, "NonExistentDB")
+	require.NoError(t, err)
+	require.False(t, exists, "NonExistentDB should not exist")
+}

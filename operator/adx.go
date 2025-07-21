@@ -321,6 +321,56 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 	return true, nil // Cluster is ready
 }
 
+// databaseExists checks if a database exists in the Kusto cluster by querying .show databases
+func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseName string) (bool, error) {
+	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
+	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
+		// Enables kustainer integration testing
+		ep.WithDefaultAzureCredential()
+	}
+	client, err := kusto.New(ep)
+	if err != nil {
+		return false, fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+
+	q := kql.New(".show databases | where DatabaseName == '").AddUnsafe(databaseName).AddLiteral("' | count")
+
+	// Use any database for the management command - we'll use the first database or default to "master"
+	queryDatabase := "master"
+	if len(cluster.Spec.Databases) > 0 {
+		queryDatabase = cluster.Spec.Databases[0].DatabaseName
+	}
+
+	result, err := client.Mgmt(ctx, queryDatabase, q)
+	if err != nil {
+		return false, fmt.Errorf("failed to query Kusto databases: %w", err)
+	}
+	defer result.Stop()
+
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to retrieve databases: %w", errFinal)
+		}
+
+		var db DatabaseExistsRec
+		if err := row.ToStruct(&db); err != nil {
+			return false, fmt.Errorf("failed to parse database record: %w", err)
+		}
+		if db.Count > 0 {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // ensureDatabases creates databases if they do not exist, returns true if any were created
 func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azcore.TokenCredential) (bool, error) {
 	databasesClient, err := armkusto.NewDatabasesClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
@@ -336,6 +386,16 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 	}
 	var dbCreated bool
 	for _, db := range databases {
+		// First check if the database already exists using Kusto query
+		exists, err := databaseExists(ctx, cluster, db.DatabaseName)
+		if err != nil {
+			logger.Warnf("Failed to check if database %s exists using Kusto query: %v, falling back to ARM API", db.DatabaseName, err)
+		} else if exists {
+			logger.Infof("Database %s already exists in cluster %s", db.DatabaseName, cluster.Spec.ClusterName)
+			continue
+		}
+
+		// If database doesn't exist or we couldn't check, use ARM API to verify availability and create
 		available, err := databasesClient.CheckNameAvailability(
 			ctx,
 			cluster.Spec.Provision.ResourceGroup,
@@ -822,6 +882,10 @@ type TableRec struct {
 
 type DatabaseRec struct {
 	DatabaseName string `json:"DatabaseName"`
+}
+
+type DatabaseExistsRec struct {
+	Count int64 `kusto:"Count"`
 }
 
 type ADXClusterSchema struct {
