@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -305,6 +306,12 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 	} else {
 		resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 		if err != nil {
+			// Check if this is a 403 Forbidden error for an existing cluster
+			var respErr *azcore.ResponseError
+			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
+				logger.Warnf("ADXCluster %s: insufficient permissions to check existing cluster status (403 Forbidden), assuming cluster exists and is ready", cluster.Spec.ClusterName)
+				return true, nil // Assume the existing cluster is ready if we can't check it
+			}
 			return false, fmt.Errorf("failed to get cluster status: %w", err)
 		}
 		if resp.Properties == nil || resp.Properties.State == nil || *resp.Properties.State != armkusto.StateRunning {
@@ -426,6 +433,11 @@ type TableExists struct {
 func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
 	logger.Infof("ADXCluster %s: entering UpdateCluster phase", cluster.Spec.ClusterName)
 
+	// Note: This method handles existing Kusto clusters where the operator may not have full
+	// management permissions. When encountering 403 Forbidden errors from Azure APIs, the operator
+	// gracefully degrades to allow federation features to continue working while skipping
+	// cluster management operations that require elevated permissions.
+
 	// To accurately detect and reconcile user-driven changes to the cluster configuration (such as Sku, Tier, or UserAssignedIdentities),
 	// the operator stores a snapshot of the last-applied configuration. This allows the operator to distinguish between changes made
 	// via the CRD (which should be reconciled) and any modifications made directly in Azure (which are intentionally ignored).
@@ -468,6 +480,26 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	}
 	resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 	if err != nil {
+		// Check if this is a 403 Forbidden error, which is expected when the operator
+		// is managing existing clusters without sufficient permissions to read cluster details
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
+			logger.Warnf("ADXCluster %s: insufficient permissions to read cluster details (403 Forbidden), skipping cluster updates - operator can still perform federation tasks", cluster.Spec.ClusterName)
+			c := metav1.Condition{
+				Type:               adxmonv1.ADXClusterConditionOwner,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: cluster.GetGeneration(),
+				LastTransitionTime: metav1.Now(),
+				Reason:             "PermissionRestricted",
+				Message:            "Cluster management restricted due to insufficient permissions, federation features remain available",
+			}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				if err := r.Status().Update(ctx, cluster); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+				}
+			}
+			return ctrl.Result{}, nil // Non-terminal state, federation can still work
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 
@@ -527,6 +559,9 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
 	logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
 
+	// Note: Like UpdateCluster, this method handles 403 Forbidden errors gracefully
+	// to support federation scenarios with limited permissions.
+
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
@@ -538,6 +573,26 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 	resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 	if err != nil {
+		// Check if this is a 403 Forbidden error, which is expected when the operator
+		// is managing existing clusters without sufficient permissions to read cluster details
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
+			logger.Warnf("ADXCluster %s: insufficient permissions to check cluster status (403 Forbidden), assuming cluster is ready for federation tasks", cluster.Spec.ClusterName)
+			c := metav1.Condition{
+				Type:               adxmonv1.ADXClusterConditionOwner,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: cluster.GetGeneration(),
+				LastTransitionTime: metav1.Now(),
+				Reason:             "PermissionRestricted",
+				Message:            "Cluster status check restricted due to insufficient permissions, federation features remain available",
+			}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				if err := r.Status().Update(ctx, cluster); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+				}
+			}
+			return ctrl.Result{}, nil // Non-terminal state, federation can still work
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 	if resp.Properties == nil || resp.Properties.State == nil {
