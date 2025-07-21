@@ -32,8 +32,10 @@ type AlertRuleSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	Database          string          `json:"database,omitempty"`
+	// +kubebuilder:validation:Pattern=^[+-]?((\d*\.?\d+|\d+\.)(ns|us|μs|ms|s|m|h))+$
 	Interval          metav1.Duration `json:"interval,omitempty"`
 	Query             string          `json:"query,omitempty"`
+	// +kubebuilder:validation:Pattern=^[+-]?((\d*\.?\d+|\d+\.)(ns|us|μs|ms|s|m|h))+$
 	AutoMitigateAfter metav1.Duration `json:"autoMitigateAfter,omitempty"`
 	Destination       string          `json:"destination,omitempty"`
 
