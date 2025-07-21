@@ -51,11 +51,13 @@ type SummaryRuleSpec struct {
 	// Body is the KQL body of the function
 	Body string `json:"body"`
 	// Interval is the cadence at which the rule will be executed
+	// +kubebuilder:validation:Pattern=^[+-]?((\d*\.?\d+|\d+\.)(ns|us|μs|ms|s|m|h))+$
 	Interval metav1.Duration `json:"interval"`
 	// IngestionDelay is the delay to subtract from the execution window start and end times
 	// to account for data ingestion latency. This ensures the query processes data that has
 	// been fully ingested. If not specified, no delay is applied.
 	// +optional
+	// +kubebuilder:validation:Pattern=^[+-]?((\d*\.?\d+|\d+\.)(ns|us|μs|ms|s|m|h))+$
 	IngestionDelay *metav1.Duration `json:"ingestionDelay,omitempty"`
 
 	// Key/Value pairs used to determine when a summary rule can execute. If empty, always execute. Keys and values
