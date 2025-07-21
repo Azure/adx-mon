@@ -45,6 +45,8 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	logger.Infof("Reconciling ADXCluster %s/%s (generation %d)", req.Namespace, req.Name, cluster.GetGeneration())
+
 	if cluster.DeletionTimestamp != nil {
 		// Note, at this time we are not going to delete any Azure resources.
 		logger.Infof("Cluster %s is being deleted", cluster.Spec.ClusterName)
@@ -55,18 +57,22 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	switch {
 	case condition == nil:
 		// First time reconciliation
+		logger.Infof("ADXCluster %s: first-time reconciliation (no existing condition)", cluster.Spec.ClusterName)
 		return r.CreateCluster(ctx, &cluster)
 
 	case condition.ObservedGeneration != cluster.GetGeneration():
 		// CRD updated
+		logger.Infof("ADXCluster %s: CRD updated (generation %d -> %d)", cluster.Spec.ClusterName, condition.ObservedGeneration, cluster.GetGeneration())
 		return r.UpdateCluster(ctx, &cluster)
 
 	case condition.Reason == ADXClusterCreatingReason:
 		// Cluster is still being configured.
+		logger.Infof("ADXCluster %s: continuing cluster creation process", cluster.Spec.ClusterName)
 		return r.CreateCluster(ctx, &cluster)
 
 	case condition.Reason == ADXClusterWaitingReason:
 		// Check the status of the cluster
+		logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
 		return r.CheckStatus(ctx, &cluster)
 	}
 
@@ -74,11 +80,15 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	if meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) && cluster.Spec.Role != nil {
 		switch *cluster.Spec.Role {
 		case adxmonv1.ClusterRolePartition:
+			logger.Infof("ADXCluster %s: executing partition cluster heartbeat", cluster.Spec.ClusterName)
 			return r.HeartbeatFederatedClusters(ctx, &cluster)
 		case adxmonv1.ClusterRoleFederated:
+			logger.Infof("ADXCluster %s: executing federated cluster reconciliation", cluster.Spec.ClusterName)
 			return r.FederateClusters(ctx, &cluster)
 		}
 	}
+
+	logger.Infof("ADXCluster %s: reconciliation complete (no action needed)", cluster.Spec.ClusterName)
 
 	return ctrl.Result{}, nil
 }
@@ -90,7 +100,10 @@ func (r *AdxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	logger.Infof("ADXCluster %s: entering CreateCluster phase", cluster.Spec.ClusterName)
+
 	setClusterStatusCondition := func(reason, message string) error {
+		logger.Infof("ADXCluster %s: updating status - %s: %s", cluster.Spec.ClusterName, reason, message)
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionUnknown,
@@ -119,6 +132,7 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	// If the cluster already has an Endpoint, we assume it exists (either user-provided or previously created),
 	// so the create routine has no work left to do.
 	if cluster.Spec.Endpoint != "" {
+		logger.Infof("ADXCluster %s: endpoint already exists (%s), marking as ready", cluster.Spec.ClusterName, cluster.Spec.Endpoint)
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionTrue,
@@ -145,44 +159,53 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to ensure Kusto provider is registered: %w", err)
 	}
 	if !registered {
+		logger.Infof("ADXCluster %s: waiting for provider registration, requeuing in 5 minutes", cluster.Spec.ClusterName)
 		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", cluster.Spec.Provision.SubscriptionId))
 		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
+	logger.Infof("ADXCluster %s: ensuring resource group", cluster.Spec.ClusterName)
 	if err := ensureResourceGroup(ctx, cluster, cred); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	logger.Infof("ADXCluster %s: creating or updating Kusto cluster", cluster.Spec.ClusterName)
 	clusterReady, err := createOrUpdateKustoCluster(ctx, cluster, cred)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if !clusterReady {
 		// We must wait for the cluster to be in a ready state before we can continue configuration.
+		logger.Infof("ADXCluster %s: cluster not ready yet, requeuing in 1 minute", cluster.Spec.ClusterName)
 		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName))
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
+	logger.Infof("ADXCluster %s: ensuring databases", cluster.Spec.ClusterName)
 	dbCreated, err := ensureDatabases(ctx, cluster, cred)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if dbCreated {
 		// Wait for databases to be created.
+		logger.Infof("ADXCluster %s: databases created, requeuing in 1 minute", cluster.Spec.ClusterName)
 		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName))
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	_ = setClusterStatusCondition(ADXClusterWaitingReason, "Provisioning ADX clusters")
 
+	logger.Infof("ADXCluster %s: ensuring heartbeat table", cluster.Spec.ClusterName)
 	tblCreated, err := ensureHeartbeatTable(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if tblCreated {
 		// Tables are created synchronously, no waiting is necessary.
+		logger.Infof("ADXCluster %s: heartbeat table created", cluster.Spec.ClusterName)
 		_ = setClusterStatusCondition(ADXClusterCreatingReason, "Provisioned Heartbeat Table")
 	}
 
+	logger.Infof("ADXCluster %s: CreateCluster phase complete, requeuing in 1 minute", cluster.Spec.ClusterName)
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
@@ -401,12 +424,15 @@ type TableExists struct {
 }
 
 func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	logger.Infof("ADXCluster %s: entering UpdateCluster phase", cluster.Spec.ClusterName)
+
 	// To accurately detect and reconcile user-driven changes to the cluster configuration (such as Sku, Tier, or UserAssignedIdentities),
 	// the operator stores a snapshot of the last-applied configuration. This allows the operator to distinguish between changes made
 	// via the CRD (which should be reconciled) and any modifications made directly in Azure (which are intentionally ignored).
 	// By comparing the current CRD spec to the stored applied state, we can determine exactly which fields the user has updated
 	// and ensure only those changes are propagated to the managed cluster.
 	if cluster.Spec.Provision == nil {
+		logger.Infof("ADXCluster %s: no provision spec, marking as complete", cluster.Spec.ClusterName)
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionTrue,
@@ -445,12 +471,14 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 
+	logger.Infof("ADXCluster %s: checking for cluster configuration changes", cluster.Spec.ClusterName)
 	clusterUpdate, updated := diffSkus(resp, appliedProvisionState, cluster)
 	if diffIdentities(resp, appliedProvisionState, cluster, &clusterUpdate) {
 		updated = true
 	}
 
 	if !updated {
+		logger.Infof("ADXCluster %s: no updates needed, marking as complete", cluster.Spec.ClusterName)
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionTrue,
@@ -467,6 +495,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, nil // Terminal state, cluster is up-to-date
 	}
 
+	logger.Infof("ADXCluster %s: applying cluster updates", cluster.Spec.ClusterName)
 	_, err = clustersClient.BeginCreateOrUpdate(
 		ctx,
 		cluster.Spec.Provision.ResourceGroup,
@@ -478,6 +507,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to update Kusto cluster: %w", err)
 	}
 
+	logger.Infof("ADXCluster %s: cluster update initiated, requeuing in 1 minute", cluster.Spec.ClusterName)
 	c := metav1.Condition{
 		Type:               adxmonv1.ADXClusterConditionOwner,
 		Status:             metav1.ConditionUnknown,
@@ -495,6 +525,8 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 }
 
 func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
+	logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
+
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
@@ -509,11 +541,15 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 	if resp.Properties == nil || resp.Properties.State == nil {
+		logger.Infof("ADXCluster %s: cluster properties not available yet, requeuing in 1 minute", cluster.Spec.ClusterName)
 		return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
 	}
 
+	logger.Infof("ADXCluster %s: cluster state is %s", cluster.Spec.ClusterName, string(*resp.Properties.State))
+
 	// If the cluster is running, we're done
 	if *resp.Properties.State == armkusto.StateRunning {
+		logger.Infof("ADXCluster %s: cluster is running, marking as ready", cluster.Spec.ClusterName)
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionTrue,
@@ -541,6 +577,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 
 	// If the cluster has failed to provision, we're done
 	if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == armkusto.ProvisioningStateFailed {
+		logger.Errorf("ADXCluster %s: cluster provisioning failed", cluster.Spec.ClusterName)
 		c := metav1.Condition{
 			Type:               adxmonv1.ADXClusterConditionOwner,
 			Status:             metav1.ConditionFalse,
@@ -558,6 +595,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 
 	// For all other states, we can safely continue to wait
+	logger.Infof("ADXCluster %s: cluster not ready yet (state: %s), requeuing in 1 minute", cluster.Spec.ClusterName, string(*resp.Properties.State))
 	return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
 }
 
@@ -570,6 +608,7 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 		return ctrl.Result{}, nil
 	}
 
+	logger.Infof("ADXCluster %s: sending heartbeats to %d federated clusters", cluster.Spec.ClusterName, len(cluster.Spec.Federation.FederationTargets))
 	for _, target := range cluster.Spec.Federation.FederationTargets {
 		if err := heartbeatFederatedCluster(ctx, cluster, target); err != nil {
 			logger.Errorf("Failed to heartbeat federated cluster %s: %v", target.Endpoint, err)
@@ -577,6 +616,7 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 		}
 		logger.Infof("Heartbeat sent to federated cluster %s", target.Endpoint)
 	}
+	logger.Infof("ADXCluster %s: heartbeat cycle complete, requeuing in 10 minutes", cluster.Spec.ClusterName)
 	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 }
 
@@ -744,6 +784,8 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, nil
 	}
 
+	logger.Infof("ADXCluster %s: starting federation reconciliation", cluster.Spec.ClusterName)
+
 	// Step 1: Create Kusto client
 	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
 	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
@@ -761,6 +803,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	}
 
 	// Step 3: Query heartbeat table
+	logger.Infof("ADXCluster %s: querying heartbeat table for federation data", cluster.Spec.ClusterName)
 	rows, err := queryHeartbeatTable(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to query heartbeat table: %w", err)
@@ -768,6 +811,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 
 	// Step 4: Parse result
 	schemaByEndpoint, _ := parseHeartbeatRows(rows)
+	logger.Infof("ADXCluster %s: processed heartbeat data from %d partition clusters", cluster.Spec.ClusterName, len(schemaByEndpoint))
 
 	// Step 5: Unique list of databases
 	dbSet := extractDatabasesFromSchemas(schemaByEndpoint)
@@ -775,6 +819,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	for db := range dbSet {
 		dbSpecs = append(dbSpecs, adxmonv1.ADXClusterDatabaseSpec{DatabaseName: db})
 	}
+	logger.Infof("ADXCluster %s: ensuring %d databases exist for federation", cluster.Spec.ClusterName, len(dbSpecs))
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
@@ -792,14 +837,17 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
 
 	// Step 8/9: For each database, split scripts and execute
+	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
 	const maxScriptSize = 1024 * 1024 // 1MB
 	for db, funcs := range funcsByDB {
+		logger.Infof("ADXCluster %s: executing %d functions for database %s", cluster.Spec.ClusterName, len(funcs), db)
 		scripts := splitKustoScripts(funcs, maxScriptSize)
 		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to execute Kusto scripts for db %s: %w", db, err)
 		}
 	}
 
+	logger.Infof("ADXCluster %s: federation reconciliation complete, requeuing in 10 minutes", cluster.Spec.ClusterName)
 	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
 }
 
