@@ -333,7 +333,8 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseN
 		return false, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
 
-	q := kql.New(".show databases | where DatabaseName == '").AddUnsafe(databaseName).AddLiteral("' | count")
+	q := kql.New(".show databases | where DatabaseName == ParamDatabaseName | count")
+	params := kql.NewParameters().AddString("ParamDatabaseName", databaseName)
 
 	// Use any database for the management command - we'll use the first database or default to "master"
 	queryDatabase := "master"
@@ -341,9 +342,9 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseN
 		queryDatabase = cluster.Spec.Databases[0].DatabaseName
 	}
 
-	result, err := client.Mgmt(ctx, queryDatabase, q)
+	result, err := client.Mgmt(ctx, queryDatabase, q, kusto.QueryParameters(params))
 	if err != nil {
-		return false, fmt.Errorf("failed to query Kusto databases: %w", err)
+		return false, fmt.Errorf("failed to check database existence: %w", err)
 	}
 	defer result.Stop()
 

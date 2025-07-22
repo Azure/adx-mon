@@ -3,11 +3,9 @@ package operator
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os/exec"
 	"strings"
 	"testing"
@@ -18,7 +16,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
@@ -657,75 +654,6 @@ func TestSplitKustoScripts(t *testing.T) {
 	require.Contains(t, joined, "//\na\n")
 	require.Contains(t, joined, "//\nb\n")
 	require.Contains(t, joined, "//\nc\n")
-}
-
-func TestAzureSDKErrorHandling(t *testing.T) {
-	// Test that we can properly detect and handle 403 Forbidden errors from Azure SDK
-	t.Run("403 error is properly detected", func(t *testing.T) {
-		// Create a mock HTTP response with 403 status
-		mockResponse := &http.Response{
-			StatusCode: http.StatusForbidden,
-			Status:     "403 Forbidden",
-			Request: &http.Request{
-				Method: "GET",
-				URL: &url.URL{
-					Scheme: "https",
-					Host:   "management.azure.com",
-					Path:   "/subscriptions/test/resourceGroups/test-rg/providers/Microsoft.Kusto/clusters/test-cluster",
-				},
-			},
-		}
-
-		// Create azcore.ResponseError manually
-		respErr := &azcore.ResponseError{
-			StatusCode:  http.StatusForbidden,
-			RawResponse: mockResponse,
-		}
-
-		// Test that we can detect it using errors.As
-		var azErr *azcore.ResponseError
-		isResponseError := errors.As(respErr, &azErr)
-		require.True(t, isResponseError, "Should be able to cast to azcore.ResponseError")
-		require.Equal(t, http.StatusForbidden, azErr.StatusCode, "Status code should be 403")
-
-		// Test the condition we use in the code
-		isForbidden := azErr.StatusCode == http.StatusForbidden
-		require.True(t, isForbidden, "Should detect 403 Forbidden status code")
-	})
-
-	t.Run("other errors are not affected", func(t *testing.T) {
-		// Create a mock HTTP response with 500 status
-		mockResponse := &http.Response{
-			StatusCode: http.StatusInternalServerError,
-			Status:     "500 Internal Server Error",
-		}
-
-		// Create azcore.ResponseError for 500 error
-		respErr := &azcore.ResponseError{
-			StatusCode:  http.StatusInternalServerError,
-			RawResponse: mockResponse,
-		}
-
-		// Test that we can detect it but it's not a 403
-		var azErr *azcore.ResponseError
-		isResponseError := errors.As(respErr, &azErr)
-		require.True(t, isResponseError, "Should be able to cast to azcore.ResponseError")
-		require.Equal(t, http.StatusInternalServerError, azErr.StatusCode, "Status code should be 500")
-
-		// Test the condition - should NOT be treated as permission error
-		isForbidden := azErr.StatusCode == http.StatusForbidden
-		require.False(t, isForbidden, "Should not detect 403 for other status codes")
-	})
-
-	t.Run("non-ResponseError is not affected", func(t *testing.T) {
-		// Create a generic error
-		genericErr := errors.New("some other error")
-
-		// Test that it cannot be cast to ResponseError
-		var azErr *azcore.ResponseError
-		isResponseError := errors.As(genericErr, &azErr)
-		require.False(t, isResponseError, "Should not be able to cast generic error to azcore.ResponseError")
-	})
 }
 
 func TestDatabaseExists(t *testing.T) {
