@@ -330,10 +330,10 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		}
 
 		// Handle rule execution logic (timing evaluation and submission)
-		err := t.handleRuleExecution(timeoutCtx, &rule)
+		operationId, err := t.handleRuleExecution(timeoutCtx, &rule)
 
 		// Process any outstanding async operations for this rule
-		t.trackAsyncOperations(timeoutCtx, &rule, kustoAsyncOperations)
+		t.trackAsyncOperations(timeoutCtx, &rule, kustoAsyncOperations, operationId)
 
 		// Update the rule's primary status condition
 		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
@@ -386,8 +386,8 @@ func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
 // handleRuleExecution handles the execution logic for a single summary rule.
 // It evaluates whether the rule should be submitted based on its interval and timing,
 // and if so, submits the rule as an async operation to Kusto.
-// Returns any submission error that occurred.
-func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) error {
+// Returns the operation id and any submission error that occurred.
+func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.SummaryRule) (string, error) {
 	// Get the current condition of the rule
 	cnd := rule.GetCondition()
 	if cnd == nil {
@@ -401,6 +401,8 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	// Calculate the next execution window based on the last successful execution
 	windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
 
+	var operationId string
+	var err error
 	if rule.ShouldSubmitRule(nil) {
 		// Subtract 1 tick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
 		// from endTime for the query to avoid boundary issues while keeping the original
@@ -413,22 +415,27 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 			StartTime: windowStartTime.Format(time.RFC3339Nano),
 			EndTime:   queryEndTime.Format(time.RFC3339Nano),
 		}
-		operationId, err := t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
+		operationId, err = t.SubmitRule(ctx, *rule, asyncOp.StartTime, asyncOp.EndTime)
 		asyncOp.OperationId = operationId
 		rule.SetAsyncOperation(asyncOp)
 		rule.SetLastExecutionTime(windowEndTime)
 
 		if err != nil {
-			return fmt.Errorf("failed to submit rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
+			return "", fmt.Errorf("failed to submit rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 		}
 	}
 
-	return nil
+	return operationId, nil
 }
 
-func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus) {
+func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus, currentExecutionOperationId string) {
 	operations := rule.GetAsyncOperations()
 	for _, op := range operations {
+		// If the operation is from the current execution, we can skip it.
+		if currentExecutionOperationId != "" && op.OperationId == currentExecutionOperationId {
+			logger.Debugf("Skipping current execution operation %s for rule %s.%s", op.OperationId, rule.Spec.Database, rule.Name)
+			continue
+		}
 
 		// Check for backlog operations, or those that failed to be submitted. We need to attempt
 		// executing these so that we don't skip any windows.

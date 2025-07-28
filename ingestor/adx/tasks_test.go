@@ -2101,3 +2101,87 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	}
 	require.True(t, retryOpFound, "Retry operation should be present in final operations")
 }
+
+func TestSummaryRuleCurrentExecutionOperationSkipping(t *testing.T) {
+	// This test verifies the fix for a bug where a summary rule that hadn't run for a while
+	// would create a new operation in handleRuleExecution(), but then immediately process
+	// and remove that same operation in trackAsyncOperations() due to stale cleanup logic.
+	// The fix ensures operations from the current execution are skipped in trackAsyncOperations.
+
+	// Create a summary rule with an old last execution time to simulate a stale rule
+	rule := &v1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "stale-rule",
+			Generation: 1,
+		},
+		Spec: v1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestTable",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestBody",
+		},
+	}
+
+	// Set a condition with an old timestamp to simulate a rule that hasn't run for a while
+	oldTime := time.Now().Add(-50 * time.Hour) // Older than the 24h window
+	rule.SetLastExecutionTime(oldTime)
+
+	// Add an old async operation that should be considered stale
+	oldOperation := v1.AsyncOperation{
+		OperationId: "old-operation-123",
+		StartTime:   oldTime.Add(-1 * time.Hour).Format(time.RFC3339Nano),
+		EndTime:     oldTime.Format(time.RFC3339Nano),
+	}
+	rule.SetAsyncOperation(oldOperation)
+
+	mockHandler := &mockCRDHandler{
+		listResponse: &v1.SummaryRuleList{Items: []v1.SummaryRule{*rule}},
+	}
+
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+
+	var submitCalls []string
+
+	task := &SummaryRuleTask{
+		store:    mockHandler,
+		kustoCli: mockExecutor,
+	}
+
+	// Track when operations are submitted
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		operationId := "new-operation-456"
+		submitCalls = append(submitCalls, operationId)
+		t.Logf("SubmitRule called, returning operationId: %s", operationId)
+		return operationId, nil
+	}
+
+	// Return empty Kusto operations to simulate the new operation not yet appearing in Kusto
+	task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
+		return []AsyncOperationStatus{}, nil
+	}
+
+	// Store initial operations count before running
+	initialOperations := rule.GetAsyncOperations()
+	require.Len(t, initialOperations, 1, "Should start with the old operation")
+
+	// Run the task
+	err := task.Run(context.Background())
+	require.NoError(t, err)
+
+	// Verify that a new operation was submitted
+	require.Len(t, submitCalls, 1, "Should have submitted exactly one new operation")
+	require.Equal(t, "new-operation-456", submitCalls[0])
+
+	// Verify the final state: old operation should be removed, new operation should remain
+	finalOperations := rule.GetAsyncOperations()
+	require.Len(t, finalOperations, 1, "Should have exactly one operation remaining")
+	require.Equal(t, "new-operation-456", finalOperations[0].OperationId, "Current execution operation should remain")
+
+	// Verify that the old stale operation was removed
+	for _, finalOp := range finalOperations {
+		require.NotEqual(t, "old-operation-123", finalOp.OperationId, "Old stale operation should have been removed")
+	}
+}
