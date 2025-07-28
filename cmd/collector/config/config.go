@@ -460,7 +460,7 @@ func (j *JournalTarget) Validate() error {
 
 type TailTarget struct {
 	FilePath string           `toml:"file-path" comment:"The path to the file to tail."`
-	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, plain."`
+	LogType  sourceparse.Type `toml:"log-type" comment:"The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, cri, kubernetes, plain, or unset."`
 	Database string           `toml:"database" comment:"Database to store logs in."`
 	Table    string           `toml:"table" comment:"Table to store logs in."`
 	Parsers  []string         `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`

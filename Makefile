@@ -55,6 +55,10 @@ clean:
 	rm bin/*
 .PHONY: clean
 
+gendocs:
+	go run tools/docgen/config/config.go
+.PHONY: gendocs
+
 test:
 	ENABLE_ASSERTIONS=true INTEGRATION=1 go test -timeout 30m ./...
 .PHONY: test
