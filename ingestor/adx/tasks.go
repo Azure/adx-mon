@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 )
 
 type TableDetail struct {
@@ -244,6 +245,7 @@ type SummaryRuleTask struct {
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 	ClusterLabels map[string]string
+	Clock         clock.Clock
 }
 
 func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *SummaryRuleTask {
@@ -251,6 +253,7 @@ func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, cl
 		store:         store,
 		kustoCli:      kustoCli,
 		ClusterLabels: clusterLabels,
+		Clock:         clock.RealClock{},
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
@@ -332,6 +335,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Handle rule execution logic (timing evaluation and submission)
 		err := t.handleRuleExecution(timeoutCtx, &rule)
 
+		// Process any backlog operations for this rule
+		rule.BackfillAsyncOperations(t.Clock)
+
 		// Process any outstanding async operations for this rule
 		t.trackAsyncOperations(timeoutCtx, &rule, kustoAsyncOperations)
 
@@ -394,14 +400,14 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 		// For first-time execution, initialize the condition with a timestamp
 		// that's one interval back from current time
 		cnd = &metav1.Condition{
-			LastTransitionTime: metav1.Time{Time: time.Now().Add(-rule.Spec.Interval.Duration)},
+			LastTransitionTime: metav1.Time{Time: t.Clock.Now().Add(-rule.Spec.Interval.Duration)},
 		}
 	}
 
 	// Calculate the next execution window based on the last successful execution
-	windowStartTime, windowEndTime := rule.NextExecutionWindow(nil)
+	windowStartTime, windowEndTime := rule.NextExecutionWindow(t.Clock)
 
-	if rule.ShouldSubmitRule(nil) {
+	if rule.ShouldSubmitRule(t.Clock) {
 		// Subtract 1 tick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
 		// from endTime for the query to avoid boundary issues while keeping the original
 		// windowEndTime for status tracking. This allows users to use `between(_startTime .. _endTime)`

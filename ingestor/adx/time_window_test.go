@@ -9,11 +9,57 @@ import (
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// FakeClock implements clock.Clock for testing
+type FakeClock struct {
+	time time.Time
+}
+
+func NewFakeClock(t time.Time) *FakeClock {
+	return &FakeClock{time: t}
+}
+
+func (f *FakeClock) Now() time.Time {
+	return f.time
+}
+
+func (f *FakeClock) Since(ts time.Time) time.Duration {
+	return f.time.Sub(ts)
+}
+
+func (f *FakeClock) Until(ts time.Time) time.Duration {
+	return ts.Sub(f.time)
+}
+
+func (f *FakeClock) NewTimer(d time.Duration) clock.Timer {
+	return clock.RealClock{}.NewTimer(d)
+}
+
+func (f *FakeClock) NewTicker(d time.Duration) clock.Ticker {
+	return clock.RealClock{}.NewTicker(d)
+}
+
+func (f *FakeClock) Sleep(d time.Duration) {
+	f.time = f.time.Add(d)
+}
+
+func (f *FakeClock) After(d time.Duration) <-chan time.Time {
+	return clock.RealClock{}.After(d)
+}
+
+func (f *FakeClock) Tick(d time.Duration) <-chan time.Time {
+	return clock.RealClock{}.Tick(d)
+}
+
 func TestTimeWindowCalculation(t *testing.T) {
 	t.Run("first execution calculates correct time window", func(t *testing.T) {
+		// Use a fixed time for deterministic testing
+		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
+		fakeClock := NewFakeClock(fixedTime)
+
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -41,10 +87,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Create task
+		// Create task with fake clock
 		task := &SummaryRuleTask{
 			store:    mockHandler,
 			kustoCli: mockExecutor,
+			Clock:    fakeClock,
 		}
 
 		// Mock GetOperations to return empty (no ongoing operations)
@@ -88,6 +135,10 @@ func TestTimeWindowCalculation(t *testing.T) {
 	})
 
 	t.Run("subsequent execution uses last successful end time as start time", func(t *testing.T) {
+		// Set a fixed time that's well in the future from the last execution time
+		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
+		fakeClock := NewFakeClock(fixedTime)
+
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -101,8 +152,9 @@ func TestTimeWindowCalculation(t *testing.T) {
 			},
 		}
 
-		// Set a last successful execution time
-		lastSuccessfulEndTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+		// Set a last successful execution time that's in the past relative to our fake clock
+		// Use exactly 1 hour ago to test normal subsequent execution without backfill
+		lastSuccessfulEndTime := fixedTime.Add(-1 * time.Hour).UTC().Truncate(rule.Spec.Interval.Duration)
 		rule.SetLastExecutionTime(lastSuccessfulEndTime)
 
 		// Add a condition to simulate a previous execution
@@ -125,10 +177,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Create task
+		// Create task with fake clock
 		task := &SummaryRuleTask{
 			store:    mockHandler,
 			kustoCli: mockExecutor,
+			Clock:    fakeClock,
 		}
 
 		// Mock GetOperations to return empty
@@ -137,10 +190,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Mock SubmitRule to track the time windows
-		var capturedStartTime, capturedEndTime string
+		var submissionCalls []struct {
+			startTime, endTime string
+		}
 		task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
-			capturedStartTime = startTime
-			capturedEndTime = endTime
+			submissionCalls = append(submissionCalls, struct {
+				startTime, endTime string
+			}{startTime, endTime})
 			return "test-operation-id", nil
 		}
 
@@ -148,14 +204,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 		err := task.Run(context.Background())
 		require.NoError(t, err)
 
-		// Verify the time windows
-		require.NotEmpty(t, capturedStartTime)
-		require.NotEmpty(t, capturedEndTime)
+		// Verify that we got exactly one submission
+		require.Len(t, submissionCalls, 1, "Expected exactly one rule submission")
 
 		// Parse the times
-		startTime, err := time.Parse(time.RFC3339Nano, capturedStartTime)
+		startTime, err := time.Parse(time.RFC3339Nano, submissionCalls[0].startTime)
 		require.NoError(t, err)
-		endTime, err := time.Parse(time.RFC3339Nano, capturedEndTime)
+		endTime, err := time.Parse(time.RFC3339Nano, submissionCalls[0].endTime)
 		require.NoError(t, err)
 
 		// Verify start time matches the last successful end time
@@ -170,6 +225,10 @@ func TestTimeWindowCalculation(t *testing.T) {
 	})
 
 	t.Run("execution time is updated when shouldSubmitRule is true", func(t *testing.T) {
+		// Use a fixed time for deterministic testing
+		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
+		fakeClock := NewFakeClock(fixedTime)
+
 		// Create a rule with no prior execution history
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -184,10 +243,9 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Set a condition with an old LastTransitionTime to allow new submissions
-		// Using a fixed timestamp for deterministic testing
-		fixedTime := time.Date(2024, 6, 17, 8, 0, 0, 0, time.UTC)
+		// Using a time that's far enough in the past relative to our fake clock
 		rule.SetCondition(metav1.Condition{
-			LastTransitionTime: metav1.Time{Time: fixedTime},
+			LastTransitionTime: metav1.Time{Time: fixedTime.Add(-2 * time.Hour)},
 			Status:             metav1.ConditionTrue,
 		})
 
@@ -205,10 +263,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Create task
+		// Create task with fake clock
 		task := &SummaryRuleTask{
 			store:    mockHandler,
 			kustoCli: mockExecutor,
+			Clock:    fakeClock,
 		}
 
 		// Mock GetOperations to return empty (no ongoing operations)
@@ -253,6 +312,10 @@ func TestTimeWindowCalculation(t *testing.T) {
 	})
 
 	t.Run("prevents gaps and overlaps in time windows", func(t *testing.T) {
+		// Use a fixed time for deterministic testing
+		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
+		fakeClock := NewFakeClock(fixedTime)
+
 		// Create a rule with 30-minute interval
 		rule := &v1.SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -266,8 +329,8 @@ func TestTimeWindowCalculation(t *testing.T) {
 			},
 		}
 
-		// Simulate first execution completed successfully
-		firstWindowStart := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+		// Simulate first execution completed successfully - should be close to the fake time
+		firstWindowStart := time.Date(2025, 6, 17, 7, 30, 0, 0, time.UTC)
 		firstWindowEnd := firstWindowStart.Add(30 * time.Minute)
 		rule.SetLastExecutionTime(firstWindowEnd)
 
@@ -291,10 +354,11 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Create task
+		// Create task with fake clock
 		task := &SummaryRuleTask{
 			store:    mockHandler,
 			kustoCli: mockExecutor,
+			Clock:    fakeClock,
 		}
 
 		// Mock GetOperations to return empty
