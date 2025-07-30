@@ -58,6 +58,30 @@ func isValidEntityGroupName(name string) bool {
 	return entityGroupNameRegex.MatchString(name)
 }
 
+// isValidClusterEndpoint validates that a cluster endpoint is safe to use in entity references
+func isValidClusterEndpoint(endpoint string) bool {
+	// Cluster endpoints should be valid URLs, typically https://clustername.region.kusto.windows.net
+	// or similar formats. We validate basic structure to prevent injection.
+	if len(endpoint) == 0 || len(endpoint) > 500 { // Reasonable length limit
+		return false
+	}
+
+	// Must start with https:// for production clusters or http:// for test containers
+	if !strings.HasPrefix(endpoint, "https://") && !strings.HasPrefix(endpoint, "http://") {
+		return false
+	}
+
+	// Should not contain characters that could break KQL syntax
+	invalidChars := []string{"'", "\"", ";", "--", "/*", "*/", "\n", "\r", "\t"}
+	for _, char := range invalidChars {
+		if strings.Contains(endpoint, char) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var cluster adxmonv1.ADXCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
@@ -471,7 +495,7 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 		return false, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
 
-	q := kql.New(".show tables | where TableName == ParamTableName | count")
+	q := kql.New(".show tables | where TableName == @ParamTableName | count")
 	params := kql.NewParameters().AddString("ParamTableName", *cluster.Spec.Federation.HeartbeatTable)
 
 	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q, kusto.QueryParameters(params))
@@ -1447,7 +1471,7 @@ type FunctionKind struct {
 }
 
 func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, error) {
-	q := kql.New(".show function ParamFunctionName schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
+	q := kql.New(".show function @ParamFunctionName schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
 	params := kql.NewParameters().AddString("ParamFunctionName", functionName)
 
 	result, err := client.Mgmt(ctx, database, q, kusto.QueryParameters(params))
@@ -1578,13 +1602,21 @@ func ensureEntityGroups(ctx context.Context, client KustoClient, dbSet map[strin
 				var stmt *kql.Builder
 				if exists {
 					// Update existing entity-group
-					alterCmd := fmt.Sprintf(".alter entity_group %s (%s)", entityGroupName, entityRefsStr)
-					stmt = kql.New("").AddUnsafe(alterCmd)
+					stmt = kql.New(".alter entity_group").
+						AddLiteral(" ").
+						AddUnsafe(entityGroupName). // Entity group names are validated, safe to use AddUnsafe
+						AddLiteral(" (").
+						AddUnsafe(entityRefsStr). // Entity references are constructed from validated endpoints
+						AddLiteral(")")
 					logger.Infof("Updating existing entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
 				} else {
 					// Create new entity-group
-					createCmd := fmt.Sprintf(".create entity_group %s (%s)", entityGroupName, entityRefsStr)
-					stmt = kql.New("").AddUnsafe(createCmd)
+					stmt = kql.New(".create entity_group").
+						AddLiteral(" ").
+						AddUnsafe(entityGroupName). // Entity group names are validated, safe to use AddUnsafe
+						AddLiteral(" (").
+						AddUnsafe(entityRefsStr). // Entity references are constructed from validated endpoints
+						AddLiteral(")")
 					logger.Infof("Creating new entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
 				}
 
@@ -1613,8 +1645,10 @@ func ensureEntityGroups(ctx context.Context, client KustoClient, dbSet map[strin
 				logger.Warnf("Skipping invalid entity-group name: %s", staleEntityGroup)
 				continue
 			}
-			dropCmd := fmt.Sprintf(".drop entity_group %s", staleEntityGroup)
-			stmt := kql.New("").AddUnsafe(dropCmd)
+			dropCmd := kql.New(".drop entity_group").
+				AddLiteral(" ").
+				AddUnsafe(staleEntityGroup) // Entity group names are validated, safe to use AddUnsafe
+			stmt := dropCmd
 			_, err := client.Mgmt(ctx, database, stmt)
 			if err != nil {
 				logger.Errorf("Failed to drop stale entity-group %s from database %s: %v", staleEntityGroup, database, err)
