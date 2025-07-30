@@ -116,7 +116,7 @@ func TestGetFileTargets(t *testing.T) {
 					Name:      "pod1",
 					Namespace: "namespace1",
 					Labels: map[string]string{
-						"app": "myapp",
+						"app": "myapp2",
 					},
 					UID: uid,
 				},
@@ -142,17 +142,17 @@ func TestGetFileTargets(t *testing.T) {
 					Labels:      map[string]string{"app": "myapp"},
 					Destination: "db1:table1",
 				},
-				{
-					Namespace:   "namespace2",
-					Labels:      map[string]string{"app": "myapp"},
-					Destination: "db1:table1",
+				{ // matching target
+					Namespace:   "namespace1",
+					Labels:      map[string]string{"app": "myapp2"},
+					Destination: "db2:table2",
 				},
 			},
 			expected: []FileTailTarget{
 				{
 					FilePath: "/var/log/containers/pod1_namespace1_container1-container1id.log",
-					Database: "db1",
-					Table:    "table1",
+					Database: "db2",
+					Table:    "table2",
 					LogType:  sourceparse.LogTypeKubernetes,
 					Parsers:  []string{},
 					Resources: map[string]interface{}{
@@ -160,7 +160,7 @@ func TestGetFileTargets(t *testing.T) {
 						"namespace":   "namespace1",
 						"container":   "container1",
 						"containerID": "docker://container1id",
-						"label.app":   "myapp",
+						"label.app":   "myapp2",
 					},
 				},
 			},
@@ -582,6 +582,333 @@ func TestIsTargetChanged(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.expected, isTargetChanged(*test.old, *test.new))
+		})
+	}
+}
+
+func TestCheckStaticPodMatch(t *testing.T) {
+	type testcase struct {
+		name      string
+		pod       *v1.Pod
+		staticPod *StaticPodTargets
+		expected  bool
+	}
+
+	tests := []testcase{
+		{
+			name: "Exact match with name and namespace",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+			},
+			expected: true,
+		},
+		{
+			name: "Match with only namespace",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "any-pod",
+					Namespace: "test-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Namespace: "test-namespace",
+			},
+			expected: true,
+		},
+		{
+			name: "Match with only name",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "any-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name: "test-pod",
+			},
+			expected: true,
+		},
+		{
+			name: "Match with single label",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"app": "myapp",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app": "myapp",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Match with multiple labels",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"app":     "myapp",
+						"version": "v1.0",
+						"env":     "prod",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app":     "myapp",
+					"version": "v1.0",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "Match with name, namespace, and labels",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"app": "myapp",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app": "myapp",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "No criteria - matches any pod",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "any-pod",
+					Namespace: "any-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{},
+			expected:  true,
+		},
+		{
+			name: "Namespace mismatch",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "wrong-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Namespace: "test-namespace",
+			},
+			expected: false,
+		},
+		{
+			name: "Name mismatch",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "wrong-pod",
+					Namespace: "test-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name: "test-pod",
+			},
+			expected: false,
+		},
+		{
+			name: "Label mismatch - wrong value",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"app": "wrong-app",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app": "myapp",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Label mismatch - missing label",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"version": "v1.0",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app": "myapp",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Label mismatch - pod has no labels",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app": "myapp",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Partial label match fails - all labels must match",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"app":     "myapp",
+						"version": "wrong-version",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app":     "myapp",
+					"version": "v1.0",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Name matches but namespace mismatches",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "wrong-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+			},
+			expected: false,
+		},
+		{
+			name: "Namespace matches but name mismatches",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "wrong-pod",
+					Namespace: "test-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name:      "test-pod",
+				Namespace: "test-namespace",
+			},
+			expected: false,
+		},
+		{
+			name: "Labels match but namespace mismatches",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "wrong-namespace",
+					Labels: map[string]string{
+						"app": "myapp",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					"app": "myapp",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Empty string fields treated as unspecified",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					UID:       uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Name:      "",
+				Namespace: "",
+			},
+			expected: true,
+		},
+		{
+			name: "Pod has extra labels - still matches if required labels match",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						"app":        "myapp",
+						"version":    "v1.0",
+						"extra":      "value",
+						"kubernetes": "label",
+					},
+					UID: uid,
+				},
+			},
+			staticPod: &StaticPodTargets{
+				Labels: map[string]string{
+					"app":     "myapp",
+					"version": "v1.0",
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := checkStaticPodMatch(test.pod, test.staticPod)
+			require.Equal(t, test.expected, result)
 		})
 	}
 }
