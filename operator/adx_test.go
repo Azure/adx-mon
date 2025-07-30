@@ -15,6 +15,9 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -688,139 +691,361 @@ func TestDatabaseExists(t *testing.T) {
 	require.False(t, exists, "NonExistentDB should not exist")
 }
 
-// TestEntityGroupLogic tests the core logic of entity-group management
-func TestEntityGroupLogic(t *testing.T) {
-	t.Run("zero heartbeat protection", func(t *testing.T) {
-		// This tests the critical safety check that prevents mass deletion
-		// when no heartbeat data is received
+func TestIsValidEntityGroupName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"valid alphanumeric", "Database123", true},
+		{"valid with underscore", "Database_Partitions", true},
+		{"valid with hyphen", "Database-Partitions", true},
+		{"valid mixed", "DB_1-test", true},
+		{"empty string", "", false},
+		{"too long", strings.Repeat("a", 257), false},
+		{"max length", strings.Repeat("a", 256), true},
+		{"single char", "a", true},
+		{"invalid space", "Database Partitions", false},
+		{"invalid special chars", "Database@Partitions", false},
+		{"invalid dot", "Database.Partitions", false},
+		{"starts with number", "123Database", true},
+	}
 
-		schemaByEndpoint := map[string][]ADXClusterSchema{} // Empty!
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidEntityGroupName(tt.input)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
 
-		// The function should detect this and return early
-		// In the real implementation, this would prevent any Kusto calls
-		if len(schemaByEndpoint) == 0 {
-			// This is the critical safety check - verify the function would return early
-			require.Empty(t, schemaByEndpoint, "Zero heartbeat data should trigger safety protection")
-		} else {
-			t.Fatal("Should have detected zero heartbeat data")
-		}
-	})
+func TestEnsureEntityGroupsZeroHeartbeatProtection(t *testing.T) {
+	// Test the critical safety check that prevents operations when no heartbeat data is received
+	emptySchemaByEndpoint := map[string][]ADXClusterSchema{} // Empty!
+	emptyDbSet := map[string]struct{}{}
 
-	t.Run("entity-group name generation", func(t *testing.T) {
-		// Test the naming convention: {DatabaseName}_Partitions
-		database := "MetricsDB"
-		expectedName := "MetricsDB" + PartitionsSuffix
+	// This should return early without making any Kusto calls
+	err := ensureEntityGroups(context.Background(), nil, emptyDbSet, emptySchemaByEndpoint)
+	require.NoError(t, err)
+	// Test passes if no panic/error occurs - the function should return early
+}
 
-		actualName := database + PartitionsSuffix
-		require.Equal(t, expectedName, actualName)
+// MockKustoClient implements KustoClient for testing
+type MockKustoClient struct {
+	MgmtFunc func(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+}
 
-		// Test edge cases
-		require.Equal(t, "Test_DB"+PartitionsSuffix, "Test_DB"+PartitionsSuffix)
-		require.Equal(t, "123"+PartitionsSuffix, "123"+PartitionsSuffix)
-	})
+func (m *MockKustoClient) Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
+	if m.MgmtFunc != nil {
+		return m.MgmtFunc(ctx, db, query, options...)
+	}
+	return nil, fmt.Errorf("not implemented")
+}
 
-	t.Run("entity reference construction", func(t *testing.T) {
-		// Test the cluster reference format: cluster('endpoint').database('db')
-		endpoint := "https://cluster1.kusto.windows.net"
-		database := "TestDB"
+// EntityGroupRec represents the result structure for entity group queries
+type EntityGroupRec struct {
+	Name string `kusto:"Name"`
+}
 
-		expectedRef := "cluster('https://cluster1.kusto.windows.net').database('TestDB')"
-		actualRef := "cluster('" + endpoint + "').database('" + database + "')"
-
-		require.Equal(t, expectedRef, actualRef)
-	})
-
-	t.Run("database filtering logic", func(t *testing.T) {
-		// Test that only databases in dbSet are processed
-		dbSet := map[string]struct{}{
-			"DB1": {},
-			"DB2": {},
-		}
-
-		schemaByEndpoint := map[string][]ADXClusterSchema{
-			"https://cluster1.kusto.windows.net": {
-				{Database: "DB1", Tables: []string{"Table1"}},
-				{Database: "DB2", Tables: []string{"Table2"}},
-				{Database: "DB3", Tables: []string{"Table3"}}, // Not in dbSet
+func TestGetEntityGroups(t *testing.T) {
+	tests := []struct {
+		name           string
+		mockResponse   []EntityGroupRec
+		mockError      error
+		expectedGroups []string
+		expectedError  string
+	}{
+		{
+			name:           "empty result",
+			mockResponse:   []EntityGroupRec{},
+			expectedGroups: nil, // getEntityGroups returns nil for empty results
+		},
+		{
+			name: "single entity group",
+			mockResponse: []EntityGroupRec{
+				{Name: "test-db"},
 			},
-		}
+			expectedGroups: []string{"test-db"},
+		},
+		{
+			name: "multiple entity groups",
+			mockResponse: []EntityGroupRec{
+				{Name: "db1"},
+				{Name: "db2"},
+				{Name: "db3"},
+			},
+			expectedGroups: []string{"db1", "db2", "db3"},
+		},
+		{
+			name:          "kusto error",
+			mockError:     fmt.Errorf("kusto connection failed"),
+			expectedError: "failed to query entity-groups: kusto connection failed",
+		},
+	}
 
-		// Only DB1 and DB2 should be processed
-		var processedDatabases []string
-		for database := range dbSet {
-			// Collect databases that would be processed
-			for endpoint, dbSchemas := range schemaByEndpoint {
-				_ = endpoint // Would be used in real implementation
-				for _, schema := range dbSchemas {
-					if schema.Database == database {
-						processedDatabases = append(processedDatabases, database)
-						break
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockKustoClient{
+				MgmtFunc: func(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
+					if tt.mockError != nil {
+						return nil, tt.mockError
+					}
+
+					// Create mock rows with entity group data
+					columns := table.Columns{
+						{Name: "Name", Type: kustotypes.String},
+					}
+
+					rows, err := kusto.NewMockRows(columns)
+					require.NoError(t, err)
+
+					for _, rec := range tt.mockResponse {
+						rows.Row(value.Values{
+							value.String{Value: rec.Name, Valid: true},
+						})
+					}
+
+					iter := &kusto.RowIterator{}
+					require.NoError(t, iter.Mock(rows))
+
+					return iter, nil
+				},
+			}
+
+			groups, err := getEntityGroups(context.Background(), mock, "testdb")
+
+			if tt.expectedError != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectedError)
+				require.Nil(t, groups)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expectedGroups, groups)
+			}
+		})
+	}
+}
+
+func TestEnsureEntityGroups(t *testing.T) {
+	tests := []struct {
+		name              string
+		dbSet             map[string]struct{}
+		schemaByEndpoint  map[string][]ADXClusterSchema
+		existingGroups    []string
+		mgmtCallsExpected []string         // Expected .show/.create/.alter/.drop commands
+		mgmtErrors        map[string]error // Map of query patterns to errors
+		expectedError     string
+	}{
+		{
+			name:              "empty inputs - early return",
+			dbSet:             map[string]struct{}{},
+			schemaByEndpoint:  map[string][]ADXClusterSchema{},
+			mgmtCallsExpected: []string{}, // No calls should be made
+		},
+		{
+			name: "create new entity group",
+			dbSet: map[string]struct{}{
+				"testdb": {},
+			},
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.windows.net": {
+					{Database: "testdb", Tables: []string{"table1"}},
+				},
+			},
+			existingGroups: []string{}, // No existing groups
+			mgmtCallsExpected: []string{
+				".show entity_groups",
+				".create entity_group testdb_Partitions",
+			},
+		},
+		{
+			name: "update existing entity group",
+			dbSet: map[string]struct{}{
+				"testdb": {},
+			},
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.windows.net": {
+					{Database: "testdb", Tables: []string{"table1"}},
+				},
+				"https://cluster2.kusto.windows.net": {
+					{Database: "testdb", Tables: []string{"table2"}},
+				},
+			},
+			existingGroups: []string{"testdb_Partitions"}, // Group already exists
+			mgmtCallsExpected: []string{
+				".show entity_groups",
+				".alter entity_group testdb_Partitions",
+			},
+		},
+		{
+			name: "drop stale entity group",
+			dbSet: map[string]struct{}{
+				"activedb": {},
+			},
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.windows.net": {
+					{Database: "activedb", Tables: []string{"table1"}},
+				},
+			},
+			existingGroups: []string{"activedb_Partitions", "staledb_Partitions"}, // staledb should be dropped
+			mgmtCallsExpected: []string{
+				".show entity_groups",
+				".alter entity_group activedb_Partitions",
+				".drop entity_group staledb_Partitions",
+			},
+		},
+		{
+			name: "multiple databases",
+			dbSet: map[string]struct{}{
+				"db1": {},
+				"db2": {},
+			},
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.windows.net": {
+					{Database: "db1", Tables: []string{"table1"}},
+					{Database: "db2", Tables: []string{"table2"}},
+				},
+			},
+			existingGroups: []string{}, // No existing groups
+			mgmtCallsExpected: []string{
+				".show entity_groups", // For db1
+				".create entity_group db1_Partitions",
+				".show entity_groups", // For db2
+				".create entity_group db2_Partitions",
+			},
+		},
+		{
+			name: "kusto error during show",
+			dbSet: map[string]struct{}{
+				"testdb": {},
+			},
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.windows.net": {
+					{Database: "testdb", Tables: []string{"table1"}},
+				},
+			},
+			mgmtErrors: map[string]error{
+				".show entity_groups": fmt.Errorf("show command failed"),
+			},
+			mgmtCallsExpected: []string{
+				".show entity_groups",
+				".create entity_group testdb_Partitions", // Should continue creating despite show error
+			},
+			// Note: Function logs error but continues processing
+		},
+		{
+			name: "kusto error during create",
+			dbSet: map[string]struct{}{
+				"testdb": {},
+			},
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.windows.net": {
+					{Database: "testdb", Tables: []string{"table1"}},
+				},
+			},
+			existingGroups: []string{}, // No existing groups
+			mgmtErrors: map[string]error{
+				".create entity_group": fmt.Errorf("create command failed"),
+			},
+			mgmtCallsExpected: []string{
+				".show entity_groups",
+				".create entity_group testdb_Partitions",
+			},
+			// Note: ensureEntityGroups logs errors but continues, doesn't return error for individual creates
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actualCalls := []string{}
+
+			mock := &MockKustoClient{
+				MgmtFunc: func(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
+					queryStr := query.String()
+					actualCalls = append(actualCalls, queryStr)
+
+					// Check if there's a specific error for this query pattern
+					for pattern, err := range tt.mgmtErrors {
+						if strings.Contains(queryStr, pattern) {
+							return nil, err
+						}
+					}
+
+					// Handle .show entity_groups
+					if strings.Contains(queryStr, ".show entity_groups") {
+						columns := table.Columns{
+							{Name: "Name", Type: kustotypes.String},
+						}
+
+						rows, err := kusto.NewMockRows(columns)
+						require.NoError(t, err)
+
+						for _, name := range tt.existingGroups {
+							rows.Row(value.Values{
+								value.String{Value: name, Valid: true},
+							})
+						}
+
+						iter := &kusto.RowIterator{}
+						require.NoError(t, iter.Mock(rows))
+
+						return iter, nil
+					}
+
+					// Other management commands (.create, .alter, .drop) succeed by default
+					// Return empty iterator with minimal columns to avoid "Columns is zero length" error
+					columns := table.Columns{
+						{Name: "Result", Type: kustotypes.String},
+					}
+					rows, err := kusto.NewMockRows(columns)
+					require.NoError(t, err)
+
+					iter := &kusto.RowIterator{}
+					require.NoError(t, iter.Mock(rows))
+
+					return iter, nil
+				},
+			}
+
+			err := ensureEntityGroups(context.Background(), mock, tt.dbSet, tt.schemaByEndpoint)
+
+			if tt.expectedError != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectedError)
+			} else {
+				require.NoError(t, err)
+			}
+
+			// Verify expected management commands were called
+			if len(tt.mgmtCallsExpected) > 0 {
+				require.Len(t, actualCalls, len(tt.mgmtCallsExpected), "Unexpected number of management calls")
+
+				// For tests with non-deterministic order (like multiple databases), just check all expected calls are present
+				if tt.name == "multiple databases" {
+					expectedCalls := make(map[string]bool)
+					for _, expected := range tt.mgmtCallsExpected {
+						expectedCalls[expected] = false
+					}
+
+					for _, actual := range actualCalls {
+						for expectedPattern := range expectedCalls {
+							if strings.Contains(actual, expectedPattern) {
+								expectedCalls[expectedPattern] = true
+								break
+							}
+						}
+					}
+
+					for pattern, found := range expectedCalls {
+						require.True(t, found, "Expected management call pattern not found: %s", pattern)
+					}
+				} else {
+					// For other tests, check order matters
+					for i, expected := range tt.mgmtCallsExpected {
+						require.Contains(t, actualCalls[i], expected, "Expected management call not found")
 					}
 				}
 			}
-		}
-
-		require.Len(t, processedDatabases, 2)
-		require.Contains(t, processedDatabases, "DB1")
-		require.Contains(t, processedDatabases, "DB2")
-		require.NotContains(t, processedDatabases, "DB3")
-	})
-
-	t.Run("stale entity-group detection", func(t *testing.T) {
-		// Test logic for identifying stale entity-groups
-		existingEntityGroups := map[string]bool{
-			"DB1" + PartitionsSuffix:   true, // Will be marked active
-			"OldDB" + PartitionsSuffix: true, // Will remain stale
-			"SomeOtherEntityGroup":     true, // Not _Partitions suffix
-		}
-
-		activeEntityGroup := "DB1" + PartitionsSuffix
-
-		// Mark active entity-group (simulates the real logic)
-		delete(existingEntityGroups, activeEntityGroup)
-
-		// Count remaining stale entity-groups with _Partitions suffix
-		staleCount := 0
-		for name := range existingEntityGroups {
-			if strings.HasSuffix(name, PartitionsSuffix) {
-				staleCount++
-			}
-		}
-
-		require.Equal(t, 1, staleCount, "Should have 1 stale entity-group with "+PartitionsSuffix+" suffix")
-		require.Contains(t, existingEntityGroups, "OldDB"+PartitionsSuffix)
-		require.Contains(t, existingEntityGroups, "SomeOtherEntityGroup") // Should remain but not be counted as stale
-	})
-
-	t.Run("multiple endpoints for same database", func(t *testing.T) {
-		// Test that multiple cluster endpoints for the same database are handled correctly
-		database := "TestDB"
-		schemaByEndpoint := map[string][]ADXClusterSchema{
-			"https://cluster1.kusto.windows.net": {
-				{Database: database, Tables: []string{"Table1"}},
-			},
-			"https://cluster2.kusto.windows.net": {
-				{Database: database, Tables: []string{"Table2"}},
-			},
-			"https://cluster3.kusto.windows.net": {
-				{Database: "OtherDB", Tables: []string{"Table3"}},
-			},
-		}
-
-		var entityReferences []string
-		for endpoint, dbSchemas := range schemaByEndpoint {
-			for _, schema := range dbSchemas {
-				if schema.Database == database {
-					entityRef := "cluster('" + endpoint + "').database('" + database + "')"
-					entityReferences = append(entityReferences, entityRef)
-					break // Found the database in this endpoint, move to next endpoint
-				}
-			}
-		}
-
-		require.Len(t, entityReferences, 2, "Should have 2 cluster references for TestDB")
-		require.Contains(t, entityReferences, "cluster('https://cluster1.kusto.windows.net').database('TestDB')")
-		require.Contains(t, entityReferences, "cluster('https://cluster2.kusto.windows.net').database('TestDB')")
-		require.NotContains(t, entityReferences, "cluster('https://cluster3.kusto.windows.net').database('TestDB')")
-	})
+		})
+	}
 }

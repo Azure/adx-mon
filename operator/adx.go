@@ -34,6 +34,11 @@ import (
 // Entity-group names must be 1-256 characters and contain only alphanumeric, underscore, and hyphen characters.
 var entityGroupNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,256}$`)
 
+// KustoClient interface for mocking Kusto operations in tests
+type KustoClient interface {
+	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+}
+
 type AdxReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -1474,7 +1479,7 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 }
 
 // getEntityGroups retrieves all entity-group names from the specified database
-func getEntityGroups(ctx context.Context, client *kusto.Client, database string) ([]string, error) {
+func getEntityGroups(ctx context.Context, client KustoClient, database string) ([]string, error) {
 	q := kql.New(".show entity_groups")
 	result, err := client.Mgmt(ctx, database, q)
 	if err != nil {
@@ -1509,7 +1514,7 @@ func getEntityGroups(ctx context.Context, client *kusto.Client, database string)
 
 // ensureEntityGroups creates/updates entity-groups for active databases and cleans up stale ones
 // containing all active partition cluster endpoints for that database
-func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[string]struct{}, schemaByEndpoint map[string][]ADXClusterSchema) error {
+func ensureEntityGroups(ctx context.Context, client KustoClient, dbSet map[string]struct{}, schemaByEndpoint map[string][]ADXClusterSchema) error {
 	// Safety check: If no heartbeat data, skip entity-group operations to prevent mass deletion
 	if len(schemaByEndpoint) == 0 {
 		logger.Warnf("No heartbeat data received from partition clusters, skipping entity-group operations to prevent accidental cleanup")
@@ -1561,7 +1566,7 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 				// Build entity references string for KQL command
 				entityRefsStr := strings.Join(entityReferences, ", ")
 
-				// Check if entity-group already exists using slices.Contains
+				// Check if entity-group already exists
 				exists := slices.Contains(allEntityGroups, entityGroupName)
 
 				// Validate entity-group name to prevent injection
