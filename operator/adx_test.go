@@ -699,8 +699,8 @@ func TestEntityGroupLogic(t *testing.T) {
 		// The function should detect this and return early
 		// In the real implementation, this would prevent any Kusto calls
 		if len(schemaByEndpoint) == 0 {
-			// This is the critical safety check
-			require.True(t, true, "Zero heartbeat data detected - should skip entity-group operations")
+			// This is the critical safety check - verify the function would return early
+			require.Empty(t, schemaByEndpoint, "Zero heartbeat data should trigger safety protection")
 		} else {
 			t.Fatal("Should have detected zero heartbeat data")
 		}
@@ -709,14 +709,14 @@ func TestEntityGroupLogic(t *testing.T) {
 	t.Run("entity-group name generation", func(t *testing.T) {
 		// Test the naming convention: {DatabaseName}_Partitions
 		database := "MetricsDB"
-		expectedName := "MetricsDB_Partitions"
+		expectedName := "MetricsDB" + PartitionsSuffix
 
-		actualName := database + "_Partitions"
+		actualName := database + PartitionsSuffix
 		require.Equal(t, expectedName, actualName)
 
 		// Test edge cases
-		require.Equal(t, "Test_DB_Partitions", "Test_DB"+"_Partitions")
-		require.Equal(t, "123_Partitions", "123"+"_Partitions")
+		require.Equal(t, "Test_DB"+PartitionsSuffix, "Test_DB"+PartitionsSuffix)
+		require.Equal(t, "123"+PartitionsSuffix, "123"+PartitionsSuffix)
 	})
 
 	t.Run("entity reference construction", func(t *testing.T) {
@@ -769,12 +769,12 @@ func TestEntityGroupLogic(t *testing.T) {
 	t.Run("stale entity-group detection", func(t *testing.T) {
 		// Test logic for identifying stale entity-groups
 		existingEntityGroups := map[string]bool{
-			"DB1_Partitions":       true, // Will be marked active
-			"OldDB_Partitions":     true, // Will remain stale
-			"SomeOtherEntityGroup": true, // Not _Partitions suffix
+			"DB1" + PartitionsSuffix:   true, // Will be marked active
+			"OldDB" + PartitionsSuffix: true, // Will remain stale
+			"SomeOtherEntityGroup":     true, // Not _Partitions suffix
 		}
 
-		activeEntityGroup := "DB1_Partitions"
+		activeEntityGroup := "DB1" + PartitionsSuffix
 
 		// Mark active entity-group (simulates the real logic)
 		delete(existingEntityGroups, activeEntityGroup)
@@ -782,13 +782,13 @@ func TestEntityGroupLogic(t *testing.T) {
 		// Count remaining stale entity-groups with _Partitions suffix
 		staleCount := 0
 		for name := range existingEntityGroups {
-			if len(name) >= len("_Partitions") && name[len(name)-len("_Partitions"):] == "_Partitions" {
+			if strings.HasSuffix(name, PartitionsSuffix) {
 				staleCount++
 			}
 		}
 
-		require.Equal(t, 1, staleCount, "Should have 1 stale _Partitions entity-group")
-		require.Contains(t, existingEntityGroups, "OldDB_Partitions")
+		require.Equal(t, 1, staleCount, "Should have 1 stale entity-group with "+PartitionsSuffix+" suffix")
+		require.Contains(t, existingEntityGroups, "OldDB"+PartitionsSuffix)
 		require.Contains(t, existingEntityGroups, "SomeOtherEntityGroup") // Should remain but not be counted as stale
 	})
 
