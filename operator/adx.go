@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1472,6 +1473,40 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 	return false, nil
 }
 
+// getEntityGroups retrieves all entity-group names from the specified database
+func getEntityGroups(ctx context.Context, client *kusto.Client, database string) ([]string, error) {
+	q := kql.New(".show entity_groups")
+	result, err := client.Mgmt(ctx, database, q)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query entity-groups: %w", err)
+	}
+	defer result.Stop()
+
+	var entityGroups []string
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, fmt.Errorf("failed to retrieve entity-groups: %w", errFinal)
+		}
+
+		var entityGroup struct {
+			Name string `kusto:"Name"`
+		}
+		if err := row.ToStruct(&entityGroup); err != nil {
+			return nil, fmt.Errorf("failed to parse entity-group: %w", err)
+		}
+		entityGroups = append(entityGroups, entityGroup.Name)
+	}
+
+	return entityGroups, nil
+}
+
 // ensureEntityGroups creates/updates entity-groups for active databases and cleans up stale ones
 // containing all active partition cluster endpoints for that database
 func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[string]struct{}, schemaByEndpoint map[string][]ADXClusterSchema) error {
@@ -1490,40 +1525,19 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 	// Process each database: create/update entity-groups and cleanup stale ones
 	for _, database := range databases {
 		// Step 1: Query existing entity-groups in this database to identify what needs cleanup
-		existingEntityGroups := make(map[string]bool)
-		q := kql.New(".show entity_groups")
-		result, err := client.Mgmt(ctx, database, q)
+		allEntityGroups, err := getEntityGroups(ctx, client, database)
 		if err != nil {
 			logger.Warnf("Failed to query existing entity-groups in database %s: %v", database, err)
 			// Continue with creation, skip cleanup for this database
-		} else {
-			for {
-				row, errInline, errFinal := result.NextRowOrError()
-				if errFinal == io.EOF {
-					break
-				}
-				if errInline != nil {
-					continue
-				}
-				if errFinal != nil {
-					logger.Warnf("Failed to retrieve entity-groups in database %s: %v", database, errFinal)
-					break
-				}
+			allEntityGroups = []string{} // Empty slice so we can still proceed with creation
+		}
 
-				var entityGroup struct {
-					Name string `kusto:"Name"`
-				}
-				if err := row.ToStruct(&entityGroup); err != nil {
-					logger.Warnf("Failed to parse entity-group in database %s: %v", database, err)
-					continue
-				}
-
-				// Track entity-groups with _Partitions suffix for cleanup consideration
-				if strings.HasSuffix(entityGroup.Name, PartitionsSuffix) {
-					existingEntityGroups[entityGroup.Name] = true
-				}
+		// Filter to only entity-groups with _Partitions suffix for cleanup consideration
+		var existingPartitionGroups []string
+		for _, entityGroup := range allEntityGroups {
+			if strings.HasSuffix(entityGroup, PartitionsSuffix) {
+				existingPartitionGroups = append(existingPartitionGroups, entityGroup)
 			}
-			result.Stop()
 		}
 
 		// Step 2: Create/update entity-groups for databases that have heartbeat data
@@ -1544,18 +1558,11 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 				// Create entity-group name following pattern: {DatabaseName}_Partitions
 				entityGroupName := fmt.Sprintf("%s%s", database, PartitionsSuffix)
 
-				// Mark this entity-group as active (don't clean it up)
-				delete(existingEntityGroups, entityGroupName)
-
 				// Build entity references string for KQL command
 				entityRefsStr := strings.Join(entityReferences, ", ")
 
-				// Check if entity-group already exists
-				exists, err := entityGroupExists(ctx, client, database, entityGroupName)
-				if err != nil {
-					logger.Errorf("Failed to check if entity-group %s exists in database %s: %v", entityGroupName, database, err)
-					continue
-				}
+				// Check if entity-group already exists using slices.Contains
+				exists := slices.Contains(allEntityGroups, entityGroupName)
 
 				// Validate entity-group name to prevent injection
 				if !isValidEntityGroupName(entityGroupName) {
@@ -1583,11 +1590,19 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 				}
 
 				logger.Infof("Successfully created/updated entity-group %s", entityGroupName)
+
+				// Remove this entity-group from cleanup list since it's now active
+				for i, existingGroup := range existingPartitionGroups {
+					if existingGroup == entityGroupName {
+						existingPartitionGroups = append(existingPartitionGroups[:i], existingPartitionGroups[i+1:]...)
+						break
+					}
+				}
 			}
 		}
 
 		// Step 3: Clean up stale entity-groups (those not updated above)
-		for staleEntityGroup := range existingEntityGroups {
+		for _, staleEntityGroup := range existingPartitionGroups {
 			logger.Infof("Removing stale entity-group %s from database %s", staleEntityGroup, database)
 			if !isValidEntityGroupName(staleEntityGroup) {
 				logger.Warnf("Skipping invalid entity-group name: %s", staleEntityGroup)
@@ -1605,39 +1620,4 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 	}
 
 	return nil
-}
-
-// entityGroupExists checks if an entity-group exists in the specified database
-func entityGroupExists(ctx context.Context, client *kusto.Client, database, entityGroupName string) (bool, error) {
-	q := kql.New(".show entity_groups | where Name == ParamEntityGroupName | count")
-	params := kql.NewParameters().AddString("ParamEntityGroupName", entityGroupName)
-
-	result, err := client.Mgmt(ctx, database, q, kusto.QueryParameters(params))
-	if err != nil {
-		return false, fmt.Errorf("failed to query entity-groups: %w", err)
-	}
-	defer result.Stop()
-
-	for {
-		row, errInline, errFinal := result.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve entity-groups: %w", errFinal)
-		}
-
-		var count struct {
-			Count int64 `kusto:"Count"`
-		}
-		if err := row.ToStruct(&count); err != nil {
-			return false, fmt.Errorf("failed to parse entity-group count: %w", err)
-		}
-		return count.Count > 0, nil
-	}
-
-	return false, nil
 }
