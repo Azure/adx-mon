@@ -309,9 +309,21 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
 
 The host log config configures file and journald log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.
 
+### Log Type
+
+The `log-type` setting defines the format of the underlying log file and determines how timestamps and log messages are extracted from structured log entries. This setting is used in `file-target` configurations to properly parse different log formats.
+
+Available log types:
+
+*   **`docker`**: Parses Docker JSON-formatted logs from the Docker daemon. These logs contain structured JSON with `log`, `stream`, and `time` fields.
+*   **`cri`**: Parses Container Runtime Interface (CRI) formatted logs. These logs have a specific format with timestamp, stream type, and log content separated by spaces.
+*   **`kubernetes`**: Auto-detects whether the log file is in Docker or CRI format and applies the appropriate parser automatically.
+*   **`plain`**: Treats each line as plain text without any structured format. Uses the current timestamp as the log timestamp.
+*   **unset/empty**: Defaults to plain text parsing when no log type is specified.
+
 ### Log Parsers
 
-Parsers are used within `file-target` and `journal-target` configurations to process the raw log message extracted from the source (e.g., a file line or a journald entry). They are defined in the `parsers` array and are applied sequentially.
+Parsers are used within `file-target`, `journal-target`, and in pod `adx-mon/log-parsers` annotations. These configurations configure processing the raw log message extracted from the source (e.g., a file line or a journald entry). They are defined in the `parsers` array and are applied sequentially.
 
 The `parsers` array accepts a list of strings, each specifying a parser type. The collector attempts to apply each parser in the order they are listed. The first parser that successfully processes the log message stops the parsing process for that message. If a parser succeeds, the resulting fields are added to the log's body.
 
@@ -336,7 +348,7 @@ Available parser types:
   [[host-log.file-target]]
     # The path to the file to tail.
     file-path = '/var/log/nginx/access.log'
-    # The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, plain.
+    # The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, cri, kubernetes, plain, or unset.
     log-type = 'plain'
     # Database to store logs in.
     database = 'Logs'
@@ -348,7 +360,7 @@ Available parser types:
   [[host-log.file-target]]
     # The path to the file to tail.
     file-path = '/var/log/myservice/service.log'
-    # The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, plain.
+    # The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, cri, kubernetes, plain, or unset.
     log-type = 'plain'
     # Database to store logs in.
     database = 'Logs'
