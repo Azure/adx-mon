@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// entityGroupNameRegex validates entity-group names for use in KQL commands.
+// Entity-group names must be 1-256 characters and contain only alphanumeric, underscore, and hyphen characters.
+var entityGroupNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,256}$`)
+
 type AdxReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -44,18 +49,7 @@ const (
 
 // isValidEntityGroupName validates that an entity-group name is safe to use in KQL commands
 func isValidEntityGroupName(name string) bool {
-	// Entity-group names must be valid identifiers
-	// Allow alphanumeric, underscore, and certain special chars but prevent injection
-	if len(name) == 0 || len(name) > 256 {
-		return false
-	}
-	for _, r := range name {
-		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') &&
-			!(r >= '0' && r <= '9') && r != '_' && r != '-' {
-			return false
-		}
-	}
-	return true
+	return entityGroupNameRegex.MatchString(name)
 }
 
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
