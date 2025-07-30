@@ -950,6 +950,13 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
+	// Step 5.5: Ensure entity-groups for federation
+	logger.Infof("ADXCluster %s: ensuring entity-groups for %d databases", cluster.Spec.ClusterName, len(dbSet))
+	if err := ensureEntityGroups(ctx, client, dbSet, schemaByEndpoint); err != nil {
+		logger.Errorf("ADXCluster %s: failed to ensure entity-groups: %v", cluster.Spec.ClusterName, err)
+		// Continue with function generation even if entity-groups fail
+	}
+
 	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
@@ -1444,6 +1451,102 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 			return false, fmt.Errorf("failed to parse function kind: %w", err)
 		}
 		return fk.Kind == "ViewFunction", nil
+	}
+
+	return false, nil
+}
+
+// ensureEntityGroups creates or updates named entity-groups for each database
+// containing all active partition cluster endpoints for that database
+func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[string]struct{}, schemaByEndpoint map[string][]ADXClusterSchema) error {
+	for database := range dbSet {
+		// Collect all cluster endpoints that have this database
+		var entityReferences []string
+		for endpoint, dbSchemas := range schemaByEndpoint {
+			for _, schema := range dbSchemas {
+				if schema.Database == database {
+					entityRef := fmt.Sprintf("cluster('%s').database('%s')", endpoint, database)
+					entityReferences = append(entityReferences, entityRef)
+					break // Found the database in this endpoint, move to next endpoint
+				}
+			}
+		}
+
+		if len(entityReferences) == 0 {
+			logger.Warnf("No partition clusters found for database %s, skipping entity-group creation", database)
+			continue
+		}
+
+		// Create entity-group name following pattern: {DatabaseName}_Partitions
+		entityGroupName := fmt.Sprintf("%s_Partitions", database)
+
+		// Build entity references string for KQL command
+		entityRefsStr := strings.Join(entityReferences, ", ")
+
+		// Check if entity-group already exists
+		exists, err := entityGroupExists(ctx, client, database, entityGroupName)
+		if err != nil {
+			return fmt.Errorf("failed to check if entity-group %s exists in database %s: %w", entityGroupName, database, err)
+		}
+
+		var stmt *kql.Builder
+		if exists {
+			// Update existing entity-group
+			stmt = kql.New(".alter entity_group ").
+				AddUnsafe(entityGroupName).
+				AddLiteral(" (").
+				AddUnsafe(entityRefsStr).
+				AddLiteral(")")
+			logger.Infof("Updating existing entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
+		} else {
+			// Create new entity-group
+			stmt = kql.New(".create entity_group ").
+				AddUnsafe(entityGroupName).
+				AddLiteral(" (").
+				AddUnsafe(entityRefsStr).
+				AddLiteral(")")
+			logger.Infof("Creating new entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
+		}
+
+		_, err = client.Mgmt(ctx, database, stmt)
+		if err != nil {
+			return fmt.Errorf("failed to create/update entity-group %s in database %s: %w", entityGroupName, database, err)
+		}
+
+		logger.Infof("Successfully created/updated entity-group %s", entityGroupName)
+	}
+
+	return nil
+}
+
+// entityGroupExists checks if an entity-group exists in the specified database
+func entityGroupExists(ctx context.Context, client *kusto.Client, database, entityGroupName string) (bool, error) {
+	q := kql.New(".show entity_groups | where Name == '").AddUnsafe(entityGroupName).AddLiteral("' | count")
+	result, err := client.Mgmt(ctx, database, q)
+	if err != nil {
+		return false, fmt.Errorf("failed to query entity-groups: %w", err)
+	}
+	defer result.Stop()
+
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to retrieve entity-groups: %w", errFinal)
+		}
+
+		var count struct {
+			Count int64 `kusto:"Count"`
+		}
+		if err := row.ToStruct(&count); err != nil {
+			return false, fmt.Errorf("failed to parse entity-group count: %w", err)
+		}
+		return count.Count > 0, nil
 	}
 
 	return false, nil

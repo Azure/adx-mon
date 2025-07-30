@@ -75,18 +75,20 @@ macro-expand Metrics_Partitions as X { X.TableName }
 
 ## Implementation Plan
 
-### Task 1: Add Entity-Group Creation Function
+### Task 1: Add Entity-Group Creation Function ✅ COMPLETED
 **File**: `operator/adx.go`
 **Function**: `ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[string]struct{}, schemaByEndpoint map[string][]ADXClusterSchema) error`
 
-**Implementation**:
-1. Iterate through each database in `dbSet`
-2. Collect all cluster endpoints that have that database from `schemaByEndpoint`
-3. Build entity reference list: `cluster('endpoint').database('dbname')` for each endpoint
-4. Execute `.create-or-alter entity_group {DatabaseName}_Partitions ({entity references})`
-5. Log entity-group creation/updates for observability
+**Implementation**: ✅ COMPLETED
+1. ✅ Iterate through each database in `dbSet`
+2. ✅ Collect all cluster endpoints that have that database from `schemaByEndpoint`
+3. ✅ Build entity reference list: `cluster('endpoint').database('dbname')` for each endpoint
+4. ✅ Check if entity-group exists using `.show entity_groups`
+5. ✅ Execute `.create entity_group` (new) or `.alter entity_group` (existing) as appropriate
+6. ✅ Log entity-group creation/updates for observability
+7. ✅ Added helper function `entityGroupExists()` for existence checking
 
-**Location**: Insert after line ~945 in `FederateClusters()` method
+**Location**: ✅ Inserted after line ~945 in `FederateClusters()` method
 
 ### Task 2: Keep Existing Function Generation Unchanged
 **File**: `operator/adx.go`  
