@@ -458,6 +458,21 @@ flowchart TD
 - **Partition Clusters:** Each partition cluster is managed by its own operator and contains a subset of the data (e.g., by geo or tenant).
 - **Federated Cluster:** A central operator manages a federated ADX cluster, providing a unified query interface and managing heartbeats and macro-expand KQL functions.
 - **Heartbeat Table:** Partition clusters send periodic heartbeats to the federated cluster, which uses them to discover topology and liveness.
+- **Entity-Groups:** The operator automatically creates named entity-groups (e.g., `Metrics_Partitions`, `Logs_Partitions`) that provide an alternative way to query federated data directly without relying on generated functions.
+
+#### Querying Federated Data
+
+The operator provides two approaches for querying data across partition clusters:
+
+1. **Generated Functions** (automatic): `federated_TableName()` functions are auto-generated for each table
+   ```kusto
+   federated_PrometheusData() | take 100
+   ```
+
+2. **Entity-Groups** (direct access): Named entity-groups provide more flexibility for custom queries
+   ```kusto
+   macro-expand entity_group Metrics_Partitions as X { X.PrometheusData | take 100 }
+   ```
 
 #### Development & Testing
 - Operator can be run locally or in-cluster.

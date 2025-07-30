@@ -536,6 +536,92 @@ These enhancements provide a clear, extensible way to configure both partition a
 
 ---
 
+## Entity-Groups for Federation
+
+In addition to the automatic macro-expand function generation, the operator creates named **entity-groups** for each database discovered from partition cluster heartbeats. Entity-groups provide an alternative, more direct way to query federated data without relying on generated functions.
+
+### Entity-Group Creation Process
+
+1. **Automatic Discovery**: The operator automatically creates entity-groups based on heartbeat data from partition clusters
+2. **Naming Convention**: `{DatabaseName}_Partitions` (e.g., `Metrics_Partitions`, `Logs_Partitions`)
+3. **Content**: Each entity-group contains all active partition cluster endpoints that have the specified database
+4. **Lifecycle Management**: Entity-groups are updated every 10 minutes during the reconciliation cycle
+
+### Entity-Group Management
+
+The operator handles entity-groups with the following safety features:
+
+- **Zero-Heartbeat Protection**: If no heartbeat data is received (e.g., during outages), entity-group operations are skipped to prevent accidental deletion
+- **Automatic Cleanup**: Stale entity-groups are automatically removed when databases are no longer present in any partition cluster
+- **Robust Error Handling**: Entity-group failures don't impact existing function generation or other operator functionality
+
+### Usage Examples
+
+#### Direct Entity-Group Queries
+
+Users can query federated data directly using entity-groups:
+
+```kusto
+// Query using entity-group directly
+macro-expand entity_group Metrics_Partitions as X { X.PrometheusData | take 100 }
+
+// More complex federated query
+macro-expand entity_group Logs_Partitions as LogClusters { 
+    LogClusters.ApplicationLogs 
+    | where TimeGenerated > ago(1h)
+    | summarize count() by LogLevel
+}
+```
+
+#### Comparison with Generated Functions
+
+Both approaches work and can be used together:
+
+```kusto
+// Using auto-generated function (existing approach)
+federated_PrometheusData() | take 100
+
+// Using entity-group directly (new capability)
+macro-expand entity_group Metrics_Partitions as X { X.PrometheusData | take 100 }
+```
+
+#### Advanced Scenarios
+
+Entity-groups enable advanced federation scenarios:
+
+```kusto
+// Query specific subset of partition clusters
+macro-expand entity_group Metrics_Partitions as X { 
+    X.PrometheusData 
+    | where $endpoint contains "westeurope"  // Filter by geography
+    | take 100 
+}
+
+// Join data across entity-groups
+let MetricsData = materialize(
+    macro-expand entity_group Metrics_Partitions as X { 
+        X.PrometheusData | project TimeGenerated, MetricName, Value 
+    }
+);
+let LogsData = materialize(
+    macro-expand entity_group Logs_Partitions as Y { 
+        Y.ApplicationLogs | project TimeGenerated, Level, Message 
+    }
+);
+MetricsData 
+| join kind=inner LogsData on TimeGenerated
+| take 100
+```
+
+### Benefits
+
+1. **Flexibility**: Direct access to federated clusters without function dependency
+2. **Advanced Filtering**: Ability to query subsets of partition clusters using built-in `$endpoint` variable
+3. **Custom Logic**: Users can implement their own aggregation and filtering logic
+4. **Future-Proof**: Entity-groups provide a foundation for future federation enhancements
+
+---
+
 ## Operator Workflow
 
 1. **Granular Reconciliation:**  
