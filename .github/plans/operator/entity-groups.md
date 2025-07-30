@@ -116,14 +116,31 @@ macro-expand Metrics_Partitions as X { X.TableName }
 
 **Note on Reconciliation**: ✅ VERIFIED - No additional requeuing logic is required. The existing `FederateClusters()` method already returns `ctrl.Result{RequeueAfter: 10 * time.Minute}`, which ensures entity-groups will be automatically updated every 10 minutes as partition clusters join/leave the federation. This maintains consistency with the existing function generation cycle.
 
-### Task 4: Add Entity-Group Cleanup (Optional)
-**Function**: `cleanupStaleEntityGroups()`
+### Task 4: Add Entity-Group Cleanup ✅ COMPLETED (Optimized Implementation)
+**Function**: Integrated into `ensureEntityGroups()` (optimized approach)
 
-**Logic**:
-1. Query existing entity-groups using `.show entity_groups`
-2. Identify entity-groups matching pattern `*_Partitions` that no longer correspond to active databases
-3. Remove stale entity-groups using `.drop entity_group`
-4. Execute during `FederateClusters()` reconciliation
+**Implementation**: ✅ COMPLETED with significant optimization
+- **Combined Operations**: Merged cleanup logic into `ensureEntityGroups()` for efficiency
+- **Zero-Heartbeat Protection**: Added safety check to prevent mass deletion when no heartbeat data received
+- **Single Query Pass**: Eliminated duplicate `.show entity_groups` calls between functions
+- **Granular Error Handling**: Continue processing other databases even if one fails
+- **Memory Efficient**: Track only `_Partitions` suffix entity-groups for cleanup
+
+**Critical Issue Identified and Fixed**: ✅ RESOLVED
+During implementation, we identified a potential data loss issue where a zero-result from the Heartbeat table (e.g., during network outages, all partition clusters down, or temporary issues) could lead to erroneous cleanup of all entity-groups. The optimized implementation includes:
+- **Early Exit Protection**: If `len(schemaByEndpoint) == 0`, skip all entity-group operations
+- **Safety Warning**: Log warning when no heartbeat data received to prevent accidental cleanup
+- **Graceful Degradation**: System continues to function with existing entity-groups until heartbeat data returns
+
+**Flow**:
+1. Check for zero heartbeat data → early exit if none (prevents mass deletion)
+2. For each database:
+   - Query existing entity-groups once
+   - Create/update entity-groups for active heartbeat data
+   - Remove only stale entity-groups not marked as active
+3. Robust error handling ensures database-level failures don't stop processing
+
+**Note**: Removed separate `cleanupStaleEntityGroups()` function as cleanup is now efficiently integrated into the main entity-group management flow.
 
 ### Task 5: Testing and Validation
 **Files**: `operator/adx_test.go` (create if doesn't exist)
