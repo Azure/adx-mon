@@ -1470,7 +1470,7 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 	for db := range dbSet {
 		databases = append(databases, db)
 	}
-	
+
 	// Process each database: create/update entity-groups and cleanup stale ones
 	for _, database := range databases {
 		// Step 1: Query existing entity-groups in this database to identify what needs cleanup
@@ -1501,7 +1501,7 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 					logger.Warnf("Failed to parse entity-group in database %s: %v", database, err)
 					continue
 				}
-				
+
 				// Track entity-groups with _Partitions suffix for cleanup consideration
 				if strings.HasSuffix(entityGroup.Name, "_Partitions") {
 					existingEntityGroups[entityGroup.Name] = true
@@ -1527,20 +1527,20 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 			if len(entityReferences) > 0 {
 				// Create entity-group name following pattern: {DatabaseName}_Partitions
 				entityGroupName := fmt.Sprintf("%s_Partitions", database)
-				
+
 				// Mark this entity-group as active (don't clean it up)
 				delete(existingEntityGroups, entityGroupName)
-				
+
 				// Build entity references string for KQL command
 				entityRefsStr := strings.Join(entityReferences, ", ")
-				
+
 				// Check if entity-group already exists
 				exists, err := entityGroupExists(ctx, client, database, entityGroupName)
 				if err != nil {
 					logger.Errorf("Failed to check if entity-group %s exists in database %s: %v", entityGroupName, database, err)
 					continue
 				}
-				
+
 				var stmt *kql.Builder
 				if exists {
 					// Update existing entity-group
@@ -1551,7 +1551,7 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 						AddLiteral(")")
 					logger.Infof("Updating existing entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
 				} else {
-					// Create new entity-group  
+					// Create new entity-group
 					stmt = kql.New(".create entity_group ").
 						AddUnsafe(entityGroupName).
 						AddLiteral(" (").
@@ -1559,17 +1559,17 @@ func ensureEntityGroups(ctx context.Context, client *kusto.Client, dbSet map[str
 						AddLiteral(")")
 					logger.Infof("Creating new entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
 				}
-				
+
 				_, err = client.Mgmt(ctx, database, stmt)
 				if err != nil {
 					logger.Errorf("Failed to create/update entity-group %s in database %s: %v", entityGroupName, database, err)
 					continue
 				}
-				
+
 				logger.Infof("Successfully created/updated entity-group %s", entityGroupName)
 			}
 		}
-		
+
 		// Step 3: Clean up stale entity-groups (those not updated above)
 		for staleEntityGroup := range existingEntityGroups {
 			logger.Infof("Removing stale entity-group %s from database %s", staleEntityGroup, database)
@@ -1618,4 +1618,3 @@ func entityGroupExists(ctx context.Context, client *kusto.Client, database, enti
 
 	return false, nil
 }
-
