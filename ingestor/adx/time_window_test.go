@@ -9,56 +9,15 @@ import (
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/clock"
+	klock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-// FakeClock implements clock.Clock for testing
-type FakeClock struct {
-	time time.Time
-}
-
-func NewFakeClock(t time.Time) *FakeClock {
-	return &FakeClock{time: t}
-}
-
-func (f *FakeClock) Now() time.Time {
-	return f.time
-}
-
-func (f *FakeClock) Since(ts time.Time) time.Duration {
-	return f.time.Sub(ts)
-}
-
-func (f *FakeClock) Until(ts time.Time) time.Duration {
-	return ts.Sub(f.time)
-}
-
-func (f *FakeClock) NewTimer(d time.Duration) clock.Timer {
-	return clock.RealClock{}.NewTimer(d)
-}
-
-func (f *FakeClock) NewTicker(d time.Duration) clock.Ticker {
-	return clock.RealClock{}.NewTicker(d)
-}
-
-func (f *FakeClock) Sleep(d time.Duration) {
-	f.time = f.time.Add(d)
-}
-
-func (f *FakeClock) After(d time.Duration) <-chan time.Time {
-	return clock.RealClock{}.After(d)
-}
-
-func (f *FakeClock) Tick(d time.Duration) <-chan time.Time {
-	return clock.RealClock{}.Tick(d)
-}
 
 func TestTimeWindowCalculation(t *testing.T) {
 	t.Run("first execution calculates correct time window", func(t *testing.T) {
 		// Use a fixed time for deterministic testing
 		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
-		fakeClock := NewFakeClock(fixedTime)
+		fakeClock := klock.NewFakeClock(fixedTime)
 
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
@@ -137,7 +96,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 	t.Run("subsequent execution uses last successful end time as start time", func(t *testing.T) {
 		// Set a fixed time that's well in the future from the last execution time
 		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
-		fakeClock := NewFakeClock(fixedTime)
+		fakeClock := klock.NewFakeClock(fixedTime)
 
 		// Create a rule with 1 hour interval
 		rule := &v1.SummaryRule{
@@ -227,7 +186,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 	t.Run("execution time is updated when shouldSubmitRule is true", func(t *testing.T) {
 		// Use a fixed time for deterministic testing
 		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
-		fakeClock := NewFakeClock(fixedTime)
+		fakeClock := klock.NewFakeClock(fixedTime)
 
 		// Create a rule with no prior execution history
 		rule := &v1.SummaryRule{
@@ -314,7 +273,7 @@ func TestTimeWindowCalculation(t *testing.T) {
 	t.Run("prevents gaps and overlaps in time windows", func(t *testing.T) {
 		// Use a fixed time for deterministic testing
 		fixedTime := time.Date(2025, 6, 17, 8, 30, 0, 0, time.UTC)
-		fakeClock := NewFakeClock(fixedTime)
+		fakeClock := klock.NewFakeClock(fixedTime)
 
 		// Create a rule with 30-minute interval
 		rule := &v1.SummaryRule{

@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	klock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -598,7 +599,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	// Set the GetOperations function to return an empty list
@@ -672,7 +673,7 @@ func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	// Set the GetOperations function to return an empty list
@@ -748,7 +749,7 @@ func TestSummaryRuleGetOperationsSucceedsAfterFailure(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	// Track GetOperations call count to simulate initial failure then success
@@ -845,7 +846,7 @@ func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	// Set the GetOperations function to return an error (Kusto unavailable)
@@ -1191,7 +1192,7 @@ func TestSummaryRuleSubmissionFailureDoesNotCauseImmediateRetry(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	// Set the GetOperations function to return an empty list
@@ -1645,7 +1646,7 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	var submitCount int
@@ -1777,7 +1778,7 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
-		Clock:    NewFakeClock(time.Now()),
+		Clock:    klock.NewFakeClock(time.Now()),
 	}
 
 	// Mock GetOperations to return the mixed states from Kusto

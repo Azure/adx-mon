@@ -326,7 +326,7 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 
 	// Get the last execution time as our starting point
 	lastExecutionTime := s.GetLastExecutionTime()
-	if lastExecutionTime == nil {
+	if lastExecutionTime == nil || lastExecutionTime.IsZero() {
 		// No action if there's no last execution time
 		return
 	}
@@ -421,12 +421,19 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 	if condition == nil {
 		condition = &metav1.Condition{}
 	}
-	condition.Message = string(operationsJSON)
+
+	message := string(operationsJSON)
+	if condition.Message == message {
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = "NoBacklog"
+	} else {
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = "InProgress"
+	}
+	condition.Message = message
 	condition.LastTransitionTime = metav1.Now()
 	condition.ObservedGeneration = s.GetGeneration()
 	condition.Type = SummaryRuleOperationIdOwner
-	condition.Status = metav1.ConditionUnknown
-	condition.Reason = "InProgress"
 
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
