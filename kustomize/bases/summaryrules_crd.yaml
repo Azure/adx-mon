@@ -63,9 +63,15 @@ spec:
                   to account for data ingestion latency. This ensures the query processes data that has
                   been fully ingested. If not specified, no delay is applied.
                 type: string
+                x-kubernetes-validations:
+                - message: ingestionDelay must be a valid duration
+                  rule: self == '' || duration(self) >= duration('0s')
               interval:
                 description: Interval is the cadence at which the rule will be executed
                 type: string
+                x-kubernetes-validations:
+                - message: interval must be a valid positive duration
+                  rule: duration(self) > duration('0s')
               name:
                 description: Name is the name of the rule (deprecated and not used
                   - use `metadata.name` instead)
