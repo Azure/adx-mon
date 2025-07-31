@@ -18,6 +18,7 @@ package v1
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -318,6 +319,125 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		}
 	}
 	return
+}
+
+func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	// Get the last execution time as our starting point
+	lastExecutionTime := s.GetLastExecutionTime()
+	if lastExecutionTime == nil || lastExecutionTime.IsZero() {
+		// No action if there's no last execution time
+		return
+	}
+
+	// Get existing async operations to check for duplicates
+	existingOps := s.GetAsyncOperations()
+
+	// Create a map for quick duplicate checking based on time windows
+	existingWindows := make(map[string]bool)
+	for _, op := range existingOps {
+		if op.StartTime != "" && op.EndTime != "" {
+			key := op.StartTime + ":" + op.EndTime
+			existingWindows[key] = true
+		}
+	}
+
+	var newOperations []AsyncOperation
+
+	// Calculate ingestion delay
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	// Calculate the current effective time (accounting for ingestion delay)
+	now := clk.Now().UTC().Add(-delay)
+
+	// Start from the last execution time and generate windows forward
+	currentWindowStart := lastExecutionTime.UTC()
+	intervalDuration := s.Spec.Interval.Duration
+
+	// Generate operations from last execution time forward until we hit current time
+	for {
+		// Calculate the next window
+		windowStart := currentWindowStart
+		windowEnd := windowStart.Add(intervalDuration)
+
+		// Stop if this window would end at or after current time
+		// (only backfill completely finished intervals)
+		if windowEnd.After(now) || windowEnd.Equal(now) {
+			break
+		}
+
+		// Check if this time window already exists
+		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + windowEnd.Format(time.RFC3339Nano)
+		if !existingWindows[windowKey] {
+			// Create new async operation (without OperationId - backlog operation)
+			newOp := AsyncOperation{
+				OperationId: "", // Empty for backlog operations
+				StartTime:   windowStart.Format(time.RFC3339Nano),
+				EndTime:     windowEnd.Format(time.RFC3339Nano),
+			}
+			newOperations = append(newOperations, newOp)
+			existingWindows[windowKey] = true
+		}
+
+		// Move to next interval
+		currentWindowStart = windowEnd
+	}
+
+	// Add new operations to existing ones, oldest first (to ensure newest are preserved when pruning)
+	allOperations := append(existingOps, newOperations...)
+
+	// If we exceed 200 operations, prune oldest (prioritize newest windows)
+	if len(allOperations) > 200 {
+		// Sort by StartTime to find chronologically oldest
+		sort.Slice(allOperations, func(i, j int) bool {
+			timeI, errI := time.Parse(time.RFC3339Nano, allOperations[i].StartTime)
+			timeJ, errJ := time.Parse(time.RFC3339Nano, allOperations[j].StartTime)
+
+			// Handle parsing errors - fall back to array position
+			if errI != nil || errJ != nil {
+				return i < j
+			}
+
+			return timeI.Before(timeJ)
+		})
+
+		// Keep only the newest 200 operations
+		allOperations = allOperations[len(allOperations)-200:]
+	}
+
+	// Marshal and store the updated operations
+	operationsJSON, err := json.Marshal(allOperations)
+	if err != nil {
+		// If we can't marshal the JSON, something has gone horribly wrong
+		return
+	}
+
+	// Update the condition
+	condition := meta.FindStatusCondition(s.Status.Conditions, SummaryRuleOperationIdOwner)
+	if condition == nil {
+		condition = &metav1.Condition{}
+	}
+
+	message := string(operationsJSON)
+	if condition.Message == message {
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = "NoBacklog"
+	} else {
+		condition.Status = metav1.ConditionUnknown
+		condition.Reason = "InProgress"
+	}
+	condition.Message = message
+	condition.LastTransitionTime = metav1.Now()
+	condition.ObservedGeneration = s.GetGeneration()
+	condition.Type = SummaryRuleOperationIdOwner
+
+	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
 // +kubebuilder:object:root=true
