@@ -4,8 +4,9 @@ FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 ARG crd
 ARG cmd=create
 
-# Install go and make
-RUN tdnf install -y golang ca-certificates make
+RUN tdnf install -y ca-certificates && update-ca-trust
+
+RUN tdnf install -y golang make
 
 # Install controller-gen
 RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest && \

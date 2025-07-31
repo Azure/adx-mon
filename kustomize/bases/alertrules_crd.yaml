@@ -41,6 +41,9 @@ spec:
             properties:
               autoMitigateAfter:
                 type: string
+                x-kubernetes-validations:
+                - message: autoMitigateAfter must be a valid duration
+                  rule: self == '' || duration(self) >= duration('0s')
               criteria:
                 additionalProperties:
                   items:
@@ -58,6 +61,9 @@ spec:
                 type: string
               interval:
                 type: string
+                x-kubernetes-validations:
+                - message: interval must be a valid positive duration
+                  rule: self == '' || duration(self) > duration('0s')
               query:
                 type: string
             type: object
