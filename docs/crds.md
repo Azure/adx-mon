@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, criteria-based execution, and historical data backfill | database, name, body, table, interval, criteria, backfill | [Summary Rules](designs/summary-rules.md#crd) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
 
@@ -199,6 +199,26 @@ spec:
       - production
 ```
 
+**Backfill Example for Historical Data Processing:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: historical-summary
+spec:
+  database: MyDB
+  name: HistoricalSummary
+  body: |
+    MyTable
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize count() by bin(Timestamp, 1h)
+  table: MySummaryTable
+  interval: 1h
+  backfill:
+    start: "2024-01-01T00:00:00Z"
+    end: "2024-01-31T23:59:59Z"
+```
+
 **Key Fields:**
 - `database`: Target ADX database.
 - `name`: Logical name for the rule.
@@ -206,6 +226,7 @@ spec:
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
 - `criteria`: _(Optional)_ Key/value pairs used to determine when a summary rule can execute. If empty or omitted, the rule always executes. Keys and values are deployment-specific and configured on ingestor instances via `--cluster-labels`. For a rule to execute, any one of the criteria must match (OR logic). Matching is case-insensitive.
+- `backfill`: _(Optional)_ Historical data processing configuration. When specified, the rule will process historical data from the start datetime to the end datetime in addition to normal interval execution. The system will automatically advance through time windows and remove this field when complete. Limited to 30 days maximum lookback period.
 
 **Required Placeholders:**
 - `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
@@ -239,6 +260,55 @@ SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodi
 - Time for next interval has elapsed
 
 **Error Handling**: Uses `UpdateStatusWithKustoErrorParsing()` to extract meaningful error messages from ADX responses and truncate long errors to 256 characters.
+
+### Backfill Feature for Historical Data Processing
+
+SummaryRules support backfill operations to process historical data across specified date ranges. This feature enables you to apply summary logic to existing data in ADX.
+
+**How Backfill Works:**
+
+1. **Specification**: Add a `backfill` field to your SummaryRule with `start` and `end` datetime values (RFC3339 format).
+
+2. **Serial Execution**: Backfill processes one time window at a time using the same interval as normal execution, preventing Kusto cluster overload.
+
+3. **Progress Tracking**: The system automatically advances the `start` position after each successful window completion. You can monitor progress by inspecting the `spec.backfill.start` field.
+
+4. **Parallel Operation**: Backfill runs alongside normal interval execution - your rule continues processing new data while catching up on historical data.
+
+5. **Auto-completion**: When backfill reaches the `end` time, the entire `backfill` field is automatically removed from the spec.
+
+**Backfill Configuration:**
+
+```yaml
+spec:
+  backfill:
+    start: "2024-01-01T00:00:00Z"  # Current backfill position (auto-updated)
+    end: "2024-01-31T23:59:59Z"    # Target end time (fixed)
+    operationId: "..."              # Current operation ID (auto-managed)
+```
+
+**Limitations and Best Practices:**
+
+- **Maximum Lookback**: 30 days maximum between start and end times
+- **Time Format**: Use RFC3339 format (`YYYY-MM-DDTHH:MM:SSZ`)
+- **Data Overlap**: Users are responsible for handling any data overlap concerns between backfill and normal execution
+- **Performance Impact**: Large backfill operations may affect Kusto cluster performance; consider running during off-peak hours
+- **Progress Monitoring**: Monitor the `spec.backfill.start` field to track progress
+- **Ingestion Delay**: Backfill operations respect the same `ingestionDelay` setting as normal execution
+
+**Example Backfill Workflow:**
+
+1. **Initial State**: Rule processes new data normally
+2. **Add Backfill**: Update the SummaryRule spec to include backfill configuration
+3. **Monitor Progress**: Watch the `start` field advance through time windows
+4. **Completion**: Backfill field is automatically removed when complete
+
+**Troubleshooting:**
+
+- **Stuck Progress**: Check Kusto operation status using the `operationId` in `spec.backfill.operationId`
+- **Failed Operations**: Failed backfill operations will retry automatically by clearing the `operationId`
+- **Invalid Dates**: Ensure start < end and both are within the 30-day lookback limit
+- **Performance Issues**: Consider reducing the interval size or scheduling backfill during off-peak hours
 
 ---
 

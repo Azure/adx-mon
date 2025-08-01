@@ -1,0 +1,44 @@
+# Large-Scale Data Migration with Backfill
+#
+# This example shows how to use backfill for migrating or reprocessing
+# large amounts of historical data with daily intervals to reduce
+# Kusto cluster load.
+
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: data-migration-backfill
+  namespace: adx-mon
+spec:
+  database: AnalyticsDB
+  table: DailyBusinessMetrics
+  body: |
+    RawBusinessEvents
+    | where EventTime between (_startTime .. _endTime)
+    | where EventType in ("purchase", "signup", "cancellation")
+    | extend Date = bin(EventTime, 1d)
+    | summarize 
+        daily_purchases = countif(EventType == "purchase"),
+        daily_signups = countif(EventType == "signup"),
+        daily_cancellations = countif(EventType == "cancellation"),
+        total_revenue = sumif(Revenue, EventType == "purchase"),
+        unique_customers = dcount(CustomerId)
+      by Date, ProductCategory
+  interval: 1d
+  
+  # Process 30 days (maximum allowed) of historical business data
+  backfill:
+    start: "2024-01-01T00:00:00Z"
+    end: "2024-01-30T23:59:59Z"
+
+---
+# Best Practices Demonstrated:
+# 1. Using daily intervals reduces cluster load for large datasets
+# 2. Maximum 30-day backfill period (enforced by validation)
+# 3. Complex business logic aggregation suitable for batch processing
+# 4. Clear table naming convention for the aggregated results
+#
+# Monitoring:
+# - Check spec.backfill.start to see current progress (advances daily)
+# - Check spec.backfill.operationId for current Kusto operation
+# - Monitor cluster performance during backfill execution

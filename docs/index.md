@@ -23,3 +23,4 @@ collection and analysis of observability data.
 * [Concepts](concepts.md)
 * [CRD Reference](crds.md)
 * [Cook Book](cookbook.md)
+* [Examples](examples/) - YAML examples and guides
