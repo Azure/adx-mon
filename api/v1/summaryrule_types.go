@@ -39,7 +39,28 @@ const (
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
 	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
+	// SummaryRuleMaxBackfillLookback is the maximum allowed lookback period for backfill operations
+	SummaryRuleMaxBackfillLookback = 30 * 24 * time.Hour // 30 days
 )
+
+// BackfillSpec defines the configuration for backfilling historical data
+type BackfillSpec struct {
+	// Start is the current backfill position (RFC3339 format)
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	Start string `json:"start"`
+	
+	// End is the target end time for backfill (RFC3339 format)
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	End string `json:"end"`
+	
+	// OperationId is the current active Kusto operation ID for this backfill window
+	// +optional
+	OperationId string `json:"operationId,omitempty"`
+}
 
 // SummaryRuleSpec defines the desired state of SummaryRule
 type SummaryRuleSpec struct {
@@ -66,6 +87,13 @@ type SummaryRuleSpec struct {
 	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
 	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
 	Criteria map[string][]string `json:"criteria,omitempty"`
+
+	// Backfill specifies historical data processing configuration. When specified, the rule will process
+	// historical data from the start datetime to the end datetime in addition to normal interval execution.
+	// The system will automatically advance through time windows and remove this field when complete.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self) || (has(self.start) && has(self.end))",message="backfill start and end are required when backfill is specified"
+	Backfill *BackfillSpec `json:"backfill,omitempty"`
 }
 
 // +kubebuilder:object:root=true
