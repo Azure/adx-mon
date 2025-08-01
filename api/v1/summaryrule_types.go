@@ -50,13 +50,13 @@ type BackfillSpec struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
 	Start string `json:"start"`
-	
+
 	// End is the target end time for backfill (RFC3339 format)
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
 	End string `json:"end"`
-	
+
 	// OperationId is the current active Kusto operation ID for this backfill window
 	// +optional
 	OperationId string `json:"operationId,omitempty"`

@@ -501,7 +501,7 @@ func (t *SummaryRuleTask) handleBackfillOperationStatus(ctx context.Context, rul
 		} else {
 			// Operation succeeded, advance backfill progress
 			logger.Infof("Backfill operation %s for rule %s.%s completed successfully", operationId, rule.Spec.Database, rule.Name)
-			
+
 			// Get the window that was just processed to advance progress
 			_, windowEnd, ok := rule.GetNextBackfillWindow(t.Clock)
 			if ok {
@@ -539,12 +539,12 @@ func (t *SummaryRuleTask) submitNextBackfillWindow(ctx context.Context, rule *v1
 
 	operationId, err := t.SubmitRule(ctx, *rule, windowStartTime.Format(time.RFC3339Nano), queryEndTime.Format(time.RFC3339Nano))
 	if err != nil {
-		return fmt.Errorf("failed to submit backfill operation for rule %s.%s (window %v to %v): %w", 
+		return fmt.Errorf("failed to submit backfill operation for rule %s.%s (window %v to %v): %w",
 			rule.Spec.Database, rule.Name, windowStartTime, windowEndTime, err)
 	}
 
 	rule.SetBackfillOperation(operationId)
-	logger.Infof("Submitted backfill operation %s for rule %s.%s (window %v to %v)", 
+	logger.Infof("Submitted backfill operation %s for rule %s.%s (window %v to %v)",
 		operationId, rule.Spec.Database, rule.Name, windowStartTime, windowEndTime)
 
 	return nil

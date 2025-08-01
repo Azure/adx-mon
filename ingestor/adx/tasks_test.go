@@ -1879,3 +1879,335 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	}
 	require.True(t, retryOpFound, "Retry operation should be present in final operations")
 }
+
+func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
+	baseTime := time.Date(2024, 6, 23, 10, 0, 0, 0, time.UTC)
+	fakeClock := klock.NewFakeClock(baseTime)
+
+	type submitCall struct {
+		rule      v1.SummaryRule
+		startTime string
+		endTime   string
+		opId      string
+	}
+
+	t.Run("submits backfill operation when no operation in progress", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Backfill: &v1.BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+				},
+			},
+		}
+
+		// Mock successful submission
+		var submitCalls []submitCall
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+			SubmitRule: func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+				opId := fmt.Sprintf("backfill-op-%d", len(submitCalls)+1)
+				submitCalls = append(submitCalls, submitCall{
+					rule:      rule,
+					startTime: startTime,
+					endTime:   endTime,
+					opId:      opId,
+				})
+				return opId, nil
+			},
+			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
+				return []AsyncOperationStatus{}, nil
+			},
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+
+		// Verify operation was submitted
+		require.Len(t, submitCalls, 1)
+		require.Equal(t, "backfill-op-1", rule.GetBackfillOperation())
+
+		// Verify time window
+		require.Equal(t, baseTime.Format(time.RFC3339Nano), submitCalls[0].startTime)
+		expectedEnd := baseTime.Add(time.Hour).Add(-kustoutil.OneTick)
+		require.Equal(t, expectedEnd.Format(time.RFC3339Nano), submitCalls[0].endTime)
+	})
+
+	t.Run("advances progress after successful operation completion", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Backfill: &v1.BackfillSpec{
+					Start:       baseTime.Format(time.RFC3339),
+					End:         baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+					OperationId: "test-operation-123",
+				},
+			},
+		}
+
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
+				return []AsyncOperationStatus{
+					{
+						OperationId: "test-operation-123",
+						State:       string(KustoAsyncOperationStateCompleted),
+					},
+				}, nil
+			},
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+
+		// Verify progress was advanced
+		expectedNewStart := baseTime.Add(time.Hour)
+		require.Equal(t, expectedNewStart.Format(time.RFC3339), rule.Spec.Backfill.Start)
+
+		// Verify operation ID was cleared
+		require.Empty(t, rule.GetBackfillOperation())
+	})
+
+	t.Run("handles failed operation by clearing operation ID", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Backfill: &v1.BackfillSpec{
+					Start:       baseTime.Format(time.RFC3339),
+					End:         baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+					OperationId: "failed-operation-456",
+				},
+			},
+		}
+
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
+				return []AsyncOperationStatus{
+					{
+						OperationId: "failed-operation-456",
+						State:       string(KustoAsyncOperationStateFailed),
+						Status:      "Query execution failed",
+					},
+				}, nil
+			},
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "backfill operation failed-operation-456 failed")
+
+		// Verify operation ID was cleared but progress not advanced
+		require.Empty(t, rule.GetBackfillOperation())
+		require.Equal(t, baseTime.Format(time.RFC3339), rule.Spec.Backfill.Start)
+	})
+
+	t.Run("handles retry operation by resubmitting", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Backfill: &v1.BackfillSpec{
+					Start:       baseTime.Format(time.RFC3339),
+					End:         baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+					OperationId: "retry-operation-789",
+				},
+			},
+		}
+
+		var submitCalls []submitCall
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+			SubmitRule: func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+				opId := "retry-operation-new"
+				submitCalls = append(submitCalls, submitCall{
+					rule:      rule,
+					startTime: startTime,
+					endTime:   endTime,
+					opId:      opId,
+				})
+				return opId, nil
+			},
+			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
+				return []AsyncOperationStatus{
+					{
+						OperationId: "retry-operation-789",
+						State:       string(KustoAsyncOperationStateInProgress),
+						ShouldRetry: 1,
+					},
+				}, nil
+			},
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+
+		// Verify retry submission
+		require.Len(t, submitCalls, 1)
+		require.Equal(t, "retry-operation-new", rule.GetBackfillOperation())
+	})
+
+	t.Run("removes backfill when complete", func(t *testing.T) {
+		// Backfill already at end time
+		endTime := baseTime.Add(time.Hour)
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Backfill: &v1.BackfillSpec{
+					Start: endTime.Format(time.RFC3339),
+					End:   endTime.Format(time.RFC3339),
+				},
+			},
+		}
+
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+
+		// Verify backfill was removed
+		require.Nil(t, rule.Spec.Backfill)
+	})
+
+	t.Run("no-op when no backfill configured", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				// No backfill configured
+			},
+		}
+
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+		// Should complete without error
+	})
+
+	t.Run("handles operation not found in Kusto", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database: "TestDB",
+				Table:    "TestTable",
+				Body:     "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval: metav1.Duration{Duration: time.Hour},
+				Backfill: &v1.BackfillSpec{
+					Start:       baseTime.Format(time.RFC3339),
+					End:         baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+					OperationId: "missing-operation",
+				},
+			},
+		}
+
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
+				return []AsyncOperationStatus{}, nil // Operation not found
+			},
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+
+		// Verify operation ID was cleared
+		require.Empty(t, rule.GetBackfillOperation())
+	})
+
+	t.Run("with ingestion delay", func(t *testing.T) {
+		rule := &v1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-rule",
+				Namespace: "default",
+			},
+			Spec: v1.SummaryRuleSpec{
+				Database:       "TestDB",
+				Table:          "TestTable",
+				Body:           "TestTable | summarize count() by bin(Timestamp, 1h)",
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 5 * time.Minute},
+				Backfill: &v1.BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   baseTime.Add(24 * time.Hour).Format(time.RFC3339),
+				},
+			},
+		}
+
+		var submitCalls []submitCall
+		task := &SummaryRuleTask{
+			Clock: fakeClock,
+			SubmitRule: func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+				opId := "backfill-with-delay"
+				submitCalls = append(submitCalls, submitCall{
+					rule:      rule,
+					startTime: startTime,
+					endTime:   endTime,
+					opId:      opId,
+				})
+				return opId, nil
+			},
+			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
+				return []AsyncOperationStatus{}, nil
+			},
+		}
+
+		err := task.handleBackfillExecution(context.Background(), rule)
+		require.NoError(t, err)
+
+		// Verify time window accounts for ingestion delay
+		require.Len(t, submitCalls, 1)
+		expectedStart := baseTime.Add(-5 * time.Minute)
+		expectedEnd := baseTime.Add(time.Hour - 5*time.Minute).Add(-kustoutil.OneTick)
+		require.Equal(t, expectedStart.Format(time.RFC3339Nano), submitCalls[0].startTime)
+		require.Equal(t, expectedEnd.Format(time.RFC3339Nano), submitCalls[0].endTime)
+	})
+}
