@@ -1436,3 +1436,311 @@ func TestBackfillAsyncOperations(t *testing.T) {
 		require.NotZero(t, condition.LastTransitionTime)
 	})
 }
+
+func TestBackfillHelperMethods(t *testing.T) {
+	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endTime := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	t.Run("HasActiveBackfill", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			backfill *BackfillSpec
+			expected bool
+		}{
+			{
+				name:     "no backfill",
+				backfill: nil,
+				expected: false,
+			},
+			{
+				name:     "empty backfill",
+				backfill: &BackfillSpec{},
+				expected: false,
+			},
+			{
+				name: "only start set",
+				backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+				},
+				expected: false,
+			},
+			{
+				name: "only end set",
+				backfill: &BackfillSpec{
+					End: endTime.Format(time.RFC3339),
+				},
+				expected: false,
+			},
+			{
+				name: "both start and end set",
+				backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   endTime.Format(time.RFC3339),
+				},
+				expected: true,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				rule := &SummaryRule{
+					Spec: SummaryRuleSpec{
+						Backfill: tc.backfill,
+					},
+				}
+				require.Equal(t, tc.expected, rule.HasActiveBackfill())
+			})
+		}
+	})
+
+	t.Run("IsBackfillComplete", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			backfill *BackfillSpec
+			expected bool
+		}{
+			{
+				name:     "no backfill is complete",
+				backfill: nil,
+				expected: true,
+			},
+			{
+				name: "start before end",
+				backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   endTime.Format(time.RFC3339),
+				},
+				expected: false,
+			},
+			{
+				name: "start equals end",
+				backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   baseTime.Format(time.RFC3339),
+				},
+				expected: true,
+			},
+			{
+				name: "start after end",
+				backfill: &BackfillSpec{
+					Start: endTime.Format(time.RFC3339),
+					End:   baseTime.Format(time.RFC3339),
+				},
+				expected: true,
+			},
+			{
+				name: "invalid start time",
+				backfill: &BackfillSpec{
+					Start: "invalid",
+					End:   endTime.Format(time.RFC3339),
+				},
+				expected: false,
+			},
+			{
+				name: "invalid end time",
+				backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   "invalid",
+				},
+				expected: false,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				rule := &SummaryRule{
+					Spec: SummaryRuleSpec{
+						Backfill: tc.backfill,
+					},
+				}
+				require.Equal(t, tc.expected, rule.IsBackfillComplete())
+			})
+		}
+	})
+
+	t.Run("GetNextBackfillWindow", func(t *testing.T) {
+		fakeClock := NewFakeClock(baseTime.Add(12 * time.Hour))
+
+		t.Run("no backfill returns false", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Interval: metav1.Duration{Duration: time.Hour},
+				},
+			}
+			start, end, ok := rule.GetNextBackfillWindow(fakeClock)
+			require.False(t, ok)
+			require.True(t, start.IsZero())
+			require.True(t, end.IsZero())
+		})
+
+		t.Run("completed backfill returns false", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Interval: metav1.Duration{Duration: time.Hour},
+					Backfill: &BackfillSpec{
+						Start: endTime.Format(time.RFC3339),
+						End:   baseTime.Format(time.RFC3339), // Start after end
+					},
+				},
+			}
+			start, end, ok := rule.GetNextBackfillWindow(fakeClock)
+			require.False(t, ok)
+			require.True(t, start.IsZero())
+			require.True(t, end.IsZero())
+		})
+
+		t.Run("valid backfill window", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Interval: metav1.Duration{Duration: time.Hour},
+					Backfill: &BackfillSpec{
+						Start: baseTime.Format(time.RFC3339),
+						End:   endTime.Format(time.RFC3339),
+					},
+				},
+			}
+			start, end, ok := rule.GetNextBackfillWindow(fakeClock)
+			require.True(t, ok)
+			require.Equal(t, baseTime, start)
+			require.Equal(t, baseTime.Add(time.Hour), end)
+		})
+
+		t.Run("with ingestion delay", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Interval:       metav1.Duration{Duration: time.Hour},
+					IngestionDelay: &metav1.Duration{Duration: 5 * time.Minute},
+					Backfill: &BackfillSpec{
+						Start: baseTime.Format(time.RFC3339),
+						End:   endTime.Format(time.RFC3339),
+					},
+				},
+			}
+			start, end, ok := rule.GetNextBackfillWindow(fakeClock)
+			require.True(t, ok)
+			require.Equal(t, baseTime.Add(-5*time.Minute), start)
+			require.Equal(t, baseTime.Add(time.Hour-5*time.Minute), end)
+		})
+
+		t.Run("window end limited by backfill end", func(t *testing.T) {
+			// Backfill end is 30 minutes into the interval
+			shortEnd := baseTime.Add(30 * time.Minute)
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Interval: metav1.Duration{Duration: time.Hour},
+					Backfill: &BackfillSpec{
+						Start: baseTime.Format(time.RFC3339),
+						End:   shortEnd.Format(time.RFC3339),
+					},
+				},
+			}
+			start, end, ok := rule.GetNextBackfillWindow(fakeClock)
+			require.True(t, ok)
+			require.Equal(t, baseTime, start)
+			require.Equal(t, shortEnd, end)
+		})
+
+		t.Run("uses real clock when nil", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Interval: metav1.Duration{Duration: time.Hour},
+					Backfill: &BackfillSpec{
+						Start: baseTime.Format(time.RFC3339),
+						End:   endTime.Format(time.RFC3339),
+					},
+				},
+			}
+			start, end, ok := rule.GetNextBackfillWindow(nil)
+			require.True(t, ok)
+			require.False(t, start.IsZero())
+			require.False(t, end.IsZero())
+		})
+	})
+
+	t.Run("AdvanceBackfillProgress", func(t *testing.T) {
+		t.Run("advances progress correctly", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					Backfill: &BackfillSpec{
+						Start: baseTime.Format(time.RFC3339),
+						End:   endTime.Format(time.RFC3339),
+					},
+				},
+			}
+
+			newEndTime := baseTime.Add(time.Hour)
+			rule.AdvanceBackfillProgress(newEndTime)
+			require.Equal(t, newEndTime.UTC().Format(time.RFC3339), rule.Spec.Backfill.Start)
+		})
+
+		t.Run("handles ingestion delay", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{
+					IngestionDelay: &metav1.Duration{Duration: 5 * time.Minute},
+					Backfill: &BackfillSpec{
+						Start: baseTime.Format(time.RFC3339),
+						End:   endTime.Format(time.RFC3339),
+					},
+				},
+			}
+
+			newEndTime := baseTime.Add(time.Hour)
+			rule.AdvanceBackfillProgress(newEndTime)
+			// Should add back the ingestion delay
+			expected := newEndTime.Add(5 * time.Minute)
+			require.Equal(t, expected.UTC().Format(time.RFC3339), rule.Spec.Backfill.Start)
+		})
+
+		t.Run("no-op when no backfill", func(t *testing.T) {
+			rule := &SummaryRule{
+				Spec: SummaryRuleSpec{},
+			}
+			rule.AdvanceBackfillProgress(baseTime)
+			// Should not panic or error
+		})
+	})
+
+	t.Run("BackfillOperationMethods", func(t *testing.T) {
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   endTime.Format(time.RFC3339),
+				},
+			},
+		}
+
+		// Test SetBackfillOperation
+		rule.SetBackfillOperation("test-operation-id")
+		require.Equal(t, "test-operation-id", rule.Spec.Backfill.OperationId)
+
+		// Test GetBackfillOperation
+		require.Equal(t, "test-operation-id", rule.GetBackfillOperation())
+
+		// Test ClearBackfillOperation
+		rule.ClearBackfillOperation()
+		require.Empty(t, rule.Spec.Backfill.OperationId)
+
+		// Test operations on rule without backfill
+		ruleNoBackfill := &SummaryRule{Spec: SummaryRuleSpec{}}
+		ruleNoBackfill.SetBackfillOperation("test")
+		require.Empty(t, ruleNoBackfill.GetBackfillOperation())
+		ruleNoBackfill.ClearBackfillOperation() // Should not panic
+	})
+
+	t.Run("RemoveBackfill", func(t *testing.T) {
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Backfill: &BackfillSpec{
+					Start: baseTime.Format(time.RFC3339),
+					End:   endTime.Format(time.RFC3339),
+				},
+			},
+		}
+
+		require.True(t, rule.HasActiveBackfill())
+		rule.RemoveBackfill()
+		require.False(t, rule.HasActiveBackfill())
+		require.Nil(t, rule.Spec.Backfill)
+	})
+}

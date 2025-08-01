@@ -468,6 +468,126 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
 }
 
+// HasActiveBackfill returns true if the rule has an active backfill configuration
+func (s *SummaryRule) HasActiveBackfill() bool {
+	return s.Spec.Backfill != nil && s.Spec.Backfill.Start != "" && s.Spec.Backfill.End != ""
+}
+
+// IsBackfillComplete returns true if the backfill has reached or passed the end time
+func (s *SummaryRule) IsBackfillComplete() bool {
+	if !s.HasActiveBackfill() {
+		return true // No backfill means it's "complete"
+	}
+
+	startTime, err := time.Parse(time.RFC3339, s.Spec.Backfill.Start)
+	if err != nil {
+		return false // Invalid start time means not complete
+	}
+
+	endTime, err := time.Parse(time.RFC3339, s.Spec.Backfill.End)
+	if err != nil {
+		return false // Invalid end time means not complete
+	}
+
+	return startTime.After(endTime) || startTime.Equal(endTime)
+}
+
+// GetNextBackfillWindow calculates the next time window for backfill execution
+// Returns start time, end time, and whether a valid window exists
+// Uses the same interval alignment as normal execution
+func (s *SummaryRule) GetNextBackfillWindow(clk clock.Clock) (time.Time, time.Time, bool) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	if !s.HasActiveBackfill() || s.IsBackfillComplete() {
+		return time.Time{}, time.Time{}, false
+	}
+
+	// Parse the current backfill start position
+	currentStart, err := time.Parse(time.RFC3339, s.Spec.Backfill.Start)
+	if err != nil {
+		return time.Time{}, time.Time{}, false
+	}
+
+	// Parse the backfill end time
+	backfillEnd, err := time.Parse(time.RFC3339, s.Spec.Backfill.End)
+	if err != nil {
+		return time.Time{}, time.Time{}, false
+	}
+
+	// Apply ingestion delay
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	// Align to interval boundaries like normal execution
+	intervalDuration := s.Spec.Interval.Duration
+	windowStartTime := currentStart.UTC().Truncate(intervalDuration)
+	windowEndTime := windowStartTime.Add(intervalDuration)
+
+	// Don't exceed the backfill end time
+	if windowEndTime.After(backfillEnd) {
+		windowEndTime = backfillEnd
+	}
+
+	// Apply ingestion delay to window
+	windowStartTime = windowStartTime.Add(-delay)
+	windowEndTime = windowEndTime.Add(-delay)
+
+	// Validate that we have a meaningful window
+	if windowStartTime.After(windowEndTime) || windowStartTime.Equal(windowEndTime) {
+		return time.Time{}, time.Time{}, false
+	}
+
+	return windowStartTime, windowEndTime, true
+}
+
+// AdvanceBackfillProgress moves the backfill start position forward after successful execution
+func (s *SummaryRule) AdvanceBackfillProgress(endTime time.Time) {
+	if !s.HasActiveBackfill() {
+		return
+	}
+
+	// Apply ingestion delay in reverse to get the actual progress position
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	// Move start position to the end time (plus delay to account for delay applied in window calculation)
+	progressPosition := endTime.Add(delay)
+	s.Spec.Backfill.Start = progressPosition.UTC().Format(time.RFC3339)
+}
+
+// ClearBackfillOperation clears the current operation ID from the backfill spec
+func (s *SummaryRule) ClearBackfillOperation() {
+	if s.HasActiveBackfill() {
+		s.Spec.Backfill.OperationId = ""
+	}
+}
+
+// SetBackfillOperation sets the operation ID for the current backfill window
+func (s *SummaryRule) SetBackfillOperation(operationId string) {
+	if s.HasActiveBackfill() {
+		s.Spec.Backfill.OperationId = operationId
+	}
+}
+
+// GetBackfillOperation returns the current backfill operation ID
+func (s *SummaryRule) GetBackfillOperation() string {
+	if s.HasActiveBackfill() {
+		return s.Spec.Backfill.OperationId
+	}
+	return ""
+}
+
+// RemoveBackfill removes the backfill configuration when complete
+func (s *SummaryRule) RemoveBackfill() {
+	s.Spec.Backfill = nil
+}
+
 // +kubebuilder:object:root=true
 
 // SummaryRuleList contains a list of SummaryRule
