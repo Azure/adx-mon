@@ -519,30 +519,53 @@ func (t *SummaryRuleTask) handleBackfillOperationStatus(ctx context.Context, rul
 
 // submitNextBackfillWindow submits the next backfill window for execution
 func (t *SummaryRuleTask) submitNextBackfillWindow(ctx context.Context, rule *v1.SummaryRule) error {
-	windowStartTime, windowEndTime, ok := rule.GetNextBackfillWindow(t.Clock)
+	windowStartTime, windowEndTime, ok := t.getNextBackfillWindow(rule)
 	if !ok {
-		// No valid window, backfill might be complete
-		if rule.IsBackfillComplete() {
-			logger.Infof("Backfill complete for rule %s.%s, removing backfill configuration", rule.Spec.Database, rule.Name)
-			rule.RemoveBackfill()
-		}
-		return nil
+		return t.handleBackfillCompletion(rule)
 	}
 
+	operationId, err := t.submitBackfillOperation(ctx, rule, windowStartTime, windowEndTime)
+	if err != nil {
+		return err
+	}
+
+	t.recordBackfillOperationSubmission(rule, operationId, windowStartTime, windowEndTime)
+	return nil
+}
+
+// getNextBackfillWindow retrieves the next backfill window and handles completion checking
+func (t *SummaryRuleTask) getNextBackfillWindow(rule *v1.SummaryRule) (time.Time, time.Time, bool) {
+	return rule.GetNextBackfillWindow(t.Clock)
+}
+
+// handleBackfillCompletion manages backfill completion when no valid window exists
+func (t *SummaryRuleTask) handleBackfillCompletion(rule *v1.SummaryRule) error {
+	if rule.IsBackfillComplete() {
+		logger.Infof("Backfill complete for rule %s.%s, removing backfill configuration", rule.Spec.Database, rule.Name)
+		rule.RemoveBackfill()
+	}
+	return nil
+}
+
+// submitBackfillOperation submits the backfill operation with proper time formatting
+func (t *SummaryRuleTask) submitBackfillOperation(ctx context.Context, rule *v1.SummaryRule, windowStartTime, windowEndTime time.Time) (string, error) {
 	// Subtract 1 tick from endTime for the query to avoid boundary issues
 	queryEndTime := windowEndTime.Add(-kustoutil.OneTick)
 
 	operationId, err := t.SubmitRule(ctx, *rule, windowStartTime.Format(time.RFC3339Nano), queryEndTime.Format(time.RFC3339Nano))
 	if err != nil {
-		return fmt.Errorf("failed to submit backfill operation for rule %s.%s (window %v to %v): %w",
+		return "", fmt.Errorf("failed to submit backfill operation for rule %s.%s (window %v to %v): %w",
 			rule.Spec.Database, rule.Name, windowStartTime, windowEndTime, err)
 	}
 
+	return operationId, nil
+}
+
+// recordBackfillOperationSubmission logs the submission and updates the rule state
+func (t *SummaryRuleTask) recordBackfillOperationSubmission(rule *v1.SummaryRule, operationId string, windowStartTime, windowEndTime time.Time) {
 	rule.SetBackfillOperation(operationId)
 	logger.Infof("Submitted backfill operation %s for rule %s.%s (window %v to %v)",
 		operationId, rule.Spec.Database, rule.Name, windowStartTime, windowEndTime)
-
-	return nil
 }
 
 func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus) {
@@ -676,7 +699,12 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 
 func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
 	// Query for a specific operation using parameters to prevent injection
-	stmt := kql.New(".show operations | where OperationId == @ParamOperationId | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status) | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status")
+	stmt := kql.New(`
+.show operations
+| where OperationId == @ParamOperationId
+| summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)
+| project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status
+`)
 	params := kql.NewParameters().AddString("ParamOperationId", operationId)
 
 	rows, err := t.kustoCli.Mgmt(ctx, stmt, kusto.QueryParameters(params))

@@ -39,7 +39,7 @@ const (
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
 	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
-	// SummaryRuleMaxBackfillLookback is the maximum allowed lookback period for backfill operations
+	// SummaryRuleMaxBackfillLookback is the maximum allowed lookback period for backfill operations (30 days)
 	SummaryRuleMaxBackfillLookback = 30 * 24 * time.Hour // 30 days
 )
 
@@ -294,9 +294,7 @@ func (s *SummaryRule) RemoveAsyncOperation(operationId string) {
 }
 
 func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+	clk = s.ensureClockIsSet(clk)
 
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	cnd := s.GetCondition()
@@ -337,30 +335,59 @@ func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
 // These represent two different architectural approaches that cannot be unified without
 // breaking existing behavior. See NextExecutionWindow() comment for more details.
 func (s *SummaryRule) calculateTimeWindow(clk clock.Clock, startPosition time.Time, maxEndTime *time.Time) (time.Time, time.Time) {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+	clk = s.ensureClockIsSet(clk)
 
-	var delay time.Duration
+	delay := s.getIngestionDelay()
+	windowStartTime, windowEndTime := s.calculateIntervalBoundaries(startPosition)
+	windowEndTime = s.applyBoundaryConstraints(windowEndTime, maxEndTime)
+
+	return s.applyIngestionDelayToWindow(windowStartTime, windowEndTime, delay)
+}
+
+// getIngestionDelay returns the configured ingestion delay duration, or zero if not set
+func (s *SummaryRule) getIngestionDelay() time.Duration {
 	if s.Spec.IngestionDelay != nil {
-		delay = s.Spec.IngestionDelay.Duration
+		return s.Spec.IngestionDelay.Duration
 	}
+	return 0
+}
 
-	// Align to interval boundaries like normal execution
+// calculateIntervalBoundaries aligns the start position to interval boundaries
+func (s *SummaryRule) calculateIntervalBoundaries(startPosition time.Time) (time.Time, time.Time) {
 	intervalDuration := s.Spec.Interval.Duration
 	windowStartTime := startPosition.UTC().Truncate(intervalDuration)
 	windowEndTime := windowStartTime.Add(intervalDuration)
-
-	// Apply boundary constraints if provided (don't exceed backfill end time)
-	if maxEndTime != nil && windowEndTime.After(*maxEndTime) {
-		windowEndTime = *maxEndTime
-	}
-
-	// Apply ingestion delay to window
-	windowStartTime = windowStartTime.Add(-delay)
-	windowEndTime = windowEndTime.Add(-delay)
-
 	return windowStartTime, windowEndTime
+}
+
+// applyBoundaryConstraints ensures the window end doesn't exceed the maximum end time
+func (s *SummaryRule) applyBoundaryConstraints(windowEndTime time.Time, maxEndTime *time.Time) time.Time {
+	if maxEndTime != nil && windowEndTime.After(*maxEndTime) {
+		return *maxEndTime
+	}
+	return windowEndTime
+}
+
+// applyIngestionDelayToWindow shifts both start and end times by the ingestion delay
+func (s *SummaryRule) applyIngestionDelayToWindow(windowStartTime, windowEndTime time.Time, delay time.Duration) (time.Time, time.Time) {
+	return windowStartTime.Add(-delay), windowEndTime.Add(-delay)
+}
+
+// ensureClockIsSet returns a real clock if the provided clock is nil
+func (s *SummaryRule) ensureClockIsSet(clk clock.Clock) clock.Clock {
+	if clk == nil {
+		return clock.RealClock{}
+	}
+	return clk
+}
+
+// capWindowEndToCurrentTime ensures the window end doesn't exceed current time (for normal execution)
+func (s *SummaryRule) capWindowEndToCurrentTime(clk clock.Clock, windowEndTime time.Time, delay time.Duration) time.Time {
+	now := clk.Now().UTC().Add(-delay).Truncate(time.Minute)
+	if windowEndTime.After(now) {
+		return now
+	}
+	return windowEndTime
 }
 
 // NextExecutionWindow calculates the time window for normal interval-based execution.
@@ -383,14 +410,8 @@ func (s *SummaryRule) calculateTimeWindow(clk clock.Clock, startPosition time.Ti
 // and cannot be unified without breaking existing behavior. Any attempt to share this
 // logic will break the comprehensive test suite that validates ingestion delay behavior.
 func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
-
-	var delay time.Duration
-	if s.Spec.IngestionDelay != nil {
-		delay = s.Spec.IngestionDelay.Duration
-	}
+	clk = s.ensureClockIsSet(clk)
+	delay := s.getIngestionDelay()
 
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	if lastSuccessfulEndTime == nil {
@@ -406,18 +427,13 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
 		// Ensure we don't execute future windows
-		now := clk.Now().UTC().Add(-delay).Truncate(time.Minute)
-		if windowEndTime.After(now) {
-			windowEndTime = now
-		}
+		windowEndTime = s.capWindowEndToCurrentTime(clk, windowEndTime, delay)
 	}
 	return
 }
 
 func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+	clk = s.ensureClockIsSet(clk)
 
 	// Get the last execution time as our starting point
 	lastExecutionTime := s.GetLastExecutionTime()
@@ -561,9 +577,7 @@ func (s *SummaryRule) IsBackfillComplete() bool {
 // Returns start time, end time, and whether a valid window exists
 // Uses the same interval alignment as normal execution
 func (s *SummaryRule) GetNextBackfillWindow(clk clock.Clock) (time.Time, time.Time, bool) {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+	clk = s.ensureClockIsSet(clk)
 
 	if !s.HasActiveBackfill() || s.IsBackfillComplete() {
 		return time.Time{}, time.Time{}, false
