@@ -39,7 +39,28 @@ const (
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
 	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
+	// SummaryRuleMaxBackfillLookback is the maximum allowed lookback period for backfill operations (30 days)
+	SummaryRuleMaxBackfillLookback = 30 * 24 * time.Hour // 30 days
 )
+
+// BackfillSpec defines the configuration for backfilling historical data
+type BackfillSpec struct {
+	// Start is the current backfill position (RFC3339 format)
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	Start string `json:"start"`
+
+	// End is the target end time for backfill (RFC3339 format)
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	End string `json:"end"`
+
+	// OperationId is the current active Kusto operation ID for this backfill window
+	// +optional
+	OperationId string `json:"operationId,omitempty"`
+}
 
 // SummaryRuleSpec defines the desired state of SummaryRule
 type SummaryRuleSpec struct {
@@ -66,6 +87,13 @@ type SummaryRuleSpec struct {
 	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
 	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
 	Criteria map[string][]string `json:"criteria,omitempty"`
+
+	// Backfill specifies historical data processing configuration. When specified, the rule will process
+	// historical data from the start datetime to the end datetime in addition to normal interval execution.
+	// The system will automatically advance through time windows and remove this field when complete.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self) || (has(self.start) && has(self.end))",message="backfill start and end are required when backfill is specified"
+	Backfill *BackfillSpec `json:"backfill,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -266,9 +294,7 @@ func (s *SummaryRule) RemoveAsyncOperation(operationId string) {
 }
 
 func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+	clk = s.ensureClockIsSet(clk)
 
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	cnd := s.GetCondition()
@@ -289,15 +315,103 @@ func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
 		(lastSuccessfulEndTime == nil && clk.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
 }
 
-func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+// calculateTimeWindow handles core window calculation logic for backfill operations.
+//
+// IMPORTANT: This method intentionally does NOT share logic with NextExecutionWindow()
+// despite apparent similarities. The methods implement fundamentally different approaches
+// to ingestion delay handling:
+//
+// calculateTimeWindow (this method):
+//   - Applies ingestion delay AFTER interval alignment
+//   - Calculates clean interval boundaries first: startPos.truncate(interval)
+//   - Then shifts the entire window: window.add(-delay)
+//   - Maintains consistent time boundaries across backfill operations
+//
+// NextExecutionWindow (normal execution):
+//   - Applies ingestion delay BEFORE interval alignment
+//   - Uses delay to determine the alignment point itself
+//   - Creates execution windows that are "shifted" by the delay amount
+//
+// These represent two different architectural approaches that cannot be unified without
+// breaking existing behavior. See NextExecutionWindow() comment for more details.
+func (s *SummaryRule) calculateTimeWindow(clk clock.Clock, startPosition time.Time, maxEndTime *time.Time) (time.Time, time.Time) {
+	clk = s.ensureClockIsSet(clk)
 
-	var delay time.Duration
+	delay := s.getIngestionDelay()
+	windowStartTime, windowEndTime := s.calculateIntervalBoundaries(startPosition)
+	windowEndTime = s.applyBoundaryConstraints(windowEndTime, maxEndTime)
+
+	return s.applyIngestionDelayToWindow(windowStartTime, windowEndTime, delay)
+}
+
+// getIngestionDelay returns the configured ingestion delay duration, or zero if not set
+func (s *SummaryRule) getIngestionDelay() time.Duration {
 	if s.Spec.IngestionDelay != nil {
-		delay = s.Spec.IngestionDelay.Duration
+		return s.Spec.IngestionDelay.Duration
 	}
+	return 0
+}
+
+// calculateIntervalBoundaries aligns the start position to interval boundaries
+func (s *SummaryRule) calculateIntervalBoundaries(startPosition time.Time) (time.Time, time.Time) {
+	intervalDuration := s.Spec.Interval.Duration
+	windowStartTime := startPosition.UTC().Truncate(intervalDuration)
+	windowEndTime := windowStartTime.Add(intervalDuration)
+	return windowStartTime, windowEndTime
+}
+
+// applyBoundaryConstraints ensures the window end doesn't exceed the maximum end time
+func (s *SummaryRule) applyBoundaryConstraints(windowEndTime time.Time, maxEndTime *time.Time) time.Time {
+	if maxEndTime != nil && windowEndTime.After(*maxEndTime) {
+		return *maxEndTime
+	}
+	return windowEndTime
+}
+
+// applyIngestionDelayToWindow shifts both start and end times by the ingestion delay
+func (s *SummaryRule) applyIngestionDelayToWindow(windowStartTime, windowEndTime time.Time, delay time.Duration) (time.Time, time.Time) {
+	return windowStartTime.Add(-delay), windowEndTime.Add(-delay)
+}
+
+// ensureClockIsSet returns a real clock if the provided clock is nil
+func (s *SummaryRule) ensureClockIsSet(clk clock.Clock) clock.Clock {
+	if clk == nil {
+		return clock.RealClock{}
+	}
+	return clk
+}
+
+// capWindowEndToCurrentTime ensures the window end doesn't exceed current time (for normal execution)
+func (s *SummaryRule) capWindowEndToCurrentTime(clk clock.Clock, windowEndTime time.Time, delay time.Duration) time.Time {
+	now := clk.Now().UTC().Add(-delay).Truncate(time.Minute)
+	if windowEndTime.After(now) {
+		return now
+	}
+	return windowEndTime
+}
+
+// NextExecutionWindow calculates the time window for normal interval-based execution.
+//
+// IMPORTANT: This method intentionally does NOT share logic with calculateTimeWindow()
+// because they implement fundamentally different approaches to ingestion delay handling:
+//
+// NextExecutionWindow (this method):
+//   - Applies ingestion delay BEFORE interval alignment
+//   - For first execution: (currentTime - delay).truncate(interval) = endTime
+//   - For subsequent: (lastEndTime - delay).truncate(interval) = startTime
+//   - This creates execution windows that are "shifted" by the delay amount
+//
+// calculateTimeWindow (backfill method):
+//   - Applies ingestion delay AFTER interval alignment
+//   - Calculates clean interval boundaries first, then shifts the entire window
+//   - This maintains consistent time window boundaries across backfill operations
+//
+// These represent two different time calculation strategies that serve different purposes
+// and cannot be unified without breaking existing behavior. Any attempt to share this
+// logic will break the comprehensive test suite that validates ingestion delay behavior.
+func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
+	clk = s.ensureClockIsSet(clk)
+	delay := s.getIngestionDelay()
 
 	lastSuccessfulEndTime := s.GetLastExecutionTime()
 	if lastSuccessfulEndTime == nil {
@@ -313,18 +427,13 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
 		// Ensure we don't execute future windows
-		now := clk.Now().UTC().Add(-delay).Truncate(time.Minute)
-		if windowEndTime.After(now) {
-			windowEndTime = now
-		}
+		windowEndTime = s.capWindowEndToCurrentTime(clk, windowEndTime, delay)
 	}
 	return
 }
 
 func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
-	if clk == nil {
-		clk = clock.RealClock{}
-	}
+	clk = s.ensureClockIsSet(clk)
 
 	// Get the last execution time as our starting point
 	lastExecutionTime := s.GetLastExecutionTime()
@@ -438,6 +547,108 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 	condition.Type = SummaryRuleOperationIdOwner
 
 	meta.SetStatusCondition(&s.Status.Conditions, *condition)
+}
+
+// HasActiveBackfill returns true if the rule has an active backfill configuration
+func (s *SummaryRule) HasActiveBackfill() bool {
+	return s.Spec.Backfill != nil && s.Spec.Backfill.Start != "" && s.Spec.Backfill.End != ""
+}
+
+// IsBackfillComplete returns true if the backfill has reached or passed the end time
+func (s *SummaryRule) IsBackfillComplete() bool {
+	if !s.HasActiveBackfill() {
+		return true // No backfill means it's "complete"
+	}
+
+	startTime, err := time.Parse(time.RFC3339, s.Spec.Backfill.Start)
+	if err != nil {
+		return false // Invalid start time means not complete
+	}
+
+	endTime, err := time.Parse(time.RFC3339, s.Spec.Backfill.End)
+	if err != nil {
+		return false // Invalid end time means not complete
+	}
+
+	return startTime.After(endTime) || startTime.Equal(endTime)
+}
+
+// GetNextBackfillWindow calculates the next time window for backfill execution
+// Returns start time, end time, and whether a valid window exists
+// Uses the same interval alignment as normal execution
+func (s *SummaryRule) GetNextBackfillWindow(clk clock.Clock) (time.Time, time.Time, bool) {
+	clk = s.ensureClockIsSet(clk)
+
+	if !s.HasActiveBackfill() || s.IsBackfillComplete() {
+		return time.Time{}, time.Time{}, false
+	}
+
+	// Parse the current backfill start position
+	currentStart, err := time.Parse(time.RFC3339, s.Spec.Backfill.Start)
+	if err != nil {
+		return time.Time{}, time.Time{}, false
+	}
+
+	// Parse the backfill end time
+	backfillEnd, err := time.Parse(time.RFC3339, s.Spec.Backfill.End)
+	if err != nil {
+		return time.Time{}, time.Time{}, false
+	}
+
+	// Use shared window calculation logic with backfill end as boundary
+	windowStartTime, windowEndTime := s.calculateTimeWindow(clk, currentStart, &backfillEnd)
+
+	// Validate that we have a meaningful window
+	if windowStartTime.After(windowEndTime) || windowStartTime.Equal(windowEndTime) {
+		return time.Time{}, time.Time{}, false
+	}
+
+	return windowStartTime, windowEndTime, true
+}
+
+// AdvanceBackfillProgress moves the backfill start position forward after successful execution
+func (s *SummaryRule) AdvanceBackfillProgress(endTime time.Time) {
+	if !s.HasActiveBackfill() {
+		return
+	}
+
+	// The endTime passed in is already delay-adjusted from calculateTimeWindow,
+	// so we need to reverse the delay to get the actual interval boundary position
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	// Add delay back to get the clean interval boundary that should be our next start position
+	progressPosition := endTime.Add(delay)
+	s.Spec.Backfill.Start = progressPosition.UTC().Format(time.RFC3339)
+}
+
+// ClearBackfillOperation clears the current operation ID from the backfill spec
+func (s *SummaryRule) ClearBackfillOperation() {
+	if s.HasActiveBackfill() {
+		s.Spec.Backfill.OperationId = ""
+	}
+}
+
+// SetBackfillOperation sets the operation ID for the current backfill window
+func (s *SummaryRule) SetBackfillOperation(operationId string) {
+	if s.HasActiveBackfill() {
+		s.Spec.Backfill.OperationId = operationId
+	}
+}
+
+// GetBackfillOperation returns the current backfill operation ID
+func (s *SummaryRule) GetBackfillOperation() string {
+	if s.HasActiveBackfill() {
+		return s.Spec.Backfill.OperationId
+	}
+	return ""
+}
+
+// RemoveBackfill removes the backfill configuration when complete
+func (s *SummaryRule) RemoveBackfill() {
+	s.Spec.Backfill = nil
 }
 
 // +kubebuilder:object:root=true

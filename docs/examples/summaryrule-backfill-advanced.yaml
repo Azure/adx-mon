@@ -1,0 +1,51 @@
+# Advanced SummaryRule with Backfill and Ingestion Delay
+#
+# This example demonstrates a more complex backfill scenario with:
+# - 15-minute ingestion delay to account for data latency
+# - Shorter interval for more granular processing
+# - Complex aggregation logic
+# - Regional data processing
+
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: advanced-backfill-example
+  namespace: adx-mon
+spec:
+  database: TelemetryDB
+  table: RegionalPerformanceSummary
+  body: |
+    PerformanceMetrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Region == "_region"
+    | extend ResponseTimeMs = todecimal(ResponseTime)
+    | summarize 
+        p50_response_time = percentile(ResponseTimeMs, 50),
+        p95_response_time = percentile(ResponseTimeMs, 95),
+        p99_response_time = percentile(ResponseTimeMs, 99),
+        total_requests = count(),
+        error_rate = countif(Status >= 400) * 100.0 / count()
+      by bin(Timestamp, 15m), Service, Region
+  interval: 15m
+  ingestionDelay: 15m
+  
+  # Process 7 days of historical data with ingestion delay
+  backfill:
+    start: "2024-02-01T00:00:00Z"
+    end: "2024-02-07T23:59:59Z"
+
+  # Only run on production clusters in specific regions
+  criteria:
+    environment:
+      - production
+    region:
+      - eastus
+      - westus
+
+---
+# Notes:
+# - The 15-minute ingestion delay ensures data is fully ingested before processing
+# - Backfill will process data in 15-minute windows, respecting the same delay
+# - The rule only executes on clusters labeled with production environment
+# - Cluster label substitution replaces "_region" with the actual region value
+# - Progress can be monitored by checking spec.backfill.start field
