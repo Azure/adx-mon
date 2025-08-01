@@ -1923,8 +1923,8 @@ func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
 				})
 				return opId, nil
 			},
-			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
-				return []AsyncOperationStatus{}, nil
+			GetOperation: func(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+				return nil, nil // No operation found, should submit new one
 			},
 		}
 
@@ -1962,13 +1962,14 @@ func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
 
 		task := &SummaryRuleTask{
 			Clock: fakeClock,
-			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
-				return []AsyncOperationStatus{
-					{
+			GetOperation: func(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+				if operationId == "test-operation-123" {
+					return &AsyncOperationStatus{
 						OperationId: "test-operation-123",
 						State:       string(KustoAsyncOperationStateCompleted),
-					},
-				}, nil
+					}, nil
+				}
+				return nil, nil
 			},
 		}
 
@@ -2004,14 +2005,15 @@ func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
 
 		task := &SummaryRuleTask{
 			Clock: fakeClock,
-			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
-				return []AsyncOperationStatus{
-					{
+			GetOperation: func(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+				if operationId == "failed-operation-456" {
+					return &AsyncOperationStatus{
 						OperationId: "failed-operation-456",
 						State:       string(KustoAsyncOperationStateFailed),
 						Status:      "Query execution failed",
-					},
-				}, nil
+					}, nil
+				}
+				return nil, nil
 			},
 		}
 
@@ -2056,14 +2058,15 @@ func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
 				})
 				return opId, nil
 			},
-			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
-				return []AsyncOperationStatus{
-					{
+			GetOperation: func(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+				if operationId == "retry-operation-789" {
+					return &AsyncOperationStatus{
 						OperationId: "retry-operation-789",
 						State:       string(KustoAsyncOperationStateInProgress),
 						ShouldRetry: 1,
-					},
-				}, nil
+					}, nil
+				}
+				return nil, nil
 			},
 		}
 
@@ -2151,8 +2154,8 @@ func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
 
 		task := &SummaryRuleTask{
 			Clock: fakeClock,
-			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
-				return []AsyncOperationStatus{}, nil // Operation not found
+			GetOperation: func(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+				return nil, nil // Operation not found
 			},
 		}
 
@@ -2195,8 +2198,8 @@ func TestSummaryRuleTask_BackfillIntegration(t *testing.T) {
 				})
 				return opId, nil
 			},
-			GetOperations: func(ctx context.Context) ([]AsyncOperationStatus, error) {
-				return []AsyncOperationStatus{}, nil
+			GetOperation: func(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+				return nil, nil // No operation found, should submit new one
 			},
 		}
 

@@ -243,6 +243,7 @@ type SummaryRuleTask struct {
 	store         storage.CRDHandler
 	kustoCli      StatementExecutor
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
+	GetOperation  func(ctx context.Context, operationId string) (*AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 	ClusterLabels map[string]string
 	Clock         clock.Clock
@@ -257,6 +258,7 @@ func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, cl
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
+	task.GetOperation = task.getOperation
 	task.SubmitRule = task.submitRule
 	return task
 }
@@ -466,27 +468,20 @@ func (t *SummaryRuleTask) handleBackfillExecution(ctx context.Context, rule *v1.
 
 // handleBackfillOperationStatus checks the status of a running backfill operation
 func (t *SummaryRuleTask) handleBackfillOperationStatus(ctx context.Context, rule *v1.SummaryRule, operationId string) error {
-	// Get current Kusto operations to check status
-	kustoAsyncOperations, err := t.GetOperations(ctx)
+	// Use the optimized single-operation query
+	kustoOp, err := t.GetOperation(ctx, operationId)
 	if err != nil {
-		// If we can't get operations status, we'll retry next time
-		logger.Warnf("Failed to get async operations for backfill operation %s: %v", operationId, err)
+		// If we can't get operation status, we'll retry next time
+		logger.Warnf("Failed to get status for backfill operation %s: %v", operationId, err)
 		return nil
 	}
 
-	// Find our operation
-	index := slices.IndexFunc(kustoAsyncOperations, func(item AsyncOperationStatus) bool {
-		return item.OperationId == operationId
-	})
-
-	if index == -1 {
+	if kustoOp == nil {
 		// Operation not found, possibly too old or completed outside our window
 		logger.Warnf("Backfill operation %s not found in Kusto operations, clearing operation ID", operationId)
 		rule.ClearBackfillOperation()
 		return nil
 	}
-
-	kustoOp := kustoAsyncOperations[index]
 
 	// Check if operation is complete
 	if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
@@ -677,6 +672,42 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	}
 
 	return operations, nil
+}
+
+func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+	// Query for a specific operation using parameters to prevent injection
+	stmt := kql.New(".show operations | where OperationId == @ParamOperationId | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status) | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status")
+	params := kql.NewParameters().AddString("ParamOperationId", operationId)
+
+	rows, err := t.kustoCli.Mgmt(ctx, stmt, kusto.QueryParameters(params))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, fmt.Errorf("failed to retrieve operation %s: %v", operationId, errFinal)
+		}
+
+		var status AsyncOperationStatus
+		if err := row.ToStruct(&status); err != nil {
+			return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
+		}
+		if status.State != "" {
+			return &status, nil
+		}
+	}
+
+	// Operation not found
+	return nil, nil
 }
 
 func operationIDFromResult(iter *kusto.RowIterator) (string, error) {

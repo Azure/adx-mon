@@ -317,6 +317,71 @@ func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
 		(lastSuccessfulEndTime == nil && clk.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
 }
 
+// calculateTimeWindow handles core window calculation logic for backfill operations.
+//
+// IMPORTANT: This method intentionally does NOT share logic with NextExecutionWindow()
+// despite apparent similarities. The methods implement fundamentally different approaches
+// to ingestion delay handling:
+//
+// calculateTimeWindow (this method):
+//   - Applies ingestion delay AFTER interval alignment
+//   - Calculates clean interval boundaries first: startPos.truncate(interval)
+//   - Then shifts the entire window: window.add(-delay)
+//   - Maintains consistent time boundaries across backfill operations
+//
+// NextExecutionWindow (normal execution):
+//   - Applies ingestion delay BEFORE interval alignment
+//   - Uses delay to determine the alignment point itself
+//   - Creates execution windows that are "shifted" by the delay amount
+//
+// These represent two different architectural approaches that cannot be unified without
+// breaking existing behavior. See NextExecutionWindow() comment for more details.
+func (s *SummaryRule) calculateTimeWindow(clk clock.Clock, startPosition time.Time, maxEndTime *time.Time) (time.Time, time.Time) {
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+
+	// Align to interval boundaries like normal execution
+	intervalDuration := s.Spec.Interval.Duration
+	windowStartTime := startPosition.UTC().Truncate(intervalDuration)
+	windowEndTime := windowStartTime.Add(intervalDuration)
+
+	// Apply boundary constraints if provided (don't exceed backfill end time)
+	if maxEndTime != nil && windowEndTime.After(*maxEndTime) {
+		windowEndTime = *maxEndTime
+	}
+
+	// Apply ingestion delay to window
+	windowStartTime = windowStartTime.Add(-delay)
+	windowEndTime = windowEndTime.Add(-delay)
+
+	return windowStartTime, windowEndTime
+}
+
+// NextExecutionWindow calculates the time window for normal interval-based execution.
+//
+// IMPORTANT: This method intentionally does NOT share logic with calculateTimeWindow()
+// because they implement fundamentally different approaches to ingestion delay handling:
+//
+// NextExecutionWindow (this method):
+//   - Applies ingestion delay BEFORE interval alignment
+//   - For first execution: (currentTime - delay).truncate(interval) = endTime
+//   - For subsequent: (lastEndTime - delay).truncate(interval) = startTime
+//   - This creates execution windows that are "shifted" by the delay amount
+//
+// calculateTimeWindow (backfill method):
+//   - Applies ingestion delay AFTER interval alignment
+//   - Calculates clean interval boundaries first, then shifts the entire window
+//   - This maintains consistent time window boundaries across backfill operations
+//
+// These represent two different time calculation strategies that serve different purposes
+// and cannot be unified without breaking existing behavior. Any attempt to share this
+// logic will break the comprehensive test suite that validates ingestion delay behavior.
 func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
 	if clk == nil {
 		clk = clock.RealClock{}
@@ -516,25 +581,8 @@ func (s *SummaryRule) GetNextBackfillWindow(clk clock.Clock) (time.Time, time.Ti
 		return time.Time{}, time.Time{}, false
 	}
 
-	// Apply ingestion delay
-	var delay time.Duration
-	if s.Spec.IngestionDelay != nil {
-		delay = s.Spec.IngestionDelay.Duration
-	}
-
-	// Align to interval boundaries like normal execution
-	intervalDuration := s.Spec.Interval.Duration
-	windowStartTime := currentStart.UTC().Truncate(intervalDuration)
-	windowEndTime := windowStartTime.Add(intervalDuration)
-
-	// Don't exceed the backfill end time
-	if windowEndTime.After(backfillEnd) {
-		windowEndTime = backfillEnd
-	}
-
-	// Apply ingestion delay to window
-	windowStartTime = windowStartTime.Add(-delay)
-	windowEndTime = windowEndTime.Add(-delay)
+	// Use shared window calculation logic with backfill end as boundary
+	windowStartTime, windowEndTime := s.calculateTimeWindow(clk, currentStart, &backfillEnd)
 
 	// Validate that we have a meaningful window
 	if windowStartTime.After(windowEndTime) || windowStartTime.Equal(windowEndTime) {
@@ -550,13 +598,14 @@ func (s *SummaryRule) AdvanceBackfillProgress(endTime time.Time) {
 		return
 	}
 
-	// Apply ingestion delay in reverse to get the actual progress position
+	// The endTime passed in is already delay-adjusted from calculateTimeWindow,
+	// so we need to reverse the delay to get the actual interval boundary position
 	var delay time.Duration
 	if s.Spec.IngestionDelay != nil {
 		delay = s.Spec.IngestionDelay.Duration
 	}
 
-	// Move start position to the end time (plus delay to account for delay applied in window calculation)
+	// Add delay back to get the clean interval boundary that should be our next start position
 	progressPosition := endTime.Add(delay)
 	s.Spec.Backfill.Start = progressPosition.UTC().Format(time.RFC3339)
 }
