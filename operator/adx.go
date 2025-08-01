@@ -58,30 +58,6 @@ func isValidEntityGroupName(name string) bool {
 	return entityGroupNameRegex.MatchString(name)
 }
 
-// isValidClusterEndpoint validates that a cluster endpoint is safe to use in entity references
-func isValidClusterEndpoint(endpoint string) bool {
-	// Cluster endpoints should be valid URLs, typically https://clustername.region.kusto.windows.net
-	// or similar formats. We validate basic structure to prevent injection.
-	if len(endpoint) == 0 || len(endpoint) > 500 { // Reasonable length limit
-		return false
-	}
-
-	// Must start with https:// for production clusters or http:// for test containers
-	if !strings.HasPrefix(endpoint, "https://") && !strings.HasPrefix(endpoint, "http://") {
-		return false
-	}
-
-	// Should not contain characters that could break KQL syntax
-	invalidChars := []string{"'", "\"", ";", "--", "/*", "*/", "\n", "\r", "\t"}
-	for _, char := range invalidChars {
-		if strings.Contains(endpoint, char) {
-			return false
-		}
-	}
-
-	return true
-}
-
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var cluster adxmonv1.ADXCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
