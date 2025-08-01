@@ -189,18 +189,24 @@ func getContainerID(containerStatuses []v1.ContainerStatus, containerName string
 
 func getStaticPod(pod *v1.Pod, staticPodTargets []*StaticPodTargets) *StaticPodTargets {
 	for _, staticPod := range staticPodTargets {
-		if staticPod.Namespace != "" && pod.Namespace != staticPod.Namespace {
-			continue
+		if checkStaticPodMatch(pod, staticPod) {
+			return staticPod
 		}
-		if staticPod.Name != "" && pod.Name != staticPod.Name {
-			continue
-		}
-		for label, value := range staticPod.Labels {
-			if pod.Labels[label] != value {
-				continue
-			}
-		}
-		return staticPod
 	}
 	return nil
+}
+
+func checkStaticPodMatch(pod *v1.Pod, staticPod *StaticPodTargets) bool {
+	if staticPod.Namespace != "" && pod.Namespace != staticPod.Namespace {
+		return false
+	}
+	if staticPod.Name != "" && pod.Name != staticPod.Name {
+		return false
+	}
+	for label, value := range staticPod.Labels {
+		if pod.Labels[label] != value {
+			return false
+		}
+	}
+	return true
 }

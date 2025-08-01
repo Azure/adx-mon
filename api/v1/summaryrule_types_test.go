@@ -1119,3 +1119,320 @@ spec:
 		require.Equal(t, expectedEnd, endTime)
 	})
 }
+
+func TestBackfillAsyncOperations(t *testing.T) {
+	t.Run("no action when no last execution time", func(t *testing.T) {
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		fakeClock := NewFakeClock(time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 0, len(ops))
+	})
+
+	t.Run("generates single backfill operation", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set last execution to 10:00
+		rule.SetLastExecutionTime(baseTime)
+
+		// Current time is 12:00, so we should generate one backfill operation for 10:00-11:00
+		fakeClock := NewFakeClock(baseTime.Add(2 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 1, len(ops))
+		require.Equal(t, "", ops[0].OperationId) // Should be backlog operation
+		require.Equal(t, "2025-06-23T10:00:00Z", ops[0].StartTime)
+		require.Equal(t, "2025-06-23T11:00:00Z", ops[0].EndTime)
+	})
+
+	t.Run("generates multiple backfill operations", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set last execution to 8:00
+		rule.SetLastExecutionTime(baseTime)
+
+		// Current time is 12:00, so we should generate 3 backfill operations
+		fakeClock := NewFakeClock(baseTime.Add(4 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 3, len(ops))
+
+		// Check all operations are backlog operations (no OperationId)
+		for _, op := range ops {
+			require.Equal(t, "", op.OperationId)
+		}
+
+		// Check time windows
+		require.Equal(t, "2025-06-23T08:00:00Z", ops[0].StartTime)
+		require.Equal(t, "2025-06-23T09:00:00Z", ops[0].EndTime)
+		require.Equal(t, "2025-06-23T09:00:00Z", ops[1].StartTime)
+		require.Equal(t, "2025-06-23T10:00:00Z", ops[1].EndTime)
+		require.Equal(t, "2025-06-23T10:00:00Z", ops[2].StartTime)
+		require.Equal(t, "2025-06-23T11:00:00Z", ops[2].EndTime)
+	})
+
+	t.Run("respects ingestion delay", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval:       metav1.Duration{Duration: time.Hour},
+				IngestionDelay: &metav1.Duration{Duration: 15 * time.Minute},
+			},
+		}
+
+		// Set last execution to 10:00
+		rule.SetLastExecutionTime(baseTime)
+
+		// Current time is 12:00, but with 15min delay, effective time is 11:45
+		// So only one operation should be generated (10:00-11:00)
+		fakeClock := NewFakeClock(baseTime.Add(2 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 1, len(ops))
+		require.Equal(t, "2025-06-23T10:00:00Z", ops[0].StartTime)
+		require.Equal(t, "2025-06-23T11:00:00Z", ops[0].EndTime)
+	})
+
+	t.Run("does not create duplicate operations", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set last execution to 8:00
+		rule.SetLastExecutionTime(baseTime)
+
+		// Add existing operation for 9:00-10:00 window
+		rule.SetAsyncOperation(AsyncOperation{
+			OperationId: "existing-op",
+			StartTime:   "2025-06-23T09:00:00Z",
+			EndTime:     "2025-06-23T10:00:00Z",
+		})
+
+		// Current time is 12:00, should generate operations for 8:00-9:00 and 10:00-11:00
+		// but skip 9:00-10:00 since it exists
+		fakeClock := NewFakeClock(baseTime.Add(4 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 3, len(ops))
+
+		// Check that existing operation is preserved
+		foundExisting := false
+		for _, op := range ops {
+			if op.OperationId == "existing-op" {
+				foundExisting = true
+				require.Equal(t, "2025-06-23T09:00:00Z", op.StartTime)
+				require.Equal(t, "2025-06-23T10:00:00Z", op.EndTime)
+			}
+		}
+		require.True(t, foundExisting, "Existing operation should be preserved")
+	})
+
+	t.Run("does not create duplicate backlog operations", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Set last execution to 8:00
+		rule.SetLastExecutionTime(baseTime)
+
+		// Add existing backlog operation for 9:00-10:00 window
+		rule.SetAsyncOperation(AsyncOperation{
+			StartTime: "2025-06-23T09:00:00Z",
+			EndTime:   "2025-06-23T10:00:00Z",
+		})
+
+		// Current time is 12:00, should generate operations for 8:00-9:00 and 10:00-11:00
+		// but skip 9:00-10:00 since it exists in backlog
+		fakeClock := NewFakeClock(baseTime.Add(4 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 3, len(ops))
+
+		// All should be backlog operations
+		for _, op := range ops {
+			require.Equal(t, "", op.OperationId)
+		}
+	})
+
+	t.Run("stops at 200 operation limit", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Add 199 existing operations
+		for i := 0; i < 199; i++ {
+			rule.SetAsyncOperation(AsyncOperation{
+				OperationId: strconv.Itoa(i),
+				StartTime:   baseTime.Add(time.Duration(i) * time.Hour).Format(time.RFC3339),
+				EndTime:     baseTime.Add(time.Duration(i+1) * time.Hour).Format(time.RFC3339),
+			})
+		}
+
+		// Set last execution to a much later time
+		rule.SetLastExecutionTime(baseTime.Add(300 * time.Hour))
+
+		// Current time is much later, but we should only add 1 more operation (to reach 200)
+		fakeClock := NewFakeClock(baseTime.Add(400 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 200, len(ops))
+	})
+
+	t.Run("prunes oldest operations when exceeding 200", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 8, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		// Add existing operations with times that would make them older
+		for i := 0; i < 50; i++ {
+			rule.SetAsyncOperation(AsyncOperation{
+				OperationId: "old-" + strconv.Itoa(i),
+				StartTime:   baseTime.Add(time.Duration(i-100) * time.Hour).Format(time.RFC3339),
+				EndTime:     baseTime.Add(time.Duration(i-100+1) * time.Hour).Format(time.RFC3339),
+			})
+		}
+
+		// Set last execution to a time that will generate many new operations
+		rule.SetLastExecutionTime(baseTime)
+
+		// Current time is much later to force many backfill operations
+		fakeClock := NewFakeClock(baseTime.Add(400 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 200, len(ops))
+
+		// Check that the oldest operations were pruned (should not find very old operations)
+		foundOldOperation := false
+		for _, op := range ops {
+			if op.OperationId == "old-0" {
+				foundOldOperation = true
+				break
+			}
+		}
+		require.False(t, foundOldOperation, "Oldest operations should be pruned")
+	})
+
+	t.Run("handles different interval durations", func(t *testing.T) {
+		testCases := []struct {
+			name           string
+			interval       time.Duration
+			hoursToAdvance int
+			expectedOps    int
+		}{
+			{
+				name:           "15 minute intervals",
+				interval:       15 * time.Minute,
+				hoursToAdvance: 2,
+				expectedOps:    7, // 2 hours = 120 minutes = 8 intervals, but exclude current = 7
+			},
+			{
+				name:           "6 hour intervals",
+				interval:       6 * time.Hour,
+				hoursToAdvance: 24,
+				expectedOps:    3, // 24 hours = 4 intervals, but exclude current = 3
+			},
+			{
+				name:           "daily intervals",
+				interval:       24 * time.Hour,
+				hoursToAdvance: 72,
+				expectedOps:    2, // 72 hours = 3 days, but exclude current = 2
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				baseTime := time.Date(2025, 6, 23, 0, 0, 0, 0, time.UTC)
+				rule := &SummaryRule{
+					Spec: SummaryRuleSpec{
+						Interval: metav1.Duration{Duration: tc.interval},
+					},
+				}
+
+				rule.SetLastExecutionTime(baseTime)
+				fakeClock := NewFakeClock(baseTime.Add(time.Duration(tc.hoursToAdvance) * time.Hour))
+				rule.BackfillAsyncOperations(fakeClock)
+
+				ops := rule.GetAsyncOperations()
+				require.Equal(t, tc.expectedOps, len(ops), "Expected %d operations for %s", tc.expectedOps, tc.name)
+			})
+		}
+	})
+
+	t.Run("works with real clock when nil provided", func(t *testing.T) {
+		baseTime := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		rule.SetLastExecutionTime(baseTime)
+
+		// Pass nil clock, should use real clock
+		rule.BackfillAsyncOperations(nil)
+
+		ops := rule.GetAsyncOperations()
+		// Should generate at least 1 operation (exact number depends on real time)
+		require.Greater(t, len(ops), 0)
+	})
+
+	t.Run("preserves existing async operations condition fields", func(t *testing.T) {
+		baseTime := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+		rule := &SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 5,
+			},
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+
+		rule.SetLastExecutionTime(baseTime)
+		fakeClock := NewFakeClock(baseTime.Add(2 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		// Check condition is properly set
+		condition := meta.FindStatusCondition(rule.Status.Conditions, SummaryRuleOperationIdOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, SummaryRuleOperationIdOwner, condition.Type)
+		require.Equal(t, metav1.ConditionUnknown, condition.Status)
+		require.Equal(t, "InProgress", condition.Reason)
+		require.Equal(t, int64(5), condition.ObservedGeneration)
+		require.NotZero(t, condition.LastTransitionTime)
+	})
+}
