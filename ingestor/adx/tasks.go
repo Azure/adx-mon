@@ -519,7 +519,7 @@ func (t *SummaryRuleTask) handleBackfillOperationStatus(ctx context.Context, rul
 
 // submitNextBackfillWindow submits the next backfill window for execution
 func (t *SummaryRuleTask) submitNextBackfillWindow(ctx context.Context, rule *v1.SummaryRule) error {
-	windowStartTime, windowEndTime, ok := t.getNextBackfillWindow(rule)
+	windowStartTime, windowEndTime, ok := rule.GetNextBackfillWindow(t.Clock)
 	if !ok {
 		return t.handleBackfillCompletion(rule)
 	}
@@ -531,11 +531,6 @@ func (t *SummaryRuleTask) submitNextBackfillWindow(ctx context.Context, rule *v1
 
 	t.recordBackfillOperationSubmission(rule, operationId, windowStartTime, windowEndTime)
 	return nil
-}
-
-// getNextBackfillWindow retrieves the next backfill window and handles completion checking
-func (t *SummaryRuleTask) getNextBackfillWindow(rule *v1.SummaryRule) (time.Time, time.Time, bool) {
-	return rule.GetNextBackfillWindow(t.Clock)
 }
 
 // handleBackfillCompletion manages backfill completion when no valid window exists
