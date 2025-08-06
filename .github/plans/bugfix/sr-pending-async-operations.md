@@ -41,11 +41,11 @@ Operations in SummaryRule status become permanently stuck when they fall outside
 - [x] Verify no other method signatures need to change
 
 ### Task 3 Checklist - Remove Bulk Query
-- [ ] Remove `getOperations()` method from `SummaryRuleTask`
-- [ ] Update `initializeRun()` to not call `getOperations()`
-- [ ] Remove `kustoAsyncOperations` parameter from `trackAsyncOperations()`
-- [ ] Update method signature in `SummaryRuleTask` struct if needed
-- [ ] Verify no other code references the removed method
+- [x] Remove `getOperations()` method from `SummaryRuleTask`
+- [x] Update `initializeRun()` to not call `getOperations()`
+- [x] Remove `kustoAsyncOperations` parameter from `trackAsyncOperations()`
+- [x] Update method signature in `SummaryRuleTask` struct if needed
+- [x] Verify no other code references the removed method
 
 ### Task 4 Checklist - Tests and Documentation  
 - [ ] Add unit tests for `getOperation()` method only

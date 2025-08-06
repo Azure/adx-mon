@@ -241,7 +241,6 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 type SummaryRuleTask struct {
 	store         storage.CRDHandler
 	kustoCli      StatementExecutor
-	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 	ClusterLabels map[string]string
 	Clock         clock.Clock
@@ -255,7 +254,6 @@ func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, cl
 		Clock:         clock.RealClock{},
 	}
 	// Set the default implementations
-	task.GetOperations = task.getOperations
 	task.SubmitRule = task.submitRule
 	return task
 }
@@ -320,7 +318,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	summaryRules, _, err := t.initializeRun(timeoutCtx)
+	summaryRules, err := t.initializeRun(timeoutCtx)
 	if err != nil {
 		return err
 	}
@@ -350,23 +348,14 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	return nil
 }
 
-func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, []AsyncOperationStatus, error) {
+func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleList, error) {
 	// Fetch all summary rules from storage
 	summaryRules := &v1.SummaryRuleList{}
 	if err := t.store.List(ctx, summaryRules); err != nil {
-		return nil, nil, fmt.Errorf("failed to list summary rules: %w", err)
+		return nil, fmt.Errorf("failed to list summary rules: %w", err)
 	}
 
-	// Get the status of all async operations currently tracked in Kusto
-	// to match against our rules' operations. If this fails (e.g., Kusto unavailable),
-	// we can still process rules and store new async operations in CRD subresources.
-	kustoAsyncOperations, err := t.GetOperations(ctx)
-	if err != nil {
-		logger.Warnf("Failed to get async operations from Kusto, continuing with rule processing: %v", err)
-		kustoAsyncOperations = []AsyncOperationStatus{}
-	}
-
-	return summaryRules, kustoAsyncOperations, nil
+	return summaryRules, nil
 }
 
 func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
@@ -522,43 +511,6 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	}
 
 	return operationIDFromResult(res)
-}
-
-func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationStatus, error) {
-	// List all the async operations that have been executed in the last 24 hours. If one of our
-	// async operations falls out of this window, it's time to stop trying that particular operation.
-	stmt := kql.New(".show operations | where StartedOn > ago(1d) | where Operation == 'TableSetOrAppend' | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status) by OperationId | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status | sort by LastUpdatedOn asc")
-	rows, err := t.kustoCli.Mgmt(ctx, stmt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve async operations: %w", err)
-	}
-	defer rows.Stop()
-
-	var operations []AsyncOperationStatus
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return nil, fmt.Errorf("failed to retrieve async operations: %v", errFinal)
-		}
-
-		var status AsyncOperationStatus
-		if err := row.ToStruct(&status); err != nil {
-			return nil, fmt.Errorf("failed to parse async operation: %v", err)
-		}
-		if status.State == "" {
-			continue
-		}
-
-		operations = append(operations, status)
-	}
-
-	return operations, nil
 }
 
 func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
