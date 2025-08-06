@@ -3,6 +3,7 @@ package adx
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -17,6 +18,9 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
 	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
+	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -119,11 +123,14 @@ func (m *mockCRDHandler) UpdateStatusWithKustoErrorParsing(ctx context.Context, 
 }
 
 type TestStatementExecutor struct {
-	database    string
-	endpoint    string
-	stmts       []string
-	nextMgmtErr error
-	operationID string
+	database          string
+	endpoint          string
+	stmts             []string
+	nextMgmtErr       error
+	operationID       string
+	mockRows          *kusto.MockRows
+	operationMockData map[string]*AsyncOperationStatus // Map operation ID to mock data
+	queriedOperations map[string]bool                  // Track which operations have been queried
 }
 
 func (t *TestStatementExecutor) Database() string {
@@ -142,13 +149,95 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		return nil, ret
 	}
 
+	// Create a new RowIterator
+	iter := &kusto.RowIterator{}
+
+	// Check if this is a getOperation call and we have specific mock data for operations
+	queryStr := query.String()
+	if strings.Contains(queryStr, "@ParamOperationId") && t.operationMockData != nil {
+		// This is a parameterized query for a specific operation
+		// For testing purposes, we'll simulate the behavior by returning operations in order
+
+		if t.queriedOperations == nil {
+			t.queriedOperations = make(map[string]bool)
+		}
+
+		// Return operations in a specific order for the test
+		operationOrder := []string{"failed-op-1", "completed-op-2", "completed-op-3", "completed-op-4"}
+
+		for _, operationId := range operationOrder {
+			if mockData, exists := t.operationMockData[operationId]; exists && !t.queriedOperations[operationId] {
+				t.queriedOperations[operationId] = true
+
+				columns := table.Columns{
+					{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+					{Name: "OperationId", Type: kustotypes.String},
+					{Name: "State", Type: kustotypes.String},
+					{Name: "ShouldRetry", Type: kustotypes.Real},
+					{Name: "Status", Type: kustotypes.String},
+				}
+
+				mockRows, err := kusto.NewMockRows(columns)
+				if err != nil {
+					return nil, err
+				}
+
+				err = mockRows.Row(value.Values{
+					value.DateTime{Value: mockData.LastUpdatedOn, Valid: true},
+					value.String{Value: mockData.OperationId, Valid: true},
+					value.String{Value: mockData.State, Valid: true},
+					value.Real{Value: mockData.ShouldRetry, Valid: true},
+					value.String{Value: mockData.Status, Valid: true},
+				})
+				if err != nil {
+					return nil, err
+				}
+
+				err = iter.Mock(mockRows)
+				if err != nil {
+					return nil, fmt.Errorf("failed to mock iterator: %w", err)
+				}
+				return iter, nil
+			}
+		}
+
+		// If we get here, all operations have been queried, return empty results
+		columns := table.Columns{
+			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+			{Name: "OperationId", Type: kustotypes.String},
+			{Name: "State", Type: kustotypes.String},
+			{Name: "ShouldRetry", Type: kustotypes.Real},
+			{Name: "Status", Type: kustotypes.String},
+		}
+
+		mockRows, err := kusto.NewMockRows(columns)
+		if err != nil {
+			return nil, err
+		}
+
+		err = iter.Mock(mockRows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to mock iterator: %w", err)
+		}
+		return iter, nil
+	}
+
+	// If we have mock rows, attach them to the iterator
+	if t.mockRows != nil {
+		err := iter.Mock(t.mockRows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to mock iterator: %w", err)
+		}
+		return iter, nil
+	}
+
 	// For ClusterLabels tests, we need to return a mock result that simulates an operation ID
 	// Since we're mainly testing the query transformation, we can return a mock iterator
 	// that provides an operation ID when needed
 	if t.operationID != "" {
 		// This is a simplified mock - in real usage, the RowIterator would contain
 		// the operation ID from Kusto. For our tests, we'll work around this limitation.
-		return &kusto.RowIterator{}, nil
+		return iter, nil
 	}
 
 	return nil, nil
@@ -638,10 +727,42 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 }
 
 func TestSummaryRuleSubmissionSuccess(t *testing.T) {
+	// Ensure test.v flag is set for MockRows
+	if flag.Lookup("test.v") == nil {
+		flag.String("test.v", "", "")
+		err := flag.CommandLine.Set("test.v", "true")
+		require.NoError(t, err, "Failed to set test.v flag")
+	}
+
+	// Create columns for AsyncOperationStatus mock
+	columns := table.Columns{
+		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+		{Name: "OperationId", Type: kustotypes.String},
+		{Name: "State", Type: kustotypes.String},
+		{Name: "ShouldRetry", Type: kustotypes.Real},
+		{Name: "Status", Type: kustotypes.String},
+	}
+
+	// Create mock rows - operation is initially in progress, then completed
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err)
+
+	// Add in-progress operation (so it doesn't get removed)
+	operationTime := time.Now()
+	err = mockRows.Row(value.Values{
+		value.DateTime{Value: operationTime, Valid: true},
+		value.String{Value: "operation-id-123", Valid: true},
+		value.String{Value: "InProgress", Valid: true}, // Keep in progress so it doesn't get removed
+		value.Real{Value: 0, Valid: true},
+		value.String{Value: "", Valid: false},
+	})
+	require.NoError(t, err)
+
 	// Create a mock statement executor
 	mockExecutor := &TestStatementExecutor{
 		database: "testdb",
 		endpoint: "http://test-endpoint",
+		mockRows: mockRows,
 	}
 
 	// Create a summary rule
@@ -687,7 +808,7 @@ func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 	}
 
 	// Run the task
-	err := task.Run(context.Background())
+	err = task.Run(context.Background())
 	require.NoError(t, err)
 
 	// Check that the rule was updated once with success status
@@ -719,6 +840,18 @@ func TestSummaryRuleGetOperationsSucceedsAfterFailure(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
+
+	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
+	columns := table.Columns{
+		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+		{Name: "OperationId", Type: kustotypes.String},
+		{Name: "State", Type: kustotypes.String},
+		{Name: "ShouldRetry", Type: kustotypes.Real},
+		{Name: "Status", Type: kustotypes.String},
+	}
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err)
+	mockExecutor.mockRows = mockRows
 
 	// Create a summary rule
 	ruleName := "test-rule"
@@ -772,7 +905,7 @@ func TestSummaryRuleGetOperationsSucceedsAfterFailure(t *testing.T) {
 	}
 
 	// First run - GetOperations fails but rule processing should continue with our fix
-	err := task.Run(context.Background())
+	err = task.Run(context.Background())
 	require.NoError(t, err, "Should succeed even when GetOperations fails")
 	require.Equal(t, 1, getOperationsCallCount, "GetOperations should have been called once")
 	require.Equal(t, 1, submitRuleCallCount, "SubmitRule should have been called once")
@@ -807,6 +940,18 @@ func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
+
+	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
+	columns := table.Columns{
+		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+		{Name: "OperationId", Type: kustotypes.String},
+		{Name: "State", Type: kustotypes.String},
+		{Name: "ShouldRetry", Type: kustotypes.Real},
+		{Name: "Status", Type: kustotypes.String},
+	}
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err)
+	mockExecutor.mockRows = mockRows
 
 	// Create a summary rule with a recent async operation that should be kept
 	ruleName := "test-rule"
@@ -861,7 +1006,7 @@ func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 	}
 
 	// Run the task - should succeed despite GetOperations failure
-	err := task.Run(context.Background())
+	err = task.Run(context.Background())
 	require.NoError(t, err, "Should succeed even when GetOperations fails")
 
 	// Check that the rule was updated
@@ -1643,6 +1788,18 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		endpoint: "http://test-endpoint",
 	}
 
+	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
+	columns := table.Columns{
+		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+		{Name: "OperationId", Type: kustotypes.String},
+		{Name: "State", Type: kustotypes.String},
+		{Name: "ShouldRetry", Type: kustotypes.Real},
+		{Name: "Status", Type: kustotypes.String},
+	}
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err)
+	mockExecutor.mockRows = mockRows
+
 	task := &SummaryRuleTask{
 		store:    mockHandler,
 		kustoCli: mockExecutor,
@@ -1711,6 +1868,50 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
+
+	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
+	columns := table.Columns{
+		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+		{Name: "OperationId", Type: kustotypes.String},
+		{Name: "State", Type: kustotypes.String},
+		{Name: "ShouldRetry", Type: kustotypes.Real},
+		{Name: "Status", Type: kustotypes.String},
+	}
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err)
+
+	// Set up operation mock data for specific operations
+	mockExecutor.operationMockData = map[string]*AsyncOperationStatus{
+		"failed-op-1": {
+			OperationId:   "failed-op-1",
+			State:         string(KustoAsyncOperationStateFailed),
+			ShouldRetry:   1, // Failed but retriable
+			Status:        "Some failure reason",
+			LastUpdatedOn: time.Date(2024, 6, 23, 10, 30, 0, 0, time.UTC),
+		},
+		"completed-op-2": {
+			OperationId:   "completed-op-2",
+			State:         string(KustoAsyncOperationStateCompleted),
+			ShouldRetry:   0, // Completed successfully
+			Status:        "Success",
+			LastUpdatedOn: time.Date(2024, 6, 23, 11, 30, 0, 0, time.UTC),
+		},
+		"completed-op-3": {
+			OperationId:   "completed-op-3",
+			State:         string(KustoAsyncOperationStateCompleted),
+			ShouldRetry:   0, // Completed successfully
+			Status:        "Success",
+			LastUpdatedOn: time.Date(2024, 6, 23, 12, 30, 0, 0, time.UTC),
+		},
+		"completed-op-4": {
+			OperationId:   "completed-op-4",
+			State:         string(KustoAsyncOperationStateCompleted),
+			ShouldRetry:   0, // Completed successfully
+			Status:        "Success",
+			LastUpdatedOn: time.Date(2024, 6, 23, 13, 30, 0, 0, time.UTC),
+		},
+	}
+	mockExecutor.mockRows = mockRows
 
 	// Create a summary rule that already has multiple async operations
 	ruleName := "test-rule"
@@ -1825,12 +2026,18 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	}
 
 	// Execute the task
-	err := task.Run(context.Background())
+	err = task.Run(context.Background())
 	require.NoError(t, err, "Task should execute successfully")
 
 	// We expect 2 SubmitRule calls:
 	// 1. New rule execution (for current time window)
 	// 2. Retry of failed operation (with original time window)
+
+	// Debug: Print all submit calls
+	for i, call := range submitCalls {
+		t.Logf("Submit call %d: start=%s, end=%s, opId=%s", i, call.startTime, call.endTime, call.opId)
+	}
+
 	require.Len(t, submitCalls, 2, "Should have 2 SubmitRule calls: new execution + retry")
 
 	// Find the retry call - it should match the failed operation's time window
@@ -1878,4 +2085,175 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 		}
 	}
 	require.True(t, retryOpFound, "Retry operation should be present in final operations")
+}
+
+func TestSummaryRuleTaskGetOperation(t *testing.T) {
+	// Helper function to ensure test.v flag is set for MockRows
+	ensureTestFlag := func() {
+		if flag.Lookup("test.v") == nil {
+			flag.String("test.v", "", "")
+			err := flag.CommandLine.Set("test.v", "true")
+			require.NoError(t, err, "Failed to set test.v flag")
+		}
+	}
+
+	t.Run("operation found", func(t *testing.T) {
+		ensureTestFlag()
+
+		// Create columns that match AsyncOperationStatus struct
+		columns := table.Columns{
+			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+			{Name: "OperationId", Type: kustotypes.String},
+			{Name: "State", Type: kustotypes.String},
+			{Name: "ShouldRetry", Type: kustotypes.Real},
+			{Name: "Status", Type: kustotypes.String},
+		}
+
+		// Create mock rows with test data
+		mockRows, err := kusto.NewMockRows(columns)
+		require.NoError(t, err)
+
+		// Add a found operation
+		operationTime := time.Date(2025, 8, 6, 10, 0, 0, 0, time.UTC)
+		err = mockRows.Row(value.Values{
+			value.DateTime{Value: operationTime, Valid: true},
+			value.String{Value: "test-operation-123", Valid: true},
+			value.String{Value: "Completed", Valid: true},
+			value.Real{Value: 0, Valid: true},
+			value.String{Value: "Success", Valid: true},
+		})
+		require.NoError(t, err)
+
+		// Create a mock executor that returns the mock data
+		mockExecutor := &TestStatementExecutor{
+			database: "testdb",
+			endpoint: "http://test-endpoint",
+		}
+
+		// Override the Mgmt method to return properly mocked RowIterator
+		mockExecutor.mockRows = mockRows
+
+		task := &SummaryRuleTask{
+			kustoCli: mockExecutor,
+		}
+
+		// Call the method
+		result, err := task.getOperation(context.Background(), "test-operation-123")
+
+		// Verify results
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, "test-operation-123", result.OperationId)
+		require.Equal(t, "Completed", result.State)
+		require.Equal(t, float64(0), result.ShouldRetry)
+		require.Equal(t, "Success", result.Status)
+		require.Equal(t, operationTime, result.LastUpdatedOn)
+
+		// Verify query structure
+		require.Len(t, mockExecutor.stmts, 1, "Should execute exactly one statement")
+		stmt := mockExecutor.stmts[0]
+		require.Contains(t, stmt, ".show operations", "Should query operations table")
+		require.Contains(t, stmt, "@ParamOperationId", "Should use parameterized query")
+		require.NotContains(t, stmt, "test-operation-123", "Should not contain raw operationId (prevents injection)")
+	})
+
+	t.Run("operation not found", func(t *testing.T) {
+		ensureTestFlag()
+
+		// Create empty mock rows (no data)
+		columns := table.Columns{
+			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+			{Name: "OperationId", Type: kustotypes.String},
+			{Name: "State", Type: kustotypes.String},
+			{Name: "ShouldRetry", Type: kustotypes.Real},
+			{Name: "Status", Type: kustotypes.String},
+		}
+
+		mockRows, err := kusto.NewMockRows(columns)
+		require.NoError(t, err)
+
+		mockExecutor := &TestStatementExecutor{
+			database: "testdb",
+			endpoint: "http://test-endpoint",
+		}
+		mockExecutor.mockRows = mockRows
+
+		task := &SummaryRuleTask{
+			kustoCli: mockExecutor,
+		}
+
+		// Call the method
+		result, err := task.getOperation(context.Background(), "nonexistent-operation")
+
+		// Should return nil for not found
+		require.NoError(t, err)
+		require.Nil(t, result)
+
+		// Verify query was executed
+		require.Len(t, mockExecutor.stmts, 1, "Should execute exactly one statement")
+	})
+
+	t.Run("kusto query error", func(t *testing.T) {
+		mockExecutor := &TestStatementExecutor{
+			database:    "testdb",
+			endpoint:    "http://test-endpoint",
+			nextMgmtErr: errors.New("kusto connection failed"),
+		}
+
+		task := &SummaryRuleTask{
+			kustoCli: mockExecutor,
+		}
+
+		// Call the method
+		result, err := task.getOperation(context.Background(), "test-operation-123")
+
+		// Should return the error from kusto
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to retrieve operation test-operation-123: kusto connection failed")
+		require.Nil(t, result)
+	})
+
+	t.Run("operation with empty state ignored", func(t *testing.T) {
+		ensureTestFlag()
+
+		// Create columns that match AsyncOperationStatus struct
+		columns := table.Columns{
+			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+			{Name: "OperationId", Type: kustotypes.String},
+			{Name: "State", Type: kustotypes.String},
+			{Name: "ShouldRetry", Type: kustotypes.Real},
+			{Name: "Status", Type: kustotypes.String},
+		}
+
+		mockRows, err := kusto.NewMockRows(columns)
+		require.NoError(t, err)
+
+		// Add operation with empty state (should be ignored)
+		operationTime := time.Date(2025, 8, 6, 10, 0, 0, 0, time.UTC)
+		err = mockRows.Row(value.Values{
+			value.DateTime{Value: operationTime, Valid: true},
+			value.String{Value: "test-operation-456", Valid: true},
+			value.String{Value: "", Valid: false}, // Empty state
+			value.Real{Value: 0, Valid: true},
+			value.String{Value: "", Valid: false},
+		})
+		require.NoError(t, err)
+
+		mockExecutor := &TestStatementExecutor{
+			database: "testdb",
+			endpoint: "http://test-endpoint",
+		}
+		mockExecutor.mockRows = mockRows
+
+		task := &SummaryRuleTask{
+			kustoCli: mockExecutor,
+		}
+
+		// Call the method
+		result, err := task.getOperation(context.Background(), "test-operation-456")
+
+		// Should return nil because empty state is ignored
+		require.NoError(t, err)
+		require.Nil(t, result)
+	})
 }
