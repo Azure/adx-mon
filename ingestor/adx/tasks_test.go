@@ -32,6 +32,45 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// ensureTestVFlagSet ensures the test.v flag is set for MockRows functionality
+func ensureTestVFlagSet(t *testing.T) {
+	t.Helper()
+	if flag.Lookup("test.v") == nil {
+		flag.String("test.v", "", "")
+		err := flag.CommandLine.Set("test.v", "true")
+		require.NoError(t, err, "Failed to set test.v flag")
+	}
+}
+
+// newAsyncOperationMockRows creates mock rows for AsyncOperationStatus with the specified parameters
+func newAsyncOperationMockRows(operationTime time.Time, operationId, state string, shouldRetry float64, status string, statusValid bool) (*kusto.MockRows, error) {
+	columns := table.Columns{
+		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
+		{Name: "OperationId", Type: kustotypes.String},
+		{Name: "State", Type: kustotypes.String},
+		{Name: "ShouldRetry", Type: kustotypes.Real},
+		{Name: "Status", Type: kustotypes.String},
+	}
+
+	mockRows, err := kusto.NewMockRows(columns)
+	if err != nil {
+		return nil, err
+	}
+
+	err = mockRows.Row(value.Values{
+		value.DateTime{Value: operationTime, Valid: true},
+		value.String{Value: operationId, Valid: true},
+		value.String{Value: state, Valid: true},
+		value.Real{Value: shouldRetry, Valid: true},
+		value.String{Value: status, Valid: statusValid},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return mockRows, nil
+}
+
 // mockCRDHandler implements storage.CRDHandler interface for testing
 type mockCRDHandler struct {
 	listResponse   client.ObjectList
@@ -156,14 +195,25 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 	queryStr := query.String()
 	if strings.Contains(queryStr, "@ParamOperationId") && t.operationMockData != nil {
 		// This is a parameterized query for a specific operation
-		// For testing purposes, we'll simulate the behavior by returning operations in order
+		// For testing purposes, we'll simulate the behavior by returning operations in a deterministic order
 
 		if t.queriedOperations == nil {
 			t.queriedOperations = make(map[string]bool)
 		}
 
-		// Return operations in a specific order for the test
-		operationOrder := []string{"failed-op-1", "completed-op-2", "completed-op-3", "completed-op-4"}
+		// Return operations in a deterministic (sorted) order for the test
+		var operationOrder []string
+		for operationId := range t.operationMockData {
+			operationOrder = append(operationOrder, operationId)
+		}
+		// Sort to ensure deterministic order across test runs
+		for i := 0; i < len(operationOrder)-1; i++ {
+			for j := i + 1; j < len(operationOrder); j++ {
+				if operationOrder[i] > operationOrder[j] {
+					operationOrder[i], operationOrder[j] = operationOrder[j], operationOrder[i]
+				}
+			}
+		}
 
 		for _, operationId := range operationOrder {
 			if mockData, exists := t.operationMockData[operationId]; exists && !t.queriedOperations[operationId] {
@@ -722,35 +772,10 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 }
 
 func TestSummaryRuleSubmissionSuccess(t *testing.T) {
-	// Ensure test.v flag is set for MockRows
-	if flag.Lookup("test.v") == nil {
-		flag.String("test.v", "", "")
-		err := flag.CommandLine.Set("test.v", "true")
-		require.NoError(t, err, "Failed to set test.v flag")
-	}
+	ensureTestVFlagSet(t)
 
-	// Create columns for AsyncOperationStatus mock
-	columns := table.Columns{
-		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-		{Name: "OperationId", Type: kustotypes.String},
-		{Name: "State", Type: kustotypes.String},
-		{Name: "ShouldRetry", Type: kustotypes.Real},
-		{Name: "Status", Type: kustotypes.String},
-	}
-
-	// Create mock rows - operation is initially in progress, then completed
-	mockRows, err := kusto.NewMockRows(columns)
-	require.NoError(t, err)
-
-	// Add in-progress operation (so it doesn't get removed)
 	operationTime := time.Now()
-	err = mockRows.Row(value.Values{
-		value.DateTime{Value: operationTime, Valid: true},
-		value.String{Value: "operation-id-123", Valid: true},
-		value.String{Value: "InProgress", Valid: true}, // Keep in progress so it doesn't get removed
-		value.Real{Value: 0, Valid: true},
-		value.String{Value: "", Valid: false},
-	})
+	mockRows, err := newAsyncOperationMockRows(operationTime, "operation-id-123", "InProgress", 0, "", false)
 	require.NoError(t, err)
 
 	// Create a mock statement executor
@@ -1923,17 +1948,8 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 }
 
 func TestSummaryRuleTaskGetOperation(t *testing.T) {
-	// Helper function to ensure test.v flag is set for MockRows
-	ensureTestFlag := func() {
-		if flag.Lookup("test.v") == nil {
-			flag.String("test.v", "", "")
-			err := flag.CommandLine.Set("test.v", "true")
-			require.NoError(t, err, "Failed to set test.v flag")
-		}
-	}
-
 	t.Run("operation found", func(t *testing.T) {
-		ensureTestFlag()
+		ensureTestVFlagSet(t)
 
 		// Create columns that match AsyncOperationStatus struct
 		columns := table.Columns{
@@ -1993,7 +2009,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 	})
 
 	t.Run("operation not found", func(t *testing.T) {
-		ensureTestFlag()
+		ensureTestVFlagSet(t)
 
 		// Create empty mock rows (no data)
 		columns := table.Columns{
@@ -2049,7 +2065,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 	})
 
 	t.Run("operation with empty state ignored", func(t *testing.T) {
-		ensureTestFlag()
+		ensureTestVFlagSet(t)
 
 		// Create columns that match AsyncOperationStatus struct
 		columns := table.Columns{

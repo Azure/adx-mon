@@ -514,6 +514,22 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 	return operationIDFromResult(res)
 }
 
+// getOperation retrieves the status of a specific asynchronous Kusto operation by its operationId.
+//
+// This method performs an individual operation lookup without time limitations, which eliminates
+// the 24-hour limitation bug that affected the previous bulk query approach. It ensures accurate
+// retrieval of operations regardless of their age by directly querying for a specific operation ID.
+//
+// Parameters:
+//   - ctx: context.Context for cancellation and timeout control
+//   - operationId: string identifier of the Kusto async operation to query
+//
+// Returns:
+//   - *AsyncOperationStatus: pointer to the operation status struct if found, or nil if not found
+//   - error: error if the query fails or the result cannot be parsed
+//
+// The method uses parameterized queries to prevent injection attacks and queries the latest
+// operation status using arg_max to ensure we get the most recent state information.
 func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
 	stmt := kql.New(`.show operations
 | where OperationId == @ParamOperationId  
