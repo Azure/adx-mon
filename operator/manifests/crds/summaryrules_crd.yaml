@@ -39,6 +39,32 @@ spec:
           spec:
             description: SummaryRuleSpec defines the desired state of SummaryRule
             properties:
+              backfill:
+                description: |-
+                  Backfill specifies historical data processing configuration. When specified, the rule will process
+                  historical data from the start datetime to the end datetime in addition to normal interval execution.
+                  The system will automatically advance through time windows and remove this field when complete.
+                properties:
+                  end:
+                    description: End is the target end time for backfill (RFC3339
+                      format)
+                    format: date-time
+                    type: string
+                  operationId:
+                    description: OperationId is the current active Kusto operation
+                      ID for this backfill window
+                    type: string
+                  start:
+                    description: Start is the current backfill position (RFC3339 format)
+                    format: date-time
+                    type: string
+                required:
+                - end
+                - start
+                type: object
+                x-kubernetes-validations:
+                - message: backfill start and end are required when backfill is specified
+                  rule: '!has(self) || (has(self.start) && has(self.end))'
               body:
                 description: Body is the KQL body of the function
                 type: string

@@ -243,6 +243,7 @@ type SummaryRuleTask struct {
 	store         storage.CRDHandler
 	kustoCli      StatementExecutor
 	GetOperations func(ctx context.Context) ([]AsyncOperationStatus, error)
+	GetOperation  func(ctx context.Context, operationId string) (*AsyncOperationStatus, error)
 	SubmitRule    func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error)
 	ClusterLabels map[string]string
 	Clock         clock.Clock
@@ -257,6 +258,7 @@ func NewSummaryRuleTask(store storage.CRDHandler, kustoCli StatementExecutor, cl
 	}
 	// Set the default implementations
 	task.GetOperations = task.getOperations
+	task.GetOperation = task.getOperation
 	task.SubmitRule = task.submitRule
 	return task
 }
@@ -334,6 +336,12 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		// Handle rule execution logic (timing evaluation and submission)
 		err := t.handleRuleExecution(timeoutCtx, &rule)
+
+		// Handle backfill execution logic (check progress and submit next window if needed)
+		backfillErr := t.handleBackfillExecution(timeoutCtx, &rule)
+		if err == nil {
+			err = backfillErr // Use backfill error if normal execution succeeded
+		}
 
 		// Process any backlog operations for this rule
 		rule.BackfillAsyncOperations(t.Clock)
@@ -430,6 +438,129 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	}
 
 	return nil
+}
+
+// handleBackfillExecution handles backfill operation logic for a single summary rule.
+// It checks if there's an active backfill, manages operation submission and progress tracking.
+// Returns any submission or operation error that occurred.
+func (t *SummaryRuleTask) handleBackfillExecution(ctx context.Context, rule *v1.SummaryRule) error {
+	if !rule.HasActiveBackfill() {
+		return nil
+	}
+
+	// Check if backfill is complete
+	if rule.IsBackfillComplete() {
+		logger.Infof("Backfill complete for rule %s.%s, removing backfill configuration", rule.Spec.Database, rule.Name)
+		rule.RemoveBackfill()
+		return nil
+	}
+
+	// Check if there's a current operation in progress
+	currentOperationId := rule.GetBackfillOperation()
+	if currentOperationId != "" {
+		// There's an operation in progress, check its status
+		return t.handleBackfillOperationStatus(ctx, rule, currentOperationId)
+	}
+
+	// No operation in progress, submit the next backfill window
+	return t.submitNextBackfillWindow(ctx, rule)
+}
+
+// handleBackfillOperationStatus checks the status of a running backfill operation
+func (t *SummaryRuleTask) handleBackfillOperationStatus(ctx context.Context, rule *v1.SummaryRule, operationId string) error {
+	// Use the optimized single-operation query
+	kustoOp, err := t.GetOperation(ctx, operationId)
+	if err != nil {
+		// If we can't get operation status, we'll retry next time
+		logger.Warnf("Failed to get status for backfill operation %s: %v", operationId, err)
+		return nil
+	}
+
+	if kustoOp == nil {
+		// Operation not found, possibly too old or completed outside our window
+		logger.Warnf("Backfill operation %s not found in Kusto operations, clearing operation ID", operationId)
+		rule.ClearBackfillOperation()
+		return nil
+	}
+
+	// Check if operation is complete
+	if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
+		if kustoOp.State == string(KustoAsyncOperationStateFailed) {
+			logger.Errorf("Backfill operation %s for rule %s.%s failed: %s", operationId, rule.Spec.Database, rule.Name, kustoOp.Status)
+			rule.ClearBackfillOperation()
+			// Return error to be tracked in rule status
+			if kustoOp.Status != "" {
+				return fmt.Errorf("backfill operation %s failed: %s", operationId, kustoOp.Status)
+			}
+			return fmt.Errorf("backfill operation %s failed", operationId)
+		} else {
+			// Operation succeeded, advance backfill progress
+			logger.Infof("Backfill operation %s for rule %s.%s completed successfully", operationId, rule.Spec.Database, rule.Name)
+
+			// Get the window that was just processed to advance progress
+			_, windowEnd, ok := rule.GetNextBackfillWindow(t.Clock)
+			if ok {
+				rule.AdvanceBackfillProgress(windowEnd)
+				logger.Infof("Advanced backfill progress for rule %s.%s to %v", rule.Spec.Database, rule.Name, windowEnd)
+			}
+			rule.ClearBackfillOperation()
+		}
+	}
+
+	// Check if operation should be retried
+	if kustoOp.ShouldRetry != 0 {
+		logger.Infof("Backfill operation %s for rule %s.%s is marked for retry, resubmitting", operationId, rule.Spec.Database, rule.Name)
+		rule.ClearBackfillOperation()
+		return t.submitNextBackfillWindow(ctx, rule)
+	}
+
+	return nil
+}
+
+// submitNextBackfillWindow submits the next backfill window for execution
+func (t *SummaryRuleTask) submitNextBackfillWindow(ctx context.Context, rule *v1.SummaryRule) error {
+	windowStartTime, windowEndTime, ok := rule.GetNextBackfillWindow(t.Clock)
+	if !ok {
+		return t.handleBackfillCompletion(rule)
+	}
+
+	operationId, err := t.submitBackfillOperation(ctx, rule, windowStartTime, windowEndTime)
+	if err != nil {
+		return err
+	}
+
+	t.recordBackfillOperationSubmission(rule, operationId, windowStartTime, windowEndTime)
+	return nil
+}
+
+// handleBackfillCompletion manages backfill completion when no valid window exists
+func (t *SummaryRuleTask) handleBackfillCompletion(rule *v1.SummaryRule) error {
+	if rule.IsBackfillComplete() {
+		logger.Infof("Backfill complete for rule %s.%s, removing backfill configuration", rule.Spec.Database, rule.Name)
+		rule.RemoveBackfill()
+	}
+	return nil
+}
+
+// submitBackfillOperation submits the backfill operation with proper time formatting
+func (t *SummaryRuleTask) submitBackfillOperation(ctx context.Context, rule *v1.SummaryRule, windowStartTime, windowEndTime time.Time) (string, error) {
+	// Subtract 1 tick from endTime for the query to avoid boundary issues
+	queryEndTime := windowEndTime.Add(-kustoutil.OneTick)
+
+	operationId, err := t.SubmitRule(ctx, *rule, windowStartTime.Format(time.RFC3339Nano), queryEndTime.Format(time.RFC3339Nano))
+	if err != nil {
+		return "", fmt.Errorf("failed to submit backfill operation for rule %s.%s (window %v to %v): %w",
+			rule.Spec.Database, rule.Name, windowStartTime, windowEndTime, err)
+	}
+
+	return operationId, nil
+}
+
+// recordBackfillOperationSubmission logs the submission and updates the rule state
+func (t *SummaryRuleTask) recordBackfillOperationSubmission(rule *v1.SummaryRule, operationId string, windowStartTime, windowEndTime time.Time) {
+	rule.SetBackfillOperation(operationId)
+	logger.Infof("Submitted backfill operation %s for rule %s.%s (window %v to %v)",
+		operationId, rule.Spec.Database, rule.Name, windowStartTime, windowEndTime)
 }
 
 func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus) {
@@ -559,6 +690,47 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	}
 
 	return operations, nil
+}
+
+func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+	// Query for a specific operation using parameters to prevent injection
+	stmt := kql.New(`
+.show operations
+| where OperationId == @ParamOperationId
+| summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)
+| project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status
+`)
+	params := kql.NewParameters().AddString("ParamOperationId", operationId)
+
+	rows, err := t.kustoCli.Mgmt(ctx, stmt, kusto.QueryParameters(params))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, fmt.Errorf("failed to retrieve operation %s: %v", operationId, errFinal)
+		}
+
+		var status AsyncOperationStatus
+		if err := row.ToStruct(&status); err != nil {
+			return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
+		}
+		if status.State != "" {
+			return &status, nil
+		}
+	}
+
+	// Operation not found
+	return nil, nil
 }
 
 func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
