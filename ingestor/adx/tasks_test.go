@@ -820,114 +820,6 @@ func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 	require.Equal(t, "operation-id-123", asyncOps[0].OperationId, "Should have the correct operation ID")
 }
 
-func TestSummaryRuleGetOperationsSucceedsAfterFailure(t *testing.T) {
-	// TODO: This test is obsolete after removing bulk GetOperations functionality.
-	// It was testing recovery behavior when GetOperations failed then succeeded.
-	// Since we now use individual getOperation calls, this test needs to be
-	// either removed or significantly refactored to test individual operation
-	// lookup failure/recovery scenarios.
-	//
-	// This test ensures that the system can recover when GetOperations initially fails
-	// but then succeeds in a subsequent run, properly handling existing operations
-
-	// Create a mock statement executor
-	mockExecutor := &TestStatementExecutor{
-		database: "testdb",
-		endpoint: "http://test-endpoint",
-	}
-
-	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-	columns := table.Columns{
-		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-		{Name: "OperationId", Type: kustotypes.String},
-		{Name: "State", Type: kustotypes.String},
-		{Name: "ShouldRetry", Type: kustotypes.Real},
-		{Name: "Status", Type: kustotypes.String},
-	}
-	mockRows, err := kusto.NewMockRows(columns)
-	require.NoError(t, err)
-	mockExecutor.mockRows = mockRows
-
-	// Create a summary rule
-	ruleName := "test-rule"
-	rule := &v1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ruleName,
-		},
-		Spec: v1.SummaryRuleSpec{
-			Database: "testdb",
-			Table:    "TestTable",
-			Interval: metav1.Duration{Duration: time.Hour},
-			Body:     "TestBody",
-		},
-	}
-
-	// Create a list to be returned by the mock handler
-	ruleList := &v1.SummaryRuleList{
-		Items: []v1.SummaryRule{*rule},
-	}
-
-	// Create a mock handler that will return our rule and track updates
-	mockHandler := &mockCRDHandler{
-		listResponse:   ruleList,
-		updatedObjects: []client.Object{},
-	}
-
-	// Create the task with our mocks
-	task := &SummaryRuleTask{
-		store:    mockHandler,
-		kustoCli: mockExecutor,
-		Clock:    klock.NewFakeClock(time.Now()),
-	}
-
-	// TODO: This test was testing GetOperations failure/recovery behavior
-	// Since GetOperations has been removed in favor of individual getOperation calls,
-	// this test needs to be refactored to test individual operation lookup behavior
-	// Track GetOperations call count to simulate initial failure then success
-	getOperationsCallCount := 0
-	_ = getOperationsCallCount // Avoid unused variable error
-	// task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-	//	getOperationsCallCount++
-	//	if getOperationsCallCount == 1 {
-	//		// First call fails (simulating Kusto unavailable)
-	//		return nil, errors.New("kusto connection failed")
-	//	}
-	//	// Second call succeeds but returns empty list (no operations)
-	//	return []AsyncOperationStatus{}, nil
-	// }
-
-	// Mock the SubmitRule function
-	submitRuleCallCount := 0
-	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
-		submitRuleCallCount++
-		return fmt.Sprintf("operation-id-%d", submitRuleCallCount), nil
-	}
-
-	// First run - GetOperations fails but rule processing should continue with our fix
-	require.NoError(t, task.Run(context.Background()), "Should succeed even when GetOperations fails")
-	require.Equal(t, 1, getOperationsCallCount, "GetOperations should have been called once")
-	require.Equal(t, 1, submitRuleCallCount, "SubmitRule should have been called once")
-
-	// Verify rule was updated with the new operation
-	require.Len(t, mockHandler.updatedObjects, 1, "Rule should have been updated once")
-	updatedRule1, ok := mockHandler.updatedObjects[0].(*v1.SummaryRule)
-	require.True(t, ok, "Updated object should be a SummaryRule")
-	asyncOps1 := updatedRule1.GetAsyncOperations()
-	require.Len(t, asyncOps1, 1, "Should have one async operation from first run")
-	require.Equal(t, "operation-id-1", asyncOps1[0].OperationId, "Should have the operation from first run")
-
-	// Reset mock handler for second run
-	mockHandler.updatedObjects = []client.Object{}
-
-	// Second run - GetOperations succeeds
-	require.NoError(t, task.Run(context.Background()), "Should succeed when GetOperations succeeds")
-	require.Equal(t, 2, getOperationsCallCount, "GetOperations should have been called twice")
-
-	// The key test: this should work fine even after the initial GetOperations failure
-	// The exact behavior (whether new operations are created) depends on timing logic,
-	// but the main point is that the system doesn't crash and continues to function
-}
-
 func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 	// This test ensures that when GetOperations fails but we have recent async operations
 	// stored in the CRD, they are kept (not removed due to age)
@@ -990,15 +882,6 @@ func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 		kustoCli: mockExecutor,
 		Clock:    klock.NewFakeClock(time.Now()),
 	}
-
-	// TODO: This test was testing GetOperations failure behavior
-	// Since GetOperations has been removed, individual getOperation calls handle failures gracefully
-	// Set the GetOperations function to return an error (Kusto unavailable)
-	getOperationsError := errors.New("failed to connect to Kusto cluster")
-	_ = getOperationsError // Avoid unused variable error
-	// task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-	//	return nil, getOperationsError
-	// }
 
 	// Mock the SubmitRule function to succeed
 	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
@@ -1810,26 +1693,6 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 		return operationId, nil
 	}
 
-	// TODO: This test needs to be updated for individual getOperation calls
-	// The original test mocked GetOperations to return completed operations so trackAsyncOperations
-	// could find and clean them up. Now individual getOperation calls need to be mocked.
-	// For now, the empty mockRows will simulate "operations not found" which should still
-	// allow the test logic to work (operations will be treated as cleaned up).
-
-	// Original mock logic (now commented out):
-	// Mock GetOperations to return all previously submitted operations as completed
-	// task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-	//	var operations []AsyncOperationStatus
-	//	for _, opId := range allSubmittedOperations {
-	//		operations = append(operations, AsyncOperationStatus{
-	//			OperationId: opId,
-	//			State:       string(KustoAsyncOperationStateCompleted),
-	//			ShouldRetry: 0, // Completed operations should have ShouldRetry=0
-	//		})
-	//	}
-	//	return operations, nil
-	// }
-
 	// Test multiple execution cycles
 	for cycle := 1; cycle <= 3; cycle++ {
 		t.Logf("Running execution cycle %d", cycle)
@@ -2010,11 +1873,6 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	// 1. New rule execution (for current time window)
 	// 2. Retry of failed operation (with original time window)
 
-	// Debug: Print all submit calls
-	for i, call := range submitCalls {
-		t.Logf("Submit call %d: start=%s, end=%s, opId=%s", i, call.startTime, call.endTime, call.opId)
-	}
-
 	require.Len(t, submitCalls, 2, "Should have 2 SubmitRule calls: new execution + retry")
 
 	// Find the retry call - it should match the failed operation's time window
@@ -2091,7 +1949,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Add a found operation
-		operationTime := time.Date(2025, 8, 6, 10, 0, 0, 0, time.UTC)
+		operationTime := time.Date(2024, 6, 23, 10, 0, 0, 0, time.UTC)
 		err = mockRows.Row(value.Values{
 			value.DateTime{Value: operationTime, Valid: true},
 			value.String{Value: "test-operation-123", Valid: true},
@@ -2206,7 +2064,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Add operation with empty state (should be ignored)
-		operationTime := time.Date(2025, 8, 6, 10, 0, 0, 0, time.UTC)
+		operationTime := time.Date(2024, 6, 23, 10, 0, 0, 0, time.UTC)
 		err = mockRows.Row(value.Values{
 			value.DateTime{Value: operationTime, Valid: true},
 			value.String{Value: "test-operation-456", Valid: true},
