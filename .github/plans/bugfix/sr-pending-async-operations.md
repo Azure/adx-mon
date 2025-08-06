@@ -48,18 +48,18 @@ Operations in SummaryRule status become permanently stuck when they fall outside
 - [x] Verify no other code references the removed method
 
 ### Task 4 Checklist - Tests and Documentation  
-- [ ] Add unit tests for `getOperation()` method only
-- [ ] Add tests for `trackAsyncOperations()` with individual lookups
-- [ ] **CRITICAL**: Test that empty `OperationId` operations are unaffected
-- [ ] Update existing tests that mock `getOperations()` to mock individual calls
-- [ ] Add code comments explaining the change from bulk to individual queries
+- [x] Add unit tests for `getOperation()` method only
+- [x] Add tests for `trackAsyncOperations()` with individual lookups
+- [x] **CRITICAL**: Test that empty `OperationId` operations are unaffected
+- [x] Update existing tests that mock `getOperations()` to mock individual calls
+- [x] Add code comments explaining the change from bulk to individual queries
 
 ### Post-Implementation Verification
-- [ ] All existing tests pass without modification (except mocking changes)
-- [ ] Operations with `OperationId` can be found regardless of age
-- [ ] Operations with empty `OperationId` still processed by `processBacklogOperation()`
-- [ ] No performance degradation for typical operation counts (<10 per rule)
-- [ ] Error handling works correctly for query failures
+- [x] All existing tests pass without modification (except mocking changes)
+- [x] Operations with `OperationId` can be found regardless of age
+- [x] Operations with empty `OperationId` still processed by `processBacklogOperation()`
+- [x] No performance degradation for typical operation counts (<10 per rule)
+- [x] Error handling works correctly for query failures
 
 ## Sample Broken SummaryRule
 

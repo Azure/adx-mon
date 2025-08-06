@@ -66,11 +66,6 @@ func TestTimeWindowCalculation(t *testing.T) {
 			Clock:    fakeClock,
 		}
 
-		// Mock GetOperations to return empty (no ongoing operations)
-		task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-			return []AsyncOperationStatus{}, nil
-		}
-
 		// Mock SubmitRule to track the time windows
 		var capturedStartTime, capturedEndTime string
 		task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
@@ -168,11 +163,6 @@ func TestTimeWindowCalculation(t *testing.T) {
 			Clock:    fakeClock,
 		}
 
-		// Mock GetOperations to return empty
-		task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-			return []AsyncOperationStatus{}, nil
-		}
-
 		// Mock SubmitRule to track the time windows
 		var submissionCalls []struct {
 			startTime, endTime string
@@ -264,11 +254,6 @@ func TestTimeWindowCalculation(t *testing.T) {
 			store:    mockHandler,
 			kustoCli: mockExecutor,
 			Clock:    fakeClock,
-		}
-
-		// Mock GetOperations to return empty (no ongoing operations)
-		task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-			return []AsyncOperationStatus{}, nil
 		}
 
 		// Track the submitted window end time
@@ -367,11 +352,6 @@ func TestTimeWindowCalculation(t *testing.T) {
 			store:    mockHandler,
 			kustoCli: mockExecutor,
 			Clock:    fakeClock,
-		}
-
-		// Mock GetOperations to return empty
-		task.GetOperations = func(ctx context.Context) ([]AsyncOperationStatus, error) {
-			return []AsyncOperationStatus{}, nil
 		}
 
 		// Track multiple executions

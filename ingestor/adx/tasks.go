@@ -420,6 +420,7 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	return nil
 }
 
+// trackAsyncOperations processes pending async operations for a SummaryRule.
 func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule) {
 	operations := rule.GetAsyncOperations()
 	for _, op := range operations {
@@ -514,12 +515,10 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 }
 
 func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
-	stmt := kql.New(`
-		.show operations
-		| where OperationId == @ParamOperationId  
-		| summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)
-		| project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status
-	`)
+	stmt := kql.New(`.show operations
+| where OperationId == @ParamOperationId  
+| summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)
+| project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status`)
 	params := kql.NewParameters().AddString("ParamOperationId", operationId)
 
 	rows, err := t.kustoCli.Mgmt(ctx, stmt, kusto.QueryParameters(params))
