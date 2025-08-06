@@ -32,13 +32,13 @@ Operations in SummaryRule status become permanently stuck when they fall outside
 - [x] Test all scenarios: operation found, not found, query errors, and data parsing
 
 ### Task 2 Checklist - Replace Bulk Query Usage
-- [ ] Modify `trackAsyncOperations()` method only
-- [ ] Replace the bulk operation lookup logic with individual `getOperation()` calls
-- [ ] **CRITICAL**: Verify operations with empty `OperationId` still go to `processBacklogOperation()`
-- [ ] Preserve existing retry logic: `handleRetryOperation()` calls remain unchanged
-- [ ] Preserve existing completion logic: `handleCompletedOperation()` calls remain unchanged  
-- [ ] Add error handling for individual query failures (log and continue)
-- [ ] Verify no other method signatures need to change
+- [x] Modify `trackAsyncOperations()` method only
+- [x] Replace the bulk operation lookup logic with individual `getOperation()` calls
+- [x] **CRITICAL**: Verify operations with empty `OperationId` still go to `processBacklogOperation()`
+- [x] Preserve existing retry logic: `handleRetryOperation()` calls remain unchanged
+- [x] Preserve existing completion logic: `handleCompletedOperation()` calls remain unchanged  
+- [x] Add error handling for individual query failures (log and continue)
+- [x] Verify no other method signatures need to change
 
 ### Task 3 Checklist - Remove Bulk Query
 - [ ] Remove `getOperations()` method from `SummaryRuleTask`

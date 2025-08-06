@@ -320,7 +320,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	summaryRules, kustoAsyncOperations, err := t.initializeRun(timeoutCtx)
+	summaryRules, _, err := t.initializeRun(timeoutCtx)
 	if err != nil {
 		return err
 	}
@@ -338,7 +338,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		rule.BackfillAsyncOperations(t.Clock)
 
 		// Process any outstanding async operations for this rule
-		t.trackAsyncOperations(timeoutCtx, &rule, kustoAsyncOperations)
+		t.trackAsyncOperations(timeoutCtx, &rule)
 
 		// Update the rule's primary status condition
 		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
@@ -431,7 +431,7 @@ func (t *SummaryRuleTask) handleRuleExecution(ctx context.Context, rule *v1.Summ
 	return nil
 }
 
-func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule, kustoAsyncOperations []AsyncOperationStatus) {
+func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.SummaryRule) {
 	operations := rule.GetAsyncOperations()
 	for _, op := range operations {
 
