@@ -200,16 +200,18 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 	queryStr := query.String()
 	if strings.Contains(queryStr, "@ParamOperationId") && t.operationMockData != nil {
 		// This is a parameterized query for a specific operation
-		// Return all operations for each call - the actual getOperation method
-		// will filter to the specific operation requested
+		// Return operations in the same order they would be processed by trackAsyncOperations
+		// which processes them in the order they appear in GetAsyncOperations()
 
 		if t.queriedOperations == nil {
 			t.queriedOperations = make(map[string]bool)
 		}
 
-		// Return the first unqueried operation (round-robin approach)
-		for operationId, mockData := range t.operationMockData {
-			if !t.queriedOperations[operationId] {
+		// Define the expected processing order to match the test setup
+		operationOrder := []string{"failed-op-1", "completed-op-2", "completed-op-3", "completed-op-4"}
+
+		for _, operationId := range operationOrder {
+			if mockData, exists := t.operationMockData[operationId]; exists && !t.queriedOperations[operationId] {
 				t.queriedOperations[operationId] = true
 
 				columns := table.Columns{
