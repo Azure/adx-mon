@@ -172,6 +172,11 @@ type TestStatementExecutor struct {
 	queriedOperations map[string]bool                  // Track which operations have been queried
 }
 
+func (t *TestStatementExecutor) Reset() {
+	t.stmts = nil
+	t.queriedOperations = nil
+}
+
 func (t *TestStatementExecutor) Database() string {
 	return t.database
 }
@@ -195,28 +200,16 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 	queryStr := query.String()
 	if strings.Contains(queryStr, "@ParamOperationId") && t.operationMockData != nil {
 		// This is a parameterized query for a specific operation
-		// For testing purposes, we'll simulate the behavior by returning operations in a deterministic order
+		// Return all operations for each call - the actual getOperation method
+		// will filter to the specific operation requested
 
 		if t.queriedOperations == nil {
 			t.queriedOperations = make(map[string]bool)
 		}
 
-		// Return operations in a deterministic (sorted) order for the test
-		var operationOrder []string
-		for operationId := range t.operationMockData {
-			operationOrder = append(operationOrder, operationId)
-		}
-		// Sort to ensure deterministic order across test runs
-		for i := 0; i < len(operationOrder)-1; i++ {
-			for j := i + 1; j < len(operationOrder); j++ {
-				if operationOrder[i] > operationOrder[j] {
-					operationOrder[i], operationOrder[j] = operationOrder[j], operationOrder[i]
-				}
-			}
-		}
-
-		for _, operationId := range operationOrder {
-			if mockData, exists := t.operationMockData[operationId]; exists && !t.queriedOperations[operationId] {
+		// Return the first unqueried operation (round-robin approach)
+		for operationId, mockData := range t.operationMockData {
+			if !t.queriedOperations[operationId] {
 				t.queriedOperations[operationId] = true
 
 				columns := table.Columns{
@@ -251,7 +244,7 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 			}
 		}
 
-		// If we get here, all operations have been queried, return empty results
+		// If all operations have been queried or no operations match, return empty results
 		columns := table.Columns{
 			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
 			{Name: "OperationId", Type: kustotypes.String},
@@ -1756,6 +1749,7 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
+	mockExecutor.Reset() // Ensure clean state
 
 	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
 	columns := table.Columns{
