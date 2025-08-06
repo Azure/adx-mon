@@ -16,18 +16,20 @@ Operations in SummaryRule status become permanently stuck when they fall outside
 ## Implementation Checklist
 
 ### Pre-Implementation Verification
-- [ ] Read and understand the entire plan before starting
-- [ ] Confirm understanding of the bug: operations >24h old get stuck due to bulk query limitation
-- [ ] Verify that the fix approach (individual lookups) addresses the root cause
-- [ ] Understand that empty `OperationId` operations must remain completely unaffected
+- [x] Read and understand the entire plan before starting
+- [x] Confirm understanding of the bug: operations >24h old get stuck due to bulk query limitation
+- [x] Verify that the fix approach (individual lookups) addresses the root cause
+- [x] Understand that empty `OperationId` operations must remain completely unaffected
 
 ### Task 1 Checklist - Add getOperation Method
-- [ ] Add exactly one new method: `getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error)`
-- [ ] Use the exact KQL query pattern provided in the plan (with parameterized queries)
-- [ ] Return `*AsyncOperationStatus` for found operations, `nil` for not found, `error` for failures
-- [ ] Add defensive error handling and parsing
-- [ ] Verify method signature matches plan exactly
-- [ ] Test the new method works with mock data
+- [x] Add exactly one new method: `getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error)`
+- [x] Use the exact KQL query pattern provided in the plan (with parameterized queries)
+- [x] Return `*AsyncOperationStatus` for found operations, `nil` for not found, `error` for failures
+- [x] Add defensive error handling and parsing
+- [x] Verify method signature matches plan exactly
+- [x] Test the new method works with mock data
+- [x] Implement proper MockRows-based testing for complete coverage
+- [x] Test all scenarios: operation found, not found, query errors, and data parsing
 
 ### Task 2 Checklist - Replace Bulk Query Usage
 - [ ] Modify `trackAsyncOperations()` method only

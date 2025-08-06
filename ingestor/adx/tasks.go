@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -443,20 +442,21 @@ func (t *SummaryRuleTask) trackAsyncOperations(ctx context.Context, rule *v1.Sum
 			continue
 		}
 
-		index := slices.IndexFunc(kustoAsyncOperations, func(item AsyncOperationStatus) bool {
-			return item.OperationId == op.OperationId
-		})
-
-		if index == -1 {
+		kustoOp, err := t.getOperation(ctx, op.OperationId)
+		if err != nil {
+			logger.Errorf("Failed to query operation %s: %v", op.OperationId, err)
+			continue
+		}
+		if kustoOp == nil {
+			// Operation not found - could be old or completed
 			continue
 		}
 
-		kustoOp := kustoAsyncOperations[index]
 		if IsKustoAsyncOperationStateCompleted(kustoOp.State) {
-			t.handleCompletedOperation(ctx, rule, kustoOp)
+			t.handleCompletedOperation(ctx, rule, *kustoOp)
 		}
 		if kustoOp.ShouldRetry != 0 {
-			t.handleRetryOperation(ctx, rule, op, kustoOp)
+			t.handleRetryOperation(ctx, rule, op, *kustoOp)
 		}
 	}
 }
@@ -559,6 +559,46 @@ func (t *SummaryRuleTask) getOperations(ctx context.Context) ([]AsyncOperationSt
 	}
 
 	return operations, nil
+}
+
+func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
+	stmt := kql.New(`
+		.show operations
+		| where OperationId == @ParamOperationId  
+		| summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)
+		| project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status
+	`)
+	params := kql.NewParameters().AddString("ParamOperationId", operationId)
+
+	rows, err := t.kustoCli.Mgmt(ctx, stmt, kusto.QueryParameters(params))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
+	}
+	defer rows.Stop()
+
+	for {
+		row, errInline, errFinal := rows.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, fmt.Errorf("failed to retrieve operation %s: %v", operationId, errFinal)
+		}
+
+		var status AsyncOperationStatus
+		if err := row.ToStruct(&status); err != nil {
+			return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
+		}
+		if status.State != "" {
+			return &status, nil
+		}
+	}
+
+	// Operation not found
+	return nil, nil
 }
 
 func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
