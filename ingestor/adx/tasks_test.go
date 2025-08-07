@@ -2175,8 +2175,6 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 	require.Len(t, ops, 1, "Should have one operation after backlog recovery")
 	require.Equal(t, operationID, ops[0].OperationId, "Backlog operation should have received operation ID")
 
-	// THE BUG: processBacklogOperation does not update LastSuccessfulExecution timestamp
-	// This assertion will FAIL with the current implementation, demonstrating the bug
 	currentTimestamp := rule.GetLastExecutionTime()
 
 	require.True(t, currentTimestamp.After(oldTimestamp),
