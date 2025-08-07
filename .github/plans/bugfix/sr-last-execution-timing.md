@@ -1,167 +1,188 @@
 # SummaryRule LastSuccessfulExecution Timing Bugfix Plan
 
+## Planning Progress
+- [x] 🔍 Feature requirements gathered
+- [x] 📚 Codebase patterns analyzed  
+- [x] 🌐 Third-party research complete (N/A - internal bugfix)
+- [x] 🏗️ Architecture decisions made
+- [x] 💬 User validation complete (review requested)
+- [x] 📋 Implementation plan finalized
+
 ## Context Section
 
 ### Feature Overview
-Fix the timing bug where `LastSuccessfulExecution` timestamp is updated at operation submission time instead of completion time, causing the timestamp to freeze and not advance as operations actually complete successfully.
+Fix the timing bug where `LastSuccessfulExecution` timestamp becomes stuck and doesn't advance when backlog operations are successfully recovered, preventing forward progress in time window processing.
 
 ### Research Summary
-- **Current Behavior**: `SetLastExecutionTime` is called in `handleRuleExecution` at submission time (line 425)
-- **Expected Behavior**: `SetLastExecutionTime` should be called in `handleCompletedOperation` when operations complete successfully
+- **Current Behavior**: `processBacklogOperation` successfully submits backlog operations and assigns operation IDs, but does NOT update `LastSuccessfulExecution` timestamp
+- **Expected Behavior**: `LastSuccessfulExecution` should advance whenever we successfully submit operations that would move the timestamp forward (regardless of whether via normal submission or backlog recovery)
 - **Architecture Pattern**: SummaryRule status conditions track execution state and timing for scheduling decisions
 
 ### Architectural Context
-The SummaryRule execution flow follows this pattern:
-1. `handleRuleExecution` determines if rule should submit based on interval timing
-2. If submitting, calls `SetLastExecutionTime(windowEndTime)` immediately
-3. Later, `handleCompletedOperation` processes completed operations but doesn't update timestamp
-4. Result: timestamp reflects submission time, not actual completion time
+The SummaryRule execution flow has two submission paths:
+1. **Normal submission** (`handleRuleExecution`): Calls `SetLastExecutionTime(windowEndTime)` ✅
+2. **Backlog recovery** (`processBacklogOperation`): Successfully submits operations but does NOT call `SetLastExecutionTime()` ❌
+
+### Production Impact
+Real SummaryRule in production shows:
+- **LastSuccessfulExecution message**: `"2025-08-01T18:00:00Z"` (stuck since 2025-08-01T18:35:13Z)
+- **Latest successful operation**: `6d035fd6-6459-4fb6-8931-64d63a1f0c8c` with window ending `"2025-08-06T08:00:00Z"`
+- **Gap**: 5+ days of successful operations not reflected in timestamp advancement
 
 ### Key Patterns
 - **Status Conditions**: Use `meta.SetStatusCondition` to update CRD status with proper timing
 - **Time Windows**: Operations have `startTime`/`endTime` representing the data window being processed
-- **Completion Tracking**: `handleCompletedOperation` identifies successful vs failed operations
+- **Forward Progress**: Only update timestamp if `new_timestamp > current_timestamp` to prevent time travel
+- **Backlog Recovery**: `processBacklogOperation` handles failed submissions but must also maintain timestamp progression
 
 ### Integration Points
 - **CRD Status Management**: `SetLastExecutionTime` updates the `LastSuccessfulExecution` condition
 - **Scheduling Logic**: Next execution windows calculated from `LastSuccessfulExecution` timestamp
 - **Operation Lifecycle**: Async operations tracked from submission through completion
+- **Backlog System**: Failed submissions recovered without timestamp updates (BUG)
 
 ### Dependencies
 - `api/v1/summaryrule_types.go`: `SetLastExecutionTime` method implementation
-- `ingestor/adx/tasks.go`: Operation submission and completion handling
+- `ingestor/adx/tasks.go`: Normal submission and backlog recovery handling
 - Kusto async operation status tracking
 
 ## Risk Assessment Matrix
 
 ### Overall Feature Risk: **LOW**
-**Rationale**: Single-line change moving existing function call from submission to completion handler.
+**Rationale**: Adding missing timestamp update to existing successful code path with forward-progress guard.
 
 ### Major Component Risks:
 
 #### Timing Logic Changes
 - **Potential Issues**: 
-  - Timestamp advances too late affecting scheduling
-  - Multiple successful operations in same execution cycle
-  - Failed operations not updating timestamp appropriately
+  - Timestamp could advance too aggressively
+  - Backlog operations from past could move timestamp backwards
+  - Multiple operations in same cycle could cause unnecessary updates
 - **Edge Cases**: 
   - Operations completing out of order
+  - Clock skew between submission and recovery
+  - Time parsing failures during recovery
   - Mixed success/failure states
   - Clock skew between submission and completion
 - **Integration Risks**: 
   - Scheduling logic depends on accurate timestamps
   - Monitoring/alerting may rely on timestamp progression
+- **Integration Risks**: 
+  - Scheduling logic depends on accurate timestamps
+  - Monitoring/alerting may rely on timestamp progression
 - **Mitigation Strategies**: 
-  - Only update timestamp for successful completions
+  - Only update timestamp when it would advance forward (`new > current`)
   - Use operation's original window end time, not current time
   - Maintain existing timestamp format and precision
+  - Add proper error handling for time parsing
 - **Validation Checkpoints**: 
-  - Verify timestamp advances after successful operations
-  - Check scheduling still works with new timing
-  - Ensure failed operations don't advance timestamp
+  - Verify timestamp advances only for newer operations
+  - Check scheduling still works with updated timing
+  - Ensure old backlog operations don't cause regression
 
 ## Task Breakdown (Commit-Optimized)
 
-### Task 1: Move timestamp update from submission to completion
-- **Commit Message**: `fix(summaryrule): update LastSuccessfulExecution on completion not submission`
-- **Objective**: Fix timing bug by moving `SetLastExecutionTime` call from submission to successful completion
-- **Risk Assessment**: LOW - Moving single function call with clear success condition
+### Task 1: Add test demonstrating the backlog timestamp bug
+- **Commit Message**: `test(summaryrule): add test demonstrating backlog timestamp advancement bug`
+- **Objective**: Create failing test that shows `processBacklogOperation` doesn't advance timestamps
+- **Risk Assessment**: LOW - Adding test coverage for existing bug
+- **Implementation Details**:
+  - **Files to modify**: `ingestor/adx/tasks_test.go`
+  - **Test scenario**: Backlog operation with newer window should advance timestamp
+  - **Expected failure**: Timestamp remains at old value despite successful backlog recovery
+  - **Test pattern**: Follow existing test patterns for backlog operations
+
+### Task 2: Fix backlog operation timestamp advancement  
+- **Commit Message**: `fix(summaryrule): advance LastSuccessfulExecution timestamp for backlog operations`
+- **Objective**: Ensure `processBacklogOperation` updates timestamp when it would advance forward
+- **Risk Assessment**: LOW - Adding missing timestamp update with forward-progress guard
 - **Implementation Details**:
   - **Files to modify**: `ingestor/adx/tasks.go`
-  - **Remove from `handleRuleExecution`** (line 425): `rule.SetLastExecutionTime(windowEndTime)`
-  - **Add to `handleCompletedOperation`** before operation removal: Parse operation's `EndTime` and call `SetLastExecutionTime`
-  - **Success condition**: Only update timestamp when `kustoOp.State != KustoAsyncOperationStateFailed`
+  - **Add to `processBacklogOperation`**: Parse operation's `EndTime` and conditionally call `SetLastExecutionTime`
+  - **Forward progress condition**: Only update if `new_timestamp > current_timestamp`
+  - **Time handling**: Add OneTick back since operation.EndTime has it subtracted
 
 - **Research References**: 
   - Existing `SetLastExecutionTime` implementation in `api/v1/summaryrule_types.go:113`
-  - Current submission timing in `handleRuleExecution` around line 425
-  - Completion handling in `handleCompletedOperation` around line 475
+  - Current backlog recovery in `processBacklogOperation` around line 494
+  - Normal submission timing in `handleRuleExecution` around line 413
 
 - **Integration Notes**: 
   - Preserve existing timestamp format (RFC3339Nano)
   - Use operation's original `EndTime`, not current timestamp
-  - Only successful operations should advance the timestamp
+  - Only operations that advance timestamp should update it
+  - Handle time parsing errors gracefully
 
 - **Implementation Pattern**:
 ```go
-func (t *SummaryRuleTask) handleCompletedOperation(ctx context.Context, rule *v1.SummaryRule, kustoOp AsyncOperationStatus) {
-	if kustoOp.State == string(KustoAsyncOperationStateFailed) {
-		// ... existing error handling
-	} else {
-		// Operation completed successfully - update LastSuccessfulExecution timestamp
-		// Find the corresponding async operation to get its EndTime
-		operations := rule.GetAsyncOperations()
-		for _, op := range operations {
-			if op.OperationId == kustoOp.OperationId {
-				if endTime, err := time.Parse(time.RFC3339Nano, op.EndTime); err == nil {
-					rule.SetLastExecutionTime(endTime.Add(kustoutil.OneTick)) // Add OneTick back since we subtracted it for the query
-				}
-				break
+func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.SummaryRule, operation v1.AsyncOperation) {
+	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil {
+		// Great, we were able to recover the failed submission window.
+		operation.OperationId = operationId
+		rule.SetAsyncOperation(operation)
+		
+		// Update timestamp only if it would advance forward
+		if endTime, parseErr := time.Parse(time.RFC3339Nano, operation.EndTime); parseErr == nil {
+			windowEndTime := endTime.Add(kustoutil.OneTick) // Add OneTick back
+			currentTimestamp := rule.GetLastExecutionTime()
+			
+			// Only advance if the new timestamp is newer (forward progress)
+			if currentTimestamp == nil || windowEndTime.After(*currentTimestamp) {
+				rule.SetLastExecutionTime(windowEndTime)
 			}
+		} else {
+			logger.Errorf("Failed to parse EndTime '%s' for backlog operation: %v", operation.EndTime, parseErr)
 		}
 	}
-	// ... existing cleanup
-	rule.RemoveAsyncOperation(kustoOp.OperationId)
 }
 ```
 
-- **Remove from handleRuleExecution**:
-```go
-// REMOVE this line from handleRuleExecution around line 425:
-rule.SetLastExecutionTime(windowEndTime)
-```
-
 - **Validation Criteria**: 
-  - Successful operations advance `LastSuccessfulExecution` timestamp
-  - Failed operations do not advance timestamp
-  - Timestamp reflects operation's actual data window end time
-  - Scheduling logic continues to work correctly
+  - Backlog operations with newer timestamps advance `LastSuccessfulExecution`
+  - Backlog operations with older timestamps do NOT advance `LastSuccessfulExecution`
+  - Timestamp reflects operation's actual data window end time  
+  - Normal submission path continues working unchanged
+  - Test demonstrates bug before fix, passes after fix
 
 - **Review Guidance**: 
-  - Focus on timing correctness: completion vs submission
-  - Verify only successful operations update timestamp
-  - Check that original window timing is preserved (with OneTick adjustment)
+  - Focus on forward-progress logic: only advance when newer
+  - Verify backlog operations update timestamp appropriately
+  - Check that time parsing errors are handled gracefully
+  - Ensure production case (2025-08-01 → 2025-08-06) would be fixed
 
 ## Documentation Plan
 
 ### Existing Documentation Updates
-- **File**: `docs/concepts.md` or similar SummaryRule documentation
-- **Section**: Add clarification that `LastSuccessfulExecution` reflects completion time, not submission time
-- **Update**: Explain the timing semantics for monitoring and troubleshooting
-
-### New Documentation
-- **Location**: Inline comments in `handleCompletedOperation`
-- **Content**: Document the timestamp update logic and OneTick adjustment reasoning
+- **File**: Inline comments in `processBacklogOperation`
+- **Content**: Document the timestamp update logic and forward-progress requirement
 
 ### Documentation Tasks
-No separate documentation commits needed - this is an internal bug fix that corrects existing behavior to match expected semantics.
-
-### Reference Integration
-Link to existing SummaryRule documentation that explains execution timing concepts.
+No separate documentation commits needed - this is an internal bug fix with clear inline documentation.
 
 ## Implementation Notes
 
 ### Error Handling Patterns
-- Only update timestamp for successful operations (`State != Failed`)
-- Handle time parsing errors gracefully (skip update if parse fails)
-- Preserve existing error handling for failed operations
+- Only update timestamp for successful backlog recoveries
+- Handle time parsing errors gracefully (log error, skip timestamp update)
+- Don't fail backlog processing if timestamp update fails
+- Preserve existing error handling for submission failures
 
 ### Configuration
 No new configuration options needed - this corrects existing behavior.
 
 ### Backward Compatibility
-- **Behavioral Change**: Timestamps will now reflect actual completion rather than submission
-- **Impact**: More accurate timing for monitoring, slightly later timestamp updates
-- **Migration**: No migration needed - timestamps will naturally correct as operations complete
+- **Behavioral Change**: Timestamps will now advance when backlog operations are recovered
+- **Impact**: More accurate timing for monitoring, resolves stuck timestamp scenarios
+- **Migration**: No migration needed - stuck timestamps will naturally advance as backlog clears
 
 ### Performance Considerations
-- **Minimal Impact**: Single additional time parse operation per completed async operation
+- **Minimal Impact**: Single additional time parse and comparison per successful backlog recovery
 - **Memory**: No additional memory overhead
 - **Concurrency**: No new concurrency considerations
 
 ### Reference Documentation
 - [SummaryRule CRD specification](../../api/v1/summaryrule_types.go)
-- [Async Operation Lifecycle](../designs/async-operations.md) (if exists)
+- [Backlog Operation Recovery](../designs/backlog-operations.md) (if exists)
 - [Kusto Integration Patterns](../concepts.md)
 
 ---
@@ -169,25 +190,28 @@ No new configuration options needed - this corrects existing behavior.
 ## Verification Checklist
 
 ### Pre-Implementation
-- [ ] Understand current submission timing in `handleRuleExecution`
-- [ ] Identify exact location for completion timing update
-- [ ] Confirm `SetLastExecutionTime` behavior and OneTick handling
+- [ ] Understand current backlog recovery in `processBacklogOperation`
+- [ ] Identify missing timestamp update for successful recoveries
+- [ ] Confirm forward-progress logic prevents time travel
 
 ### Implementation
-- [ ] Remove `SetLastExecutionTime` call from `handleRuleExecution`
-- [ ] Add timestamp update in `handleCompletedOperation` for successful operations only
+- [ ] Add test demonstrating the bug (should fail initially)
+- [ ] Add timestamp update in `processBacklogOperation` for successful recoveries
 - [ ] Parse operation `EndTime` correctly with OneTick adjustment
+- [ ] Only advance timestamp when `new_timestamp > current_timestamp`
 - [ ] Handle time parsing errors gracefully
+- [ ] Verify test passes after fix
 
 ### Post-Implementation  
-- [ ] Verify timestamps advance after successful operations complete
-- [ ] Confirm failed operations don't advance timestamp
-- [ ] Test scheduling logic still works with completion-based timing
+- [ ] Verify backlog operations with newer timestamps advance `LastSuccessfulExecution`
+- [ ] Confirm backlog operations with older timestamps don't advance `LastSuccessfulExecution`
+- [ ] Test scheduling logic still works with updated timing
 - [ ] Check timestamp format remains consistent (RFC3339Nano)
 - [ ] Validate OneTick adjustment preserves original window semantics
 
 ### Integration Testing
-- [ ] Submit test operations and verify completion updates timestamp
-- [ ] Test mixed success/failure scenarios
-- [ ] Verify next execution windows calculate correctly from new timestamp
-- [ ] Check existing SummaryRules continue working after fix
+- [ ] Test backlog recovery scenarios with mixed old/new timestamps
+- [ ] Verify normal submission path remains unchanged
+- [ ] Check error scenarios: malformed EndTime, parsing failures, etc.
+- [ ] Confirm production scenario (stuck at 2025-08-01) would be resolved
+- [ ] Validate no regressions in existing functionality

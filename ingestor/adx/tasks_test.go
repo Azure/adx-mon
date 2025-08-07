@@ -2104,3 +2104,157 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 		require.Nil(t, result)
 	})
 }
+
+// TestSummaryRuleBacklogTimestampUpdate tests that processBacklogOperation
+// updates LastSuccessfulExecution timestamp when backlog operations succeed.
+// This test should initially FAIL, demonstrating the bug in production.
+func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
+	// Create a mock statement executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	mockExecutor.Reset()
+
+	// Create a mock response for the submission operation ID
+	operationIDColumns := table.Columns{
+		{Name: "OperationId", Type: kustotypes.String},
+	}
+	operationIDRows, err := kusto.NewMockRows(operationIDColumns)
+	require.NoError(t, err)
+
+	operationID := "backlog-op-success-12345"
+	err = operationIDRows.Row(value.Values{
+		value.String{Value: operationID, Valid: true},
+	})
+	require.NoError(t, err)
+
+	mockExecutor.mockRows = operationIDRows
+
+	// Create storage interface
+	store := &mockCRDHandler{}
+
+	// Create the SummaryRuleTask
+	task := NewSummaryRuleTask(store, mockExecutor, nil)
+
+	// Create a test SummaryRule with an old timestamp (simulating production case)
+	oldTimestamp := time.Date(2024, 8, 1, 18, 0, 0, 0, time.UTC) // Stuck timestamp
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-stuck-rule",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestDestination",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestSource | summarize count() by bin(Timestamp, 1h)",
+		},
+	}
+
+	// Set the old timestamp to simulate the stuck state
+	rule.SetLastExecutionTime(oldTimestamp)
+
+	// Simulate a failed operation that needs backlog recovery
+	// This represents a window that failed initial submission but should have succeeded
+	backlogWindowEndTime := time.Date(2024, 8, 6, 14, 0, 0, 0, time.UTC)
+	failedOperation := adxmonv1.AsyncOperation{
+		StartTime:   time.Date(2024, 8, 6, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		EndTime:     backlogWindowEndTime.Add(-kustoutil.OneTick).Format(time.RFC3339Nano), // Adjusted for Kusto boundary
+		OperationId: "",                                                                    // Empty indicates it needs backlog recovery
+	}
+	rule.SetAsyncOperation(failedOperation)
+
+	ctx := context.Background()
+
+	// Execute processBacklogOperation - this should recover the operation AND update timestamp
+	task.processBacklogOperation(ctx, rule, failedOperation)
+
+	// Verify the operation got an ID (backlog recovery succeeded)
+	ops := rule.GetAsyncOperations()
+	require.Len(t, ops, 1, "Should have one operation after backlog recovery")
+	require.Equal(t, operationID, ops[0].OperationId, "Backlog operation should have received operation ID")
+
+	currentTimestamp := rule.GetLastExecutionTime()
+
+	require.True(t, currentTimestamp.After(oldTimestamp),
+		"processBacklogOperation should advance LastSuccessfulExecution when recovering newer windows. "+
+			"Expected timestamp > %s, Got: %s",
+		oldTimestamp.Format(time.RFC3339),
+		currentTimestamp.Format(time.RFC3339))
+
+	require.WithinDuration(t, backlogWindowEndTime, *currentTimestamp, time.Millisecond,
+		"processBacklogOperation should set LastSuccessfulExecution to the recovered window EndTime")
+}
+
+// TestSummaryRuleBacklogTimestampForwardProgressOnly tests that backlog operations
+// only advance the timestamp when the recovered window is newer than current timestamp.
+func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
+	// Create mock executor
+	mockExecutor := &TestStatementExecutor{
+		database: "testdb",
+		endpoint: "http://test-endpoint",
+	}
+	mockExecutor.Reset()
+
+	// Create mock rows for operation ID response
+	operationIDColumns := table.Columns{
+		{Name: "OperationId", Type: kustotypes.String},
+	}
+	operationIDRows, err := kusto.NewMockRows(operationIDColumns)
+	require.NoError(t, err)
+
+	operationID := "old-backlog-op-67890"
+	err = operationIDRows.Row(value.Values{
+		value.String{Value: operationID, Valid: true},
+	})
+	require.NoError(t, err)
+
+	mockExecutor.mockRows = operationIDRows
+
+	store := &mockCRDHandler{}
+	task := NewSummaryRuleTask(store, mockExecutor, nil)
+
+	// Create rule with current timestamp NEWER than the backlog operation
+	currentTimestamp := time.Date(2024, 8, 1, 18, 0, 0, 0, time.UTC)
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-forward-progress-rule",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "TestDestination",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "TestSource | summarize count() by bin(Timestamp, 1h)",
+		},
+	}
+	rule.SetLastExecutionTime(currentTimestamp)
+
+	// Create a backlog operation for an OLDER window (should NOT advance timestamp)
+	olderWindowEndTime := time.Date(2024, 7, 25, 10, 0, 0, 0, time.UTC)
+	olderOperation := adxmonv1.AsyncOperation{
+		StartTime:   time.Date(2024, 7, 25, 9, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		EndTime:     olderWindowEndTime.Add(-kustoutil.OneTick).Format(time.RFC3339Nano),
+		OperationId: "",
+	}
+	rule.SetAsyncOperation(olderOperation)
+
+	ctx := context.Background()
+
+	// Process the backlog operation
+	task.processBacklogOperation(ctx, rule, olderOperation)
+
+	// Verify the operation got recovered
+	ops := rule.GetAsyncOperations()
+	require.Len(t, ops, 1, "Should have one operation after backlog recovery")
+	require.Equal(t, operationID, ops[0].OperationId)
+
+	// Verify timestamp was NOT advanced (forward progress protection)
+	finalTimestamp := rule.GetLastExecutionTime()
+	require.True(t, finalTimestamp.Equal(currentTimestamp),
+		"processBacklogOperation should NOT advance LastSuccessfulExecution for older windows. "+
+			"Expected: %s, Got: %s",
+		currentTimestamp.Format(time.RFC3339),
+		finalTimestamp.Format(time.RFC3339))
+}
