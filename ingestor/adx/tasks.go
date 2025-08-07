@@ -496,6 +496,19 @@ func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.
 		// Great, we were able to recover the failed submission window.
 		operation.OperationId = operationId
 		rule.SetAsyncOperation(operation)
+
+		// Update timestamp to reflect successful backlog recovery
+		// Parse the operation EndTime and add OneTick back since it was subtracted for Kusto boundary
+		if operationEndTime, parseErr := time.Parse(time.RFC3339Nano, operation.EndTime); parseErr == nil {
+			// Add OneTick back to get the original window end time
+			windowEndTime := operationEndTime.Add(kustoutil.OneTick)
+			
+			// Only advance timestamp if this window is newer than current timestamp (forward progress)
+			currentTimestamp := rule.GetLastExecutionTime()
+			if windowEndTime.After(*currentTimestamp) {
+				rule.SetLastExecutionTime(windowEndTime)
+			}
+		}
 	}
 }
 
