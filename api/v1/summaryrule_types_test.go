@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1447,8 +1448,7 @@ func TestOneTick_Inconsistency_Between_Regular_And_Backfill_Operations(t *testin
 
 		// 1. Simulate what regular operations do (from handleRuleExecution)
 		// They subtract OneTick from windowEnd before formatting
-		const OneTick = 100 * time.Nanosecond // Same as kustoutil.OneTick
-		regularOpEndTime := windowEnd.Add(-OneTick).Format(time.RFC3339Nano)
+		regularOpEndTime := windowEnd.Add(-kustoutil.OneTick).Format(time.RFC3339Nano)
 
 		// 2. Create a backfilled operation using current BackfillAsyncOperations logic
 		rule := &SummaryRule{
@@ -1474,6 +1474,6 @@ func TestOneTick_Inconsistency_Between_Regular_And_Backfill_Operations(t *testin
 		// This will show the actual difference:
 		t.Logf("Regular operation EndTime: %s", regularOpEndTime)
 		t.Logf("Backfill operation EndTime: %s", backfillOpEndTime)
-		t.Logf("Difference: %v", windowEnd.Sub(windowEnd.Add(-OneTick)))
+		t.Logf("Difference: %v", windowEnd.Sub(windowEnd.Add(-kustoutil.OneTick)))
 	})
 }
