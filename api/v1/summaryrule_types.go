@@ -21,6 +21,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
@@ -376,10 +377,12 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + windowEnd.Format(time.RFC3339Nano)
 		if !existingWindows[windowKey] {
 			// Create new async operation (without OperationId - backlog operation)
+			// Subtract OneTick (100 nanoseconds) from windowEnd to match the boundary handling
+			// used in handleRuleExecution, ensuring consistency between regular and backfilled operations
 			newOp := AsyncOperation{
 				OperationId: "", // Empty for backlog operations
 				StartTime:   windowStart.Format(time.RFC3339Nano),
-				EndTime:     windowEnd.Format(time.RFC3339Nano),
+				EndTime:     windowEnd.Add(-kustoutil.OneTick).Format(time.RFC3339Nano),
 			}
 			newOperations = append(newOperations, newOp)
 			existingWindows[windowKey] = true
