@@ -21,6 +21,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
@@ -376,10 +377,17 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + windowEnd.Format(time.RFC3339Nano)
 		if !existingWindows[windowKey] {
 			// Create new async operation (without OperationId - backlog operation)
+			//
+			// IMPORTANT: Apply OneTick subtraction for boundary consistency
+			// Subtract OneTick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
+			// from windowEnd to ensure consistent boundary handling with regular operations created
+			// in ingestor/adx/tasks.go::handleRuleExecution. This prevents overlapping time windows
+			// between backfilled and regular operations, and ensures KQL queries using
+			// `between(_startTime .. _endTime)` work correctly without boundary issues.
 			newOp := AsyncOperation{
 				OperationId: "", // Empty for backlog operations
 				StartTime:   windowStart.Format(time.RFC3339Nano),
-				EndTime:     windowEnd.Format(time.RFC3339Nano),
+				EndTime:     windowEnd.Add(-kustoutil.OneTick).Format(time.RFC3339Nano),
 			}
 			newOperations = append(newOperations, newOp)
 			existingWindows[windowKey] = true
