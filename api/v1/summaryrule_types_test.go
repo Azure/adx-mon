@@ -1436,3 +1436,44 @@ func TestBackfillAsyncOperations(t *testing.T) {
 		require.NotZero(t, condition.LastTransitionTime)
 	})
 }
+
+func TestOneTick_Inconsistency_Between_Regular_And_Backfill_Operations(t *testing.T) {
+	t.Run("demonstrates OneTick inconsistency between regular and backfill operations", func(t *testing.T) {
+		// This test demonstrates the current bug: backfilled operations have EndTime
+		// that's OneTick higher than regular operations for the same time window.
+
+		baseTime := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
+		windowEnd := baseTime.Add(time.Hour) // 11:00
+
+		// 1. Simulate what regular operations do (from handleRuleExecution)
+		// They subtract OneTick from windowEnd before formatting
+		const OneTick = 100 * time.Nanosecond // Same as kustoutil.OneTick
+		regularOpEndTime := windowEnd.Add(-OneTick).Format(time.RFC3339Nano)
+
+		// 2. Create a backfilled operation using current BackfillAsyncOperations logic
+		rule := &SummaryRule{
+			Spec: SummaryRuleSpec{
+				Interval: metav1.Duration{Duration: time.Hour},
+			},
+		}
+		rule.SetLastExecutionTime(baseTime)
+
+		// Current time is 12:00, so backfill should generate operation for 10:00-11:00
+		fakeClock := NewFakeClock(baseTime.Add(2 * time.Hour))
+		rule.BackfillAsyncOperations(fakeClock)
+
+		ops := rule.GetAsyncOperations()
+		require.Equal(t, 1, len(ops))
+		backfillOpEndTime := ops[0].EndTime
+
+		// 3. Compare: backfilled operation should have same EndTime as regular operation
+		// but currently it doesn't (this assertion will FAIL, demonstrating the bug)
+		require.Equal(t, regularOpEndTime, backfillOpEndTime,
+			"Backfilled operation EndTime should match regular operation EndTime (both should subtract OneTick)")
+
+		// This will show the actual difference:
+		t.Logf("Regular operation EndTime: %s", regularOpEndTime)
+		t.Logf("Backfill operation EndTime: %s", backfillOpEndTime)
+		t.Logf("Difference: %v", windowEnd.Sub(windowEnd.Add(-OneTick)))
+	})
+}
