@@ -505,14 +505,19 @@ func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.
 
 			// Only advance timestamp if this window represents forward progress
 			currentTimestamp := rule.GetLastExecutionTime()
-			if currentTimestamp == nil || originalWindowEndTime.After(*currentTimestamp) {
+			if currentTimestamp == nil {
+				currentTimestamp = &time.Time{}
+			}
+			if originalWindowEndTime.After(*currentTimestamp) {
 				rule.SetLastExecutionTime(originalWindowEndTime)
 			}
 		} else {
 			logger.Warnf("Failed to parse operation EndTime '%s' for backlog recovery: %v", operation.EndTime, parseErr)
 		}
 
-		// Track the operation after timestamp advancement to maintain consistency
+		// Track the operation after timestamp advancement to maintain consistency.
+		// This order ensures that if timestamp advancement succeeds, the operation is tracked;
+		// if timestamp parsing fails, we still track the operation but without advancing the timestamp.
 		rule.SetAsyncOperation(operation)
 	}
 }

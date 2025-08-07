@@ -2185,11 +2185,8 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 		oldTimestamp.Format(time.RFC3339),
 		currentTimestamp.Format(time.RFC3339))
 
-	require.True(t, currentTimestamp.Equal(backlogWindowEndTime) || currentTimestamp.After(backlogWindowEndTime.Add(-time.Second)),
-		"processBacklogOperation should set LastSuccessfulExecution to the recovered window EndTime. "+
-			"Expected: %s, Got: %s",
-		backlogWindowEndTime.Format(time.RFC3339),
-		currentTimestamp.Format(time.RFC3339))
+	require.WithinDuration(t, backlogWindowEndTime, *currentTimestamp, time.Millisecond,
+		"processBacklogOperation should set LastSuccessfulExecution to the recovered window EndTime")
 }
 
 // TestSummaryRuleBacklogTimestampForwardProgressOnly tests that backlog operations
