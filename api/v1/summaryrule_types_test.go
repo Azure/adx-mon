@@ -1154,7 +1154,7 @@ func TestBackfillAsyncOperations(t *testing.T) {
 		require.Equal(t, 1, len(ops))
 		require.Equal(t, "", ops[0].OperationId) // Should be backlog operation
 		require.Equal(t, "2025-06-23T10:00:00Z", ops[0].StartTime)
-		require.Equal(t, "2025-06-23T11:00:00Z", ops[0].EndTime)
+		require.Equal(t, "2025-06-23T10:59:59.9999999Z", ops[0].EndTime) // EndTime now has OneTick subtracted
 	})
 
 	t.Run("generates multiple backfill operations", func(t *testing.T) {
@@ -1180,13 +1180,13 @@ func TestBackfillAsyncOperations(t *testing.T) {
 			require.Equal(t, "", op.OperationId)
 		}
 
-		// Check time windows
+		// Check time windows (EndTime now has OneTick subtracted)
 		require.Equal(t, "2025-06-23T08:00:00Z", ops[0].StartTime)
-		require.Equal(t, "2025-06-23T09:00:00Z", ops[0].EndTime)
+		require.Equal(t, "2025-06-23T08:59:59.9999999Z", ops[0].EndTime)
 		require.Equal(t, "2025-06-23T09:00:00Z", ops[1].StartTime)
-		require.Equal(t, "2025-06-23T10:00:00Z", ops[1].EndTime)
+		require.Equal(t, "2025-06-23T09:59:59.9999999Z", ops[1].EndTime)
 		require.Equal(t, "2025-06-23T10:00:00Z", ops[2].StartTime)
-		require.Equal(t, "2025-06-23T11:00:00Z", ops[2].EndTime)
+		require.Equal(t, "2025-06-23T10:59:59.9999999Z", ops[2].EndTime)
 	})
 
 	t.Run("respects ingestion delay", func(t *testing.T) {
@@ -1209,7 +1209,7 @@ func TestBackfillAsyncOperations(t *testing.T) {
 		ops := rule.GetAsyncOperations()
 		require.Equal(t, 1, len(ops))
 		require.Equal(t, "2025-06-23T10:00:00Z", ops[0].StartTime)
-		require.Equal(t, "2025-06-23T11:00:00Z", ops[0].EndTime)
+		require.Equal(t, "2025-06-23T10:59:59.9999999Z", ops[0].EndTime) // EndTime now has OneTick subtracted
 	})
 
 	t.Run("does not create duplicate operations", func(t *testing.T) {
