@@ -2122,13 +2122,13 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 	}
 	operationIDRows, err := kusto.NewMockRows(operationIDColumns)
 	require.NoError(t, err)
-	
+
 	operationID := "backlog-op-success-12345"
 	err = operationIDRows.Row(value.Values{
 		value.String{Value: operationID, Valid: true},
 	})
 	require.NoError(t, err)
-	
+
 	mockExecutor.mockRows = operationIDRows
 
 	// Create storage interface
@@ -2161,7 +2161,7 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 	failedOperation := adxmonv1.AsyncOperation{
 		StartTime:   time.Date(2024, 8, 6, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 		EndTime:     backlogWindowEndTime.Add(-kustoutil.OneTick).Format(time.RFC3339Nano), // Adjusted for Kusto boundary
-		OperationId: "", // Empty indicates it needs backlog recovery
+		OperationId: "",                                                                    // Empty indicates it needs backlog recovery
 	}
 	rule.SetAsyncOperation(failedOperation)
 
@@ -2178,17 +2178,17 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 	// THE BUG: processBacklogOperation does not update LastSuccessfulExecution timestamp
 	// This assertion will FAIL with the current implementation, demonstrating the bug
 	currentTimestamp := rule.GetLastExecutionTime()
-	
-	require.True(t, currentTimestamp.After(oldTimestamp), 
+
+	require.True(t, currentTimestamp.After(oldTimestamp),
 		"processBacklogOperation should advance LastSuccessfulExecution when recovering newer windows. "+
-		"Expected timestamp > %s, Got: %s", 
-		oldTimestamp.Format(time.RFC3339), 
+			"Expected timestamp > %s, Got: %s",
+		oldTimestamp.Format(time.RFC3339),
 		currentTimestamp.Format(time.RFC3339))
 
 	require.True(t, currentTimestamp.Equal(backlogWindowEndTime) || currentTimestamp.After(backlogWindowEndTime.Add(-time.Second)),
 		"processBacklogOperation should set LastSuccessfulExecution to the recovered window EndTime. "+
-		"Expected: %s, Got: %s", 
-		backlogWindowEndTime.Format(time.RFC3339), 
+			"Expected: %s, Got: %s",
+		backlogWindowEndTime.Format(time.RFC3339),
 		currentTimestamp.Format(time.RFC3339))
 }
 
@@ -2197,24 +2197,24 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 	// Create mock executor
 	mockExecutor := &TestStatementExecutor{
-		database: "testdb", 
+		database: "testdb",
 		endpoint: "http://test-endpoint",
 	}
 	mockExecutor.Reset()
 
-	// Create mock rows for operation ID response  
+	// Create mock rows for operation ID response
 	operationIDColumns := table.Columns{
 		{Name: "OperationId", Type: kustotypes.String},
 	}
 	operationIDRows, err := kusto.NewMockRows(operationIDColumns)
 	require.NoError(t, err)
-	
+
 	operationID := "old-backlog-op-67890"
 	err = operationIDRows.Row(value.Values{
 		value.String{Value: operationID, Valid: true},
 	})
 	require.NoError(t, err)
-	
+
 	mockExecutor.mockRows = operationIDRows
 
 	store := &mockCRDHandler{}
@@ -2229,7 +2229,7 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 		},
 		Spec: adxmonv1.SummaryRuleSpec{
 			Database: "testdb",
-			Table:    "TestDestination", 
+			Table:    "TestDestination",
 			Interval: metav1.Duration{Duration: time.Hour},
 			Body:     "TestSource | summarize count() by bin(Timestamp, 1h)",
 		},
@@ -2259,7 +2259,7 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 	finalTimestamp := rule.GetLastExecutionTime()
 	require.True(t, finalTimestamp.Equal(currentTimestamp),
 		"processBacklogOperation should NOT advance LastSuccessfulExecution for older windows. "+
-		"Expected: %s, Got: %s", 
+			"Expected: %s, Got: %s",
 		currentTimestamp.Format(time.RFC3339),
 		finalTimestamp.Format(time.RFC3339))
 }

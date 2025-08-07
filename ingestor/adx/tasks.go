@@ -495,20 +495,25 @@ func (t *SummaryRuleTask) processBacklogOperation(ctx context.Context, rule *v1.
 	if operationId, err := t.SubmitRule(ctx, *rule, operation.StartTime, operation.EndTime); err == nil {
 		// Great, we were able to recover the failed submission window.
 		operation.OperationId = operationId
-		rule.SetAsyncOperation(operation)
 
-		// Update timestamp to reflect successful backlog recovery
-		// Parse the operation EndTime and add OneTick back since it was subtracted for Kusto boundary
+		// Parse the operation EndTime and calculate the original window end time.
+		// The operation.EndTime has kustoutil.OneTick (100ns) subtracted in handleRuleExecution
+		// to avoid Kusto boundary issues, so we need to add it back for timestamp tracking.
 		if operationEndTime, parseErr := time.Parse(time.RFC3339Nano, operation.EndTime); parseErr == nil {
-			// Add OneTick back to get the original window end time
-			windowEndTime := operationEndTime.Add(kustoutil.OneTick)
-			
-			// Only advance timestamp if this window is newer than current timestamp (forward progress)
+			// Restore the original window end time by adding back the subtracted OneTick
+			originalWindowEndTime := operationEndTime.Add(kustoutil.OneTick)
+
+			// Only advance timestamp if this window represents forward progress
 			currentTimestamp := rule.GetLastExecutionTime()
-			if windowEndTime.After(*currentTimestamp) {
-				rule.SetLastExecutionTime(windowEndTime)
+			if currentTimestamp == nil || originalWindowEndTime.After(*currentTimestamp) {
+				rule.SetLastExecutionTime(originalWindowEndTime)
 			}
+		} else {
+			logger.Warnf("Failed to parse operation EndTime '%s' for backlog recovery: %v", operation.EndTime, parseErr)
 		}
+
+		// Track the operation after timestamp advancement to maintain consistency
+		rule.SetAsyncOperation(operation)
 	}
 }
 
