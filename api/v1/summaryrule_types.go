@@ -337,13 +337,25 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 	// Get existing async operations to check for duplicates
 	existingOps := s.GetAsyncOperations()
 
-	// Create a map for quick duplicate checking based on time windows
+	// Create a map for quick duplicate checking based on canonical time windows.
+	// Canonical window representation uses (start, start+interval-OneTick) to match
+	// how we store backlog operations (inclusive end). Previously we keyed on the
+	// unadjusted exclusive end while storing an adjusted inclusive end, causing
+	// perpetual re-generation of the same backlog window.
 	existingWindows := make(map[string]bool)
+	intervalDuration := s.Spec.Interval.Duration
 	for _, op := range existingOps {
-		if op.StartTime != "" && op.EndTime != "" {
-			key := op.StartTime + ":" + op.EndTime
-			existingWindows[key] = true
+		if op.StartTime == "" || op.EndTime == "" {
+			continue
 		}
+		startParsed, errStart := time.Parse(time.RFC3339Nano, op.StartTime)
+		if errStart != nil {
+			continue
+		}
+		// Reconstruct canonical end as start + interval - OneTick (what we store)
+		canonicalEnd := startParsed.Add(intervalDuration).Add(-kustoutil.OneTick)
+		key := startParsed.Format(time.RFC3339Nano) + ":" + canonicalEnd.Format(time.RFC3339Nano)
+		existingWindows[key] = true
 	}
 
 	var newOperations []AsyncOperation
@@ -359,7 +371,7 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 
 	// Start from the last execution time and generate windows forward
 	currentWindowStart := lastExecutionTime.UTC()
-	intervalDuration := s.Spec.Interval.Duration
+	// intervalDuration already captured above
 
 	// Generate operations from last execution time forward until we hit current time
 	for {
@@ -373,21 +385,14 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 			break
 		}
 
-		// Check if this time window already exists
-		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + windowEnd.Format(time.RFC3339Nano)
+		// Check if this time window already exists (canonical key uses inclusive end)
+		inclusiveEnd := windowEnd.Add(-kustoutil.OneTick)
+		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + inclusiveEnd.Format(time.RFC3339Nano)
 		if !existingWindows[windowKey] {
-			// Create new async operation (without OperationId - backlog operation)
-			//
-			// IMPORTANT: Apply OneTick subtraction for boundary consistency
-			// Subtract OneTick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
-			// from windowEnd to ensure consistent boundary handling with regular operations created
-			// in ingestor/adx/tasks.go::handleRuleExecution. This prevents overlapping time windows
-			// between backfilled and regular operations, and ensures KQL queries using
-			// `between(_startTime .. _endTime)` work correctly without boundary issues.
 			newOp := AsyncOperation{
-				OperationId: "", // Empty for backlog operations
+				OperationId: "", // backlog operation
 				StartTime:   windowStart.Format(time.RFC3339Nano),
-				EndTime:     windowEnd.Add(-kustoutil.OneTick).Format(time.RFC3339Nano),
+				EndTime:     inclusiveEnd.Format(time.RFC3339Nano),
 			}
 			newOperations = append(newOperations, newOp)
 			existingWindows[windowKey] = true
