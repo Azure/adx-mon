@@ -326,6 +326,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 	// Process each summary rule individually
 	for _, rule := range summaryRules.Items {
 		if !t.shouldProcessRule(rule) {
+			t.logSummaryRule(&rule, true, nil)
 			continue
 		}
 
@@ -338,6 +339,7 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Process any outstanding async operations for this rule
 		t.trackAsyncOperations(timeoutCtx, &rule)
 
+		t.logSummaryRule(&rule, false, err)
 		// Update the rule's primary status condition
 		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
 			logger.Errorf("Failed to update summary rule status: %v", err)
@@ -589,6 +591,28 @@ func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) 
 
 	// Operation not found
 	return nil, nil
+}
+
+// logSummaryRule emits a concise wide log for a SummaryRule.
+// When skipped is true we only log identity + skip reason fields.
+// When processed we include inflight_ops, last_exec_end, and forward_progress.
+func (t *SummaryRuleTask) logSummaryRule(rule *v1.SummaryRule, skipped bool, submissionErr error) {
+	if skipped {
+		logger.Logger().Info("SummaryRule", "ns", rule.Namespace, "rule", rule.Name, "db", rule.Spec.Database, "table", rule.Spec.Table, "criteria_skipped", true)
+		return
+	}
+	asyncOps := rule.GetAsyncOperations()
+	inflightOps := len(asyncOps)
+	lastExec := rule.GetLastExecutionTime()
+	lastExecStr := ""
+	if lastExec != nil && !lastExec.IsZero() {
+		lastExecStr = lastExec.UTC().Format(time.RFC3339Nano)
+	}
+	forward := false
+	if submissionErr == nil {
+		forward = lastExecStr != "" && lastExec.UTC().Add(rule.Spec.Interval.Duration).After(time.Now().Add(-rule.Spec.Interval.Duration))
+	}
+	logger.Logger().Info("SummaryRule", "ns", rule.Namespace, "rule", rule.Name, "db", rule.Spec.Database, "table", rule.Spec.Table, "criteria_skipped", false, "inflight_ops", inflightOps, "last_exec_end", lastExecStr, "forward_progress", forward)
 }
 
 func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
