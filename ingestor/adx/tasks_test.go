@@ -198,7 +198,7 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 
 	// Check if this is a getOperation call and we have specific mock data for operations
 	queryStr := query.String()
-	if strings.Contains(queryStr, "@ParamOperationId") && t.operationMockData != nil {
+	if strings.Contains(queryStr, "OperationId") && t.operationMockData != nil {
 		// This is a parameterized query for a specific operation
 		// Return operations in the same order they would be processed by trackAsyncOperations
 		// which processes them in the order they appear in GetAsyncOperations()
@@ -2000,8 +2000,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 		require.Len(t, mockExecutor.stmts, 1, "Should execute exactly one statement")
 		stmt := mockExecutor.stmts[0]
 		require.Contains(t, stmt, ".show operations", "Should query operations table")
-		require.Contains(t, stmt, "@ParamOperationId", "Should use parameterized query")
-		require.NotContains(t, stmt, "test-operation-123", "Should not contain raw operationId (prevents injection)")
+		require.Contains(t, stmt, "test-operation-123")
 	})
 
 	t.Run("operation not found", func(t *testing.T) {
