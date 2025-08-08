@@ -308,8 +308,8 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		windowEndTime = alignedNow
 		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
 	} else {
-		// Subsequent executions: start from where the last successful execution ended, minus delay, aligned to interval boundary
-		start := lastSuccessfulEndTime.Add(-delay)
+		// Subsequent executions: start exactly from the last successful execution end (do not shift backward by delay)
+		start := lastSuccessfulEndTime
 		windowStartTime = start.Truncate(s.Spec.Interval.Duration)
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
 
