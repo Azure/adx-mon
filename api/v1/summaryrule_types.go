@@ -280,14 +280,22 @@ func (s *SummaryRule) ShouldSubmitRule(clk clock.Clock) bool {
 			LastTransitionTime: metav1.Time{Time: clk.Now().Add(-s.Spec.Interval.Duration)},
 		}
 	}
+
+	// Make readiness delay-aware: we only consider time elapsed against (now - delay)
+	var delay time.Duration
+	if s.Spec.IngestionDelay != nil {
+		delay = s.Spec.IngestionDelay.Duration
+	}
+	effectiveNow := clk.Now().Add(-delay)
+
 	// Determine if the rule should be executed based on several criteria:
 	// 1. The rule is being deleted
 	// 2. Rule has been updated (new generation)
-	// 3. It's time for the next interval execution (based on actual time windows)
+	// 3. It's time for the next interval execution (based on delay-aware clock)
 	return s.DeletionTimestamp != nil || // Rule is being deleted
 		cnd.ObservedGeneration != s.GetGeneration() || // A new version of this CRD was created
-		(lastSuccessfulEndTime != nil && clk.Since(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
-		(lastSuccessfulEndTime == nil && clk.Since(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
+		(lastSuccessfulEndTime != nil && effectiveNow.Sub(*lastSuccessfulEndTime) >= s.Spec.Interval.Duration) || // Time for next interval
+		(lastSuccessfulEndTime == nil && effectiveNow.Sub(cnd.LastTransitionTime.Time) >= s.Spec.Interval.Duration) // First execution timing
 }
 
 func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time.Time, windowEndTime time.Time) {
@@ -308,16 +316,9 @@ func (s *SummaryRule) NextExecutionWindow(clk clock.Clock) (windowStartTime time
 		windowEndTime = alignedNow
 		windowStartTime = windowEndTime.Add(-s.Spec.Interval.Duration)
 	} else {
-		// Subsequent executions: start from where the last successful execution ended, minus delay, aligned to interval boundary
-		start := lastSuccessfulEndTime.Add(-delay)
-		windowStartTime = start.Truncate(s.Spec.Interval.Duration)
+		// Subsequent executions: start at previous end boundary; always return full interval.
+		windowStartTime = lastSuccessfulEndTime.Truncate(s.Spec.Interval.Duration)
 		windowEndTime = windowStartTime.Add(s.Spec.Interval.Duration)
-
-		// Ensure we don't execute future windows
-		now := clk.Now().UTC().Add(-delay).Truncate(time.Minute)
-		if windowEndTime.After(now) {
-			windowEndTime = now
-		}
 	}
 	return
 }
@@ -337,13 +338,25 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 	// Get existing async operations to check for duplicates
 	existingOps := s.GetAsyncOperations()
 
-	// Create a map for quick duplicate checking based on time windows
+	// Create a map for quick duplicate checking based on canonical time windows.
+	// Canonical window representation uses (start, start+interval-OneTick) to match
+	// how we store backlog operations (inclusive end). Previously we keyed on the
+	// unadjusted exclusive end while storing an adjusted inclusive end, causing
+	// perpetual re-generation of the same backlog window.
 	existingWindows := make(map[string]bool)
+	intervalDuration := s.Spec.Interval.Duration
 	for _, op := range existingOps {
-		if op.StartTime != "" && op.EndTime != "" {
-			key := op.StartTime + ":" + op.EndTime
-			existingWindows[key] = true
+		if op.StartTime == "" || op.EndTime == "" {
+			continue
 		}
+		startParsed, errStart := time.Parse(time.RFC3339Nano, op.StartTime)
+		if errStart != nil {
+			continue
+		}
+		// Reconstruct canonical end as start + interval - OneTick (what we store)
+		canonicalEnd := startParsed.Add(intervalDuration).Add(-kustoutil.OneTick)
+		key := startParsed.Format(time.RFC3339Nano) + ":" + canonicalEnd.Format(time.RFC3339Nano)
+		existingWindows[key] = true
 	}
 
 	var newOperations []AsyncOperation
@@ -359,7 +372,7 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 
 	// Start from the last execution time and generate windows forward
 	currentWindowStart := lastExecutionTime.UTC()
-	intervalDuration := s.Spec.Interval.Duration
+	// intervalDuration already captured above
 
 	// Generate operations from last execution time forward until we hit current time
 	for {
@@ -373,21 +386,14 @@ func (s *SummaryRule) BackfillAsyncOperations(clk clock.Clock) {
 			break
 		}
 
-		// Check if this time window already exists
-		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + windowEnd.Format(time.RFC3339Nano)
+		// Check if this time window already exists (canonical key uses inclusive end)
+		inclusiveEnd := windowEnd.Add(-kustoutil.OneTick)
+		windowKey := windowStart.Format(time.RFC3339Nano) + ":" + inclusiveEnd.Format(time.RFC3339Nano)
 		if !existingWindows[windowKey] {
-			// Create new async operation (without OperationId - backlog operation)
-			//
-			// IMPORTANT: Apply OneTick subtraction for boundary consistency
-			// Subtract OneTick (100 nanoseconds, the smallest time unit supported by Kusto datetime)
-			// from windowEnd to ensure consistent boundary handling with regular operations created
-			// in ingestor/adx/tasks.go::handleRuleExecution. This prevents overlapping time windows
-			// between backfilled and regular operations, and ensures KQL queries using
-			// `between(_startTime .. _endTime)` work correctly without boundary issues.
 			newOp := AsyncOperation{
-				OperationId: "", // Empty for backlog operations
+				OperationId: "", // backlog operation
 				StartTime:   windowStart.Format(time.RFC3339Nano),
-				EndTime:     windowEnd.Add(-kustoutil.OneTick).Format(time.RFC3339Nano),
+				EndTime:     inclusiveEnd.Format(time.RFC3339Nano),
 			}
 			newOperations = append(newOperations, newOp)
 			existingWindows[windowKey] = true
