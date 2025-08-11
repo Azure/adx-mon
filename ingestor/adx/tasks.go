@@ -556,13 +556,14 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 // The method uses parameterized queries to prevent injection attacks and queries the latest
 // operation status using arg_max to ensure we get the most recent state information.
 func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) (*AsyncOperationStatus, error) {
-	stmt := kql.New(`.show operations
-| where OperationId == @ParamOperationId  
-| summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)
-| project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status`)
-	params := kql.NewParameters().AddString("ParamOperationId", operationId)
+	// Management commands (those starting with a dot) do NOT support QueryParameters per azure-kusto-go docs.
 
-	rows, err := t.kustoCli.Mgmt(ctx, stmt, kusto.QueryParameters(params))
+	stmt := kql.New(`.show operations`).
+		AddLiteral(" | where OperationId == ").AddString(operationId).
+		AddLiteral(" | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)").
+		AddLiteral(" | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status")
+
+	rows, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
 	}

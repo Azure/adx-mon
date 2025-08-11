@@ -544,7 +544,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		require.Equal(t, time.Hour, endTime.Sub(startTime))
 	})
 
-	t.Run("prevents future execution windows", func(t *testing.T) {
+	t.Run("future last execution produces full future interval", func(t *testing.T) {
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Generation: 1,
@@ -560,12 +560,11 @@ func TestNextExecutionWindow(t *testing.T) {
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		// Should start from the future time but cap end time to current time
-		require.Equal(t, futureStart.Truncate(rule.Spec.Interval.Duration), startTime)
-		currentTimeMinute := fixedTime.UTC().Truncate(time.Minute)
-
-		// End time should be capped to current time since start time is in the future
-		require.Equal(t, currentTimeMinute, endTime)
+		// With simplified semantics we just return the full interval following the (even if incorrect) last execution.
+		expectedStart := futureStart.Truncate(rule.Spec.Interval.Duration)
+		expectedEnd := expectedStart.Add(time.Hour)
+		require.Equal(t, expectedStart, startTime)
+		require.Equal(t, expectedEnd, endTime)
 	})
 
 	t.Run("should correct a wrongly set last execution time", func(t *testing.T) {
@@ -801,7 +800,7 @@ func TestNextExecutionWindow(t *testing.T) {
 		require.Equal(t, 7*24*time.Hour, endTime.Sub(startTime))
 	})
 
-	t.Run("edge case - last execution exactly at current time", func(t *testing.T) {
+	t.Run("edge case - last execution exactly at current time returns next full minute", func(t *testing.T) {
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Generation: 1,
@@ -818,11 +817,11 @@ func TestNextExecutionWindow(t *testing.T) {
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		require.Equal(t, currentTime, startTime)
-		// End time should be capped to current time since it would be in the future
-		require.Equal(t, currentTime, endTime)
+		// Full minute interval returned
+		require.Equal(t, currentTime.Add(time.Minute), endTime)
 	})
 
-	t.Run("window calculation with past execution that would exceed current time", func(t *testing.T) {
+	t.Run("window calculation with past execution that extends past now returns full interval", func(t *testing.T) {
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Generation: 1,
@@ -839,10 +838,9 @@ func TestNextExecutionWindow(t *testing.T) {
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
 		require.Equal(t, lastExecution.Truncate(rule.Spec.Interval.Duration), startTime)
-		// End time should be capped to current time (truncated to the interval)
-		expectedMaxEndTime := fixedTime.UTC().Truncate(rule.Spec.Interval.Duration)
-		require.Equal(t, expectedMaxEndTime, endTime)
-		require.True(t, endTime.After(startTime))
+		// End time now always full interval beyond start
+		require.Equal(t, startTime.Add(2*time.Hour), endTime)
+		require.Equal(t, 2*time.Hour, endTime.Sub(startTime))
 	})
 }
 
@@ -940,10 +938,9 @@ spec:
 
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
 
-		// lastExecution - 15min = 10:45:00, truncated to hour = 10:00:00
-		// End time: 11:00:00
-		expectedStart := time.Date(2025, 6, 23, 10, 0, 0, 0, time.UTC)
-		expectedEnd := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		// Delay-aware readiness now; window always full interval: 11:00-12:00.
+		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
 
 		require.Equal(t, expectedStart, startTime)
 		require.Equal(t, expectedEnd, endTime)
@@ -994,7 +991,7 @@ spec:
 		require.Equal(t, expectedEnd, endTime)
 	})
 
-	t.Run("NextExecutionWindow with ingestion delay and future window capping", func(t *testing.T) {
+	t.Run("NextExecutionWindow with ingestion delay ignores future capping (full interval)", func(t *testing.T) {
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Generation: 1,
@@ -1009,11 +1006,10 @@ spec:
 		lastExecution := fixedTime.Add(-30 * time.Minute).UTC() // 30 minutes ago
 		rule.SetLastExecutionTime(lastExecution)
 
-		// lastExecution - 30min = 11:31:02, truncated to hour = 11:00:00
-		// End time: 12:00:00 (capped to now - delay = 11:31:02, truncated to minute = 11:31:00)
 		startTime, endTime := rule.NextExecutionWindow(fakeClock)
+		// Full interval semantics retained: 11:00-12:00
 		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
-		expectedEnd := time.Date(2025, 6, 23, 11, 31, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
 
 		require.Equal(t, expectedStart, startTime)
 		require.Equal(t, expectedEnd, endTime)
@@ -1076,9 +1072,9 @@ spec:
 		}
 	})
 
-	// Status conditions test: last execution time is 12:00:00, delay is 10min, so window starts at 11:00:00, ends at 12:00:00
-	// But if now - delay is before window end, it will be capped
-	// 12:01:02 - 10min = 11:51:02, truncated to minute = 11:51:00
+	// Status conditions test: with delay-aware readiness we still produce full intervals.
+	// Last execution time is 12:00:00, next window should be 12:00-13:00 (full hour).
+	// Delay does not mutate the window shape.
 	t.Run("Status conditions unchanged by ingestion delay", func(t *testing.T) {
 		rule := &SummaryRule{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1113,9 +1109,8 @@ spec:
 		require.NotNil(t, retrievedTime)
 		require.Equal(t, originalTime, *retrievedTime)
 
-		// Start time: 11:00:00, end time: 12:00:00, but capped to 11:51:00
-		expectedStart := time.Date(2025, 6, 23, 11, 0, 0, 0, time.UTC)
-		expectedEnd := time.Date(2025, 6, 23, 11, 51, 0, 0, time.UTC)
+		expectedStart := time.Date(2025, 6, 23, 12, 0, 0, 0, time.UTC)
+		expectedEnd := time.Date(2025, 6, 23, 13, 0, 0, 0, time.UTC)
 		require.Equal(t, expectedStart, startTime)
 		require.Equal(t, expectedEnd, endTime)
 	})
