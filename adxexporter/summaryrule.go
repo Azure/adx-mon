@@ -2,9 +2,16 @@ package adxexporter
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/kusto/kql"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -59,8 +66,40 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, nil
 	}
 
-	// No further behavior yet; full submission/tracking to be added in next commits.
-	return ctrl.Result{}, nil
+	// Minimal submission path: compute window and submit async if it's time
+	if rule.ShouldSubmitRule(r.Clock) {
+		windowStart, windowEnd := rule.NextExecutionWindow(r.Clock)
+
+		// Use inclusive end for the query by subtracting OneTick (100ns) to avoid boundary issues
+		queryEnd := windowEnd.Add(-kustoutil.OneTick)
+
+		// Submit rule asynchronously
+		opID, err := r.submitRule(ctx, rule, windowStart, queryEnd)
+
+		// Always set async operation entry with the submitted (or attempted) window
+		asyncOp := adxmonv1.AsyncOperation{
+			OperationId: opID,
+			StartTime:   windowStart.UTC().Format(time.RFC3339Nano),
+			EndTime:     queryEnd.UTC().Format(time.RFC3339Nano),
+		}
+		rule.SetAsyncOperation(asyncOp)
+
+		// Advance last execution time to the window end (original, exclusive end)
+		rule.SetLastExecutionTime(windowEnd)
+
+		// Update status reflecting submission result
+		if uerr := r.updateSummaryRuleStatus(ctx, &rule, err); uerr != nil {
+			// Log but continue; controller will retry on next reconcile
+			logger.Errorf("Failed to update SummaryRule status %s/%s: %v", rule.Namespace, rule.Name, uerr)
+		}
+	}
+
+	// Requeue based on rule interval to drive periodic submissions
+	requeueAfter := rule.Spec.Interval.Duration
+	if requeueAfter <= 0 {
+		requeueAfter = time.Minute
+	}
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // SetupWithManager registers the controller with the manager.
@@ -112,4 +151,71 @@ func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
 func (r *SummaryRuleReconciler) Run(ctx context.Context) error {
 	// Intentionally empty; async operation polling and other routines will be added later.
 	return nil
+}
+
+// submitRule executes the SummaryRule body using an async .set-or-append into the target table
+// with _startTime/_endTime substitutions and returns the Kusto operation ID.
+func (r *SummaryRuleReconciler) submitRule(ctx context.Context, rule adxmonv1.SummaryRule, start, end time.Time) (string, error) {
+	exec := r.KustoExecutors[rule.Spec.Database]
+	if exec == nil {
+		return "", fmt.Errorf("no Kusto executor for database %s", rule.Spec.Database)
+	}
+
+	// Build query with substitutions
+	body := kustoutil.ApplySubstitutions(rule.Spec.Body, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano), r.ClusterLabels)
+
+	// Execute asynchronously: .set-or-append async <table> <| <body>
+	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
+
+	// Apply a safety timeout to prevent hanging calls
+	tCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	res, err := exec.Mgmt(tCtx, stmt)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
+	}
+
+	return operationIDFromResult(res)
+}
+
+// updateSummaryRuleStatus sets the primary condition with friendly Kusto error parsing
+func (r *SummaryRuleReconciler) updateSummaryRuleStatus(ctx context.Context, rule *adxmonv1.SummaryRule, err error) error {
+	condition := metav1.Condition{
+		Type:               adxmonv1.SummaryRuleOwner,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ExecutionSuccessful",
+		Message:            "Rule submitted successfully",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: rule.GetGeneration(),
+	}
+	if err != nil {
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = "ExecutionFailed"
+		condition.Message = kustoutil.ParseError(err)
+	}
+	rule.SetCondition(condition)
+	return r.Status().Update(ctx, rule)
+}
+
+// operationIDFromResult extracts a single string cell (operation id) from the RowIterator
+func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
+	defer iter.Stop()
+	for {
+		row, errInline, errFinal := iter.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return "", fmt.Errorf("failed to retrieve operation ID: %v", errFinal)
+		}
+		if len(row.Values) != 1 {
+			return "", fmt.Errorf("unexpected number of values in row: %d", len(row.Values))
+		}
+		return row.Values[0].String(), nil
+	}
+	return "", nil
 }
