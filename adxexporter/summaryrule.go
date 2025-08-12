@@ -45,9 +45,19 @@ func (r *SummaryRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.QueryExecutors = make(map[string]*QueryExecutor)
 	}
 
+	// Placeholder: prepare per-database executors (to be implemented in follow-up commit)
+	// This keeps behavior as no-op while establishing the structure.
+	// _ = r.initializeQueryExecutors()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.SummaryRule{}).
 		Complete(r)
+}
+
+// initializeQueryExecutors creates per-database executors for SummaryRule processing.
+// No-op placeholder for now to keep this commit minimal.
+func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
+	return nil
 }
 
 // Run starts any background tasks needed by the reconciler; placeholder for now.
