@@ -24,7 +24,26 @@ func (l loggingRoundTripper) RoundTrip(req *stdhttp.Request) (*stdhttp.Response,
 		if hasSig(url) {
 			url = sigRedactRe.ReplaceAllString(url, "sig=REDACTED")
 		}
-		logger.Errorf("HTTP transport error method=%s url=%s: %v", req.Method, url, err)
+		// Capture safe correlation IDs for troubleshooting (no auth headers).
+		// References for where these come from in the Kusto SDK:
+		//  - x-ms-client-request-id is set by azure-kusto-go in kusto/conn.go (ClientRequestIdHeader const and getHeaders()).
+		//  - Azure services commonly return x-ms-request-id (see Azure SDKs) and ADX may return x-ms-activity-id/root-activity-id.
+		// Request-scope IDs
+		crid := req.Header.Get("x-ms-client-request-id")
+		tp := req.Header.Get("traceparent")
+		// Build a compact suffix with only non-empty values
+		var extra []string
+		if crid != "" {
+			extra = append(extra, "crid="+crid)
+		}
+		if tp != "" {
+			extra = append(extra, "tp="+tp)
+		}
+		if len(extra) > 0 {
+			logger.Errorf("HTTP transport error method=%s url=%s %s: %v", req.Method, url, strings.Join(extra, " "), err)
+		} else {
+			logger.Errorf("HTTP transport error method=%s url=%s: %v", req.Method, url, err)
+		}
 		return resp, err
 	}
 
@@ -33,7 +52,30 @@ func (l loggingRoundTripper) RoundTrip(req *stdhttp.Request) (*stdhttp.Response,
 		if hasSig(url) {
 			url = sigRedactRe.ReplaceAllString(url, "sig=REDACTED")
 		}
-		logger.Errorf("HTTP status=%d method=%s url=%s", resp.StatusCode, req.Method, url)
+		// Extract safe correlation IDs from response headers (Azure/Kusto conventions) and request header.
+		// See notes above for sources in the Kusto SDK and Azure conventions.
+		crid := req.Header.Get("x-ms-client-request-id")
+		rid := pickHeader(resp.Header, "x-ms-request-id", "request-id")
+		aid := pickHeader(resp.Header, "x-ms-activity-id", "x-ms-root-activity-id")
+		tp := pickHeader(resp.Header, "traceparent")
+		var extra []string
+		if crid != "" {
+			extra = append(extra, "crid="+crid)
+		}
+		if rid != "" {
+			extra = append(extra, "rid="+rid)
+		}
+		if aid != "" {
+			extra = append(extra, "aid="+aid)
+		}
+		if tp != "" {
+			extra = append(extra, "tp="+tp)
+		}
+		if len(extra) > 0 {
+			logger.Errorf("HTTP status=%d method=%s url=%s %s", resp.StatusCode, req.Method, url, strings.Join(extra, " "))
+		} else {
+			logger.Errorf("HTTP status=%d method=%s url=%s", resp.StatusCode, req.Method, url)
+		}
 	}
 	return resp, nil
 }
@@ -60,4 +102,15 @@ func hasSig(s string) bool {
 	}
 	// Coarse fallback to avoid bringing unicode/lowercasing: check a few common variants.
 	return strings.Contains(s, "Sig=") || strings.Contains(s, "SIG=")
+}
+
+// pickHeader returns the first non-empty value among the provided header keys.
+// This is purposely restricted to explicit, non-sensitive headers.
+func pickHeader(h stdhttp.Header, keys ...string) string {
+	for _, k := range keys {
+		if v := h.Get(k); v != "" {
+			return v
+		}
+	}
+	return ""
 }
