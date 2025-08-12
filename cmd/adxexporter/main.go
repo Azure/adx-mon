@@ -107,7 +107,7 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create manager: %w", err)
 	}
 
-	// Set up controller
+	// Set up controllers
 	adxexp := &adxexporter.MetricsExporterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -121,6 +121,17 @@ func realMain(ctx *cli.Context) error {
 	}
 	if err = adxexp.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)
+	}
+
+	// SummaryRule controller skeleton (no-op for now)
+	sr := &adxexporter.SummaryRuleReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		ClusterLabels: clusterLabels,
+		KustoClusters: kustoClusters,
+	}
+	if err = sr.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create summaryrule controller: %w", err)
 	}
 
 	if err := mgr.AddReadyzCheck("metrics-ready", func(req *http.Request) error {
