@@ -22,16 +22,50 @@ type SummaryRuleReconciler struct {
 	KustoClusters map[string]string // database name -> endpoint URL
 
 	// Query/Mgmt execution components (initialized later)
-	QueryExecutors map[string]*QueryExecutor // keyed by database name
+	QueryExecutors map[string]*QueryExecutor // keyed by database name (may be used later)
+	KustoExecutors map[string]KustoExecutor  // per-database Kusto clients supporting Query and Mgmt
 	Clock          clock.Clock
 }
 
 // Reconcile processes a single SummaryRule; placeholder implementation for now.
 func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if logger.IsDebug() {
-		logger.Debugf("SummaryRuleReconciler placeholder reconcile for %s/%s", req.Namespace, req.Name)
+		logger.Debugf("SummaryRule reconcile start %s/%s", req.Namespace, req.Name)
 	}
-	// No-op for now; full logic to be added in subsequent commits.
+
+	// Fetch the SummaryRule instance
+	var rule adxmonv1.SummaryRule
+	if err := r.Get(ctx, req.NamespacedName, &rule); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			// Deleted, nothing to do
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Database gating: skip if this controller doesn't manage the rule's database
+	if _, ok := r.KustoClusters[rule.Spec.Database]; !ok {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping SummaryRule %s/%s - unknown database %q", req.Namespace, req.Name, rule.Spec.Database)
+		}
+		return ctrl.Result{}, nil
+	}
+	if _, ok := r.KustoExecutors[rule.Spec.Database]; !ok {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping SummaryRule %s/%s - no executor for database %q", req.Namespace, req.Name, rule.Spec.Database)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Criteria gating
+	if !matchesCriteria(rule.Spec.Criteria, r.ClusterLabels) {
+		if logger.IsDebug() {
+			logger.Debugf("Skipping SummaryRule %s/%s - criteria did not match cluster labels", req.Namespace, req.Name)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// No further behavior yet; full submission/tracking to be added in next commits.
 	return ctrl.Result{}, nil
 }
 
@@ -44,10 +78,14 @@ func (r *SummaryRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.QueryExecutors == nil {
 		r.QueryExecutors = make(map[string]*QueryExecutor)
 	}
+	if r.KustoExecutors == nil {
+		r.KustoExecutors = make(map[string]KustoExecutor)
+	}
 
-	// Placeholder: prepare per-database executors (to be implemented in follow-up commit)
-	// This keeps behavior as no-op while establishing the structure.
-	// _ = r.initializeQueryExecutors()
+	// Prepare per-database Kusto executors
+	if err := r.initializeQueryExecutors(); err != nil {
+		return err
+	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.SummaryRule{}).
@@ -57,6 +95,22 @@ func (r *SummaryRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // initializeQueryExecutors creates per-database executors for SummaryRule processing.
 // No-op placeholder for now to keep this commit minimal.
 func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
+	for database, endpoint := range r.KustoClusters {
+		// Reuse the shared Kusto client capable of both Query and Mgmt
+		kustoClient, err := NewKustoClient(endpoint, database)
+		if err != nil {
+			return err
+		}
+		r.KustoExecutors[database] = kustoClient
+
+		// Optionally keep a QueryExecutor if needed later
+		if _, ok := r.QueryExecutors[database]; !ok {
+			r.QueryExecutors[database] = NewQueryExecutor(kustoClient)
+			if r.Clock != nil {
+				r.QueryExecutors[database].SetClock(r.Clock)
+			}
+		}
+	}
 	return nil
 }
 
