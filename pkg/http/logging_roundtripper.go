@@ -8,7 +8,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 )
 
-// sigRedactRe matches a SAS signature parameter value case-insensitively.
+// sigRedactRe matches only the "sig=" value portion (case-insensitive).
+// We rely on hasSig() to ensure we only redact standalone parameters.
 var sigRedactRe = regexp.MustCompile(`(?i)sig=[^&\s]+`)
 
 // loggingRoundTripper wraps another RoundTripper and logs only errors.
@@ -95,13 +96,11 @@ func WithLogging(c *stdhttp.Client) *stdhttp.Client {
 
 // hasSig is a cheap pre-check to avoid running regex on the hot path when not needed.
 func hasSig(s string) bool {
-	// Case-insensitive contains check for "sig=" without allocations.
-	// Fast path for common lowercase.
-	if strings.Contains(s, "sig=") {
-		return true
-	}
-	// Coarse fallback to avoid bringing unicode/lowercasing: check a few common variants.
-	return strings.Contains(s, "Sig=") || strings.Contains(s, "SIG=")
+	// Only detect standalone query parameter keys: "?sig=" or "&sig=" (case-insensitive).
+	// Avoid allocations by checking common case variants explicitly.
+	return strings.Contains(s, "?sig=") || strings.Contains(s, "&sig=") ||
+		strings.Contains(s, "?Sig=") || strings.Contains(s, "&Sig=") ||
+		strings.Contains(s, "?SIG=") || strings.Contains(s, "&SIG=")
 }
 
 // pickHeader returns the first non-empty value among the provided header keys.

@@ -165,7 +165,7 @@ func TestHasSig(t *testing.T) {
 		{"https://x/y?sig=abc", true},
 		{"https://x/y?Sig=abc", true},
 		{"https://x/y?SIG=abc", true},
-		{"https://x/y?nosig=true", true}, // substring match of "sig="
+		{"https://x/y?nosig=true", false}, // does not contain standalone "sig=" param
 		{"https://x/y?signature=abc", false},
 		{"https://x/y", false},
 	}
