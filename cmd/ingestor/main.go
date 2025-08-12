@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/adx"
 	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
 	"github.com/Azure/adx-mon/metrics"
+	monhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -433,8 +434,15 @@ func newKustoClient(endpoint string) (*kusto.Client, error) {
 	if strings.HasPrefix(endpoint, "https://") {
 		kcsb.WithDefaultAzureCredential()
 	}
-
-	return kusto.New(kcsb)
+	// Create the SDK client first to preserve any defaults the SDK sets on its http.Client.
+	c, err := kusto.New(kcsb)
+	if err != nil {
+		return nil, err
+	}
+	// Wrap the existing http.Client with our error-logging RoundTripper to capture transport/HTTP failures.
+	base := c.HttpClient()
+	monhttp.WithLogging(base)
+	return c, nil
 }
 
 func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
