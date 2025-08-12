@@ -44,12 +44,6 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Database gating: skip if this controller doesn't manage the rule's database
-	if _, ok := r.KustoClusters[rule.Spec.Database]; !ok {
-		if logger.IsDebug() {
-			logger.Debugf("Skipping SummaryRule %s/%s - unknown database %q", req.Namespace, req.Name, rule.Spec.Database)
-		}
-		return ctrl.Result{}, nil
-	}
 	if _, ok := r.KustoExecutors[rule.Spec.Database]; !ok {
 		if logger.IsDebug() {
 			logger.Debugf("Skipping SummaryRule %s/%s - no executor for database %q", req.Namespace, req.Name, rule.Spec.Database)
