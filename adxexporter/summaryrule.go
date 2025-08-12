@@ -18,6 +18,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// WIP NOTE (state + next steps):
+// - Current state:
+//   - SummaryRuleReconciler exists and is registered in main.
+//   - Per-DB executors initialized: KustoExecutors (Mgmt+Query) and QueryExecutors with clock.
+//   - Gating implemented: database presence in KustoExecutors and criteria match.
+//   - Minimal submission path implemented:
+//     * Computes execution window (NextExecutionWindow), adjusts end by OneTick for query.
+//     * Submits async .set-or-append to target table with substituted _startTime/_endTime/labels.
+//     * Records AsyncOperation (op id + window), advances LastExecutionTime, updates condition.
+//     * Requeues based on rule interval.
+// - Next steps (to implement when resuming):
+//   1) Async operation tracking: query .show operations by op id, handle Completed/Failed, parse errors, and remove finished ops. Support ShouldRetry on transient states.
+//   2) Backfill: leverage SummaryRule.BackfillAsyncOperations to submit backlog safely (forward-only progression).
+//   3) Logging: add concise info/debug logs mirroring ingestor task behavior.
+//   4) Tests: port/mirror ingestor/adx SummaryRuleTask tests to adxexporter (submission, retry, backlog).
+//   5) Optional: readiness/metrics for rule execution and operation latencies.
+
 // SummaryRuleReconciler will reconcile SummaryRule objects.
 // This is a skeleton; behavior will be implemented in follow-up commits.
 type SummaryRuleReconciler struct {
