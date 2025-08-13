@@ -75,7 +75,7 @@ func TestSummaryRule_SubmissionSuccess(t *testing.T) {
 	ensureTestVFlagSetT(t)
 
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
 		Spec: adxmonv1.SummaryRuleSpec{
 			Database: "testdb",
 			Table:    "TestTable",
@@ -129,7 +129,7 @@ func TestSummaryRule_SubmissionFailure(t *testing.T) {
 	ensureTestVFlagSetT(t)
 
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-fail"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-fail", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
 		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
 	}
 	c := newFakeClientWithRule(t, rule)
@@ -161,7 +161,7 @@ func TestSummaryRule_CompletedFailedRemovesAndSetsStatus(t *testing.T) {
 
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-failed-op"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-failed-op", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
 		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
 		Status:     adxmonv1.SummaryRuleStatus{},
 	}
@@ -201,7 +201,7 @@ func TestSummaryRule_RetryOperation(t *testing.T) {
 
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-retry"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-retry", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
 		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: 24 * time.Hour}, Body: "Body"},
 		Status:     adxmonv1.SummaryRuleStatus{},
 	}
@@ -263,7 +263,7 @@ func TestSummaryRule_CriteriaAndDatabaseGating(t *testing.T) {
 func TestSummaryRule_NoImmediateRetryAfterFailure(t *testing.T) {
 	ensureTestVFlagSetT(t)
 	now := time.Now()
-	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-no-retry"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-no-retry", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	c := newFakeClientWithRule(t, rule)
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// Fail initial submission and backlog retry
@@ -292,7 +292,7 @@ func TestSummaryRule_BacklogTimestampForwardProgressOnly(t *testing.T) {
 	ensureTestVFlagSetT(t)
 	now := time.Now().UTC().Truncate(time.Hour)
 	// Prepare a rule with last exec at now and a backlog op that would not be forward progress
-	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-forward"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-forward", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	rule.SetLastExecutionTime(now)
 	prevStart := now.Add(-time.Hour)
 	prevEndInclusive := prevStart.Add(time.Hour).Add(-kustoutil.OneTick)
@@ -320,7 +320,7 @@ func TestSummaryRule_BacklogTimestampForwardProgressOnly(t *testing.T) {
 func TestSummaryRule_MixedAsyncStates(t *testing.T) {
 	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
-	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-mixed"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-mixed", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	// Seed multiple ops
 	rule.SetAsyncOperation(adxmonv1.AsyncOperation{OperationId: "completed-op", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), EndTime: now.Add(-time.Hour).Format(time.RFC3339Nano)})
 	rule.SetAsyncOperation(adxmonv1.AsyncOperation{OperationId: "retry-op", StartTime: now.Add(-time.Hour).Format(time.RFC3339Nano), EndTime: now.Add(-time.Minute).Format(time.RFC3339Nano)})
@@ -358,7 +358,7 @@ func TestSummaryRule_MixedAsyncStates(t *testing.T) {
 func TestSummaryRule_GetOperationFailureRetainsRecentOps(t *testing.T) {
 	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
-	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-retain"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-retain", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	// Seed with one recent op id
 	rule.SetAsyncOperation(adxmonv1.AsyncOperation{OperationId: "recent-op", StartTime: now.Add(-time.Hour).Format(time.RFC3339Nano), EndTime: now.Add(-time.Minute).Format(time.RFC3339Nano)})
 	// Prevent new submission
@@ -380,7 +380,7 @@ func TestSummaryRule_GetOperationFailureRetainsRecentOps(t *testing.T) {
 func TestSummaryRule_KustoErrorParsingOnFailure(t *testing.T) {
 	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
-	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-err-msg"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-err-msg", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	c := newFakeClientWithRule(t, rule)
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// Create a Kusto HttpError with an @message payload and wrap it
@@ -401,11 +401,110 @@ func TestSummaryRule_KustoErrorParsingOnFailure(t *testing.T) {
 	require.Equal(t, "function is invalid", cond.Message)
 }
 
+func TestSummaryRule_ExporterSkipsWhenOwnerIngestorOrMissing(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now()
+
+	// Case 1: owner=ingestor -> exporter should skip
+	ruleIngestor := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-skip-ingestor", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerIngestor}},
+		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
+	}
+	// Case 2: no owner annotation -> exporter should skip
+	ruleMissing := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-skip-missing"},
+		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
+	}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&adxmonv1.SummaryRule{}).WithObjects(ruleIngestor, ruleMissing).Build()
+
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+
+	// Run reconcile on both
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleIngestor)})
+	require.NoError(t, err)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleMissing)})
+	require.NoError(t, err)
+
+	var updated1, updated2 adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(ruleIngestor), &updated1))
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(ruleMissing), &updated2))
+	require.Len(t, updated1.GetAsyncOperations(), 0)
+	require.Nil(t, updated1.GetCondition())
+	require.Len(t, updated2.GetAsyncOperations(), 0)
+	require.Nil(t, updated2.GetCondition())
+}
+
+func TestSummaryRule_ExporterAdoptsWhenDesiredAndSafe(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "default",
+			Name:        "sr-adopt-safe",
+			Annotations: map[string]string{adxmonv1.SummaryRuleDesiredOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter},
+		},
+		Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
+	}
+	// Make ShouldSubmitRule return false by setting last exec to now
+	rule.SetLastExecutionTime(now)
+
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, res.RequeueAfter)
+
+	// Verify owner is set and desired-owner cleared
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	require.Equal(t, adxmonv1.SummaryRuleOwnerADXExporter, updated.Annotations[adxmonv1.SummaryRuleOwnerAnnotation])
+	_, exists := updated.Annotations[adxmonv1.SummaryRuleDesiredOwnerAnnotation]
+	require.False(t, exists)
+}
+
+func TestSummaryRule_ExporterDoesNotAdoptWhenInsideWindow(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "default",
+			Name:        "sr-adopt-unsafe",
+			Annotations: map[string]string{adxmonv1.SummaryRuleDesiredOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter},
+		},
+		Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
+	}
+	// Make ShouldSubmitRule return true: set last exec to now-interval
+	rule.SetLastExecutionTime(now.Add(-time.Hour))
+
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+	// Should skip and not requeue immediately for adoption
+	require.Equal(t, time.Duration(0), res.RequeueAfter)
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	// Owner should remain unset, desired still present
+	_, hasOwner := updated.Annotations[adxmonv1.SummaryRuleOwnerAnnotation]
+	require.False(t, hasOwner)
+	require.Equal(t, adxmonv1.SummaryRuleOwnerADXExporter, updated.Annotations[adxmonv1.SummaryRuleDesiredOwnerAnnotation])
+}
+
 func TestSummaryRule_OneTickBoundary_NoDoubleProcessing(t *testing.T) {
 	ensureTestVFlagSetT(t)
 	// Window boundaries should subtract OneTick for inclusive end, preventing overlap with next window
 	start := time.Date(2025, 8, 13, 10, 0, 0, 0, time.UTC)
-	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-onetick"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-onetick", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	c := newFakeClientWithRule(t, rule)
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// First submission returns op id and then getOperation for that id
