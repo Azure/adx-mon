@@ -19,6 +19,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// Exporter-local constants to avoid magic values scattered in the reconciler.
+const (
+	adoptRequeue  = 5 * time.Second
+	submitTimeout = 5 * time.Minute
+	pollTimeout   = 2 * time.Minute
+
+	stateCompleted = "Completed"
+	stateFailed    = "Failed"
+)
+
 // SummaryRuleReconciler will reconcile SummaryRule objects.
 type SummaryRuleReconciler struct {
 	client.Client
@@ -62,7 +72,7 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				if err := crdownership.PatchClaim(ctx, r.Client, &rule, adxmonv1.SummaryRuleOwnerADXExporter); err != nil {
 					logger.Warnf("Failed to patch ownership for %s/%s: %v", rule.Namespace, rule.Name, err)
 				} else {
-					return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+					return ctrl.Result{RequeueAfter: adoptRequeue}, nil
 				}
 			}
 		}
@@ -172,14 +182,6 @@ func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
 	return nil
 }
 
-// Run starts any background tasks needed by the reconciler; placeholder for now.
-func (r *SummaryRuleReconciler) Run(ctx context.Context) error {
-	// Intentionally empty; async operation polling and other routines will be added later.
-
-	// TODO: is this needed? Seems we're handling this in Reconcile already.
-	return nil
-}
-
 // submitRule executes the SummaryRule body using an async .set-or-append into the target table
 // with _startTime/_endTime substitutions and returns the Kusto operation ID.
 func (r *SummaryRuleReconciler) submitRule(ctx context.Context, rule adxmonv1.SummaryRule, start, end time.Time) (string, error) {
@@ -195,7 +197,7 @@ func (r *SummaryRuleReconciler) submitRule(ctx context.Context, rule adxmonv1.Su
 	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
 
 	// Apply a safety timeout to prevent hanging calls
-	tCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	tCtx, cancel := context.WithTimeout(ctx, submitTimeout)
 	defer cancel()
 
 	res, err := exec.Mgmt(tCtx, stmt)
@@ -270,7 +272,7 @@ func (r *SummaryRuleReconciler) getOperation(ctx context.Context, database strin
 		AddLiteral(" | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status")
 
 	// Apply a shorter timeout for status polling
-	tCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	tCtx, cancel := context.WithTimeout(ctx, pollTimeout)
 	defer cancel()
 
 	rows, err := exec.Mgmt(tCtx, stmt)
@@ -323,7 +325,7 @@ func (r *SummaryRuleReconciler) trackAsyncOperations(ctx context.Context, rule *
 		}
 
 		// Completed (Succeeded or Failed) — remove entry and update status on failure
-		if status.State == "Completed" || status.State == "Failed" {
+		if status.State == stateCompleted || status.State == stateFailed {
 			r.handleCompletedOperation(ctx, rule, *status)
 		}
 
@@ -356,7 +358,7 @@ func (r *SummaryRuleReconciler) handleRetryOperation(ctx context.Context, rule *
 
 // handleCompletedOperation removes completed op and updates status on failure
 func (r *SummaryRuleReconciler) handleCompletedOperation(ctx context.Context, rule *adxmonv1.SummaryRule, status AsyncOperationStatus) {
-	if status.State == "Failed" {
+	if status.State == stateFailed {
 		// Build a concise error message
 		var err error
 		if status.Status != "" {
