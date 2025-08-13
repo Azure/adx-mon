@@ -7,6 +7,7 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -54,51 +55,17 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, nil
 	}
 
-	// TODO: let's move this into a function, it's super busy here
-
-	// Ownership gating and safe adoption
-	anns := rule.GetAnnotations()
-	owner := ""
-	if anns != nil {
-		owner = anns[adxmonv1.SummaryRuleOwnerAnnotation]
-	}
-	desired := ""
-	if anns != nil {
-		desired = anns[adxmonv1.SummaryRuleDesiredOwnerAnnotation]
-	}
-
-	// Only process when explicitly owned by exporter
-	if owner != adxmonv1.SummaryRuleOwnerADXExporter {
-		// If a desired-owner asks us to adopt, do so safely
-		if desired == adxmonv1.SummaryRuleOwnerADXExporter {
-			safeToAdopt := false
-
-			// Safeguard 1: No outstanding async operations
-			if len(rule.GetAsyncOperations()) == 0 {
-				// Safeguard 2: Not currently within a submission window
-				if !rule.ShouldSubmitRule(r.Clock) {
-					safeToAdopt = true
-				}
-			}
-
-			if safeToAdopt {
-				// Patch the CRD immediately to claim ownership and clear desired-owner
-				patched := rule.DeepCopy()
-				if patched.Annotations == nil {
-					patched.Annotations = map[string]string{}
-				}
-				patched.Annotations[adxmonv1.SummaryRuleOwnerAnnotation] = adxmonv1.SummaryRuleOwnerADXExporter
-				delete(patched.Annotations, adxmonv1.SummaryRuleDesiredOwnerAnnotation)
-
-				if err := r.Patch(ctx, patched, client.MergeFrom(&rule)); err != nil {
+	// Ownership gating and safe adoption via shared helpers
+	if !crdownership.IsOwnedBy(&rule, adxmonv1.SummaryRuleOwnerADXExporter) {
+		if crdownership.WantsOwner(&rule, adxmonv1.SummaryRuleOwnerADXExporter) {
+			if ok, _ := crdownership.SafeToAdopt(&rule, r.Clock); ok {
+				if err := crdownership.PatchClaim(ctx, r.Client, &rule, adxmonv1.SummaryRuleOwnerADXExporter); err != nil {
 					logger.Warnf("Failed to patch ownership for %s/%s: %v", rule.Namespace, rule.Name, err)
 				} else {
-					// Requeue soon to reconcile under new ownership
 					return ctrl.Result{RequeueAfter: time.Second * 5}, nil
 				}
 			}
 		}
-		// Not owned by exporter (or adoption not safe) — skip
 		return ctrl.Result{}, nil
 	}
 
