@@ -38,8 +38,7 @@ type SummaryRuleReconciler struct {
 	ClusterLabels map[string]string
 	KustoClusters map[string]string // database name -> endpoint URL
 
-	QueryExecutors map[string]*QueryExecutor // keyed by database name (may be used later)
-	KustoExecutors map[string]KustoExecutor  // per-database Kusto clients supporting Query and Mgmt
+	KustoExecutors map[string]KustoExecutor // per-database Kusto clients supporting Query and Mgmt
 	Clock          clock.Clock
 }
 
@@ -100,11 +99,8 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Advance last execution time to the window end (original, exclusive end)
 		rule.SetLastExecutionTime(windowEnd)
 
-		// Update status reflecting submission result
-		if uerr := r.updateSummaryRuleStatus(ctx, &rule, err); uerr != nil {
-			// Log but continue; controller will retry on next reconcile
-			logger.Errorf("Failed to update SummaryRule status %s/%s: %v", rule.Namespace, rule.Name, uerr)
-		}
+		// Update in-memory condition reflecting submission result; persist once at end
+		r.updateSummaryRuleStatus(&rule, err)
 	}
 
 	// Backfill any missing async operations based on last successful execution time
@@ -128,9 +124,6 @@ func (r *SummaryRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Initialize defaults
 	if r.Clock == nil {
 		r.Clock = clock.RealClock{}
-	}
-	if r.QueryExecutors == nil {
-		r.QueryExecutors = make(map[string]*QueryExecutor)
 	}
 	if r.KustoExecutors == nil {
 		r.KustoExecutors = make(map[string]KustoExecutor)
@@ -165,7 +158,6 @@ func nextRequeue(rule *adxmonv1.SummaryRule) time.Duration {
 }
 
 // initializeQueryExecutors creates per-database executors for SummaryRule processing.
-// No-op placeholder for now to keep this commit minimal.
 func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
 	for database, endpoint := range r.KustoClusters {
 		// Reuse the shared Kusto client capable of both Query and Mgmt
@@ -174,14 +166,6 @@ func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
 			return err
 		}
 		r.KustoExecutors[database] = kustoClient
-
-		// Optionally keep a QueryExecutor if needed later
-		if _, ok := r.QueryExecutors[database]; !ok {
-			r.QueryExecutors[database] = NewQueryExecutor(kustoClient)
-			if r.Clock != nil {
-				r.QueryExecutors[database].SetClock(r.Clock)
-			}
-		}
 	}
 	return nil
 }
@@ -213,7 +197,7 @@ func (r *SummaryRuleReconciler) submitRule(ctx context.Context, rule adxmonv1.Su
 }
 
 // updateSummaryRuleStatus sets the primary condition with friendly Kusto error parsing
-func (r *SummaryRuleReconciler) updateSummaryRuleStatus(ctx context.Context, rule *adxmonv1.SummaryRule, err error) error {
+func (r *SummaryRuleReconciler) updateSummaryRuleStatus(rule *adxmonv1.SummaryRule, err error) {
 	condition := metav1.Condition{
 		Type:               adxmonv1.SummaryRuleOwner,
 		Status:             metav1.ConditionTrue,
@@ -228,7 +212,6 @@ func (r *SummaryRuleReconciler) updateSummaryRuleStatus(ctx context.Context, rul
 		condition.Message = kustoutil.ParseError(err)
 	}
 	rule.SetCondition(condition)
-	return r.Status().Update(ctx, rule)
 }
 
 // operationIDFromResult extracts a single string cell (operation id) from the RowIterator
@@ -376,9 +359,8 @@ func (r *SummaryRuleReconciler) handleCompletedOperation(ctx context.Context, ru
 		} else {
 			err = fmt.Errorf("async operation %s failed", status.OperationId)
 		}
-		if uerr := r.updateSummaryRuleStatus(ctx, rule, err); uerr != nil {
-			logger.Errorf("Failed to update SummaryRule status for failed op %s: %v", status.OperationId, uerr)
-		}
+		// Update in-memory condition; persist once at end of reconcile
+		r.updateSummaryRuleStatus(rule, err)
 	}
 	// Remove completed op from tracking
 	rule.RemoveAsyncOperation(status.OperationId)

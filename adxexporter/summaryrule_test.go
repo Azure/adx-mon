@@ -65,7 +65,6 @@ func newBaseReconciler(t *testing.T, c client.Client, mock *MockKustoExecutor, c
 		Scheme:         c.Scheme(),
 		ClusterLabels:  map[string]string{},
 		KustoClusters:  map[string]string{"testdb": "https://test"},
-		QueryExecutors: map[string]*QueryExecutor{},
 		KustoExecutors: map[string]KustoExecutor{"testdb": mock},
 		Clock:          klock.NewFakeClock(clockNow),
 	}
