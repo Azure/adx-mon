@@ -119,22 +119,8 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		logger.Warnf("Failed to persist SummaryRule async status %s/%s: %v", rule.Namespace, rule.Name, err)
 	}
 
-	// Requeue based on rule interval to drive periodic submissions
-	requeueAfter := rule.Spec.Interval.Duration
-	// If there are inflight async operations, poll at a reasonable cadence
-	if len(rule.GetAsyncOperations()) > 0 {
-		// TODO: maybe we should stick this in a function, it's kind of busy in here, I'm also not entirely
-		// sure of the logic. For example, GetAsyncOperations will probably always return 1, since we just
-		// enqueued the current execution window.
-		poll := adxmonv1.SummaryRuleAsyncOperationPollInterval
-		if poll > 0 && (requeueAfter <= 0 || poll < requeueAfter) {
-			requeueAfter = poll
-		}
-	}
-	if requeueAfter <= 0 {
-		requeueAfter = time.Minute
-	}
-	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	// Requeue based on rule interval and async polling needs
+	return ctrl.Result{RequeueAfter: nextRequeue(&rule)}, nil
 }
 
 // SetupWithManager registers the controller with the manager.
@@ -158,6 +144,24 @@ func (r *SummaryRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.SummaryRule{}).
 		Complete(r)
+}
+
+// nextRequeue decides the next reconcile interval:
+// - Base: rule interval
+// - If there are inflight/backlog async operations, prefer SummaryRuleAsyncOperationPollInterval when shorter
+// - Fallback minimum of 1 minute to avoid hot loops on misconfiguration
+func nextRequeue(rule *adxmonv1.SummaryRule) time.Duration {
+	base := rule.Spec.Interval.Duration
+	if len(rule.GetAsyncOperations()) > 0 {
+		poll := adxmonv1.SummaryRuleAsyncOperationPollInterval
+		if poll > 0 && (base <= 0 || poll < base) {
+			base = poll
+		}
+	}
+	if base <= 0 {
+		base = time.Minute
+	}
+	return base
 }
 
 // initializeQueryExecutors creates per-database executors for SummaryRule processing.
@@ -321,16 +325,18 @@ func (r *SummaryRuleReconciler) trackAsyncOperations(ctx context.Context, rule *
 		}
 		if status == nil {
 			// Operation not found; could be very old or already pruned server-side
+			if logger.IsDebug() {
+				logger.Debugf("Async operation %s not found in .show operations", op.OperationId)
+			}
 			continue
 		}
 
 		// Completed (Succeeded or Failed) — remove entry and update status on failure
 		if status.State == stateCompleted || status.State == stateFailed {
 			r.handleCompletedOperation(ctx, rule, *status)
-		}
-
-		// ShouldRetry indicates resubmission is recommended
-		if status.ShouldRetry != 0 {
+			continue
+		} else if status.ShouldRetry != 0 {
+			// ShouldRetry indicates resubmission is recommended
 			r.handleRetryOperation(ctx, rule, op, *status)
 		}
 	}
