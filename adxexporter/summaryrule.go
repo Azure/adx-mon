@@ -54,28 +54,15 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Database gating: skip if this controller doesn't manage the rule's database
-	if _, ok := r.KustoExecutors[rule.Spec.Database]; !ok {
+	// Gate by database, criteria, and adoption
+	if !r.isDatabaseManaged(&rule) {
 		return ctrl.Result{}, nil
 	}
-
-	// Criteria gating
-	if !matchesCriteria(rule.Spec.Criteria, r.ClusterLabels) {
+	if !r.criteriaMatch(&rule) {
 		return ctrl.Result{}, nil
 	}
-
-	// Ownership gating and safe adoption via shared helpers
-	if !crdownership.IsOwnedBy(&rule, adxmonv1.SummaryRuleOwnerADXExporter) {
-		if crdownership.WantsOwner(&rule, adxmonv1.SummaryRuleOwnerADXExporter) {
-			if ok, _ := crdownership.SafeToAdopt(&rule, r.Clock); ok {
-				if err := crdownership.PatchClaim(ctx, r.Client, &rule, adxmonv1.SummaryRuleOwnerADXExporter); err != nil {
-					logger.Warnf("Failed to patch ownership for %s/%s: %v", rule.Namespace, rule.Name, err)
-				} else {
-					return ctrl.Result{RequeueAfter: adoptRequeue}, nil
-				}
-			}
-		}
-		return ctrl.Result{}, nil
+	if requeue, handled := r.adoptIfDesired(ctx, &rule); handled {
+		return requeue, nil
 	}
 
 	// Minimal submission path: compute window and submit async if it's time
@@ -155,6 +142,35 @@ func nextRequeue(rule *adxmonv1.SummaryRule) time.Duration {
 		base = time.Minute
 	}
 	return base
+}
+
+// isDatabaseManaged returns true if this reconciler has an executor for the rule's database
+func (r *SummaryRuleReconciler) isDatabaseManaged(rule *adxmonv1.SummaryRule) bool {
+	_, ok := r.KustoExecutors[rule.Spec.Database]
+	return ok
+}
+
+// criteriaMatch returns true if the rule's criteria match the controller's cluster labels
+func (r *SummaryRuleReconciler) criteriaMatch(rule *adxmonv1.SummaryRule) bool {
+	return matchesCriteria(rule.Spec.Criteria, r.ClusterLabels)
+}
+
+// adoptIfDesired tries to claim ownership if requested and safe. It returns (result, handled)
+// where handled indicates the reconcile should return immediately with the given result.
+func (r *SummaryRuleReconciler) adoptIfDesired(ctx context.Context, rule *adxmonv1.SummaryRule) (ctrl.Result, bool) {
+	if crdownership.IsOwnedBy(rule, adxmonv1.SummaryRuleOwnerADXExporter) {
+		return ctrl.Result{}, false
+	}
+	if crdownership.WantsOwner(rule, adxmonv1.SummaryRuleOwnerADXExporter) {
+		if ok, _ := crdownership.SafeToAdopt(rule, r.Clock); ok {
+			if err := crdownership.PatchClaim(ctx, r.Client, rule, adxmonv1.SummaryRuleOwnerADXExporter); err != nil {
+				logger.Warnf("Failed to patch ownership for %s/%s: %v", rule.Namespace, rule.Name, err)
+			} else {
+				return ctrl.Result{RequeueAfter: adoptRequeue}, true
+			}
+		}
+	}
+	return ctrl.Result{}, true
 }
 
 // initializeQueryExecutors creates per-database executors for SummaryRule processing.
