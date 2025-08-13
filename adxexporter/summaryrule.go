@@ -58,7 +58,7 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if !r.isDatabaseManaged(&rule) {
 		return ctrl.Result{}, nil
 	}
-	if !r.criteriaMatch(&rule) {
+	if !matchesCriteria(rule.Spec.Criteria, r.ClusterLabels) {
 		return ctrl.Result{}, nil
 	}
 	if requeue, handled := r.adoptIfDesired(ctx, &rule); handled {
@@ -150,10 +150,7 @@ func (r *SummaryRuleReconciler) isDatabaseManaged(rule *adxmonv1.SummaryRule) bo
 	return ok
 }
 
-// criteriaMatch returns true if the rule's criteria match the controller's cluster labels
-func (r *SummaryRuleReconciler) criteriaMatch(rule *adxmonv1.SummaryRule) bool {
-	return matchesCriteria(rule.Spec.Criteria, r.ClusterLabels)
-}
+// (criteria match handled inline for clarity)
 
 // adoptIfDesired tries to claim ownership if requested and safe. It returns (result, handled)
 // where handled indicates the reconcile should return immediately with the given result.
