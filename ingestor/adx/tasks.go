@@ -375,6 +375,27 @@ func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleLis
 }
 
 func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
+	// Ownership gating via annotation: default (missing) goes to ingestor for backward compatibility.
+	if rule.Annotations != nil {
+		if owner, ok := rule.Annotations[v1.SummaryRuleOwnerAnnotation]; ok {
+			switch owner {
+			case v1.SummaryRuleOwnerADXExporter:
+				if logger.IsDebug() {
+					logger.Debugf("Skipping %s/%s because owner is %s", rule.Namespace, rule.Name, v1.SummaryRuleOwnerADXExporter)
+				}
+				return false
+			case v1.SummaryRuleOwnerIngestor:
+				// proceed
+			default:
+				// Unknown value: fail-closed to avoid split-brain
+				if logger.IsDebug() {
+					logger.Debugf("Skipping %s/%s due to unknown owner annotation: %s", rule.Namespace, rule.Name, owner)
+				}
+				return false
+			}
+		}
+	}
+
 	// Skip rules not belonging to the current database
 	if rule.Spec.Database != t.kustoCli.Database() {
 		if logger.IsDebug() {

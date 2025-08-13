@@ -54,6 +54,54 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, nil
 	}
 
+	// TODO: let's move this into a function, it's super busy here
+
+	// Ownership gating and safe adoption
+	anns := rule.GetAnnotations()
+	owner := ""
+	if anns != nil {
+		owner = anns[adxmonv1.SummaryRuleOwnerAnnotation]
+	}
+	desired := ""
+	if anns != nil {
+		desired = anns[adxmonv1.SummaryRuleDesiredOwnerAnnotation]
+	}
+
+	// Only process when explicitly owned by exporter
+	if owner != adxmonv1.SummaryRuleOwnerADXExporter {
+		// If a desired-owner asks us to adopt, do so safely
+		if desired == adxmonv1.SummaryRuleOwnerADXExporter {
+			safeToAdopt := false
+
+			// Safeguard 1: No outstanding async operations
+			if len(rule.GetAsyncOperations()) == 0 {
+				// Safeguard 2: Not currently within a submission window
+				if !rule.ShouldSubmitRule(r.Clock) {
+					safeToAdopt = true
+				}
+			}
+
+			if safeToAdopt {
+				// Patch the CRD immediately to claim ownership and clear desired-owner
+				patched := rule.DeepCopy()
+				if patched.Annotations == nil {
+					patched.Annotations = map[string]string{}
+				}
+				patched.Annotations[adxmonv1.SummaryRuleOwnerAnnotation] = adxmonv1.SummaryRuleOwnerADXExporter
+				delete(patched.Annotations, adxmonv1.SummaryRuleDesiredOwnerAnnotation)
+
+				if err := r.Patch(ctx, patched, client.MergeFrom(&rule)); err != nil {
+					logger.Warnf("Failed to patch ownership for %s/%s: %v", rule.Namespace, rule.Name, err)
+				} else {
+					// Requeue soon to reconcile under new ownership
+					return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+				}
+			}
+		}
+		// Not owned by exporter (or adoption not safe) — skip
+		return ctrl.Result{}, nil
+	}
+
 	// Minimal submission path: compute window and submit async if it's time
 	if rule.ShouldSubmitRule(r.Clock) {
 		windowStart, windowEnd := rule.NextExecutionWindow(r.Clock)
