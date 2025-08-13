@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -28,6 +30,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// entityGroupNameRegex validates entity-group names for use in KQL commands.
+// Entity-group names must be 1-256 characters and contain only alphanumeric, underscore, and hyphen characters.
+var entityGroupNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,256}$`)
+
+// KustoClient interface for mocking Kusto operations in tests
+type KustoClient interface {
+	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+}
+
 type AdxReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -38,7 +49,14 @@ const (
 	ADXClusterCreatingReason = "Creating"
 	// ADXClusterWaitingReason denotes a cluster that is fully configured and is waiting to become available.
 	ADXClusterWaitingReason = "Waiting"
+	// PartitionsSuffix is the suffix used for entity-group names
+	PartitionsSuffix = "_Partitions"
 )
+
+// isValidEntityGroupName validates that an entity-group name is safe to use in KQL commands
+func isValidEntityGroupName(name string) bool {
+	return entityGroupNameRegex.MatchString(name)
+}
 
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var cluster adxmonv1.ADXCluster
@@ -453,8 +471,10 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 		return false, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
 
-	q := kql.New(".show tables | where TableName == '").AddUnsafe(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("' | count")
-	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q)
+	q := kql.New(".show tables | where TableName == @ParamTableName | count")
+	params := kql.NewParameters().AddString("ParamTableName", *cluster.Spec.Federation.HeartbeatTable)
+
+	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q, kusto.QueryParameters(params))
 	if err != nil {
 		return false, fmt.Errorf("failed to query Kusto tables: %w", err)
 	}
@@ -950,6 +970,13 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
+	// Step 5.5: Ensure entity-groups for federation
+	logger.Infof("ADXCluster %s: ensuring entity-groups for %d databases", cluster.Spec.ClusterName, len(dbSet))
+	if err := ensureEntityGroups(ctx, client, dbSet, schemaByEndpoint); err != nil {
+		logger.Errorf("ADXCluster %s: failed to ensure entity-groups: %v", cluster.Spec.ClusterName, err)
+		// Continue with function generation even if entity-groups fail
+	}
+
 	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
@@ -1420,8 +1447,10 @@ type FunctionKind struct {
 }
 
 func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, error) {
-	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
-	result, err := client.Mgmt(ctx, database, q)
+	q := kql.New(".show function @ParamFunctionName schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
+	params := kql.NewParameters().AddString("ParamFunctionName", functionName)
+
+	result, err := client.Mgmt(ctx, database, q, kusto.QueryParameters(params))
 	if err != nil {
 		return false, fmt.Errorf("failed to query function schema: %w", err)
 	}
@@ -1447,4 +1476,163 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 	}
 
 	return false, nil
+}
+
+// getEntityGroups retrieves all entity-group names from the specified database
+func getEntityGroups(ctx context.Context, client KustoClient, database string) ([]string, error) {
+	q := kql.New(".show entity_groups")
+	result, err := client.Mgmt(ctx, database, q)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query entity-groups: %w", err)
+	}
+	defer result.Stop()
+
+	var entityGroups []string
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, fmt.Errorf("failed to retrieve entity-groups: %w", errFinal)
+		}
+
+		var entityGroup struct {
+			Name string `kusto:"Name"`
+		}
+		if err := row.ToStruct(&entityGroup); err != nil {
+			return nil, fmt.Errorf("failed to parse entity-group: %w", err)
+		}
+		entityGroups = append(entityGroups, entityGroup.Name)
+	}
+
+	return entityGroups, nil
+}
+
+// ensureEntityGroups creates/updates entity-groups for active databases and cleans up stale ones
+// containing all active partition cluster endpoints for that database
+func ensureEntityGroups(ctx context.Context, client KustoClient, dbSet map[string]struct{}, schemaByEndpoint map[string][]ADXClusterSchema) error {
+	// Safety check: If no heartbeat data, skip entity-group operations to prevent mass deletion
+	if len(schemaByEndpoint) == 0 {
+		logger.Warnf("No heartbeat data received from partition clusters, skipping entity-group operations to prevent accidental cleanup")
+		return nil
+	}
+
+	// Get list of databases to process
+	databases := make([]string, 0, len(dbSet))
+	for db := range dbSet {
+		databases = append(databases, db)
+	}
+
+	// Process each database: create/update entity-groups and cleanup stale ones
+	for _, database := range databases {
+		// Step 1: Query existing entity-groups in this database to identify what needs cleanup
+		allEntityGroups, err := getEntityGroups(ctx, client, database)
+		if err != nil {
+			logger.Warnf("Failed to query existing entity-groups in database %s: %v", database, err)
+			// Continue with creation, skip cleanup for this database
+			allEntityGroups = []string{} // Empty slice so we can still proceed with creation
+		}
+
+		// Filter to only entity-groups with _Partitions suffix for cleanup consideration
+		var existingPartitionGroups []string
+		for _, entityGroup := range allEntityGroups {
+			if strings.HasSuffix(entityGroup, PartitionsSuffix) {
+				existingPartitionGroups = append(existingPartitionGroups, entityGroup)
+			}
+		}
+
+		// Step 2: Create/update entity-groups for databases that have heartbeat data
+		if _, hasDatabase := dbSet[database]; hasDatabase {
+			// Collect all cluster endpoints that have this database
+			var entityReferences []string
+			for endpoint, dbSchemas := range schemaByEndpoint {
+				for _, schema := range dbSchemas {
+					if schema.Database == database {
+						entityRef := fmt.Sprintf("cluster('%s').database('%s')", endpoint, database)
+						entityReferences = append(entityReferences, entityRef)
+						break // Found the database in this endpoint, move to next endpoint
+					}
+				}
+			}
+
+			if len(entityReferences) > 0 {
+				// Create entity-group name following pattern: {DatabaseName}_Partitions
+				entityGroupName := fmt.Sprintf("%s%s", database, PartitionsSuffix)
+
+				// Build entity references string for KQL command
+				entityRefsStr := strings.Join(entityReferences, ", ")
+
+				// Check if entity-group already exists
+				exists := slices.Contains(allEntityGroups, entityGroupName)
+
+				// Validate entity-group name to prevent injection
+				if !isValidEntityGroupName(entityGroupName) {
+					logger.Errorf("Invalid entity-group name: %s", entityGroupName)
+					continue
+				}
+
+				var stmt *kql.Builder
+				if exists {
+					// Update existing entity-group
+					stmt = kql.New(".alter entity_group").
+						AddLiteral(" ").
+						AddUnsafe(entityGroupName). // Entity group names are validated, safe to use AddUnsafe
+						AddLiteral(" (").
+						AddUnsafe(entityRefsStr). // Entity references are constructed from validated endpoints
+						AddLiteral(")")
+					logger.Infof("Updating existing entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
+				} else {
+					// Create new entity-group
+					stmt = kql.New(".create entity_group").
+						AddLiteral(" ").
+						AddUnsafe(entityGroupName). // Entity group names are validated, safe to use AddUnsafe
+						AddLiteral(" (").
+						AddUnsafe(entityRefsStr). // Entity references are constructed from validated endpoints
+						AddLiteral(")")
+					logger.Infof("Creating new entity-group %s with %d partition clusters", entityGroupName, len(entityReferences))
+				}
+
+				_, err = client.Mgmt(ctx, database, stmt)
+				if err != nil {
+					logger.Errorf("Failed to create/update entity-group %s in database %s: %v", entityGroupName, database, err)
+					continue
+				}
+
+				logger.Infof("Successfully created/updated entity-group %s", entityGroupName)
+
+				// Remove this entity-group from cleanup list since it's now active
+				for i, existingGroup := range existingPartitionGroups {
+					if existingGroup == entityGroupName {
+						existingPartitionGroups = append(existingPartitionGroups[:i], existingPartitionGroups[i+1:]...)
+						break
+					}
+				}
+			}
+		}
+
+		// Step 3: Clean up stale entity-groups (those not updated above)
+		for _, staleEntityGroup := range existingPartitionGroups {
+			logger.Infof("Removing stale entity-group %s from database %s", staleEntityGroup, database)
+			if !isValidEntityGroupName(staleEntityGroup) {
+				logger.Warnf("Skipping invalid entity-group name: %s", staleEntityGroup)
+				continue
+			}
+			dropCmd := kql.New(".drop entity_group").
+				AddLiteral(" ").
+				AddUnsafe(staleEntityGroup) // Entity group names are validated, safe to use AddUnsafe
+			stmt := dropCmd
+			_, err := client.Mgmt(ctx, database, stmt)
+			if err != nil {
+				logger.Errorf("Failed to drop stale entity-group %s from database %s: %v", staleEntityGroup, database, err)
+			} else {
+				logger.Infof("Successfully removed stale entity-group %s", staleEntityGroup)
+			}
+		}
+	}
+
+	return nil
 }
