@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/ingest"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 )
@@ -61,6 +64,27 @@ type UploaderOpts struct {
 	Dimensions        []string
 	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
+}
+
+// UploadError wraps an error from Kusto ingestion, carrying an HTTPStatus when available.
+type UploadError struct {
+	Err        error
+	HTTPStatus int
+	// DeadletterHint indicates we should capture the batch payload even if HTTP status is unknown.
+	DeadletterHint bool
+}
+
+func (e *UploadError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+func (e *UploadError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
@@ -189,7 +213,21 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	// When completed, delete the file on local storage we are uploading.
 	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
 	if err != nil {
-		return sanitizeErrorString(err)
+		// Preserve HTTP status (e.g., 400) for caller while sanitizing message for logs.
+		status := 0
+		var httpErr *kustoerrors.HttpError
+		if errors.As(err, &httpErr) {
+			status = httpErr.StatusCode
+		}
+		// Detect sentinel blob upload failures from the queued ingest path.
+		deadletter := false
+		var ke *kustoerrors.Error
+		if errors.As(err, &ke) {
+			if ke.Op == kustoerrors.OpFileIngest && ke.Kind == kustoerrors.KBlobstore && strings.Contains(ke.Error(), "problem uploading to Blob Storage") {
+				deadletter = true
+			}
+		}
+		return &UploadError{Err: sanitizeErrorString(err), HTTPStatus: status, DeadletterHint: deadletter}
 	}
 
 	err = <-res.Wait(ctx)
@@ -205,6 +243,64 @@ func sanitizeErrorString(err error) error {
 	r := regexp.MustCompile(`sig=[a-zA-Z0-9]+`)
 	errString = r.ReplaceAllString(errString, "sig=REDACTED")
 	return errors.New(errString)
+}
+
+// tryDeadletterStream attempts to capture the full batch payload that produced an HTTP 400.
+// It creates storageDir/"deadletter" exclusively; if it already exists, it returns immediately.
+// Best-effort: any failures are logged and ignored.
+func (n *uploader) tryDeadletterStream(segmentPaths []string, skipHeader bool, database, table string, cause error) {
+	// Single, fixed file in storage dir acts as occupancy gate.
+	dstPath := filepath.Join(n.storageDir, "deadletter")
+	// O_EXCL prevents races across goroutines/processes.
+	f, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		// If it already exists, someone else captured; that's fine.
+		if !os.IsExist(err) {
+			if logger.IsDebug() {
+				logger.Debugf("deadletter: failed to create file: %s", err.Error())
+			}
+		}
+		return
+	}
+
+	// Ensure the file gets closed.
+	defer func() {
+		// Best-effort fsync to persist the captured payload.
+		_ = f.Sync()
+		_ = f.Close()
+	}()
+
+	// Copy all segments in order, reconstructing the original MultiReader body.
+	buf := make([]byte, 64*1024)
+	for _, p := range segmentPaths {
+		var opts []wal.Option
+		if skipHeader {
+			opts = append(opts, wal.WithSkipHeader)
+		}
+		sr, err := wal.NewSegmentReader(p, opts...)
+		if err != nil {
+			if logger.IsDebug() {
+				logger.Debugf("deadletter: failed to open segment %s: %s", p, err.Error())
+			}
+			return
+		}
+		// Ensure each reader is closed
+		func() {
+			defer sr.Close()
+			if _, err := io.CopyBuffer(f, sr, buf); err != nil {
+				if logger.IsDebug() {
+					logger.Debugf("deadletter: failed to copy segment %s: %s", p, err.Error())
+				}
+			}
+		}()
+	}
+
+	// Log minimal sanitized context for operators
+	if logger.IsDebug() {
+		logger.Debugf("deadletter: captured payload for %s.%s to %s: %v", database, table, dstPath, cause)
+	} else {
+		logger.Warnf("deadletter: captured payload for %s.%s to %s", database, table, dstPath)
+	}
 }
 
 func (n *uploader) upload(ctx context.Context) error {
@@ -309,6 +405,41 @@ func (n *uploader) upload(ctx context.Context) error {
 
 				now := time.Now()
 				if err := n.uploadReader(mr, database, table, mapping); err != nil {
+					// If Kusto returned HTTP 400 for this batch, capture the full payload once.
+					var ue *UploadError
+					if errors.As(err, &ue) && ue.HTTPStatus == 400 {
+						// Build ordered paths and header-skip flag to reconstruct the stream.
+						paths := make([]string, 0, len(segmentReaders))
+						for _, sr := range segmentReaders {
+							paths = append(paths, sr.Path())
+						}
+						n.tryDeadletterStream(paths, schema != "", database, table, err)
+					} else if errors.As(err, &ue) && ue.DeadletterHint {
+						paths := make([]string, 0, len(segmentReaders))
+						for _, sr := range segmentReaders {
+							paths = append(paths, sr.Path())
+						}
+						n.tryDeadletterStream(paths, schema != "", database, table, err)
+					} else {
+						// Also capture on direct Kusto HTTP errors with status 400 (e.g., mgmt/streaming paths),
+						// and on permanent ingestion failures returned by res.Wait().
+						var httpErr *kustoerrors.HttpError
+						if errors.As(err, &httpErr) && httpErr.StatusCode == 400 {
+							paths := make([]string, 0, len(segmentReaders))
+							for _, sr := range segmentReaders {
+								paths = append(paths, sr.Path())
+							}
+							n.tryDeadletterStream(paths, schema != "", database, table, err)
+						} else if ingest.IsStatusRecord(err) {
+							if fs, getErr := ingest.GetIngestionFailureStatus(err); getErr == nil && fs == ingest.Permanent {
+								paths := make([]string, 0, len(segmentReaders))
+								for _, sr := range segmentReaders {
+									paths = append(paths, sr.Path())
+								}
+								n.tryDeadletterStream(paths, schema != "", database, table, err)
+							}
+						}
+					}
 					logger.Errorf("Failed to upload file: %s", err.Error())
 					return
 				}
