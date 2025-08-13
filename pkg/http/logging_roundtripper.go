@@ -2,6 +2,8 @@ package http
 
 import (
 	stdhttp "net/http"
+	neturl "net/url"
+	"path"
 	"regexp"
 	"strings"
 
@@ -34,6 +36,23 @@ func (l loggingRoundTripper) RoundTrip(req *stdhttp.Request) (*stdhttp.Response,
 		tp := req.Header.Get("traceparent")
 		// Build a compact suffix with only non-empty values
 		var extra []string
+		// Try to capture the uploaded blob/file name (last URL path segment).
+		// Context: When the azure-kusto-go queued ingestion path uploads to Azure Blob Storage,
+		// it uses azblob.Client with container and blobName arguments. The azblob SDK encodes
+		// these as URL path segments: "/<container>/<blobName>". See vendor:
+		//   - github.com/Azure/azure-kusto-go/kusto/ingest/internal/queued/queued.go
+		//     (Reader/localToBlob -> uploadStream/uploadBlob with container, blobName)
+		//   - fullUrl() in the same file sets parseURL.ContainerName/BlobName and returns the URL.
+		// Therefore, for Blob Storage requests the last path segment identifies the blob.
+		// For non-blob endpoints (e.g., ADX mgmt: /v1/rest/mgmt), this will simply be the last
+		// segment like "mgmt" and not a blob name.
+		if base := path.Base(req.URL.Path); base != "." && base != "/" && base != "" {
+			if dec, derr := neturl.PathUnescape(base); derr == nil {
+				extra = append(extra, "blob="+dec)
+			} else {
+				extra = append(extra, "blob="+base)
+			}
+		}
 		if crid != "" {
 			extra = append(extra, "crid="+crid)
 		}
@@ -60,6 +79,15 @@ func (l loggingRoundTripper) RoundTrip(req *stdhttp.Request) (*stdhttp.Response,
 		aid := pickHeader(resp.Header, "x-ms-activity-id", "x-ms-root-activity-id")
 		tp := pickHeader(resp.Header, "traceparent")
 		var extra []string
+		// Try to capture the uploaded blob/file name (last URL path segment).
+		// See detailed note above regarding azblob path encoding and non-blob endpoints.
+		if base := path.Base(req.URL.Path); base != "." && base != "/" && base != "" {
+			if dec, derr := neturl.PathUnescape(base); derr == nil {
+				extra = append(extra, "blob="+dec)
+			} else {
+				extra = append(extra, "blob="+base)
+			}
+		}
 		if crid != "" {
 			extra = append(extra, "crid="+crid)
 		}

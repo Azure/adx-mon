@@ -174,3 +174,39 @@ func TestHasSig(t *testing.T) {
 		require.Equalf(t, tc.want, got, "input: %s", tc.in)
 	}
 }
+
+func TestLoggingRoundTripper_TransportError_IncludesBlobName(t *testing.T) {
+	buf, _ := withCapturedLogs(t, slog.LevelDebug)
+
+	// Blob upload-style URL; last segment should be decoded and logged as blob=
+	req, err := stdhttp.NewRequest("PUT", "https://acct.blob.core.windows.net/container/some%20file.csv?sig=abc", nil)
+	require.NoError(t, err)
+	req.Header.Set("x-ms-client-request-id", "crid-blob-1")
+
+	lrt := loggingRoundTripper{next: &fakeRT{err: errors.New("network down")}}
+	_, rerr := lrt.RoundTrip(req)
+	require.Error(t, rerr)
+
+	out := buf.String()
+	require.Contains(t, out, "HTTP transport error")
+	require.Contains(t, out, "blob=some file.csv")
+	require.Contains(t, out, "sig=REDACTED")
+}
+
+func TestLoggingRoundTripper_Status4xx_IncludesLastSegmentForMgmt(t *testing.T) {
+	buf, _ := withCapturedLogs(t, slog.LevelDebug)
+
+	// Non-blob ADX mgmt endpoint; last segment is "mgmt" and should appear as blob=mgmt per implementation notes.
+	req, err := stdhttp.NewRequest("POST", "https://cluster.kusto.windows.net/v1/rest/mgmt", strings.NewReader(""))
+	require.NoError(t, err)
+	req.Header.Set("x-ms-client-request-id", "crid-mgmt-1")
+
+	rt := &fakeRT{resp: &stdhttp.Response{StatusCode: 400, Status: "400 Bad Request", Request: req, Body: stdhttp.NoBody, Header: stdhttp.Header{}}}
+	lrt := loggingRoundTripper{next: rt}
+	_, rerr := lrt.RoundTrip(req)
+	require.NoError(t, rerr)
+
+	out := buf.String()
+	require.Contains(t, out, "HTTP status=400")
+	require.Contains(t, out, "blob=mgmt")
+}
