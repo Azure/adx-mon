@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	gotls "crypto/tls"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -26,7 +26,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
-	"github.com/Azure/adx-mon/pkg/tls"
+	adxtls "github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -158,8 +158,8 @@ func realMain(ctx *cli.Context) error {
 
 	// Build server TLS config
 	var (
-		serverTLSConfig *gotls.Config
-		cert            gotls.Certificate
+		serverTLSConfig *tls.Config
+		cert            tls.Certificate
 	)
 	if cacert != "" && key != "" {
 		certPEM, err := os.ReadFile(cacert)
@@ -170,7 +170,7 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Fatalf("Failed to read key file: %s", err)
 		}
-		c, err := gotls.X509KeyPair(certPEM, keyPEM)
+		c, err := tls.X509KeyPair(certPEM, keyPEM)
 		if err != nil {
 			logger.Fatalf("Failed to parse TLS key pair: %s", err)
 		}
@@ -178,11 +178,11 @@ func realMain(ctx *cli.Context) error {
 		logger.Infof("Using TLS from files cert=%s key=%s", cacert, key)
 	} else if cacert == "" && key == "" {
 		logger.Warnf("Using fake TLS credentials (not for production use!)")
-		certBytes, keyBytes, err := tls.NewFakeTLSCredentials()
+		certBytes, keyBytes, err := adxtls.NewFakeTLSCredentials()
 		if err != nil {
 			logger.Fatalf("Failed to create fake TLS credentials: %s", err)
 		}
-		c, err := gotls.X509KeyPair(certBytes, keyBytes)
+		c, err := tls.X509KeyPair(certBytes, keyBytes)
 		if err != nil {
 			logger.Fatalf("Failed to build in-memory TLS key pair: %s", err)
 		}
@@ -193,7 +193,7 @@ func realMain(ctx *cli.Context) error {
 		// running in production and we bail out.
 		logger.Fatalf("Both --ca-cert and --key are required")
 	}
-	serverTLSConfig = &gotls.Config{Certificates: []gotls.Certificate{cert}}
+	serverTLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 
 	if storageDir == "" {
 		logger.Fatalf("--storage-dir is required")
@@ -332,11 +332,7 @@ func realMain(ctx *cli.Context) error {
 			logger.Warnf("Failed to pin to CPU: %s", err)
 		}
 
-		// Serve HTTPS using in-memory TLS config
-		if serverTLSConfig == nil {
-			logger.Fatalf("Server TLS config is nil")
-		}
-		tlsListener := gotls.NewListener(l, serverTLSConfig)
+		tlsListener := tls.NewListener(l, serverTLSConfig)
 		if err := srv.Serve(tlsListener); err != nil {
 			logger.Error(err.Error())
 		}
