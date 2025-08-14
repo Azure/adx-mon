@@ -53,7 +53,7 @@ require (
 	golang.org/x/sys v0.35.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20241209162323-e6fa225c2576
 	google.golang.org/protobuf v1.36.7
-	k8s.io/api v0.33.3
+	k8s.io/api v0.33.4
 	k8s.io/apimachinery v0.33.4
 	k8s.io/client-go v0.33.3
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397
