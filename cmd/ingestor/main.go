@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -25,7 +26,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
-	"github.com/Azure/adx-mon/pkg/tls"
+	adxtls "github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -155,54 +156,45 @@ func realMain(ctx *cli.Context) error {
 		}
 	}
 
-	if cacert != "" || key != "" {
-		if cacert == "" || key == "" {
-			logger.Fatalf("Both --ca-cert and --key are required")
+	// Build server TLS config
+	var (
+		serverTLSConfig *tls.Config
+		cert            tls.Certificate
+	)
+	if cacert != "" && key != "" {
+		certPEM, err := os.ReadFile(cacert)
+		if err != nil {
+			logger.Fatalf("Failed to read cert file: %s", err)
 		}
-	} else {
+		keyPEM, err := os.ReadFile(key)
+		if err != nil {
+			logger.Fatalf("Failed to read key file: %s", err)
+		}
+		c, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			logger.Fatalf("Failed to parse TLS key pair: %s", err)
+		}
+		cert = c
+		logger.Infof("Using TLS from files cert=%s key=%s", cacert, key)
+	} else if cacert == "" && key == "" {
 		logger.Warnf("Using fake TLS credentials (not for production use!)")
-		certBytes, keyBytes, err := tls.NewFakeTLSCredentials()
+		certBytes, keyBytes, err := adxtls.NewFakeTLSCredentials()
 		if err != nil {
 			logger.Fatalf("Failed to create fake TLS credentials: %s", err)
 		}
-
-		certFile, err := os.CreateTemp("", "cert")
+		c, err := tls.X509KeyPair(certBytes, keyBytes)
 		if err != nil {
-			logger.Fatalf("Failed to create cert temp file: %s", err)
+			logger.Fatalf("Failed to build in-memory TLS key pair: %s", err)
 		}
-
-		if _, err := certFile.Write(certBytes); err != nil {
-			logger.Fatalf("Failed to write cert temp file: %s", err)
-		}
-
-		keyFile, err := os.CreateTemp("", "key")
-		if err != nil {
-			logger.Fatalf("Failed to create key temp file: %s", err)
-		}
-
-		if _, err := keyFile.Write(keyBytes); err != nil {
-			logger.Fatalf("Failed to write key temp file: %s", err)
-		}
-
-		cacert = certFile.Name()
-		key = keyFile.Name()
+		cert = c
 		insecureSkipVerify = true
-
-		if err := certFile.Close(); err != nil {
-			logger.Fatalf("Failed to close cert temp file: %s", err)
-		}
-
-		if err := keyFile.Close(); err != nil {
-			logger.Fatalf("Failed to close key temp file: %s", err)
-		}
-
-		defer func() {
-			os.Remove(certFile.Name())
-			os.Remove(keyFile.Name())
-		}()
+	} else {
+		// If either cacert or key is provided, then it is assumed that this code is
+		// running in production and we bail out.
+		logger.Fatalf("Both --ca-cert and --key are required")
 	}
+	serverTLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	logger.Infof("Using TLS ca-cert=%s key=%s", cacert, key)
 	if storageDir == "" {
 		logger.Fatalf("--storage-dir is required")
 	}
@@ -340,7 +332,8 @@ func realMain(ctx *cli.Context) error {
 			logger.Warnf("Failed to pin to CPU: %s", err)
 		}
 
-		if err := srv.ServeTLS(l, cacert, key); err != nil {
+		tlsListener := tls.NewListener(l, serverTLSConfig)
+		if err := srv.Serve(tlsListener); err != nil {
 			logger.Error(err.Error())
 		}
 	}()
