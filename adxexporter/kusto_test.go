@@ -105,6 +105,29 @@ func (m *MockKustoExecutor) Query(ctx context.Context, query kusto.Statement, op
 	return createEmptyMockRowIterator(), nil
 }
 
+// Mgmt implements the management command execution for the mock executor.
+// For current tests, no behavior changes are needed, so it mirrors Query by
+// recording the statement and returning configured results or an empty iterator.
+func (m *MockKustoExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	// Reuse Query behavior to avoid duplicating test plumbing
+	// Cast MgmtOption to no-op and delegate to Query-like path
+	m.queries = append(m.queries, query.String())
+
+	if m.callIdx < len(m.errors) && m.errors[m.callIdx] != nil {
+		err := m.errors[m.callIdx]
+		m.callIdx++
+		return nil, err
+	}
+
+	if m.callIdx < len(m.results) {
+		result := m.results[m.callIdx]
+		m.callIdx++
+		return result, nil
+	}
+
+	return createEmptyMockRowIterator(), nil
+}
+
 func (m *MockKustoExecutor) SetNextError(err error) {
 	m.errors = append(m.errors, err)
 }
