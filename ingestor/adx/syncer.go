@@ -103,8 +103,12 @@ func (s *Syncer) Close() error {
 func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 	query := fmt.Sprintf(".show database %s ingestion mappings", s.database)
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(query)
-	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
+	var rows *kusto.RowIterator
+	if err := retryMgmt(ctx, "loadIngestionMappings", func() error {
+		var err error
+		rows, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
+		return err
+	}); err != nil {
 		return err
 	}
 
@@ -176,8 +180,12 @@ func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
-	if err != nil {
+	var rows *kusto.RowIterator
+	if err := retryMgmt(context.Background(), "ensure-table", func() error {
+		var err error
+		rows, err = s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+		return err
+	}); err != nil {
 		return err
 	}
 
@@ -249,8 +257,12 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 
 	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
 
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
-	if err != nil {
+	var rows *kusto.RowIterator
+	if err := retryMgmt(context.Background(), "ensure-mapping", func() error {
+		var err error
+		rows, err = s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+		return err
+	}); err != nil {
 		return "", err
 	}
 
@@ -342,16 +354,20 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 	// but we can't create the function unless a table exists.
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
 		".create table AdxmonIngestorTableCardinalityCount (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real)")
-	_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
+	if err := retryMgmt(ctx, "ensure-prom-functions-create-cardinality-table", func() error {
+		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+		return err
+	}); err != nil {
 		return err
 	}
 
 	for _, fn := range functions {
 		logger.Infof("Creating function %s", fn.name)
 		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
-		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
-		if err != nil {
+		if err := retryMgmt(ctx, "create-function-"+fn.name, func() error {
+			_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+			return err
+		}); err != nil {
 			return err
 		}
 	}
@@ -394,8 +410,10 @@ func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
 
 	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
 		fmt.Sprintf(".alter-merge database %s policy ingestionbatching\n```%s\n```", s.database, string(b)))
-	_, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
+	if err := retryMgmt(ctx, "ensure-ingestion-policy", func() error {
+		_, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
+		return err
+	}); err != nil {
 		return err
 	}
 	return nil
