@@ -3,6 +3,7 @@ package storage_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,13 @@ func TestCRDs(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      typeNamespacedName.Name,
 			Namespace: typeNamespacedName.Namespace,
+		},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Interval: metav1.Duration{Duration: time.Minute},
+			// Minimal valid spec to satisfy CRD validation; other fields optional for this test
+			Database: "TestDB",
+			Table:    "TestTable",
+			Body:     "print 1",
 		},
 	}
 	require.NoError(t, ctrlCli.Create(ctx, sr))
