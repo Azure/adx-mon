@@ -33,6 +33,22 @@ func TestCRDs(t *testing.T) {
 	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 
+	// CI can be slower to establish CRDs; wait until the SummaryRule CRD is served
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		gvk := adxmonv1.GroupVersion.WithKind("SummaryRule")
+		// Use the REST mapper via the client scheme indirectly by attempting a List
+		listProbe := &adxmonv1.SummaryRuleList{}
+		err = ctrlCli.List(ctx, listProbe)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			require.NoError(t, err, "timed out waiting for CRD %s to be established", gvk.String())
+		}
+		time.Sleep(2 * time.Second)
+	}
+
 	store := storage.NewCRDHandler(ctrlCli, nil)
 
 	resourceName := "testtest"
