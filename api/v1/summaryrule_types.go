@@ -40,6 +40,21 @@ const (
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
 	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
+
+	// SummaryRuleOwnerAnnotation is a per-CRD annotation that determines which component
+	// should process the SummaryRule. Supported values are SummaryRuleOwnerIngestor and
+	// SummaryRuleOwnerADXExporter. When empty or missing, the default behavior is for the
+	// Ingestor to process the rule (backward compatibility).
+	SummaryRuleOwnerAnnotation = "adx-mon.azure.com/owner"
+	// SummaryRuleDesiredOwnerAnnotation is an optional per-CRD annotation used to request
+	// a safe ownership transition. When set to SummaryRuleOwnerADXExporter, the ADX Exporter
+	// will adopt ownership only when it is safe to do so (no inflight async ops and outside
+	// a submission window), then it will set SummaryRuleOwnerAnnotation and clear this value.
+	SummaryRuleDesiredOwnerAnnotation = "adx-mon.azure.com/desired-owner"
+	// SummaryRuleOwnerIngestor specifies ownership by the Ingestor component
+	SummaryRuleOwnerIngestor = "ingestor"
+	// SummaryRuleOwnerADXExporter specifies ownership by the ADX Exporter component
+	SummaryRuleOwnerADXExporter = "adx-exporter"
 )
 
 // SummaryRuleSpec defines the desired state of SummaryRule
