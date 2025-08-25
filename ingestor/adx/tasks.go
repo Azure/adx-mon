@@ -333,8 +333,22 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Handle rule execution logic (timing evaluation and submission)
 		err := t.handleRuleExecution(timeoutCtx, &rule)
 
-		// Process any backlog operations for this rule
-		rule.BackfillAsyncOperations(t.Clock)
+		// If the submission failed we intentionally skip backfill generation for this
+		// cycle. Backfilling when the cluster is offline (or submissions are failing)
+		// causes us to enqueue synthetic backlog windows that will immediately be
+		// retried again next cycle, inflating the async operation list. The backlog
+		// will be reconstructed on the first successful submission using the last
+		// successful execution timestamp, so skipping here is safe and prevents
+		// unbounded growth / test expectation mismatch.
+		if err == nil {
+			// Process any backlog operations for this rule (only when submission
+			// succeeded this cycle).
+			rule.BackfillAsyncOperations(t.Clock)
+		}
+		// NOTE: If we skipped BackfillAsyncOperations due to an error we still want
+		// to attempt recovery of any pre-existing backlog operations as the
+		// underlying outage may have been transient after submission; however, we
+		// only attempt to process operations that already exist (trackAsyncOperations).
 
 		// Process any outstanding async operations for this rule
 		t.trackAsyncOperations(timeoutCtx, &rule)
