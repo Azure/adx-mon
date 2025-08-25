@@ -351,8 +351,11 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseN
 		return false, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
 
-	q := kql.New(".show databases | where DatabaseName == ParamDatabaseName | count")
-	params := kql.NewParameters().AddString("ParamDatabaseName", databaseName)
+	// NOTE: Management (dot) commands do not support query parameters. Using parameters here
+	// results in a syntax error like SYN0100 ("Admin commands must have a dot (.) character as their first non-whitespace character").
+	// For this specific usage we escape the database name as a string literal inline.
+	// databaseName originates from the CR spec and is restricted by validation, ensuring no injection.
+	q := kql.New(".show databases | where DatabaseName == ").AddString(databaseName).AddLiteral(" | count")
 
 	// Use any database for the management command - we'll use the first database or default to "master"
 	queryDatabase := "master"
@@ -360,7 +363,7 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseN
 		queryDatabase = cluster.Spec.Databases[0].DatabaseName
 	}
 
-	result, err := client.Mgmt(ctx, queryDatabase, q, kusto.QueryParameters(params))
+	result, err := client.Mgmt(ctx, queryDatabase, q)
 	if err != nil {
 		return false, fmt.Errorf("failed to check database existence: %w", err)
 	}
