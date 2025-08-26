@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// test helper: ensure test.v set for Azure Kusto SDK mocks
+// ensureTestVFlagSetT sets the -test.v flag required for Azure Kusto SDK mock diagnostics.
 func ensureTestVFlagSetT(t *testing.T) {
 	t.Helper()
 	if flag.Lookup("test.v") == nil {
@@ -36,18 +36,31 @@ func ensureTestVFlagSetT(t *testing.T) {
 	}
 }
 
-// test helper: create a RowIterator from custom columns/values
-func createRowIteratorFromMockRows(t *testing.T, cols table.Columns, rows []value.Values) *kusto.RowIterator {
+// buildMockRows constructs a kusto.MockRows and populates it with provided rows.
+func buildMockRows(t *testing.T, cols table.Columns, rows []value.Values) *kusto.MockRows {
 	t.Helper()
-	iter := &kusto.RowIterator{}
 	mockRows, err := kusto.NewMockRows(cols)
 	require.NoError(t, err)
 	for _, r := range rows {
 		require.NoError(t, mockRows.Row(r))
 	}
+	return mockRows
+}
+
+// buildIteratorFromMockRows creates a RowIterator from pre-built mock rows.
+func buildIteratorFromMockRows(t *testing.T, mockRows *kusto.MockRows) *kusto.RowIterator {
+	t.Helper()
 	ensureTestVFlagSetT(t)
+	iter := &kusto.RowIterator{}
 	require.NoError(t, iter.Mock(mockRows))
 	return iter
+}
+
+// createRowIteratorFromMockRows is a convenience wrapper combining buildMockRows + buildIteratorFromMockRows.
+// Kept for backwards compatibility with existing tests while providing finer-grained helpers for new cases.
+func createRowIteratorFromMockRows(t *testing.T, cols table.Columns, rows []value.Values) *kusto.RowIterator {
+	t.Helper()
+	return buildIteratorFromMockRows(t, buildMockRows(t, cols, rows))
 }
 
 func newFakeClientWithRule(t *testing.T, rule *adxmonv1.SummaryRule) client.Client {

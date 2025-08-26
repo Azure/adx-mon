@@ -130,16 +130,29 @@ func (r *SummaryRuleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // - Base: rule interval
 // - If there are inflight/backlog async operations, prefer SummaryRuleAsyncOperationPollInterval when shorter
 // - Fallback minimum of 1 minute to avoid hot loops on misconfiguration
-func nextRequeue(rule *adxmonv1.SummaryRule) time.Duration {
-	base := rule.Spec.Interval.Duration
-	if len(rule.GetAsyncOperations()) > 0 {
-		poll := adxmonv1.SummaryRuleAsyncOperationPollInterval
-		if poll > 0 && (base <= 0 || poll < base) {
-			base = poll
-		}
+// asyncPollInterval decides whether to use the async operation poll cadence.
+// Returns (pollInterval, ok) where ok indicates we should override the base interval.
+func asyncPollInterval(rule *adxmonv1.SummaryRule) (time.Duration, bool) {
+	if len(rule.GetAsyncOperations()) == 0 {
+		return 0, false
 	}
+	poll := adxmonv1.SummaryRuleAsyncOperationPollInterval
+	if poll <= 0 {
+		return 0, false
+	}
+	if base := rule.Spec.Interval.Duration; base > 0 && base <= poll { // base already sooner or equal
+		return 0, false
+	}
+	return poll, true
+}
+
+func nextRequeue(rule *adxmonv1.SummaryRule) time.Duration {
+	if poll, ok := asyncPollInterval(rule); ok {
+		return poll
+	}
+	base := rule.Spec.Interval.Duration
 	if base <= 0 {
-		base = time.Minute
+		return time.Minute
 	}
 	return base
 }
@@ -318,36 +331,45 @@ func (r *SummaryRuleReconciler) getOperation(ctx context.Context, database strin
 
 // trackAsyncOperations iterates current async ops and processes completed/retry/backlog entries
 func (r *SummaryRuleReconciler) trackAsyncOperations(ctx context.Context, rule *adxmonv1.SummaryRule) {
-	ops := rule.GetAsyncOperations()
-	for _, op := range ops {
-		// Backlog: operation without OperationId indicates failed submission earlier
-		if op.OperationId == "" {
-			r.processBacklogOperation(ctx, rule, op)
-			continue
-		}
-
-		status, err := r.getOperation(ctx, rule.Spec.Database, op.OperationId)
-		if err != nil {
-			logger.Errorf("Failed to query operation %s: %v", op.OperationId, err)
-			continue
-		}
-		if status == nil {
-			// Operation not found; could be very old or already pruned server-side
-			if logger.IsDebug() {
-				logger.Debugf("Async operation %s not found in .show operations", op.OperationId)
-			}
-			continue
-		}
-
-		// Completed (Succeeded or Failed) — remove entry and update status on failure
-		if status.State == stateCompleted || status.State == stateFailed {
-			r.handleCompletedOperation(ctx, rule, *status)
-			continue
-		} else if status.ShouldRetry != 0 {
-			// ShouldRetry indicates resubmission is recommended
-			r.handleRetryOperation(ctx, rule, op, *status)
-		}
+	// Reviewer note addressed: this method previously handled backlog lookup, status polling,
+	// completion, and retry logic inline. It is now a simple iterator delegating responsibilities
+	// to focused helpers for readability & testability.
+	for _, op := range rule.GetAsyncOperations() {
+		r.processAsyncOperation(ctx, rule, op)
 	}
+}
+
+// processAsyncOperation routes an async operation to the correct handler based on its state.
+func (r *SummaryRuleReconciler) processAsyncOperation(ctx context.Context, rule *adxmonv1.SummaryRule, op adxmonv1.AsyncOperation) {
+	if op.OperationId == "" { // backlog entry (submission previously failed)
+		r.processBacklogOperation(ctx, rule, op)
+		return
+	}
+
+	status := r.fetchOperationStatus(ctx, rule, op)
+	if status == nil { // error already logged or not found
+		return
+	}
+
+	switch {
+	case status.State == stateCompleted || status.State == stateFailed:
+		r.handleCompletedOperation(ctx, rule, *status)
+	case status.ShouldRetry != 0:
+		r.handleRetryOperation(ctx, rule, op, *status)
+	}
+}
+
+// fetchOperationStatus gets the status for an operation, logging errors consistently.
+func (r *SummaryRuleReconciler) fetchOperationStatus(ctx context.Context, rule *adxmonv1.SummaryRule, op adxmonv1.AsyncOperation) *AsyncOperationStatus {
+	status, err := r.getOperation(ctx, rule.Spec.Database, op.OperationId)
+	if err != nil {
+		logger.Errorf("Failed to query operation %s: %v", op.OperationId, err)
+		return nil
+	}
+	if status == nil && logger.IsDebug() {
+		logger.Debugf("Async operation %s not found in .show operations", op.OperationId)
+	}
+	return status
 }
 
 // handleRetryOperation resubmits a window and swaps the tracked OperationId if a new one is created
