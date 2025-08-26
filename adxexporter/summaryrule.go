@@ -171,27 +171,40 @@ func (r *SummaryRuleReconciler) adoptIfDesired(ctx context.Context, rule *adxmon
 	if crdownership.IsOwnedBy(rule, adxmonv1.SummaryRuleOwnerADXExporter) {
 		return ctrl.Result{}, false
 	}
-	if crdownership.WantsOwner(rule, adxmonv1.SummaryRuleOwnerADXExporter) {
+
+	// Auto-adoption policy: if rule is currently (explicitly or implicitly) owned by the ingestor
+	// (missing annotation or annotation=ingestor) we attempt to adopt it even without a desired-owner
+	// annotation. This enables seamless migration when the exporter is introduced.
+	wantsExporter := crdownership.WantsOwner(rule, adxmonv1.SummaryRuleOwnerADXExporter)
+	ingestorOwned := crdownership.IsOwnedBy(rule, adxmonv1.SummaryRuleOwnerIngestor)
+	if wantsExporter || ingestorOwned {
 		if ok, reason := crdownership.SafeToAdopt(rule, r.Clock); ok {
 			if err := crdownership.PatchClaim(ctx, r.Client, rule, adxmonv1.SummaryRuleOwnerADXExporter); err != nil {
 				logger.Logger().Error("Failed to claim ownership",
 					"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
-					"event", "ownership_acknowledged",
+					"event", "ownership_adopt",
 					"status", "FAILURE",
+					"auto", ingestorOwned && !wantsExporter,
 					"error", err.Error(),
 				)
 			} else {
 				logger.Logger().Info("Adopted SummaryRule",
 					"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
-					"event", "ownership_acknowledged",
+					"event", "ownership_adopt",
 					"status", "SUCCESS",
 					"safe_reason", reason,
 					"desired_owner", adxmonv1.SummaryRuleOwnerADXExporter,
+					"auto", ingestorOwned && !wantsExporter,
 				)
 				return ctrl.Result{RequeueAfter: adoptRequeue}, true
 			}
+		} else {
+			// Not yet safe; requeue so we can attempt adoption soon.
+			return ctrl.Result{RequeueAfter: adoptRequeue}, true
 		}
 	}
+
+	// Unknown/unsupported owner annotation: skip processing (fail closed)
 	return ctrl.Result{}, true
 }
 

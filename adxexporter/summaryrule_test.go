@@ -501,15 +501,39 @@ func TestSummaryRule_ExporterDoesNotAdoptWhenInsideWindow(t *testing.T) {
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
 	require.NoError(t, err)
-	// Should skip and not requeue immediately for adoption
-	require.Equal(t, time.Duration(0), res.RequeueAfter)
+	// Now expect a requeueAfter adoptRequeue while waiting for safe window (5s)
+	require.Equal(t, adoptRequeue, res.RequeueAfter)
 
 	var updated adxmonv1.SummaryRule
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
-	// Owner should remain unset, desired still present
+	// Owner should still be unset until it becomes safe
 	_, hasOwner := updated.Annotations[adxmonv1.SummaryRuleOwnerAnnotation]
 	require.False(t, hasOwner)
 	require.Equal(t, adxmonv1.SummaryRuleOwnerADXExporter, updated.Annotations[adxmonv1.SummaryRuleDesiredOwnerAnnotation])
+}
+
+func TestSummaryRule_ExporterAutoAdoptsMissingAnnotation(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-auto-adopt"}, // no annotations -> implicit ingestor owner
+		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
+	}
+	// Set last exec to now so ShouldSubmitRule is false => safe adoption immediately
+	rule.SetLastExecutionTime(now)
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+	require.Equal(t, adoptRequeue, res.RequeueAfter)
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	require.Equal(t, adxmonv1.SummaryRuleOwnerADXExporter, updated.Annotations[adxmonv1.SummaryRuleOwnerAnnotation])
+	_, hasDesired := updated.Annotations[adxmonv1.SummaryRuleDesiredOwnerAnnotation]
+	require.False(t, hasDesired)
 }
 
 func TestSummaryRule_OneTickBoundary_NoDoubleProcessing(t *testing.T) {
