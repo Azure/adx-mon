@@ -766,6 +766,37 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 	require.Len(t, asyncOps, 1, "Should have an async operation when submission fails")
 }
 
+func TestSummaryRule_IngestorOwnerGating(t *testing.T) {
+	ensureTestVFlagSet(t)
+	clk := klock.NewFakeClock(time.Now())
+
+	// Create four rules with different owner annotations
+	ruleIngestor := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-ingestor", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: v1.SummaryRuleOwnerIngestor}}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleExporter := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-exporter", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: v1.SummaryRuleOwnerADXExporter}}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleMissing := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-missing"}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+	ruleUnknown := &v1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-owner-unknown", Annotations: map[string]string{v1.SummaryRuleOwnerAnnotation: "who"}}, Spec: v1.SummaryRuleSpec{Database: "db", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
+
+	list := &v1.SummaryRuleList{Items: []v1.SummaryRule{*ruleIngestor, *ruleExporter, *ruleMissing, *ruleUnknown}}
+	mockStore := &mockCRDHandler{listResponse: list}
+	// Prepare an empty mock rows iterator to satisfy getOperation calls
+	emptyCols := table.Columns{{Name: "LastUpdatedOn", Type: kustotypes.DateTime}, {Name: "OperationId", Type: kustotypes.String}, {Name: "State", Type: kustotypes.String}, {Name: "ShouldRetry", Type: kustotypes.Real}, {Name: "Status", Type: kustotypes.String}}
+	mr, err := kusto.NewMockRows(emptyCols)
+	require.NoError(t, err)
+	exec := &TestStatementExecutor{database: "db", endpoint: "https://test", mockRows: mr}
+	task := NewSummaryRuleTask(mockStore, exec, map[string]string{})
+	task.Clock = clk
+	// Stub SubmitRule to record calls
+	var submitted []string
+	task.SubmitRule = func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		submitted = append(submitted, rule.Name)
+		return "op", nil
+	}
+
+	require.NoError(t, task.Run(context.Background()))
+	// Should have processed ingestor and missing only
+	require.ElementsMatch(t, []string{"sr-owner-ingestor", "sr-owner-missing"}, submitted)
+}
+
 func TestSummaryRuleSubmissionSuccess(t *testing.T) {
 	ensureTestVFlagSet(t)
 
