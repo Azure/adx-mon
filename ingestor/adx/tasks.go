@@ -378,9 +378,10 @@ func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleLis
 func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
 	// Ownership gating via shared helper: default (missing) goes to ingestor for backward compatibility.
 	if !crdownership.IsOwnedBy(&rule, v1.SummaryRuleOwnerIngestor) {
-		if logger.IsDebug() {
-			logger.Debugf("Skipping %s/%s because owner is not ingestor", rule.Namespace, rule.Name)
-		}
+		logger.Logger().Info("Ownership annotation not ingestor; skipping processing",
+			"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+			"event", "control_handed_over",
+		)
 		return false
 	}
 

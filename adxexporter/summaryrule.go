@@ -159,10 +159,22 @@ func (r *SummaryRuleReconciler) adoptIfDesired(ctx context.Context, rule *adxmon
 		return ctrl.Result{}, false
 	}
 	if crdownership.WantsOwner(rule, adxmonv1.SummaryRuleOwnerADXExporter) {
-		if ok, _ := crdownership.SafeToAdopt(rule, r.Clock); ok {
+		if ok, reason := crdownership.SafeToAdopt(rule, r.Clock); ok {
 			if err := crdownership.PatchClaim(ctx, r.Client, rule, adxmonv1.SummaryRuleOwnerADXExporter); err != nil {
-				logger.Warnf("Failed to patch ownership for %s/%s: %v", rule.Namespace, rule.Name, err)
+				logger.Logger().Error("Failed to claim ownership",
+					"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+					"event", "ownership_acknowledged",
+					"status", "FAILURE",
+					"error", err.Error(),
+				)
 			} else {
+				logger.Logger().Info("Adopted SummaryRule",
+					"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+					"event", "ownership_acknowledged",
+					"status", "SUCCESS",
+					"safe_reason", reason,
+					"desired_owner", adxmonv1.SummaryRuleOwnerADXExporter,
+				)
 				return ctrl.Result{RequeueAfter: adoptRequeue}, true
 			}
 		}
