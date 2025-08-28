@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -146,6 +147,7 @@ func TestAlerterReconciler_ReconcileComponent(t *testing.T) {
 
 func TestAlerterReconciler_CreateAlerter(t *testing.T) {
 	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	cluster := &adxmonv1.ADXCluster{
@@ -323,8 +325,7 @@ func TestAlerterReconciler_handleADXClusterSelectorChange(t *testing.T) {
 func TestAlerterReconciler_SecurityControlsValidation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	alerter := &adxmonv1.Alerter{
 		ObjectMeta: metav1.ObjectMeta{

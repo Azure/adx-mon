@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -151,6 +152,7 @@ func TestIngestorReconciler_ReconcileComponent(t *testing.T) {
 func TestIngestorReconciler_CreateIngestor(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	cluster := &adxmonv1.ADXCluster{
 		TypeMeta: metav1.TypeMeta{
@@ -381,8 +383,7 @@ func TestIngestorReconciler_handleADXClusterSelectorChange(t *testing.T) {
 func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	ingestor := &adxmonv1.Ingestor{
 		ObjectMeta: metav1.ObjectMeta{
