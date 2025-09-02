@@ -30,12 +30,19 @@ func (s *StoreSink) Open(ctx context.Context) error {
 }
 
 func (s *StoreSink) Send(ctx context.Context, batch *types.LogBatch) error {
+	// Count prior to attempting persistence so we can (intentionally) risk a slight
+	// overcount if the subsequent write fails. This keeps the counting path off
+	// the critical section that would otherwise require a second traversal or
+	// per-log metric increments after success.
+	countAndRecordMonitoredLogs(batch.Logs, s.monitoredSet)
+
 	err := s.store.WriteNativeLogs(ctx, batch)
 	if err != nil {
 		return err
 	}
-	batch.Ack()
-	countAndRecordMonitoredLogs(batch.Logs, s.monitoredSet)
+	if batch.Ack != nil {
+		batch.Ack()
+	}
 	return nil
 }
 
@@ -48,14 +55,20 @@ func (s *StoreSink) Name() string {
 }
 
 // countAndRecordMonitoredLogs aggregates counts per (db, table) for logs in the batch
-// that satisfy the provided monitored predicate, and emits a single metric increment per pair.
-// It intentionally performs the counting prior to storage write; if the write fails,
-// an overcount can occur (accepted trade-off for lower hot-path contention).
+// that satisfy the provided monitored predicate, and emits a single metric increment
+// per pair.
+//
+// NOTE: This function is intended to be invoked BEFORE the storage write so that
+// counting does not add latency after persistence. If the write subsequently fails
+// an overcount will occur (accepted trade-off for Phase 0 visibility use‑case).
+//
+// Allocation: the counts map is only allocated lazily if at least one monitored
+// log is encountered (zero allocations for unmonitored batches).
 func countAndRecordMonitoredLogs(logs []*types.Log, monitoredSet func(db, table string) bool) {
 	if monitoredSet == nil {
 		return
 	}
-	var counts map[[2]string]int
+	var counts map[[2]string]int // lazy alloc
 	for _, log := range logs {
 		db := types.StringOrEmpty(log.GetAttributeValue(types.AttributeDatabaseName))
 		if db == "" {
