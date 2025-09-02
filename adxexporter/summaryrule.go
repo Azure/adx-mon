@@ -431,6 +431,7 @@ func (r *SummaryRuleReconciler) handleCompletedOperation(ctx context.Context, ru
 
 // processBacklogOperation attempts to submit a previously failed window and advance timestamp safely
 func (r *SummaryRuleReconciler) processBacklogOperation(ctx context.Context, rule *adxmonv1.SummaryRule, operation adxmonv1.AsyncOperation) {
+	// Parse the stored window; if invalid we can't safely resubmit.
 	start, errStart := time.Parse(time.RFC3339Nano, operation.StartTime)
 	end, errEnd := time.Parse(time.RFC3339Nano, operation.EndTime)
 	if errStart != nil || errEnd != nil {
@@ -438,22 +439,23 @@ func (r *SummaryRuleReconciler) processBacklogOperation(ctx context.Context, rul
 		return
 	}
 
-	if opId, err := r.submitRule(ctx, *rule, start, end); err == nil {
-		operation.OperationId = opId
+	opID, err := r.submitRule(ctx, *rule, start, end)
+	if err != nil {
+		// Keep backlog entry (OperationId empty) for future attempts
+		return
+	}
+	operation.OperationId = opID
+	r.updateLastExecutionTimeIfForward(rule, end)
+	rule.SetAsyncOperation(operation)
+}
 
-		// Restore original (exclusive) window end by adding back OneTick to the inclusive end we stored
-		originalWindowEnd := end.Add(kustoutil.OneTick)
-		current := rule.GetLastExecutionTime()
-		if current == nil {
-			t := time.Time{}
-			current = &t
-		}
-		if originalWindowEnd.After(*current) {
-			rule.SetLastExecutionTime(originalWindowEnd)
-		}
-
-		// Track updated operation with new id
-		rule.SetAsyncOperation(operation)
+// updateLastExecutionTimeIfForward advances LastExecutionTime if the provided inclusiveEnd corresponds
+// to a strictly newer (exclusive) window end, preserving forward-only progression semantics.
+func (r *SummaryRuleReconciler) updateLastExecutionTimeIfForward(rule *adxmonv1.SummaryRule, inclusiveEnd time.Time) {
+	originalWindowEnd := inclusiveEnd.Add(kustoutil.OneTick) // convert back to exclusive end
+	current := rule.GetLastExecutionTime()
+	if current == nil || originalWindowEnd.After(*current) {
+		rule.SetLastExecutionTime(originalWindowEnd)
 	}
 }
 
