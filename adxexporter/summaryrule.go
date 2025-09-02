@@ -102,6 +102,9 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		logger.Warnf("Failed to persist SummaryRule async status %s/%s: %v", rule.Namespace, rule.Name, err)
 	}
 
+	// Emit health / status log (best-effort, after status update to reflect latest view)
+	r.emitHealthLog(&rule)
+
 	// Requeue based on rule interval and async polling needs
 	return ctrl.Result{RequeueAfter: nextRequeue(&rule)}, nil
 }
@@ -452,4 +455,138 @@ func (r *SummaryRuleReconciler) processBacklogOperation(ctx context.Context, rul
 		// Track updated operation with new id
 		rule.SetAsyncOperation(operation)
 	}
+}
+
+// emitHealthLog produces a single structured log line summarizing whether the rule is considered
+// "working". A rule is working when: owned (or already adopted) by exporter, database managed,
+// criteria matched, no stale async operations, no detected interval gap beyond one interval, and
+// (if due) submission succeeded or (if not due) simply waiting.
+// This avoids expensive downstream Kusto correlation for basic liveness checks.
+func (r *SummaryRuleReconciler) emitHealthLog(rule *adxmonv1.SummaryRule) {
+	// Only log for rules the exporter owns or is attempting to adopt; skip others to reduce noise.
+	owned := crdownership.IsOwnedBy(rule, adxmonv1.SummaryRuleOwnerADXExporter)
+	wantsExporter := crdownership.WantsOwner(rule, adxmonv1.SummaryRuleOwnerADXExporter)
+	if !owned && !wantsExporter && !crdownership.IsOwnedBy(rule, adxmonv1.SummaryRuleOwnerIngestor) {
+		return
+	}
+
+	// Pre-calculate basic properties
+	interval := rule.Spec.Interval.Duration
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	var ingestionDelay time.Duration
+	if rule.Spec.IngestionDelay != nil {
+		ingestionDelay = rule.Spec.IngestionDelay.Duration
+	}
+
+	lastExec := rule.GetLastExecutionTime()
+	now := r.Clock.Now()
+	effectiveNow := now.Add(-ingestionDelay)
+
+	asyncOps := rule.GetAsyncOperations()
+	var inflight, backlog int
+	var oldestInflightStart *time.Time
+	for _, op := range asyncOps {
+		if op.OperationId == "" {
+			backlog++
+		} else {
+			inflight++
+			// Parse start for stale detection
+			if op.StartTime != "" {
+				if t, err := time.Parse(time.RFC3339Nano, op.StartTime); err == nil {
+					if oldestInflightStart == nil || t.Before(*oldestInflightStart) {
+						oldestInflightStart = &t
+					}
+				}
+			}
+		}
+	}
+
+	// Detect stale async (heuristic): oldest inflight started more than max(interval, 3*pollInterval)
+	poll := adxmonv1.SummaryRuleAsyncOperationPollInterval
+	staleThreshold := interval
+	if th := 3 * poll; th > staleThreshold {
+		staleThreshold = th
+	}
+	staleAsync := false
+	if oldestInflightStart != nil && now.Sub(*oldestInflightStart) > staleThreshold {
+		staleAsync = true
+	}
+
+	// Gap detection: after BackfillAsyncOperations, any remaining fully elapsed intervals not represented
+	// by either lastExec advancement or backlog windows implies a gap.
+	gapDetected := false
+	if lastExec != nil && !lastExec.IsZero() {
+		elapsed := effectiveNow.Sub(*lastExec)
+		if elapsed > interval { // at least one interval boundary has passed
+			// Count how many *complete* intervals have elapsed
+			completeIntervals := int(elapsed / interval)
+			// Windows already accounted for: backlog operations (each backlog op represents one missing window)
+			if backlog < completeIntervals {
+				// Allow one interval of leeway to reduce false positives (e.g., reconcile delay)
+				if completeIntervals-backlog > 1 {
+					gapDetected = true
+				}
+			}
+		}
+	}
+
+	// Determine due & submitted from conditions: we treat due purely as whether it *would* be submitted now
+	due := rule.ShouldSubmitRule(r.Clock)
+	submitted := false
+	// We approximate submission success by checking if due and we advanced LastSuccessfulExecutionTime within this reconcile.
+	if due && lastExec != nil {
+		// If lastExec within <= interval of now (with delay considered) we consider that just submitted.
+		if effectiveNow.Sub(*lastExec) < (interval / 2) { // heuristic; avoids false positive if reconcile jitter small
+			submitted = true
+		}
+	}
+
+	// Working state & reason
+	working := true
+	degraded := ""
+	switch {
+	case !r.isDatabaseManaged(rule):
+		working, degraded = false, "unmanaged_database"
+	case !matchesCriteria(rule.Spec.Criteria, r.ClusterLabels):
+		working, degraded = false, "criteria_mismatch"
+	case !owned && wantsExporter:
+		working, degraded = false, "ownership_pending"
+	case due && !submitted:
+		// If it was due but not (apparently) submitted this cycle
+		working, degraded = false, "submission_missed"
+	case staleAsync:
+		working, degraded = false, "async_stale"
+	case gapDetected:
+		working, degraded = false, "backlog_gap"
+	}
+
+	l := logger.Logger()
+	// Construct structured fields; keep keys stable
+	kv := []interface{}{
+		"event", "summaryrule_health",
+		"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+		"database", rule.Spec.Database,
+		"interval_seconds", int(interval.Seconds()),
+	}
+	if ingestionDelay > 0 {
+		kv = append(kv, "ingestion_delay_seconds", int(ingestionDelay.Seconds()))
+	}
+	if lastExec != nil {
+		kv = append(kv, "last_execution_end", lastExec.UTC().Format(time.RFC3339Nano))
+	}
+	kv = append(kv,
+		"due", due,
+		"submitted", submitted,
+		"async_inflight", inflight,
+		"async_backlog", backlog,
+		"stale_async", staleAsync,
+		"gap_detected", gapDetected,
+		"working", working,
+	)
+	if degraded != "" {
+		kv = append(kv, "degraded_reason", degraded)
+	}
+	l.Info("SummaryRule health", kv...)
 }
