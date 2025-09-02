@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/siderolabs/go-kmsg"
 )
 
@@ -111,6 +112,54 @@ type Config struct {
 	OtelMetric            []*OtelMetric            `toml:"otel-metric,omitempty" comment:"Defines an OpenTelemetry metric endpoint. Accepts OTLP/HTTP and/or OTLP/gRPC."`
 	HostLog               []*HostLog               `toml:"host-log,omitempty" comment:"Defines a host log scraper."`
 	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.\nExporters are declared here and referenced by name in each collection source."`
+
+	// LogMonitor defines optional allow-list of database:table pairs for loss visibility counting.
+	LogMonitor *LogMonitor `toml:"log_monitor" comment:"Optional configuration for monitored log database:table pairs used for loss visibility. Each pair is <database>:<table>. Invalid entries are skipped with a warning."`
+}
+
+// MaxMonitoredPairsWarn is a soft cap to warn operators of potential excessive cardinality.
+const MaxMonitoredPairsWarn = 500
+
+type LogMonitor struct {
+	Pairs  []string            `toml:"pairs" comment:"List of database:table pairs to monitor for loss visibility."`
+	parsed map[string]struct{} `toml:"-"`
+}
+
+func (lm *LogMonitor) monitorKey(db, table string) string { return db + "\x00" + table }
+
+// BuildSet parses and validates pairs into the internal set. It is idempotent.
+func (lm *LogMonitor) BuildSet() {
+	if lm == nil || lm.parsed != nil {
+		return
+	}
+	lm.parsed = make(map[string]struct{})
+	for _, p := range lm.Pairs {
+		if p == "" {
+			logger.Warn("log_monitor: empty pair entry skipped")
+			continue
+		}
+		parts := strings.Split(p, ":")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			logger.Warn("log_monitor: invalid pair skipped", "value", p)
+			continue
+		}
+		lm.parsed[lm.monitorKey(parts[0], parts[1])] = struct{}{}
+	}
+	if len(lm.parsed) > MaxMonitoredPairsWarn {
+		logger.Warn("log_monitor: high monitored pair count", "count", len(lm.parsed))
+	}
+}
+
+// IsMonitored returns true if db/table is in the allow-list.
+func (lm *LogMonitor) IsMonitored(db, table string) bool {
+	if lm == nil {
+		return false
+	}
+	if lm.parsed == nil {
+		lm.BuildSet()
+	}
+	_, ok := lm.parsed[lm.monitorKey(db, table)]
+	return ok
 }
 
 type PrometheusScrape struct {

@@ -46,6 +46,7 @@ nav:
       - 'index.md'
   - 'quick-start.md'
   - 'concepts.md'
+  - 'monitoring.md'
   - 'cookbook.md'
   - Reference:
       - 'config.md'

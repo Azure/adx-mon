@@ -205,6 +205,13 @@ var (
 		Help:      "Counter of the number of logs dropped due to errors",
 	}, []string{"source", "stage"})
 
+	MonitoredLogsCollectedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "monitored_logs_collected_total",
+		Help:      "Counter of the number of logs collected (post-transform) for monitored database/table pairs",
+	}, []string{"database", "table"})
+
 	MetricsRequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "collector",

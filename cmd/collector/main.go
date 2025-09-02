@@ -522,6 +522,13 @@ func realMain(ctx *cli.Context) error {
 		})
 	}
 
+	// Build monitored set predicate once (applies to all sinks writing to storage).
+	var monitoredPredicate func(db, table string) bool
+	if cfg.LogMonitor != nil {
+		cfg.LogMonitor.BuildSet()
+		monitoredPredicate = cfg.LogMonitor.IsMonitored
+	}
+
 	if cfg.OtelLog != nil {
 		v := cfg.OtelLog
 		addAttributes := mergeMaps(cfg.AddAttributes, v.AddAttributes)
@@ -545,7 +552,8 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-				Store: store,
+				Store:        store,
+				MonitoredSet: monitoredPredicate,
 			})
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to create store sink: %w", err)
@@ -642,7 +650,8 @@ func realMain(ctx *cli.Context) error {
 			}
 
 			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-				Store: store,
+				Store:        store,
+				MonitoredSet: monitoredPredicate,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("create sink for tailsource: %w", err)
@@ -687,7 +696,8 @@ func realMain(ctx *cli.Context) error {
 				addAttributes := mergeMaps(cfg.AddLabels, v.AddAttributes)
 
 				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-					Store: store,
+					Store:        store,
+					MonitoredSet: monitoredPredicate,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("create sink for tailsource: %w", err)
@@ -767,7 +777,8 @@ func realMain(ctx *cli.Context) error {
 				}
 
 				sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{
-					Store: store,
+					Store:        store,
+					MonitoredSet: monitoredPredicate,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("create sink for tailsource: %w", err)
