@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -144,8 +145,7 @@ func TestCollectorReconciler_ReconcileComponent(t *testing.T) {
 func TestCollectorReconciler_CreateCollector(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	// Minimal Collector CRD
 	collector := &adxmonv1.Collector{
@@ -260,8 +260,7 @@ func TestCollectorReconciler_ApplyDefaults_WithIngestor(t *testing.T) {
 func TestCollectorReconciler_Reconcile(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
-	require.NoError(t, appsv1.AddToScheme(scheme))
-	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 
 	// Test case 1: Collector not found - should call ReconcileComponent
 	t.Run("CollectorNotFound", func(t *testing.T) {
