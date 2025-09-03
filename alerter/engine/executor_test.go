@@ -261,11 +261,12 @@ func TestExecutor_RunOnce(t *testing.T) {
 }
 
 func TestExecutor_syncWorkers_Remove(t *testing.T) {
-	ctx, _ := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	e := Executor{
 		ruleStore: &fakeRuleStore{},
 		workers: map[string]*worker{
-			"alert": NewWorker(&rules.Rule{Name: "alert"}, "eastus", nil, &fakeKustoClient{}, &fakeAlerter{}, "", nil, nil),
+			"alert": NewWorker(&WorkerConfig{Rule: &rules.Rule{Name: "alert"}, Region: "eastus", KustoClient: &fakeKustoClient{}, AlertClient: &fakeAlerter{}}),
 		},
 	}
 

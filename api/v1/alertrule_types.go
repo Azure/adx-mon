@@ -101,16 +101,23 @@ func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
 	criteria := rule["criteria"]
 	if s, ok := criteria.(map[string]interface{}); ok && s != nil {
 		a.Criteria = make(map[string][]string)
-		for k, v := range s {
-			switch v.(type) {
+		for k, raw := range s {
+			switch val := raw.(type) {
 			case string:
-				a.Criteria[k] = []string{v.(string)}
+				a.Criteria[k] = []string{val}
 			case []interface{}:
-				for _, value := range v.([]interface{}) {
-					a.Criteria[k] = append(a.Criteria[k], value.(string))
+				for _, v := range val {
+					if str, ok := v.(string); ok {
+						a.Criteria[k] = append(a.Criteria[k], str)
+					}
 				}
 			}
 		}
+	}
+
+	// Optional criteriaExpression (string). If absent or wrong type, leave zero value.
+	if expr, ok := rule["criteriaExpression"].(string); ok {
+		a.CriteriaExpression = expr
 	}
 
 	return nil

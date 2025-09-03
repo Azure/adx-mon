@@ -84,7 +84,16 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 }
 
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
-	return NewWorker(rule, e.region, e.tags, e.kustoClient, e.alertCli, fmt.Sprintf("%s/alerts", e.alertAddr), e.HandlerFn, e.ctrlCli)
+	return NewWorker(&WorkerConfig{
+		Rule:        rule,
+		Region:      e.region,
+		Tags:        e.tags,
+		KustoClient: e.kustoClient,
+		AlertClient: e.alertCli,
+		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
+		HandlerFn:   e.HandlerFn,
+		CtrlClient:  e.ctrlCli,
+	})
 }
 
 func (e *Executor) Close() error {
