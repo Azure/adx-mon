@@ -190,6 +190,8 @@ func (r *SummaryRuleReconciler) adoptIfDesired(ctx context.Context, rule *adxmon
 					"auto", ingestorOwned && !wantsExporter,
 					"error", err.Error(),
 				)
+				// Requeue to handle potential transient API errors (network, apiserver disruption, etc.).
+				return ctrl.Result{RequeueAfter: adoptRequeue}, true
 			} else {
 				logger.Logger().Info("Adopted SummaryRule",
 					"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
