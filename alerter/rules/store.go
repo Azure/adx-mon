@@ -13,6 +13,8 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
 
+	"github.com/google/cel-go/cel"
+
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -177,17 +179,76 @@ type Rule struct {
 	LastQueryTime time.Time
 }
 
-// func (r *Rule) MatchesCriteria(tags map[string]string) (bool, error) {
-// 	if len(r.Criteria) != 0 {
-// 		for k, v := range r.Criteria {
-// 			if vv, ok := tags[strings.ToLower(k)]; ok {
-// 				for _, value := range v {
-// 					if strings.EqualFold(vv, value) {
-// 						return true, nil
-// 					}
-// 				}
-// 			}
-// 		}
-// 	}
-// 	return false, nil
-// }
+// Matches evaluates whether this rule should execute based on simple Criteria AND the CEL CriteriaExpression.
+// It returns true if both the map criteria matches and the expression evaluates to true.
+// Errors are returned for invalid criteria keys (referencing tags that don't exist) or CEL compilation issues.
+func (r *Rule) Matches(tags map[string]string) (bool, error) {
+	// Normalize provided tags (lowercase keys & values) without mutating caller map.
+	lowered := make(map[string]string, len(tags))
+	for k, v := range tags {
+		lowered[strings.ToLower(k)] = strings.ToLower(v)
+	}
+
+	// Map criteria evaluation (OR semantics across keys)
+	var criteriaMatched bool
+	if len(r.Criteria) == 0 {
+		criteriaMatched = true
+	} else {
+		for k, values := range r.Criteria {
+			keyLower := strings.ToLower(k)
+			vv, ok := lowered[keyLower]
+			if !ok { // key absent -> cannot match this key; continue checking others (OR semantics)
+				continue
+			}
+			for _, candidate := range values {
+				if strings.EqualFold(vv, candidate) {
+					criteriaMatched = true
+					break
+				}
+			}
+			if criteriaMatched { // OR semantics across keys/values
+				break
+			}
+		}
+	}
+
+	var expressionMatched bool
+	if r.CriteriaExpression == "" {
+		expressionMatched = true
+	} else {
+		// Define variables based on our tags
+		varDecls := make([]cel.EnvOption, 0)
+		activation := map[string]interface{}{}
+		for k, v := range lowered {
+			varDecls = append(varDecls, cel.Variable(k, cel.StringType))
+			activation[k] = v
+		}
+		env, err := cel.NewEnv(varDecls...)
+		if err != nil {
+			return false, fmt.Errorf("cel env error: %w", err)
+		}
+
+		// Parse the expression and evaluate
+		ast, iss := env.Parse(r.CriteriaExpression)
+		if iss.Err() != nil {
+			return false, fmt.Errorf("cel parse error: %w", iss.Err())
+		}
+		checked, iss2 := env.Check(ast)
+		if iss2.Err() != nil {
+			return false, fmt.Errorf("cel typecheck error: %w", iss2.Err())
+		}
+		prog, err := env.Program(checked)
+		if err != nil {
+			return false, fmt.Errorf("cel program build error: %w", err)
+		}
+		out, _, err := prog.Eval(activation)
+		if err != nil {
+			return false, fmt.Errorf("cel eval error: %w", err)
+		}
+		if b, ok := out.Value().(bool); ok && b {
+			expressionMatched = true
+		}
+	}
+
+	return criteriaMatched && expressionMatched, nil
+}

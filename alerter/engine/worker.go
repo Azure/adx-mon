@@ -19,8 +19,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/google/cel-go/cel"
 )
 
 const (
@@ -44,33 +42,21 @@ type worker struct {
 	ctrlCli         client.Client
 	alertsGenerated int // Track alerts generated in current execution
 
-	// CEL related cached compilation
-	criteriaCELCompiled bool
-	criteriaCELEnv      *cel.Env
-	criteriaCELProgram  cel.Program
-	criteriaCELErr      error
-}
-
-// BuildCELEnvFromTags constructs a CEL environment declaring each tag key as a string variable.
-// Tag keys must already be lowercase.
-func BuildCELEnvFromTags(tags map[string]string) (*cel.Env, error) {
-	var opts []cel.EnvOption
-	for k := range tags {
-		opts = append(opts, cel.Variable(k, cel.StringType))
-	}
-	return cel.NewEnv(opts...)
+	// criteria/expression evaluation cached at construction
+	matchAllowed bool
+	matchErr     error
 }
 
 // NewWorker creates a worker instance pre-building the CEL environment from tags.
 // The CEL expression itself is compiled lazily on first ExecuteQuery call.
-func NewWorker(rule *rules.Rule, region string, tags map[string]string, kustoClient Client, alertCli interface{ Create(ctx context.Context, endpoint string, alert alert.Alert) error }, alertAddr string, handlerFn func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error, ctrlCli client.Client) *worker {
+func NewWorker(rule *rules.Rule, region string, tags map[string]string, kustoClient Client, alertCli interface {
+	Create(ctx context.Context, endpoint string, alert alert.Alert) error
+}, alertAddr string, handlerFn func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error, ctrlCli client.Client) *worker {
 	// Lowercase tags for case-insensitive matching and consistent CEL variable naming.
 	lowered := make(map[string]string, len(tags))
 	for k, v := range tags {
 		lowered[strings.ToLower(k)] = strings.ToLower(v)
 	}
-	// Build CEL environment (ignore error here; stored for lazy compilation logging later)
-	env, err := BuildCELEnvFromTags(lowered)
 	w := &worker{
 		rule:        rule,
 		Region:      region,
@@ -80,11 +66,15 @@ func NewWorker(rule *rules.Rule, region string, tags map[string]string, kustoCli
 		AlertAddr:   alertAddr,
 		HandlerFn:   handlerFn,
 		ctrlCli:     ctrlCli,
-		criteriaCELEnv: env,
 	}
+	// Evaluate rule match once and store result.
+	allowed, err := rule.Matches(lowered)
+	w.matchAllowed = allowed
+	w.matchErr = err
 	if err != nil {
-		w.criteriaCELErr = fmt.Errorf("failed to build CEL env: %w", err)
-		logger.Errorf("%v", w.criteriaCELErr)
+		logger.Errorf("Worker initialization match error for %s/%s: %v", rule.Namespace, rule.Name, err)
+	} else if !allowed {
+		logger.Infof("Worker %s/%s disabled (criteria/expression not matched) at initialization", rule.Namespace, rule.Name)
 	}
 	return w
 }
@@ -149,71 +139,13 @@ func (e *worker) calculateNextQueryTime() time.Time {
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
-	// Check if the rule is enabled for this instance by matching any of the alert criteria tags.
-	var criteriaMatched bool
-	// Existing map-based criteria (OR semantics across map entries)
-	if len(e.rule.Criteria) == 0 {
-		criteriaMatched = true
-	} else {
-		for k, v := range e.rule.Criteria {
-			lowerKey := strings.ToLower(k)
-			if vv, ok := e.tags[lowerKey]; ok {
-				for _, value := range v {
-					if strings.EqualFold(vv, value) {
-						criteriaMatched = true
-						break
-					}
-				}
-			}
-			if criteriaMatched {
-				break
-			}
-		}
+	// Use cached match decision
+	if e.matchErr != nil {
+		logger.Errorf("Skipping %s/%s due to cached criteria evaluation error: %v", e.rule.Namespace, e.rule.Name, e.matchErr)
+		return
 	}
-
-	// CEL expression evaluation (lazy compile of expression only; env built at worker construction).
-	var expressionMatched bool
-	if e.rule.CriteriaExpression != "" {
-		if !e.criteriaCELCompiled { // Compile expression once per worker.
-			if e.criteriaCELEnv == nil {
-				e.criteriaCELErr = fmt.Errorf("CEL environment not initialized for %s/%s", e.rule.Namespace, e.rule.Name)
-				logger.Errorf("%v", e.criteriaCELErr)
-				e.criteriaCELCompiled = true
-			} else {
-				ast, iss := e.criteriaCELEnv.Parse(e.rule.CriteriaExpression)
-				if iss.Err() != nil {
-					e.criteriaCELErr = iss.Err()
-				} else {
-					astChecked, iss2 := e.criteriaCELEnv.Check(ast)
-					if iss2.Err() != nil {
-						e.criteriaCELErr = iss2.Err()
-					} else {
-						e.criteriaCELProgram, e.criteriaCELErr = e.criteriaCELEnv.Program(astChecked)
-					}
-				}
-				if e.criteriaCELErr != nil {
-					logger.Errorf("Failed to compile CEL criteria expression for %s/%s: %v", e.rule.Namespace, e.rule.Name, e.criteriaCELErr)
-				}
-				e.criteriaCELCompiled = true
-			}
-		}
-		if e.criteriaCELErr == nil {
-			activation := map[string]interface{}{}
-			for k, v := range e.tags { // tags already lowered
-				activation[k] = v
-			}
-			out, _, err := e.criteriaCELProgram.Eval(activation)
-			if err != nil {
-				logger.Errorf("CEL evaluation error for %s/%s: %v", e.rule.Namespace, e.rule.Name, err)
-			} else if b, ok := out.Value().(bool); ok && b {
-				expressionMatched = true
-			}
-		}
-	}
-
-	// Execution decision: map criteria OR expression (if either true, proceed). If neither defined treat as allowed.
-	if !(criteriaMatched || expressionMatched) {
-		logger.Infof("Skipping %s/%s on %s/%s because criteria/expression did not match. tags=%v expr=%q", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags, e.rule.CriteriaExpression)
+	if !e.matchAllowed {
+		// Silent skip except trace already logged in constructor
 		return
 	}
 

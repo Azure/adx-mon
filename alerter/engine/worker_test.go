@@ -195,7 +195,6 @@ func TestWorker_CriteriaExpression_ExecutesOnMatch(t *testing.T) {
 	rule := &rules.Rule{
 		Namespace:          "namespace",
 		Name:               "expr",
-		Criteria:           map[string][]string{"region": []string{"nomatch"}}, // won't match
 		CriteriaExpression: "cloud == 'public' && region == 'eastus'",
 	}
 	w := NewWorker(rule, "eastus", map[string]string{"region": "eastus", "cloud": "public"}, kcli, alertCli, "", nil, nil)
@@ -217,7 +216,6 @@ func TestWorker_CriteriaExpression_ExecutesOnMatchTwo(t *testing.T) {
 	rule := &rules.Rule{
 		Namespace:          "namespace",
 		Name:               "expr",
-		Criteria:           map[string][]string{"region": []string{"nomatch"}}, // won't match
 		CriteriaExpression: "cloud in ['other', 'public'] && region == 'eastus' && environment != 'integration'",
 	}
 	w := NewWorker(rule, "eastus", map[string]string{"region": "eastus", "cloud": "public", "environment": "production"}, kcli, alertCli, "", nil, nil)
@@ -440,14 +438,7 @@ func TestWorker_AlertsThrottled(t *testing.T) {
 		Name:        "name",
 		Destination: "destination/queue",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(rule, "eastus", nil, kcli, alertCli, "", nil, nil)
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -479,14 +470,7 @@ func TestWorker_NotificationHealth(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(rule, "eastus", nil, kcli, alertCli, "", nil, nil)
 
 	// Initialize metrics to healthy state
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)

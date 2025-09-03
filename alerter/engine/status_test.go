@@ -26,17 +26,9 @@ func TestWorker_StatusUpdate_NoKubernetesClient(t *testing.T) {
 		Database:  "TestDB",
 	}
 
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "http://fake.alert.addr",
-		AlertCli:    &fakeAlerter{},
-		HandlerFn: func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
-			return nil
-		},
-		ctrlCli: nil, // No Kubernetes client
-	}
+	w := NewWorker(rule, "eastus", nil, kcli, &fakeAlerter{}, "http://fake.alert.addr", func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+		return nil
+	}, nil)
 
 	// This should not panic or error
 	w.ExecuteQuery(context.Background())
@@ -90,20 +82,12 @@ func TestWorker_AlertCounting(t *testing.T) {
 				Database:  "TestDB",
 			}
 
-			w := &worker{
-				rule:        rule,
-				Region:      "eastus",
-				kustoClient: kcli,
-				AlertAddr:   "http://fake.alert.addr",
-				AlertCli:    &fakeAlerter{},
-				HandlerFn: func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
-					if tt.handlerSuccess {
-						return nil // Success - alert generated
-					}
-					return fmt.Errorf("handler failed") // Failure - no alert generated
-				},
-				ctrlCli: nil, // No Kubernetes client
-			}
+			w := NewWorker(rule, "eastus", nil, kcli, &fakeAlerter{}, "http://fake.alert.addr", func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+				if tt.handlerSuccess {
+					return nil // Success - alert generated
+				}
+				return fmt.Errorf("handler failed") // Failure - no alert generated
+			}, nil)
 
 			// Execute the query
 			w.ExecuteQuery(context.Background())
