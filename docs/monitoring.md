@@ -85,5 +85,3 @@ Because counters reset on restart, prefer rate/delta over aligned windows and an
 - Sequence range tracking for precise gap detection.
 - Helper controller to auto-create `*_Counts` SummaryRules for a provided allow‑list.
 
----
-Feedback welcome. This document will evolve as Phase 0 lands and we gather empirical results.
