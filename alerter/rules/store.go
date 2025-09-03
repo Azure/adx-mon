@@ -76,17 +76,18 @@ func (s *Store) Rules() []*Rule {
 
 func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	rule := &Rule{
-		Version:           r.ResourceVersion,
-		Database:          r.Spec.Database,
-		Namespace:         r.Namespace,
-		Name:              r.Name,
-		Interval:          r.Spec.Interval.Duration,
-		Query:             r.Spec.Query,
-		Destination:       r.Spec.Destination,
-		AutoMitigateAfter: r.Spec.AutoMitigateAfter.Duration,
-		Criteria:          r.Spec.Criteria,
-		IsMgmtQuery:       false,
-		LastQueryTime:     r.Status.LastQueryTime.Time,
+		Version:            r.ResourceVersion,
+		Database:           r.Spec.Database,
+		Namespace:          r.Namespace,
+		Name:               r.Name,
+		Interval:           r.Spec.Interval.Duration,
+		Query:              r.Spec.Query,
+		Destination:        r.Spec.Destination,
+		AutoMitigateAfter:  r.Spec.AutoMitigateAfter.Duration,
+		Criteria:           r.Spec.Criteria,
+		CriteriaExpression: r.Spec.CriteriaExpression,
+		IsMgmtQuery:        false,
+		LastQueryTime:      r.Status.LastQueryTime.Time,
 	}
 
 	// If a query starts with a dot then it is acting against that Kusto cluster and not looking through
@@ -162,6 +163,8 @@ type Rule struct {
 
 	// Criteria is a map of key-value pairs that are used to determine where an alert can execute.
 	Criteria map[string][]string
+	// CriteriaExpression is an optional CEL expression used for richer execution control.
+	CriteriaExpression string
 
 	// Management queries (starts with a dot) have to call a different
 	// query API in the Kusto Go SDK.

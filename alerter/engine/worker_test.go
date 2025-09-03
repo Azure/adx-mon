@@ -235,6 +235,108 @@ func TestWorker_TagsMultiple(t *testing.T) {
 
 }
 
+func TestWorker_CriteriaExpression_ExecutesOnMatch(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error { return nil }}
+
+	rule := &rules.Rule{
+		Namespace:          "namespace",
+		Name:               "expr",
+		Criteria:           map[string][]string{"region": []string{"nomatch"}}, // won't match
+		CriteriaExpression: "cloud == 'public' && region == 'eastus'",
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+		tags: map[string]string{
+			"region": "eastus",
+			"cloud":  "public",
+		},
+	}
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+	require.True(t, queryCalled, "expected query to execute due to CEL expression match")
+}
+func TestWorker_CriteriaExpression_ExecutesOnMatchTwo(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error { return nil }}
+
+	rule := &rules.Rule{
+		Namespace:          "namespace",
+		Name:               "expr",
+		Criteria:           map[string][]string{"region": []string{"nomatch"}}, // won't match
+		CriteriaExpression: "cloud in ['other', 'public'] && region == 'eastus' && environment != 'integration'",
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+		tags: map[string]string{
+			"region":      "eastus",
+			"cloud":       "public",
+			"environment": "production",
+		},
+	}
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+	require.True(t, queryCalled, "expected query to execute due to CEL expression match")
+}
+
+func TestWorker_CriteriaExpression_SkipsOnNoMatch(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error { return nil }}
+
+	rule := &rules.Rule{
+		Namespace:          "namespace",
+		Name:               "expr2",
+		Criteria:           map[string][]string{"region": []string{"nomatch"}}, // won't match
+		CriteriaExpression: "cloud == 'public' && region == 'westus'",          // region mismatch
+	}
+	w := &worker{
+		rule:        rule,
+		Region:      "eastus",
+		kustoClient: kcli,
+		AlertAddr:   "",
+		AlertCli:    alertCli,
+		HandlerFn:   nil,
+		tags: map[string]string{
+			"region": "eastus",
+			"cloud":  "public",
+		},
+	}
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+	require.False(t, queryCalled, "expected query NOT to execute due to CEL expression evaluating false and criteria mismatch")
+}
+
 func TestWorker_ServerError(t *testing.T) {
 
 	kcli := &fakeKustoClient{

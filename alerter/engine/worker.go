@@ -19,6 +19,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/google/cel-go/cel"
 )
 
 const (
@@ -41,6 +43,12 @@ type worker struct {
 	HandlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
 	ctrlCli         client.Client
 	alertsGenerated int // Track alerts generated in current execution
+
+	// CEL related cached compilation
+	criteriaCELCompiled bool
+	criteriaCELEnv      *cel.Env
+	criteriaCELProgram  cel.Program
+	criteriaCELErr      error
 }
 
 func (e *worker) Run(ctx context.Context) {
@@ -104,25 +112,75 @@ func (e *worker) calculateNextQueryTime() time.Time {
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
 	// Check if the rule is enabled for this instance by matching any of the alert criteria tags.
-	var matched bool
-	for k, v := range e.rule.Criteria {
-		lowerKey := strings.ToLower(k)
-		if vv, ok := e.tags[lowerKey]; ok {
-			for _, value := range v {
-				if strings.ToLower(vv) == strings.ToLower(value) {
-					matched = true
-					break
+	var criteriaMatched bool
+	// Existing map-based criteria (OR semantics across map entries)
+	if len(e.rule.Criteria) == 0 {
+		criteriaMatched = true
+	} else {
+		for k, v := range e.rule.Criteria {
+			lowerKey := strings.ToLower(k)
+			if vv, ok := e.tags[lowerKey]; ok {
+				for _, value := range v {
+					if strings.ToLower(vv) == strings.ToLower(value) {
+						criteriaMatched = true
+						break
+					}
 				}
 			}
-		}
-		if matched {
-			break
+			if criteriaMatched {
+				break
+			}
 		}
 	}
 
-	// If tags are specified, but none of them matched, skip the query
-	if len(e.rule.Criteria) > 0 && !matched {
-		logger.Infof("Skipping %s/%s on %s/%s because none of the tags matched: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags)
+	// CEL expression evaluation (lazy compile). If provided and evaluates true, expressionMatched=true.
+	var expressionMatched bool
+	if e.rule.CriteriaExpression != "" {
+		if !e.criteriaCELCompiled { // compile once per worker instance
+			// Build environment variable declarations using new cel.Variable API
+			var opts []cel.EnvOption
+			for k := range e.tags {
+				opts = append(opts, cel.Variable(k, cel.StringType))
+			}
+			e.criteriaCELEnv, e.criteriaCELErr = cel.NewEnv(opts...)
+			if e.criteriaCELErr == nil {
+				ast, iss := e.criteriaCELEnv.Parse(e.rule.CriteriaExpression)
+				if iss.Err() != nil {
+					e.criteriaCELErr = iss.Err()
+				} else {
+					astChecked, iss2 := e.criteriaCELEnv.Check(ast)
+					if iss2.Err() != nil {
+						e.criteriaCELErr = iss2.Err()
+					} else {
+						e.criteriaCELProgram, e.criteriaCELErr = e.criteriaCELEnv.Program(astChecked)
+					}
+				}
+			}
+			if e.criteriaCELErr != nil {
+				logger.Errorf("Failed to compile CEL criteria expression for %s/%s: %v", e.rule.Namespace, e.rule.Name, e.criteriaCELErr)
+			}
+			e.criteriaCELCompiled = true
+		}
+		if e.criteriaCELErr == nil {
+			activation := map[string]interface{}{}
+			for k, v := range e.tags { // tags already lowered
+				activation[k] = v
+			}
+			// Evaluate
+			out, _, err := e.criteriaCELProgram.Eval(activation)
+			if err != nil {
+				logger.Errorf("CEL evaluation error for %s/%s: %v", e.rule.Namespace, e.rule.Name, err)
+			} else {
+				if b, ok := out.Value().(bool); ok && b {
+					expressionMatched = true
+				}
+			}
+		}
+	}
+
+	// Execution decision: map criteria OR expression (if either true, proceed). If neither defined treat as allowed.
+	if !(criteriaMatched || expressionMatched) {
+		logger.Infof("Skipping %s/%s on %s/%s because criteria/expression did not match. tags=%v expr=%q", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags, e.rule.CriteriaExpression)
 		return
 	}
 

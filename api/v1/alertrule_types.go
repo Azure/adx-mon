@@ -44,6 +44,22 @@ type AlertRuleSpec struct {
 	// started with `--tag cloud=public`. If an AlertRule has `criteria: {cloud: public}`, then the rule will only
 	// execute on that alerter. Any key/values pairs must match (case-insensitive) for the rule to execute.
 	Criteria map[string][]string `json:"criteria,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression that provides a richer way
+	// to determine if the alert should execute. The CEL environment is dynamically constructed from the alerter's
+	// execution context (cloud, region, and any --tag key/value pairs). All variables are exposed as strings and
+	// can be referenced directly by their tag name. For example:
+	//
+	//   criteriaExpression: "cloud == 'public' && region in ['eastus','westus'] && env == 'prod'"
+	//
+	// Execution semantics:
+	//   * If neither criteria nor criteriaExpression are specified, the rule always executes.
+	//   * If only criteriaExpression is specified, it must evaluate to true for the rule to execute.
+	//   * If only criteria (map) is specified, existing matching behavior (any key/value match) applies.
+	//   * If both are specified, the rule executes when BOTH the criteria map matches AND the expression evaluates to true.
+	//
+	// An invalid expression (parse or type check error) will treated as an error and prevent the rule from executing.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 // UnmarshalJSON implements the json.Unmarshaler interface for backward compatibility with and older version of the
