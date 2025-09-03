@@ -176,3 +176,18 @@ type Rule struct {
 	// LastQueryTime from the AlertRule status, used for smart scheduling
 	LastQueryTime time.Time
 }
+
+// func (r *Rule) MatchesCriteria(tags map[string]string) (bool, error) {
+// 	if len(r.Criteria) != 0 {
+// 		for k, v := range r.Criteria {
+// 			if vv, ok := tags[strings.ToLower(k)]; ok {
+// 				for _, value := range v {
+// 					if strings.EqualFold(vv, value) {
+// 						return true, nil
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}
+// 	return false, nil
+// }

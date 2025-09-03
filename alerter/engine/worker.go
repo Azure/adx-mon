@@ -51,6 +51,44 @@ type worker struct {
 	criteriaCELErr      error
 }
 
+// BuildCELEnvFromTags constructs a CEL environment declaring each tag key as a string variable.
+// Tag keys must already be lowercase.
+func BuildCELEnvFromTags(tags map[string]string) (*cel.Env, error) {
+	var opts []cel.EnvOption
+	for k := range tags {
+		opts = append(opts, cel.Variable(k, cel.StringType))
+	}
+	return cel.NewEnv(opts...)
+}
+
+// NewWorker creates a worker instance pre-building the CEL environment from tags.
+// The CEL expression itself is compiled lazily on first ExecuteQuery call.
+func NewWorker(rule *rules.Rule, region string, tags map[string]string, kustoClient Client, alertCli interface{ Create(ctx context.Context, endpoint string, alert alert.Alert) error }, alertAddr string, handlerFn func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error, ctrlCli client.Client) *worker {
+	// Lowercase tags for case-insensitive matching and consistent CEL variable naming.
+	lowered := make(map[string]string, len(tags))
+	for k, v := range tags {
+		lowered[strings.ToLower(k)] = strings.ToLower(v)
+	}
+	// Build CEL environment (ignore error here; stored for lazy compilation logging later)
+	env, err := BuildCELEnvFromTags(lowered)
+	w := &worker{
+		rule:        rule,
+		Region:      region,
+		tags:        lowered,
+		kustoClient: kustoClient,
+		AlertCli:    alertCli,
+		AlertAddr:   alertAddr,
+		HandlerFn:   handlerFn,
+		ctrlCli:     ctrlCli,
+		criteriaCELEnv: env,
+	}
+	if err != nil {
+		w.criteriaCELErr = fmt.Errorf("failed to build CEL env: %w", err)
+		logger.Errorf("%v", w.criteriaCELErr)
+	}
+	return w
+}
+
 func (e *worker) Run(ctx context.Context) {
 	e.wg.Add(1)
 
@@ -121,7 +159,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 			lowerKey := strings.ToLower(k)
 			if vv, ok := e.tags[lowerKey]; ok {
 				for _, value := range v {
-					if strings.ToLower(vv) == strings.ToLower(value) {
+					if strings.EqualFold(vv, value) {
 						criteriaMatched = true
 						break
 					}
@@ -133,17 +171,15 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		}
 	}
 
-	// CEL expression evaluation (lazy compile). If provided and evaluates true, expressionMatched=true.
+	// CEL expression evaluation (lazy compile of expression only; env built at worker construction).
 	var expressionMatched bool
 	if e.rule.CriteriaExpression != "" {
-		if !e.criteriaCELCompiled { // compile once per worker instance
-			// Build environment variable declarations using new cel.Variable API
-			var opts []cel.EnvOption
-			for k := range e.tags {
-				opts = append(opts, cel.Variable(k, cel.StringType))
-			}
-			e.criteriaCELEnv, e.criteriaCELErr = cel.NewEnv(opts...)
-			if e.criteriaCELErr == nil {
+		if !e.criteriaCELCompiled { // Compile expression once per worker.
+			if e.criteriaCELEnv == nil {
+				e.criteriaCELErr = fmt.Errorf("CEL environment not initialized for %s/%s", e.rule.Namespace, e.rule.Name)
+				logger.Errorf("%v", e.criteriaCELErr)
+				e.criteriaCELCompiled = true
+			} else {
 				ast, iss := e.criteriaCELEnv.Parse(e.rule.CriteriaExpression)
 				if iss.Err() != nil {
 					e.criteriaCELErr = iss.Err()
@@ -155,25 +191,22 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 						e.criteriaCELProgram, e.criteriaCELErr = e.criteriaCELEnv.Program(astChecked)
 					}
 				}
+				if e.criteriaCELErr != nil {
+					logger.Errorf("Failed to compile CEL criteria expression for %s/%s: %v", e.rule.Namespace, e.rule.Name, e.criteriaCELErr)
+				}
+				e.criteriaCELCompiled = true
 			}
-			if e.criteriaCELErr != nil {
-				logger.Errorf("Failed to compile CEL criteria expression for %s/%s: %v", e.rule.Namespace, e.rule.Name, e.criteriaCELErr)
-			}
-			e.criteriaCELCompiled = true
 		}
 		if e.criteriaCELErr == nil {
 			activation := map[string]interface{}{}
 			for k, v := range e.tags { // tags already lowered
 				activation[k] = v
 			}
-			// Evaluate
 			out, _, err := e.criteriaCELProgram.Eval(activation)
 			if err != nil {
 				logger.Errorf("CEL evaluation error for %s/%s: %v", e.rule.Namespace, e.rule.Name, err)
-			} else {
-				if b, ok := out.Value().(bool); ok && b {
-					expressionMatched = true
-				}
+			} else if b, ok := out.Value().(bool); ok && b {
+				expressionMatched = true
 			}
 		}
 	}

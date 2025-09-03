@@ -84,20 +84,7 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 }
 
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
-	lowerTags := make(map[string]string, len(e.tags))
-	for k, v := range e.tags {
-		lowerTags[strings.ToLower(k)] = strings.ToLower(v)
-	}
-	return &worker{
-		rule:        rule,
-		tags:        lowerTags,
-		kustoClient: e.kustoClient,
-		Region:      e.region,
-		HandlerFn:   e.HandlerFn,
-		AlertCli:    e.alertCli,
-		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
-		ctrlCli:     e.ctrlCli,
-	}
+	return NewWorker(rule, e.region, e.tags, e.kustoClient, e.alertCli, fmt.Sprintf("%s/alerts", e.alertAddr), e.HandlerFn, e.ctrlCli)
 }
 
 func (e *Executor) Close() error {
