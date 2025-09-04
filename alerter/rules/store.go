@@ -189,7 +189,9 @@ func (r *Rule) Matches(tags map[string]string) (bool, error) {
 		lowered[strings.ToLower(k)] = strings.ToLower(v)
 	}
 
-	// Map criteria evaluation (OR semantics across keys)
+	// Map criteria evaluation - only requires one matching key/value
+	// We do not currently enforce that unknown keys are an error like with criteriaExpression
+	// for backwards compatibility
 	var criteriaMatched bool
 	if len(r.Criteria) == 0 {
 		criteriaMatched = true
@@ -197,7 +199,7 @@ func (r *Rule) Matches(tags map[string]string) (bool, error) {
 		for k, values := range r.Criteria {
 			keyLower := strings.ToLower(k)
 			vv, ok := lowered[keyLower]
-			if !ok { // key absent -> cannot match this key; continue checking others (OR semantics)
+			if !ok { // key absent -> cannot match this key; continue checking others
 				continue
 			}
 			for _, candidate := range values {
@@ -205,9 +207,6 @@ func (r *Rule) Matches(tags map[string]string) (bool, error) {
 					criteriaMatched = true
 					break
 				}
-			}
-			if criteriaMatched { // OR semantics across keys/values
-				break
 			}
 		}
 	}

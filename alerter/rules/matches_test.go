@@ -24,6 +24,26 @@ func TestRuleMatches_CriteriaOnly(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestRuleMatches_SingleCriteriaOnly(t *testing.T) {
+	// Criteria only requires a single matching value
+	r := newRule("crit-only")
+	r.Criteria = map[string][]string{"region": {"eastus"}, "cloud": {"public"}}
+	// match region: eastus
+	ok, err := r.Matches(map[string]string{"region": "eastus", "cloud": "other"})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// match cloud: public
+	ok, err = r.Matches(map[string]string{"region": "westus", "cloud": "public"})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// no matches
+	ok, err = r.Matches(map[string]string{"region": "centralus"})
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestRuleMatches_ExpressionOnly(t *testing.T) {
 	r := newRule("expr-only")
 	r.CriteriaExpression = "cloud == 'public' && region == 'eastus'"
