@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
@@ -120,46 +121,65 @@ type Config struct {
 // MaxMonitoredPairsWarn is a soft cap to warn operators of potential excessive cardinality.
 const MaxMonitoredPairsWarn = 500
 
+// LogMonitor tracks a set of allowed <database>:<table> pairs for loss visibility counting.
+// It is immutable after the first BuildSet() call; subsequent changes to Pairs are not observed.
+// For dynamic reconfiguration, construct a new LogMonitor instance.
 type LogMonitor struct {
 	Pairs  []string            `toml:"pairs" comment:"List of database:table pairs to monitor for loss visibility."`
 	parsed map[string]struct{} `toml:"-"`
+	once   sync.Once           `toml:"-"`
 }
 
 func (lm *LogMonitor) monitorKey(db, table string) string { return db + "\x00" + table }
 
-// BuildSet parses and validates pairs into the internal set. It is idempotent.
+// BuildSet parses and validates pairs into the internal set. It is idempotent and thread-safe.
 func (lm *LogMonitor) BuildSet() {
-	if lm == nil || lm.parsed != nil {
+	if lm == nil {
 		return
 	}
-	lm.parsed = make(map[string]struct{})
-	for _, p := range lm.Pairs {
-		if p == "" {
-			logger.Warn("log_monitor: empty pair entry skipped")
-			continue
+	lm.once.Do(func() {
+		lm.parsed = make(map[string]struct{})
+		for _, raw := range lm.Pairs {
+			p := strings.TrimSpace(raw)
+			if p == "" {
+				logger.Warn("log_monitor: empty pair entry skipped")
+				continue
+			}
+			db, tbl, ok := strings.Cut(p, ":")
+			if !ok {
+				logger.Warn("log_monitor: invalid pair skipped", "value", p)
+				continue
+			}
+			db = strings.TrimSpace(db)
+			tbl = strings.TrimSpace(tbl)
+			if db == "" || tbl == "" {
+				logger.Warn("log_monitor: invalid pair skipped", "value", p)
+				continue
+			}
+			lm.parsed[lm.monitorKey(db, tbl)] = struct{}{}
 		}
-		parts := strings.Split(p, ":")
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			logger.Warn("log_monitor: invalid pair skipped", "value", p)
-			continue
+		if len(lm.parsed) > MaxMonitoredPairsWarn {
+			logger.Warn("log_monitor: high monitored pair count", "count", len(lm.parsed))
 		}
-		lm.parsed[lm.monitorKey(parts[0], parts[1])] = struct{}{}
-	}
-	if len(lm.parsed) > MaxMonitoredPairsWarn {
-		logger.Warn("log_monitor: high monitored pair count", "count", len(lm.parsed))
-	}
+	})
 }
 
 // IsMonitored returns true if db/table is in the allow-list.
+// Note: This method assumes BuildSet has already been called.
 func (lm *LogMonitor) IsMonitored(db, table string) bool {
 	if lm == nil {
 		return false
 	}
-	if lm.parsed == nil {
-		lm.BuildSet()
-	}
+	// No lazy initialization here to avoid racy map writes; BuildSet must be invoked during setup.
 	_, ok := lm.parsed[lm.monitorKey(db, table)]
 	return ok
+}
+
+// NewLogMonitor constructs a LogMonitor and eagerly builds the internal set.
+func NewLogMonitor(pairs []string) *LogMonitor {
+	lm := &LogMonitor{Pairs: pairs}
+	lm.BuildSet()
+	return lm
 }
 
 type PrometheusScrape struct {
@@ -562,6 +582,11 @@ func (c *Config) Validate() error {
 		if err := c.Exporters.Validate(); err != nil {
 			return err
 		}
+	}
+
+	// Eagerly build log monitor set to avoid racy lazy initialization by concurrent sinks.
+	if c.LogMonitor != nil {
+		c.LogMonitor.BuildSet()
 	}
 
 	tlsCertEmpty := c.TLSCertFile == ""

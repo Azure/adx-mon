@@ -525,7 +525,6 @@ func realMain(ctx *cli.Context) error {
 	// Build monitored set predicate once (applies to all sinks writing to storage).
 	var monitoredPredicate func(db, table string) bool
 	if cfg.LogMonitor != nil {
-		cfg.LogMonitor.BuildSet()
 		monitoredPredicate = cfg.LogMonitor.IsMonitored
 	}
 
