@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	prom_model "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -132,7 +133,7 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 }
 
 func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.MetricFamily, error) {
-	parser := &expfmt.TextParser{}
+	parser := expfmt.NewTextParser(model.UTF8Validation)
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.opts.ScrapeTimeOut)
 	defer cancel()
