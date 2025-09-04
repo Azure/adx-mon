@@ -86,6 +86,22 @@ type SummaryRuleSpec struct {
 	// started with `--cluster-labels=region=eastus`. If a SummaryRule has `criteria: {region: [eastus]}`, then the rule will only
 	// execute on that ingestor. Any key/values pairs must match (case-insensitive) for the rule to execute.
 	Criteria map[string][]string `json:"criteria,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression that provides a richer way
+	// to determine if the summary rule should execute. The CEL environment is dynamically constructed from the
+	// ingestor's cluster labels (e.g. region, cloud, and any --cluster-labels key/value pairs). All variables are
+	// exposed as strings and can be referenced directly by their label name. For example:
+	//
+	//   criteriaExpression: "region in ['eastus','westus'] && environment == 'prod'"
+	//
+	// Execution semantics:
+	//   * If neither criteria nor criteriaExpression are specified, the rule always executes.
+	//   * If only criteriaExpression is specified, it must evaluate to true for the rule to execute.
+	//   * If only criteria (map) is specified, existing matching behavior (any key/value match) applies.
+	//   * If both are specified, the rule executes when BOTH the criteria map matches AND the expression evaluates to true.
+	//
+	// An invalid expression (parse or type check error) will be treated as an error and prevent the rule from executing.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/google/cel-go/cel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 )
@@ -393,13 +394,58 @@ func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
 		return false
 	}
 
-	// Check if the rule is enabled for this instance by matching any of the criteria against cluster labels
+	// Legacy criteria map (OR semantics). Must match if provided.
 	if !matchesCriteria(rule.Spec.Criteria, t.ClusterLabels) {
 		if logger.IsDebug() {
 			logger.Debugf("Skipping %s/%s on %s because none of the criteria matched cluster labels: %v", rule.Namespace, rule.Name, rule.Spec.Database, t.ClusterLabels)
 		}
 		return false
 	}
+
+	// CEL criteriaExpression (AND semantics with criteria map) if provided.
+	if rule.Spec.CriteriaExpression != "" {
+		// Build CEL environment from cluster labels (lowercased keys)
+		var decls []cel.EnvOption
+		activation := map[string]interface{}{}
+		for k, v := range t.ClusterLabels {
+			lk := strings.ToLower(k)
+			decls = append(decls, cel.Variable(lk, cel.StringType))
+			activation[lk] = strings.ToLower(v)
+		}
+		env, err := cel.NewEnv(decls...)
+		if err != nil {
+			logger.Errorf("Skipping %s/%s due to CEL env error: %v", rule.Namespace, rule.Name, err)
+			return false
+		}
+		ast, iss := env.Parse(rule.Spec.CriteriaExpression)
+		if iss.Err() != nil {
+			logger.Errorf("Skipping %s/%s due to CEL parse error: %v", rule.Namespace, rule.Name, iss.Err())
+			return false
+		}
+		checked, iss2 := env.Check(ast)
+		if iss2.Err() != nil {
+			logger.Errorf("Skipping %s/%s due to CEL typecheck error: %v", rule.Namespace, rule.Name, iss2.Err())
+			return false
+		}
+		prog, err := env.Program(checked)
+		if err != nil {
+			logger.Errorf("Skipping %s/%s due to CEL program build error: %v", rule.Namespace, rule.Name, err)
+			return false
+		}
+		out, _, err := prog.Eval(activation)
+		if err != nil {
+			logger.Errorf("Skipping %s/%s due to CEL eval error: %v", rule.Namespace, rule.Name, err)
+			return false
+		}
+		b, ok := out.Value().(bool)
+		if !ok || !b {
+			if logger.IsDebug() {
+				logger.Debugf("Skipping %s/%s because criteriaExpression evaluated to false", rule.Namespace, rule.Name)
+			}
+			return false
+		}
+	}
+
 	return true
 }
 
