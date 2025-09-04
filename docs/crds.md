@@ -176,7 +176,7 @@ spec:
   interval: 1h
 ```
 
-**Criteria-Based Example for Conditional Execution:**
+**Criteria / CriteriaExpression Based Conditional Execution:**
 ```yaml
 apiVersion: adx-mon.azure.com/v1
 kind: SummaryRule
@@ -197,6 +197,9 @@ spec:
       - westus
     environment:
       - production
+  # Optional CEL expression – all cluster labels are exposed as lower-cased string variables
+  criteriaExpression: |
+    (region in ['eastus','westus']) && environment == 'production'
 ```
 
 **Key Fields:**
@@ -206,6 +209,7 @@ spec:
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
 - `criteria`: _(Optional)_ Key/value pairs used to determine when a summary rule can execute. If empty or omitted, the rule always executes. Keys and values are deployment-specific and configured on ingestor instances via `--cluster-labels`. For a rule to execute, any one of the criteria must match (OR logic). Matching is case-insensitive.
+- `criteriaExpression`: _(Optional)_ A CEL expression evaluated against the ingestor's cluster labels (all label keys are lower‑cased and provided as string variables). Combined semantics: `(criteria empty OR any criteria pair matches) AND (criteriaExpression empty OR expression evaluates to true)`. Invalid expressions (parse/type/eval error) result in the rule being skipped.
 
 **Required Placeholders:**
 - `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
@@ -217,6 +221,31 @@ spec:
 **Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries. Use cluster label substitutions to create environment-agnostic rules that work across different deployments.
 
 ### How SummaryRules Work Internally
+
+#### Shared Execution Selection Logic (criteria / criteriaExpression)
+All rule-like CRDs (AlertRule, SummaryRule, MetricsExporter) now share a unified evaluation path:
+
+1. Normalize cluster label keys to lower case and expose them as CEL variables (string values also lower-cased for value comparison convenience).
+2. Evaluate legacy `criteria` map with OR semantics (case-insensitive key + value matches).
+3. If a `criteriaExpression` is present, compile and evaluate it with [CEL](https://cel.dev/).
+4. Execute only if both the map check and the expression pass (empty pieces are permissive).
+
+Examples:
+```yaml
+# Map only
+criteria:
+  region: [eastus, westus]
+
+# Expression only
+criteriaExpression: region in ['eastus','westus'] && environment == 'prod'
+
+# Both (AND semantics)
+criteria:
+  region: [eastus]
+criteriaExpression: environment == 'prod' && cloud == 'public'
+```
+
+This logic is implemented once in `pkg/celutil` and reused by Alerter, Ingestor (SummaryRules), and Metrics Exporter for consistency.
 
 SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodically to:
 
