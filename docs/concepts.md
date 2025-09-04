@@ -298,7 +298,7 @@ The **Alerter** component is responsible for evaluating alert rules (defined as 
 - **Notification Delivery:** Sends alert notifications to a configurable HTTP endpoint (e.g., ICM, PagerDuty, custom webhooks) in a standard JSON format.
 - **Correlation & Auto-Mitigation:** Supports correlation IDs to deduplicate alerts and auto-mitigate after a configurable duration.
 - **Tag-Based Routing:** Supports tag-based filtering to control which alerter instance processes which rules (e.g., by region, cloud, or custom tags).
-- **CEL Criteria Expressions:** In addition to simple tag criteria maps, an `AlertRule` may specify `spec.criteriaExpression`, a [CEL](https://cel.dev/) expression evaluated against the alerter's tags (including implicit `cloud` and `region`). The rule executes only if BOTH (a) the legacy `spec.criteria` map matches (or is empty, which defaults to a match) AND (b) the CEL expression evaluates to true (or is empty, which defaults to true). Example: `criteriaExpression: "cloud == 'public' && region in ['eastus','westus'] && env == 'prod'"`. If neither `criteria` nor `criteriaExpression` is provided the rule executes everywhere; if one is omitted it is treated as permissive.
+- **Conditional Execution (criteria / criteriaExpression):** AlertRule, SummaryRule and MetricsExporter share unified conditional logic. A legacy `criteria` map (OR semantics across entries) and an optional CEL `criteriaExpression` (evaluated against lower‑cased cluster label/tag variables such as `region`, `cloud`, `environment`, etc.) combine with AND semantics. If either is empty it is permissive. Evaluation errors skip execution.
 - **Health & Metrics:** Exposes Prometheus metrics for alert delivery health, query health, and notification status.
 
 #### Configuration & Usage
@@ -345,13 +345,32 @@ Alert notifications are sent as JSON via HTTP POST to the configured endpoint. E
 5. **Health Monitoring:** Exposes Prometheus metrics for query and notification health.
 
 #### Tag-Based Routing
-Alerter instances can be configured with tags (e.g., `region`, `cloud`). Only rules whose `criteria` match the instance's tags will be processed by that instance. This enables multi-region or multi-cloud deployments.
+Alerter instances can be configured with tags (e.g., `region`, `cloud`). Only rules whose `criteria` match the instance's tags will be processed by that instance. This enables multi-region or multi-cloud deployments. `criteriaExpression` is parsed and executed using [CEL](https://cel.dev/), with the available variables being defined by tags passed into the executing service.
+
+#### Unified Execution Selection Examples
+```yaml
+# Map only
+spec:
+  criteria:
+    region: [eastus, westus]
+
+# Expression only
+spec:
+  criteriaExpression: region in ['eastus','westus'] && env == 'prod'
+
+# Both (AND)
+spec:
+  criteria:
+    region: [eastus]
+  criteriaExpression: env == 'prod' && cloud == 'public'
+```
+Behavior formula: `(criteria empty OR any match) AND (criteriaExpression empty OR expression true)`.
 
 #### Example CLI Usage
 ```sh
 cd cmd/alerter
 # Run with required Kusto endpoint and kubeconfig
-./alerter --kusto-endpoint "DB=https://cluster.kusto.windows.net" --kubeconfig ~/.kube/config --region uksouth --cloud AzureCloud --alerter-address http://alerter-endpoint
+./alerter --kusto-endpoint "DB=https://cluster.kusto.windows.net" --kubeconfig ~/.kube/config --region uksouth --cloud AzureCloud --tag environment=test --alerter-address http://alerter-endpoint
 ```
 
 #### Health & Metrics
