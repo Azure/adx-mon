@@ -31,16 +31,58 @@ type worker struct {
 
 	wg          sync.WaitGroup
 	rule        *rules.Rule
-	Region      string
-	tags        map[string]string
+	region      string
 	kustoClient Client
-	AlertAddr   string
-	AlertCli    interface {
+	alertAddr   string
+	alertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	HandlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	handlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
 	ctrlCli         client.Client
 	alertsGenerated int // Track alerts generated in current execution
+
+	// criteria/expression evaluation cached at construction
+	matchAllowed bool
+	matchErr     error
+}
+
+// WorkerConfig groups parameters for constructing a worker.
+type WorkerConfig struct {
+	Rule        *rules.Rule
+	Region      string
+	Tags        map[string]string
+	KustoClient Client
+	AlertClient interface {
+		Create(ctx context.Context, endpoint string, alert alert.Alert) error
+	}
+	AlertAddr  string
+	HandlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	CtrlClient client.Client
+}
+
+// NewWorker creates a worker and performs one-time match evaluation.
+func NewWorker(cfg *WorkerConfig) *worker {
+	if cfg == nil || cfg.Rule == nil {
+		return nil
+	}
+	w := &worker{
+		rule:        cfg.Rule,
+		region:      cfg.Region,
+		kustoClient: cfg.KustoClient,
+		alertCli:    cfg.AlertClient,
+		alertAddr:   cfg.AlertAddr,
+		handlerFn:   cfg.HandlerFn,
+		ctrlCli:     cfg.CtrlClient,
+	}
+	allowed, err := cfg.Rule.Matches(cfg.Tags)
+	w.matchAllowed = allowed
+	w.matchErr = err
+	if err != nil {
+		logger.Errorf("Worker initialization match error for %s/%s: %v", cfg.Rule.Namespace, cfg.Rule.Name, err)
+	} else if !allowed {
+		logger.Infof("Worker %s/%s disabled (criteria/expression not matched) at initialization", cfg.Rule.Namespace, cfg.Rule.Name)
+	}
+	return w
 }
 
 func (e *worker) Run(ctx context.Context) {
@@ -103,26 +145,13 @@ func (e *worker) calculateNextQueryTime() time.Time {
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
-	// Check if the rule is enabled for this instance by matching any of the alert criteria tags.
-	var matched bool
-	for k, v := range e.rule.Criteria {
-		lowerKey := strings.ToLower(k)
-		if vv, ok := e.tags[lowerKey]; ok {
-			for _, value := range v {
-				if strings.ToLower(vv) == strings.ToLower(value) {
-					matched = true
-					break
-				}
-			}
-		}
-		if matched {
-			break
-		}
+	// Use cached match decision
+	if e.matchErr != nil {
+		logger.Errorf("Skipping %s/%s due to cached criteria evaluation error: %v", e.rule.Namespace, e.rule.Name, e.matchErr)
+		return
 	}
-
-	// If tags are specified, but none of them matched, skip the query
-	if len(e.rule.Criteria) > 0 && !matched {
-		logger.Infof("Skipping %s/%s on %s/%s because none of the tags matched: %v", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, e.tags)
+	if !e.matchAllowed {
+		// Silent skip except trace already logged in constructor
 		return
 	}
 
@@ -140,7 +169,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	// Reset alerts counter for this execution
 	e.alertsGenerated = 0
 
-	queryContext, err := NewQueryContext(e.rule, endTime, e.Region)
+	queryContext, err := NewQueryContext(e.rule, endTime, e.region)
 	if err != nil {
 		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 		e.updateAlertRuleStatus(ctx, endTime, 0, "Error", fmt.Sprintf("Failed to wrap query: %v", err))
@@ -151,7 +180,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 	// Create a wrapper handler that tracks alerts generated
 	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
-		err := e.HandlerFn(ctx, endpoint, qc, row)
+		err := e.handlerFn(ctx, endpoint, qc, row)
 		if err == nil {
 			// If HandlerFn succeeded, it means an alert was generated
 			e.alertsGenerated++
@@ -163,9 +192,9 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	if err != nil {
 		// This failed because we sent too many notifications.
 		if errors.Is(err, alert.ErrTooManyRequests) {
-			err := e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
+			err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
 				Destination:   e.rule.Destination,
-				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.Region),
+				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
 				Summary:       "This alert has been throttled by ICM due to too many notifications.  Please reduce the number of notifications for this alert.",
 				Severity:      3,
 				Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
@@ -199,7 +228,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		}
 
 		endpointBaseName, _ := strings.CutPrefix(e.kustoClient.Endpoint(e.rule.Database), "https://")
-		err = e.AlertCli.Create(ctx, e.AlertAddr, alert.Alert{
+		err = e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
 			Destination:   e.rule.Destination,
 			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
 			Summary:       summary,
