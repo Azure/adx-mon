@@ -54,6 +54,22 @@ type MetricsExporterSpec struct {
 	// started with `--cluster-labels=region=eastus,environment=production`. If a MetricsExporter has `criteria: {region: [eastus], environment: [production]}`, then the rule will only
 	// execute on that adxexporter. Any key/values pairs must match (case-insensitive) for the rule to execute.
 	Criteria map[string][]string `json:"criteria,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression that provides a richer way
+	// to determine if the metrics exporter should execute. The CEL environment is dynamically constructed from the
+	// exporter's cluster labels (e.g. region, cloud, environment, and any --cluster-labels key/value pairs). All variables
+	// are exposed as strings and can be referenced directly by their label name. For example:
+	//
+	//   criteriaExpression: "region in ['eastus','westus'] && environment == 'prod'"
+	//
+	// Execution semantics mirror AlertRule:
+	//   * If neither criteria nor criteriaExpression are specified, the exporter always executes.
+	//   * If only criteriaExpression is specified, it must evaluate to true for execution.
+	//   * If only criteria is specified, existing matching behavior (any key/value match) applies.
+	//   * If both are specified, BOTH must match (criteria map match AND expression true).
+	//
+	// An invalid expression (parse or type check error) will be treated as an error and prevent execution.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 // TransformConfig defines how to convert query results to metrics
