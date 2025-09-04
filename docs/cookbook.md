@@ -159,6 +159,49 @@ TableName
 
 ## Alerting
 
+### Conditional Execution with criteria / criteriaExpression
+Apply rules only on certain clusters or environments without duplicating manifests.
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: hourly-cpu-prod-public
+spec:
+  database: Metrics
+  name: CPUUsageHourlyProdPublic
+  table: CPUUsageHourly
+  interval: 1h
+  body: |
+    Metrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Name == "cpu_usage_percent"
+    | summarize AvgCPU = avg(Value) by bin(Timestamp, 1h), Pod, Namespace
+  criteria:
+    region: [eastus, westus]
+  criteriaExpression: env == 'prod' && cloud == 'public'
+```
+
+Behavior formula: `(criteria empty OR any match) AND (criteriaExpression empty OR expression true)`.
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: core-metrics-eu
+spec:
+  database: Metrics
+  name: CoreMetrics
+  query: |
+    Metrics
+    | where Timestamp between (_startTime .. _endTime)
+    | where Region == '_region'
+  interval: 5m
+  criteriaExpression: region in ['westeurope','northeurope'] && env != 'dev'
+```
+
+If the expression fails to parse or evaluate the exporter execution is skipped.
+
 ### Detecting rate of change in a metric
 
 ### Detecting increase in error messages
