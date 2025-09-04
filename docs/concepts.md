@@ -298,6 +298,7 @@ The **Alerter** component is responsible for evaluating alert rules (defined as 
 - **Notification Delivery:** Sends alert notifications to a configurable HTTP endpoint (e.g., ICM, PagerDuty, custom webhooks) in a standard JSON format.
 - **Correlation & Auto-Mitigation:** Supports correlation IDs to deduplicate alerts and auto-mitigate after a configurable duration.
 - **Tag-Based Routing:** Supports tag-based filtering to control which alerter instance processes which rules (e.g., by region, cloud, or custom tags).
+- **CEL Criteria Expressions:** In addition to simple tag criteria maps, an `AlertRule` may specify `spec.criteriaExpression`, a [CEL](https://cel.dev/) expression evaluated against the alerter's tags (including implicit `cloud` and `region`). The rule executes only if BOTH (a) the legacy `spec.criteria` map matches (or is empty, which defaults to a match) AND (b) the CEL expression evaluates to true (or is empty, which defaults to true). Example: `criteriaExpression: "cloud == 'public' && region in ['eastus','westus'] && env == 'prod'"`. If neither `criteria` nor `criteriaExpression` is provided the rule executes everywhere; if one is omitted it is treated as permissive.
 - **Health & Metrics:** Exposes Prometheus metrics for alert delivery health, query health, and notification status.
 
 #### Configuration & Usage
