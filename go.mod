@@ -33,7 +33,7 @@ require (
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.23.0
 	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.65.0
+	github.com/prometheus/common v0.66.0
 	github.com/siderolabs/go-kmsg v0.1.4
 	github.com/stretchr/testify v1.11.1
 	github.com/tenebris-tech/tail v1.0.5
@@ -166,6 +166,7 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.34.0 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
