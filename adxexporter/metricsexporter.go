@@ -1,5 +1,4 @@
 package adxexporter
-
 import (
 	"context"
 	"fmt"
@@ -7,10 +6,10 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/transform"
-	"github.com/google/cel-go/cel"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -72,41 +71,13 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Evaluate optional criteriaExpression (must be true if provided)
-	if expr := metricsExporter.Spec.CriteriaExpression; expr != "" {
-		var decls []cel.EnvOption
-		activation := map[string]interface{}{}
-		for k, v := range r.ClusterLabels {
-			lk := strings.ToLower(k)
-			decls = append(decls, cel.Variable(lk, cel.StringType))
-			activation[lk] = strings.ToLower(v)
-		}
-		env, err := cel.NewEnv(decls...)
+	if metricsExporter.Spec.CriteriaExpression != "" {
+		ok, err := celutil.EvaluateCriteriaExpression(r.ClusterLabels, metricsExporter.Spec.CriteriaExpression)
 		if err != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to CEL env error: %v", req.Namespace, req.Name, err)
+			logger.Errorf("Skipping MetricsExporter %s/%s due to criteriaExpression error: %v", req.Namespace, req.Name, err)
 			return ctrl.Result{}, nil
 		}
-		ast, iss := env.Parse(expr)
-		if iss.Err() != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to CEL parse error: %v", req.Namespace, req.Name, iss.Err())
-			return ctrl.Result{}, nil
-		}
-		checked, iss2 := env.Check(ast)
-		if iss2.Err() != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to CEL typecheck error: %v", req.Namespace, req.Name, iss2.Err())
-			return ctrl.Result{}, nil
-		}
-		prog, err := env.Program(checked)
-		if err != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to CEL program build error: %v", req.Namespace, req.Name, err)
-			return ctrl.Result{}, nil
-		}
-		out, _, err := prog.Eval(activation)
-		if err != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to CEL eval error: %v", req.Namespace, req.Name, err)
-			return ctrl.Result{}, nil
-		}
-		b, ok := out.Value().(bool)
-		if !ok || !b {
+		if !ok {
 			if logger.IsDebug() {
 				logger.Debugf("Skipping MetricsExporter %s/%s because criteriaExpression evaluated to false", req.Namespace, req.Name)
 			}

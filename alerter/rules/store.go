@@ -8,12 +8,11 @@ import (
 	"time"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/unsafe"
-
-	"github.com/google/cel-go/cel"
 
 	// //nolint:godot // comment does not end with a sentence // temporarily disabling code
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -211,42 +210,15 @@ func (r *Rule) Matches(tags map[string]string) (bool, error) {
 		}
 	}
 
-	var expressionMatched bool
+	expressionMatched := false
 	if r.CriteriaExpression == "" {
 		expressionMatched = true
 	} else {
-		// Define variables based on our tags
-		varDecls := make([]cel.EnvOption, 0)
-		activation := map[string]interface{}{}
-		for k, v := range lowered {
-			varDecls = append(varDecls, cel.Variable(k, cel.StringType))
-			activation[k] = v
-		}
-		env, err := cel.NewEnv(varDecls...)
+		matched, err := celutil.EvaluateCriteriaExpression(lowered, r.CriteriaExpression)
 		if err != nil {
-			return false, fmt.Errorf("cel env error: %w", err)
+			return false, fmt.Errorf("failed to evaluate criteriaExpression: %w", err)
 		}
-
-		// Parse the expression and evaluate
-		ast, iss := env.Parse(r.CriteriaExpression)
-		if iss.Err() != nil {
-			return false, fmt.Errorf("cel parse error: %w", iss.Err())
-		}
-		checked, iss2 := env.Check(ast)
-		if iss2.Err() != nil {
-			return false, fmt.Errorf("cel typecheck error: %w", iss2.Err())
-		}
-		prog, err := env.Program(checked)
-		if err != nil {
-			return false, fmt.Errorf("cel program build error: %w", err)
-		}
-		out, _, err := prog.Eval(activation)
-		if err != nil {
-			return false, fmt.Errorf("cel eval error: %w", err)
-		}
-		if b, ok := out.Value().(bool); ok && b {
-			expressionMatched = true
-		}
+		expressionMatched = matched
 	}
 
 	return criteriaMatched && expressionMatched, nil
