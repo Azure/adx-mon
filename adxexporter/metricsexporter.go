@@ -1,4 +1,5 @@
 package adxexporter
+
 import (
 	"context"
 	"fmt"
