@@ -40,6 +40,21 @@ const (
 	// the status of an async operation. This value is somewhat arbitrary, but the intent
 	// is to not overwhelm the service with requests.
 	SummaryRuleAsyncOperationPollInterval = 10 * time.Minute
+
+	// SummaryRuleOwnerAnnotation is a per-CRD annotation that determines which component
+	// should process the SummaryRule. Supported values are SummaryRuleOwnerIngestor and
+	// SummaryRuleOwnerADXExporter. When empty or missing, the default behavior is for the
+	// Ingestor to process the rule (backward compatibility).
+	SummaryRuleOwnerAnnotation = "adx-mon.azure.com/owner"
+	// SummaryRuleDesiredOwnerAnnotation is an optional per-CRD annotation used to request
+	// a safe ownership transition. When set to SummaryRuleOwnerADXExporter, the ADX Exporter
+	// will adopt ownership only when it is safe to do so (no inflight async ops and outside
+	// a submission window), then it will set SummaryRuleOwnerAnnotation and clear this value.
+	SummaryRuleDesiredOwnerAnnotation = "adx-mon.azure.com/desired-owner"
+	// SummaryRuleOwnerIngestor specifies ownership by the Ingestor component
+	SummaryRuleOwnerIngestor = "ingestor"
+	// SummaryRuleOwnerADXExporter specifies ownership by the ADX Exporter component
+	SummaryRuleOwnerADXExporter = "adx-exporter"
 )
 
 // SummaryRuleSpec defines the desired state of SummaryRule
@@ -55,9 +70,13 @@ type SummaryRuleSpec struct {
 	// Interval is the cadence at which the rule will be executed
 	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="interval must be a valid positive duration"
 	Interval metav1.Duration `json:"interval"`
-	// IngestionDelay is the delay to subtract from the execution window start and end times
-	// to account for data ingestion latency. This ensures the query processes data that has
-	// been fully ingested. If not specified, no delay is applied.
+	// IngestionDelay is subtracted from the execution window start and end times to account
+	// for data ingestion latency, ensuring the query only processes fully ingested data.
+	// NOTE: Current implementation also subtracts this delay from the "now" used to decide
+	// whether an interval has elapsed (i.e. scheduling readiness). This effectively lengthens
+	// wall‑clock spacing between executions to Interval + IngestionDelay. If you intend only
+	// to shift the processed window but keep wall‑clock cadence at Interval, this behavior
+	// will be adjusted in a future release.
 	// +optional
 	// +kubebuilder:validation:XValidation:rule="self == '' || duration(self) >= duration('0s')",message="ingestionDelay must be a valid duration"
 	IngestionDelay *metav1.Duration `json:"ingestionDelay,omitempty"`

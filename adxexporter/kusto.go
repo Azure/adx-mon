@@ -22,6 +22,8 @@ type KustoExecutor interface {
 	Endpoint() string
 	// Query executes a KQL query and returns the results
 	Query(ctx context.Context, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+	// Mgmt executes a Kusto management command (dot-command)
+	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
 }
 
 // KustoClient wraps the Azure Kusto Go client to implement KustoExecutor
@@ -61,6 +63,11 @@ func (k *KustoClient) Endpoint() string {
 
 func (k *KustoClient) Query(ctx context.Context, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
 	return k.client.Query(ctx, k.database, query, options...)
+}
+
+// Mgmt executes a Kusto management command (dot-command) against the configured database
+func (k *KustoClient) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+	return k.client.Mgmt(ctx, k.database, query, options...)
 }
 
 // QueryResult represents the result of a KQL query execution

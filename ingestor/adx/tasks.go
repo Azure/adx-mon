@@ -14,6 +14,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/ingestor/storage"
+	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -375,6 +376,15 @@ func (t *SummaryRuleTask) initializeRun(ctx context.Context) (*v1.SummaryRuleLis
 }
 
 func (t *SummaryRuleTask) shouldProcessRule(rule v1.SummaryRule) bool {
+	// Ownership gating via shared helper: default (missing) goes to ingestor for backward compatibility.
+	if !crdownership.IsOwnedBy(&rule, v1.SummaryRuleOwnerIngestor) {
+		logger.Logger().Info("Ownership annotation not ingestor; skipping processing",
+			"crd_name", fmt.Sprintf("%s/%s", rule.Namespace, rule.Name),
+			"event", "control_handed_over",
+		)
+		return false
+	}
+
 	// Skip rules not belonging to the current database
 	if rule.Spec.Database != t.kustoCli.Database() {
 		if logger.IsDebug() {
