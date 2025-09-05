@@ -238,7 +238,7 @@ func (r *SummaryRuleReconciler) submitRule(ctx context.Context, rule adxmonv1.Su
 	body := kustoutil.ApplySubstitutions(rule.Spec.Body, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano), r.ClusterLabels)
 
 	// Execute asynchronously: .set-or-append async <table> <| <body>
-	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" <| ").AddUnsafe(body)
+	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" with (extend_schema=true) <| ").AddUnsafe(body)
 
 	// Apply a safety timeout to prevent hanging calls
 	tCtx, cancel := context.WithTimeout(ctx, submitTimeout)
