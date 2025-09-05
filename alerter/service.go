@@ -148,6 +148,15 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 
 	lint := NewLinter()
 
+	failedCriteriaCount := 0
+	for _, rule := range ruleStore.Rules() {
+		_, err := rule.Matches(opts.Tags)
+		if err != nil {
+			failedCriteriaCount++
+			logger.Errorf("Rule '%s/%s' failed to evaluate criteria: %v", rule.Namespace, rule.Name, err)
+		}
+	}
+
 	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
 	if err != nil {
 		return fmt.Errorf("failed to get auth: %w", err)
@@ -168,7 +177,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	})
 
 	executor.RunOnce(ctx)
-	if lint.HasFailedQueries() {
+	if lint.HasFailedQueries() || failedCriteriaCount > 0 {
 		return fmt.Errorf("failed to lint rules")
 	}
 	lint.Log()

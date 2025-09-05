@@ -55,17 +55,7 @@ func TestWorker_TagsMismatch(t *testing.T) {
 			"region": {"eastus"},
 		},
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-		tags: map[string]string{
-			"region": "westus",
-		},
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "westus"}, KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -99,18 +89,7 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 			"region": {"eastus"},
 		},
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-		tags: map[string]string{
-			"region": "eastus",
-			"env":    "prod",
-		},
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "eastus", "env": "prod"}, KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -145,18 +124,7 @@ func TestWorker_TagsNoneMatch(t *testing.T) {
 			"region": {"westus"},
 		},
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-		tags: map[string]string{
-			"region": "eastus",
-			"env":    "prod",
-		},
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "eastus", "env": "prod"}, KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -191,18 +159,7 @@ func TestWorker_TagsMultiple(t *testing.T) {
 			"region": {"eastus", "westus"},
 		},
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-		tags: map[string]string{
-			"region": "eastus",
-			"env":    "prod",
-		},
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "eastus", "env": "prod"}, KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -212,18 +169,7 @@ func TestWorker_TagsMultiple(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 	require.Equal(t, true, queryCalled)
 
-	w = &worker{
-		rule:        rule,
-		Region:      "westus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-		tags: map[string]string{
-			"region": "eastus",
-			"env":    "prod",
-		},
-	}
+	w = NewWorker(&WorkerConfig{Rule: rule, Region: "westus", Tags: map[string]string{"region": "eastus", "env": "prod"}, KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -233,6 +179,72 @@ func TestWorker_TagsMultiple(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 	require.Equal(t, true, queryCalled)
 
+}
+
+func TestWorker_CriteriaExpression_ExecutesOnMatch(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error { return nil }}
+
+	rule := &rules.Rule{
+		Namespace:          "namespace",
+		Name:               "expr",
+		CriteriaExpression: "cloud == 'public' && region == 'eastus'",
+	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "eastus", "cloud": "public"}, KustoClient: kcli, AlertClient: alertCli})
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+	require.True(t, queryCalled, "expected query to execute due to CEL expression match")
+}
+func TestWorker_CriteriaExpression_ExecutesOnMatchTwo(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error { return nil }}
+
+	rule := &rules.Rule{
+		Namespace:          "namespace",
+		Name:               "expr",
+		CriteriaExpression: "cloud in ['other', 'public'] && region == 'eastus' && environment != 'integration'",
+	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "eastus", "cloud": "public", "environment": "production"}, KustoClient: kcli, AlertClient: alertCli})
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+	require.True(t, queryCalled, "expected query to execute due to CEL expression match")
+}
+
+func TestWorker_CriteriaExpression_SkipsOnNoMatch(t *testing.T) {
+	var queryCalled bool
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error { return nil }}
+
+	rule := &rules.Rule{
+		Namespace:          "namespace",
+		Name:               "expr2",
+		Criteria:           map[string][]string{"region": []string{"nomatch"}}, // won't match
+		CriteriaExpression: "cloud == 'public' && region == 'westus'",          // region mismatch
+	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", Tags: map[string]string{"region": "eastus", "cloud": "public"}, KustoClient: kcli, AlertClient: alertCli})
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+	require.False(t, queryCalled, "expected query NOT to execute due to CEL expression evaluating false and criteria mismatch")
 }
 
 func TestWorker_ServerError(t *testing.T) {
@@ -253,14 +265,7 @@ func TestWorker_ServerError(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -287,14 +292,7 @@ func TestWorker_ConnectionReset(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -322,14 +320,7 @@ func TestWorker_ContextTimeout(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -359,14 +350,7 @@ func TestWorker_RequestInvalid(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -395,14 +379,7 @@ func TestWorker_UnknownDB(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -431,14 +408,7 @@ func TestWorker_MissingColumnsFromResults(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -468,14 +438,7 @@ func TestWorker_AlertsThrottled(t *testing.T) {
 		Name:        "name",
 		Destination: "destination/queue",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -507,14 +470,7 @@ func TestWorker_NotificationHealth(t *testing.T) {
 		Namespace: "namespace",
 		Name:      "name",
 	}
-	w := &worker{
-		rule:        rule,
-		Region:      "eastus",
-		kustoClient: kcli,
-		AlertAddr:   "",
-		AlertCli:    alertCli,
-		HandlerFn:   nil,
-	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
 	// Initialize metrics to healthy state
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
@@ -538,7 +494,7 @@ func TestWorker_NotificationHealth(t *testing.T) {
 		},
 	}
 
-	w.AlertCli = alertCli
+	w.alertCli = alertCli
 
 	// Keep metrics as they were after the first test
 	w.ExecuteQuery(context.Background())
@@ -556,14 +512,7 @@ func TestCalculateNextQueryTime(t *testing.T) {
 	interval := 5 * time.Minute
 
 	t.Run("first execution returns immediate", func(t *testing.T) {
-		w := &worker{
-			rule: &rules.Rule{
-				Namespace:     "ns",
-				Name:          "rule",
-				Interval:      interval,
-				LastQueryTime: time.Time{}, // zero value
-			},
-		}
+		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule", Interval: interval, LastQueryTime: time.Time{}}, Region: "eastus"})
 		result := w.calculateNextQueryTime()
 		// Should be in the past (immediate execution)
 		require.True(t, result.Before(time.Now().Add(1*time.Second)), "expected immediate execution")
@@ -571,14 +520,7 @@ func TestCalculateNextQueryTime(t *testing.T) {
 
 	t.Run("scheduled execution returns lastQueryTime+interval", func(t *testing.T) {
 		last := now.Add(-10 * time.Minute)
-		w := &worker{
-			rule: &rules.Rule{
-				Namespace:     "ns",
-				Name:          "rule",
-				Interval:      interval,
-				LastQueryTime: last,
-			},
-		}
+		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule", Interval: interval, LastQueryTime: last}, Region: "eastus"})
 		result := w.calculateNextQueryTime()
 		expected := last.Add(interval)
 		require.Equal(t, expected, result)
