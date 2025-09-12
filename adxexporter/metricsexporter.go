@@ -73,10 +73,11 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		condStatus = metav1.ConditionTrue
 	}
 	cond := metav1.Condition{Type: adxmonv1.ConditionCriteria, Status: condStatus, Reason: reason, Message: message, ObservedGeneration: metricsExporter.GetGeneration(), LastTransitionTime: metav1.Now()}
-	if meta.SetStatusCondition(&metricsExporter.Status.Conditions, cond) {
-		_ = r.Status().Update(ctx, &metricsExporter) // best-effort update
-	}
+	condChanged := meta.SetStatusCondition(&metricsExporter.Status.Conditions, cond)
 	if !proceed {
+		if condChanged {
+			_ = r.Status().Update(ctx, &metricsExporter) // best-effort persist when skipping
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -84,12 +85,14 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		req.Namespace, req.Name, metricsExporter.Spec.Database, metricsExporter.Spec.Interval.Duration)
 
 	// Execute KQL query if it's time
-	execErr := r.executeMetricsExporter(ctx, &metricsExporter)
+	executed, execErr := r.executeMetricsExporter(ctx, &metricsExporter)
 
-	// Always update status, whether success or failure
-	if statusErr := r.updateStatus(ctx, &metricsExporter, execErr); statusErr != nil {
-		logger.Errorf("Failed to update status for MetricsExporter %s/%s: %v", req.Namespace, req.Name, statusErr)
-		// Don't return error here - we want to continue processing
+	// Update status only when there was an actual execution attempt.
+	if executed {
+		if statusErr := r.updateStatus(ctx, &metricsExporter, execErr); statusErr != nil {
+			logger.Errorf("Failed to update status for MetricsExporter %s/%s: %v", req.Namespace, req.Name, statusErr)
+			// Don't return error here - we want to continue processing
+		}
 	}
 
 	// Requeue for next interval (for continuous processing)
@@ -206,11 +209,13 @@ func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmon
 }
 
 // executeMetricsExporter handles the execution logic for a MetricsExporter
-func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) error {
+// executeMetricsExporter runs the exporter if due. It returns (executed, err)
+// where executed indicates whether a query attempt occurred.
+func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) (bool, error) {
 	// Get query executor for this database
 	executor, exists := r.QueryExecutors[me.Spec.Database]
 	if !exists {
-		return fmt.Errorf("no query executor configured for database %s", me.Spec.Database)
+		return false, fmt.Errorf("no query executor configured for database %s", me.Spec.Database)
 	}
 
 	// Set the clock on the CRD for testing
@@ -224,7 +229,7 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 		if logger.IsDebug() {
 			logger.Debugf("Not time to execute MetricsExporter %s/%s yet", me.Namespace, me.Name)
 		}
-		return nil
+		return false, nil
 	}
 
 	// Calculate the execution window using the CRD method
@@ -239,11 +244,11 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 
 	result, err := executor.ExecuteQuery(tCtx, me.Spec.Body, startTime, endTime, r.ClusterLabels)
 	if err != nil {
-		return fmt.Errorf("failed to execute query: %w", err)
+		return true, fmt.Errorf("failed to execute query: %w", err)
 	}
 
 	if result.Error != nil {
-		return fmt.Errorf("query execution failed: %w", result.Error)
+		return true, fmt.Errorf("query execution failed: %w", result.Error)
 	}
 
 	logger.Infof("Query executed successfully in %v, returned %d rows",
@@ -251,13 +256,13 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 
 	// Transform results to metrics and expose them
 	if err := r.transformAndRegisterMetrics(ctx, me, result.Rows); err != nil {
-		return fmt.Errorf("failed to transform and register metrics: %w", err)
+		return true, fmt.Errorf("failed to transform and register metrics: %w", err)
 	}
 
 	// Update the last execution time using the CRD method
 	me.SetLastExecutionTime(endTime)
 
-	return nil
+	return true, nil
 }
 
 // transformAndRegisterMetrics converts KQL query results to metrics and registers them
