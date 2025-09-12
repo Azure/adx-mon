@@ -76,9 +76,13 @@ spec:
                 type: string
               ingestionDelay:
                 description: |-
-                  IngestionDelay is the delay to subtract from the execution window start and end times
-                  to account for data ingestion latency. This ensures the query processes data that has
-                  been fully ingested. If not specified, no delay is applied.
+                  IngestionDelay is subtracted from the execution window start and end times to account
+                  for data ingestion latency, ensuring the query only processes fully ingested data.
+                  NOTE: Current implementation also subtracts this delay from the "now" used to decide
+                  whether an interval has elapsed (i.e. scheduling readiness). This effectively lengthens
+                  wall‑clock spacing between executions to Interval + IngestionDelay. If you intend only
+                  to shift the processed window but keep wall‑clock cadence at Interval, this behavior
+                  will be adjusted in a future release.
                 type: string
                 x-kubernetes-validations:
                 - message: ingestionDelay must be a valid duration
@@ -106,8 +110,10 @@ spec:
             description: SummaryRuleStatus defines the observed state of Function
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
+                description: |-
+                  Conditions is an array of current observed SummaryRule conditions.
+                  SummaryRule controllers set at minimum the owner condition (SummaryRuleOwner) and may also
+                  use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
