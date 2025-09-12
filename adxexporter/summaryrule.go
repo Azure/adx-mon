@@ -287,42 +287,42 @@ func (r *SummaryRuleReconciler) updateSummaryRuleStatus(rule *adxmonv1.SummaryRu
 	}
 	rule.SetCondition(condition)
 
-    // Add/Update Completed and Failed shared conditions for last submission attempt using meta.SetStatusCondition
-    if err == nil {
-        meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionCompleted,
-            Status:             metav1.ConditionTrue,
-            Reason:             "ExecutionSuccessful",
-            Message:            "Most recent submission succeeded",
-            ObservedGeneration: rule.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-        meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionFailed,
-            Status:             metav1.ConditionFalse,
-            Reason:             "ExecutionSuccessful",
-            Message:            "Most recent submission succeeded",
-            ObservedGeneration: rule.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-    } else {
-        meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionFailed,
-            Status:             metav1.ConditionTrue,
-            Reason:             "ExecutionFailed",
-            Message:            condition.Message,
-            ObservedGeneration: rule.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-        meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionCompleted,
-            Status:             metav1.ConditionFalse,
-            Reason:             "ExecutionFailed",
-            Message:            condition.Message,
-            ObservedGeneration: rule.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-    }
+	// Add/Update Completed and Failed shared conditions for last submission attempt using meta.SetStatusCondition
+	if err == nil {
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent submission succeeded",
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent submission succeeded",
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	} else {
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	}
 }
 
 // operationIDFromResult extracts a single string cell (operation id) from the RowIterator

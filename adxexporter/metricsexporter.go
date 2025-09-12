@@ -61,13 +61,13 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-    proceed, reason, message, exprErr := EvaluateExecutionCriteria(metricsExporter.Spec.Criteria, metricsExporter.Spec.CriteriaExpression, r.ClusterLabels)
-    if exprErr != nil {
-        // This error means the criteria expression was invalid (parse/type/eval error).
-        // We'll treat this as a non-match to prevent execution, but log the error for visibility.
-        logger.Errorf("Criteria expression error for MetricsExporter %s/%s: %v", req.Namespace, req.Name, exprErr)
-        return ctrl.Result{}, nil
-    }
+	proceed, reason, message, exprErr := EvaluateExecutionCriteria(metricsExporter.Spec.Criteria, metricsExporter.Spec.CriteriaExpression, r.ClusterLabels)
+	if exprErr != nil {
+		// This error means the criteria expression was invalid (parse/type/eval error).
+		// We'll treat this as a non-match to prevent execution, but log the error for visibility.
+		logger.Errorf("Criteria expression error for MetricsExporter %s/%s: %v", req.Namespace, req.Name, exprErr)
+		return ctrl.Result{}, nil
+	}
 	condStatus := metav1.ConditionFalse
 	if proceed {
 		condStatus = metav1.ConditionTrue
@@ -123,8 +123,6 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	return nil
 }
 
-// matchesCriteria removed: logic centralized in EvaluateExecutionCriteria (criteria.go)
-
 // SetupWithManager sets up the service with the Manager
 func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.exposeMetricsServer(); err != nil {
@@ -161,44 +159,44 @@ func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmon
 
 	me.SetCondition(condition)
 
-    // Mirror terminal success/failure via shared Completed/Failed conditions using meta.SetStatusCondition.
-    if err == nil {
-        // Completed=True, Failed=False
-        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionCompleted,
-            Status:             metav1.ConditionTrue,
-            Reason:             "ExecutionSuccessful",
-            Message:            "Most recent execution succeeded",
-            ObservedGeneration: me.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionFailed,
-            Status:             metav1.ConditionFalse,
-            Reason:             "ExecutionSuccessful",
-            Message:            "Most recent execution succeeded",
-            ObservedGeneration: me.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-    } else {
-        // Failed=True, Completed=False
-        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionFailed,
-            Status:             metav1.ConditionTrue,
-            Reason:             "ExecutionFailed",
-            Message:            condition.Message,
-            ObservedGeneration: me.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
-            Type:               adxmonv1.ConditionCompleted,
-            Status:             metav1.ConditionFalse,
-            Reason:             "ExecutionFailed",
-            Message:            condition.Message,
-            ObservedGeneration: me.GetGeneration(),
-            LastTransitionTime: metav1.Now(),
-        })
-    }
+	// Mirror terminal success/failure via shared Completed/Failed conditions using meta.SetStatusCondition.
+	if err == nil {
+		// Completed=True, Failed=False
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent execution succeeded",
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent execution succeeded",
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	} else {
+		// Failed=True, Completed=False
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	}
 
 	if statusErr := r.Status().Update(ctx, me); statusErr != nil {
 		return fmt.Errorf("failed to update status: %w", statusErr)

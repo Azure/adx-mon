@@ -59,10 +59,9 @@ func EvaluateExecutionCriteria(criteria map[string][]string, criteriaExpression 
 			return true, adxmonv1.ReasonCriteriaMatched, "criteria expression true", nil
 		}
 		return false, adxmonv1.ReasonCriteriaNotMatched, "criteria expression evaluated to false", nil
-    default:
-        // Fallback: criteria not matched
-        return false, adxmonv1.ReasonCriteriaNotMatched, "criteria not matched", nil
-    }
+	}
+	// Fallback: criteria not matched
+	return false, adxmonv1.ReasonCriteriaNotMatched, "criteria not matched", nil
 }
 
 // matchesCriteria reused from existing logic (empty => true, case-insensitive key search; any value match returns true)
