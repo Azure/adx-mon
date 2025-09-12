@@ -3,11 +3,9 @@ package adxexporter
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/transform"
@@ -17,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
@@ -62,40 +61,38 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Check if this MetricsExporter should be processed by this instance
-	if !matchesCriteria(metricsExporter.Spec.Criteria, r.ClusterLabels) {
-		if logger.IsDebug() {
-			logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
-				req.Namespace, req.Name)
-		}
+	proceed, reason, message, exprErr := EvaluateExecutionCriteria(metricsExporter.Spec.Criteria, metricsExporter.Spec.CriteriaExpression, r.ClusterLabels)
+	if exprErr != nil {
+		// This error means the criteria expression was invalid (parse/type/eval error).
+		// We'll treat this as a non-match to prevent execution, but log the error for visibility.
+		logger.Errorf("Criteria expression error for MetricsExporter %s/%s: %v", req.Namespace, req.Name, exprErr)
 		return ctrl.Result{}, nil
 	}
-
-	// Evaluate optional criteriaExpression (must be true if provided)
-	if metricsExporter.Spec.CriteriaExpression != "" {
-		ok, err := celutil.EvaluateCriteriaExpression(r.ClusterLabels, metricsExporter.Spec.CriteriaExpression)
-		if err != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to criteriaExpression error: %v", req.Namespace, req.Name, err)
-			return ctrl.Result{}, nil
+	condStatus := metav1.ConditionFalse
+	if proceed {
+		condStatus = metav1.ConditionTrue
+	}
+	cond := metav1.Condition{Type: adxmonv1.ConditionCriteria, Status: condStatus, Reason: reason, Message: message, ObservedGeneration: metricsExporter.GetGeneration(), LastTransitionTime: metav1.Now()}
+	condChanged := meta.SetStatusCondition(&metricsExporter.Status.Conditions, cond)
+	if !proceed {
+		if condChanged {
+			_ = r.Status().Update(ctx, &metricsExporter) // best-effort persist when skipping
 		}
-		if !ok {
-			if logger.IsDebug() {
-				logger.Debugf("Skipping MetricsExporter %s/%s because criteriaExpression evaluated to false", req.Namespace, req.Name)
-			}
-			return ctrl.Result{}, nil
-		}
+		return ctrl.Result{}, nil
 	}
 
 	logger.Infof("Processing MetricsExporter %s/%s with database: %s, interval: %s",
 		req.Namespace, req.Name, metricsExporter.Spec.Database, metricsExporter.Spec.Interval.Duration)
 
 	// Execute KQL query if it's time
-	execErr := r.executeMetricsExporter(ctx, &metricsExporter)
+	executed, execErr := r.executeMetricsExporter(ctx, &metricsExporter)
 
-	// Always update status, whether success or failure
-	if statusErr := r.updateStatus(ctx, &metricsExporter, execErr); statusErr != nil {
-		logger.Errorf("Failed to update status for MetricsExporter %s/%s: %v", req.Namespace, req.Name, statusErr)
-		// Don't return error here - we want to continue processing
+	// Update status only when there was an actual execution attempt.
+	if executed {
+		if statusErr := r.updateStatus(ctx, &metricsExporter, execErr); statusErr != nil {
+			logger.Errorf("Failed to update status for MetricsExporter %s/%s: %v", req.Namespace, req.Name, statusErr)
+			// Don't return error here - we want to continue processing
+		}
 	}
 
 	// Requeue for next interval (for continuous processing)
@@ -127,33 +124,6 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	r.Meter = otel.GetMeterProvider().Meter("adxexporter")
 
 	return nil
-}
-
-// matchesCriteria checks if the given criteria matches any of the cluster labels.
-// Uses the same logic as SummaryRule for consistency
-func matchesCriteria(criteria map[string][]string, clusterLabels map[string]string) bool {
-	// If no criteria are specified, always match
-	if len(criteria) == 0 {
-		return true
-	}
-
-	// Check if any criterion matches
-	for k, v := range criteria {
-		lowerKey := strings.ToLower(k)
-		// Look for matching cluster label (case-insensitive key matching)
-		for labelKey, labelValue := range clusterLabels {
-			if strings.ToLower(labelKey) == lowerKey {
-				for _, value := range v {
-					if strings.EqualFold(labelValue, value) {
-						return true // Found a match, return immediately
-					}
-				}
-				break // We found the key, no need to check other label keys
-			}
-		}
-	}
-
-	return false // No criteria matched
 }
 
 // SetupWithManager sets up the service with the Manager
@@ -192,6 +162,45 @@ func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmon
 
 	me.SetCondition(condition)
 
+	// Mirror terminal success/failure via shared Completed/Failed conditions using meta.SetStatusCondition.
+	if err == nil {
+		// Completed=True, Failed=False
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent execution succeeded",
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent execution succeeded",
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	} else {
+		// Failed=True, Completed=False
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: me.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	}
+
 	if statusErr := r.Status().Update(ctx, me); statusErr != nil {
 		return fmt.Errorf("failed to update status: %w", statusErr)
 	}
@@ -200,11 +209,13 @@ func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmon
 }
 
 // executeMetricsExporter handles the execution logic for a MetricsExporter
-func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) error {
+// executeMetricsExporter runs the exporter if due. It returns (executed, err)
+// where executed indicates whether a query attempt occurred.
+func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, me *adxmonv1.MetricsExporter) (bool, error) {
 	// Get query executor for this database
 	executor, exists := r.QueryExecutors[me.Spec.Database]
 	if !exists {
-		return fmt.Errorf("no query executor configured for database %s", me.Spec.Database)
+		return false, fmt.Errorf("no query executor configured for database %s", me.Spec.Database)
 	}
 
 	// Set the clock on the CRD for testing
@@ -218,7 +229,7 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 		if logger.IsDebug() {
 			logger.Debugf("Not time to execute MetricsExporter %s/%s yet", me.Namespace, me.Name)
 		}
-		return nil
+		return false, nil
 	}
 
 	// Calculate the execution window using the CRD method
@@ -233,11 +244,11 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 
 	result, err := executor.ExecuteQuery(tCtx, me.Spec.Body, startTime, endTime, r.ClusterLabels)
 	if err != nil {
-		return fmt.Errorf("failed to execute query: %w", err)
+		return true, fmt.Errorf("failed to execute query: %w", err)
 	}
 
 	if result.Error != nil {
-		return fmt.Errorf("query execution failed: %w", result.Error)
+		return true, fmt.Errorf("query execution failed: %w", result.Error)
 	}
 
 	logger.Infof("Query executed successfully in %v, returned %d rows",
@@ -245,13 +256,13 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 
 	// Transform results to metrics and expose them
 	if err := r.transformAndRegisterMetrics(ctx, me, result.Rows); err != nil {
-		return fmt.Errorf("failed to transform and register metrics: %w", err)
+		return true, fmt.Errorf("failed to transform and register metrics: %w", err)
 	}
 
 	// Update the last execution time using the CRD method
 	me.SetLastExecutionTime(endTime)
 
-	return nil
+	return true, nil
 }
 
 // transformAndRegisterMetrics converts KQL query results to metrics and registers them

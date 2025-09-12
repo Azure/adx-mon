@@ -132,6 +132,11 @@ type AlertRuleStatus struct {
 	Message       string      `json:"message,omitempty"`
 	LastQueryTime metav1.Time `json:"lastQueryTime,omitempty"`
 	LastAlertTime metav1.Time `json:"lastAlertTime,omitempty"`
+	// Conditions provide standardized status signaling. Controllers may
+	// set shared conditions defined in conditions.go such as ConditionCriteria
+	// to reflect evaluation of Spec.Criteria / Spec.CriteriaExpression.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

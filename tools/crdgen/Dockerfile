@@ -4,9 +4,18 @@ FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 ARG crd
 ARG cmd=create
 
+ENV CGO_ENABLED=1
+
 RUN tdnf install -y ca-certificates && update-ca-trust
 
-RUN tdnf install -y golang make
+# compiler + headers
+RUN tdnf install -y \
+  gcc make binutils glibc-devel kernel-headers pkg-config \
+  systemd-devel \
+ && tdnf clean all
+
+RUN tdnf install -y golang
+
 
 # Install controller-gen
 RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest && \

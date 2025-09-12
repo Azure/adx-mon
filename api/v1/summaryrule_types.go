@@ -118,7 +118,9 @@ type SummaryRule struct {
 
 // SummaryRuleStatus defines the observed state of Function
 type SummaryRuleStatus struct {
-	// Conditions is an array of current observed SummaryRule conditions
+	// Conditions is an array of current observed SummaryRule conditions.
+	// SummaryRule controllers set at minimum the owner condition (SummaryRuleOwner) and may also
+	// use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
