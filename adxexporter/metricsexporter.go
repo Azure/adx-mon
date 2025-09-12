@@ -3,11 +3,9 @@ package adxexporter
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/transform"
@@ -17,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
@@ -62,28 +61,23 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Check if this MetricsExporter should be processed by this instance
-	if !matchesCriteria(metricsExporter.Spec.Criteria, r.ClusterLabels) {
-		if logger.IsDebug() {
-			logger.Debugf("Skipping MetricsExporter %s/%s - criteria does not match cluster labels",
-				req.Namespace, req.Name)
-		}
-		return ctrl.Result{}, nil
+    proceed, reason, message, exprErr := EvaluateExecutionCriteria(metricsExporter.Spec.Criteria, metricsExporter.Spec.CriteriaExpression, r.ClusterLabels)
+    if exprErr != nil {
+        // This error means the criteria expression was invalid (parse/type/eval error).
+        // We'll treat this as a non-match to prevent execution, but log the error for visibility.
+        logger.Errorf("Criteria expression error for MetricsExporter %s/%s: %v", req.Namespace, req.Name, exprErr)
+        return ctrl.Result{}, nil
+    }
+	condStatus := metav1.ConditionFalse
+	if proceed {
+		condStatus = metav1.ConditionTrue
 	}
-
-	// Evaluate optional criteriaExpression (must be true if provided)
-	if metricsExporter.Spec.CriteriaExpression != "" {
-		ok, err := celutil.EvaluateCriteriaExpression(r.ClusterLabels, metricsExporter.Spec.CriteriaExpression)
-		if err != nil {
-			logger.Errorf("Skipping MetricsExporter %s/%s due to criteriaExpression error: %v", req.Namespace, req.Name, err)
-			return ctrl.Result{}, nil
-		}
-		if !ok {
-			if logger.IsDebug() {
-				logger.Debugf("Skipping MetricsExporter %s/%s because criteriaExpression evaluated to false", req.Namespace, req.Name)
-			}
-			return ctrl.Result{}, nil
-		}
+	cond := metav1.Condition{Type: adxmonv1.ConditionCriteria, Status: condStatus, Reason: reason, Message: message, ObservedGeneration: metricsExporter.GetGeneration(), LastTransitionTime: metav1.Now()}
+	if meta.SetStatusCondition(&metricsExporter.Status.Conditions, cond) {
+		_ = r.Status().Update(ctx, &metricsExporter) // best-effort update
+	}
+	if !proceed {
+		return ctrl.Result{}, nil
 	}
 
 	logger.Infof("Processing MetricsExporter %s/%s with database: %s, interval: %s",
@@ -129,32 +123,7 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	return nil
 }
 
-// matchesCriteria checks if the given criteria matches any of the cluster labels.
-// Uses the same logic as SummaryRule for consistency
-func matchesCriteria(criteria map[string][]string, clusterLabels map[string]string) bool {
-	// If no criteria are specified, always match
-	if len(criteria) == 0 {
-		return true
-	}
-
-	// Check if any criterion matches
-	for k, v := range criteria {
-		lowerKey := strings.ToLower(k)
-		// Look for matching cluster label (case-insensitive key matching)
-		for labelKey, labelValue := range clusterLabels {
-			if strings.ToLower(labelKey) == lowerKey {
-				for _, value := range v {
-					if strings.EqualFold(labelValue, value) {
-						return true // Found a match, return immediately
-					}
-				}
-				break // We found the key, no need to check other label keys
-			}
-		}
-	}
-
-	return false // No criteria matched
-}
+// matchesCriteria removed: logic centralized in EvaluateExecutionCriteria (criteria.go)
 
 // SetupWithManager sets up the service with the Manager
 func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -191,6 +160,45 @@ func (r *MetricsExporterReconciler) updateStatus(ctx context.Context, me *adxmon
 	}
 
 	me.SetCondition(condition)
+
+    // Mirror terminal success/failure via shared Completed/Failed conditions using meta.SetStatusCondition.
+    if err == nil {
+        // Completed=True, Failed=False
+        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+            Type:               adxmonv1.ConditionCompleted,
+            Status:             metav1.ConditionTrue,
+            Reason:             "ExecutionSuccessful",
+            Message:            "Most recent execution succeeded",
+            ObservedGeneration: me.GetGeneration(),
+            LastTransitionTime: metav1.Now(),
+        })
+        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+            Type:               adxmonv1.ConditionFailed,
+            Status:             metav1.ConditionFalse,
+            Reason:             "ExecutionSuccessful",
+            Message:            "Most recent execution succeeded",
+            ObservedGeneration: me.GetGeneration(),
+            LastTransitionTime: metav1.Now(),
+        })
+    } else {
+        // Failed=True, Completed=False
+        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+            Type:               adxmonv1.ConditionFailed,
+            Status:             metav1.ConditionTrue,
+            Reason:             "ExecutionFailed",
+            Message:            condition.Message,
+            ObservedGeneration: me.GetGeneration(),
+            LastTransitionTime: metav1.Now(),
+        })
+        meta.SetStatusCondition(&me.Status.Conditions, metav1.Condition{
+            Type:               adxmonv1.ConditionCompleted,
+            Status:             metav1.ConditionFalse,
+            Reason:             "ExecutionFailed",
+            Message:            condition.Message,
+            ObservedGeneration: me.GetGeneration(),
+            LastTransitionTime: metav1.Now(),
+        })
+    }
 
 	if statusErr := r.Status().Update(ctx, me); statusErr != nil {
 		return fmt.Errorf("failed to update status: %w", statusErr)
