@@ -8,7 +8,7 @@ require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250903204106-8f7f39d68375.2
 	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.9-20250903204106-8f7f39d68375.1
 	github.com/Azure/azure-kusto-go v0.15.2
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.19.0
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.19.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.11.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto v1.3.1
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources v1.2.0
