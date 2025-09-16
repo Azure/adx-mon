@@ -214,7 +214,8 @@ func (r *Rule) Matches(tags map[string]string) (bool, error) {
 	if r.CriteriaExpression == "" {
 		expressionMatched = true
 	} else {
-		matched, err := celutil.EvaluateCriteriaExpression(lowered, r.CriteriaExpression)
+		// do not pass lowered - for expressions, match on the actual cases.
+		matched, err := celutil.EvaluateCriteriaExpression(tags, r.CriteriaExpression)
 		if err != nil {
 			return false, fmt.Errorf("failed to evaluate criteriaExpression: %w", err)
 		}
