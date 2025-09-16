@@ -2,7 +2,6 @@ package celutil
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/google/cel-go/cel"
 )
@@ -20,9 +19,8 @@ func EvaluateCriteriaExpression(clusterLabels map[string]string, expression stri
 	decls := make([]cel.EnvOption, 0, len(clusterLabels))
 	activation := make(map[string]interface{}, len(clusterLabels))
 	for k, v := range clusterLabels {
-		lk := strings.ToLower(k)
-		decls = append(decls, cel.Variable(lk, cel.StringType))
-		activation[lk] = strings.ToLower(v)
+		decls = append(decls, cel.Variable(k, cel.StringType))
+		activation[k] = v
 	}
 	env, err := cel.NewEnv(decls...)
 	if err != nil {
