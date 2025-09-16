@@ -35,6 +35,19 @@ type ADXClusterSpec struct {
 	//+kubebuilder:validation:Optional
 	// Supports cluster partitioning. Only relevant if Role is set.
 	Federation *ADXClusterFederationSpec `json:"federation,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+	// operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
+	// Every label is exposed as a string variable that can be referenced directly, for example:
+	//
+	//   criteriaExpression: "region in ['eastus','westus'] && environment == 'prod'"
+	//
+	// Semantics:
+	//   * Empty / omitted expression => the ADXCluster always reconciles.
+	//   * When specified, the expression must evaluate to true for reconciliation; false skips quietly.
+	//   * CEL parse, type-check, or evaluation errors are surfaced via status and block reconciliation
+	//     until corrected.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 type ClusterRole string

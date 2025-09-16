@@ -116,12 +116,15 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 type SyncFunctionsTask struct {
 	store    storage.Functions
 	kustoCli StatementExecutor
+	// ClusterLabels carries the ingestor's cluster identity for criteriaExpression evaluation.
+	ClusterLabels map[string]string
 }
 
-func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor) *SyncFunctionsTask {
+func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor, clusterLabels map[string]string) *SyncFunctionsTask {
 	return &SyncFunctionsTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		kustoCli:      kustoCli,
+		ClusterLabels: clusterLabels,
 	}
 }
 
@@ -134,6 +137,24 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		if function.Spec.Database != v1.AllDatabases && function.Spec.Database != t.kustoCli.Database() {
 			continue
+		}
+
+		if expr := function.Spec.CriteriaExpression; expr != "" {
+			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
+			if err != nil {
+				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
+				logger.Errorf("Function %s/%s criteriaExpression error: %v", function.Namespace, function.Name, err)
+				if updErr := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); updErr != nil {
+					logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
+				}
+				continue
+			}
+			if !ok {
+				if logger.IsDebug() {
+					logger.Debugf("Skipping function %s/%s due to criteriaExpression evaluating to false", function.Namespace, function.Name)
+				}
+				continue
+			}
 		}
 
 		if !function.DeletionTimestamp.IsZero() {
@@ -198,12 +219,15 @@ func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.
 type ManagementCommandTask struct {
 	store    storage.CRDHandler
 	kustoCli StatementExecutor
+	// ClusterLabels mirrors the ingestor cluster identity for management-command gating.
+	ClusterLabels map[string]string
 }
 
-func NewManagementCommandsTask(store storage.CRDHandler, kustoCli StatementExecutor) *ManagementCommandTask {
+func NewManagementCommandsTask(store storage.CRDHandler, kustoCli StatementExecutor, clusterLabels map[string]string) *ManagementCommandTask {
 	return &ManagementCommandTask{
-		store:    store,
-		kustoCli: kustoCli,
+		store:         store,
+		kustoCli:      kustoCli,
+		ClusterLabels: clusterLabels,
 	}
 }
 
@@ -216,6 +240,24 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		// ManagementCommands database is optional as not all commands are scoped at the database level
 		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
 			continue
+		}
+
+		if expr := command.Spec.CriteriaExpression; expr != "" {
+			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
+			if err != nil {
+				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
+				logger.Errorf("ManagementCommand %s/%s criteriaExpression error: %v", command.Namespace, command.Name, err)
+				if updErr := t.store.UpdateStatus(ctx, &command, err); updErr != nil {
+					logger.Errorf("Failed to update management command status for %s/%s: %v", command.Namespace, command.Name, updErr)
+				}
+				continue
+			}
+			if !ok {
+				if logger.IsDebug() {
+					logger.Debugf("Skipping management command %s/%s due to criteriaExpression evaluating to false", command.Namespace, command.Name)
+				}
+				continue
+			}
 		}
 
 		var stmt *kql.Builder
