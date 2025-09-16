@@ -56,6 +56,7 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 	tests := []struct {
 		name            string
 		spec            adxmonv1.MetricsExporterSpec
+		clusterLabels   map[string]string // optional override of default cluster labels
 		expectExecuted  bool
 		expectQueryRows bool // whether we configure a mock row result
 	}{
@@ -94,38 +95,81 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 			spec:           adxmonv1.MetricsExporterSpec{CriteriaExpression: "region =="},
 			expectExecuted: false,
 		},
+		// Casing behaviors:
+		{
+			name:           "criteria map insensitive - upper label lower criteria key",
+			spec:           adxmonv1.MetricsExporterSpec{Criteria: map[string][]string{"region": {"eastus"}}},
+			clusterLabels:  map[string]string{"REGION": "EASTUS"},
+			expectExecuted: true,
+		},
+		{
+			name: "criteriaExpression sensitive - mismatched case identifiers",
+			spec: adxmonv1.MetricsExporterSpec{CriteriaExpression: "REGION == 'eastus'"},
+			// clusterLabels default (lowercase) -> REGION undefined
+			expectExecuted: false,
+		},
+		{
+			name:           "criteriaExpression sensitive - matching case identifiers",
+			spec:           adxmonv1.MetricsExporterSpec{CriteriaExpression: "Region == 'eastus'"},
+			clusterLabels:  map[string]string{"Region": "eastus"},
+			expectExecuted: true,
+		},
+		{
+			name:           "criteriaExpression sensitive - matching case values",
+			spec:           adxmonv1.MetricsExporterSpec{CriteriaExpression: "Region == 'Eastus'"},
+			clusterLabels:  map[string]string{"Region": "Eastus"},
+			expectExecuted: true,
+		},
+		{
+			name:           "criteriaExpression sensitive - not matching case values",
+			spec:           adxmonv1.MetricsExporterSpec{CriteriaExpression: "Region == 'Eastus'"},
+			clusterLabels:  map[string]string{"Region": "eastus"},
+			expectExecuted: false,
+		},
+		{
+			name:           "criteriaExpression value case sensitive mismatch",
+			spec:           adxmonv1.MetricsExporterSpec{CriteriaExpression: "region == 'eastus'"},
+			clusterLabels:  map[string]string{"region": "EASTUS"},
+			expectExecuted: false,
+		},
+		{
+			name:           "combined - criteria matches expression identifier case mismatch causes skip",
+			spec:           adxmonv1.MetricsExporterSpec{Criteria: map[string][]string{"region": {"eastus"}}, CriteriaExpression: "REGION == 'eastus'"},
+			clusterLabels:  map[string]string{"region": "eastus"},
+			expectExecuted: false,
+		},
+		{
+			name: "combined - both match with matching identifier cases",
+			spec: adxmonv1.MetricsExporterSpec{Criteria: map[string][]string{"Region": {"EASTUS"}}, CriteriaExpression: "environment == 'prod' && region == 'eastus'"},
+			// default labels suffice
+			expectExecuted: true,
+		},
 	}
 
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			me := makeME(tt.spec, fmt.Sprintf("me-%d", i))
-
-			// Fake client with object
+			labels := clusterLabels
+			if tt.clusterLabels != nil {
+				labels = tt.clusterLabels
+			}
 			fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(me).Build()
-
-			// Mock Kusto executor
 			mockKusto := NewMockKustoExecutor(t, "test-db", "https://test-cluster.kusto.windows.net")
-			// Provide a row for successful executions to exercise deeper path
 			if tt.expectExecuted {
 				mockKusto.SetNextResult(t, [][]interface{}{{"test_metric", 1.0, time.Now()}})
 			}
-
 			reconciler := &MetricsExporterReconciler{
 				Client:                fakeClient,
 				Scheme:                s,
-				ClusterLabels:         clusterLabels,
+				ClusterLabels:         labels,
 				KustoClusters:         map[string]string{"test-db": "https://test-cluster.kusto.windows.net"},
 				QueryExecutors:        map[string]*QueryExecutor{"test-db": NewQueryExecutor(mockKusto)},
 				EnableMetricsEndpoint: false,
 			}
-
-			// Initialize meter (noop when disabled)
 			require.NoError(t, reconciler.exposeMetricsServer())
-
 			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: me.Name, Namespace: me.Namespace}}
 			res, err := reconciler.Reconcile(context.Background(), req)
 			require.NoError(t, err)
-
 			queries := mockKusto.GetQueries()
 			if tt.expectExecuted {
 				assert.Len(t, queries, 1, "expected a query to run")
