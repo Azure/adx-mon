@@ -22,6 +22,15 @@ func TestRuleMatches_CriteriaOnly(t *testing.T) {
 	ok, err = r.Matches(map[string]string{"region": "centralus"})
 	require.NoError(t, err)
 	require.False(t, ok)
+
+	// case insensitivity
+	ok, err = r.Matches(map[string]string{"REGION": "EASTUS"})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = r.Matches(map[string]string{"region": "EaStUs"})
+	require.NoError(t, err)
+	require.True(t, ok)
 }
 
 func TestRuleMatches_SingleCriteriaOnly(t *testing.T) {
@@ -45,14 +54,71 @@ func TestRuleMatches_SingleCriteriaOnly(t *testing.T) {
 }
 
 func TestRuleMatches_ExpressionOnly(t *testing.T) {
-	r := newRule("expr-only")
-	r.CriteriaExpression = "cloud == 'public' && region == 'eastus'"
-	ok, err := r.Matches(map[string]string{"cloud": "public", "region": "eastus"})
-	require.NoError(t, err)
-	require.True(t, ok)
-	ok, err = r.Matches(map[string]string{"cloud": "public", "region": "westus"})
-	require.NoError(t, err)
-	require.False(t, ok)
+	tests := []struct {
+		name        string
+		expr        string
+		labels      map[string]string
+		expectMatch bool
+		wantErr     bool
+	}{
+		{
+			name:        "match-capitalized-var",
+			expr:        "cloud == 'Public' && region == 'eastus'",
+			labels:      map[string]string{"cloud": "Public", "region": "eastus"},
+			expectMatch: true,
+		},
+		{
+			name:        "no-match-region-capitialized",
+			expr:        "cloud == 'Public' && region == 'Eastus'", // not eastus
+			labels:      map[string]string{"cloud": "Public", "region": "eastus"},
+			expectMatch: false,
+		},
+		{
+			name:        "no-match-lowercase-keys-and-vars",
+			expr:        "cloud == 'Public' && region == 'eastus'",
+			labels:      map[string]string{"cloud": "Public", "region": "westus"},
+			expectMatch: false,
+		},
+		{
+			name:    "expr-uppercase-vars-lowercase-label-keys-unknown-identifiers",
+			expr:    "CLOUD == 'Public' && REGION == 'eastus'",
+			labels:  map[string]string{"cloud": "Public", "region": "eastus"},
+			wantErr: true, // variable names won't match label keys (case sensitive)
+		},
+		{
+			name:        "expr-uppercase-vars-uppercase-label-keys-match",
+			expr:        "CLOUD == 'Public' && REGION == 'eastus'",
+			labels:      map[string]string{"CLOUD": "Public", "REGION": "eastus"},
+			expectMatch: true,
+		},
+		{
+			name:    "expr-mixedcase-vars-lowercase-keys-unknown-identifiers",
+			expr:    "Cloud == 'Public' && Region == 'eastus'", // not cloud/region
+			labels:  map[string]string{"cloud": "Public", "region": "eastus"},
+			wantErr: true,
+		},
+		{
+			name:        "expr-mixedcase-vars-matching-mixedcase-keys",
+			expr:        "Cloud == 'Public' && Region == 'eastus'",
+			labels:      map[string]string{"Cloud": "Public", "Region": "eastus"},
+			expectMatch: true,
+		},
+	}
+
+	for _, tc := range tests {
+		cc := tc
+		t.Run(cc.name, func(t *testing.T) {
+			r := newRule("expr-only")
+			r.CriteriaExpression = cc.expr
+			ok, err := r.Matches(cc.labels)
+			if cc.wantErr {
+				require.Error(t, err, "expected error for case %s", cc.name)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, cc.expectMatch, ok)
+		})
+	}
 }
 
 func TestRuleMatches_ExpressionUnknownIdentifierError(t *testing.T) {
