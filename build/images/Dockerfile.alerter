@@ -1,20 +1,20 @@
 FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
 
-RUN tdnf install -y golang ca-certificates
+RUN tdnf install -y golang ca-certificates gcc make glibc-devel binutils kernel-headers
 
 ADD . /code
 WORKDIR /code
 
 ARG VERSION GIT_COMMIT BUILD_TIME
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 -ldflags=" \
 -X 'github.com/Azure/adx-mon/pkg/version.Version=${VERSION}' \
 -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=${GIT_COMMIT}' \
 -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
 " -o ./bin/alerter ./cmd/alerter
 
-FROM mcr.microsoft.com/azurelinux/distroless/minimal:3.0
+FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
 
 LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
 
