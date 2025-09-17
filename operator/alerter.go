@@ -12,6 +12,7 @@ import (
 	time "time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -45,6 +46,27 @@ func (r *AlerterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	alerter := &adxmonv1.Alerter{}
 	if err := r.Get(ctx, req.NamespacedName, alerter); err != nil {
 		return r.ReconcileComponent(ctx, req)
+	}
+
+	if expr := alerter.Spec.CriteriaExpression; expr != "" {
+		labels := getOperatorClusterLabels()
+		ok, err := celutil.EvaluateCriteriaExpression(labels, expr)
+		if err != nil {
+			logger.Errorf("Alerter %s/%s criteriaExpression error: %v", req.Namespace, req.Name, err)
+			// Expression errors are terminal until the CRD is updated, so we just set status and exit.
+			c := metav1.Condition{Type: adxmonv1.AlerterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: alerter.GetGeneration(), LastTransitionTime: metav1.Now()}
+			if meta.SetStatusCondition(&alerter.Status.Conditions, c) {
+				_ = r.Status().Update(ctx, alerter)
+			}
+			return ctrl.Result{}, nil
+		}
+		if !ok {
+			c := metav1.Condition{Type: adxmonv1.AlerterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: alerter.GetGeneration(), LastTransitionTime: metav1.Now()}
+			if meta.SetStatusCondition(&alerter.Status.Conditions, c) {
+				_ = r.Status().Update(ctx, alerter)
+			}
+			return ctrl.Result{}, nil
+		}
 	}
 
 	if !alerter.DeletionTimestamp.IsZero() {
