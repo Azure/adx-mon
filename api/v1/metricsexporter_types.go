@@ -95,7 +95,9 @@ type TransformConfig struct {
 
 // MetricsExporterStatus defines the observed state of MetricsExporter
 type MetricsExporterStatus struct {
-	// Conditions is an array of current observed MetricsExporter conditions
+	// Conditions is an array of current observed MetricsExporter conditions.
+	// Controllers set at minimum the owner condition (MetricsExporterOwner) and may also
+	// use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
