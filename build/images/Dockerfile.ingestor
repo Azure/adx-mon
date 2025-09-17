@@ -14,7 +14,7 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
 " -o ./bin/ingestor ./cmd/ingestor
 
-FROM mcr.microsoft.com/azurelinux/distroless/minimal:3.0
+FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
 
 LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
 
