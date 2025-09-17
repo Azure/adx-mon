@@ -46,6 +46,20 @@ spec:
                 maxLength: 100
                 pattern: ^[a-zA-Z0-9-]+$
                 type: string
+              criteriaExpression:
+                description: |-
+                  CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+                  operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
+                  Every label is exposed as a string variable that can be referenced directly, for example:
+
+                    criteriaExpression: "region in ['eastus','westus'] && environment == 'prod'"
+
+                  Semantics:
+                    * Empty / omitted expression => the ADXCluster always reconciles.
+                    * When specified, the expression must evaluate to true for reconciliation; false skips quietly.
+                    * CEL parse, type-check, or evaluation errors are surfaced via status and block reconciliation
+                      until corrected.
+                type: string
               databases:
                 description: Databases is an array of ADXClusterDatabaseSpec objects.
                   Each object defines a database to be created in the ADX cluster.

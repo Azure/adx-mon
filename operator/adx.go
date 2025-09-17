@@ -15,6 +15,7 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
@@ -62,6 +63,29 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	var cluster adxmonv1.ADXCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// CriteriaExpression gating: if specified and evaluates to false, skip reconciliation quietly.
+	if expr := cluster.Spec.CriteriaExpression; expr != "" {
+		labels := getOperatorClusterLabels()
+		ok, err := celutil.EvaluateCriteriaExpression(labels, expr)
+		if err != nil {
+			logger.Errorf("ADXCluster %s/%s criteriaExpression error: %v", req.Namespace, req.Name, err)
+			// Surface error via status condition for visibility. No explicit requeue—this is a
+			// terminal error until the user edits the CRD (a CR update will trigger reconcile).
+			c := metav1.Condition{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: cluster.GetGeneration(), LastTransitionTime: metav1.Now()}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				_ = r.Status().Update(ctx, &cluster)
+			}
+			return ctrl.Result{}, nil
+		}
+		if !ok { // Expression false, mark condition and skip until spec changes
+			c := metav1.Condition{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping reconciliation", ObservedGeneration: cluster.GetGeneration(), LastTransitionTime: metav1.Now()}
+			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
+				_ = r.Status().Update(ctx, &cluster)
+			}
+			return ctrl.Result{}, nil
+		}
 	}
 
 	logger.Infof("Reconciling ADXCluster %s/%s (generation %d)", req.Namespace, req.Name, cluster.GetGeneration())

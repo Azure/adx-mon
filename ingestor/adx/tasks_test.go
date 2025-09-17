@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -90,6 +91,10 @@ func (m *mockCRDHandler) List(ctx context.Context, list client.ObjectList, filte
 		case *v1.SummaryRuleList:
 			if srList, ok := m.listResponse.(*v1.SummaryRuleList); ok {
 				list.Items = srList.Items
+			}
+		case *v1.ManagementCommandList:
+			if mcList, ok := m.listResponse.(*v1.ManagementCommandList); ok {
+				list.Items = mcList.Items
 			}
 		}
 	}
@@ -410,6 +415,52 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 	})
 }
 
+func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("skips when expression evaluates to false", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"},
+					Spec: v1.FunctionSpec{
+						Database:           "db",
+						Body:               ".create-or-alter function fn() { print 1 }",
+						CriteriaExpression: "region == 'eastus'",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "db"}
+		task := NewSyncFunctionsTask(store, exec, map[string]string{"region": "westus"})
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "function should not execute when criteriaExpression is false")
+		require.Empty(t, store.statusUpdates, "status should not be updated when skipping")
+	})
+
+	t.Run("records failure when expression evaluation errors", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"},
+					Spec: v1.FunctionSpec{
+						Database:           "db",
+						Body:               ".create-or-alter function fn() { print 1 }",
+						CriteriaExpression: "region == 'eastus'",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "db"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "function should not execute when criteriaExpression errors")
+		require.Len(t, store.statusUpdates, 1)
+		require.Equal(t, v1.Failed, store.statusUpdates[0].Status.Status)
+		require.Contains(t, store.statusUpdates[0].Status.Error, "criteriaExpression evaluation failed")
+	})
+}
+
 func TestFunctions(t *testing.T) {
 	testutils.IntegrationTest(t)
 
@@ -443,7 +494,7 @@ func TestFunctions(t *testing.T) {
 	}
 
 	functionStore := storage.NewFunctions(ctrlCli, nil)
-	task := NewSyncFunctionsTask(functionStore, executor)
+	task := NewSyncFunctionsTask(functionStore, executor, map[string]string{"environment": "test"})
 
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
@@ -605,7 +656,7 @@ func TestManagementCommands(t *testing.T) {
 	}
 
 	store := storage.NewCRDHandler(ctrlCli, nil)
-	task := NewManagementCommandsTask(store, executor)
+	task := NewManagementCommandsTask(store, executor, map[string]string{"environment": "test"})
 
 	t.Run("Creates database management commands", func(t *testing.T) {
 		resourceName := "testtest"
@@ -677,6 +728,55 @@ func TestManagementCommands(t *testing.T) {
 
 			return false
 		}, 10*time.Minute, time.Second)
+	})
+}
+
+func TestManagementCommandCriteriaExpression(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("skips execution when expression is false", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:               ".clear database cache query_results",
+						Database:           "db",
+						CriteriaExpression: "region == 'eastus'",
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "db"}
+		task := NewManagementCommandsTask(handler, exec, map[string]string{"region": "westus"})
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "management command should be skipped when criteriaExpression is false")
+		require.Empty(t, handler.updatedObjects, "status should remain unchanged when skipping")
+	})
+
+	t.Run("records error when expression evaluation fails", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:               ".clear database cache query_results",
+						Database:           "db",
+						CriteriaExpression: "region == 'eastus'",
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "db"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "management command should not execute when criteriaExpression errors")
+		require.Len(t, handler.updatedObjects, 1)
+		cmd := handler.updatedObjects[0].(*v1.ManagementCommand)
+		condition := apimeta.FindStatusCondition(cmd.Status.Conditions, adxmonv1.ManagementCommandConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, metav1.ConditionFalse, condition.Status)
+		require.Contains(t, condition.Message, "criteriaExpression evaluation failed")
 	})
 }
 

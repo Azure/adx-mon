@@ -286,12 +286,12 @@ func (s *Service) Open(ctx context.Context) error {
 			return t.Run(ctx)
 		})
 
-		f := adx.NewSyncFunctionsTask(fnStore, v)
+		f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
 		s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
 
-		m := adx.NewManagementCommandsTask(crdStore, v)
+		m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
 		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
 			return m.Run(ctx)
 		})
@@ -303,12 +303,12 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	for _, v := range s.opts.LogsKustoCli {
-		f := adx.NewSyncFunctionsTask(fnStore, v)
+		f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
 		s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
 			return f.Run(ctx)
 		})
 
-		m := adx.NewManagementCommandsTask(crdStore, v)
+		m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
 		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
 			return m.Run(ctx)
 		})

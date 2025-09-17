@@ -48,6 +48,20 @@ spec:
               body:
                 description: Body is the KQL body of the function
                 type: string
+              criteriaExpression:
+                description: |-
+                  CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+                  operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
+                  Every label is exposed as a string variable. Example:
+
+                    criteriaExpression: "environment == 'prod' && region in ['eastus','westus']"
+
+                  Semantics:
+                    * Empty / omitted expression => the Function always reconciles.
+                    * When specified, the expression must evaluate to true for reconciliation; false skips quietly.
+                    * CEL parse, type-check, or evaluation errors surface via status and block reconciliation until
+                      corrected.
+                type: string
               database:
                 description: Database is the name of the database in which the function
                   will be created
