@@ -110,8 +110,10 @@ spec:
             description: SummaryRuleStatus defines the observed state of Function
             properties:
               conditions:
-                description: Conditions is an array of current observed SummaryRule
-                  conditions
+                description: |-
+                  Conditions is an array of current observed SummaryRule conditions.
+                  SummaryRule controllers set at minimum the owner condition (SummaryRuleOwner) and may also
+                  use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
