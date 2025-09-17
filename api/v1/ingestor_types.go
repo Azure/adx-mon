@@ -34,6 +34,19 @@ type IngestorSpec struct {
 	// AppliedProvisionState is a JSON-serialized snapshot of the CRD
 	// as last applied by the operator. This is set by the operator and is read-only for users.
 	AppliedProvisionState string `json:"appliedProvisionState,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+	// operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
+	// All labels are exposed as string variables. Example:
+	//
+	//   criteriaExpression: "environment == 'prod' && region == 'eastus'"
+	//
+	// Semantics:
+	//   * Empty / omitted expression => the Ingestor always reconciles.
+	//   * When specified, the expression must evaluate to true for reconciliation; false skips quietly.
+	//   * CEL parse, type-check, or evaluation errors surface via status and block reconciliation until
+	//     corrected.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 func (s *IngestorSpec) StoreAppliedProvisioningState() error {

@@ -21,6 +21,19 @@ type ManagementCommandSpec struct {
 
 	// Body is the management command to execute
 	Body string `json:"body"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+	// operator / ingestor cluster labels (region, environment, cloud, and any --cluster-labels key/value
+	// pairs). All labels are exposed as string variables. Example:
+	//
+	//   criteriaExpression: "environment == 'prod' && region == 'eastus'"
+	//
+	// Semantics:
+	//   * Empty / omitted expression => the ManagementCommand always executes when selected.
+	//   * When specified, the expression must evaluate to true; false skips execution.
+	//   * CEL parse, type-check, or evaluation errors surface via status and block execution until
+	//     corrected.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 // ManagementCommandStatus defines the observed state of ManagementCommand
