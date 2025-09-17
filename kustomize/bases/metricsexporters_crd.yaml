@@ -121,8 +121,10 @@ spec:
             description: MetricsExporterStatus defines the observed state of MetricsExporter
             properties:
               conditions:
-                description: Conditions is an array of current observed MetricsExporter
-                  conditions
+                description: |-
+                  Conditions is an array of current observed MetricsExporter conditions.
+                  Controllers set at minimum the owner condition (MetricsExporterOwner) and may also
+                  use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

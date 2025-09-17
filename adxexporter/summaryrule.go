@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
@@ -54,13 +55,30 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Gate by database, criteria, and adoption
+	// Gate by database, criteria (map + expression), and adoption
 	if !r.isDatabaseManaged(&rule) {
 		return ctrl.Result{}, nil
 	}
-	if !matchesCriteria(rule.Spec.Criteria, r.ClusterLabels) {
+
+	proceed, reason, message, exprErr := EvaluateExecutionCriteria(rule.Spec.Criteria, rule.Spec.CriteriaExpression, r.ClusterLabels)
+	if exprErr != nil {
+		// This error means the criteria expression was invalid (parse/type/eval error).
+		// We'll treat this as a non-match to prevent execution, but log the error for visibility.
+		logger.Errorf("Criteria expression error for SummaryRule %s/%s: %v", req.Namespace, req.Name, exprErr)
 		return ctrl.Result{}, nil
 	}
+	condStatus := metav1.ConditionFalse
+	if proceed {
+		condStatus = metav1.ConditionTrue
+	}
+	cond := metav1.Condition{Type: adxmonv1.ConditionCriteria, Status: condStatus, Reason: reason, Message: message, ObservedGeneration: rule.GetGeneration(), LastTransitionTime: metav1.Now()}
+	if meta.SetStatusCondition(&rule.Status.Conditions, cond) {
+		_ = r.Status().Update(ctx, &rule) // best-effort update
+	}
+	if !proceed {
+		return ctrl.Result{}, nil
+	}
+
 	if requeue, handled := r.adoptIfDesired(ctx, &rule); handled {
 		return requeue, nil
 	}
@@ -268,6 +286,43 @@ func (r *SummaryRuleReconciler) updateSummaryRuleStatus(rule *adxmonv1.SummaryRu
 		condition.Message = kustoutil.ParseError(err)
 	}
 	rule.SetCondition(condition)
+
+	// Add/Update Completed and Failed shared conditions for last submission attempt using meta.SetStatusCondition
+	if err == nil {
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent submission succeeded",
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionSuccessful",
+			Message:            "Most recent submission succeeded",
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	} else {
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+		meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+			Type:               adxmonv1.ConditionCompleted,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ExecutionFailed",
+			Message:            condition.Message,
+			ObservedGeneration: rule.GetGeneration(),
+			LastTransitionTime: metav1.Now(),
+		})
+	}
 }
 
 // operationIDFromResult extracts a single string cell (operation id) from the RowIterator
@@ -553,7 +608,10 @@ func (r *SummaryRuleReconciler) emitHealthLog(rule *adxmonv1.SummaryRule) {
 	switch {
 	case !r.isDatabaseManaged(rule):
 		working, degraded = false, "unmanaged_database"
-	case !matchesCriteria(rule.Spec.Criteria, r.ClusterLabels):
+	case func() bool {
+		ok, _, _, _ := EvaluateExecutionCriteria(rule.Spec.Criteria, rule.Spec.CriteriaExpression, r.ClusterLabels)
+		return !ok
+	}():
 		working, degraded = false, "criteria_mismatch"
 	case !owned && wantsExporter:
 		working, degraded = false, "ownership_pending"

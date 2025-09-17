@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -145,6 +146,9 @@ func (e *worker) calculateNextQueryTime() time.Time {
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
+	// Best-effort: update criteria condition reflecting cached match evaluation
+	e.updateAlertRuleCriteriaCondition(ctx)
+
 	// Use cached match decision
 	if e.matchErr != nil {
 		logger.Errorf("Skipping %s/%s due to cached criteria evaluation error: %v", e.rule.Namespace, e.rule.Name, e.matchErr)
@@ -301,6 +305,50 @@ func (e *worker) updateAlertRuleStatus(ctx context.Context, executionTime time.T
 
 	logger.Debugf("Updated AlertRule %s/%s status: LastQueryTime=%v, LastAlertTime=%v, Status=%s",
 		e.rule.Namespace, e.rule.Name, executionTime, alertRule.Status.LastAlertTime, status)
+}
+
+// updateAlertRuleCriteriaCondition writes the ConditionCriteria condition based on cached match evaluation.
+// It is safe/no-op when ctrlCli is not configured.
+func (e *worker) updateAlertRuleCriteriaCondition(ctx context.Context) {
+	if e.ctrlCli == nil {
+		return
+	}
+
+	updateCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	alertRule := &alertrulev1.AlertRule{}
+	if err := e.ctrlCli.Get(updateCtx, types.NamespacedName{Namespace: e.rule.Namespace, Name: e.rule.Name}, alertRule); err != nil {
+		logger.Errorf("Failed to get AlertRule %s/%s for criteria condition update: %v", e.rule.Namespace, e.rule.Name, err)
+		return
+	}
+
+	// Build condition based on evaluation result
+	condStatus := metav1.ConditionFalse
+	reason := alertrulev1.ReasonCriteriaNotMatched
+	message := "criteria map did not match or expression evaluated to false"
+	if e.matchErr != nil {
+		reason = alertrulev1.ReasonCriteriaExpressionError
+		message = fmt.Sprintf("criteria expression error: %v", e.matchErr)
+	} else if e.matchAllowed {
+		condStatus = metav1.ConditionTrue
+		reason = alertrulev1.ReasonCriteriaMatched
+		message = "criteria/expression matched"
+	}
+
+	cond := metav1.Condition{
+		Type:               alertrulev1.ConditionCriteria,
+		Status:             condStatus,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: alertRule.GetGeneration(),
+		LastTransitionTime: metav1.Now(),
+	}
+	if meta.SetStatusCondition(&alertRule.Status.Conditions, cond) {
+		if err := e.ctrlCli.Status().Update(updateCtx, alertRule); err != nil {
+			logger.Errorf("Failed to update AlertRule %s/%s criteria condition: %v", e.rule.Namespace, e.rule.Name, err)
+		}
+	}
 }
 
 func (e *worker) Close() {

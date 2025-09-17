@@ -43,6 +43,19 @@ type FunctionSpec struct {
 	// AppliedEndpoint is a JSON-serialized of the endpoints that the function
 	// is applied to. This is set by the operator and is read-only for users.
 	AppliedEndpoint string `json:"appliedEndpoint,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+	// operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
+	// Every label is exposed as a string variable. Example:
+	//
+	//   criteriaExpression: "environment == 'prod' && region in ['eastus','westus']"
+	//
+	// Semantics:
+	//   * Empty / omitted expression => the Function always reconciles.
+	//   * When specified, the expression must evaluate to true for reconciliation; false skips quietly.
+	//   * CEL parse, type-check, or evaluation errors surface via status and block reconciliation until
+	//     corrected.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 // FunctionStatusEnum defines the possible status values for FunctionStatus

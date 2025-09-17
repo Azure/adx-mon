@@ -14,6 +14,19 @@ type CollectorSpec struct {
 	//+kubebuilder:validation:Format=uri
 	// IngestorEndpoint is the URI endpoint for the ingestor service that this collector should send data to. Optional; if omitted, the operator will configure it automatically.
 	IngestorEndpoint string `json:"ingestorEndpoint,omitempty"`
+
+	// CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
+	// operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
+	// All labels are exposed as string variables. Example:
+	//
+	//   criteriaExpression: "environment == 'prod' && region == 'eastus'"
+	//
+	// Semantics:
+	//   * Empty / omitted expression => the Collector always reconciles.
+	//   * When specified, the expression must evaluate to true for reconciliation; false skips quietly.
+	//   * CEL parse, type-check, or evaluation errors surface via status and block reconciliation until
+	//     corrected.
+	CriteriaExpression string `json:"criteriaExpression,omitempty"`
 }
 
 const CollectorConditionOwner = "collector.adx-mon.azure.com"
