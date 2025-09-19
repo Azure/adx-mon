@@ -355,8 +355,12 @@ func (n *uploader) extractSchema(path string) (string, error) {
 // https://learn.microsoft.com/en-us/azure/data-explorer/kusto-emulator-overview#limitations
 func (n *uploader) clusterRequiresDirectIngest(ctx context.Context) (bool, error) {
 	stmt := kql.New(".show cluster details")
-	rows, err := n.KustoCli.Mgmt(ctx, n.database, stmt)
-	if err != nil {
+	var rows *kusto.RowIterator
+	if err := retryMgmt(ctx, "show-cluster-details", func() error {
+		var err error
+		rows, err = n.KustoCli.Mgmt(ctx, n.database, stmt)
+		return err
+	}); err != nil {
 		return false, fmt.Errorf("failed to query cluster details: %w", err)
 	}
 	defer rows.Stop()
