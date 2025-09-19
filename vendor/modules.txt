@@ -12,7 +12,7 @@ buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/pr
 # cel.dev/expr v0.24.0
 ## explicit; go 1.22.0
 cel.dev/expr
-# dario.cat/mergo v1.0.1
+# dario.cat/mergo v1.0.2
 ## explicit; go 1.13
 dario.cat/mergo
 # github.com/Azure/azure-kusto-go v0.15.2 => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
@@ -248,7 +248,7 @@ github.com/docker/docker/internal/lazyregexp
 github.com/docker/docker/internal/multierror
 github.com/docker/docker/pkg/jsonmessage
 github.com/docker/docker/pkg/stdcopy
-# github.com/docker/go-connections v0.5.0
+# github.com/docker/go-connections v0.6.0
 ## explicit; go 1.18
 github.com/docker/go-connections/nat
 github.com/docker/go-connections/sockets
@@ -528,7 +528,7 @@ github.com/russross/blackfriday/v2
 # github.com/samber/lo v1.38.1
 ## explicit; go 1.18
 github.com/samber/lo
-# github.com/shirou/gopsutil/v4 v4.25.5
+# github.com/shirou/gopsutil/v4 v4.25.6
 ## explicit; go 1.23
 github.com/shirou/gopsutil/v4/common
 github.com/shirou/gopsutil/v4/cpu
@@ -567,8 +567,8 @@ github.com/tenebris-tech/tail/ratelimiter
 github.com/tenebris-tech/tail/util
 github.com/tenebris-tech/tail/watch
 github.com/tenebris-tech/tail/winfile
-# github.com/testcontainers/testcontainers-go v0.38.0
-## explicit; go 1.23.0
+# github.com/testcontainers/testcontainers-go v0.39.0
+## explicit; go 1.24.0
 github.com/testcontainers/testcontainers-go
 github.com/testcontainers/testcontainers-go/exec
 github.com/testcontainers/testcontainers-go/internal
