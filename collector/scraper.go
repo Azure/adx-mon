@@ -510,9 +510,13 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 			// If target list is specified, only scrape those path/port combinations
 			if len(targetMap) != 0 {
 				checkPorts := []string{strconv.Itoa(int(cp.ContainerPort)), readinessPort, livenessPort}
+				// Add named port to the check list if it exists
+				if cp.Name != "" {
+					checkPorts = append(checkPorts, cp.Name)
+				}
 				for _, checkPort := range checkPorts {
-					// if the current port, liveness port, or readiness port exist in the targetMap, add that to scrape targets
-					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap); added {
+					// if the current port, liveness port, readiness port, or named port exist in the targetMap, add that to scrape targets
+					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap, &cp); added {
 						targets = append(targets, target)
 						// if all targets are accounted for, return target list
 						if len(targetMap) == 0 {
@@ -526,12 +530,27 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 			// If a port is specified, only scrape that port on the pod
 			if port != "" {
-				if port != strconv.Itoa(int(cp.ContainerPort)) && port != readinessPort && port != livenessPort {
+				portMatch := false
+				actualPort := ""
+
+				// Check if it matches numeric port
+				if port == strconv.Itoa(int(cp.ContainerPort)) || port == readinessPort || port == livenessPort {
+					portMatch = true
+					actualPort = port
+				}
+				// Check if it matches named port
+				if cp.Name != "" && port == cp.Name {
+					portMatch = true
+					actualPort = strconv.Itoa(int(cp.ContainerPort))
+				}
+
+				if !portMatch {
 					continue
 				}
+
 				targets = append(targets,
 					ScrapeTarget{
-						Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, path),
+						Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, actualPort, path),
 						Namespace: p.Namespace,
 						Pod:       p.Name,
 						Container: c.Name,
@@ -573,10 +592,15 @@ func parseTargetList(targetList string) (map[string]string, error) {
 	return m, nil
 }
 
-func addTargetFromMap(podIP, scheme, port, namespace, pod, container string, targetMap map[string]string) (ScrapeTarget, bool) {
+func addTargetFromMap(podIP, scheme, port, namespace, pod, container string, targetMap map[string]string, cp *v1.ContainerPort) (ScrapeTarget, bool) {
 	if tPath, ok := targetMap[port]; ok {
+		actualPort := port
+		// If the port matches a named port, use the actual numeric port
+		if cp != nil && cp.Name == port {
+			actualPort = strconv.Itoa(int(cp.ContainerPort))
+		}
 		target := ScrapeTarget{
-			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, port, tPath),
+			Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, actualPort, tPath),
 			Namespace: namespace,
 			Pod:       pod,
 			Container: container,
