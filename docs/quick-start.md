@@ -36,8 +36,24 @@ Prometheus metric names will be transformed from `snake_case` to `TitleCase`. As
 
 ```yaml
 adx-mon/scrape: "true"
-adx-mon/port: "8080"
+adx-mon/port: "8080"      # Can use numeric ports
 adx-mon/path: "/metrics"
+```
+
+You can also use **named ports** for better readability:
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/port: "metrics"   # Use the named port from your container spec
+adx-mon/path: "/metrics"
+```
+
+For multiple endpoints, use the `targets` annotation:
+
+```yaml
+adx-mon/scrape: "true"
+# Mix named and numeric ports as needed
+adx-mon/targets: "/metrics:metrics,/health:9000"
 ```
 
 ### Logs

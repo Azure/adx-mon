@@ -43,7 +43,8 @@ The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is t
   - `exporters`: Additional telemetry destinations.
 - **Kubernetes Annotations:**
   - `adx-mon/scrape`: Enables scraping for a pod/service.
-  - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path.
+  - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path. Port can be numeric (e.g., "8080") or named (e.g., "metrics").
+  - `adx-mon/targets`: Comma-separated list of path:port combinations. Supports named ports.
   - `adx-mon/log-destination`: Sets log destination table.
   - `adx-mon/log-parsers`: Comma-separated list of log parsers (e.g., `json`).
 
