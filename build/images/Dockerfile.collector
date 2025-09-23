@@ -1,13 +1,12 @@
 FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS builder
+ARG TARGETOS TARGETARCH VERSION GIT_COMMIT BUILD_TIME
 
 RUN tdnf install -y golang systemd-devel gcc glibc-devel binutils kernel-headers ca-certificates
 
 ADD . /code
 WORKDIR /code
 
-ARG VERSION GIT_COMMIT BUILD_TIME
-
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 -ldflags=" \
 -X 'github.com/Azure/adx-mon/pkg/version.Version=${VERSION}' \
 -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=${GIT_COMMIT}' \
