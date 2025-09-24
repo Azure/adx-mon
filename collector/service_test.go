@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -403,6 +404,162 @@ func TestMakeTargetsFromListNegative(t *testing.T) {
 
 	targets := makeTargets(pod)
 	require.Equal(t, 0, len(targets))
+}
+
+func TestMakeTargets_NamedPort(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "metrics", // Use named port instead of numeric
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics", // Named port
+					ContainerPort: 8080,
+				},
+				{
+					Name:          "health", // Another named port
+					ContainerPort: 9000,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 1, len(targets))
+	require.Equal(t, "http://1.2.3.4:8080/metrics", targets[0].Addr)
+	require.Equal(t, "foo", targets[0].Namespace)
+	require.Equal(t, "bar", targets[0].Pod)
+	require.Equal(t, "container", targets[0].Container)
+}
+
+func TestMakeTargets_NamedPortInTargets(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape":  "true",
+		"adx-mon/targets": "/metrics:metrics,/health:health", // Use named ports
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics",
+					ContainerPort: 8080,
+				},
+				{
+					Name:          "health",
+					ContainerPort: 9000,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 2, len(targets))
+
+	// Sort by port for consistent testing
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Addr < targets[j].Addr
+	})
+
+	require.Equal(t, "http://1.2.3.4:8080/metrics", targets[0].Addr)
+	require.Equal(t, "http://1.2.3.4:9000/health", targets[1].Addr)
+}
+
+func TestMakeTargets_MixedNamedAndNumericPorts(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape":  "true",
+		"adx-mon/targets": "/metrics:metrics,/health:9001", // Mix named and numeric ports
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics",
+					ContainerPort: 8080,
+				},
+				{
+					ContainerPort: 9001, // No name for this port
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 2, len(targets))
+
+	// Sort by port for consistent testing
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Addr < targets[j].Addr
+	})
+
+	require.Equal(t, "http://1.2.3.4:8080/metrics", targets[0].Addr)
+	require.Equal(t, "http://1.2.3.4:9001/health", targets[1].Addr)
+}
+
+func TestMakeTargets_NamedPortNotFound(t *testing.T) {
+	pod := fakePod("foo", "bar", nil, "node")
+	pod.Annotations = map[string]string{
+		"adx-mon/scrape": "true",
+		"adx-mon/port":   "nonexistent", // Named port that doesn't exist
+	}
+
+	pod.Status.PodIP = "1.2.3.4"
+	pod.Spec.Containers = []v1.Container{
+		{
+			Name: "container",
+			Ports: []v1.ContainerPort{
+				{
+					Name:          "metrics",
+					ContainerPort: 8080,
+				},
+			},
+		},
+	}
+
+	targets := makeTargets(pod)
+	require.Equal(t, 0, len(targets)) // Should not find any targets
+}
+
+func TestAddTargetFromMap_NamedPort(t *testing.T) {
+	targetMap := map[string]string{
+		"metrics": "/metrics",
+		"8080":    "/health",
+	}
+
+	cp := &v1.ContainerPort{
+		Name:          "metrics",
+		ContainerPort: 9090,
+	}
+
+	// Test named port resolution
+	target, added := addTargetFromMap("1.2.3.4", "http", "metrics", "namespace", "pod", "container", targetMap, cp)
+	require.True(t, added)
+	require.Equal(t, "http://1.2.3.4:9090/metrics", target.Addr) // Should resolve to numeric port
+	require.Equal(t, "namespace", target.Namespace)
+	require.Equal(t, "pod", target.Pod)
+	require.Equal(t, "container", target.Container)
+
+	// targetMap should have the named port removed
+	_, exists := targetMap["metrics"]
+	require.False(t, exists)
+
+	// Test numeric port (unchanged behavior)
+	target2, added2 := addTargetFromMap("1.2.3.4", "http", "8080", "namespace", "pod", "container", targetMap, cp)
+	require.True(t, added2)
+	require.Equal(t, "http://1.2.3.4:8080/health", target2.Addr) // Should use numeric port as-is
 }
 
 func fakePod(namespace, name string, labels map[string]string, node string) *v1.Pod {
