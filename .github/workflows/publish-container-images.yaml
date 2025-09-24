@@ -4,6 +4,7 @@ on:
   push:
     branches: [ "main" ]
     tags: [ 'v*.*.*' ]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -45,6 +46,7 @@ jobs:
 
       # Login against a Docker registry
       - name: Log into registry ${{ env.REGISTRY }}
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -71,10 +73,11 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
             GIT_COMMIT=${{ github.sha }}
             BUILD_TIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-          push: true
+          push: ${{ github.event_name != 'workflow_dispatch' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
