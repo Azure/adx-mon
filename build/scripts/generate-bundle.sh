@@ -16,7 +16,8 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Run bundle generation in Docker container for cross-platform compatibility
-docker run --rm -v "$K8S_DIR:/build" ubuntu:latest bash -eu -o pipefail -c '
+docker run --rm -v "$K8S_DIR:/build" mcr.microsoft.com/azurelinux/base/core:3.0 bash -eu -o pipefail -c '
+  tdnf install -y tar gzip
   cd /build
 
   GZIP=-n \
