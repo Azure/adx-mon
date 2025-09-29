@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -71,8 +72,8 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	if !s.healthChecker.IsHealthy() {
-		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
-		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
+		status := newErrorStatus("Overloaded. Retry later")
+		writeErrorStatusResponse(w, http.StatusTooManyRequests, status, m)
 		return
 	}
 
@@ -86,14 +87,14 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		n, err := io.ReadFull(r.Body, b)
 		if err != nil {
 			s.logger.Error("Failed to read request body", "Error", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			m.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
+			status := newErrorStatus("Failed to read request body")
+			writeErrorStatusResponse(w, http.StatusInternalServerError, status, m)
 			return
 		}
 		if n < int(r.ContentLength) {
 			s.logger.Warn("Short read")
-			w.WriteHeader(http.StatusBadRequest)
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			status := newErrorStatus("Request body shorter than Content-Length header")
+			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
 			return
 		}
 		b = b[:n]
@@ -105,8 +106,8 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		msg := &v1.ExportLogsServiceRequest{}
 		if err := proto.Unmarshal(b, msg); err != nil {
 			s.logger.Error("Failed to unmarshal request body", "Error", err)
-			w.WriteHeader(http.StatusBadRequest)
-			m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
+			status := newErrorStatus(fmt.Sprintf("Failed to unmarshal request body: %v", err))
+			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
 			return
 		}
 
@@ -158,13 +159,13 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		// We're receiving JSON, so we need to unmarshal the JSON
 		// into an OTLP protobuf, then use gRPC to send the OTLP
 		// protobuf to the OTLP endpoint
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
+		status := newErrorStatus("Unsupported Content-Type: application/json")
+		writeErrorStatusResponse(w, http.StatusUnsupportedMediaType, status, m)
 
 	default:
 		logger.Errorf("Unsupported Content-Type: %s", r.Header.Get("Content-Type"))
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		m.WithLabelValues(strconv.Itoa(http.StatusUnsupportedMediaType)).Inc()
+		status := newErrorStatus(fmt.Sprintf("Unsupported Content-Type: %s", r.Header.Get("Content-Type")))
+		writeErrorStatusResponse(w, http.StatusUnsupportedMediaType, status, m)
 	}
 
 }
