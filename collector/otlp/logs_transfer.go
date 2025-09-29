@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/otlp"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -112,7 +113,20 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
 		logBatch.Reset()
 
-		droppedLogMissingMetadata := s.convertToLogBatch(msg, logBatch)
+		droppedLogMissingMetadata, convertedLogs := s.convertToLogBatch(msg, logBatch)
+
+		if convertedLogs == 0 {
+			var status *status.Status
+			if droppedLogMissingMetadata > 0 {
+				metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+				status = newErrorStatus("All logs dropped. Required kusto.database and kusto.table attributes or body fields are missing.")
+			} else {
+				status = newErrorStatus("No logs to process.")
+			}
+
+			writeErrorStatusResponse(w, http.StatusBadRequest, status, m)
+			return
+		}
 
 		s.outputQueue <- logBatch
 
@@ -160,13 +174,16 @@ var (
 	ErrMalformedLogs        = errors.New("malformed log records")
 )
 
-// convertToLogBatch populates the LogBatch with the logs from the OTLP message. Returns the number of logs that were lacking kusto routing metadata
-func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBatch *types.LogBatch) int64 {
+// convertToLogBatch populates the LogBatch with the logs from the OTLP message.
+// Returns the number of logs that were lacking kusto routing metadata and the
+// number of logs successfully converted.
+func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBatch *types.LogBatch) (int64, int64) {
 	if msg == nil {
-		return 0
+		return 0, 0
 	}
 
-	var droppedLogMissingMetadata int64 = 0
+	var droppedLogMissingMetadata int64
+	var convertedLogs int64
 	for _, resourceLog := range msg.ResourceLogs {
 		if resourceLog == nil {
 			continue
@@ -218,10 +235,11 @@ func (s *LogsService) convertToLogBatch(msg *v1.ExportLogsServiceRequest, logBat
 				metrics.LogKeys.WithLabelValues(dbName, tableName).Inc()
 
 				logBatch.Logs = append(logBatch.Logs, log)
+				convertedLogs++
 			}
 		}
 	}
-	return droppedLogMissingMetadata
+	return droppedLogMissingMetadata, convertedLogs
 }
 
 const defaultMaxDepth = 20
