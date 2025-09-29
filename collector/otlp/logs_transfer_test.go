@@ -3,6 +3,7 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -367,11 +368,119 @@ func TestLogsService_Overloaded(t *testing.T) {
 	resp := httptest.NewRecorder()
 	s.Handler(resp, req)
 	require.Equal(t, http.StatusTooManyRequests, resp.Code)
+	require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
+
+	statusResp := &statuspb.Status{}
+	require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+	require.Equal(t, "Overloaded. Retry later", statusResp.GetMessage())
 
 	require.NoError(t, store.Close())
 
 	keys := store.PrefixesByAge()
 	require.Equal(t, 0, len(keys))
+}
+
+func TestLogsService_ErrorStatusResponses(t *testing.T) {
+	tests := []struct {
+		name           string
+		buildRequest   func(t *testing.T) *http.Request
+		expectedStatus int
+		assertMessage  func(t *testing.T, msg string)
+	}{
+		{
+			name: "invalid_proto",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", strings.NewReader("notaproto"))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/x-protobuf")
+				return req
+			},
+			expectedStatus: http.StatusBadRequest,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Contains(t, msg, "Failed to unmarshal request body:")
+			},
+		},
+		{
+			name: "read_error",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", nil)
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/x-protobuf")
+				req.ContentLength = 8
+				req.Body = &failingReadCloser{err: errors.New("read failed")}
+				return req
+			},
+			expectedStatus: http.StatusInternalServerError,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Equal(t, "Failed to read request body", msg)
+			},
+		},
+		{
+			name: "unsupported_json",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", strings.NewReader("{}"))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			expectedStatus: http.StatusUnsupportedMediaType,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Equal(t, "Unsupported Content-Type: application/json", msg)
+			},
+		},
+		{
+			name: "unsupported_other",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", strings.NewReader("ignored"))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "text/plain")
+				return req
+			},
+			expectedStatus: http.StatusUnsupportedMediaType,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Equal(t, "Unsupported Content-Type: text/plain", msg)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			store := storage.NewLocalStore(
+				storage.StoreOpts{
+					StorageDir: dir,
+				})
+
+			require.NoError(t, store.Open(context.Background()))
+			defer store.Close()
+
+			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
+			require.NoError(t, err)
+			workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
+			s := NewLogsService(LogsServiceOpts{
+				WorkerCreator: workerCreator,
+				HealthChecker: fakeHealthChecker{true},
+			})
+			require.NoError(t, s.Open(context.Background()))
+			defer s.Close()
+
+			req := tt.buildRequest(t)
+			resp := httptest.NewRecorder()
+			s.Handler(resp, req)
+
+			require.Equal(t, tt.expectedStatus, resp.Code)
+			require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
+
+			statusResp := &statuspb.Status{}
+			require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+			tt.assertMessage(t, statusResp.GetMessage())
+
+			require.NoError(t, store.Close())
+			keys := store.PrefixesByAge()
+			require.Len(t, keys, 0)
+		})
+	}
 }
 
 func BenchmarkLogsService(b *testing.B) {
@@ -1209,6 +1318,16 @@ func TestExtract(t *testing.T) {
 		})
 	}
 }
+
+type failingReadCloser struct {
+	err error
+}
+
+func (f *failingReadCloser) Read(_ []byte) (int, error) {
+	return 0, f.err
+}
+
+func (f *failingReadCloser) Close() error { return nil }
 
 type fakeHealthChecker struct {
 	healthy bool
