@@ -57,8 +57,9 @@ func (s *Store) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	s.rules = rules
+
+	s.wg.Add(1)
 	go s.reloadPeriodically()
 	return nil
 }
@@ -103,8 +104,11 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 }
 
 func (s *Store) reloadRules() ([]*Rule, error) {
+	ctx, cancel := context.WithTimeout(s.ctx, 1*time.Minute)
+	defer cancel()
+
 	ruleList := &alertrulev1.AlertRuleList{}
-	if err := s.ctrlCli.List(context.Background(), ruleList); err != nil {
+	if err := s.ctrlCli.List(ctx, ruleList); err != nil {
 		return nil, fmt.Errorf("failed to list alert rules: %w", err)
 	}
 
@@ -120,7 +124,6 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 }
 
 func (s *Store) reloadPeriodically() {
-	s.wg.Add(1)
 	defer s.wg.Done()
 
 	for {
