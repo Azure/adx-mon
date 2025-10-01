@@ -25,7 +25,8 @@ import (
 )
 
 type Service struct {
-	opts *ServiceOpts
+	opts           *ServiceOpts
+	storageBackend storage.Backend
 
 	cancel context.CancelFunc
 
@@ -58,9 +59,10 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	ListenAddr string
-	NodeName   string
-	Endpoint   string
+	ListenAddr     string
+	NodeName       string
+	Endpoint       string
+	StorageBackend storage.Backend
 
 	// LogCollectionHandlers is the list of log collection handlers
 	LogCollectionHandlers []LogCollectorOpts
@@ -181,6 +183,11 @@ func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
+	backend := opts.StorageBackend
+	if backend == "" {
+		backend = storage.BackendADX
+	}
+
 	maxSegmentAge := 30 * time.Second
 	if opts.MaxSegmentAge.Seconds() > 0 {
 		maxSegmentAge = opts.MaxSegmentAge
@@ -212,6 +219,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
 		MaxDiskUsage:     maxDiskUsage,
+		Backend:          backend,
 		LiftedLabels:     opts.LiftLabels,
 		LiftedAttributes: opts.LiftAttributes,
 		LiftedResources:  opts.LiftResources,
@@ -341,7 +349,8 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	svc := &Service{
-		opts: opts,
+		opts:           opts,
+		storageBackend: backend,
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
 			PeerHealthReport: health,
 		}),

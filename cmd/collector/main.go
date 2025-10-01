@@ -50,6 +50,12 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
+			&cli.StringFlag{
+				Name:        "storage-backend",
+				Usage:       "Override storage backend (adx or clickhouse)",
+				EnvVars:     []string{"COLLECTOR_STORAGE_BACKEND"},
+				DefaultText: string(storage.BackendADX),
+			},
 		},
 
 		Commands: []*cli.Command{
@@ -115,10 +121,25 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg = fileConfig
+	backendOverride := ctx.String("storage-backend")
+	if ctx.IsSet("storage-backend") {
+		if backendOverride == "" {
+			return fmt.Errorf("storage-backend cannot be empty")
+		}
+		cfg.StorageBackend = backendOverride
+	} else if cfg.StorageBackend == "" {
+		cfg.StorageBackend = config.DefaultConfig.StorageBackend
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+
+	backend, err := storage.ParseBackend(cfg.StorageBackend)
+	if err != nil {
+		return err
+	}
+	logger.Infof("Collector storage backend: %s", backend)
 
 	hostname := ctx.String("hostname")
 	if hostname == "" {
@@ -316,6 +337,7 @@ func realMain(ctx *cli.Context) error {
 		ListenAddr:             cfg.ListenAddr,
 		NodeName:               hostname,
 		Endpoint:               endpoint,
+		StorageBackend:         backend,
 		DisableGzip:            cfg.DisableGzip,
 		LiftLabels:             sortedLiftedLabels,
 		AddAttributes:          addAttributes,
