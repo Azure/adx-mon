@@ -111,6 +111,8 @@ type Config struct {
 	OtelMetric            []*OtelMetric            `toml:"otel-metric,omitempty" comment:"Defines an OpenTelemetry metric endpoint. Accepts OTLP/HTTP and/or OTLP/gRPC."`
 	HostLog               []*HostLog               `toml:"host-log,omitempty" comment:"Defines a host log scraper."`
 	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.\nExporters are declared here and referenced by name in each collection source."`
+	MetadataWatch         *MetadataWatch           `toml:"metadata-watch,omitempty" comment:"Optional configuration for watching dynamic metadata to add to logs and metrics."`
+	AddMetadataLabels     *AddMetadataLabels       `toml:"add-metadata-labels,omitempty" comment:"Optional global configuration for adding dynamic metadata as labels to all logs and metrics."`
 }
 
 type PrometheusScrape struct {
@@ -511,6 +513,18 @@ type LogTransform struct {
 func (c *Config) Validate() error {
 	if c.Exporters != nil {
 		if err := c.Exporters.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.MetadataWatch != nil {
+		if err := c.MetadataWatch.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.AddMetadataLabels != nil {
+		if err := c.AddMetadataLabels.Validate(c); err != nil {
 			return err
 		}
 	}

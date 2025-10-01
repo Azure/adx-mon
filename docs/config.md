@@ -426,6 +426,36 @@ Available parser types:
 
 ## Exporters
 
+## Metadata Watching
+
+Metadata watching enables dynamic enrichment of metrics and logs with Kubernetes node metadata (labels, annotations) and other sources. This is configured using the `[metadata-watch]` and `[add-metadata-labels]` sections.
+### Kubernetes Node Metadata Watching
+
+Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.
+
+```toml
+# Optional configuration for watching dynamic metadata to add to logs and metrics.
+[metadata-watch]
+  # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
+  [metadata-watch.kubernetes-node]
+
+# Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
+[add-metadata-labels]
+  # Configures the node labels and annotations to add as labels
+  [add-metadata-labels.kubernetes-node]
+    # Mapping of node label keys to destination label key names
+    [add-metadata-labels.kubernetes-node.labels]
+      'kubernetes.io/role' = 'node_role'
+      'node.kubernetes.io/instance-type' = 'instance_type'
+
+    # Mapping of node annotation keys to destination label key names
+    [add-metadata-labels.kubernetes-node.annotations]
+      'cluster-autoscaler.kubernetes.io/safe-to-evict' = 'safe_to_evict'
+      'node.alpha.kubernetes.io/ttl' = 'node_ttl'
+
+```
+
+## Exporters
 Exporters are used to send telemetry to external systems in parallel with data sent to Azure Data Explorer. Exporters are per-source type (e.g. Metrics, Logs). Exporters are defined under the top level configuration key `[exporters]` within a key representing the exporter type (e.g. `[exporters.otlp-metric-export]`). They are referenced by their configured `name` in the relevant telemetry collection section.
 ### Metric Exporters
 
