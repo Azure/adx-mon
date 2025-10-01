@@ -19,6 +19,8 @@ import (
 	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto"
@@ -33,6 +35,63 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+type fakeCredential struct{}
+
+func (fakeCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{Token: "fake", ExpiresOn: time.Now().Add(time.Hour)}, nil
+}
+
+func TestEnsureDatabasesHandlesNilFederation(t *testing.T) {
+	t.Parallel()
+
+	cluster := &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test",
+			Endpoint:    "https://example.kusto.windows.net",
+			Provision: &adxmonv1.ADXClusterProvisionSpec{
+				SubscriptionId: "00000000-0000-0000-0000-000000000000",
+				ResourceGroup:  "rg-test",
+				Location:       "eastus",
+			},
+		},
+	}
+
+	created, err := ensureDatabases(context.Background(), cluster, fakeCredential{})
+	require.NoError(t, err)
+	require.False(t, created)
+}
+
+func TestEnsureDatabasesSkipsWithoutProvision(t *testing.T) {
+	t.Parallel()
+
+	cluster := &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test",
+			Endpoint:    "https://example.kusto.windows.net",
+		},
+	}
+
+	created, err := ensureDatabases(context.Background(), cluster, fakeCredential{})
+	require.NoError(t, err)
+	require.False(t, created)
+}
+
+func TestEnsureDatabasesRequiresSubscriptionAndResourceGroup(t *testing.T) {
+	t.Parallel()
+
+	cluster := &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test",
+			Endpoint:    "https://example.kusto.windows.net",
+			Provision:   &adxmonv1.ADXClusterProvisionSpec{},
+		},
+	}
+
+	_, err := ensureDatabases(context.Background(), cluster, fakeCredential{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing subscriptionId or resourceGroup")
+}
 
 func TestGetIMDSMetadata(t *testing.T) {
 	tests := []struct {
