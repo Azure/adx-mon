@@ -401,12 +401,20 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseN
 
 // ensureDatabases creates databases if they do not exist, returns true if any were created
 func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azcore.TokenCredential) (bool, error) {
+	if cluster.Spec.Provision == nil {
+		logger.Warnf("Skipping database ensure for cluster %s: provision configuration is empty", cluster.Spec.ClusterName)
+		return false, nil
+	}
+	if cluster.Spec.Provision.SubscriptionId == "" || cluster.Spec.Provision.ResourceGroup == "" {
+		return false, fmt.Errorf("cluster %s is missing subscriptionId or resourceGroup in provision spec", cluster.Spec.ClusterName)
+	}
+
 	databasesClient, err := armkusto.NewDatabasesClient(cluster.Spec.Provision.SubscriptionId, cred, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create databases client: %w", err)
 	}
 	databases := cluster.Spec.Databases
-	if cluster.Spec.Federation.HeartbeatDatabase != nil {
+	if cluster.Spec.Federation != nil && cluster.Spec.Federation.HeartbeatDatabase != nil {
 		databases = append(databases, adxmonv1.ADXClusterDatabaseSpec{
 			DatabaseName:  *cluster.Spec.Federation.HeartbeatDatabase,
 			TelemetryType: adxmonv1.DatabaseTelemetryLogs,
