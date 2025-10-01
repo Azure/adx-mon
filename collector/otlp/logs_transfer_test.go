@@ -3,6 +3,7 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,9 @@ import (
 	"github.com/Azure/adx-mon/storage"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	protoV2 "google.golang.org/protobuf/proto"
 )
 
 func TestLogsServiceE2E(t *testing.T) {
@@ -133,6 +136,204 @@ func TestLogsServiceE2E(t *testing.T) {
 	})
 }
 
+func TestLogsService_AllLogsDropped(t *testing.T) {
+	const (
+		droppedMessage      = "All logs dropped. Required kusto.database and kusto.table attributes or body fields are missing."
+		emptyRequestMessage = "No logs to process."
+	)
+
+	tests := []struct {
+		name            string
+		build           func() *v1.ExportLogsServiceRequest
+		expectedMessage string
+	}{
+		{
+			name: "empty_request",
+			build: func() *v1.ExportLogsServiceRequest {
+				return &v1.ExportLogsServiceRequest{}
+			},
+			expectedMessage: emptyRequestMessage,
+		},
+		{
+			name: "body_string_without_metadata",
+			build: func() *v1.ExportLogsServiceRequest {
+				return exportLogsRequest([]*logsv1.LogRecord{
+					{
+						TimeUnixNano:         1,
+						ObservedTimeUnixNano: 1,
+						Body: &commonv1.AnyValue{
+							Value: &commonv1.AnyValue_StringValue{StringValue: "body"},
+						},
+					},
+				})
+			},
+			expectedMessage: droppedMessage,
+		},
+		{
+			name: "body_missing_table",
+			build: func() *v1.ExportLogsServiceRequest {
+				return exportLogsRequest([]*logsv1.LogRecord{
+					{
+						TimeUnixNano:         1,
+						ObservedTimeUnixNano: 1,
+						Body: &commonv1.AnyValue{
+							Value: &commonv1.AnyValue_KvlistValue{
+								KvlistValue: &commonv1.KeyValueList{
+									Values: []*commonv1.KeyValue{
+										{
+											Key: "message",
+											Value: &commonv1.AnyValue{
+												Value: &commonv1.AnyValue_StringValue{StringValue: "message"},
+											},
+										},
+										{
+											Key: "kusto.database",
+											Value: &commonv1.AnyValue{
+												Value: &commonv1.AnyValue_StringValue{StringValue: "ADatabase"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				})
+			},
+			expectedMessage: droppedMessage,
+		},
+		{
+			name: "attributes_missing_database",
+			build: func() *v1.ExportLogsServiceRequest {
+				return exportLogsRequest([]*logsv1.LogRecord{
+					{
+						TimeUnixNano:         1,
+						ObservedTimeUnixNano: 1,
+						Attributes: []*commonv1.KeyValue{
+							{
+								Key: "kusto.table",
+								Value: &commonv1.AnyValue{
+									Value: &commonv1.AnyValue_StringValue{StringValue: "BTable"},
+								},
+							},
+						},
+					},
+				})
+			},
+			expectedMessage: droppedMessage,
+		},
+		{
+			name: "attributes_missing_table",
+			build: func() *v1.ExportLogsServiceRequest {
+				return exportLogsRequest([]*logsv1.LogRecord{
+					{
+						TimeUnixNano:         1,
+						ObservedTimeUnixNano: 1,
+						Attributes: []*commonv1.KeyValue{
+							{
+								Key: "kusto.database",
+								Value: &commonv1.AnyValue{
+									Value: &commonv1.AnyValue_StringValue{StringValue: "ADatabase"},
+								},
+							},
+						},
+					},
+				})
+			},
+			expectedMessage: droppedMessage,
+		},
+		{
+			name: "resource_only_metadata",
+			build: func() *v1.ExportLogsServiceRequest {
+				return &v1.ExportLogsServiceRequest{
+					ResourceLogs: []*logsv1.ResourceLogs{
+						{
+							Resource: &resourcev1.Resource{
+								Attributes: []*commonv1.KeyValue{
+									{
+										Key: "kusto.database",
+										Value: &commonv1.AnyValue{
+											Value: &commonv1.AnyValue_StringValue{StringValue: "ADatabase"},
+										},
+									},
+									{
+										Key: "kusto.table",
+										Value: &commonv1.AnyValue{
+											Value: &commonv1.AnyValue_StringValue{StringValue: "BTable"},
+										},
+									},
+								},
+							},
+							ScopeLogs: []*logsv1.ScopeLogs{
+								{
+									LogRecords: []*logsv1.LogRecord{
+										{
+											TimeUnixNano:         1,
+											ObservedTimeUnixNano: 1,
+											Body: &commonv1.AnyValue{
+												Value: &commonv1.AnyValue_StringValue{StringValue: "body"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+			},
+			expectedMessage: droppedMessage,
+		},
+		{
+			name: "multiple_records_all_invalid",
+			build: func() *v1.ExportLogsServiceRequest {
+				return exportLogsRequest([]*logsv1.LogRecord{
+					{
+						TimeUnixNano:         1,
+						ObservedTimeUnixNano: 1,
+						Attributes: []*commonv1.KeyValue{
+							{
+								Key: "kusto.database",
+								Value: &commonv1.AnyValue{
+									Value: &commonv1.AnyValue_StringValue{StringValue: "ADatabase"},
+								},
+							},
+						},
+					},
+					{
+						TimeUnixNano:         2,
+						ObservedTimeUnixNano: 2,
+						Attributes: []*commonv1.KeyValue{
+							{
+								Key: "kusto.table",
+								Value: &commonv1.AnyValue{
+									Value: &commonv1.AnyValue_StringValue{StringValue: "BTable"},
+								},
+							},
+						},
+					},
+				})
+			},
+			expectedMessage: droppedMessage,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, store := makeRequest(t, tt.build())
+
+			require.Equal(t, http.StatusBadRequest, resp.Code)
+			require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
+
+			statusResp := &statuspb.Status{}
+			require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+			require.Equal(t, tt.expectedMessage, statusResp.GetMessage())
+
+			require.NoError(t, store.Close())
+			keys := store.PrefixesByAge()
+			require.Len(t, keys, 0)
+		})
+	}
+}
+
 func TestLogsService_Overloaded(t *testing.T) {
 	dir := t.TempDir()
 
@@ -167,11 +368,119 @@ func TestLogsService_Overloaded(t *testing.T) {
 	resp := httptest.NewRecorder()
 	s.Handler(resp, req)
 	require.Equal(t, http.StatusTooManyRequests, resp.Code)
+	require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
+
+	statusResp := &statuspb.Status{}
+	require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+	require.Equal(t, "Overloaded. Retry later", statusResp.GetMessage())
 
 	require.NoError(t, store.Close())
 
 	keys := store.PrefixesByAge()
 	require.Equal(t, 0, len(keys))
+}
+
+func TestLogsService_ErrorStatusResponses(t *testing.T) {
+	tests := []struct {
+		name           string
+		buildRequest   func(t *testing.T) *http.Request
+		expectedStatus int
+		assertMessage  func(t *testing.T, msg string)
+	}{
+		{
+			name: "invalid_proto",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", strings.NewReader("notaproto"))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/x-protobuf")
+				return req
+			},
+			expectedStatus: http.StatusBadRequest,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Contains(t, msg, "Failed to unmarshal request body:")
+			},
+		},
+		{
+			name: "read_error",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", nil)
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/x-protobuf")
+				req.ContentLength = 8
+				req.Body = &failingReadCloser{err: errors.New("read failed")}
+				return req
+			},
+			expectedStatus: http.StatusInternalServerError,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Equal(t, "Failed to read request body", msg)
+			},
+		},
+		{
+			name: "unsupported_json",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", strings.NewReader("{}"))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			},
+			expectedStatus: http.StatusUnsupportedMediaType,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Equal(t, "Unsupported Content-Type: application/json", msg)
+			},
+		},
+		{
+			name: "unsupported_other",
+			buildRequest: func(t *testing.T) *http.Request {
+				req, err := http.NewRequest("POST", "/v1/logs", strings.NewReader("ignored"))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "text/plain")
+				return req
+			},
+			expectedStatus: http.StatusUnsupportedMediaType,
+			assertMessage: func(t *testing.T, msg string) {
+				require.Equal(t, "Unsupported Content-Type: text/plain", msg)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			store := storage.NewLocalStore(
+				storage.StoreOpts{
+					StorageDir: dir,
+				})
+
+			require.NoError(t, store.Open(context.Background()))
+			defer store.Close()
+
+			sink, err := sinks.NewStoreSink(sinks.StoreSinkConfig{Store: store})
+			require.NoError(t, err)
+			workerCreator := engine.WorkerCreator(nil, []types.Sink{sink})
+			s := NewLogsService(LogsServiceOpts{
+				WorkerCreator: workerCreator,
+				HealthChecker: fakeHealthChecker{true},
+			})
+			require.NoError(t, s.Open(context.Background()))
+			defer s.Close()
+
+			req := tt.buildRequest(t)
+			resp := httptest.NewRecorder()
+			s.Handler(resp, req)
+
+			require.Equal(t, tt.expectedStatus, resp.Code)
+			require.Equal(t, "application/x-protobuf", resp.Header().Get("Content-Type"))
+
+			statusResp := &statuspb.Status{}
+			require.NoError(t, protoV2.Unmarshal(resp.Body.Bytes(), statusResp))
+			tt.assertMessage(t, statusResp.GetMessage())
+
+			require.NoError(t, store.Close())
+			keys := store.PrefixesByAge()
+			require.Len(t, keys, 0)
+		})
+	}
 }
 
 func BenchmarkLogsService(b *testing.B) {
@@ -224,18 +533,21 @@ func TestConvertToLogBatch(t *testing.T) {
 		req                 *v1.ExportLogsServiceRequest
 		expectedFunc        func() *types.LogBatch
 		expectedDroppedLogs int64
+		expectedConverted   int64
 	}{
 		{
 			name:                "nil request",
 			req:                 nil,
 			expectedFunc:        getLogbatch,
 			expectedDroppedLogs: 0,
+			expectedConverted:   0,
 		},
 		{
 			name:                "empty request",
 			req:                 &v1.ExportLogsServiceRequest{},
 			expectedFunc:        getLogbatch,
 			expectedDroppedLogs: 0,
+			expectedConverted:   0,
 		},
 		{
 			name: "nil resource log entry",
@@ -249,6 +561,7 @@ func TestConvertToLogBatch(t *testing.T) {
 			},
 			expectedFunc:        getLogbatch,
 			expectedDroppedLogs: 0,
+			expectedConverted:   0,
 		},
 		{
 			name: "nil scope logs",
@@ -266,6 +579,7 @@ func TestConvertToLogBatch(t *testing.T) {
 			},
 			expectedFunc:        getLogbatch,
 			expectedDroppedLogs: 0,
+			expectedConverted:   0,
 		},
 		{
 			name: "nil log records",
@@ -284,10 +598,12 @@ func TestConvertToLogBatch(t *testing.T) {
 			},
 			expectedFunc:        getLogbatch,
 			expectedDroppedLogs: 0,
+			expectedConverted:   0,
 		},
 		{
 			name:                "log without routing info",
 			expectedDroppedLogs: 1,
+			expectedConverted:   1,
 			expectedFunc: func() *types.LogBatch {
 				batch := getLogbatch()
 				log := types.LogPool.Get(1).(*types.Log)
@@ -361,6 +677,7 @@ func TestConvertToLogBatch(t *testing.T) {
 		{
 			name:                "log with resource",
 			expectedDroppedLogs: 0,
+			expectedConverted:   1,
 			expectedFunc: func() *types.LogBatch {
 				batch := getLogbatch()
 				log := types.LogPool.Get(1).(*types.Log)
@@ -457,10 +774,11 @@ func TestConvertToLogBatch(t *testing.T) {
 			})
 			logBatch := types.LogBatchPool.Get(1).(*types.LogBatch)
 			logBatch.Reset()
-			droppedLogs := s.convertToLogBatch(tt.req, logBatch)
+			droppedLogs, convertedLogs := s.convertToLogBatch(tt.req, logBatch)
 
 			expectedLogBatch := tt.expectedFunc()
 			require.Equal(t, tt.expectedDroppedLogs, droppedLogs)
+			require.Equal(t, tt.expectedConverted, convertedLogs)
 			require.ElementsMatch(t, expectedLogBatch.Logs, logBatch.Logs)
 		})
 	}
@@ -1000,6 +1318,16 @@ func TestExtract(t *testing.T) {
 		})
 	}
 }
+
+type failingReadCloser struct {
+	err error
+}
+
+func (f *failingReadCloser) Read(_ []byte) (int, error) {
+	return 0, f.err
+}
+
+func (f *failingReadCloser) Close() error { return nil }
 
 type fakeHealthChecker struct {
 	healthy bool
