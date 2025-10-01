@@ -64,6 +64,111 @@ func TestConfig_ValidatePromRemoteWrite_EmptyAddLabels(t *testing.T) {
 	require.Equal(t, "prometheus-remote-write.add-labels key must be set", c.Validate().Error())
 }
 
+func TestConfig_Validate_MetadataWatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "metadata watch omitted",
+			cfg:  Config{},
+		},
+		{
+			name: "metadata watch configured",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{},
+			},
+		},
+		{
+			name: "metadata watch kubernetes node",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestConfig_Validate_AddMetadataLabels(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "add metadata labels omitted",
+			cfg:  Config{},
+		},
+		{
+			name: "kubernetes node metadata not requested",
+			cfg: Config{
+				AddMetadataLabels: &AddMetadataLabels{},
+			},
+		},
+		{
+			name: "metadata labels require watcher",
+			cfg: Config{
+				AddMetadataLabels: &AddMetadataLabels{
+					KubernetesNode: &AddMetadataKubernetesNode{},
+				},
+			},
+			wantErr: "metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "invalid kubernetes label key",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				AddMetadataLabels: &AddMetadataLabels{
+					KubernetesNode: &AddMetadataKubernetesNode{
+						Labels: map[string]string{
+							"": "dest",
+						},
+					},
+				},
+			},
+			wantErr: "add-metadata-labels.kubernetes-node.labels key must be set",
+		},
+		{
+			name: "metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				AddMetadataLabels: &AddMetadataLabels{
+					KubernetesNode: &AddMetadataKubernetesNode{
+						Labels: map[string]string{
+							"kubernetes.io/role": "node_role",
+						},
+						Annotations: map[string]string{
+							"cluster-autoscaler.kubernetes.io/safe-to-evict": "safe_to_evict",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestConfig_ValidatePromRemoteWrite_EmptyDropLabels(t *testing.T) {
 	c := Config{
 		PrometheusRemoteWrite: []*PrometheusRemoteWrite{

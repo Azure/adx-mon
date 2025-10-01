@@ -17,6 +17,7 @@ var tmpl string
 
 type Contents struct {
 	Sections         []Section
+	MetadataSections []Section
 	ExporterSections []Section
 }
 
@@ -344,6 +345,29 @@ func getContents() Contents {
 									Table:    "Kernel",
 									Priority: "warning",
 								},
+							},
+						},
+					},
+				},
+			},
+		},
+		MetadataSections: []Section{
+			{
+				Title:       "Kubernetes Node Metadata Watching",
+				Description: "Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.",
+				Config: &config.Config{
+					MetadataWatch: &config.MetadataWatch{
+						KubernetesNode: &config.MetadataWatchKubernetesNode{},
+					},
+					AddMetadataLabels: &config.AddMetadataLabels{
+						KubernetesNode: &config.AddMetadataKubernetesNode{
+							Labels: map[string]string{
+								"kubernetes.io/role":               "node_role",
+								"node.kubernetes.io/instance-type": "instance_type",
+							},
+							Annotations: map[string]string{
+								"cluster-autoscaler.kubernetes.io/safe-to-evict": "safe_to_evict",
+								"node.alpha.kubernetes.io/ttl":                   "node_ttl",
 							},
 						},
 					},
