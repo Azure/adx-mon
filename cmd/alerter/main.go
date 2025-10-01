@@ -8,16 +8,17 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Azure/adx-mon/alerter"
-	alertrulev1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2" // imports as package "cli"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Azure/adx-mon/alerter"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/version"
 )
 
 func main() {
@@ -141,7 +142,7 @@ func realMain(ctx *cli.Context) error {
 }
 
 func newKubeClient(cCtx *cli.Context) (dynamic.Interface, *kubernetes.Clientset, ctrlclient.Client, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
+	config, err := k8s.BuildConfigFromFlags("", cCtx.String("kubeconfig"))
 	if err != nil {
 		logger.Warnf("No kube config provided, using fake kube client")
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", cCtx.String("kubeconfig"), err)

@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -17,7 +15,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
 	v12 "k8s.io/client-go/listers/core/v1"
-	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/testutils"
 )
 
 func TestCoordinator_NewPeer(t *testing.T) {
@@ -275,7 +276,7 @@ func TestCoordinatorInK8s(t *testing.T) {
 	kubeconfig, err := testutils.WriteKubeConfig(ctx, k3sContainer, t.TempDir())
 	require.NoError(t, err)
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	config, err := k8s.BuildConfigFromFlags("", kubeconfig)
 	require.NoError(t, err)
 
 	client, err := kubernetes.NewForConfig(config)
