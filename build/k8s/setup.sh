@@ -136,7 +136,7 @@ else
 fi
 
 # Find the managed identity client ID attached to the AKS node pools
-NODE_POOL_IDENTITY=$(az aks show --resource-group $AKS_RG --name $AKS_CLUSTER --query identityProfile.kubeletidentity.clientId -o json | jq . -r)
+NODE_POOL_IDENTITY=$(az aks show --subscription $AKS_SUB --resource-group $AKS_RG --name $AKS_CLUSTER --query identityProfile.kubeletidentity.clientId -o json | jq . -r)
 
 if interactive; then
   echo
