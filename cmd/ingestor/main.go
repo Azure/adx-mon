@@ -17,18 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	v1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/adx-mon/ingestor"
-	"github.com/Azure/adx-mon/ingestor/adx"
-	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
-	"github.com/Azure/adx-mon/metrics"
-	monhttp "github.com/Azure/adx-mon/pkg/http"
-	"github.com/Azure/adx-mon/pkg/limiter"
-	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/scheduler"
-	adxtls "github.com/Azure/adx-mon/pkg/tls"
-	"github.com/Azure/adx-mon/pkg/version"
-	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
@@ -37,8 +25,21 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/ingestor"
+	"github.com/Azure/adx-mon/ingestor/adx"
+	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
+	"github.com/Azure/adx-mon/metrics"
+	monhttp "github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/limiter"
+	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/scheduler"
+	adxtls "github.com/Azure/adx-mon/pkg/tls"
+	"github.com/Azure/adx-mon/pkg/version"
+	"github.com/Azure/adx-mon/schema"
 )
 
 func main() {
@@ -398,7 +399,7 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 		return nil, fake.NewSimpleClientset(), nil, nil
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	config, err := k8s.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", kubeconfig, err)
 	}

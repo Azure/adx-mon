@@ -93,6 +93,9 @@ func (e *worker) Run(ctx context.Context) {
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.mu.Unlock()
 
+	// Best-effort: update criteria condition reflecting cached match evaluation
+	e.updateAlertRuleCriteriaCondition(ctx)
+
 	go func() {
 		defer e.wg.Done()
 
@@ -146,16 +149,13 @@ func (e *worker) calculateNextQueryTime() time.Time {
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
-	// Best-effort: update criteria condition reflecting cached match evaluation
-	e.updateAlertRuleCriteriaCondition(ctx)
-
 	// Use cached match decision
 	if e.matchErr != nil {
 		logger.Errorf("Skipping %s/%s due to cached criteria evaluation error: %v", e.rule.Namespace, e.rule.Name, e.matchErr)
 		return
 	}
 	if !e.matchAllowed {
-		// Silent skip except trace already logged in constructor
+		logger.Infof("Skipping %s/%s due to cached criteria evaluation", e.rule.Namespace, e.rule.Name)
 		return
 	}
 
