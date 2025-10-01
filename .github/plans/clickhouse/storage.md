@@ -35,12 +35,12 @@ Provide an end-to-end recipe for preparing the collector’s WAL pipeline to ser
 3. Emit an informational log on startup stating the active backend and refuse to start if the flag is empty or invalid. Keep ADX as the fallback when the flag is omitted.
 4. Expose the selected backend via a gauge/metric (e.g., `collector_storage_backend_info`) so operators can validate clusters are homogenous before rollout.
 
-### Phase 2. Keep WAL serialization CSV-first
+### Phase 2. Keep WAL serialization CSV-first ✅ _Completed 2025-10-01_
 
-1. Leave the existing CSV encoders (`transform.MetricsCSVWriter`, `transform.NativeLogsCSVWriter`, etc.) untouched; ensure no code path switches encoders based on the backend flag.
-2. Add a focused unit test under `storage/store_test.go` that writes data with the backend flag set to `clickhouse` and confirms the resulting segment can still be decoded by `wal.NewSegmentReader` as CSV.
-3. Audit `storage.StoreOpts` to confirm S2 compression and `SampleType` metadata remain enabled; make compression configurable only if a future native payload path requires it.
-4. Validate that segment filenames and keys (`wal.Filename`, `storage.SegmentKey`) stay unchanged so ingestor batching continues to work without modification.
+1. Leave the existing CSV encoders (`transform.MetricsCSVWriter`, `transform.NativeLogsCSVWriter`, etc.) untouched; ensure no code path switches encoders based on the backend flag. **Status:** Verified — collector store continues to call the same CSV writers in ClickHouse mode.
+2. Add a focused unit test under `storage/store_test.go` that writes data with the backend flag set to `clickhouse` and confirms the resulting segment can still be decoded by `wal.NewSegmentReader` as CSV. **Status:** Implemented via table-driven `TestStore_WriteTimeSeries`, which asserts identical CSV payloads for both `adx` and `clickhouse` backends.
+3. Audit `storage.StoreOpts` to confirm S2 compression and `SampleType` metadata remain enabled; make compression configurable only if a future native payload path requires it. **Status:** Completed — storage options remain backend-agnostic, continuing to pass through compression metadata unchanged.
+4. Validate that segment filenames and keys (`wal.Filename`, `storage.SegmentKey`) stay unchanged so ingestor batching continues to work without modification. **Status:** Confirmed — no key or filename changes were required, and tests continue to rely on the existing format.
 
 ### Phase 3. Safety and interoperability checks
 
