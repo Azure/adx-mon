@@ -433,6 +433,8 @@ Metadata watching enables dynamic enrichment of metrics and logs with Kubernetes
 
 Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.
 
+> **RBAC requirements**: The collector's service account must be able to `get`, `list`, and `watch` the core `nodes` resource. Without these permissions the watcher fails with a "Failed to watch" error when attempting to read node metadata.
+
 ```toml
 # Optional configuration for watching dynamic metadata to add to logs and metrics.
 [metadata-watch]
