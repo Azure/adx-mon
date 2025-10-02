@@ -1,6 +1,6 @@
 # ClickHouse Ingestion Implementation Guide
 
-_Last updated: 2025-10-01_
+Last updated: 2025-10-02
 
 ## Purpose
 
@@ -29,12 +29,16 @@ Equip the engineering team with a concrete, end-to-end recipe for adding the Cli
 
 ## Implementation phases
 
-### Phase 1. Package scaffolding
+### Phase 1. Package scaffolding ✅
 
-1. Create `ingestor/clickhouse` with files for `uploader.go`, `config.go`, and `schema.go` (or similar split).
-2. Define `Config` struct that captures DSN, TLS overrides, optional auth materials, and batch sizing knobs.
-3. Implement `NewUploader(cfg Config, logger *zap.Logger) (Uploader, error)` returning a struct that satisfies the existing `ingestor/service.Uploader` interface (`Open`, `Close`, `Upload`, etc.).
-4. Add unit tests covering basic construction and configuration validation.
+1. ✅ `ingestor/clickhouse` now exists with `config.go`, `schema.go`, and `uploader.go` scaffolding.
+2. ✅ `Config` captures DSN, TLS, auth, queue sizing, and batch controls with validation + defaults.
+3. ✅ `NewUploader(cfg Config, log *slog.Logger)` returns an implementation of the shared uploader contract and defaults to `pkg/logger` when caller passes `nil`.
+4. ✅ Unit tests cover config validation, constructor defaults, lifecycle idempotence, and schema immutability.
+
+Additional notes:
+- `DefaultSchemas` mirrors `schema.NewMetricsSchema()` and `schema.NewLogsSchema()` so ClickHouse/ADX stay column-aligned.
+- The uploader logs with the project-wide slog logger to match existing observability conventions.
 
 ### Phase 2. Connection and configuration plumbing
 
