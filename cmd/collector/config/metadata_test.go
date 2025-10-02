@@ -112,3 +112,73 @@ func TestAddMetadataLabelsValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeAddMetadataLabels(t *testing.T) {
+	t.Run("nil configs returns empty config", func(t *testing.T) {
+		cfg := MergeAddMetadataLabels()
+		require.NotNil(t, cfg)
+		require.Empty(t, cfg.KubernetesNodeLabels)
+		require.Empty(t, cfg.KubernetesNodeAnnotations)
+
+		cfg = MergeAddMetadataLabels(nil, nil)
+		require.NotNil(t, cfg)
+		require.Empty(t, cfg.KubernetesNodeLabels)
+		require.Empty(t, cfg.KubernetesNodeAnnotations)
+	})
+
+	t.Run("merges maps and preserves precedence", func(t *testing.T) {
+		labelsFirst := map[string]string{
+			"first":  "label_a",
+			"shared": "label_b",
+		}
+		annotationsFirst := map[string]string{
+			"first-ann": "ann_a",
+		}
+		labelsSecond := map[string]string{
+			"shared": "label_c",
+			"second": "label_d",
+		}
+		annotationsSecond := map[string]string{
+			"second-ann": "ann_b",
+		}
+
+		cfg := MergeAddMetadataLabels(
+			&AddMetadataLabels{
+				KubernetesNode: &AddMetadataKubernetesNode{
+					Labels:      labelsFirst,
+					Annotations: annotationsFirst,
+				},
+			},
+			&AddMetadataLabels{
+				KubernetesNode: &AddMetadataKubernetesNode{
+					Labels:      labelsSecond,
+					Annotations: annotationsSecond,
+				},
+			},
+		)
+
+		require.NotNil(t, cfg)
+		require.Equal(t, map[string]string{
+			"first":  "label_a",
+			"shared": "label_c",
+			"second": "label_d",
+		}, cfg.KubernetesNodeLabels)
+		require.Equal(t, map[string]string{
+			"first-ann":  "ann_a",
+			"second-ann": "ann_b",
+		}, cfg.KubernetesNodeAnnotations)
+
+		// Mutating the original maps must not affect the merged output.
+		labelsFirst["first"] = "mutated"
+		annotationsSecond["second-ann"] = "mutated"
+		require.Equal(t, "label_a", cfg.KubernetesNodeLabels["first"])
+		require.Equal(t, "ann_b", cfg.KubernetesNodeAnnotations["second-ann"])
+	})
+
+	t.Run("skips nil kubernetes node configs", func(t *testing.T) {
+		cfg := MergeAddMetadataLabels(&AddMetadataLabels{})
+		require.NotNil(t, cfg)
+		require.Empty(t, cfg.KubernetesNodeLabels)
+		require.Empty(t, cfg.KubernetesNodeAnnotations)
+	})
+}

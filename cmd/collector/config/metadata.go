@@ -1,6 +1,11 @@
 package config
 
-import "errors"
+import (
+	"errors"
+	"maps"
+
+	"github.com/Azure/adx-mon/collector/metadata"
+)
 
 // MetadataWatch defines a set of watchers for dynamic metadata to add to logs and metrics.
 type MetadataWatch struct {
@@ -67,4 +72,29 @@ func (a *AddMetadataLabels) Validate(config *Config) error {
 	}
 
 	return nil
+}
+
+// MergeAddMetadataLabels collapses one or more AddMetadataLabels configs into a single DynamicLabelerConfig.
+// Later configurations in the slice take precedence when keys overlap.
+func MergeAddMetadataLabels(configs ...*AddMetadataLabels) *metadata.DynamicLabelerConfig {
+	merged := &metadata.DynamicLabelerConfig{
+		KubernetesNodeLabels:      make(map[string]string),
+		KubernetesNodeAnnotations: make(map[string]string),
+	}
+
+	for _, cfg := range configs {
+		if cfg == nil {
+			continue
+		}
+
+		node := cfg.KubernetesNode
+		if node == nil {
+			continue
+		}
+
+		maps.Copy(merged.KubernetesNodeLabels, node.Labels)
+		maps.Copy(merged.KubernetesNodeAnnotations, node.Annotations)
+	}
+
+	return merged
 }
