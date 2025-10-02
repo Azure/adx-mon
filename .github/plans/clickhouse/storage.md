@@ -42,11 +42,11 @@ Provide an end-to-end recipe for preparing the collector’s WAL pipeline to ser
 3. Audit `storage.StoreOpts` to confirm S2 compression and `SampleType` metadata remain enabled; make compression configurable only if a future native payload path requires it. **Status:** Completed — storage options remain backend-agnostic, continuing to pass through compression metadata unchanged.
 4. Validate that segment filenames and keys (`wal.Filename`, `storage.SegmentKey`) stay unchanged so ingestor batching continues to work without modification. **Status:** Confirmed — no key or filename changes were required, and tests continue to rely on the existing format.
 
-### Phase 3. Safety and interoperability checks
+### Phase 3. Safety and interoperability checks ✅ _Completed 2025-10-02_
 
-1. Teach the collector to export the selected backend through its readiness/debug endpoints (e.g., include `backend=clickhouse` in `/readyz` or `/debug/store`) to aid rollout verification.
-2. Add a startup sanity check that compares the collector backend flag with an optional environment guard (e.g., `ADXMON_EXPECT_BACKEND`). This helps catch configuration drift during canaries.
-3. Update documentation/config samples (collector README, charts, manifests) to surface the new flag and warn that all collectors and ingestors in an environment must share the same value.
+1. Teach the collector to export the selected backend through its readiness/debug endpoints (e.g., include `backend=clickhouse` in `/readyz` or `/debug/store`) to aid rollout verification. **Status:** Completed — collector now serves `/readyz` and `/debug/store` with backend annotations.
+2. Add a startup sanity check that compares the collector backend flag with an optional environment guard (e.g., `ADXMON_EXPECT_BACKEND`). This helps catch configuration drift during canaries. **Status:** Deferred — guard proved unnecessary and has been removed in favor of readiness endpoint validation.
+3. Update documentation/config samples (collector README, charts, manifests) to surface the new flag and warn that all collectors and ingestors in an environment must share the same value. **Status:** Updated — documentation now focuses on `/readyz` and `/debug/store` for backend verification; no environment guard required.
 
 ### Phase 4. Validation & testing
 
