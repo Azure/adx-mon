@@ -251,6 +251,58 @@ func TestConfig_Validate_AddMetadataLabels(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "otel log metadata labels require watcher",
+			cfg: Config{
+				OtelLog: &OtelLog{
+					AddMetadataLabels: &AddMetadataLabels{
+						KubernetesNode: &AddMetadataKubernetesNode{},
+					},
+				},
+			},
+			wantErr: "otel-log.add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "otel log metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				OtelLog: &OtelLog{
+					AddMetadataLabels: &AddMetadataLabels{
+						KubernetesNode: &AddMetadataKubernetesNode{
+							Labels: map[string]string{"role": "node_role"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "host log metadata labels require watcher",
+			cfg: Config{
+				HostLog: []*HostLog{
+					{
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{},
+						},
+					},
+				},
+			},
+			wantErr: "host-log[0].add-metadata-labels: metadata-watch.kubernetes-node must be configured when add-metadata-labels.kubernetes-node is used",
+		},
+		{
+			name: "host log metadata labels success",
+			cfg: Config{
+				MetadataWatch: &MetadataWatch{KubernetesNode: &MetadataWatchKubernetesNode{}},
+				HostLog: []*HostLog{
+					{
+						AddMetadataLabels: &AddMetadataLabels{
+							KubernetesNode: &AddMetadataKubernetesNode{
+								Labels: map[string]string{"role": "node_role"},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -554,9 +554,12 @@ func realMain(ctx *cli.Context) error {
 				}
 			}
 
-			if len(addAttributes) > 0 {
+			dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				}))
 			}
 
@@ -651,9 +654,12 @@ func realMain(ctx *cli.Context) error {
 				transformers = append(transformers, transform)
 			}
 
-			if len(addAttributes) > 0 {
+			dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				}))
 			}
 
@@ -717,8 +723,10 @@ func realMain(ctx *cli.Context) error {
 					}
 					transformers = append(transformers, transform)
 				}
+				dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 				attributeTransform := addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				})
 				transformers = append(transformers, attributeTransform)
 
@@ -776,9 +784,12 @@ func realMain(ctx *cli.Context) error {
 					transformers = append(transformers, transform)
 				}
 
-				if len(addAttributes) > 0 {
+				dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+				if len(addAttributes) > 0 || dynamicLabeler != nil {
 					transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 						ResourceValues: addAttributes,
+						DynamicLabeler: dynamicLabeler,
 					}))
 				}
 
@@ -888,7 +899,7 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func newDynamicLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.MetricLabeler {
+func newDynamicLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) *metadata.DynamicLabeler {
 	if kubeNode == nil {
 		return nil
 	}

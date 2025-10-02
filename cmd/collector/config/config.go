@@ -250,10 +250,11 @@ func (w *PrometheusRemoteWrite) Validate() error {
 }
 
 type OtelLog struct {
-	AddAttributes  map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	LiftAttributes []string          `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
-	Transforms     []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
-	Exporters      []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
+	AddAttributes     map[string]string  `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	AddMetadataLabels *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to logs received on this endpoint."`
+	LiftAttributes    []string           `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	Transforms        []*LogTransform    `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	Exporters         []string           `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *OtelLog) Validate() error {
@@ -339,14 +340,15 @@ func (w *OtelMetric) Validate() error {
 }
 
 type HostLog struct {
-	DisableKubeDiscovery bool              `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
-	AddAttributes        map[string]string `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	StaticFileTargets    []*TailTarget     `toml:"file-target" comment:"Defines a tail file target."`
-	StaticPodTargets     []*PodTarget      `toml:"static-pod-target" comment:"Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver."`
-	JournalTargets       []*JournalTarget  `toml:"journal-target" comment:"Defines a journal target to scrape."`
-	KernelTargets        []*KernelTarget   `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
-	Transforms           []*LogTransform   `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
-	Exporters            []string          `toml:"exporters" comment:"List of exporter names to forward logs to."`
+	DisableKubeDiscovery bool               `toml:"disable-kube-discovery" comment:"Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery."`
+	AddAttributes        map[string]string  `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	AddMetadataLabels    *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to logs collected from this source."`
+	StaticFileTargets    []*TailTarget      `toml:"file-target" comment:"Defines a tail file target."`
+	StaticPodTargets     []*PodTarget       `toml:"static-pod-target" comment:"Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver."`
+	JournalTargets       []*JournalTarget   `toml:"journal-target" comment:"Defines a journal target to scrape."`
+	KernelTargets        []*KernelTarget    `toml:"kernel-target" comment:"Defines a kernel target to scrape."`
+	Transforms           []*LogTransform    `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	Exporters            []string           `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *HostLog) Validate() error {
@@ -589,6 +591,12 @@ func (c *Config) Validate() error {
 			return err
 		}
 
+		if c.OtelLog.AddMetadataLabels != nil {
+			if err := c.OtelLog.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("otel-log.add-metadata-labels: %w", err)
+			}
+		}
+
 		for _, exporterName := range c.OtelLog.Exporters {
 			if !HasLogsExporter(exporterName, c.Exporters) {
 				return fmt.Errorf("otel-log.exporters %q not found", exporterName)
@@ -600,6 +608,12 @@ func (c *Config) Validate() error {
 	for i, v := range c.HostLog {
 		if err := v.Validate(); err != nil {
 			return err
+		}
+
+		if v.AddMetadataLabels != nil {
+			if err := v.AddMetadataLabels.Validate(c); err != nil {
+				return fmt.Errorf("host-log[%d].add-metadata-labels: %w", i, err)
+			}
 		}
 		if !v.DisableKubeDiscovery {
 			if tailScrapingFromKube {
