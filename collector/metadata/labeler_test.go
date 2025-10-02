@@ -54,8 +54,8 @@ func TestDynamicLabelerWalkAndAppend(t *testing.T) {
 	labeler := FromConfig(kubeNode, cfg)
 
 	got := make(map[string]string)
-	labeler.WalkLabels(func(key, value string) {
-		got[key] = value
+	labeler.WalkLabels(func(key, value []byte) {
+		got[string(key)] = string(value)
 	})
 
 	require.Equal(t, map[string]string{
