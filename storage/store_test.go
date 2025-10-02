@@ -172,107 +172,145 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 }
 
 func TestStore_WriteOTLPLogs_Empty(t *testing.T) {
-	b := make([]byte, 256)
 	logger.SetLevel(slog.LevelDebug)
-	database := "adxlogs"
-	ctx := context.Background()
-	dir := t.TempDir()
-	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
-		MaxDiskUsage:   1024 * 1024,
-	})
+	tests := []struct {
+		name    string
+		backend storage.Backend
+	}{
+		{name: "adx", backend: storage.BackendADX},
+		{name: "clickhouse", backend: storage.BackendClickHouse},
+	}
 
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-	require.Equal(t, 0, s.WALCount())
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			b := make([]byte, 256)
+			database := "adxlogs"
+			ctx := context.Background()
+			dir := t.TempDir()
+			s := storage.NewLocalStore(storage.StoreOpts{
+				StorageDir:     dir,
+				SegmentMaxSize: 1024,
+				SegmentMaxAge:  time.Minute,
+				MaxDiskUsage:   1024 * 1024,
+				Backend:        tt.backend,
+			})
 
-	require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{
-		Logs: make([]*logsv1.LogRecord, 1),
-	}))
-	time.Sleep(200 * time.Millisecond)
-	require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{}))
+			require.NoError(t, s.Open(context.Background()))
+			t.Cleanup(func() {
+				if s != nil {
+					s.Close()
+				}
+			})
+			require.Equal(t, 0, s.WALCount())
 
-	key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
-	w, err := s.GetWAL(ctx, key)
-	require.NoError(t, err)
-	require.NotNil(t, w)
+			require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{
+				Logs: make([]*logsv1.LogRecord, 1),
+			}))
+			time.Sleep(200 * time.Millisecond)
+			require.NoError(t, s.WriteOTLPLogs(ctx, database, "foo", &otlp.Logs{}))
 
-	path := w.Path()
+			key := fmt.Appendf(b[:0], "%s_%s", database, "foo")
+			w, err := s.GetWAL(ctx, key)
+			require.NoError(t, err)
+			require.NotNil(t, w)
 
-	require.Equal(t, 1, s.WALCount())
-	require.NoError(t, s.Close())
+			path := w.Path()
 
-	f, err := os.Open(path)
-	require.NoError(t, err)
-	defer f.Close()
+			require.Equal(t, 1, s.WALCount())
+			require.NoError(t, s.Close())
+			s = nil
 
-	iter, err := wal.NewSegmentIterator(f)
-	require.NoError(t, err)
-	n, err := iter.Verify()
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
+			f, err := os.Open(path)
+			require.NoError(t, err)
+			defer f.Close()
 
-	r, err := wal.NewSegmentReader(path)
-	require.NoError(t, err)
-	data, err := io.ReadAll(r)
-	require.NoError(t, err)
-	spew.Dump(data)
+			iter, err := wal.NewSegmentIterator(f)
+			require.NoError(t, err)
+			n, err := iter.Verify()
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			r, err := wal.NewSegmentReader(path)
+			require.NoError(t, err)
+			data, err := io.ReadAll(r)
+			require.NoError(t, err)
+			spew.Dump(data)
+		})
+	}
 }
 
 func TestStore_WriteNativeLogs_Empty(t *testing.T) {
-	b := make([]byte, 256)
 	logger.SetLevel(slog.LevelDebug)
-	database := "adxlogs"
-	ctx := context.Background()
-	dir := t.TempDir()
-	s := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     dir,
-		SegmentMaxSize: 1024,
-		SegmentMaxAge:  time.Minute,
-		MaxDiskUsage:   1024 * 1024,
-	})
+	tests := []struct {
+		name    string
+		backend storage.Backend
+	}{
+		{name: "adx", backend: storage.BackendADX},
+		{name: "clickhouse", backend: storage.BackendClickHouse},
+	}
 
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-	require.Equal(t, 0, s.WALCount())
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			b := make([]byte, 256)
+			database := "adxlogs"
+			ctx := context.Background()
+			dir := t.TempDir()
+			s := storage.NewLocalStore(storage.StoreOpts{
+				StorageDir:     dir,
+				SegmentMaxSize: 1024,
+				SegmentMaxAge:  time.Minute,
+				MaxDiskUsage:   1024 * 1024,
+				Backend:        tt.backend,
+			})
 
-	log := types.NewLog()
-	log.SetAttributeValue(types.AttributeDatabaseName, database)
-	log.SetAttributeValue(types.AttributeTableName, "foo")
+			require.NoError(t, s.Open(context.Background()))
+			t.Cleanup(func() {
+				if s != nil {
+					s.Close()
+				}
+			})
+			require.Equal(t, 0, s.WALCount())
 
-	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
-		Logs: []*types.Log{log},
-	}))
-	time.Sleep(200 * time.Millisecond)
-	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
+			log := types.NewLog()
+			log.SetAttributeValue(types.AttributeDatabaseName, database)
+			log.SetAttributeValue(types.AttributeTableName, "foo")
 
-	key := fmt.Appendf(b[:0], "%s_%s_%s", database, "foo", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
-	w, err := s.GetWAL(ctx, key)
-	require.NoError(t, err)
-	require.NotNil(t, w)
+			require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
+				Logs: []*types.Log{log},
+			}))
+			time.Sleep(200 * time.Millisecond)
+			require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{}))
 
-	path := w.Path()
+			key := fmt.Appendf(b[:0], "%s_%s_%s", database, "foo", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
+			w, err := s.GetWAL(ctx, key)
+			require.NoError(t, err)
+			require.NotNil(t, w)
 
-	require.Equal(t, 1, s.WALCount())
-	require.NoError(t, s.Close())
+			path := w.Path()
 
-	f, err := os.Open(path)
-	require.NoError(t, err)
-	defer f.Close()
+			require.Equal(t, 1, s.WALCount())
+			require.NoError(t, s.Close())
+			s = nil
 
-	iter, err := wal.NewSegmentIterator(f)
-	require.NoError(t, err)
-	n, err := iter.Verify()
-	require.NoError(t, err)
-	require.Equal(t, 1, n)
+			f, err := os.Open(path)
+			require.NoError(t, err)
+			defer f.Close()
 
-	r, err := wal.NewSegmentReader(path)
-	require.NoError(t, err)
-	data, err := io.ReadAll(r)
-	require.NoError(t, err)
-	spew.Dump(data)
+			iter, err := wal.NewSegmentIterator(f)
+			require.NoError(t, err)
+			n, err := iter.Verify()
+			require.NoError(t, err)
+			require.Equal(t, 1, n)
+
+			r, err := wal.NewSegmentReader(path)
+			require.NoError(t, err)
+			data, err := io.ReadAll(r)
+			require.NoError(t, err)
+			spew.Dump(data)
+		})
+	}
 }
 
 func TestStore_SkipNonCSV(t *testing.T) {

@@ -50,9 +50,9 @@ Provide an end-to-end recipe for preparing the collector’s WAL pipeline to ser
 
 ### Phase 4. Validation & testing
 
-1. Extend existing WAL integration tests (e.g., `storage/store_test.go`, `collector/client_test.go`) to run in both backend modes using table-driven cases.
-2. Run `go test ./collector/... ./storage/...` locally and in CI to ensure no regressions.
-3. Perform an end-to-end smoke test: start a collector in `clickhouse` mode pointed at a local ingestor (still ADX-backed for now), generate sample Prometheus traffic, and confirm segments land on disk and can be uploaded by the CSV-based ingestor path.
+1. Extend existing WAL integration tests (e.g., `storage/store_test.go`, `collector/service_test.go`) to run in both backend modes using table-driven cases. **Status:** Completed — storage WAL tests cover both backends for metrics and logs, and collector service tests now execute under both configurations.
+2. Run `go test ./collector/... ./storage/...` locally and in CI to ensure no regressions. **Status:** Completed — local runs executed with both packages to confirm parity.
+3. Perform an end-to-end smoke test: start a collector in `clickhouse` mode pointed at a local ingestor (still ADX-backed for now), generate sample Prometheus traffic, and confirm segments land on disk and can be uploaded by the CSV-based ingestor path. **Status:** Pending — requires a dedicated environment and manual verification.
 
 ## Rollout checklist ✅
 
