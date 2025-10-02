@@ -20,6 +20,7 @@ import (
 type connectionManager interface {
 	Ping(ctx context.Context) error
 	Close() error
+	PrepareInsert(ctx context.Context, database, table string, columns []Column) (batchWriter, error)
 }
 
 var newConnectionManager = func(cfg Config) (connectionManager, error) {
@@ -72,6 +73,21 @@ func (p *clientPool) Close() error {
 	err := p.conn.Close()
 	p.conn = nil
 	return err
+}
+
+func (p *clientPool) PrepareInsert(ctx context.Context, database, table string, columns []Column) (batchWriter, error) {
+	conn, err := p.ensureConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := buildInsertQuery(database, table, columns)
+	batch, err := conn.PrepareBatch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return &clickhouseBatch{batch: batch}, nil
 }
 
 func buildOptions(cfg Config) (*clickhouse.Options, error) {

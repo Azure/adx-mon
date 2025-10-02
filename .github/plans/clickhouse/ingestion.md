@@ -47,15 +47,13 @@ Additional notes:
 - ⏳ Parse CLI-provided `<database>=<endpoint>` tuples via `kustoendpoints`, interpreting endpoints as ClickHouse DSNs.
 - ⏳ Extend `cmd/ingestor/main.go` to select `clickhouse.NewUploader` whenever `--storage-backend=clickhouse` (or equivalent) is set. Default remains ADX.
 
-### Phase 3. Batch ingestion pipeline
+### Phase 3. Batch ingestion pipeline ✅
 
-1. Reuse `cluster.Batcher` without modification; `UploadQueue` will continue to hand batches to the uploader.
-2. Within `Upload(ctx, batch)`:
-   - Acquire segment readers via `wal.NewSegmentReader`.
-   - Inspect `segment.PayloadType`. If `SampleTypeClickHouseNative`, stream the raw bytes into a ClickHouse `proto.Block` without conversion. Otherwise decode CSV rows using existing CSV helpers.
-   - Group rows by `<database>.<table>` prefix so each insert targets a single ClickHouse table.
-3. Build columnar blocks with `proto.Block` helpers or the driver’s `AppendStruct` support. Apply LZ4 compression (driver default) for native mode.
-4. Commit the batch using `client.Do(ctx, ch.Query{Body: block})` (or equivalent). On success, call `batch.Remove()` to delete WAL segments.
+- ✅ `cluster.Batcher` and the shared `UploadQueue` feed the ClickHouse uploader exactly like the ADX path, so the storage backend remains pluggable.
+- ✅ `Open` spins up `runtime.NumCPU()` worker goroutines that drain the queue and invoke `processBatch`, matching the ADX uploader’s concurrency/backpressure story.
+- ✅ Each `processBatch` call opens WAL segments with `wal.NewSegmentReader`, reads the embedded CSV header, and derives a `schema.SchemaMapping` before preparing an insert writer through the connection manager.
+- ✅ `ensureSchema` caches table definitions per schema signature, reusing column layouts across batches and keeping the ClickHouse DDL surfacing centralized.
+- ✅ `convertRecord` converts CSV rows into typed ClickHouse values (including full-range `strconv.ParseUint` for unsigned columns) and relies on the batch writer to flush on row-count or interval triggers before finally sending the insert and removing WAL segments.
 
 ### Phase 4. Schema and metadata management
 
