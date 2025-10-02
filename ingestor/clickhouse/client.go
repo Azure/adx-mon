@@ -21,6 +21,7 @@ type connectionManager interface {
 	Ping(ctx context.Context) error
 	Close() error
 	PrepareInsert(ctx context.Context, database, table string, columns []Column) (batchWriter, error)
+	Exec(ctx context.Context, query string, args ...any) error
 }
 
 var newConnectionManager = func(cfg Config) (connectionManager, error) {
@@ -88,6 +89,14 @@ func (p *clientPool) PrepareInsert(ctx context.Context, database, table string, 
 	}
 
 	return &clickhouseBatch{batch: batch}, nil
+}
+
+func (p *clientPool) Exec(ctx context.Context, query string, args ...any) error {
+	conn, err := p.ensureConn(ctx)
+	if err != nil {
+		return err
+	}
+	return conn.Exec(ctx, query, args...)
 }
 
 func buildOptions(cfg Config) (*clickhouse.Options, error) {

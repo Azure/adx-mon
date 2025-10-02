@@ -57,11 +57,11 @@ Additional notes:
 
 ### Phase 4. Schema and metadata management
 
-1. Introduce a `Syncer` analogue that ensures target tables exist before inserts:
-   - For metrics, create schemas compatible with Prometheus samples (`timestamp`, `labels` map, `value`, etc.).
-   - For logs, align with existing ClickStack/OTel schemas if available.
-2. Run schema enforcement during `Open(ctx)` so the queue does not start until tables are ready.
-3. Record schema version in a lightweight metadata table (optional but recommended for future migrations).
+1. ✅ Introduce a `Syncer` analogue that ensures target tables exist before inserts:
+   - ✅ For metrics, create schemas compatible with Prometheus samples (`timestamp`, `labels` map, `value`, etc.).
+   - ✅ For logs, align with existing ClickStack/OTel schemas if available.
+2. ✅ Run schema enforcement during `Open(ctx)` so the queue does not start until tables are ready.
+3. ✅ Record schema version in a lightweight metadata table (optional but recommended for future migrations).
 
 ### Phase 5. Retry and backpressure integration
 

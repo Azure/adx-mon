@@ -3,8 +3,10 @@ package clickhouse
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,8 +29,6 @@ func TestConfigValidateErrors(t *testing.T) {
 }
 
 func TestNewUploaderAppliesDefaults(t *testing.T) {
-	t.Parallel()
-
 	withFakeConnectionManager(t, &fakeConnection{})
 
 	cfg := Config{
@@ -51,8 +51,6 @@ func TestNewUploaderAppliesDefaults(t *testing.T) {
 }
 
 func TestNewUploaderValidatesTLSPairing(t *testing.T) {
-	t.Parallel()
-
 	withFakeConnectionManager(t, &fakeConnection{})
 
 	cfg := Config{
@@ -69,8 +67,6 @@ func TestNewUploaderValidatesTLSPairing(t *testing.T) {
 }
 
 func TestOpenCloseIsIdempotent(t *testing.T) {
-	t.Parallel()
-
 	fake := &fakeConnection{}
 	withFakeConnectionManager(t, fake)
 
@@ -90,9 +86,24 @@ func TestOpenCloseIsIdempotent(t *testing.T) {
 	require.NoError(t, u.Close())
 }
 
-func TestSchemasReturnsCopy(t *testing.T) {
-	t.Parallel()
+func TestUploaderOpenFailsWhenSchemaSyncFails(t *testing.T) {
+	fake := &fakeConnection{execErr: errors.New("sync failed")}
+	withFakeConnectionManager(t, fake)
 
+	cfg := Config{
+		Database: "metrics",
+		DSN:      "clickhouse://localhost:9000/default",
+	}
+
+	u, err := NewUploader(cfg, nil)
+	require.NoError(t, err)
+
+	err = u.Open(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sync failed")
+}
+
+func TestSchemasReturnsCopy(t *testing.T) {
 	withFakeConnectionManager(t, &fakeConnection{})
 
 	cfg := Config{Database: "metrics", DSN: "clickhouse://localhost"}
@@ -108,8 +119,6 @@ func TestSchemasReturnsCopy(t *testing.T) {
 }
 
 func TestUploaderProcessesMetricBatch(t *testing.T) {
-	t.Parallel()
-
 	fake := &fakeConnection{}
 	withFakeConnectionManager(t, fake)
 
@@ -180,18 +189,52 @@ func TestUploaderProcessesMetricBatch(t *testing.T) {
 	require.True(t, batch.IsReleased())
 	require.True(t, batcher.WasRemoved())
 	require.True(t, batcher.WasReleased())
+
+	require.Eventually(t, func() bool {
+		for _, query := range fake.execQueries() {
+			if strings.Contains(query, "`metricsdb`.`CpuUsage`") {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		for _, query := range fake.execQueries() {
+			if strings.Contains(query, "'CpuUsage'") {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
 }
 
 type fakeConnection struct {
 	pingErr    error
 	prepareErr error
+	execErr    error
 
 	mu      sync.Mutex
 	batches []*fakeBatch
+	execs   []string
 }
 
 func (f *fakeConnection) Ping(context.Context) error { return f.pingErr }
 func (f *fakeConnection) Close() error               { return nil }
+
+func (f *fakeConnection) Exec(_ context.Context, query string, args ...any) error {
+	if f.execErr != nil {
+		return f.execErr
+	}
+	f.mu.Lock()
+	query = strings.TrimSpace(query)
+	if len(args) > 0 {
+		query = fmt.Sprintf("%s | args=%d", query, len(args))
+	}
+	f.execs = append(f.execs, query)
+	f.mu.Unlock()
+	return nil
+}
 
 func (f *fakeConnection) PrepareInsert(context.Context, string, string, []Column) (batchWriter, error) {
 	if f.prepareErr != nil {
@@ -212,6 +255,20 @@ func (f *fakeConnection) lastBatch() *fakeBatch {
 		return nil
 	}
 	return f.batches[len(f.batches)-1]
+}
+
+func (f *fakeConnection) execCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.execs)
+}
+
+func (f *fakeConnection) execQueries() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.execs))
+	copy(out, f.execs)
+	return out
 }
 
 type fakeBatch struct {

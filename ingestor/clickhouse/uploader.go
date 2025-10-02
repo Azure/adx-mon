@@ -37,6 +37,7 @@ type uploader struct {
 	queue   chan *cluster.Batch
 	schemas map[string]Schema
 	conn    connectionManager
+	syncer  *syncer
 
 	mu       sync.RWMutex
 	schemaMu sync.RWMutex
@@ -70,6 +71,7 @@ func NewUploader(cfg Config, log *slog.Logger) (Uploader, error) {
 		queue:   make(chan *cluster.Batch, cfg.QueueCapacity),
 		schemas: DefaultSchemas(),
 		conn:    conn,
+		syncer:  newSyncer(cfg.Database, conn, log),
 	}, nil
 }
 
@@ -86,6 +88,12 @@ func (u *uploader) Open(ctx context.Context) error {
 	u.cancel = cancel
 	u.open = true
 	if err := u.conn.Ping(ctx); err != nil {
+		u.open = false
+		cancel()
+		return err
+	}
+
+	if err := u.syncer.EnsureInitial(ctx, u.Schemas()); err != nil {
 		u.open = false
 		cancel()
 		return err
@@ -263,7 +271,14 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				return fmt.Errorf("empty schema for table %s", batch.Table)
 			}
 
-			schemaDef = u.ensureSchema(batch.Table, schemaID, mapping)
+			schemaDef, err = u.ensureSchema(ctx, batch.Table, schemaID, mapping)
+			if err != nil {
+				sr.Close()
+				if u.log != nil {
+					u.log.Error("failed to ensure schema", slog.String("table", batch.Table), slog.String("error", err.Error()))
+				}
+				return err
+			}
 
 			writer, err = u.conn.PrepareInsert(ctx, batch.Database, batch.Table, schemaDef.Columns)
 			if err != nil {
@@ -393,13 +408,13 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 	return nil
 }
 
-func (u *uploader) ensureSchema(table, schemaID string, mapping schema.SchemaMapping) Schema {
+func (u *uploader) ensureSchema(ctx context.Context, table, schemaID string, mapping schema.SchemaMapping) (Schema, error) {
 	key := schemaCacheKey(table, schemaID)
 
 	u.schemaMu.RLock()
 	if existing, ok := u.schemas[key]; ok {
 		u.schemaMu.RUnlock()
-		return existing
+		return existing, nil
 	}
 	u.schemaMu.RUnlock()
 
@@ -407,15 +422,19 @@ func (u *uploader) ensureSchema(table, schemaID string, mapping schema.SchemaMap
 	schemaCopy := Schema{Table: table, Columns: make([]Column, len(cols))}
 	copy(schemaCopy.Columns, cols)
 
+	if err := u.syncer.EnsureTable(ctx, table, schemaID, schemaCopy.Columns); err != nil {
+		return Schema{}, err
+	}
+
 	u.schemaMu.Lock()
 	defer u.schemaMu.Unlock()
 
 	if existing, ok := u.schemas[key]; ok {
-		return existing
+		return existing, nil
 	}
 
 	u.schemas[key] = schemaCopy
-	return schemaCopy
+	return schemaCopy, nil
 }
 
 func schemaCacheKey(table, schemaID string) string {
