@@ -35,12 +35,25 @@ func TestAddAttributesTransform_New(t *testing.T) {
 			},
 			expectedAttrs: map[string]string{},
 		},
+		{
+			name: "with dynamic labeler",
+			config: Config{
+				ResourceValues: map[string]string{
+					"existing": "value",
+				},
+				DynamicLabeler: &stubLogLabeler{},
+			},
+			expectedAttrs: map[string]string{
+				"existing": "value",
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			transformer := NewTransform(tt.config)
 			assert.Equal(t, tt.expectedAttrs, transformer.resourceValues)
+			assert.Equal(t, tt.config.DynamicLabeler, transformer.dynamicLabeler)
 		})
 	}
 }
@@ -181,4 +194,80 @@ func TestAddAttributesTransform_Transform(t *testing.T) {
 func TestAddAttributesTransform_Name(t *testing.T) {
 	transformer := &Transform{}
 	assert.Equal(t, "AddAttributesTransform", transformer.Name())
+}
+
+func TestAddAttributesTransform_TransformWithDynamicLabeler(t *testing.T) {
+	labeler := &stubLogLabeler{
+		values: map[string]string{
+			"dynamic": "value",
+			"overlap": "from-labeler",
+		},
+	}
+
+	transformer := NewTransform(Config{
+		ResourceValues: map[string]string{
+			"static":  "static-value",
+			"overlap": "from-static",
+		},
+		DynamicLabeler: labeler,
+	})
+
+	logs := []*types.Log{types.NewLog(), types.NewLog()}
+	batch := &types.LogBatch{Logs: logs}
+
+	_, err := transformer.Transform(context.Background(), batch)
+	require.NoError(t, err)
+
+	require.Equal(t, len(logs), labeler.callCount)
+
+	for _, log := range logs {
+		val, ok := log.GetResourceValue("dynamic")
+		require.True(t, ok)
+		require.Equal(t, "value", val)
+
+		val, ok = log.GetResourceValue("static")
+		require.True(t, ok)
+		require.Equal(t, "static-value", val)
+
+		val, ok = log.GetResourceValue("overlap")
+		require.True(t, ok)
+		require.Equal(t, "from-static", val)
+	}
+}
+
+func TestAddAttributesTransform_TransformWithDynamicLabelerOnly(t *testing.T) {
+	labeler := &stubLogLabeler{
+		values: map[string]string{
+			"dynamic": "value",
+		},
+	}
+
+	transformer := NewTransform(Config{
+		ResourceValues: nil,
+		DynamicLabeler: labeler,
+	})
+
+	log := types.NewLog()
+	batch := &types.LogBatch{Logs: []*types.Log{log}}
+
+	_, err := transformer.Transform(context.Background(), batch)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, labeler.callCount)
+
+	val, ok := log.GetResourceValue("dynamic")
+	require.True(t, ok)
+	require.Equal(t, "value", val)
+}
+
+type stubLogLabeler struct {
+	values    map[string]string
+	callCount int
+}
+
+func (s *stubLogLabeler) SetResourceValues(log *types.Log) {
+	s.callCount++
+	for k, v := range s.values {
+		log.SetResourceValue(k, v)
+	}
 }
