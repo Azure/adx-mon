@@ -354,7 +354,7 @@ func getContents() Contents {
 		MetadataSections: []Section{
 			{
 				Title:       "Kubernetes Node Metadata Watching",
-				Description: "Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.",
+				Description: "Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.\n\n> **RBAC requirements**: The collector's service account must be able to `get`, `list`, and `watch` the core `nodes` resource. Without these permissions the watcher fails with a \"Failed to watch\" error when attempting to read node metadata.",
 				Config: &config.Config{
 					MetadataWatch: &config.MetadataWatch{
 						KubernetesNode: &config.MetadataWatchKubernetesNode{},
