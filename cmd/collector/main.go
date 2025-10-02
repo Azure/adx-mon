@@ -15,6 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+	"github.com/urfave/cli/v2"
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/Azure/adx-mon/cmd/collector/config"
 	"github.com/Azure/adx-mon/collector"
 	"github.com/Azure/adx-mon/collector/logs"
@@ -36,10 +40,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
-	"github.com/pelletier/go-toml/v2"
-	"github.com/urfave/cli/v2"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
@@ -877,7 +877,7 @@ func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) 
 		return informer, nil
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", kubeConfig)
+	config, err := k8s.BuildConfigFromFlags("", kubeConfig)
 	if err != nil {
 		logger.Warnf("No kube-config provided")
 		return nil, fmt.Errorf("unable to find kube config [%s]: %w", kubeConfig, err)
