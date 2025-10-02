@@ -3,6 +3,7 @@ package metadata
 import (
 	"maps"
 
+	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/prompb"
 )
 
@@ -16,6 +17,10 @@ type MetricLabeler interface {
 	WalkLabels(callback func(key, value []byte))
 	// AppendPromLabels appends the dynamic labels this labeler sets to the provided TimeSeries.
 	AppendPromLabels(ts *prompb.TimeSeries)
+}
+
+type LogLabeler interface {
+	SetResourceValues(*types.Log)
 }
 
 // DynamicLabeler is a labeler that adds dynamic labels from a collection of metadata sources.
@@ -87,17 +92,29 @@ func (d *DynamicLabeler) WalkLabels(callback func(key, value []byte)) {
 }
 
 func (d *DynamicLabeler) AppendPromLabels(ts *prompb.TimeSeries) {
-	if d.kubeNode == nil {
-		return
-	}
+	if d.kubeNode != nil {
+		for srcKey, destKey := range d.kubeNodeLabels {
+			val, _ := d.kubeNode.Label(srcKey)
+			ts.AppendLabel([]byte(destKey), []byte(val))
+		}
 
-	for srcKey, destKey := range d.kubeNodeLabels {
-		val, _ := d.kubeNode.Label(srcKey)
-		ts.AppendLabel([]byte(destKey), []byte(val))
+		for srcKey, destKey := range d.kubeNodeAnnotations {
+			val, _ := d.kubeNode.Annotation(srcKey)
+			ts.AppendLabel([]byte(destKey), []byte(val))
+		}
 	}
+}
 
-	for srcKey, destKey := range d.kubeNodeAnnotations {
-		val, _ := d.kubeNode.Annotation(srcKey)
-		ts.AppendLabel([]byte(destKey), []byte(val))
+func (d *DynamicLabeler) SetResourceValues(log *types.Log) {
+	if d.kubeNode != nil {
+		for srcKey, destKey := range d.kubeNodeLabels {
+			val, _ := d.kubeNode.Label(srcKey)
+			log.SetResourceValue(destKey, val)
+		}
+
+		for srcKey, destKey := range d.kubeNodeAnnotations {
+			val, _ := d.kubeNode.Annotation(srcKey)
+			log.SetResourceValue(destKey, val)
+		}
 	}
 }
