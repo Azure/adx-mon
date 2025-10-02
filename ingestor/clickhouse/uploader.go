@@ -24,6 +24,7 @@ type uploader struct {
 	log     *slog.Logger
 	queue   chan *cluster.Batch
 	schemas map[string]Schema
+	conn    connectionManager
 
 	mu     sync.RWMutex
 	cancel context.CancelFunc
@@ -42,11 +43,17 @@ func NewUploader(cfg Config, log *slog.Logger) (Uploader, error) {
 	}
 	log = log.With(slog.String("component", "clickhouse-uploader"))
 
+	conn, err := newConnectionManager(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return &uploader{
 		cfg:     cfg,
 		log:     log,
 		queue:   make(chan *cluster.Batch, cfg.QueueCapacity),
 		schemas: DefaultSchemas(),
+		conn:    conn,
 	}, nil
 }
 
@@ -62,6 +69,10 @@ func (u *uploader) Open(ctx context.Context) error {
 	u.ctx = ctx
 	u.cancel = cancel
 	u.open = true
+	if err := u.conn.Ping(ctx); err != nil {
+		return err
+	}
+
 	u.log.Info("clickhouse uploader ready")
 
 	return nil
@@ -77,6 +88,10 @@ func (u *uploader) Close() error {
 
 	u.cancel()
 	u.open = false
+
+	if err := u.conn.Close(); err != nil {
+		u.log.Warn("failed to close clickhouse connection", slog.String("error", err.Error()))
+	}
 	u.log.Info("clickhouse uploader stopped")
 	return nil
 }

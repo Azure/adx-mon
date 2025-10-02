@@ -42,13 +42,10 @@ Additional notes:
 
 ### Phase 2. Connection and configuration plumbing
 
-1. Parse CLI-provided `<database>=<endpoint>` tuples via the existing `kustoendpoints` helper, interpreting the endpoint as a ClickHouse DSN (support `clickhouse://` and `https://`).
-2. For each tuple, build a `clickhouse.Options` instance:
-   - Enable TLS by default; allow `--insecure-clickhouse` (or reuse `--tls-skip-verify`) to toggle verification.
-   - Surface compression, async insert, and timeouts via `Config`.
-   - Accept credentials through the DSN or environment variables (`CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, etc.).
-3. Create a lightweight connection manager (e.g., `type clientPool interface`) that wraps the driver and supports health pings.
-4. Extend `cmd/ingestor/main.go` to select `clickhouse.NewUploader` whenever `--storage-backend=clickhouse` (or equivalent) is set. Default remains ADX.
+- ✅ `buildOptions` constructs `clickhouse.Options` with TLS defaults, compression, async insert, and timeout knobs derived from `Config`.
+- ✅ `clientPool` connection manager lazily dials the driver and is exercised by uploader lifecycle tests.
+- ⏳ Parse CLI-provided `<database>=<endpoint>` tuples via `kustoendpoints`, interpreting endpoints as ClickHouse DSNs.
+- ⏳ Extend `cmd/ingestor/main.go` to select `clickhouse.NewUploader` whenever `--storage-backend=clickhouse` (or equivalent) is set. Default remains ADX.
 
 ### Phase 3. Batch ingestion pipeline
 

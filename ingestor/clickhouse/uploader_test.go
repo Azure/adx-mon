@@ -20,6 +20,8 @@ func TestConfigValidateErrors(t *testing.T) {
 func TestNewUploaderAppliesDefaults(t *testing.T) {
 	t.Parallel()
 
+	withFakeConnectionManager(t, &fakeConnection{})
+
 	cfg := Config{
 		Database: "metrics",
 		DSN:      "clickhouse://localhost:9000/default",
@@ -42,6 +44,8 @@ func TestNewUploaderAppliesDefaults(t *testing.T) {
 func TestNewUploaderValidatesTLSPairing(t *testing.T) {
 	t.Parallel()
 
+	withFakeConnectionManager(t, &fakeConnection{})
+
 	cfg := Config{
 		Database: "metrics",
 		DSN:      "clickhouse://localhost:9000/default",
@@ -57,6 +61,9 @@ func TestNewUploaderValidatesTLSPairing(t *testing.T) {
 
 func TestOpenCloseIsIdempotent(t *testing.T) {
 	t.Parallel()
+
+	fake := &fakeConnection{}
+	withFakeConnectionManager(t, fake)
 
 	cfg := Config{
 		Database:      "metrics",
@@ -77,6 +84,8 @@ func TestOpenCloseIsIdempotent(t *testing.T) {
 func TestSchemasReturnsCopy(t *testing.T) {
 	t.Parallel()
 
+	withFakeConnectionManager(t, &fakeConnection{})
+
 	cfg := Config{Database: "metrics", DSN: "clickhouse://localhost"}
 	u, err := NewUploader(cfg, nil)
 	require.NoError(t, err)
@@ -87,4 +96,22 @@ func TestSchemasReturnsCopy(t *testing.T) {
 
 	second := impl.Schemas()
 	require.NotEqual(t, "hacked", second["metrics"].Table)
+}
+
+type fakeConnection struct {
+	pingErr error
+}
+
+func (f *fakeConnection) Ping(context.Context) error { return f.pingErr }
+func (f *fakeConnection) Close() error               { return nil }
+
+func withFakeConnectionManager(t *testing.T, conn connectionManager) {
+	t.Helper()
+	original := newConnectionManager
+	newConnectionManager = func(Config) (connectionManager, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() {
+		newConnectionManager = original
+	})
 }
