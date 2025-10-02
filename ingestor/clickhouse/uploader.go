@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	monlogger "github.com/Azure/adx-mon/pkg/logger"
@@ -91,6 +94,12 @@ func (u *uploader) Open(ctx context.Context) error {
 		u.open = false
 		cancel()
 		return err
+	}
+
+	if err := u.conn.Exec(ctx, "SELECT 1"); err != nil {
+		u.open = false
+		cancel()
+		return fmt.Errorf("clickhouse health probe failed: %w", err)
 	}
 
 	if err := u.syncer.EnsureInitial(ctx, u.Schemas()); err != nil {
@@ -193,6 +202,24 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 		return nil
 	}
 
+	stats := newUploadStats(batch.Database)
+	var totalRows int
+	defer func() {
+		stats.setRows(totalRows)
+		stats.observe()
+	}()
+
+	handleError := func(err error, retryable bool) error {
+		if !retryable {
+			if remErr := batch.Remove(); remErr != nil {
+				if u.log != nil {
+					u.log.Warn("failed to remove fatal batch", slog.String("database", batch.Database), slog.String("error", remErr.Error()))
+				}
+			}
+		}
+		return stats.error(err, retryable)
+	}
+
 	var (
 		writer       batchWriter
 		schemaDef    Schema
@@ -200,7 +227,6 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 		schemaID     string
 		headerSig    string
 		rowsInBatch  int
-		totalRows    int
 		processed    int
 		flushTimer   *time.Timer
 	)
@@ -231,10 +257,11 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 			if u.log != nil {
 				u.log.Error("failed to open segment", slog.String("path", segment.Path), slog.String("error", err.Error()))
 			}
-			return err
+			return handleError(err, false)
 		}
 
 		processed++
+		stats.addBytes(segment.Size)
 
 		bufReader := bufio.NewReader(sr)
 		header, err := readHeader(bufReader)
@@ -243,7 +270,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 			if u.log != nil {
 				u.log.Error("failed to read segment header", slog.String("path", segment.Path), slog.String("error", err.Error()))
 			}
-			return err
+			return handleError(err, false)
 		}
 
 		if headerSig == "" {
@@ -254,7 +281,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to parse segment filename", slog.String("path", segment.Path), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, false)
 			}
 
 			schemaID = schemaName
@@ -264,11 +291,11 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to unmarshal schema", slog.String("path", segment.Path), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, false)
 			}
 			if len(mapping) == 0 {
 				sr.Close()
-				return fmt.Errorf("empty schema for table %s", batch.Table)
+				return handleError(fmt.Errorf("empty schema for table %s", batch.Table), false)
 			}
 
 			schemaDef, err = u.ensureSchema(ctx, batch.Table, schemaID, mapping)
@@ -277,7 +304,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to ensure schema", slog.String("table", batch.Table), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, true)
 			}
 
 			writer, err = u.conn.PrepareInsert(ctx, batch.Database, batch.Table, schemaDef.Columns)
@@ -286,7 +313,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to prepare clickhouse batch", slog.String("table", batch.Table), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, true)
 			}
 
 			schemaLoaded = true
@@ -296,7 +323,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 			}
 		} else if headerSig != header {
 			sr.Close()
-			return fmt.Errorf("schema mismatch for table %s", batch.Table)
+			return handleError(fmt.Errorf("schema mismatch for table %s", batch.Table), false)
 		}
 
 		csvReader := csv.NewReader(bufReader)
@@ -313,12 +340,12 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to read csv record", slog.String("path", segment.Path), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, false)
 			}
 
 			if !schemaLoaded {
 				sr.Close()
-				return fmt.Errorf("schema not loaded for table %s", batch.Table)
+				return handleError(fmt.Errorf("schema not loaded for table %s", batch.Table), false)
 			}
 
 			values, err := convertRecord(record, schemaDef.Columns)
@@ -327,7 +354,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to convert record", slog.String("table", batch.Table), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, false)
 			}
 
 			if err := writer.Append(values...); err != nil {
@@ -335,7 +362,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				if u.log != nil {
 					u.log.Error("failed to append row", slog.String("table", batch.Table), slog.String("error", err.Error()))
 				}
-				return err
+				return handleError(err, isRetryable(err))
 			}
 
 			rowsInBatch++
@@ -347,7 +374,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 					if u.log != nil {
 						u.log.Error("failed to flush batch", slog.String("table", batch.Table), slog.String("error", err.Error()))
 					}
-					return err
+					return handleError(err, isRetryable(err))
 				}
 				rowsInBatch = 0
 			}
@@ -361,7 +388,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 							if u.log != nil {
 								u.log.Error("failed to flush batch on interval", slog.String("table", batch.Table), slog.String("error", err.Error()))
 							}
-							return err
+							return handleError(err, isRetryable(err))
 						}
 						rowsInBatch = 0
 					}
@@ -382,7 +409,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 	}
 
 	if !schemaLoaded {
-		return fmt.Errorf("no schema resolved for table %s", batch.Table)
+		return handleError(fmt.Errorf("no schema resolved for table %s", batch.Table), false)
 	}
 
 	if flushTimer != nil {
@@ -398,11 +425,15 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 	}
 
 	if err := writer.Send(); err != nil {
-		return fmt.Errorf("send clickhouse batch: %w", err)
+		retryable := isRetryable(err)
+		if !retryable && u.log != nil {
+			u.log.Error("fatal clickhouse send error", slog.String("database", batch.Database), slog.String("error", err.Error()))
+		}
+		return handleError(fmt.Errorf("send clickhouse batch: %w", err), retryable)
 	}
 
 	if err := batch.Remove(); err != nil {
-		return fmt.Errorf("remove batch: %w", err)
+		return handleError(fmt.Errorf("remove batch: %w", err), true)
 	}
 
 	return nil
@@ -519,6 +550,53 @@ func convertRecord(record []string, columns []Column) ([]any, error) {
 	}
 
 	return values, nil
+}
+
+var fatalClickHouseCodes = map[int32]struct{}{
+	44:  {}, // TYPE_MISMATCH
+	53:  {}, // UNKNOWN_TYPE
+	57:  {}, // UNKNOWN_DATABASE
+	117: {}, // UNKNOWN_TABLE
+	202: {}, // ILLEGAL_TYPE_OF_ARGUMENT
+	241: {}, // READONLY
+	271: {}, // NOT_FOUND_COLUMN_IN_BLOCK
+}
+
+func isRetryable(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return true
+	case errors.Is(err, clickhouse.ErrAcquireConnTimeout), errors.Is(err, clickhouse.ErrServerUnexpectedData), errors.Is(err, clickhouse.ErrBatchNotSent):
+		return true
+	case errors.Is(err, clickhouse.ErrAcquireConnNoAddress), errors.Is(err, clickhouse.ErrBatchInvalid), errors.Is(err, clickhouse.ErrBatchAlreadySent), errors.Is(err, clickhouse.ErrUnsupportedServerRevision):
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() || netErr.Temporary() {
+			return true
+		}
+	}
+
+	var opErr *clickhouse.OpError
+	if errors.As(err, &opErr) {
+		return false
+	}
+
+	var chErr *clickhouse.Exception
+	if errors.As(err, &chErr) {
+		if _, ok := fatalClickHouseCodes[chErr.Code]; ok {
+			return false
+		}
+		return true
+	}
+
+	return true
 }
 
 func buildInsertQuery(database, table string, columns []Column) string {

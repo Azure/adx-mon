@@ -30,6 +30,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
+	"github.com/Azure/adx-mon/ingestor/clickhouse"
 	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
 	"github.com/Azure/adx-mon/metrics"
 	monhttp "github.com/Azure/adx-mon/pkg/http"
@@ -40,6 +41,7 @@ import (
 	adxtls "github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
+	"github.com/Azure/adx-mon/storage"
 )
 
 func main() {
@@ -52,8 +54,9 @@ func main() {
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
 			&cli.StringFlag{Name: "region", Usage: "Current region"},
 			&cli.StringFlag{Name: "storage-dir", Usage: "Directory to store WAL segments"},
-			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint> for metrics storage"},
-			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Kusto endpoint in the format of <db>=<endpoint>, handles OTLP logs"},
+			&cli.StringFlag{Name: "storage-backend", Usage: "Storage backend to use (adx or clickhouse)", EnvVars: []string{"INGESTOR_STORAGE_BACKEND"}, Value: string(storage.BackendADX)},
+			&cli.StringSliceFlag{Name: "metrics-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for metrics"},
+			&cli.StringSliceFlag{Name: "logs-kusto-endpoints", Usage: "Storage endpoint in the format <db>=<endpoint> for OTLP logs"},
 			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish ingestor clusters. Format: <key>=<value>"},
 			&cli.BoolFlag{Name: "disable-peer-transfer", Usage: "Disable segment transfers to peers"},
 			&cli.IntFlag{Name: "uploads", Usage: "Number of concurrent uploads", Value: adx.ConcurrentUploads},
@@ -200,60 +203,91 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatalf("--storage-dir is required")
 	}
 
+	backendRaw := ctx.String("storage-backend")
+	backend, err := storage.ParseBackend(backendRaw)
+	if err != nil {
+		logger.Fatalf("Invalid storage backend: %s", err)
+	}
+	logger.Infof("Ingestor storage backend: %s", backend)
+
+	metricsEndpoints := ctx.StringSlice("metrics-kusto-endpoints")
+	logsEndpoints := ctx.StringSlice("logs-kusto-endpoints")
+
+	allowedDatabases := make([]string, 0, len(metricsEndpoints)+len(logsEndpoints))
 	var (
-		allowedDatabases                []string
-		metricsUploaders, logsUploaders []adx.Uploader
-		metricsDatabases, logsDatabases []string
+		metricsDatabases []string
+		logsDatabases    []string
+		metricsKustoCli  []metrics.StatementExecutor
+		logsKustoCli     []metrics.StatementExecutor
+		uploader         ingestor.Uploader
 	)
 
-	metricsKusto := ctx.StringSlice("metrics-kusto-endpoints")
-	if len(metricsKusto) > 0 {
-		metricsUploaders, metricsDatabases, err = newUploaders(
-			metricsKusto, storageDir, concurrentUploads,
+	switch backend {
+	case storage.BackendADX:
+		metricsUploaders, md, err := newUploaders(
+			metricsEndpoints, storageDir, concurrentUploads,
 			schema.DefaultMetricsMapping, adx.PromMetrics)
 		if err != nil {
-			logger.Fatalf("Failed to create uploader: %s", err)
+			logger.Fatalf("Failed to create metrics uploader: %s", err)
 		}
-	} else {
-		logger.Warnf("No kusto endpoint provided, using fake metrics uploader")
-		uploader := adx.NewFakeUploader("FakeMetrics")
-		metricsUploaders = append(metricsUploaders, uploader)
-		metricsDatabases = append(metricsDatabases, uploader.Database())
-	}
-
-	logsKusto := ctx.StringSlice("logs-kusto-endpoints")
-	if len(logsKusto) > 0 {
-		logsUploaders, logsDatabases, err = newUploaders(
-			logsKusto, storageDir, concurrentUploads,
+		metricsDatabases = md
+		logsUploaders, ld, err := newUploaders(
+			logsEndpoints, storageDir, concurrentUploads,
 			schema.DefaultLogsMapping, adx.OTLPLogs)
 		if err != nil {
-			logger.Fatalf("Failed to create uploaders for OTLP logs: %s", err)
+			logger.Fatalf("Failed to create logs uploader: %s", err)
 		}
-	} else {
-		logger.Warnf("No kusto endpoint provided, using fake logs uploader")
-		uploader := adx.NewFakeUploader("FakeLogs")
-		logsUploaders = append(logsUploaders, uploader)
-		logsDatabases = append(logsDatabases, uploader.Database())
+		logsDatabases = ld
+
+		allowedDatabases = append(allowedDatabases, metricsDatabases...)
+		allowedDatabases = append(allowedDatabases, logsDatabases...)
+
+		uploadDispatcher := adx.NewDispatcher(append(logsUploaders, metricsUploaders...))
+		if err := uploadDispatcher.Open(svcCtx); err != nil {
+			logger.Fatalf("Failed to start upload dispatcher: %s", err)
+		}
+		uploader = uploadDispatcher
+		defer uploadDispatcher.Close()
+
+		for _, cli := range metricsUploaders {
+			metricsKustoCli = append(metricsKustoCli, cli)
+		}
+		for _, cli := range logsUploaders {
+			logsKustoCli = append(logsKustoCli, cli)
+		}
+
+	case storage.BackendClickHouse:
+		metricsUploaders, md, err := newClickHouseUploaders(metricsEndpoints)
+		if err != nil {
+			logger.Fatalf("Failed to create ClickHouse metrics uploader: %s", err)
+		}
+		logsUploaders, ld, err := newClickHouseUploaders(logsEndpoints)
+		if err != nil {
+			logger.Fatalf("Failed to create ClickHouse logs uploader: %s", err)
+		}
+
+		metricsDatabases = md
+		logsDatabases = ld
+		allowedDatabases = append(allowedDatabases, metricsDatabases...)
+		allowedDatabases = append(allowedDatabases, logsDatabases...)
+
+		combined := append(metricsUploaders, logsUploaders...)
+		chDispatcher := clickhouse.NewDispatcher(logger.Logger(), combined)
+		if err := chDispatcher.Open(svcCtx); err != nil {
+			logger.Fatalf("Failed to start ClickHouse dispatcher: %s", err)
+		}
+		uploader = chDispatcher
+		defer chDispatcher.Close()
+
+	default:
+		logger.Fatalf("Unsupported storage backend %q", backend)
 	}
 
-	allowedDatabases = append(allowedDatabases, metricsDatabases...)
-	allowedDatabases = append(allowedDatabases, logsDatabases...)
-
-	uploadDispatcher := adx.NewDispatcher(append(logsUploaders, metricsUploaders...))
-	if err := uploadDispatcher.Open(svcCtx); err != nil {
-		logger.Fatalf("Failed to start upload dispatcher: %s", err)
-	}
-	defer uploadDispatcher.Close()
-
-	var metricsKustoCli []metrics.StatementExecutor
-	for _, cli := range metricsUploaders {
-		metricsKustoCli = append(metricsKustoCli, cli)
+	if uploader == nil {
+		logger.Fatalf("No uploader configured for backend %s", backend)
 	}
 
-	var logsKustoCli []metrics.StatementExecutor
-	for _, cli := range logsUploaders {
-		logsKustoCli = append(logsKustoCli, cli)
-	}
+	allowedDatabases = dedupeStrings(allowedDatabases)
 
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:                 k8scli,
@@ -261,13 +295,13 @@ func realMain(ctx *cli.Context) error {
 		LogsKustoCli:           logsKustoCli,
 		MetricsKustoCli:        metricsKustoCli,
 		MetricsDatabases:       metricsDatabases,
-		AllowedDatabase:        metricsDatabases,
+		AllowedDatabase:        allowedDatabases,
 		LogsDatabases:          logsDatabases,
 		Namespace:              namespace,
 		Hostname:               hostname,
 		Region:                 region,
 		StorageDir:             storageDir,
-		Uploader:               uploadDispatcher,
+		Uploader:               uploader,
 		DisablePeerTransfer:    disablePeerTransfer,
 		PartitionSize:          partitionSize,
 		MaxSegmentSize:         maxSegmentSize,
@@ -283,6 +317,7 @@ func realMain(ctx *cli.Context) error {
 		DropFilePrefixes:       dropPrefixes,
 		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
 		ClusterLabels:          makeClusterLabels(ctx),
+		StorageBackend:         backend,
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
@@ -439,28 +474,51 @@ func newKustoClient(endpoint string) (*kusto.Client, error) {
 	return c, nil
 }
 
-func parseKustoEndpoint(kustoEndpoint string) (string, string, error) {
-	if !strings.Contains(kustoEndpoint, "=") {
-		return "", "", fmt.Errorf("invalid kusto endpoint: %s", kustoEndpoint)
+func parseStorageEndpoint(endpoint string) (string, string, error) {
+	if !strings.Contains(endpoint, "=") {
+		return "", "", fmt.Errorf("invalid endpoint: %s", endpoint)
 	}
 
-	split := strings.Split(kustoEndpoint, "=")
-	database := split[0]
-	addr := split[1]
+	split := strings.SplitN(endpoint, "=", 2)
+	database := strings.TrimSpace(split[0])
+	target := strings.TrimSpace(split[1])
 
 	if database == "" {
-		return "", "", fmt.Errorf("-db is required")
+		return "", "", fmt.Errorf("database name is required in %q", endpoint)
 	}
-	return addr, database, nil
+	if target == "" {
+		return "", "", fmt.Errorf("endpoint address is required for database %q", database)
+	}
+	return target, database, nil
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
 
-	var uploaders []adx.Uploader
-	var uploadDatabaseNames []string
+	var (
+		uploaders           []adx.Uploader
+		uploadDatabaseNames []string
+	)
+
+	if len(endpoints) == 0 {
+		var fakeName string
+		switch sampleType {
+		case adx.PromMetrics:
+			fakeName = "FakeMetrics"
+		case adx.OTLPLogs:
+			fakeName = "FakeLogs"
+		default:
+			fakeName = "Fake"
+		}
+		logger.Warnf("No Kusto endpoint provided, using fake uploader %s", fakeName)
+		uploader := adx.NewFakeUploader(fakeName)
+		uploaders = append(uploaders, uploader)
+		uploadDatabaseNames = append(uploadDatabaseNames, uploader.Database())
+		return uploaders, uploadDatabaseNames, nil
+	}
+
 	for _, endpoint := range endpoints {
-		addr, database, err := parseKustoEndpoint(endpoint)
+		addr, database, err := parseStorageEndpoint(endpoint)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -480,6 +538,54 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 		uploadDatabaseNames = append(uploadDatabaseNames, database)
 	}
 	return uploaders, uploadDatabaseNames, nil
+}
+
+func newClickHouseUploaders(endpoints []string) ([]clickhouse.Uploader, []string, error) {
+	if len(endpoints) == 0 {
+		logger.Warnf("No ClickHouse endpoint provided for this stream; uploads will be skipped")
+		return nil, nil, nil
+	}
+
+	uploaders := make([]clickhouse.Uploader, 0, len(endpoints))
+	databases := make([]string, 0, len(endpoints))
+
+	for _, endpoint := range endpoints {
+		dsn, database, err := parseStorageEndpoint(endpoint)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse clickhouse endpoint %q: %w", endpoint, err)
+		}
+
+		cfg := clickhouse.Config{Database: database, DSN: dsn}
+		uploader, err := clickhouse.NewUploader(cfg, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("init clickhouse uploader for database %q: %w", database, err)
+		}
+
+		uploaders = append(uploaders, uploader)
+		databases = append(databases, database)
+	}
+
+	return uploaders, databases, nil
+}
+
+func dedupeStrings(inputs []string) []string {
+	if len(inputs) == 0 {
+		return inputs
+	}
+
+	seen := make(map[string]struct{}, len(inputs))
+	out := make([]string, 0, len(inputs))
+	for _, v := range inputs {
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func newLogger() *log.Logger {
