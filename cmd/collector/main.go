@@ -293,7 +293,7 @@ func realMain(ctx *cli.Context) error {
 			RemoteClients:             remoteClients,
 		}
 
-		scraperOpts.DynamicLabeler = newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, cfg.PrometheusScrape.AddMetadataLabels)
+		scraperOpts.DynamicLabeler = newMetricLabeler(kubeNode, cfg.AddMetadataLabels, cfg.PrometheusScrape.AddMetadataLabels)
 	}
 
 	// Add the global add attributes to the log config
@@ -430,7 +430,7 @@ func realMain(ctx *cli.Context) error {
 		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.PrometheusRemoteWriteHandlerOpts{
 			Path: v.Path,
 			MetricOpts: collector.MetricsHandlerOpts{
-				DynamicLabeler:           newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
+				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
 				DropMetrics:              dropMetrics,
 				DropLabels:               dropLabels,
@@ -526,7 +526,7 @@ func realMain(ctx *cli.Context) error {
 			GrpcPort: v.GrpcPort,
 			MetricOpts: collector.MetricsHandlerOpts{
 				DefaultDropMetrics:       defaultDropMetrics,
-				DynamicLabeler:           newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
+				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
 				DropMetrics:              dropMetrics,
 				DropLabels:               dropLabels,
@@ -554,7 +554,7 @@ func realMain(ctx *cli.Context) error {
 				}
 			}
 
-			dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+			dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 
 			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
@@ -654,7 +654,7 @@ func realMain(ctx *cli.Context) error {
 				transformers = append(transformers, transform)
 			}
 
-			dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+			dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 
 			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
@@ -723,7 +723,7 @@ func realMain(ctx *cli.Context) error {
 					}
 					transformers = append(transformers, transform)
 				}
-				dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+				dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 				attributeTransform := addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
 					DynamicLabeler: dynamicLabeler,
@@ -784,7 +784,7 @@ func realMain(ctx *cli.Context) error {
 					transformers = append(transformers, transform)
 				}
 
-				dynamicLabeler := newDynamicLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+				dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 
 				if len(addAttributes) > 0 || dynamicLabeler != nil {
 					transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
@@ -899,7 +899,24 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func newDynamicLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) *metadata.DynamicLabeler {
+func newLogLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.LogLabeler {
+	if kubeNode == nil {
+		return nil
+	}
+
+	merged := config.MergeAddMetadataLabels(configs...)
+	if merged == nil {
+		return nil
+	}
+
+	if len(merged.KubernetesNodeLabels) == 0 && len(merged.KubernetesNodeAnnotations) == 0 {
+		return nil
+	}
+
+	return metadata.FromConfig(kubeNode, merged)
+}
+
+func newMetricLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.MetricLabeler {
 	if kubeNode == nil {
 		return nil
 	}
