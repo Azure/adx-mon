@@ -1391,13 +1391,13 @@ func collectInventoryByDatabase(schemas map[string][]ADXClusterSchema) map[strin
 				inventory[schema.Database] = make(map[string]struct{})
 			}
 			for _, table := range schema.Tables {
-				if table == "" {
+				if strings.TrimSpace(table) == "" {
 					continue
 				}
 				inventory[schema.Database][table] = struct{}{}
 			}
 			for _, view := range schema.Views {
-				if view == "" {
+				if strings.TrimSpace(view) == "" {
 					continue
 				}
 				inventory[schema.Database][view] = struct{}{}
