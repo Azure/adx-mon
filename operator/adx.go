@@ -39,6 +39,8 @@ const (
 	ADXClusterCreatingReason = "Creating"
 	// ADXClusterWaitingReason denotes a cluster that is fully configured and is waiting to become available.
 	ADXClusterWaitingReason = "Waiting"
+
+	otlpHubSchemaDefinition = "Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic"
 )
 
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -985,6 +987,16 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
+	entityInventory := collectInventoryByDatabase(schemaByEndpoint)
+	for db, entities := range entityInventory {
+		if len(entities) == 0 {
+			continue
+		}
+		if err := ensureHubTables(ctx, client, db, entities); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to ensure tables for database %s: %w", db, err)
+		}
+	}
+
 	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
@@ -1369,6 +1381,93 @@ func extractDatabasesFromSchemas(schemas map[string][]ADXClusterSchema) map[stri
 		}
 	}
 	return dbSet
+}
+
+func collectInventoryByDatabase(schemas map[string][]ADXClusterSchema) map[string][]string {
+	inventory := make(map[string]map[string]struct{})
+	for _, dbSchemas := range schemas {
+		for _, schema := range dbSchemas {
+			if inventory[schema.Database] == nil {
+				inventory[schema.Database] = make(map[string]struct{})
+			}
+			for _, table := range schema.Tables {
+				if strings.TrimSpace(table) == "" {
+					continue
+				}
+				inventory[schema.Database][table] = struct{}{}
+			}
+			for _, view := range schema.Views {
+				if strings.TrimSpace(view) == "" {
+					continue
+				}
+				inventory[schema.Database][view] = struct{}{}
+			}
+		}
+	}
+	byDatabase := make(map[string][]string, len(inventory))
+	for db, entries := range inventory {
+		var names []string
+		for name := range entries {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		byDatabase[db] = names
+	}
+	return byDatabase
+}
+
+func ensureHubTables(ctx context.Context, client *kusto.Client, database string, tables []string) error {
+	for _, table := range tables {
+		if strings.TrimSpace(table) == "" {
+			continue
+		}
+		exists, err := tableExists(ctx, client, database, table)
+		if err != nil {
+			return fmt.Errorf("failed to check table existence for %s.%s: %w", database, table, err)
+		}
+		if exists {
+			continue
+		}
+		stmt := kql.New(".create table ").
+			AddUnsafe(table).
+			AddLiteral(" (").
+			AddUnsafe(otlpHubSchemaDefinition).
+			AddLiteral(")")
+		if _, err := client.Mgmt(ctx, database, stmt); err != nil {
+			return fmt.Errorf("failed to create table %s.%s: %w", database, table, err)
+		}
+		logger.Infof("Created hub table %s.%s using OTLP schema", database, table)
+	}
+	return nil
+}
+
+func tableExists(ctx context.Context, client *kusto.Client, database, table string) (bool, error) {
+	query := kql.New(".show tables | where TableName == ").AddString(table).AddLiteral(" | count")
+	result, err := client.Mgmt(ctx, database, query)
+	if err != nil {
+		return false, fmt.Errorf("failed to query table existence: %w", err)
+	}
+	defer result.Stop()
+
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to read table existence: %w", errFinal)
+		}
+		var rec DatabaseExistsRec
+		if err := row.ToStruct(&rec); err != nil {
+			return false, fmt.Errorf("failed to parse table existence: %w", err)
+		}
+		return rec.Count > 0, nil
+	}
+
+	return false, nil
 }
 
 // Helper: Map tables to endpoints for each database
