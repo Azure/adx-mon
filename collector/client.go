@@ -274,7 +274,7 @@ func (c *MetricsClient) readToken() (string, error) {
 }
 
 func (c *MetricsClient) refreshToken() {
-	t := time.NewTicker(30 * time.Minute)
+	t := time.NewTicker(1 * time.Minute)
 	defer t.Stop()
 
 	for {
