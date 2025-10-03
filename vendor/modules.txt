@@ -1,7 +1,7 @@
 # buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20250903204106-8f7f39d68375.2
 ## explicit; go 1.19
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect
-# buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.9-20250903204106-8f7f39d68375.1
+# buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.10-20250903204106-8f7f39d68375.1
 ## explicit; go 1.23
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1
