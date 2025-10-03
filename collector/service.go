@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
+	"github.com/Azure/adx-mon/collector/metadata"
 	metricsHandler "github.com/Azure/adx-mon/collector/metrics"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
@@ -61,6 +62,8 @@ type ServiceOpts struct {
 	ListenAddr string
 	NodeName   string
 	Endpoint   string
+
+	KubeNode *metadata.KubeNode
 
 	// LogCollectionHandlers is the list of log collection handlers
 	LogCollectionHandlers []LogCollectorOpts
@@ -167,6 +170,8 @@ type MetricsHandlerOpts struct {
 	DefaultDropMetrics       bool
 
 	RemoteWriteClients []remote.RemoteWriteClient
+
+	DynamicLabeler metadata.MetricLabeler
 }
 
 func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
@@ -177,6 +182,7 @@ func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
 		KeepMetrics:               o.KeepMetrics,
 		KeepMetricsWithLabelValue: o.KeepMetricsLabelValues,
 		DefaultDropMetrics:        o.DefaultDropMetrics,
+		DynamicLabeler:            o.DynamicLabeler,
 	}
 }
 
@@ -221,6 +227,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	var httpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
 	workerSvcs := []service.Component{}
+	if opts.KubeNode != nil {
+		workerSvcs = append(workerSvcs, opts.KubeNode)
+	}
 
 	for _, handlerOpts := range opts.PromMetricsHandlers {
 		metricsProxySvc := metricsHandler.NewHandler(metricsHandler.HandlerOpts{

@@ -27,6 +27,7 @@ rules:
     resources:
       - namespaces
       - pods
+      - nodes # node label metadata. Not needed if not using add-metadata-labels.kubernetes-node
     verbs:
       - get
       - list
