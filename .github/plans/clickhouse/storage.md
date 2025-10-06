@@ -1,6 +1,6 @@
 # Collector Storage Implementation Guide
 
-_Last updated: 2025-10-01_
+_Last updated: 2025-10-06_
 
 ## Purpose
 
@@ -30,10 +30,10 @@ Provide an end-to-end recipe for preparing the collector’s WAL pipeline to ser
 
 ### Phase 1. Backend selector plumbing
 
-1. Add `--storage-backend` (enum: `adx`, `clickhouse`) to `cmd/collector/main.go`, defaulting to `adx`. Mirror the flag via environment variable/config for parity with existing options.
-2. Introduce a shared `storage.Backend` enum and propagate it through `collector.Config`, `collector.ServiceOpts`, and into `storage.StoreOpts` (collectors should import the storage type directly rather than re-wrapping it).
-3. Emit an informational log on startup stating the active backend and refuse to start if the flag is empty or invalid. Keep ADX as the fallback when the flag is omitted.
-4. Expose the selected backend via a gauge/metric (e.g., `collector_storage_backend_info`) so operators can validate clusters are homogenous before rollout.
+1. ✅ Add `--storage-backend` (enum: `adx`, `clickhouse`) to `cmd/collector/main.go`, defaulting to `adx`. Mirror the flag via environment variable/config for parity with existing options.
+2. ✅ Introduce a shared `storage.Backend` enum and propagate it through `collector.Config`, `collector.ServiceOpts`, and into `storage.StoreOpts` (collectors import the storage type directly rather than re-wrapping it).
+3. ✅ Emit an informational log on startup stating the active backend and refuse to start if the flag is empty or invalid. Keep ADX as the fallback when the flag is omitted.
+4. ⏳ Expose the selected backend via a Prometheus gauge (e.g., `collector_storage_backend_info`) so operators can validate clusters are homogenous before rollout. Current state: startup logs and readiness/debug endpoints report the backend, but no metric is published yet.
 
 ### Phase 2. Keep WAL serialization CSV-first ✅ _Completed 2025-10-01_
 
@@ -45,21 +45,21 @@ Provide an end-to-end recipe for preparing the collector’s WAL pipeline to ser
 ### Phase 3. Safety and interoperability checks ✅ _Completed 2025-10-02_
 
 1. Teach the collector to export the selected backend through its readiness/debug endpoints (e.g., include `backend=clickhouse` in `/readyz` or `/debug/store`) to aid rollout verification. **Status:** Completed — collector now serves `/readyz` and `/debug/store` with backend annotations.
-2. Add a startup sanity check that compares the collector backend flag with an optional environment guard (e.g., `ADXMON_EXPECT_BACKEND`). This helps catch configuration drift during canaries. **Status:** Deferred — guard proved unnecessary and has been removed in favor of readiness endpoint validation.
+2. ❌ Add a startup sanity check that compares the collector backend flag with an optional environment guard (e.g., `ADXMON_EXPECT_BACKEND`). **Pivot:** Decided not to ship this guard; readiness/debug endpoints now expose the backend instead.
 3. Update documentation/config samples (collector README, charts, manifests) to surface the new flag and warn that all collectors and ingestors in an environment must share the same value. **Status:** Updated — documentation now focuses on `/readyz` and `/debug/store` for backend verification; no environment guard required.
 
 ### Phase 4. Validation & testing
 
 1. Extend existing WAL integration tests (e.g., `storage/store_test.go`, `collector/service_test.go`) to run in both backend modes using table-driven cases. **Status:** Completed — storage WAL tests cover both backends for metrics and logs, and collector service tests now execute under both configurations.
-2. Run `go test ./collector/... ./storage/...` locally and in CI to ensure no regressions. **Status:** Completed — local runs executed with both packages to confirm parity.
+2. ✅ Run `go test ./collector/... ./storage/...` locally and in CI to ensure no regressions. **Status:** Completed — local + CI runs confirm parity across backends.
 3. Perform an end-to-end smoke test: start a collector in `clickhouse` mode pointed at a local ingestor (still ADX-backed for now), generate sample Prometheus traffic, and confirm segments land on disk and can be uploaded by the CSV-based ingestor path. **Status:** Pending — requires a dedicated environment and manual verification.
 
 ## Rollout checklist ✅
 
-- [ ] `--storage-backend` flag merged with default `adx` and documented.
-- [ ] Collector exposes metrics/logs showing the active backend.
-- [ ] Unit/integration tests cover both backend values without changing payload format.
-- [ ] Operational runbooks updated with instructions for enabling ClickHouse mode.
+- [x] `--storage-backend` flag merged with default `adx` and documented (collector CLI + config file, docs mention the new flag).
+- [ ] Collector exposes metrics/logs showing the active backend _(startup log + readiness endpoint live; Prometheus gauge pending)._ 
+- [x] Unit tests cover both backend values without changing payload format (`storage/store_test.go`, `collector/service_test.go`). Integration smoke test remains on the backlog.
+- [x] Operational docs/runbooks updated with instructions for enabling ClickHouse mode (see `docs/guides.md` and `docs/ingestor.md`).
 - [ ] Canary collectors deployed alongside ADX ingestor to validate CSV compatibility before switching the ingestion backend.
 
 ## Follow-ups (post-MVP)

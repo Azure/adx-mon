@@ -1,6 +1,6 @@
 # ClickHouse Ingestion Implementation Guide
 
-Last updated: 2025-10-02
+Last updated: 2025-10-06
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Equip the engineering team with a concrete, end-to-end recipe for adding the Cli
 ## Target outcomes
 
 - `ingestor/clickhouse` package implements the shared uploader interface and can be selected at runtime.
-- ClickHouse inserts support both CSV-decoded WAL batches and pre-encoded native WAL segments.
+- ClickHouse inserts support CSV-decoded WAL batches. Native WAL ingestion is deferred until the MVP stabilizes.
 - Retry/backpressure, health reporting, and metrics behave identically to the ADX backend.
 - CLI configuration cleanly switches between ADX and ClickHouse modes with no double-writes.
 
@@ -18,7 +18,7 @@ Equip the engineering team with a concrete, end-to-end recipe for adding the Cli
 - Familiarity with the current ingestor flow (`ingestor/service.go`, `cluster.Batcher`, `UploadQueue`).
 - Understanding of WAL segment formats (`pkg/wal`, `SampleType*` enums) and the backpressure guards in `ingestor/storage`.
 - Access to the ClickHouse server(s) and agreement on target databases/tables.
-- Go modules for the ClickHouse driver (`github.com/ClickHouse/ch-go/v2`) vendored or pinned in `go.mod`.
+- Go modules for the ClickHouse driver (`github.com/ClickHouse/clickhouse-go/v2`) vendored or pinned in `go.mod`.
 
 ## Component map
 
@@ -70,7 +70,7 @@ Additional notes:
    - ✅ Retry transient network, timeout, and throttling codes.
    - ✅ Mark schema or validation failures as fatal and surface them through metrics/logging.
 3. ✅ Do not implement an extra throttling layer; rely on the existing WAL guards (`--max-segment-count`, `--max-disk-usage`, `--max-segment-age`) to pause new intake until the queue drains.
-4. ⏳ Update backpressure metrics to include ClickHouse labels so operators can distinguish the backend in dashboards. (New ClickHouse-specific upload counters/latency metrics land in `ingestor/clickhouse/metrics.go`; wiring existing backpressure gauges still pending.)
+4. ⏳ Extend shared backpressure gauges (queue depth, disk pressure) with a backend label so operators can distinguish ADX vs ClickHouse in dashboards. Dedicated ClickHouse counters/latency metrics live in `ingestor/clickhouse/metrics.go`; hooking the shared gauges remains outstanding.
 5. ✅ Fatal ClickHouse errors now remove WAL batches before returning to prevent infinite retry loops.
 
 ### Phase 6. CLI wiring and feature flagging ✅
@@ -89,19 +89,19 @@ Additional notes:
 
 ### Phase 8. Testing and validation
 
-1. Unit tests:
-   - Mock the ClickHouse client interface to assert CSV vs. native handling and retry classification.
-   - Ensure schema sync logic issues correct DDL statements.
-2. Integration smoke test (requires ClickHouse test container):
+1. ✅ Unit tests:
+   - Mock the ClickHouse client interface to assert CSV handling and retry classification (`client_test.go`, `uploader_test.go`).
+   - Ensure schema sync logic issues correct DDL statements (`syncer_test.go`).
+2. ⏳ Integration smoke test (requires ClickHouse test container):
    - Start a ClickHouse instance.
    - Run the ingestor with `--storage-backend=clickhouse` and feed synthetic WAL segments (see `pkg/wal/testutil`).
    - Verify rows arrive in the target table and WAL segments are deleted.
-3. Regression tests: run existing `go test ./ingestor/...` to confirm the ADX path still passes.
+3. ✅ Regression tests: run `go test ./ingestor/...` (CI + local) to confirm the ADX path still passes alongside ClickHouse.
 
 ## Rollout checklist ✅
 
 - [x] Feature flag (`--storage-backend`) merged and defaulted to ADX.
-- [ ] ClickHouse uploader passes unit and integration tests.
+- [ ] ClickHouse uploader passes unit and integration tests _(unit suite green; integration harness pending)._ 
 - [x] Documentation updated (this guide, config reference, runbook).
 - [ ] Dashboard/alert coverage for ClickHouse metrics in place.
 - [ ] Run staged rollout: dev → staging → production. Monitor queue depth, disk usage, and error rates at each step.
@@ -110,4 +110,4 @@ Additional notes:
 
 - `ingestor/adx` package for lifecycle and queue integration patterns.
 - `pkg/wal` README for segment formats and backpressure controls.
-- ClickHouse `ch-go` documentation: https://github.com/ClickHouse/ch-go
+- ClickHouse `clickhouse-go` documentation: https://github.com/ClickHouse/clickhouse-go
