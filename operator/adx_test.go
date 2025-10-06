@@ -661,6 +661,16 @@ func TestExtractDatabasesFromSchemas(t *testing.T) {
 	require.Contains(t, dbs, "db2")
 }
 
+func TestCollectInventoryByDatabase(t *testing.T) {
+	schemas := map[string][]ADXClusterSchema{
+		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}, Views: []string{"view1"}}},
+		"ep2": {{Database: "db1", Tables: []string{"t2"}, Views: []string{"view2", ""}}},
+	}
+	inventory := collectInventoryByDatabase(schemas)
+	require.Contains(t, inventory, "db1")
+	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, inventory["db1"])
+}
+
 func TestMapTablesToEndpoints(t *testing.T) {
 	schemas := map[string][]ADXClusterSchema{
 		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}}},
@@ -745,4 +755,37 @@ func TestDatabaseExists(t *testing.T) {
 	exists, err = databaseExists(ctx, cluster, "NonExistentDB")
 	require.NoError(t, err)
 	require.False(t, exists, "NonExistentDB should not exist")
+}
+
+func TestEnsureHubTables(t *testing.T) {
+	testutils.IntegrationTest(t)
+	ctx := context.Background()
+	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, kustoContainer)
+	require.NoError(t, err)
+
+	ep := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	client, err := kusto.New(ep)
+	require.NoError(t, err)
+	defer client.Close()
+
+	database := "NetDefaultDB"
+	tables := []string{"MirrorTable", "MirrorView"}
+
+	for _, tbl := range tables {
+		exists, err := tableExists(ctx, client, database, tbl)
+		require.NoError(t, err)
+		require.False(t, exists)
+	}
+
+	require.NoError(t, ensureHubTables(ctx, client, database, tables))
+
+	for _, tbl := range tables {
+		exists, err := tableExists(ctx, client, database, tbl)
+		require.NoError(t, err)
+		require.True(t, exists)
+	}
+
+	// Re-run to confirm it remains idempotent when tables already exist.
+	require.NoError(t, ensureHubTables(ctx, client, database, tables))
 }
