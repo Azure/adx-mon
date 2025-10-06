@@ -14,11 +14,13 @@ Collector is configured with a [TOML-formatted](https://toml.io/) file. In Kuber
 ```
 {{- end }}
 
-## Exporters
-
 ## Metadata Watching
 
 Metadata watching enables dynamic enrichment of metrics and logs with Kubernetes node metadata (labels, annotations) and other sources. This is configured using the `[metadata-watch]` and `[add-metadata-labels]` sections.
+
+`[metadata-watch]` is a global declaration of the dynamic metadata observers the collector should run. Define it once at the root of the config; every watcher listed there is shared across the entire process.
+
+`[add-metadata-labels]` blocks consume those watchers and can be declared in multiple scopes. Use the top-level block to apply metadata to every signal, and add scoped blocks (for example, `host-log.add-metadata-labels` or `prometheus-scrape.add-metadata-labels`) to override or extend the mappings for specific pipelines.
 
 {{- range .MetadataSections }}
 ### {{ .Title }}
