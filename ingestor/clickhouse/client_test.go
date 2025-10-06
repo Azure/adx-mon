@@ -22,10 +22,23 @@ func TestBuildOptionsNativeDefaults(t *testing.T) {
 	require.Equal(t, clickhouse.Native, opts.Protocol)
 	require.Equal(t, []string{"primary:9000"}, opts.Addr)
 	require.Equal(t, "metrics", opts.Auth.Database)
-	require.NotNil(t, opts.TLS)
-	require.Equal(t, uint16(tls.VersionTLS12), opts.TLS.MinVersion)
+	require.Nil(t, opts.TLS)
 	require.Equal(t, clickhouse.CompressionLZ4, opts.Compression.Method)
 	require.Equal(t, cfg.Client.DialTimeout, opts.DialTimeout)
+}
+
+func TestBuildOptionsNativeSecureEnabled(t *testing.T) {
+	cfg := Config{
+		Database: "metrics",
+		DSN:      "clickhouse://primary?secure=1",
+	}.withDefaults()
+
+	opts, err := buildOptions(cfg)
+	require.NoError(t, err)
+
+	require.NotNil(t, opts.TLS)
+	require.Equal(t, uint16(tls.VersionTLS12), opts.TLS.MinVersion)
+	require.Equal(t, "primary", opts.TLS.ServerName)
 }
 
 func TestBuildOptionsHTTP(t *testing.T) {
@@ -113,7 +126,10 @@ func TestBuildOptionsRequiresDSN(t *testing.T) {
 }
 
 func TestTLSConfigWithCustomFiles(t *testing.T) {
-	tlsCfg, err := buildTLSConfig(TLSConfig{InsecureSkipVerify: true}, "https")
+	uri, err := url.Parse("https://endpoint")
+	require.NoError(t, err)
+
+	tlsCfg, err := buildTLSConfig(TLSConfig{InsecureSkipVerify: true}, uri)
 	require.NoError(t, err)
 	require.NotNil(t, tlsCfg)
 	require.True(t, tlsCfg.InsecureSkipVerify)

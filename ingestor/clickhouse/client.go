@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -119,7 +120,7 @@ func buildOptions(cfg Config) (*clickhouse.Options, error) {
 	}
 
 	addresses := expandAddresses(uri.Host, defaultPort)
-	tlsConfig, err := buildTLSConfig(cfg.TLS, uri.Scheme)
+	tlsConfig, err := buildTLSConfig(cfg.TLS, uri)
 	if err != nil {
 		return nil, err
 	}
@@ -177,13 +178,26 @@ func expandAddresses(hostPart, defaultPort string) []string {
 	return addresses
 }
 
-func buildTLSConfig(cfg TLSConfig, scheme string) (*tls.Config, error) {
-	needTLS := strings.EqualFold(scheme, "https") || strings.EqualFold(scheme, "clickhouse") || strings.EqualFold(scheme, "native")
-	if !needTLS && cfg.CAFile == "" && cfg.CertFile == "" && !cfg.InsecureSkipVerify {
+func buildTLSConfig(cfg TLSConfig, uri *url.URL) (*tls.Config, error) {
+	secure := false
+	if rawSecure := uri.Query().Get("secure"); rawSecure != "" {
+		if parsed, err := strconv.ParseBool(rawSecure); err == nil {
+			secure = parsed
+		}
+	}
+
+	scheme := strings.ToLower(uri.Scheme)
+	hasUserTLS := cfg.CAFile != "" || (cfg.CertFile != "" && cfg.KeyFile != "") || cfg.InsecureSkipVerify
+	needTLS := scheme == "https" || secure || hasUserTLS
+	if !needTLS {
 		return nil, nil
 	}
 
 	tlsCfg := &tls.Config{InsecureSkipVerify: cfg.InsecureSkipVerify}
+
+	if host := uri.Hostname(); host != "" {
+		tlsCfg.ServerName = host
+	}
 
 	if cfg.CAFile != "" {
 		caPEM, err := os.ReadFile(cfg.CAFile)
@@ -205,7 +219,7 @@ func buildTLSConfig(cfg TLSConfig, scheme string) (*tls.Config, error) {
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
-	if tlsCfg.RootCAs == nil && !cfg.InsecureSkipVerify && needTLS {
+	if tlsCfg.RootCAs == nil && !cfg.InsecureSkipVerify {
 		tlsCfg.MinVersion = tls.VersionTLS12
 	}
 
