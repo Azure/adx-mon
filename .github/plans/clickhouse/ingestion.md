@@ -1,10 +1,5 @@
 # ClickHouse Ingestion Implementation Guide
 
-Last updated: 2025-10-06
-
-## Purpose
-
-Equip the engineering team with a concrete, end-to-end recipe for adding the ClickHouse backend to the ingestor. Follow these steps to ship a production-ready uploader that slots into the existing WAL/queue pipeline without disrupting the ADX path.
 
 ## Target outcomes
 
@@ -12,13 +7,6 @@ Equip the engineering team with a concrete, end-to-end recipe for adding the Cli
 - ClickHouse inserts support CSV-decoded WAL batches. Native WAL ingestion is deferred until the MVP stabilizes.
 - Retry/backpressure, health reporting, and metrics behave identically to the ADX backend.
 - CLI configuration cleanly switches between ADX and ClickHouse modes with no double-writes.
-
-## Prerequisites
-
-- Familiarity with the current ingestor flow (`ingestor/service.go`, `cluster.Batcher`, `UploadQueue`).
-- Understanding of WAL segment formats (`pkg/wal`, `SampleType*` enums) and the backpressure guards in `ingestor/storage`.
-- Access to the ClickHouse server(s) and agreement on target databases/tables.
-- Go modules for the ClickHouse driver (`github.com/ClickHouse/clickhouse-go/v2`) vendored or pinned in `go.mod`.
 
 ## Component map
 
@@ -97,17 +85,3 @@ Additional notes:
    - Run the ingestor with `--storage-backend=clickhouse` and feed synthetic WAL segments (see `pkg/wal/testutil`).
    - Verify rows arrive in the target table and WAL segments are deleted.
 3. ✅ Regression tests: run `go test ./ingestor/...` (CI + local) to confirm the ADX path still passes alongside ClickHouse.
-
-## Rollout checklist ✅
-
-- [x] Feature flag (`--storage-backend`) merged and defaulted to ADX.
-- [ ] ClickHouse uploader passes unit and integration tests _(unit suite green; integration harness pending)._ 
-- [x] Documentation updated (this guide, config reference, runbook).
-- [ ] Dashboard/alert coverage for ClickHouse metrics in place.
-- [ ] Run staged rollout: dev → staging → production. Monitor queue depth, disk usage, and error rates at each step.
-
-## References
-
-- `ingestor/adx` package for lifecycle and queue integration patterns.
-- `pkg/wal` README for segment formats and backpressure controls.
-- ClickHouse `clickhouse-go` documentation: https://github.com/ClickHouse/clickhouse-go

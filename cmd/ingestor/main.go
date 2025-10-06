@@ -239,9 +239,6 @@ func realMain(ctx *cli.Context) error {
 		}
 		logsDatabases = ld
 
-		allowedDatabases = append(allowedDatabases, metricsDatabases...)
-		allowedDatabases = append(allowedDatabases, logsDatabases...)
-
 		uploadDispatcher := adx.NewDispatcher(append(logsUploaders, metricsUploaders...))
 		if err := uploadDispatcher.Open(svcCtx); err != nil {
 			logger.Fatalf("Failed to start upload dispatcher: %s", err)
@@ -268,8 +265,6 @@ func realMain(ctx *cli.Context) error {
 
 		metricsDatabases = md
 		logsDatabases = ld
-		allowedDatabases = append(allowedDatabases, metricsDatabases...)
-		allowedDatabases = append(allowedDatabases, logsDatabases...)
 
 		combined := append(metricsUploaders, logsUploaders...)
 		chDispatcher := clickhouse.NewDispatcher(logger.Logger(), combined)
@@ -287,7 +282,8 @@ func realMain(ctx *cli.Context) error {
 		logger.Fatalf("No uploader configured for backend %s", backend)
 	}
 
-	allowedDatabases = dedupeStrings(allowedDatabases)
+	allowedDatabases = append(allowedDatabases, metricsDatabases...)
+	allowedDatabases = append(allowedDatabases, logsDatabases...)
 
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
 		K8sCli:                 k8scli,
@@ -566,26 +562,6 @@ func newClickHouseUploaders(endpoints []string) ([]clickhouse.Uploader, []string
 	}
 
 	return uploaders, databases, nil
-}
-
-func dedupeStrings(inputs []string) []string {
-	if len(inputs) == 0 {
-		return inputs
-	}
-
-	seen := make(map[string]struct{}, len(inputs))
-	out := make([]string, 0, len(inputs))
-	for _, v := range inputs {
-		if v == "" {
-			continue
-		}
-		if _, ok := seen[v]; ok {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
-	return out
 }
 
 func newLogger() *log.Logger {
