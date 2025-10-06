@@ -40,8 +40,6 @@ max-transfer-concurrency = 100
 storage-dir = '/var/lib/adx-mon'
 # Enable pprof endpoints.
 enable-pprof = true
-# Storage backend for WAL segments (valid values: "adx", "clickhouse").
-storage-backend = 'adx'
 # Default to dropping all metrics.  Only metrics matching a keep rule will be kept.
 default-drop-metrics = false
 # Global Regexes of metrics to drop.
