@@ -369,11 +369,11 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				return handleError(fmt.Errorf("schema not loaded for table %s", batch.Table), false)
 			}
 
-			recordCopy := append([]string(nil), record...)
 			values, err := convertRecord(record, schemaDef.Columns)
 			if err != nil {
 				sr.Close()
 				if u.log != nil {
+					recordCopy := append([]string(nil), record...)
 					recordPreview := recordCopy
 					if len(recordPreview) > 10 {
 						recordPreview = recordPreview[:10]
