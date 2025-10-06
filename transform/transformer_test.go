@@ -180,6 +180,57 @@ func TestRequestTransformer_WalkLabels(t *testing.T) {
 
 }
 
+func TestRequestTransformer_TransformTimeSeries_DynamicLabeler(t *testing.T) {
+	dl := newFakeDynamicLabeler(map[string]string{"dyn_label": "dyn_value"})
+
+	ts := &prompb.TimeSeries{
+		Labels: []*prompb.Label{
+			{Name: []byte("__name__"), Value: []byte("cpu")},
+			{Name: []byte("region"), Value: []byte("eastus")},
+		},
+	}
+
+	f := &transform.RequestTransformer{DynamicLabeler: dl}
+
+	res := f.TransformTimeSeries(ts)
+
+	require.True(t, dl.appendNamesCalled, "expected AppendLabelNamesBytes to be called during init")
+	require.Equal(t, 1, dl.appendPromLabelsCalled, "expected AppendPromLabels to be called once")
+
+	val, ok := findLabelValue(res.Labels, "dyn_label")
+	require.True(t, ok)
+	require.Equal(t, "dyn_value", val)
+
+	region, ok := findLabelValue(res.Labels, "region")
+	require.True(t, ok)
+	require.Equal(t, "eastus", region)
+}
+
+func TestRequestTransformer_TransformWriteRequest_DynamicLabeler(t *testing.T) {
+	dl := newFakeDynamicLabeler(map[string]string{"dyn": "value"})
+
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}},
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("mem")}}},
+		},
+	}
+
+	f := &transform.RequestTransformer{DynamicLabeler: dl}
+
+	res := f.TransformWriteRequest(req)
+
+	require.Equal(t, 2, len(res.Timeseries))
+	require.True(t, dl.appendNamesCalled)
+	require.Equal(t, 2, dl.appendPromLabelsCalled)
+
+	for _, ts := range res.Timeseries {
+		val, ok := findLabelValue(ts.Labels, "dyn")
+		require.True(t, ok)
+		require.Equal(t, "value", val)
+	}
+}
+
 func TestRequestTransformer_TransformWriteRequest_DropLabels(t *testing.T) {
 	f := &transform.RequestTransformer{
 		DropLabels: map[*regexp.Regexp]*regexp.Regexp{
@@ -651,6 +702,46 @@ func TestRequestTransformer_TransformWriteRequest_KeepMetricsWithLabelValueDropL
 	require.Equal(t, []byte("cpu"), res.Timeseries[0].Labels[0].Value)
 	require.Equal(t, []byte("zone"), res.Timeseries[0].Labels[1].Name)
 	require.Equal(t, []byte("3"), res.Timeseries[0].Labels[1].Value)
+}
+
+type fakeDynamicLabeler struct {
+	labels                 map[string]string
+	appendNamesCalled      bool
+	appendPromLabelsCalled int
+}
+
+func newFakeDynamicLabeler(labels map[string]string) *fakeDynamicLabeler {
+	return &fakeDynamicLabeler{labels: labels}
+}
+
+func (f *fakeDynamicLabeler) AppendLabelNamesBytes(names [][]byte) [][]byte {
+	f.appendNamesCalled = true
+	for k := range f.labels {
+		names = append(names, []byte(k))
+	}
+	return names
+}
+
+func (f *fakeDynamicLabeler) WalkLabels(callback func(key, value []byte)) {
+	for k, v := range f.labels {
+		callback([]byte(k), []byte(v))
+	}
+}
+
+func (f *fakeDynamicLabeler) AppendPromLabels(ts *prompb.TimeSeries) {
+	f.appendPromLabelsCalled++
+	for k, v := range f.labels {
+		ts.AppendLabel([]byte(k), []byte(v))
+	}
+}
+
+func findLabelValue(labels []*prompb.Label, key string) (string, bool) {
+	for _, l := range labels {
+		if string(l.Name) == key {
+			return string(l.Value), true
+		}
+	}
+	return "", false
 }
 
 func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {

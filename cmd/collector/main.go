@@ -31,6 +31,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/collector/metadata"
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/http"
@@ -151,6 +152,16 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
+
+	var kubeNode *metadata.KubeNode
+	if cfg.MetadataWatch != nil && cfg.MetadataWatch.KubernetesNode != nil {
+		client, err := getKubeClient(cfg.Kubeconfig)
+		if err != nil {
+			return fmt.Errorf("failed to build kubernetes client for metadata watch: %w", err)
+		}
+
+		kubeNode = metadata.NewKubeNode(client, hostname)
+	}
 
 	var endpoint string
 	if cfg.Endpoint != "" {
@@ -302,6 +313,8 @@ func realMain(ctx *cli.Context) error {
 			MaxBatchSize:              cfg.MaxBatchSize,
 			RemoteClients:             remoteClients,
 		}
+
+		scraperOpts.DynamicLabeler = newMetricLabeler(kubeNode, cfg.AddMetadataLabels, cfg.PrometheusScrape.AddMetadataLabels)
 	}
 
 	// Add the global add attributes to the log config
@@ -338,6 +351,7 @@ func realMain(ctx *cli.Context) error {
 		NodeName:               hostname,
 		Endpoint:               endpoint,
 		StorageBackend:         backend,
+		KubeNode:               kubeNode,
 		DisableGzip:            cfg.DisableGzip,
 		LiftLabels:             sortedLiftedLabels,
 		AddAttributes:          addAttributes,
@@ -438,13 +452,14 @@ func realMain(ctx *cli.Context) error {
 		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.PrometheusRemoteWriteHandlerOpts{
 			Path: v.Path,
 			MetricOpts: collector.MetricsHandlerOpts{
-				DefaultDropMetrics:       defaultDropMetrics,
+				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
 				DropMetrics:              dropMetrics,
 				DropLabels:               dropLabels,
 				KeepMetrics:              keepMetrics,
 				KeepMetricsLabelValues:   keepMetricLabelValues,
 				DisableMetricsForwarding: disableMetricsForwarding,
+				DefaultDropMetrics:       defaultDropMetrics,
 				RemoteWriteClients:       remoteWriteClients,
 			},
 		})
@@ -533,6 +548,7 @@ func realMain(ctx *cli.Context) error {
 			GrpcPort: v.GrpcPort,
 			MetricOpts: collector.MetricsHandlerOpts{
 				DefaultDropMetrics:       defaultDropMetrics,
+				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
 				DropMetrics:              dropMetrics,
 				DropLabels:               dropLabels,
@@ -560,9 +576,12 @@ func realMain(ctx *cli.Context) error {
 				}
 			}
 
-			if len(addAttributes) > 0 {
+			dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				}))
 			}
 
@@ -657,9 +676,12 @@ func realMain(ctx *cli.Context) error {
 				transformers = append(transformers, transform)
 			}
 
-			if len(addAttributes) > 0 {
+			dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+			if len(addAttributes) > 0 || dynamicLabeler != nil {
 				transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				}))
 			}
 
@@ -723,8 +745,10 @@ func realMain(ctx *cli.Context) error {
 					}
 					transformers = append(transformers, transform)
 				}
+				dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
 				attributeTransform := addattributes.NewTransform(addattributes.Config{
 					ResourceValues: addAttributes,
+					DynamicLabeler: dynamicLabeler,
 				})
 				transformers = append(transformers, attributeTransform)
 
@@ -782,9 +806,12 @@ func realMain(ctx *cli.Context) error {
 					transformers = append(transformers, transform)
 				}
 
-				if len(addAttributes) > 0 {
+				dynamicLabeler := newLogLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels)
+
+				if len(addAttributes) > 0 || dynamicLabeler != nil {
 					transformers = append(transformers, addattributes.NewTransform(addattributes.Config{
 						ResourceValues: addAttributes,
+						DynamicLabeler: dynamicLabeler,
 					}))
 				}
 
@@ -894,11 +921,41 @@ func mergeMaps(labels ...map[string]string) map[string]string {
 	return m
 }
 
-func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
-	if informer != nil {
-		return informer, nil
+func newLogLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.LogLabeler {
+	if kubeNode == nil {
+		return nil
 	}
 
+	merged := config.MergeAddMetadataLabels(configs...)
+	if merged == nil {
+		return nil
+	}
+
+	if len(merged.KubernetesNodeLabels) == 0 && len(merged.KubernetesNodeAnnotations) == 0 {
+		return nil
+	}
+
+	return metadata.FromConfig(kubeNode, merged)
+}
+
+func newMetricLabeler(kubeNode *metadata.KubeNode, configs ...*config.AddMetadataLabels) metadata.MetricLabeler {
+	if kubeNode == nil {
+		return nil
+	}
+
+	merged := config.MergeAddMetadataLabels(configs...)
+	if merged == nil {
+		return nil
+	}
+
+	if len(merged.KubernetesNodeLabels) == 0 && len(merged.KubernetesNodeAnnotations) == 0 {
+		return nil
+	}
+
+	return metadata.FromConfig(kubeNode, merged)
+}
+
+func getKubeClient(kubeConfig string) (*kubernetes.Clientset, error) {
 	config, err := k8s.BuildConfigFromFlags("", kubeConfig)
 	if err != nil {
 		logger.Warnf("No kube-config provided")
@@ -908,6 +965,19 @@ func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to build kube config: %w", err)
+	}
+
+	return client, nil
+}
+
+func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
+	if informer != nil {
+		return informer, nil
+	}
+
+	client, err := getKubeClient(kubeConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	return k8s.NewPodInformer(client, nodeName), nil

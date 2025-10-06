@@ -426,8 +426,165 @@ Available parser types:
 
 ```
 
-## Exporters
+## Metadata Watching
 
+Metadata watching enables dynamic enrichment of metrics and logs with Kubernetes node metadata (labels, annotations) and other sources. This is configured using the `[metadata-watch]` and `[add-metadata-labels]` sections.
+
+`[metadata-watch]` is a global declaration of the dynamic metadata observers the collector should run. Define it once at the root of the config; every watcher listed there is shared across the entire process.
+
+`[add-metadata-labels]` blocks consume those watchers and can be declared in multiple scopes. Use the top-level block to apply metadata to every signal, and add scoped blocks (for example, `host-log.add-metadata-labels` or `prometheus-scrape.add-metadata-labels`) to override or extend the mappings for specific pipelines.
+### Kubernetes Node Metadata Watching
+
+Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.
+
+> **RBAC requirements**: The collector's service account must be able to `get`, `list`, and `watch` the core `nodes` resource. Without these permissions the watcher fails with a "Failed to watch" error when attempting to read node metadata.
+
+```toml
+# Optional configuration for watching dynamic metadata to add to logs and metrics.
+[metadata-watch]
+  # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
+  [metadata-watch.kubernetes-node]
+
+# Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
+[add-metadata-labels]
+  # Configures the node labels and annotations to add as labels
+  [add-metadata-labels.kubernetes-node]
+    # Mapping of node label keys to destination label key names
+    [add-metadata-labels.kubernetes-node.labels]
+      'kubernetes.io/role' = 'node_role'
+      'node.kubernetes.io/instance-type' = 'instance_type'
+
+    # Mapping of node annotation keys to destination label key names
+    [add-metadata-labels.kubernetes-node.annotations]
+      'cluster-autoscaler.kubernetes.io/safe-to-evict' = 'safe_to_evict'
+      'node.alpha.kubernetes.io/ttl' = 'node_ttl'
+
+```
+### Layered Metadata for Host Logs
+
+Pair a global node metadata mapping with host log-specific aliases so different destinations receive tailored labels while still using the same watcher stream.
+
+```toml
+# Defines a host log scraper.
+[[host-log]]
+  # Disable discovery of Kubernetes pod targets. Only one HostLog configuration can use Kubernetes discovery.
+  disable-kube-discovery = false
+  # Defines a static Kubernetes pod target to scrape. These are pods managed by the Kubelet and not discoverable via the apiserver.
+  static-pod-target = []
+  # Defines a journal target to scrape.
+  journal-target = []
+  # Defines a kernel target to scrape.
+  kernel-target = []
+  # Defines a list of transforms to apply to log lines.
+  transforms = []
+  # List of exporter names to forward logs to.
+  exporters = []
+
+  # Optional configuration for adding dynamic metadata as labels to logs collected from this source.
+  [host-log.add-metadata-labels]
+    # Configures the node labels and annotations to add as labels
+    [host-log.add-metadata-labels.kubernetes-node]
+      # Mapping of node label keys to destination label key names
+      [host-log.add-metadata-labels.kubernetes-node.labels]
+        'kubernetes.io/hostname' = 'node_hostname'
+        'topology.kubernetes.io/zone' = 'log_zone'
+
+      # Mapping of node annotation keys to destination label key names
+      [host-log.add-metadata-labels.kubernetes-node.annotations]
+        'node.alpha.kubernetes.io/ttl' = 'log_node_ttl'
+
+  # Defines a tail file target.
+  [[host-log.file-target]]
+    # The path to the file to tail.
+    file-path = '/var/log/containers/frontend.log'
+    # The type of log being output. This defines how timestamps and log messages are extracted from structured log types like docker json files. Options are: docker, cri, kubernetes, plain, or unset.
+    log-type = 'kubernetes'
+    # Database to store logs in.
+    database = 'Logs'
+    # Table to store logs in.
+    table = 'Frontend'
+    # Parsers to apply sequentially to the log line.
+    parsers = []
+
+# Optional configuration for watching dynamic metadata to add to logs and metrics.
+[metadata-watch]
+  # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
+  [metadata-watch.kubernetes-node]
+
+# Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
+[add-metadata-labels]
+  # Configures the node labels and annotations to add as labels
+  [add-metadata-labels.kubernetes-node]
+    # Mapping of node label keys to destination label key names
+    [add-metadata-labels.kubernetes-node.labels]
+      'beta.kubernetes.io/os' = 'os'
+      'topology.kubernetes.io/region' = 'region'
+
+    # Mapping of node annotation keys to destination label key names
+    [add-metadata-labels.kubernetes-node.annotations]
+      'cluster-autoscaler.kubernetes.io/safe-to-evict' = 'global_safe_to_evict'
+
+```
+### Metadata for Prometheus Scrape Metrics
+
+Configure Prometheus scrape to expose zone and instance details with names tailored to downstream consumers without globally adding node labels
+
+```toml
+# Defines a prometheus format endpoint scraper.
+[prometheus-scrape]
+  # Database to store metrics in.
+  database = 'Metrics'
+  # Scrape interval in seconds.
+  scrape-interval = 15
+  # Scrape timeout in seconds.
+  scrape-timeout = 10
+  # Disable metrics forwarding to endpoints.
+  disable-metrics-forwarding = false
+  # Disable discovery of kubernetes pod targets.
+  disable-discovery = false
+  # Regexes of metrics to drop.
+  drop-metrics = []
+  # Regexes of metrics to keep.
+  keep-metrics = []
+  # Regexes of metrics to keep if they have the given label and value.
+  keep-metrics-with-label-value = []
+  # List of exporter names to forward metrics to.
+  exporters = []
+
+  # Defines a static scrape target.
+  [[prometheus-scrape.static-scrape-target]]
+    # The regex to match the host name against.  If the hostname matches, the URL will be scraped.
+    host-regex = 'frontend-.*'
+    # The URL to scrape.
+    url = 'http://frontend.monitoring.svc:9090/metrics'
+    # The namespace label to add for metrics scraped at this URL.
+    namespace = 'prod'
+    # The pod label to add for metrics scraped at this URL.
+    pod = 'frontend'
+    # The container label to add for metrics scraped at this URL.
+    container = 'web'
+
+  # Optional configuration for adding dynamic metadata as labels to metrics scraped from this source.
+  [prometheus-scrape.add-metadata-labels]
+    # Configures the node labels and annotations to add as labels
+    [prometheus-scrape.add-metadata-labels.kubernetes-node]
+      # Mapping of node label keys to destination label key names
+      [prometheus-scrape.add-metadata-labels.kubernetes-node.labels]
+        'node.kubernetes.io/instance-type' = 'machine_type'
+        'topology.kubernetes.io/zone' = 'availability_zone'
+
+      # Mapping of node annotation keys to destination label key names
+      [prometheus-scrape.add-metadata-labels.kubernetes-node.annotations]
+        'cluster-autoscaler.kubernetes.io/safe-to-evict' = 'metric_safe_to_evict'
+
+# Optional configuration for watching dynamic metadata to add to logs and metrics.
+[metadata-watch]
+  # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
+  [metadata-watch.kubernetes-node]
+
+```
+
+## Exporters
 Exporters are used to send telemetry to external systems in parallel with data sent to Azure Data Explorer. Exporters are per-source type (e.g. Metrics, Logs). Exporters are defined under the top level configuration key `[exporters]` within a key representing the exporter type (e.g. `[exporters.otlp-metric-export]`). They are referenced by their configured `name` in the relevant telemetry collection section.
 ### Metric Exporters
 

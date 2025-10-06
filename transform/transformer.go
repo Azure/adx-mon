@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/Azure/adx-mon/collector/metadata"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/prompb"
 )
@@ -29,13 +30,21 @@ type RequestTransformer struct {
 	// should match the Prometheus naming style before the metric is translated to a Kusto table name.
 	DropMetrics []*regexp.Regexp
 
-	// AddLabels is a map of label names to label values that will be added to all metrics.
+	// AddLabels is a map of static label names to label values that will be added to all metrics.
+	// AddLabels takes precedence over any existing labels with the same name or any dynamic labels.
 	AddLabels map[string]string
 
+	// addLabels is the static slice of the labels to add to each TimeSeries. Dynamic labels are walked/added with DynamicLabeler.
 	addLabels []*prompb.Label
+
+	// addLabelsKeys is a slice of the label names in AddLabels as byte slices for efficient comparison.
+	addLabelsKeys [][]byte
 
 	// AllowedDatabase is a map of database names that are allowed to be written to.
 	AllowedDatabase map[string]struct{}
+
+	// DynamicLabeler is an optional labeler that adds dynamic labels from metadata sources.
+	DynamicLabeler metadata.MetricLabeler
 
 	initOnce sync.Once
 }
@@ -51,14 +60,22 @@ func (f *RequestTransformer) init() {
 			f.KeepMetricsWithLabelValue = make(map[*regexp.Regexp]*regexp.Regexp)
 		}
 
+		// Precompile the static add labels into the slice format used by TimeSeries.
+		// Also build the addLabelsKeys slice for efficient comparison when transforming.
 		for k, v := range f.AddLabels {
 			addLabelsSlice = append(addLabelsSlice, &prompb.Label{
 				Name:  []byte(k),
 				Value: []byte(v),
 			})
+			f.addLabelsKeys = append(f.addLabelsKeys, []byte(k))
 		}
 		prompb.Sort(addLabelsSlice)
 		f.addLabels = addLabelsSlice
+
+		// If a DynamicLabeler is configured, ensure its labels are included in the addLabelsKeys slice.
+		if f.DynamicLabeler != nil {
+			f.addLabelsKeys = f.DynamicLabeler.AppendLabelNamesBytes(f.addLabelsKeys)
+		}
 	})
 }
 
@@ -132,8 +149,8 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 		}
 
 		// Skip any labels that will be overwritten by the add labels.
-		for _, al := range f.addLabels {
-			if bytes.Equal(l.Name, al.Name) {
+		for _, al := range f.addLabelsKeys {
+			if bytes.Equal(l.Name, al) {
 				skipLabel = true
 				break
 			}
@@ -147,6 +164,9 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 		i++
 	}
 	v.Labels = v.Labels[:i]
+	if f.DynamicLabeler != nil {
+		f.DynamicLabeler.AppendPromLabels(v)
+	}
 	for _, ll := range f.addLabels {
 		v.AppendLabel(ll.Name, ll.Value)
 	}
@@ -184,8 +204,8 @@ func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name
 		}
 
 		// Skip any labels that will be overwritten by the add labels.
-		for _, al := range f.addLabels {
-			if bytes.Equal(l.Name, al.Name) {
+		for _, al := range f.addLabelsKeys {
+			if bytes.Equal(l.Name, al) {
 				skipLabel = true
 				break
 			}
@@ -196,6 +216,9 @@ func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name
 		}
 
 		callback(l.Name, l.Value)
+	}
+	if f.DynamicLabeler != nil {
+		f.DynamicLabeler.WalkLabels(callback)
 	}
 	for _, ll := range f.addLabels {
 		callback(ll.Name, ll.Value)

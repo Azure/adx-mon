@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/collector/metadata"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -67,6 +68,8 @@ type ScraperOpts struct {
 	RemoteClients []remote.RemoteWriteClient
 
 	HealthChecker interface{ IsHealthy() bool }
+
+	DynamicLabeler metadata.MetricLabeler
 }
 
 func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
@@ -77,6 +80,7 @@ func (s *ScraperOpts) RequestTransformer() *transform.RequestTransformer {
 		DropMetrics:               s.DropMetrics,
 		KeepMetrics:               s.KeepMetrics,
 		KeepMetricsWithLabelValue: s.KeepMetricsWithLabelValue,
+		DynamicLabeler:            s.DynamicLabeler,
 	}
 }
 

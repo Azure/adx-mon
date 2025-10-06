@@ -17,6 +17,7 @@ var tmpl string
 
 type Contents struct {
 	Sections         []Section
+	MetadataSections []Section
 	ExporterSections []Section
 }
 
@@ -343,6 +344,106 @@ func getContents() Contents {
 									Database: "Logs",
 									Table:    "Kernel",
 									Priority: "warning",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		MetadataSections: []Section{
+			{
+				Title:       "Kubernetes Node Metadata Watching",
+				Description: "Enable watching Kubernetes node labels and annotations to add them as labels to all metrics and logs. Requires both metadata-watch and add-metadata-labels sections to be configured.\n\n> **RBAC requirements**: The collector's service account must be able to `get`, `list`, and `watch` the core `nodes` resource. Without these permissions the watcher fails with a \"Failed to watch\" error when attempting to read node metadata.",
+				Config: &config.Config{
+					MetadataWatch: &config.MetadataWatch{
+						KubernetesNode: &config.MetadataWatchKubernetesNode{},
+					},
+					AddMetadataLabels: &config.AddMetadataLabels{
+						KubernetesNode: &config.AddMetadataKubernetesNode{
+							Labels: map[string]string{
+								"kubernetes.io/role":               "node_role",
+								"node.kubernetes.io/instance-type": "instance_type",
+							},
+							Annotations: map[string]string{
+								"cluster-autoscaler.kubernetes.io/safe-to-evict": "safe_to_evict",
+								"node.alpha.kubernetes.io/ttl":                   "node_ttl",
+							},
+						},
+					},
+				},
+			},
+			{
+				Title:       "Layered Metadata for Host Logs",
+				Description: "Pair a global node metadata mapping with host log-specific aliases so different destinations receive tailored labels while still using the same watcher stream.",
+				Config: &config.Config{
+					MetadataWatch: &config.MetadataWatch{
+						KubernetesNode: &config.MetadataWatchKubernetesNode{},
+					},
+					AddMetadataLabels: &config.AddMetadataLabels{
+						KubernetesNode: &config.AddMetadataKubernetesNode{
+							Labels: map[string]string{
+								"topology.kubernetes.io/region": "region",
+								"beta.kubernetes.io/os":         "os",
+							},
+							Annotations: map[string]string{
+								"cluster-autoscaler.kubernetes.io/safe-to-evict": "global_safe_to_evict",
+							},
+						},
+					},
+					HostLog: []*config.HostLog{
+						{
+							StaticFileTargets: []*config.TailTarget{
+								{
+									FilePath: "/var/log/containers/frontend.log",
+									LogType:  "kubernetes",
+									Database: "Logs",
+									Table:    "Frontend",
+								},
+							},
+							AddMetadataLabels: &config.AddMetadataLabels{
+								KubernetesNode: &config.AddMetadataKubernetesNode{
+									Labels: map[string]string{
+										"kubernetes.io/hostname":      "node_hostname",
+										"topology.kubernetes.io/zone": "log_zone",
+									},
+									Annotations: map[string]string{
+										"node.alpha.kubernetes.io/ttl": "log_node_ttl",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Title:       "Metadata for Prometheus Scrape Metrics",
+				Description: "Configure Prometheus scrape to expose zone and instance details with names tailored to downstream consumers without globally adding node labels",
+				Config: &config.Config{
+					MetadataWatch: &config.MetadataWatch{
+						KubernetesNode: &config.MetadataWatchKubernetesNode{},
+					},
+					PrometheusScrape: &config.PrometheusScrape{
+						Database:              "Metrics",
+						ScrapeIntervalSeconds: 15,
+						ScrapeTimeout:         10,
+						StaticScrapeTarget: []*config.ScrapeTarget{
+							{
+								HostRegex: "frontend-.*",
+								URL:       "http://frontend.monitoring.svc:9090/metrics",
+								Namespace: "prod",
+								Pod:       "frontend",
+								Container: "web",
+							},
+						},
+						AddMetadataLabels: &config.AddMetadataLabels{
+							KubernetesNode: &config.AddMetadataKubernetesNode{
+								Labels: map[string]string{
+									"topology.kubernetes.io/zone":      "availability_zone",
+									"node.kubernetes.io/instance-type": "machine_type",
+								},
+								Annotations: map[string]string{
+									"cluster-autoscaler.kubernetes.io/safe-to-evict": "metric_safe_to_evict",
 								},
 							},
 						},
