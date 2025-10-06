@@ -275,6 +275,12 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 
 		if headerSig == "" {
 			headerSig = header
+			if u.log != nil {
+				u.log.Info("loaded WAL segment header",
+					slog.String("table", batch.Table),
+					slog.String("path", segment.Path),
+					slog.String("header_signature", header))
+			}
 			_, _, schemaName, _, err := wal.ParseFilename(segment.Path)
 			if err != nil {
 				sr.Close()
@@ -305,6 +311,17 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 					u.log.Error("failed to ensure schema", slog.String("table", batch.Table), slog.String("error", err.Error()))
 				}
 				return handleError(err, true)
+			}
+
+			if u.log != nil {
+				columnSpecs := make([]string, 0, len(schemaDef.Columns))
+				for _, col := range schemaDef.Columns {
+					columnSpecs = append(columnSpecs, fmt.Sprintf("%s:%s", col.Name, col.Type))
+				}
+				u.log.Info("prepared ClickHouse schema",
+					slog.String("table", batch.Table),
+					slog.String("schema_id", schemaID),
+					slog.Any("columns", columnSpecs))
 			}
 
 			writer, err = u.conn.PrepareInsert(ctx, batch.Database, batch.Table, schemaDef.Columns)
@@ -343,16 +360,32 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				return handleError(err, false)
 			}
 
+			if headerSig != "" && isHeaderRecord(record, headerSig) {
+				continue
+			}
+
 			if !schemaLoaded {
 				sr.Close()
 				return handleError(fmt.Errorf("schema not loaded for table %s", batch.Table), false)
 			}
 
+			recordCopy := append([]string(nil), record...)
 			values, err := convertRecord(record, schemaDef.Columns)
 			if err != nil {
 				sr.Close()
 				if u.log != nil {
-					u.log.Error("failed to convert record", slog.String("table", batch.Table), slog.String("error", err.Error()))
+					recordPreview := recordCopy
+					if len(recordPreview) > 10 {
+						recordPreview = recordPreview[:10]
+					}
+					u.log.Error("failed to convert record",
+						slog.String("table", batch.Table),
+						slog.String("schema_id", schemaID),
+						slog.String("path", segment.Path),
+						slog.Int("record_len", len(recordCopy)),
+						slog.Any("record_preview", recordPreview),
+						slog.String("header_signature", headerSig),
+						slog.String("error", err.Error()))
 				}
 				return handleError(err, false)
 			}
@@ -481,6 +514,14 @@ func readHeader(r *bufio.Reader) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
+}
+
+func isHeaderRecord(record []string, header string) bool {
+	if len(record) == 0 {
+		return false
+	}
+
+	return strings.Join(record, ",") == header
 }
 
 func convertRecord(record []string, columns []Column) ([]any, error) {

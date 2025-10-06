@@ -1,0 +1,8 @@
+<clickhouse>
+    <!-- Enable features required by the dev stack schemas. -->
+    <profiles>
+        <default>
+            <allow_experimental_json_type>1</allow_experimental_json_type>
+        </default>
+    </profiles>
+</clickhouse>

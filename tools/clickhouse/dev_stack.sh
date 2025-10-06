@@ -13,6 +13,9 @@ COLLECTOR_DATA="${STACK_DIR}/collector-data"
 INGESTOR_DATA="${STACK_DIR}/ingestor-data"
 CLICKHOUSE_DATA="${STACK_DIR}/clickhouse-data"
 CONFIG_MOUNT="/etc/adx-mon/collector.toml"
+CLICKHOUSE_CONFIG_DIR="${SCRIPT_DIR}/clickhouse-config"
+CLICKHOUSE_PLAY_CONFIG="${CLICKHOUSE_CONFIG_DIR}/play-ui.xml"
+CLICKHOUSE_CONFIG_MOUNT="/etc/clickhouse-server/config.d/play-ui.xml"
 
 NETWORK_NAME="adxmon-clickhouse-net"
 CLICKHOUSE_CONTAINER="adxmon-clickhouse"
@@ -24,6 +27,18 @@ INGESTOR_IMAGE="adxmon/ingestor:clickhouse-dev"
 CLICKHOUSE_IMAGE="${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:24.8}"
 CLICKHOUSE_DB="${CLICKHOUSE_DB:-observability}"
 LOGS_DB="${LOGS_DB:-observability_logs}"
+CLICKHOUSE_STACK_USER="${CLICKHOUSE_STACK_USER:-default}"
+CLICKHOUSE_STACK_PASSWORD="${CLICKHOUSE_STACK_PASSWORD:-devpass}"
+CLICKHOUSE_NATIVE_DSN="tcp://${CLICKHOUSE_STACK_USER}:${CLICKHOUSE_STACK_PASSWORD}@clickhouse:9000"
+CLICKHOUSE_DEV_SETTINGS="${CLICKHOUSE_CONFIG_DIR}/dev-settings.xml"
+CLICKHOUSE_USER_SETTINGS="${CLICKHOUSE_CONFIG_DIR}/default-user-settings.xml"
+CLICKHOUSE_PROFILE_SETTINGS="${CLICKHOUSE_CONFIG_DIR}/dev-profiles.xml"
+
+# Optional host journal mounts for collector troubleshooting
+MOUNT_HOST_JOURNAL="${MOUNT_HOST_JOURNAL:-0}"
+COLLECTOR_JOURNAL_RUN_PATH="${COLLECTOR_JOURNAL_RUN_PATH:-/run/log/journal}"
+COLLECTOR_JOURNAL_VAR_PATH="${COLLECTOR_JOURNAL_VAR_PATH:-/var/log/journal}"
+COLLECTOR_MACHINE_ID_PATH="${COLLECTOR_MACHINE_ID_PATH:-/etc/machine-id}"
 
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "dev")"
@@ -71,6 +86,16 @@ path = "/receive"
 database = "${CLICKHOUSE_DB}"
 path = "/v1/metrics"
 grpc-port = 4317
+
+[[host-log]]
+disable-kube-discovery = true
+add-attributes = { source = "systemd", unit = "docker.service" }
+
+  [[host-log.journal-target]]
+  matches = ["_SYSTEMD_UNIT=docker.service"]
+  database = "${LOGS_DB}"
+  table = "docker_journal"
+  journal-fields = ["_PID", "_HOSTNAME", "PRIORITY", "MESSAGE"]
 EOF
 }
 
@@ -116,12 +141,34 @@ build_images() {
 
 start_clickhouse() {
   remove_container_if_exists "${CLICKHOUSE_CONTAINER}"
+  if [[ ! -f "${CLICKHOUSE_PLAY_CONFIG}" ]]; then
+    err "Missing ClickHouse UI config: ${CLICKHOUSE_PLAY_CONFIG}"
+    exit 1
+  fi
+  if [[ ! -f "${CLICKHOUSE_DEV_SETTINGS}" ]]; then
+    err "Missing ClickHouse dev settings config: ${CLICKHOUSE_DEV_SETTINGS}"
+    exit 1
+  fi
+  if [[ ! -f "${CLICKHOUSE_USER_SETTINGS}" ]]; then
+    err "Missing ClickHouse user settings config: ${CLICKHOUSE_USER_SETTINGS}"
+    exit 1
+  fi
+  if [[ ! -f "${CLICKHOUSE_PROFILE_SETTINGS}" ]]; then
+    err "Missing ClickHouse profile settings config: ${CLICKHOUSE_PROFILE_SETTINGS}"
+    exit 1
+  fi
   log "Starting ClickHouse container"
   docker run -d \
     --name "${CLICKHOUSE_CONTAINER}" \
     --network "${NETWORK_NAME}" \
     --network-alias clickhouse \
     -v "${CLICKHOUSE_DATA}:/var/lib/clickhouse" \
+    -e "CLICKHOUSE_USER=${CLICKHOUSE_STACK_USER}" \
+    -e "CLICKHOUSE_PASSWORD=${CLICKHOUSE_STACK_PASSWORD}" \
+    -v "${CLICKHOUSE_PLAY_CONFIG}:${CLICKHOUSE_CONFIG_MOUNT}:ro" \
+    -v "${CLICKHOUSE_DEV_SETTINGS}:/etc/clickhouse-server/config.d/dev-settings.xml:ro" \
+    -v "${CLICKHOUSE_USER_SETTINGS}:/etc/clickhouse-server/users.d/dev-default.xml:ro" \
+    -v "${CLICKHOUSE_PROFILE_SETTINGS}:/etc/clickhouse-server/users.d/dev-profiles.xml:ro" \
     -p 8123:8123 \
     -p 9000:9000 \
     -p 9009:9009 \
@@ -134,7 +181,7 @@ start_clickhouse() {
 wait_for_clickhouse() {
   log "Waiting for ClickHouse to become ready"
   local retry=0
-  until docker exec "${CLICKHOUSE_CONTAINER}" clickhouse-client --query "SELECT 1" >/dev/null 2>&1; do
+  until docker exec "${CLICKHOUSE_CONTAINER}" clickhouse-client --user "${CLICKHOUSE_STACK_USER}" --password "${CLICKHOUSE_STACK_PASSWORD}" --query "SELECT 1" >/dev/null 2>&1; do
     retry=$((retry + 1))
     if (( retry > 60 )); then
       err "ClickHouse did not become ready"
@@ -147,8 +194,8 @@ wait_for_clickhouse() {
 
 init_clickhouse_db() {
   log "Creating ClickHouse databases (${CLICKHOUSE_DB}, ${LOGS_DB})"
-  docker exec "${CLICKHOUSE_CONTAINER}" clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${CLICKHOUSE_DB}" >/dev/null
-  docker exec "${CLICKHOUSE_CONTAINER}" clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${LOGS_DB}" >/dev/null
+  docker exec "${CLICKHOUSE_CONTAINER}" clickhouse-client --user "${CLICKHOUSE_STACK_USER}" --password "${CLICKHOUSE_STACK_PASSWORD}" --query "CREATE DATABASE IF NOT EXISTS ${CLICKHOUSE_DB}" >/dev/null
+  docker exec "${CLICKHOUSE_CONTAINER}" clickhouse-client --user "${CLICKHOUSE_STACK_USER}" --password "${CLICKHOUSE_STACK_PASSWORD}" --query "CREATE DATABASE IF NOT EXISTS ${LOGS_DB}" >/dev/null
 }
 
 start_ingestor() {
@@ -164,8 +211,8 @@ start_ingestor() {
     "${INGESTOR_IMAGE}" \
     --storage-dir /var/lib/adx-mon/ingestor \
     --storage-backend clickhouse \
-    --metrics-kusto-endpoints "${CLICKHOUSE_DB}=clickhouse://clickhouse:9000" \
-    --logs-kusto-endpoints "${LOGS_DB}=clickhouse://clickhouse:9000" \
+    --metrics-kusto-endpoints "${CLICKHOUSE_DB}=${CLICKHOUSE_NATIVE_DSN}" \
+    --logs-kusto-endpoints "${LOGS_DB}=${CLICKHOUSE_NATIVE_DSN}" \
     --max-segment-size $((64 * 1024 * 1024)) \
     --max-transfer-size $((64 * 1024 * 1024))
 
@@ -176,18 +223,42 @@ start_ingestor() {
 start_collector() {
   remove_container_if_exists "${COLLECTOR_CONTAINER}"
   log "Starting collector container"
+  local extra_args=()
+  if [[ "${MOUNT_HOST_JOURNAL}" == "1" ]]; then
+    if [[ -d "${COLLECTOR_JOURNAL_RUN_PATH}" ]]; then
+      extra_args+=("-v" "${COLLECTOR_JOURNAL_RUN_PATH}:/run/log/journal:ro")
+    else
+      log "Host journal runtime path ${COLLECTOR_JOURNAL_RUN_PATH} not found; skipping mount"
+    fi
+    if [[ -d "${COLLECTOR_JOURNAL_VAR_PATH}" ]]; then
+      extra_args+=("-v" "${COLLECTOR_JOURNAL_VAR_PATH}:/var/log/journal:ro")
+    else
+      log "Host journal persistent path ${COLLECTOR_JOURNAL_VAR_PATH} not found; skipping mount"
+    fi
+    if [[ -f "${COLLECTOR_MACHINE_ID_PATH}" ]]; then
+      extra_args+=("-v" "${COLLECTOR_MACHINE_ID_PATH}:/etc/machine-id:ro")
+    fi
+
+    local journal_gid
+    journal_gid=$(getent group systemd-journal 2>/dev/null | cut -d: -f3 || true)
+    if [[ -n "${journal_gid}" ]]; then
+      extra_args+=("--group-add" "${journal_gid}")
+    fi
+  fi
+
   docker run -d \
     --name "${COLLECTOR_CONTAINER}" \
     --network "${NETWORK_NAME}" \
     --network-alias collector \
-  -v "${COLLECTOR_DATA}:/var/lib/adx-mon/collector" \
-  -v "${COLLECTOR_CONFIG}:${CONFIG_MOUNT}:ro" \
+    -v "${COLLECTOR_DATA}:/var/lib/adx-mon/collector" \
+    -v "${COLLECTOR_CONFIG}:${CONFIG_MOUNT}:ro" \
     -p 8080:8080 \
     -p 4317:4317 \
     -p 4318:4318 \
+    "${extra_args[@]}" \
     "${COLLECTOR_IMAGE}" \
     --storage-backend clickhouse \
-  --config "${CONFIG_MOUNT}"
+    --config "${CONFIG_MOUNT}"
 }
 
 start_stack() {

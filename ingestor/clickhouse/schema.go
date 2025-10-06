@@ -64,7 +64,7 @@ func mapClickHouseType(columnName, adxType string) string {
 	case "string":
 		return "String"
 	case "dynamic":
-		return "JSON"
+		return "String"
 	default:
 		return "String"
 	}
