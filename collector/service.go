@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	stdhttp "net/http"
 	"net/http/pprof"
 	"regexp"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/collector/otlp"
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/debug"
 	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -26,7 +28,9 @@ import (
 )
 
 type Service struct {
-	opts *ServiceOpts
+	opts           *ServiceOpts
+	storageBackend storage.Backend
+	health         *cluster.Health
 
 	cancel context.CancelFunc
 
@@ -59,9 +63,10 @@ type Service struct {
 }
 
 type ServiceOpts struct {
-	ListenAddr string
-	NodeName   string
-	Endpoint   string
+	ListenAddr     string
+	NodeName       string
+	Endpoint       string
+	StorageBackend storage.Backend
 
 	KubeNode *metadata.KubeNode
 
@@ -187,6 +192,11 @@ func (o MetricsHandlerOpts) RequestTransformer() *transform.RequestTransformer {
 }
 
 func NewService(opts *ServiceOpts) (*Service, error) {
+	backend := opts.StorageBackend
+	if backend == "" {
+		backend = storage.BackendADX
+	}
+
 	maxSegmentAge := 30 * time.Second
 	if opts.MaxSegmentAge.Seconds() > 0 {
 		maxSegmentAge = opts.MaxSegmentAge
@@ -218,6 +228,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
 		MaxDiskUsage:     maxDiskUsage,
+		Backend:          backend,
 		LiftedLabels:     opts.LiftLabels,
 		LiftedAttributes: opts.LiftAttributes,
 		LiftedResources:  opts.LiftResources,
@@ -350,7 +361,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	svc := &Service{
-		opts: opts,
+		opts:           opts,
+		storageBackend: backend,
+		health:         health,
 		metricsSvc: metrics.NewService(metrics.ServiceOpts{
 			PeerHealthReport: health,
 		}),
@@ -423,6 +436,8 @@ func (s *Service) Open(ctx context.Context) error {
 	primaryHttp := http.NewServer(opts)
 
 	primaryHttp.RegisterHandler("/metrics", promhttp.Handler())
+	primaryHttp.RegisterHandlerFunc("/readyz", s.HandleReady)
+	primaryHttp.RegisterHandlerFunc("/debug/store", s.HandleDebugStore)
 	if s.opts.EnablePprof {
 		opts.WriteTimeout = 60 * time.Second
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/", pprof.Index)
@@ -490,6 +505,39 @@ func (s *Service) Close() error {
 	s.replicator.Close()
 	s.store.Close()
 	return nil
+}
+
+func (s *Service) HandleReady(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	unhealthyReason := ""
+	if s.health != nil {
+		unhealthyReason = s.health.UnhealthyReason()
+	}
+
+	if unhealthyReason == "" {
+		w.WriteHeader(stdhttp.StatusOK)
+		fmt.Fprintf(w, "status=ok backend=%s\n", s.storageBackend)
+		return
+	}
+
+	w.WriteHeader(stdhttp.StatusServiceUnavailable)
+	fmt.Fprintf(w, "status=not_ready reason=%s backend=%s\n", unhealthyReason, s.storageBackend)
+}
+
+func (s *Service) HandleDebugStore(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	if _, err := fmt.Fprintf(w, "backend=%s\n", s.storageBackend); err != nil {
+		logger.Errorf("failed to write backend header: %s", err)
+		return
+	}
+
+	if debugWriter, ok := s.store.(debug.DebugWriter); ok {
+		if err := debugWriter.WriteDebug(w); err != nil {
+			logger.Errorf("failed to write store debug info: %s", err)
+		}
+	}
 }
 
 func tlsListenerFunc(cert tls.Certificate) func(addr string) (net.Listener, error) {

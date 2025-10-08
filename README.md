@@ -28,7 +28,10 @@ collection and analysis of observability data.
 
 ## Development
 
+### Collector backend verification
 
+- `/readyz` returns `status=ok backend=<value>` when healthy and 503 with the same backend annotation if max disk usage or segment thresholds trigger backpressure.
+- `/debug/store` prefixes the active backend before the existing WAL diagnostics to help validate cluster configuration.
 
 ## Contributing
 

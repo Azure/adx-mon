@@ -17,6 +17,12 @@ func TestConfig_ValidatePromRemoteWrite_PathRequired(t *testing.T) {
 	require.Equal(t, "prometheus-remote-write.path must be set", err.Error())
 }
 
+func TestConfig_Validate_InvalidStorageBackend(t *testing.T) {
+	c := Config{StorageBackend: "invalid"}
+	err := c.Validate()
+	require.EqualError(t, err, `unknown storage backend "invalid"`)
+}
+
 func TestConfig_ValidatePromRemoteWrite_PromRemoteWrite(t *testing.T) {
 	c := Config{
 		PrometheusRemoteWrite: []*PrometheusRemoteWrite{
@@ -581,10 +587,10 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Success - single host log with kube discovery enabled",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{
+					{
 						DisableKubeDiscovery: true,
 					},
-					&HostLog{},
+					{},
 				},
 			},
 		},
@@ -592,8 +598,8 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Failure - multiple host logs with kube discovery enabled",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{},
-					&HostLog{},
+					{},
+					{},
 				},
 			},
 			err: "host-log[1].disable-kube-discovery not set for more than one HostLog configuration",
@@ -602,13 +608,13 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Success - valid exporters",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{
+					{
 						DisableKubeDiscovery: true,
 						Exporters: []string{
 							"foo",
 						},
 					},
-					&HostLog{
+					{
 						Exporters: []string{
 							"bar",
 						},
@@ -634,13 +640,13 @@ func TestConfig_ValidateConfig_HostLog(t *testing.T) {
 			name: "Failure - missing exporter",
 			config: Config{
 				HostLog: []*HostLog{
-					&HostLog{
+					{
 						DisableKubeDiscovery: true,
 						Exporters: []string{
 							"foo",
 						},
 					},
-					&HostLog{
+					{
 						Exporters: []string{
 							"bar",
 						},
