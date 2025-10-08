@@ -688,9 +688,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.WALFlushIntervalMilliSeconds == 0 {
-		c.WALFlushIntervalMilliSeconds = DefaultConfig.WALFlushIntervalMilliSeconds
-	} else if c.WALFlushIntervalMilliSeconds < 0 {
+	if c.WALFlushIntervalMilliSeconds < 0 {
 		return errors.New("wal-flush-interval must be greater than 0")
 	}
 
