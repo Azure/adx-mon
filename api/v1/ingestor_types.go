@@ -47,6 +47,10 @@ type IngestorSpec struct {
 	//   * CEL parse, type-check, or evaluation errors surface via status and block reconciliation until
 	//     corrected.
 	CriteriaExpression string `json:"criteriaExpression,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// Autoscaler configures the optional autoscaling control loop for the ingestor StatefulSet.
+	Autoscaler *IngestorAutoscalerSpec `json:"autoscaler,omitempty"`
 }
 
 func (s *IngestorSpec) StoreAppliedProvisioningState() error {
@@ -78,6 +82,9 @@ const IngestorConditionOwner = "ingestor.adx-mon.azure.com"
 type IngestorStatus struct {
 	//+kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	Autoscaler *IngestorAutoscalerStatus `json:"autoscaler,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -103,4 +110,82 @@ type IngestorList struct {
 
 func init() {
 	SchemeBuilder.Register(&Ingestor{}, &IngestorList{})
+}
+
+// +kubebuilder:validation:XValidation:rule="self.maxReplicas == 0 || self.maxReplicas >= self.minReplicas",message="maxReplicas must be greater than or equal to minReplicas"
+// IngestorAutoscalerSpec captures configuration for the autoscaler control loop.
+type IngestorAutoscalerSpec struct {
+	//+kubebuilder:default=false
+	Enabled bool `json:"enabled"`
+
+	//+kubebuilder:validation:Minimum=0
+	//+kubebuilder:default=1
+	MinReplicas int32 `json:"minReplicas,omitempty"`
+
+	//+kubebuilder:validation:Minimum=0
+	//+kubebuilder:default=1
+	MaxReplicas int32 `json:"maxReplicas,omitempty"`
+
+	//+kubebuilder:validation:Minimum=0
+	//+kubebuilder:validation:Maximum=100
+	//+kubebuilder:default=70
+	// ScaleUpCPUThreshold is the percentage (0-100) of average CPU utilization that triggers a scale-up evaluation.
+	ScaleUpCPUThreshold int32 `json:"scaleUpCPUThreshold,omitempty"`
+
+	//+kubebuilder:validation:Minimum=0
+	//+kubebuilder:validation:Maximum=100
+	//+kubebuilder:default=40
+	// ScaleDownCPUThreshold is the percentage (0-100) of average CPU utilization at or below which scale-down is considered.
+	ScaleDownCPUThreshold int32 `json:"scaleDownCPUThreshold,omitempty"`
+
+	//+kubebuilder:default="5m"
+	ScaleInterval metav1.Duration `json:"scaleInterval,omitempty"`
+
+	//+kubebuilder:default="15m"
+	CPUWindow metav1.Duration `json:"cpuWindow,omitempty"`
+
+	//+kubebuilder:validation:Minimum=0
+	//+kubebuilder:validation:Maximum=100
+	//+kubebuilder:default=25
+	// ScaleUpBasePercent is the baseline percentage (0-100) of the current replica count to add during a scale-up, prior to capping.
+	ScaleUpBasePercent int32 `json:"scaleUpBasePercent,omitempty"`
+
+	//+kubebuilder:validation:Minimum=0
+	//+kubebuilder:default=5
+	ScaleUpCapPerCycle int32 `json:"scaleUpCapPerCycle,omitempty"`
+
+	//+kubebuilder:default=false
+	DryRun bool `json:"dryRun,omitempty"`
+
+	//+kubebuilder:default=true
+	CollectMetrics bool `json:"collectMetrics,omitempty"`
+}
+
+// IngestorAutoscalerAction represents the last scaling decision performed.
+type IngestorAutoscalerAction string
+
+const (
+	AutoscalerActionNone      IngestorAutoscalerAction = "None"
+	AutoscalerActionScaleUp   IngestorAutoscalerAction = "ScaleUp"
+	AutoscalerActionScaleDown IngestorAutoscalerAction = "ScaleDown"
+	AutoscalerActionSkip      IngestorAutoscalerAction = "Skip"
+)
+
+// IngestorAutoscalerStatus exposes runtime data about the autoscaling loop.
+type IngestorAutoscalerStatus struct {
+	//+kubebuilder:validation:Optional
+	LastAction IngestorAutoscalerAction `json:"lastAction,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	LastActionTime *metav1.Time `json:"lastActionTime,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// LastObservedCPUPercentHundredths stores the last measured CPU utilization scaled by 100 (e.g. 7543 represents 75.43%).
+	LastObservedCPUPercentHundredths int32 `json:"lastObservedCpuPercentHundredths,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	Reason string `json:"reason,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	LastScaleTime *metav1.Time `json:"lastScaleTime,omitempty"`
 }
