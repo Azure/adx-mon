@@ -51,7 +51,7 @@ type Service struct {
 	// database is a map of known DB names used for validating requests.
 	databases map[string]struct{}
 
-	uploader    adx.Uploader
+	uploader    Uploader
 	replicator  cluster.Replicator
 	coordinator cluster.Coordinator
 	batcher     cluster.Batcher
@@ -68,7 +68,7 @@ type Service struct {
 
 type ServiceOpts struct {
 	StorageDir     string
-	Uploader       adx.Uploader
+	Uploader       Uploader
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
 
@@ -143,9 +143,15 @@ type ServiceOpts struct {
 	SlowRequestThreshold float64
 
 	ClusterLabels map[string]string
+
+	StorageBackend storage.Backend
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
+	if opts.StorageBackend == "" {
+		opts.StorageBackend = storage.BackendADX
+	}
+
 	store := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:     opts.StorageDir,
 		SegmentMaxSize: opts.MaxSegmentSize,
@@ -278,45 +284,48 @@ func (s *Service) Open(ctx context.Context) error {
 		return nil
 	})
 
-	fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
-	crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
-	for _, v := range s.opts.MetricsKustoCli {
-		t := adx.NewDropUnusedTablesTask(v)
-		s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
-			return t.Run(ctx)
-		})
+	if s.opts.StorageBackend == storage.BackendADX {
+		fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
+		crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
+		for _, v := range s.opts.MetricsKustoCli {
+			t := adx.NewDropUnusedTablesTask(v)
+			s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
+				return t.Run(ctx)
+			})
 
-		f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
-		s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
-			return f.Run(ctx)
-		})
+			f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
+				return f.Run(ctx)
+			})
 
-		m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
-		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
-			return m.Run(ctx)
-		})
+			m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
+				return m.Run(ctx)
+			})
 
-		sr := adx.NewSummaryRuleTask(crdStore, v, s.opts.ClusterLabels)
-		s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
-			return sr.Run(ctx)
-		})
-	}
+			sr := adx.NewSummaryRuleTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
+				return sr.Run(ctx)
+			})
+		}
 
-	for _, v := range s.opts.LogsKustoCli {
-		f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
-		s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
-			return f.Run(ctx)
-		})
+		for _, v := range s.opts.LogsKustoCli {
+			f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
+				return f.Run(ctx)
+			})
 
-		m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
-		s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
-			return m.Run(ctx)
-		})
+			m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
+				return m.Run(ctx)
+			})
 
-		sr := adx.NewSummaryRuleTask(crdStore, v, s.opts.ClusterLabels)
-		s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
-			return sr.Run(ctx)
-		})
+			sr := adx.NewSummaryRuleTask(crdStore, v, s.opts.ClusterLabels)
+			s.scheduler.ScheduleEvery(time.Minute, "summary-rules", func(ctx context.Context) error {
+				return sr.Run(ctx)
+			})
+		}
+
 	}
 
 	t := adx.NewAuditDiskSpaceTask(s.batcher, s.opts.StorageDir)

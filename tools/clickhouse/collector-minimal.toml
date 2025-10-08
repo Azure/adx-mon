@@ -1,0 +1,30 @@
+# Minimal collector configuration wired for the ClickHouse dev stack
+# Copy this file to a writable location and update the database names or endpoint as needed.
+
+endpoint = "https://ingestor:9090"
+insecure-skip-verify = true
+listen-addr = ":8080"
+region = "dev"
+storage-backend = "clickhouse"
+storage-dir = "/var/lib/adx-mon/collector"
+wal-flush-interval-ms = 100
+max-batch-size = 5000
+
+[[prometheus-remote-write]]
+database = "observability"
+path = "/receive"
+
+[[otel-metric]]
+database = "observability"
+path = "/v1/metrics"
+grpc-port = 4317
+
+[[host-log]]
+disable-kube-discovery = true
+add-attributes = { source = "systemd", unit = "docker.service" }
+
+  [[host-log.journal-target]]
+  matches = ["_SYSTEMD_UNIT=docker.service"]
+  database = "observability_logs"
+  table = "docker_journal"
+  journal-fields = ["_PID", "_HOSTNAME", "PRIORITY", "MESSAGE"]

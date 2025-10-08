@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,264 +17,317 @@ import (
 
 const MetricListenAddr = ":9090"
 
+var serviceBackends = []struct {
+	name    string
+	backend storage.Backend
+}{
+	{name: "adx", backend: storage.BackendADX},
+	{name: "clickhouse", backend: storage.BackendClickHouse},
+}
+
+func runCollectorBackends(t *testing.T, fn func(t *testing.T, backend storage.Backend)) {
+	t.Helper()
+	for _, tt := range serviceBackends {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			fn(t, tt.backend)
+		})
+	}
+}
+
 func TestService_Open(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset()
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			ScrapeInterval: 10 * time.Second,
-		},
-		DisableGzip: true,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset()
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				ScrapeInterval: 10 * time.Second,
+			},
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 0, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 0, len(s.scraper.Targets()))
 }
 
 func TestService_Open_Static(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset()
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset()
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 1, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_NoMatchingHost(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "node1"))
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 1, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_NoMetricsAnnotations(t *testing.T) {
-	dir := t.TempDir()
-	cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		cli := fake.NewSimpleClientset(fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123"))
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		require.Equal(t, 1, len(s.scraper.Targets()))
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	require.Equal(t, 1, len(s.scraper.Targets()))
 }
 
 func TestService_Open_Matching(t *testing.T) {
-	dir := t.TempDir()
-	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
-	pod.Annotations = map[string]string{
-		"adx-mon/scrape": "true",
-	}
-	pod.Status.PodIP = "172.31.1.18"
-	pod.Spec.Containers = []v1.Container{
-		{
-			Name: "container",
-			Ports: []v1.ContainerPort{
-				{
-					ContainerPort: 9000,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+		pod.Annotations = map[string]string{
+			"adx-mon/scrape": "true",
+		}
+		pod.Status.PodIP = "172.31.1.18"
+		pod.Spec.Containers = []v1.Container{
+			{
+				Name: "container",
+				Ports: []v1.ContainerPort{
+					{
+						ContainerPort: 9000,
+					},
 				},
 			},
-		},
-	}
-	cli := fake.NewSimpleClientset(pod)
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{
-					Addr:      "http://localhost:8080/metrics",
-					Namespace: "namespace",
-					Pod:       "pod",
-					Container: "container",
+		}
+		cli := fake.NewSimpleClientset(pod)
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{
+						Addr:      "http://localhost:8080/metrics",
+						Namespace: "namespace",
+						Pod:       "pod",
+						Container: "container",
+					},
 				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		targets := s.scraper.Targets()
+		require.Equal(t, 2, len(targets))
+		require.Equal(t, "http://172.31.1.18:9000/metrics", targets[0].Addr)
+		require.Equal(t, "container", targets[0].Container)
+		require.Equal(t, "default", targets[0].Namespace)
+
+		require.Equal(t, "http://localhost:8080/metrics", targets[1].Addr)
+		require.Equal(t, "namespace", targets[1].Namespace)
+		require.Equal(t, "pod", targets[1].Pod)
+		require.Equal(t, "container", targets[1].Container)
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	targets := s.scraper.Targets()
-	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://172.31.1.18:9000/metrics", targets[0].Addr)
-	require.Equal(t, "container", targets[0].Container)
-	require.Equal(t, "default", targets[0].Namespace)
-
-	require.Equal(t, "http://localhost:8080/metrics", targets[1].Addr)
-	require.Equal(t, "namespace", targets[1].Namespace)
-	require.Equal(t, "pod", targets[1].Pod)
-	require.Equal(t, "container", targets[1].Container)
 
 }
 
 func TestService_Open_HostPort(t *testing.T) {
-	dir := t.TempDir()
-	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
-	pod.Annotations = map[string]string{
-		"adx-mon/scrape": "true",
-		"adx-mon/port":   "10254",
-	}
-	pod.Status.PodIP = "172.31.1.18"
-	pod.Spec.Containers = []v1.Container{
-		{
-			Name: "container",
-			Ports: []v1.ContainerPort{
-				{
-					ContainerPort: 9000,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+		pod.Annotations = map[string]string{
+			"adx-mon/scrape": "true",
+			"adx-mon/port":   "10254",
+		}
+		pod.Status.PodIP = "172.31.1.18"
+		pod.Spec.Containers = []v1.Container{
+			{
+				Name: "container",
+				Ports: []v1.ContainerPort{
+					{
+						ContainerPort: 9000,
+					},
 				},
-			},
-			ReadinessProbe: &v1.Probe{
-				ProbeHandler: v1.ProbeHandler{
-					HTTPGet: &v1.HTTPGetAction{
-						Port: intstr.FromInt(10254),
+				ReadinessProbe: &v1.Probe{
+					ProbeHandler: v1.ProbeHandler{
+						HTTPGet: &v1.HTTPGetAction{
+							Port: intstr.FromInt(10254),
+						},
 					},
 				},
 			},
-		},
-	}
-	cli := fake.NewSimpleClientset(pod)
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-		},
-		DisableGzip: true,
+		}
+		cli := fake.NewSimpleClientset(pod)
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+			},
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		targets := s.scraper.Targets()
+		require.Equal(t, 1, len(targets))
+		require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
+		require.Equal(t, "default", targets[0].Namespace)
+		require.Equal(t, "pod1", targets[0].Pod)
+		require.Equal(t, "container", targets[0].Container)
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	targets := s.scraper.Targets()
-	require.Equal(t, 1, len(targets))
-	require.Equal(t, "http://172.31.1.18:10254/metrics", targets[0].Addr)
-	require.Equal(t, "default", targets[0].Namespace)
-	require.Equal(t, "pod1", targets[0].Pod)
-	require.Equal(t, "container", targets[0].Container)
 }
 
 func TestService_Open_MatchingPort(t *testing.T) {
-	dir := t.TempDir()
-	pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
-	pod.Annotations = map[string]string{
-		"adx-mon/scrape": "true",
-		"adx-mon/port":   "8080",
-	}
-	pod.Spec.Containers = []v1.Container{
-		{
-			Name: "container",
-			Ports: []v1.ContainerPort{
-				{
-					ContainerPort: 8080,
+	runCollectorBackends(t, func(t *testing.T, backend storage.Backend) {
+		dir := t.TempDir()
+		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
+		pod.Annotations = map[string]string{
+			"adx-mon/scrape": "true",
+			"adx-mon/port":   "8080",
+		}
+		pod.Spec.Containers = []v1.Container{
+			{
+				Name: "container",
+				Ports: []v1.ContainerPort{
+					{
+						ContainerPort: 8080,
+					},
 				},
 			},
-		},
-	}
-	pod.Status.PodIP = "172.31.1.18"
-	cli := fake.NewSimpleClientset(pod)
-	informer := k8s.NewPodInformer(cli, "ks8-master-123")
-	s, err := NewService(&ServiceOpts{
-		StorageDir: dir,
-		ListenAddr: MetricListenAddr,
-		Scraper: &ScraperOpts{
-			PodInformer:    informer,
-			NodeName:       "ks8-master-123",
-			ScrapeInterval: 10 * time.Second,
-			Targets: []ScrapeTarget{
-				{Addr: "http://localhost:8080/metrics"},
+		}
+		pod.Status.PodIP = "172.31.1.18"
+		cli := fake.NewSimpleClientset(pod)
+		informer := k8s.NewPodInformer(cli, "ks8-master-123")
+		s, err := NewService(&ServiceOpts{
+			StorageDir:     dir,
+			StorageBackend: backend,
+			ListenAddr:     MetricListenAddr,
+			Scraper: &ScraperOpts{
+				PodInformer:    informer,
+				NodeName:       "ks8-master-123",
+				ScrapeInterval: 10 * time.Second,
+				Targets: []ScrapeTarget{
+					{Addr: "http://localhost:8080/metrics"},
+				},
 			},
-		},
-		DisableGzip: true,
+			DisableGzip: true,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Open(context.Background()))
+		t.Cleanup(func() {
+			s.Close()
+		})
+
+		// wait for the scraper to pick up the new target
+		time.Sleep(100 * time.Millisecond)
+
+		targets := s.scraper.Targets()
+		require.Equal(t, 2, len(targets))
+		require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
+		require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
+		require.Equal(t, "container", targets[1].Container)
+		require.Equal(t, "default", targets[1].Namespace)
 	})
-	require.NoError(t, err)
-	require.NoError(t, s.Open(context.Background()))
-	defer s.Close()
-
-	// wait for the scraper to pick up the new target
-	time.Sleep(100 * time.Millisecond)
-
-	targets := s.scraper.Targets()
-	require.Equal(t, 2, len(targets))
-	require.Equal(t, "http://localhost:8080/metrics", targets[0].Addr)
-	require.Equal(t, "http://172.31.1.18:8080/metrics", targets[1].Addr)
-	require.Equal(t, "container", targets[1].Container)
-	require.Equal(t, "default", targets[1].Namespace)
 }
 
 func TestMakeTargets(t *testing.T) {

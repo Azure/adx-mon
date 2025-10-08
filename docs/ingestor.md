@@ -48,6 +48,49 @@ sized to be between 100MB and 1GB (uncompressed) to align with Kusto ingestion b
 
 ## Traces
 
+## ClickHouse sink
+
+The ingestor can stream batches to ClickHouse in addition to Azure Data Explorer. Switch the storage
+backend to `clickhouse` when you want to land telemetry in a ClickHouse cluster—either for hybrid
+deployments or for local development.
+
+### Configure the ingestor
+
+1. Launch the binary with `--storage-backend=clickhouse` (or set
+	`INGESTOR_STORAGE_BACKEND=clickhouse`).
+2. Provide one or more metrics and logs endpoints with the existing
+	`--metrics-kusto-endpoints` / `--logs-kusto-endpoints` flags. Each value uses the familiar
+	`<database>=<dsn>` format. Example:
+
+	```sh
+	--metrics-kusto-endpoints "observability=clickhouse://default:devpass@clickhouse:9000/observability"
+	--logs-kusto-endpoints "observability_logs=clickhouse://default:devpass@clickhouse:9000/observability_logs"
+	```
+
+	The ingestor automatically provisions the required tables (`metrics_samples` and `otel_logs`) and
+	maps lifted labels/resources to ClickHouse columns.
+3. TLS is disabled unless the DSN explicitly requests it. Use either an HTTPS-based DSN or append
+	`secure=1`/`secure=true` when using the native protocol. Optional certificates can be supplied via
+	the ClickHouse uploader configuration (CA, client cert/key, or `InsecureSkipVerify`).
+
+> **Tip:** You can target multiple ClickHouse clusters by repeating the endpoint flags; the ingestor
+> fans out batches to every configured DSN for a given stream.
+
+### Align the collector
+
+Collect the same WAL format by setting the collector configuration to `storage-backend = "clickhouse"`
+(or pass the `--storage-backend` CLI flag). No other configuration changes are required—the collector
+still delivers segments to the ingestor over the transfer API.
+
+### Local harness
+
+The helper script in `tools/clickhouse/dev_stack.sh` spins up a complete collector → ingestor →
+ClickHouse pipeline on Docker. It builds fresh images (unless `SKIP_BUILD=1`), launches a ClickHouse
+server with pre-created `observability` and `observability_logs` databases, and wires the collector to
+the ingestor using the clickhouse backend. See [`tools/clickhouse/README.md`](../tools/clickhouse/README.md)
+for usage, including how to seed OTLP metrics and query the data with `clickhouse-client` or the Tabix
+UI at `http://localhost:8123/play`.
+
 ## WAL Format and Storage
 
 The Ingestor uses a Write-Ahead Log (WAL) for durable, append-only buffering of telemetry data before upload to Azure Data Explorer. The WAL binary format is fully documented in [Concepts: WAL Segment File Format](concepts.md#wal-segment-file-format), including:
