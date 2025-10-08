@@ -188,9 +188,9 @@ func TestUploaderProcessesMetricBatch(t *testing.T) {
 	require.Equal(t, 42.5, row[3])
 
 	require.Eventually(t, func() bool { return batch.IsRemoved() }, time.Second, 10*time.Millisecond)
-	require.True(t, batch.IsReleased())
+	require.Eventually(t, func() bool { return batch.IsReleased() }, time.Second, 10*time.Millisecond)
 	require.True(t, batcher.WasRemoved())
-	require.True(t, batcher.WasReleased())
+	require.Eventually(t, func() bool { return batcher.WasReleased() }, time.Second, 10*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		for _, query := range fake.execQueries() {
