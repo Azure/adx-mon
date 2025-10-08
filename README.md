@@ -11,6 +11,7 @@ collection and analysis of observability data.
 * **Unlimited Cardinality, Retention, and Granularity**: No restrictions on data dimensions, storage duration, or detail level.
 * **Low Latency Ingestion and Lightweight Collection**: Ensures rapid data processing with minimal resource overhead.
 * **Unified Alerting**: Simplified alerting mechanisms for metrics, logs, and traces.
+* **Adaptive Ingestor Autoscaling**: CPU-aware control loop that safely scales StatefulSet replicas with dry-run support.
 * **Granular Conditional Execution**: Unified `criteria` + CEL `criteriaExpression` gating across AlertRule, SummaryRule, and MetricsExporter CRDs for fine-grained deployment scoping.
 * **Powered by Azure Data Explorer (ADX)**: Built on the robust and scalable [ADX](https://azure.microsoft.com/en-us/products/data-explorer) platform with the powerful [Kusto Query Language (KQL)](https://learn.microsoft.com/en-us/azure/data-explorer/kusto/query/) unifying access to all telemetry.
 * **Flexible and Standards-Based Interfaces**: Supports OTEL, Prometheus, and other industry standards ingestion protocols.

@@ -23,6 +23,31 @@ bash <(curl -s  https://raw.githubusercontent.com/Azure/adx-mon/main/build/k8s/b
 This script will prompt you for the name or you AKS and ADX cluster and configure them to accept telemetry from ADX-Mon
 components. It configures the provided ADX cluster with `Metrics` and `Logs` databases and deploy the Collector and Ingestor services to begin collecting and shipping data from the AKS cluster.
 
+## Enable the Ingestor Autoscaler (optional)
+
+The operator deploys a single ingestor replica by default. To let the control plane resize the StatefulSet based on CPU
+utilization, enable the autoscaler on the `Ingestor` custom resource:
+
+```sh
+kubectl -n adx-mon patch ingestors.adx-mon.azure.com adx-mon --type merge -p '
+spec:
+  autoscaler:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    scaleUpCPUThreshold: 70
+    scaleDownCPUThreshold: 40
+    scaleInterval: 5m
+    cpuWindow: 15m
+    scaleUpBasePercent: 25
+    scaleUpCapPerCycle: 4
+'
+```
+
+This command keeps the original manifest intact and only updates the autoscaler block. You can inspect the latest
+decision with `kubectl -n adx-mon get ingestor adx-mon -o yaml | less`. The autoscaler requires the Kubernetes Metrics
+Server (or any implementation of the `metrics.k8s.io` API) to be installed in the cluster.
+
 ## Annotate Your Pods
 
 Telemetry can be ingested into ADX-Mon by annotating your pods with the appropriate annotations or shipping it through

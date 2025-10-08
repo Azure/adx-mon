@@ -91,6 +91,71 @@ spec:
                   AppliedProvisionState is a JSON-serialized snapshot of the CRD
                   as last applied by the operator. This is set by the operator and is read-only for users.
                 type: string
+              autoscaler:
+                description: Autoscaler configures the optional autoscaling control
+                  loop for the ingestor StatefulSet.
+                properties:
+                  collectMetrics:
+                    default: true
+                    type: boolean
+                  cpuWindow:
+                    default: 15m
+                    type: string
+                  dryRun:
+                    default: false
+                    type: boolean
+                  enabled:
+                    default: false
+                    type: boolean
+                  maxReplicas:
+                    default: 1
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  minReplicas:
+                    default: 1
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  scaleDownCPUThreshold:
+                    default: 40
+                    description: ScaleDownCPUThreshold is the percentage (0-100) of
+                      average CPU utilization at or below which scale-down is considered.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  scaleInterval:
+                    default: 5m
+                    type: string
+                  scaleUpBasePercent:
+                    default: 25
+                    description: ScaleUpBasePercent is the baseline percentage (0-100)
+                      of the current replica count to add during a scale-up, prior
+                      to capping.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  scaleUpCPUThreshold:
+                    default: 70
+                    description: ScaleUpCPUThreshold is the percentage (0-100) of
+                      average CPU utilization that triggers a scale-up evaluation.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  scaleUpCapPerCycle:
+                    default: 5
+                    format: int32
+                    minimum: 0
+                    type: integer
+                required:
+                - enabled
+                type: object
+                x-kubernetes-validations:
+                - message: maxReplicas must be greater than or equal to minReplicas
+                  rule: self.maxReplicas == 0 || self.maxReplicas >= self.minReplicas
               criteriaExpression:
                 description: |-
                   CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
@@ -132,6 +197,29 @@ spec:
           status:
             description: IngestorStatus defines the observed state of Ingestor
             properties:
+              autoscaler:
+                description: IngestorAutoscalerStatus exposes runtime data about the
+                  autoscaling loop.
+                properties:
+                  lastAction:
+                    description: IngestorAutoscalerAction represents the last scaling
+                      decision performed.
+                    type: string
+                  lastActionTime:
+                    format: date-time
+                    type: string
+                  lastObservedCpuPercentHundredths:
+                    description: LastObservedCPUPercentHundredths stores the last
+                      measured CPU utilization scaled by 100 (e.g. 7543 represents
+                      75.43%).
+                    format: int32
+                    type: integer
+                  lastScaleTime:
+                    format: date-time
+                    type: string
+                  reason:
+                    type: string
+                type: object
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

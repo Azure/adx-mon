@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/operator/autoscaler"
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
+	ingestormetrics "github.com/Azure/adx-mon/pkg/metrics/ingestor"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -23,6 +26,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/client-go/tools/record"
+	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -38,6 +44,12 @@ type IngestorReconciler struct {
 	Scheme *runtime.Scheme
 
 	waitForReadyReason string
+
+	nodeMetrics ingestormetrics.NodeMetricsClient
+	enginesMu   sync.Mutex
+	engines     map[types.NamespacedName]*autoscaler.Engine
+	clock       clock.Clock
+	recorder    record.EventRecorder
 }
 
 func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -69,6 +81,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	if !ingestor.DeletionTimestamp.IsZero() {
 		logger.Infof("Ingestor %s/%s is being deleted, skipping reconciliation", ingestor.Namespace, ingestor.Name)
+		r.removeEngine(req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
 
@@ -91,7 +104,11 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return r.CreateIngestor(ctx, ingestor)
 	}
 
-	return ctrl.Result{}, nil
+	res, err := r.runAutoscaler(ctx, req.NamespacedName, ingestor)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	return res, nil
 }
 
 func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
@@ -184,6 +201,9 @@ func (r *IngestorReconciler) updateImageIfNeeded(sts *appsv1.StatefulSet, ingest
 
 // updateReplicasIfNeeded updates the StatefulSet replicas if it differs from the Ingestor spec.
 func (r *IngestorReconciler) updateReplicasIfNeeded(sts *appsv1.StatefulSet, ingestor *adxmonv1.Ingestor) bool {
+	if ingestor.Spec.Autoscaler != nil && ingestor.Spec.Autoscaler.Enabled {
+		return false
+	}
 	if sts.Spec.Replicas != nil && *sts.Spec.Replicas != ingestor.Spec.Replicas {
 		logger.Infof("Updating replicas for Ingestor %s/%s from %d to %d", ingestor.Namespace, ingestor.Name, *sts.Spec.Replicas, ingestor.Spec.Replicas)
 		*sts.Spec.Replicas = ingestor.Spec.Replicas
@@ -258,6 +278,16 @@ func (r *IngestorReconciler) handleADXClusterSelectorChange(ctx context.Context,
 
 func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.waitForReadyReason = "WaitForReady"
+	r.clock = clock.RealClock{}
+	r.engines = make(map[types.NamespacedName]*autoscaler.Engine)
+	r.recorder = mgr.GetEventRecorderFor("ingestor-autoscaler")
+
+	metricsCli, err := metricsclient.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("failed to create metrics client: %w", err)
+	}
+	// NodeMetricses is the upstream-generated pluralization from the metrics.k8s.io clientset.
+	r.nodeMetrics = metricsCli.MetricsV1beta1().NodeMetricses()
 
 	// Define the mapping function for ADXCluster changes to enqueue Ingestor reconciliations
 	mapFn := func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -423,6 +453,17 @@ func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
 	if ingestor.Spec.Image == "" {
 		ingestor.Spec.Image = "ghcr.io/azure/adx-mon/ingestor:latest"
 	}
+	if ingestor.Spec.Autoscaler != nil {
+		if ingestor.Spec.Autoscaler.MinReplicas == 0 {
+			ingestor.Spec.Autoscaler.MinReplicas = ingestor.Spec.Replicas
+		}
+		if ingestor.Spec.Autoscaler.MaxReplicas == 0 {
+			ingestor.Spec.Autoscaler.MaxReplicas = ingestor.Spec.Replicas
+		}
+		if ingestor.Spec.Autoscaler.MaxReplicas < ingestor.Spec.Autoscaler.MinReplicas {
+			ingestor.Spec.Autoscaler.MaxReplicas = ingestor.Spec.Autoscaler.MinReplicas
+		}
+	}
 }
 
 type ingestorTemplateData struct {
@@ -543,4 +584,49 @@ func (r *IngestorReconciler) installCrds(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (r *IngestorReconciler) runAutoscaler(ctx context.Context, key types.NamespacedName, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
+	if ingestor.Spec.Autoscaler == nil || !ingestor.Spec.Autoscaler.Enabled {
+		r.removeEngine(key)
+		return ctrl.Result{}, nil
+	}
+
+	engine, err := r.ensureEngine(key, ingestor)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	requeue, err := engine.Run(ctx, ingestor)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if requeue <= 0 {
+		requeue = time.Minute
+	}
+	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+func (r *IngestorReconciler) ensureEngine(key types.NamespacedName, ingestor *adxmonv1.Ingestor) (*autoscaler.Engine, error) {
+	r.enginesMu.Lock()
+	defer r.enginesMu.Unlock()
+
+	if engine, ok := r.engines[key]; ok {
+		return engine, nil
+	}
+
+	if r.nodeMetrics == nil {
+		return nil, fmt.Errorf("node metrics client not initialized")
+	}
+
+	collector := ingestormetrics.NewCollector(r.Client, r.nodeMetrics, ingestor.Namespace, ingestor.Name, r.clock)
+	engine := autoscaler.NewEngine(r.Client, collector, r.recorder, r.clock)
+	r.engines[key] = engine
+	return engine, nil
+}
+
+func (r *IngestorReconciler) removeEngine(key types.NamespacedName) {
+	r.enginesMu.Lock()
+	delete(r.engines, key)
+	r.enginesMu.Unlock()
 }

@@ -25,6 +25,54 @@ The performance and throughput of a single ingestor pod is limited by network ba
 storage.  The actual processing performed by the ingestor is fairly minimal and is mostly unmarshalling
 the incoming data (Protobufs) and writing it to disk in an append only storage format.
 
+## Autoscaling
+
+The operator ships with a purpose-built autoscaler that adjusts the StatefulSet replica count based on the average CPU
+utilization of the nodes currently hosting ingestor pods. During each reconciliation cycle the operator collects
+metrics from the Kubernetes `metrics.k8s.io` API, retains a sliding window of samples, and decides whether to add or
+remove replicas. Scale-downs are coordinated using `shutdown-requested`/`shutdown-completed` pod annotations so that a
+pod can gracefully flush its WAL before deletion.
+
+Autoscaling is disabled by default. To enable it, add an `autoscaler` block to your `Ingestor` custom resource:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Ingestor
+metadata:
+  name: adx-mon
+  namespace: adx-mon
+spec:
+  replicas: 3
+  autoscaler:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    scaleUpCPUThreshold: 70     # scale up when rolling average CPU exceeds 70%
+    scaleDownCPUThreshold: 40   # consider scale down at or below 40%
+    scaleInterval: 5m           # enforce at least 5 minutes between scale actions
+    cpuWindow: 15m              # size of the rolling metrics window
+    scaleUpBasePercent: 25      # grow by 25% (capped by scaleUpCapPerCycle) per step
+    scaleUpCapPerCycle: 5       # prevent large jumps in a single iteration
+    dryRun: false               # set true to observe decisions without changing replicas
+```
+
+Key behaviors and configuration options:
+
+* `minReplicas`/`maxReplicas` bound the replica range. Defaults are derived from `spec.replicas` when omitted.
+* CPU thresholds are expressed as percentages. You can widen the hysteresis band to tolerate more variance.
+* `scaleInterval` controls the minimum time between scaling actions. Scale intervals shorter than the metrics window
+  will be clamped by the autoscaler.
+* `scaleUpBasePercent` determines the proportion of the current replica count added during a scale-up. The value is
+  capped by `scaleUpCapPerCycle` to avoid overshooting in large clusters.
+* Enable `dryRun` to surface decisions through status updates and events without mutating the StatefulSet. This is
+  useful when calibrating thresholds.
+* `collectMetrics` (default `true`) is reserved for future integrations that provide external metrics sources. Leave it
+  enabled unless you have a replacement data path wired into the operator.
+
+The autoscaler records its last decision under `status.autoscaler`. The status includes the most recent action, the
+time it occurred, and the last observed CPU utilization (stored as a percentage multiplied by 100). This makes it easy
+to visualize the control loop with `kubectl get ingestor -o yaml` or prometheus rules.
+
 # Data Flow
 
 ## Metrics
