@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -166,7 +165,9 @@ func (u *uploader) Schemas() map[string]Schema {
 	for k, v := range u.schemas {
 		cols := make([]Column, len(v.Columns))
 		copy(cols, v.Columns)
-		cp[k] = Schema{Table: v.Table, Columns: cols}
+		converters := make([]valueConverter, len(v.Converters))
+		copy(converters, v.Converters)
+		cp[k] = Schema{Table: v.Table, Columns: cols, Converters: converters}
 	}
 	return cp
 }
@@ -223,6 +224,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 	var (
 		writer       batchWriter
 		schemaDef    Schema
+		rowBuffer    []any
 		schemaLoaded bool
 		schemaID     string
 		headerSig    string
@@ -334,6 +336,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 			}
 
 			schemaLoaded = true
+			rowBuffer = make([]any, len(schemaDef.Columns))
 
 			if flushInterval > 0 {
 				flushTimer = time.NewTimer(flushInterval)
@@ -369,8 +372,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				return handleError(fmt.Errorf("schema not loaded for table %s", batch.Table), false)
 			}
 
-			values, err := convertRecord(record, schemaDef.Columns)
-			if err != nil {
+			if err := convertRecordInto(record, schemaDef.Columns, schemaDef.Converters, rowBuffer); err != nil {
 				sr.Close()
 				if u.log != nil {
 					recordCopy := append([]string(nil), record...)
@@ -390,7 +392,7 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 				return handleError(err, false)
 			}
 
-			if err := writer.Append(values...); err != nil {
+			if err := writer.Append(rowBuffer...); err != nil {
 				sr.Close()
 				if u.log != nil {
 					u.log.Error("failed to append row", slog.String("table", batch.Table), slog.String("error", err.Error()))
@@ -483,8 +485,14 @@ func (u *uploader) ensureSchema(ctx context.Context, table, schemaID string, map
 	u.schemaMu.RUnlock()
 
 	cols := convertToColumns(mapping)
-	schemaCopy := Schema{Table: table, Columns: make([]Column, len(cols))}
+	converters := buildConverters(cols)
+	schemaCopy := Schema{
+		Table:      table,
+		Columns:    make([]Column, len(cols)),
+		Converters: make([]valueConverter, len(converters)),
+	}
 	copy(schemaCopy.Columns, cols)
+	copy(schemaCopy.Converters, converters)
 
 	if err := u.syncer.EnsureTable(ctx, table, schemaID, schemaCopy.Columns); err != nil {
 		return Schema{}, err
@@ -525,72 +533,36 @@ func isHeaderRecord(record []string, header string) bool {
 }
 
 func convertRecord(record []string, columns []Column) ([]any, error) {
-	if len(record) < len(columns) {
-		return nil, fmt.Errorf("record has %d fields, expected %d", len(record), len(columns))
-	}
-
 	values := make([]any, len(columns))
-	for i, column := range columns {
-		field := record[i]
-		switch column.Type {
-		case "DateTime64":
-			if field == "" {
-				values[i] = time.Unix(0, 0).UTC()
-				continue
-			}
-			ts, err := time.Parse(time.RFC3339Nano, field)
-			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", column.Name, err)
-			}
-			values[i] = ts
-		case "UInt64":
-			if field == "" {
-				values[i] = uint64(0)
-				continue
-			}
-			uv, err := strconv.ParseUint(field, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", column.Name, err)
-			}
-			values[i] = uv
-		case "Int64":
-			if field == "" {
-				values[i] = int64(0)
-				continue
-			}
-			iv, err := strconv.ParseInt(field, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", column.Name, err)
-			}
-			values[i] = iv
-		case "Int32":
-			if field == "" {
-				values[i] = int32(0)
-				continue
-			}
-			iv, err := strconv.ParseInt(field, 10, 32)
-			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", column.Name, err)
-			}
-			values[i] = int32(iv)
-		case "Float64":
-			if field == "" {
-				values[i] = float64(0)
-				continue
-			}
-			fv, err := strconv.ParseFloat(field, 64)
-			if err != nil {
-				return nil, fmt.Errorf("column %s: %w", column.Name, err)
-			}
-			values[i] = fv
-		case "JSON", "String":
-			values[i] = field
-		default:
-			values[i] = field
-		}
+	converters := buildConverters(columns)
+	if err := convertRecordInto(record, columns, converters, values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func convertRecordInto(record []string, columns []Column, converters []valueConverter, dest []any) error {
+	if len(record) < len(columns) {
+		return fmt.Errorf("record has %d fields, expected %d", len(record), len(columns))
 	}
 
-	return values, nil
+	if len(dest) < len(columns) {
+		return fmt.Errorf("destination buffer too small: got %d, need %d", len(dest), len(columns))
+	}
+
+	if len(converters) != len(columns) {
+		converters = buildConverters(columns)
+	}
+
+	for i := range columns {
+		value, err := converters[i](record[i])
+		if err != nil {
+			return err
+		}
+		dest[i] = value
+	}
+
+	return nil
 }
 
 var fatalClickHouseCodes = map[int32]struct{}{
