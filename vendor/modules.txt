@@ -72,7 +72,7 @@ github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime
 github.com/Azure/azure-sdk-for-go/sdk/azcore/streaming
 github.com/Azure/azure-sdk-for-go/sdk/azcore/to
 github.com/Azure/azure-sdk-for-go/sdk/azcore/tracing
-# github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.12.0
+# github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.0
 ## explicit; go 1.23.0
 github.com/Azure/azure-sdk-for-go/sdk/azidentity
 github.com/Azure/azure-sdk-for-go/sdk/azidentity/internal
@@ -156,6 +156,22 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/shared
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/version
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/managedidentity
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
+# github.com/ClickHouse/ch-go v0.68.0
+## explicit; go 1.23.0
+github.com/ClickHouse/ch-go/compress
+github.com/ClickHouse/ch-go/proto
+# github.com/ClickHouse/clickhouse-go/v2 v2.40.3
+## explicit; go 1.24.0
+github.com/ClickHouse/clickhouse-go/v2
+github.com/ClickHouse/clickhouse-go/v2/contributors
+github.com/ClickHouse/clickhouse-go/v2/ext
+github.com/ClickHouse/clickhouse-go/v2/lib/binary
+github.com/ClickHouse/clickhouse-go/v2/lib/chcol
+github.com/ClickHouse/clickhouse-go/v2/lib/column
+github.com/ClickHouse/clickhouse-go/v2/lib/driver
+github.com/ClickHouse/clickhouse-go/v2/lib/proto
+github.com/ClickHouse/clickhouse-go/v2/lib/timezone
+github.com/ClickHouse/clickhouse-go/v2/resources
 # github.com/Microsoft/go-winio v0.6.2
 ## explicit; go 1.21
 github.com/Microsoft/go-winio
@@ -168,6 +184,10 @@ github.com/Microsoft/go-winio/pkg/guid
 # github.com/VictoriaMetrics/easyproto v0.1.4
 ## explicit; go 1.18
 github.com/VictoriaMetrics/easyproto
+# github.com/andybalholm/brotli v1.2.0
+## explicit; go 1.22
+github.com/andybalholm/brotli
+github.com/andybalholm/brotli/matchfinder
 # github.com/antlr4-go/antlr/v4 v4.13.0
 ## explicit; go 1.20
 github.com/antlr4-go/antlr/v4
@@ -220,7 +240,7 @@ github.com/davidnarayan/go-flake
 # github.com/distribution/reference v0.6.0
 ## explicit; go 1.20
 github.com/distribution/reference
-# github.com/docker/docker v28.3.3+incompatible
+# github.com/docker/docker v28.4.0+incompatible
 ## explicit
 github.com/docker/docker/api
 github.com/docker/docker/api/types
@@ -244,8 +264,6 @@ github.com/docker/docker/api/types/time
 github.com/docker/docker/api/types/versions
 github.com/docker/docker/api/types/volume
 github.com/docker/docker/client
-github.com/docker/docker/internal/lazyregexp
-github.com/docker/docker/internal/multierror
 github.com/docker/docker/pkg/jsonmessage
 github.com/docker/docker/pkg/stdcopy
 # github.com/docker/go-connections v0.6.0
@@ -280,6 +298,12 @@ github.com/fsnotify/fsnotify/internal
 # github.com/fxamacker/cbor/v2 v2.9.0
 ## explicit; go 1.20
 github.com/fxamacker/cbor/v2
+# github.com/go-faster/city v1.0.1
+## explicit; go 1.17
+github.com/go-faster/city
+# github.com/go-faster/errors v0.7.1
+## explicit; go 1.20
+github.com/go-faster/errors
 # github.com/go-logr/logr v1.4.3
 ## explicit; go 1.18
 github.com/go-logr/logr
@@ -470,6 +494,9 @@ github.com/opencontainers/go-digest
 ## explicit; go 1.18
 github.com/opencontainers/image-spec/specs-go
 github.com/opencontainers/image-spec/specs-go/v1
+# github.com/paulmach/orb v0.11.1
+## explicit; go 1.15
+github.com/paulmach/orb
 # github.com/pelletier/go-toml/v2 v2.2.4
 ## explicit; go 1.21.0
 github.com/pelletier/go-toml/v2
@@ -480,6 +507,13 @@ github.com/pelletier/go-toml/v2/unstable
 # github.com/philhofer/fwd v1.2.0
 ## explicit; go 1.20
 github.com/philhofer/fwd
+# github.com/pierrec/lz4/v4 v4.1.22
+## explicit; go 1.14
+github.com/pierrec/lz4/v4
+github.com/pierrec/lz4/v4/internal/lz4block
+github.com/pierrec/lz4/v4/internal/lz4errors
+github.com/pierrec/lz4/v4/internal/lz4stream
+github.com/pierrec/lz4/v4/internal/xxh32
 # github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 ## explicit; go 1.14
 github.com/pkg/browser
@@ -510,8 +544,8 @@ github.com/prometheus/client_golang/prometheus/promhttp/internal
 # github.com/prometheus/client_model v0.6.2
 ## explicit; go 1.22.0
 github.com/prometheus/client_model/go
-# github.com/prometheus/common v0.66.1
-## explicit; go 1.23.0
+# github.com/prometheus/common v0.67.1
+## explicit; go 1.24.0
 github.com/prometheus/common/expfmt
 github.com/prometheus/common/model
 # github.com/prometheus/otlptranslator v0.0.2
@@ -528,6 +562,14 @@ github.com/russross/blackfriday/v2
 # github.com/samber/lo v1.38.1
 ## explicit; go 1.18
 github.com/samber/lo
+# github.com/segmentio/asm v1.2.0
+## explicit; go 1.18
+github.com/segmentio/asm/bswap
+github.com/segmentio/asm/cpu
+github.com/segmentio/asm/cpu/arm
+github.com/segmentio/asm/cpu/arm64
+github.com/segmentio/asm/cpu/cpuid
+github.com/segmentio/asm/cpu/x86
 # github.com/shirou/gopsutil/v4 v4.25.6
 ## explicit; go 1.23
 github.com/shirou/gopsutil/v4/common
@@ -536,8 +578,8 @@ github.com/shirou/gopsutil/v4/internal/common
 github.com/shirou/gopsutil/v4/mem
 github.com/shirou/gopsutil/v4/net
 github.com/shirou/gopsutil/v4/process
-# github.com/shopspring/decimal v1.3.1
-## explicit; go 1.13
+# github.com/shopspring/decimal v1.4.0
+## explicit; go 1.10
 github.com/shopspring/decimal
 # github.com/siderolabs/gen v0.4.7
 ## explicit; go 1.21.0
@@ -664,13 +706,13 @@ go.opentelemetry.io/otel/trace/noop
 # go.uber.org/multierr v1.11.0
 ## explicit; go 1.19
 go.uber.org/multierr
-# go.yaml.in/yaml/v2 v2.4.2
+# go.yaml.in/yaml/v2 v2.4.3
 ## explicit; go 1.15
 go.yaml.in/yaml/v2
 # go.yaml.in/yaml/v3 v3.0.4
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
-# golang.org/x/crypto v0.42.0
+# golang.org/x/crypto v0.43.0
 ## explicit; go 1.24.0
 golang.org/x/crypto/blowfish
 golang.org/x/crypto/chacha20
@@ -685,7 +727,7 @@ golang.org/x/crypto/ssh/internal/bcrypt_pbkdf
 ## explicit; go 1.20
 golang.org/x/exp/constraints
 golang.org/x/exp/slices
-# golang.org/x/net v0.44.0
+# golang.org/x/net v0.46.0
 ## explicit; go 1.24.0
 golang.org/x/net/html
 golang.org/x/net/html/atom
@@ -699,24 +741,24 @@ golang.org/x/net/internal/httpcommon
 golang.org/x/net/internal/socks
 golang.org/x/net/proxy
 golang.org/x/net/websocket
-# golang.org/x/oauth2 v0.30.0
-## explicit; go 1.23.0
+# golang.org/x/oauth2 v0.31.0
+## explicit; go 1.24.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
 # golang.org/x/sync v0.17.0
 ## explicit; go 1.24.0
 golang.org/x/sync/errgroup
-# golang.org/x/sys v0.36.0
+# golang.org/x/sys v0.37.0
 ## explicit; go 1.24.0
 golang.org/x/sys/cpu
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
-# golang.org/x/term v0.35.0
+# golang.org/x/term v0.36.0
 ## explicit; go 1.24.0
 golang.org/x/term
-# golang.org/x/text v0.29.0
+# golang.org/x/text v0.30.0
 ## explicit; go 1.24.0
 golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
@@ -1292,7 +1334,7 @@ k8s.io/utils/net
 k8s.io/utils/ptr
 k8s.io/utils/strings/slices
 k8s.io/utils/trace
-# sigs.k8s.io/controller-runtime v0.22.2
+# sigs.k8s.io/controller-runtime v0.22.3
 ## explicit; go 1.24.0
 sigs.k8s.io/controller-runtime
 sigs.k8s.io/controller-runtime/pkg/builder

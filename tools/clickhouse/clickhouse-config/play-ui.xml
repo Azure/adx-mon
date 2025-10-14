@@ -1,0 +1,5 @@
+<clickhouse>
+    <!-- Override the default HTTP response to serve the Tabix UI loader.
+         This provides a lightweight SQL console at http://localhost:8123/play. -->
+    <http_server_default_response><![CDATA[<html ng-app="SMI2"><head><base href="https://ui.tabix.io/"></head><body><div ui-view="" class="content-ui"></div><script src="https://loader.tabix.io/master.js"></script></body></html>]]></http_server_default_response>
+</clickhouse>

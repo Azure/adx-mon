@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/siderolabs/go-kmsg"
 )
 
@@ -39,6 +40,7 @@ var DefaultConfig = Config{
 	WALFlushIntervalMilliSeconds: 100,
 	ListenAddr:                   ":8080",
 	StorageDir:                   homedir,
+	StorageBackend:               "adx",
 	PrometheusScrape: &PrometheusScrape{
 		StaticScrapeTarget:    []*ScrapeTarget{},
 		ScrapeIntervalSeconds: 30,
@@ -76,6 +78,7 @@ type Config struct {
 	Region             string `toml:"region,omitempty" comment:"Region is a location identifier."`
 	TLSKeyFile         string `toml:"tls-key-file,omitempty" comment:"Optional path to the TLS key file."`
 	TLSCertFile        string `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
+	StorageBackend     string `toml:"storage-backend,omitempty" comment:"Storage backend used for WAL segments. Valid values: adx, clickhouse."`
 
 	MaxConnections               int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
 	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
@@ -516,6 +519,19 @@ type LogTransform struct {
 }
 
 func (c *Config) Validate() error {
+	backend := c.StorageBackend
+	if backend == "" {
+		backend = DefaultConfig.StorageBackend
+	}
+
+	if _, err := storage.ParseBackend(backend); err != nil {
+		return err
+	}
+
+	if c.StorageBackend == "" {
+		c.StorageBackend = backend
+	}
+
 	if c.Exporters != nil {
 		if err := c.Exporters.Validate(); err != nil {
 			return err

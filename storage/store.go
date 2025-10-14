@@ -71,6 +71,7 @@ type StoreOpts struct {
 	SegmentMaxSize int64
 	SegmentMaxAge  time.Duration
 	MaxDiskUsage   int64
+	Backend        Backend
 
 	LiftedLabels     []string
 	LiftedAttributes []string
@@ -80,6 +81,10 @@ type StoreOpts struct {
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
+	if opts.Backend == "" {
+		opts.Backend = BackendADX
+	}
+
 	return &LocalStore{
 		opts: opts,
 		repository: wal.NewRepository(wal.RepositoryOpts{
