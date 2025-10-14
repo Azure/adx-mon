@@ -56,6 +56,14 @@ adx-mon/scrape: "true"
 adx-mon/targets: "/metrics:metrics,/health:9000"
 ```
 
+You can also scrape HTTPS endpoints by setting the `scheme` annotation. Authentication uses the service token from within the Collector pod.
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/scheme: "https"
+adx-mon/path: "/metrics"
+```
+
 ### Logs
 
 ADX-Mon collector supports discovering logs from pods. To configure the destination Kusto table, annotate your pod with `adx-mon/log-destination` with a value of `DBName:TableName`.
