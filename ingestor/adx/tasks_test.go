@@ -422,7 +422,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"},
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
 					Spec: v1.FunctionSpec{
 						Database:           "db",
 						Body:               ".create-or-alter function fn() { print 1 }",
@@ -435,14 +435,22 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		task := NewSyncFunctionsTask(store, exec, map[string]string{"region": "westus"})
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts, "function should not execute when criteriaExpression is false")
-		require.Empty(t, store.statusUpdates, "status should not be updated when skipping")
+		require.Len(t, store.statusUpdates, 1, "status should be updated with condition when skipping")
+		
+		// Verify the CriteriaMatch condition was set to false
+		fn := store.statusUpdates[0]
+		criteriaCondition := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionCriteriaMatch)
+		require.NotNil(t, criteriaCondition, "CriteriaMatch condition should be set")
+		require.Equal(t, metav1.ConditionFalse, criteriaCondition.Status)
+		require.Equal(t, "CriteriaNotMatched", criteriaCondition.Reason)
+		require.Contains(t, criteriaCondition.Message, "evaluated to false")
 	})
 
 	t.Run("records failure when expression evaluation errors", func(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"},
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
 					Spec: v1.FunctionSpec{
 						Database:           "db",
 						Body:               ".create-or-alter function fn() { print 1 }",
@@ -458,6 +466,14 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		require.Len(t, store.statusUpdates, 1)
 		require.Equal(t, v1.Failed, store.statusUpdates[0].Status.Status)
 		require.Contains(t, store.statusUpdates[0].Status.Error, "criteriaExpression evaluation failed")
+		
+		// Verify the CriteriaMatch condition was set with error
+		fn := store.statusUpdates[0]
+		criteriaCondition := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionCriteriaMatch)
+		require.NotNil(t, criteriaCondition, "CriteriaMatch condition should be set")
+		require.Equal(t, metav1.ConditionFalse, criteriaCondition.Status)
+		require.Equal(t, "CriteriaExpressionError", criteriaCondition.Reason)
+		require.Contains(t, criteriaCondition.Message, "evaluation failed")
 	})
 }
 
