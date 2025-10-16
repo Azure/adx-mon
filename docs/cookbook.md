@@ -236,7 +236,7 @@ Lowering ingestion latency incurs higher resource demands on the ADX side which 
 - Consider your SummaryRule `ingestionDelay` settings when tuning batching policies - ensure the delay is longer than the batching timespan
 - Test policy changes on non-production databases first to understand the impact on query availability
 - Change Metrics database policies to 30s, 500 files and 1GB for < 1min queryability
-- Change Logs database policies to 5m, 500 files and 4GG for higher throughput
+- Change Logs database policies to 5m, 500 files and 4GB for higher throughput
 
 **Relationship to SummaryRule ingestionDelay:**
 - Database ingestion batching policies control when data is sealed and becomes queryable in ADX
