@@ -162,7 +162,7 @@ TableName
 There are several layers of batching within ADX-Mon that allow tuning of throughput and latency.
 The defaults are configured to support ingestion latencies from source to ADX of less than one minute.  Within
 ADX, there are batching policies that may need to be adjusted from their defaults which is tuned for
-thoughput.
+throughput.
 
 By default, ADX will seal a batch after 5 mins, 500 files or 1 GB of data is available.  For metrics and lower
 latencies needs, it is recommend to lower this to 30s, 500 files or 1 GB to achieve faster ingest latency.
