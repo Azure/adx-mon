@@ -159,7 +159,7 @@ TableName
 
 ### Optimizing Ingestion Latency
 
-There are several layers of batching within ADX-Mon that allow turning of throughput and latency.
+There are several layers of batching within ADX-Mon that allow tuning of throughput and latency.
 The defaults are configured to support ingestion latencies from source to ADX of less than one minute.  Within
 ADX, there are batching policies that may need to be adjusted from their defaults which is tuned for
 thoughput.
