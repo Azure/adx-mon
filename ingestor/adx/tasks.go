@@ -136,14 +136,18 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	for _, function := range functions {
 
 		if function.Spec.Database != v1.AllDatabases && function.Spec.Database != t.kustoCli.Database() {
+			function.SetDatabaseMatchCondition(false, function.Spec.Database, t.kustoCli.Database())
+			_ = t.store.UpdateStatus(ctx, function)
 			continue
 		}
+		function.SetDatabaseMatchCondition(true, function.Spec.Database, t.kustoCli.Database())
 
 		if expr := function.Spec.CriteriaExpression; expr != "" {
 			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
 			if err != nil {
 				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
 				logger.Errorf("Function %s/%s criteriaExpression error: %v", function.Namespace, function.Name, err)
+				function.SetCriteriaMatchCondition(false, expr, err)
 				if updErr := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); updErr != nil {
 					logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 				}
@@ -153,11 +157,17 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				if logger.IsDebug() {
 					logger.Debugf("Skipping function %s/%s due to criteriaExpression evaluating to false", function.Namespace, function.Name)
 				}
+				function.SetCriteriaMatchCondition(false, expr, nil)
+				_ = t.store.UpdateStatus(ctx, function)
 				continue
 			}
+			function.SetCriteriaMatchCondition(true, expr, nil)
+		} else {
+			function.SetCriteriaMatchCondition(true, "", nil)
 		}
 
 		if !function.DeletionTimestamp.IsZero() {
+			function.SetCondition(metav1.ConditionTrue, "FunctionDeleting", "Function deletion in progress")
 			// Until we can parse KQL we don't actually know the function's
 			// name as described in this CRD; however, we'll make the assumption
 			// that the CRD name is the same as the function name in Kusto and
@@ -166,6 +176,9 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
 				// Deletion is best-effort, especially while we still can't parse KQL
+				function.SetCondition(metav1.ConditionFalse, "FunctionDeleteFailed", fmt.Sprintf("Failed to delete function: %v", err))
+			} else {
+				function.SetCondition(metav1.ConditionTrue, "FunctionDeleted", "Function successfully deleted from Kusto")
 			}
 			t.updateKQLFunctionStatus(ctx, function, v1.Success, nil)
 			return nil
@@ -177,11 +190,13 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 				if !errors.Retry(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
+					function.SetCondition(metav1.ConditionFalse, "KustoExecutionFailed", fmt.Sprintf("Permanent Kusto failure: %v", err))
 					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
 						logger.Errorf("Failed to update permanent failure status: %v", err)
 					}
 					continue
 				} else {
+					function.SetCondition(metav1.ConditionFalse, "KustoExecutionRetrying", fmt.Sprintf("Transient Kusto failure: %v", err))
 					t.updateKQLFunctionStatus(ctx, function, v1.Failed, err)
 					logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 					continue
@@ -189,6 +204,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			}
 
 			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
+			function.SetCondition(metav1.ConditionTrue, "KustoExecutionSucceeded", fmt.Sprintf("Function created at %s", t.kustoCli.Endpoint()))
 			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
 				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
 				if err := t.store.Update(ctx, function); err != nil {

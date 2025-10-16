@@ -17,12 +17,25 @@ limitations under the License.
 package v1
 
 import (
+	"fmt"
+
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // AllDatabases is a special value that indicates all databases
 // +k8s:deepcopy-gen=false
 const AllDatabases = "*"
+
+// Function condition type constants following the domain naming convention
+const (
+	// FunctionReconciled indicates the function has been successfully reconciled
+	FunctionReconciled = "function.adx-mon.azure.com/Reconciled"
+	// FunctionDatabaseMatch indicates if the function's database matches an ingestor endpoint
+	FunctionDatabaseMatch = "function.adx-mon.azure.com/DatabaseMatch"
+	// FunctionCriteriaMatch indicates if the function's criteria expression matches cluster labels
+	FunctionCriteriaMatch = "function.adx-mon.azure.com/CriteriaMatch"
+)
 
 // FunctionSpec defines the desired state of Function
 type FunctionSpec struct {
@@ -96,6 +109,89 @@ type Function struct {
 
 	Spec   FunctionSpec   `json:"spec,omitempty"`
 	Status FunctionStatus `json:"status,omitempty"`
+}
+
+// GetCondition returns the primary FunctionReconciled condition
+func (f *Function) GetCondition() *metav1.Condition {
+	return meta.FindStatusCondition(f.Status.Conditions, FunctionReconciled)
+}
+
+// SetCondition sets the primary reconciliation status condition with the given status, reason, and message.
+// This method automatically sets ObservedGeneration and LastTransitionTime.
+func (f *Function) SetCondition(status metav1.ConditionStatus, reason, message string) {
+	condition := metav1.Condition{
+		Type:               FunctionReconciled,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: f.GetGeneration(),
+	}
+	meta.SetStatusCondition(&f.Status.Conditions, condition)
+}
+
+// SetDatabaseMatchCondition sets the database matching condition to indicate whether the
+// function's database matches any configured ingestor endpoint.
+func (f *Function) SetDatabaseMatchCondition(matched bool, configuredDB, availableDB string) {
+	var status metav1.ConditionStatus
+	var reason, message string
+
+	if matched {
+		status = metav1.ConditionTrue
+		reason = "DatabaseMatched"
+		message = fmt.Sprintf("Function database '%s' matches endpoint database (case-insensitive)", configuredDB)
+	} else {
+		status = metav1.ConditionFalse
+		reason = "DatabaseMismatch"
+		message = fmt.Sprintf("Function database '%s' does not match ingestor endpoint database '%s' (case-insensitive comparison)", configuredDB, availableDB)
+	}
+
+	condition := metav1.Condition{
+		Type:               FunctionDatabaseMatch,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: f.GetGeneration(),
+	}
+	meta.SetStatusCondition(&f.Status.Conditions, condition)
+}
+
+// SetCriteriaMatchCondition sets the criteria expression matching condition.
+// When matched is true, indicates the expression evaluated successfully to true.
+// When matched is false with err != nil, indicates an evaluation error.
+// When matched is false with err == nil, indicates the expression evaluated to false (skip silently).
+func (f *Function) SetCriteriaMatchCondition(matched bool, expression string, err error) {
+	var status metav1.ConditionStatus
+	var reason, message string
+
+	if err != nil {
+		status = metav1.ConditionFalse
+		reason = "CriteriaExpressionError"
+		message = fmt.Sprintf("CriteriaExpression evaluation failed: %v", err)
+	} else if matched {
+		status = metav1.ConditionTrue
+		reason = "CriteriaMatched"
+		if expression != "" {
+			message = fmt.Sprintf("CriteriaExpression '%s' evaluated to true", expression)
+		} else {
+			message = "No criteria expression specified, processing function"
+		}
+	} else {
+		status = metav1.ConditionFalse
+		reason = "CriteriaNotMatched"
+		message = fmt.Sprintf("CriteriaExpression '%s' evaluated to false, skipping function", expression)
+	}
+
+	condition := metav1.Condition{
+		Type:               FunctionCriteriaMatch,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: f.GetGeneration(),
+	}
+	meta.SetStatusCondition(&f.Status.Conditions, condition)
 }
 
 // +kubebuilder:object:root=true
