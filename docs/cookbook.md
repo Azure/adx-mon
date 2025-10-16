@@ -165,7 +165,7 @@ ADX, there are batching policies that may need to be adjusted from their default
 throughput.
 
 By default, ADX will seal a batch after 5 mins, 500 files or 1 GB of data is available.  For metrics and lower
-latencies needs, it is recommend to lower this to 30s, 500 files or 1 GB to achieve faster ingest latency.
+latencies needs, it is recommended to lower this to 30s, 500 files or 1 GB to achieve faster ingest latency.
 
 You can control ADX ingestion batching behavior at the database level using ManagementCommand resources. These policies determine how quickly data becomes available for querying after ingestion by configuring when ADX seals and commits data batches.
 
