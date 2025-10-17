@@ -157,6 +157,92 @@ TableName
   - Without delay: Process 13:00-14:00 data
   - With delay: Process 12:00-13:00 data (shifted back by 10 minutes, then aligned to hour boundary)
 
+### Optimizing Ingestion Latency
+
+There are several layers of batching within ADX-Mon that allow tuning of throughput and latency.
+The defaults are configured to support ingestion latencies from source to ADX of less than one minute.  Within
+ADX, there are batching policies that may need to be adjusted from their defaults which is tuned for
+throughput.
+
+By default, ADX will seal a batch after 5 mins, 500 files or 1 GB of data is available.  For metrics and lower
+latencies needs, it is recommended to lower this to 30s, 500 files or 1 GB to achieve faster ingest latency.
+
+You can control ADX ingestion batching behavior at the database level using ManagementCommand resources. These policies determine how quickly data becomes available for querying after ingestion by configuring when ADX seals and commits data batches.
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: ingestion-batching-policies
+  namespace: adx-mon
+spec:
+  body: |
+    .alter-merge database Metrics policy ingestionbatching ```
+    {
+      "MaximumBatchingTimeSpan" : "00:00:30",
+      "MaximumNumberOfItems" : 500,
+      "MaximumRawDataSizeMB" : 1024
+    }
+    ```
+    .alter-merge database Logs policy ingestionbatching ```
+    {
+      "MaximumBatchingTimeSpan" : "00:05:00",
+      "MaximumNumberOfItems" : 500,
+      "MaximumRawDataSizeMB" : 4096
+    }
+    ```
+```
+
+**Policy Parameters:**
+- **MaximumBatchingTimeSpan**: Maximum time to wait before sealing a batch (format: HH:MM:SS)
+- **MaximumNumberOfItems**: Maximum number of items (blobs) per batch
+- **MaximumRawDataSizeMB**: Maximum uncompressed data size per batch in MB
+
+**Latency vs. Throughput Trade-offs:**
+- **Low latency** (30 seconds): Use for real-time dashboards and alerting data that needs to be queryable quickly
+- **Higher throughput** (5 minutes): Use for bulk data that doesn't require immediate availability, reduces ingestion overhead
+- **Balanced approach**: Start with 5 minutes and adjust based on query patterns and data volume
+
+
+#### Per-Table Policies
+
+There may be some tables that you need to lower the ingestion latency from the default database policies.  Specific tables
+can be ingested more quickly with a table level ingestion policy.
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: ingestion-batching-policies
+  namespace: adx-mon
+spec:
+  body: |
+    .alter-merge table MetricsDB.MyTable policy ingestionbatching ```
+    {
+      "MaximumBatchingTimeSpan" : "00:00:10",
+      "MaximumNumberOfItems" : 500,
+      "MaximumRawDataSizeMB" : 1024
+    }
+    ```
+```
+
+Lowering ingestion latency incurs higher resource demands on the ADX side which can increase costs under high volume.
+
+**Best Practices:**
+- Apply policies during initial cluster setup before heavy ingestion begins
+- Use shorter batching times for metrics databases that power real-time dashboards
+- Use longer batching times for logs or historical data where query latency is less critical
+- Monitor ingestion performance with `.show ingestion failures` and `.show operations` commands
+- Consider your SummaryRule `ingestionDelay` settings when tuning batching policies - ensure the delay is longer than the batching timespan
+- Test policy changes on non-production databases first to understand the impact on query availability
+- Change Metrics database policies to 30s, 500 files and 1GB for < 1min queryability
+- Change Logs database policies to 5m, 500 files and 4GB for higher throughput
+
+**Relationship to SummaryRule ingestionDelay:**
+- Database ingestion batching policies control when data is sealed and becomes queryable in ADX
+- SummaryRule `ingestionDelay` should be set longer than the database's `MaximumBatchingTimeSpan` to ensure data completeness
+- Example: If your database uses `MaximumBatchingTimeSpan: 00:05:00`, set SummaryRule `ingestionDelay: 10m` or longer
+
 ## Alerting
 
 ### Conditional Execution with criteria / criteriaExpression

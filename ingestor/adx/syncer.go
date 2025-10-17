@@ -82,10 +82,6 @@ func (s *Syncer) Open(ctx context.Context) error {
 		return err
 	}
 
-	if err := s.ensureIngestionPolicy(ctx); err != nil {
-		return err
-	}
-
 	ctx, s.cancelFn = context.WithCancel(ctx)
 
 	s.wg.Add(1)
@@ -359,45 +355,6 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 }
 
 func (s *Syncer) ensureOTLPLogsFunctions(ctx context.Context) error {
-	return nil
-}
-
-func (s *Syncer) ensureIngestionPolicy(ctx context.Context) error {
-	type ingestionPolicy struct {
-		MaximumBatchingTimeSpan string `json:"MaximumBatchingTimeSpan"`
-		MaximumNumberOfItems    int    `json:"MaximumNumberOfItems"`
-		MaximumRawDataSizeMB    int    `json:"MaximumRawDataSizeMB"`
-	}
-
-	p := &ingestionPolicy{
-		MaximumBatchingTimeSpan: "00:00:30",
-		MaximumNumberOfItems:    500,
-		MaximumRawDataSizeMB:    1000,
-	}
-
-	// Optimize logs for throughput instead of latency
-	if s.st == OTLPLogs {
-		p = &ingestionPolicy{
-			MaximumBatchingTimeSpan: "00:05:00",
-			MaximumNumberOfItems:    500,
-			MaximumRawDataSizeMB:    4096,
-		}
-	}
-
-	b, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-
-	logger.Infof("Creating ingestion batching policy: Database=%s MaximumBatchingTimeSpan=%s, MaximumNumberOfItems=%d, MaximumRawDataSizeMB=%d",
-		s.database, p.MaximumBatchingTimeSpan, p.MaximumNumberOfItems, p.MaximumRawDataSizeMB)
-
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-		fmt.Sprintf(".alter-merge database %s policy ingestionbatching\n```%s\n```", s.database, string(b)))
-	_, err = s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
