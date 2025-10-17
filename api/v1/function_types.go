@@ -215,7 +215,7 @@ func (f *Function) SetCriteriaMatchCondition(matched bool, expression string, er
 	if len(clusterLabels) > 0 && clusterLabels[0] != nil {
 		labels = clusterLabels[0]
 	}
-	labelSummary := formatClusterLabels(labels)
+	labelSummary := FormatClusterLabels(labels)
 	reason := ReasonCriteriaMatched
 	status := metav1.ConditionTrue
 	message := fmt.Sprintf("Criteria expression %q matched cluster labels: %s", expression, labelSummary)
@@ -243,7 +243,9 @@ func (f *Function) SetCriteriaMatchCondition(matched bool, expression string, er
 	meta.SetStatusCondition(&f.Status.Conditions, condition)
 }
 
-func formatClusterLabels(labels map[string]string) string {
+// FormatClusterLabels returns a stable, human-readable summary of cluster labels for status messages.
+// Keys are sorted to make comparisons deterministic.
+func FormatClusterLabels(labels map[string]string) string {
 	if len(labels) == 0 {
 		return "(none)"
 	}

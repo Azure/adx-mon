@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -169,7 +168,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			}
 			if !ok {
 				function.SetCriteriaMatchCondition(false, expr, nil, t.ClusterLabels)
-				message := fmt.Sprintf("Function skipped because criteria expression evaluated to false for cluster labels: %s", formatClusterLabelsForMessage(t.ClusterLabels))
+				message := fmt.Sprintf("Function skipped because criteria expression evaluated to false for cluster labels: %s", v1.FormatClusterLabels(t.ClusterLabels))
 				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaNotMatched", message)
 				function.Status.Status = v1.Failed
 				function.Status.Error = ""
@@ -369,22 +368,6 @@ const (
 func IsKustoAsyncOperationStateCompleted(state string) bool {
 	return state == string(KustoAsyncOperationStateCompleted) ||
 		state == string(KustoAsyncOperationStateFailed)
-}
-
-func formatClusterLabelsForMessage(labels map[string]string) string {
-	if len(labels) == 0 {
-		return "(none)"
-	}
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, labels[k]))
-	}
-	return strings.Join(parts, ", ")
 }
 
 // matchesCriteria checks if the given criteria matches any of the cluster labels.
