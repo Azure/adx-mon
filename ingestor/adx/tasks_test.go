@@ -340,6 +340,11 @@ func (t *TestFunctionStore) UpdateStatus(ctx context.Context, fn *v1.Function) e
 	return nil
 }
 
+func (t *TestFunctionStore) UpdateCondition(ctx context.Context, fn *v1.Function, condition metav1.Condition) error {
+	apimeta.SetStatusCondition(&fn.Status.Conditions, condition)
+	return t.UpdateStatus(ctx, fn)
+}
+
 func TestUpdateKQLFunctionStatus(t *testing.T) {
 	t.Run("update status without error", func(t *testing.T) {
 		fn := &v1.Function{
@@ -415,14 +420,142 @@ func TestUpdateKQLFunctionStatus(t *testing.T) {
 	})
 }
 
-func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
+func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("skips when expression evaluates to false", func(t *testing.T) {
+	t.Run("case-insensitive match reconciles function", func(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"},
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database: "Prod",
+						Body:     ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "prod", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.NotEmpty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		dbCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
+		require.NotNil(t, dbCond)
+		require.Equal(t, metav1.ConditionTrue, dbCond.Status)
+		require.Equal(t, "DatabaseMatched", dbCond.Reason)
+
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionTrue, recCond.Status)
+		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
+		require.Contains(t, recCond.Message, exec.Endpoint())
+		require.Equal(t, v1.Success, fn.Status.Status)
+	})
+
+	t.Run("database mismatch surfaces condition", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database: "Metrics",
+						Body:     ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "Logs"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		dbCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
+		require.NotNil(t, dbCond)
+		require.Equal(t, metav1.ConditionFalse, dbCond.Status)
+		require.Equal(t, "DatabaseMismatch", dbCond.Reason)
+		require.Contains(t, dbCond.Message, "Metrics")
+
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "DatabaseMismatchSkipped", recCond.Reason)
+		require.Contains(t, recCond.Message, "Metrics")
+		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Empty(t, fn.Status.Error)
+	})
+
+	t.Run("wildcard database matches", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database: v1.AllDatabases,
+						Body:     ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "prod", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.NotEmpty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		dbCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
+		require.NotNil(t, dbCond)
+		require.Equal(t, metav1.ConditionTrue, dbCond.Status)
+		require.Equal(t, "DatabaseWildcard", dbCond.Reason)
+
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionTrue, recCond.Status)
+		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
+	})
+}
+
+func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("matches when expression evaluates true", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database:           "db",
+						Body:               ".create-or-alter function fn() { print 1 }",
+						CriteriaExpression: "region == 'eastus'",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
+		task := NewSyncFunctionsTask(store, exec, map[string]string{"region": "eastus"})
+		require.NoError(t, task.Run(ctx))
+		require.NotEmpty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		critCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionCriteriaMatch)
+		require.NotNil(t, critCond)
+		require.Equal(t, metav1.ConditionTrue, critCond.Status)
+		require.Equal(t, v1.ReasonCriteriaMatched, critCond.Reason)
+		require.Contains(t, critCond.Message, "region == 'eastus'")
+
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionTrue, recCond.Status)
+		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
+	})
+
+	t.Run("skips when expression evaluates false", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
 					Spec: v1.FunctionSpec{
 						Database:           "db",
 						Body:               ".create-or-alter function fn() { print 1 }",
@@ -434,19 +567,32 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		exec := &TestStatementExecutor{database: "db"}
 		task := NewSyncFunctionsTask(store, exec, map[string]string{"region": "westus"})
 		require.NoError(t, task.Run(ctx))
-		require.Empty(t, exec.stmts, "function should not execute when criteriaExpression is false")
-		require.Empty(t, store.statusUpdates, "status should not be updated when skipping")
+		require.Empty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		critCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionCriteriaMatch)
+		require.NotNil(t, critCond)
+		require.Equal(t, metav1.ConditionFalse, critCond.Status)
+		require.Equal(t, v1.ReasonCriteriaNotMatched, critCond.Reason)
+		require.Contains(t, critCond.Message, "region=westus")
+
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "CriteriaNotMatched", recCond.Reason)
+		require.Contains(t, recCond.Message, "evaluated to false")
+		require.Equal(t, v1.Failed, fn.Status.Status)
 	})
 
-	t.Run("records failure when expression evaluation errors", func(t *testing.T) {
+	t.Run("records failures when expression evaluation errors", func(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"},
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
 					Spec: v1.FunctionSpec{
 						Database:           "db",
 						Body:               ".create-or-alter function fn() { print 1 }",
-						CriteriaExpression: "region == 'eastus'",
+						CriteriaExpression: "region ==",
 					},
 				},
 			},
@@ -454,11 +600,147 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		exec := &TestStatementExecutor{database: "db"}
 		task := NewSyncFunctionsTask(store, exec, nil)
 		require.NoError(t, task.Run(ctx))
-		require.Empty(t, exec.stmts, "function should not execute when criteriaExpression errors")
-		require.Len(t, store.statusUpdates, 1)
-		require.Equal(t, v1.Failed, store.statusUpdates[0].Status.Status)
-		require.Contains(t, store.statusUpdates[0].Status.Error, "criteriaExpression evaluation failed")
+		require.Empty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		critCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionCriteriaMatch)
+		require.NotNil(t, critCond)
+		require.Equal(t, metav1.ConditionFalse, critCond.Status)
+		require.Equal(t, v1.ReasonCriteriaExpressionError, critCond.Reason)
+		require.Contains(t, critCond.Message, "failed")
+
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "CriteriaEvaluationFailed", recCond.Reason)
+		require.Contains(t, recCond.Message, "evaluation failed")
+		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Contains(t, fn.Status.Error, "criteriaExpression evaluation failed")
 	})
+
+	t.Run("empty expression defaults to match", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database: "db",
+						Body:     ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.NotEmpty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		critCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionCriteriaMatch)
+		require.NotNil(t, critCond)
+		require.Equal(t, metav1.ConditionTrue, critCond.Status)
+		require.Contains(t, critCond.Message, "defaulting to match")
+	})
+}
+
+func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
+	ctx := context.Background()
+
+	newFunction := func() *v1.Function {
+		return &v1.Function{
+			ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+			Spec: v1.FunctionSpec{
+				Database: "db",
+				Body:     ".create-or-alter function fn() { print 1 }",
+			},
+		}
+	}
+
+	t.Run("success updates conditions", func(t *testing.T) {
+		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
+		exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.NotEmpty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionTrue, recCond.Status)
+		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
+		require.Contains(t, recCond.Message, exec.Endpoint())
+		require.Equal(t, v1.Success, fn.Status.Status)
+	})
+
+	t.Run("permanent failure flags condition", func(t *testing.T) {
+		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
+		exec := &TestStatementExecutor{database: "db"}
+		exec.nextMgmtErr = kustoerrors.ES(kustoerrors.OpMgmt, kustoerrors.KClientArgs, "permanent failure").SetNoRetry()
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+
+		fn := store.funcs[0]
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "KustoExecutionFailed", recCond.Reason)
+		require.Contains(t, recCond.Message, "permanent failure")
+		require.Equal(t, v1.PermanentFailure, fn.Status.Status)
+		require.Contains(t, fn.Status.Error, "permanent failure")
+	})
+
+	t.Run("transient failure retries later", func(t *testing.T) {
+		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
+		exec := &TestStatementExecutor{database: "db"}
+		exec.nextMgmtErr = kustoerrors.ES(kustoerrors.OpMgmt, kustoerrors.KTimeout, "temporary failure")
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+
+		fn := store.funcs[0]
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "KustoExecutionRetrying", recCond.Reason)
+		require.Contains(t, recCond.Message, "temporary failure")
+		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Contains(t, fn.Status.Error, "temporary failure")
+	})
+}
+
+func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
+	ctx := context.Background()
+
+	store := &TestFunctionStore{
+		funcs: []*v1.Function{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "fn",
+					Namespace:         "default",
+					Generation:        1,
+					DeletionTimestamp: &metav1.Time{Time: time.Now()},
+				},
+				Spec: v1.FunctionSpec{
+					Database: "db",
+					Body:     ".create-or-alter function fn() { print 1 }",
+				},
+			},
+		},
+	}
+	exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
+	task := NewSyncFunctionsTask(store, exec, nil)
+	require.NoError(t, task.Run(ctx))
+	require.Len(t, exec.stmts, 1)
+	require.Contains(t, exec.stmts[0], ".drop function")
+
+	fn := store.funcs[0]
+	recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+	require.NotNil(t, recCond)
+	require.Equal(t, metav1.ConditionTrue, recCond.Status)
+	require.Equal(t, "FunctionDeleted", recCond.Reason)
+	require.Contains(t, recCond.Message, "deleted")
+	require.Equal(t, v1.Success, fn.Status.Status)
 }
 
 func TestFunctions(t *testing.T) {

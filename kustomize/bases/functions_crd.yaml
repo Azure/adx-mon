@@ -79,8 +79,23 @@ spec:
             description: FunctionStatus defines the observed state of Function
             properties:
               conditions:
-                description: Conditions is a list of conditions that apply to the
-                  Function
+                description: |-
+                  Conditions conveys detailed reconciliation state in a Kubernetes-native format.
+                  Controllers set FunctionDatabaseMatch and FunctionCriteriaMatch to surface gating
+                  decisions (skipped due to database mismatch or criteria mismatch) and
+                  FunctionReconciled to report the outcome of the most recent reconciliation attempt.
+
+                  Example:
+                    status:
+                      conditions:
+                      - type: function.adx-mon.azure.com/DatabaseMatch
+                        status: "False"
+                        reason: DatabaseMismatch
+                        message: "Function database 'AKSProd' does not match available databases: aksprod, aksinfra"
+                      - type: function.adx-mon.azure.com/Reconciled
+                        status: "False"
+                        reason: DatabaseMismatchSkipped
+                        message: "Function skipped due to database mismatch"
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
