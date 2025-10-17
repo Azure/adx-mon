@@ -301,6 +301,37 @@ spec:
 
 **Intended Use:** Encapsulate reusable KQL logic or present custom schemas for easier querying.
 
+### Status Conditions
+
+`Function` resources surface detailed reconciliation state via Kubernetes conditions. These appear in `kubectl describe function <name>` and provide actionable diagnostics without digging into ingestor logs.
+
+| Condition Type | Meaning | Typical Status / Reasons |
+|----------------|---------|---------------------------|
+| `function.adx-mon.azure.com/DatabaseMatch` | Whether the spec `database` matches an ingestor endpoint (case-insensitive). | `True` with reason `DatabaseMatched` or `DatabaseWildcard`; `False` with reason `DatabaseMismatch` including available databases in the message. |
+| `function.adx-mon.azure.com/CriteriaMatch` | Result of evaluating `spec.criteriaExpression` against cluster labels. | `True` with reason `CriteriaMatched`; `False` with reason `CriteriaNotMatched` (expression evaluated to false) or `CriteriaExpressionError` (parse/evaluation failure). |
+| `function.adx-mon.azure.com/Reconciled` | Outcome of the most recent reconciliation attempt. | `True` with reason `KustoExecutionSucceeded` or `FunctionDeleted`; `False` for intermediate states such as `DatabaseMismatchSkipped`, `CriteriaNotMatched`, `CriteriaEvaluationFailed`, `KustoExecutionRetrying`, or `KustoExecutionFailed`. |
+
+Example describe output when a database mismatch occurs:
+
+```yaml
+Status:
+  Conditions:
+  - lastTransitionTime: "2025-10-16T20:05:00Z"
+    message: Function database 'ContosoProd' does not match available ingestor databases: contosoprod, contosoinfra
+    observedGeneration: 2
+    reason: DatabaseMismatch
+    status: "False"
+    type: function.adx-mon.azure.com/DatabaseMatch
+  - lastTransitionTime: "2025-10-16T20:05:00Z"
+    message: Function skipped due to database mismatch (configured "ContosoProd", available "contosoinfra")
+    observedGeneration: 2
+    reason: DatabaseMismatchSkipped
+    status: "False"
+    type: function.adx-mon.azure.com/Reconciled
+```
+
+Controllers always set `observedGeneration` to the processed spec generation, making it easy to confirm whether the latest edit has been reconciled. Messages are capped at 256 characters (consistent with other CRDs) to avoid log spam while remaining human-readable.
+
 ---
 
 ## ManagementCommand

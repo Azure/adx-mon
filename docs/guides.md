@@ -96,3 +96,22 @@ as `stop`, `cleanup`, and log streaming.
 	targeting the same database name you provided to the ClickHouse uploader.
 - Use `./tools/clickhouse/dev_stack.sh logs ingestor` to watch the pipeline in real time during local
 	experiments.
+
+## Troubleshooting Function Reconciliation
+
+Use the new Function status conditions to diagnose reconciliation failures in seconds:
+
+1. Run `kubectl describe function <name>`.
+2. Inspect the `Conditions` block; each entry corresponds to a reconciliation gate.
+3. Work through the table below to decide the next action.
+
+| Condition | Status | What it Means | Next Steps |
+|-----------|--------|---------------|------------|
+| `DatabaseMatch` | `False` (reason `DatabaseMismatch`) | The Function database does not match the current ingestor endpoint (comparison is case-insensitive). | Update `spec.database` to match the ingestor's ADX database or redeploy the Function to a cluster targeting the desired database. |
+| `CriteriaMatch` | `False` (reason `CriteriaNotMatched`) | `spec.criteriaExpression` evaluated to false for this ingestor's cluster labels. | Confirm the cluster labels (shown in the condition message) and adjust the expression if the Function should run on this cluster. |
+| `CriteriaMatch` | `False` (reason `CriteriaExpressionError`) | The CEL expression failed to parse or evaluate. Message includes the parse error for quick fixes. | Correct the expression syntax; reconciliation resumes automatically once the Function spec is updated. |
+| `Reconciled` | `False` with reason `KustoExecutionRetrying` | ADX returned a transient error (e.g., timeout or throttling). | No action needed; the ingestor will retry. If the error persists, inspect the ingestor logs for more context. |
+| `Reconciled` | `False` with reason `KustoExecutionFailed` | ADX reported a permanent failure (often due to invalid KQL). | Review the error message (also stored in `status.error`) and fix the Function body. |
+| `Reconciled` | `False` with reason `DatabaseMismatchSkipped` or `CriteriaNotMatched` | The Function was intentionally skipped due to mismatch gating. | Update the spec or deploy to a matching cluster if the Function should execute here. |
+
+Condition messages are capped at 256 characters and include the ingestor's cluster labels (for criteria checks) and ADX endpoint details (for execution results). Clearing the underlying issue and updating the Function spec will trigger a fresh reconciliation cycle—no manual restarts required.
