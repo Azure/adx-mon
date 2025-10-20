@@ -281,16 +281,15 @@ kind: Function
 metadata:
   name: custom-log-view
 spec:
-  name: CustomLogView
   body: |
-    Logs
-    | extend Level = tostring(Body.lvl), Message = tostring(Body.msg)
-    | project Timestamp, Level, Message, Pod = Resource.pod
+    .create-or-alter function with (view=true, folder='views') CustomLogView () {
+      Logs
+      | extend Level = tostring(Body.lvl), Message = tostring(Body.msg)
+      | project Timestamp, Level, Message, Pod = Resource.pod
+    }
   database: Logs
-  table: CustomLogView
-  isView: true
-  parameters: []
 ```
+
 **Key Fields:**
 - `name`: Name of the function/view in ADX.
 - `body`: KQL body of the function.
