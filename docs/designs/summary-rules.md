@@ -78,7 +78,7 @@ spec:
   body: |
     SomeMetric
     | where Timestamp between (_startTime .. _endTime)
-    | summarize avg(Value) by bin(Timestamp, 1h)
+    | summarize avg(Value)
   table: SomeMetricHourlyAvg
   interval: 1h
   criteria:
@@ -104,16 +104,16 @@ kind: Function
 metadata:
   name: samplefn
 spec:
-  name: SomeMetricHourlyAvg
   body: |
-    let _startTime = table('SomeMetricHourlyAvg') | summarize max(Timestamp); 
-    SomeMetric
-    | where Timestamp >= _startTime
-    | summarize avg(Value) by bin(Timestamp, 1h)
-    | union table('SomeMetricHourlyAvg')
+    .create-or-alter function with (view=true, folder='views') SomeMetricHourlyAvg () {
+      let _interval = 1h;
+      let _startTime = toscalar(table('SomeMetricHourlyAvg') | summarize max(Timestamp)); 
+      SomeMetric
+      | where Timestamp >= _startTime
+      | summarize avg(Value) by bin(Timestamp, _interval)
+      | union table('SomeMetricHourlyAvg')
+    }
   database: SomeDatabase
-  table: SomeMetricHourlyAvg
-  isView: true
 ```
 
 Variations of this view pattern can always return the most recent hour of raw data and summarized data thereafter.  The
