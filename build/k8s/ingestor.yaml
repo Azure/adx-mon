@@ -41,6 +41,8 @@ rules:
       - adx-mon.azure.com
     resources:
       - functions/status
+      - managementcommands/status
+      - summaryrules/status
     verbs:
       - update
       - patch
