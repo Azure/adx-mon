@@ -26,7 +26,7 @@ require (
 	github.com/golang/snappy v1.0.0
 	github.com/google/cel-go v0.26.1
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.0
+	github.com/klauspost/compress v1.18.1
 	github.com/klauspost/pgzip v1.2.6
 	github.com/libp2p/go-buffer-pool v0.1.0
 	github.com/lmittmann/tint v1.1.2
