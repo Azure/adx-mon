@@ -142,6 +142,13 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 			})
 
 			require.NoError(t, s.Open(context.Background()))
+			t.Cleanup(func() {
+				if s != nil {
+					if err := s.Close(); err != nil {
+						t.Errorf("failed to close store: %v", err)
+					}
+				}
+			})
 			require.Equal(t, 0, s.WALCount())
 
 			ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
@@ -159,6 +166,7 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 
 			require.Equal(t, 1, s.WALCount())
 			require.NoError(t, s.Close())
+			s = nil
 
 			r, err := wal.NewSegmentReader(path)
 			require.NoError(t, err)
