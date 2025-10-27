@@ -485,6 +485,15 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		require.Contains(t, recCond.Message, "Metrics")
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Empty(t, fn.Status.Error)
+
+		require.Len(t, store.statusUpdates, 1)
+
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, store.statusUpdates, 1)
+
+		store.funcs[0].Generation = 2
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, store.statusUpdates, 2)
 	})
 
 	t.Run("wildcard database matches", func(t *testing.T) {
@@ -2669,4 +2678,45 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 			"Expected: %s, Got: %s",
 		currentTimestamp.Format(time.RFC3339),
 		finalTimestamp.Format(time.RFC3339))
+}
+
+func TestShouldSkipDatabaseMismatchUpdate(t *testing.T) {
+	task := &SyncFunctionsTask{}
+	configured := "db-a"
+	recordedAvailable := "db-b"
+
+	newMismatchFunction := func(recorded string) *v1.Function {
+		fn := &v1.Function{
+			ObjectMeta: metav1.ObjectMeta{
+				Generation: 1,
+			},
+			Spec: v1.FunctionSpec{
+				Database: configured,
+			},
+		}
+		fn.SetDatabaseMatchCondition(false, configured, recorded)
+		message := fmt.Sprintf("Function skipped due to database mismatch (configured %q, available %q)", configured, recorded)
+		fn.SetReconcileCondition(metav1.ConditionFalse, "DatabaseMismatchSkipped", message)
+		fn.Status.Status = v1.Failed
+		fn.Status.Reason = "DatabaseMismatch"
+		fn.Status.Error = ""
+		fn.Status.Message = message
+		return fn
+	}
+
+	t.Run("skip when details unchanged", func(t *testing.T) {
+		fn := newMismatchFunction(recordedAvailable)
+		require.True(t, task.shouldSkipDatabaseMismatchUpdate(fn, recordedAvailable))
+	})
+
+	t.Run("do not skip when available database changes", func(t *testing.T) {
+		fn := newMismatchFunction(recordedAvailable)
+		require.False(t, task.shouldSkipDatabaseMismatchUpdate(fn, "db-c"))
+	})
+
+	t.Run("do not skip when status message differs", func(t *testing.T) {
+		fn := newMismatchFunction(recordedAvailable)
+		fn.Status.Message = "out of date"
+		require.False(t, task.shouldSkipDatabaseMismatchUpdate(fn, recordedAvailable))
+	})
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 )
@@ -137,6 +138,9 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		availableDB := t.kustoCli.Database()
 		configuredDB := function.Spec.Database
 		if configuredDB != v1.AllDatabases && !strings.EqualFold(configuredDB, availableDB) {
+			if t.shouldSkipDatabaseMismatchUpdate(function, availableDB) {
+				continue
+			}
 			function.SetDatabaseMatchCondition(false, configuredDB, availableDB)
 			message := fmt.Sprintf("Function skipped due to database mismatch (configured %q, available %q)", configuredDB, availableDB)
 			function.SetReconcileCondition(metav1.ConditionFalse, "DatabaseMismatchSkipped", message)
@@ -246,6 +250,46 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (t *SyncFunctionsTask) shouldSkipDatabaseMismatchUpdate(fn *v1.Function, availableDB string) bool {
+	if fn == nil {
+		return false
+	}
+	if fn.Status.ObservedGeneration != fn.GetGeneration() {
+		return false
+	}
+	if fn.Status.Status != v1.Failed || fn.Status.Reason != "DatabaseMismatch" || fn.Status.Error != "" {
+		return false
+	}
+	dbCond := meta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
+	if dbCond == nil || dbCond.Status != metav1.ConditionFalse || dbCond.Reason != "DatabaseMismatch" || dbCond.ObservedGeneration != fn.GetGeneration() {
+		return false
+	}
+	configuredDB := fn.Spec.Database
+	expectedDBCondMessage := expectedDatabaseMismatchConditionMessage(configuredDB, availableDB)
+	if dbCond.Message != expectedDBCondMessage {
+		return false
+	}
+	recCond := fn.GetCondition()
+	if recCond == nil || recCond.Status != metav1.ConditionFalse || recCond.Reason != "DatabaseMismatchSkipped" || recCond.ObservedGeneration != fn.GetGeneration() {
+		return false
+	}
+	expectedStatusMessage := fmt.Sprintf("Function skipped due to database mismatch (configured %q, available %q)", configuredDB, availableDB)
+	if recCond.Message != expectedStatusMessage {
+		return false
+	}
+	if fn.Status.Message != expectedStatusMessage {
+		return false
+	}
+	return true
+}
+
+func expectedDatabaseMismatchConditionMessage(configuredDB, availableDB string) string {
+	if strings.TrimSpace(availableDB) == "" {
+		return fmt.Sprintf("Function database %q does not match any configured ingestor endpoints", configuredDB)
+	}
+	return fmt.Sprintf("Function database %q does not match available ingestor databases: %s", configuredDB, availableDB)
 }
 
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {

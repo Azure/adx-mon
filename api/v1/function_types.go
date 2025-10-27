@@ -208,14 +208,10 @@ func (f *Function) SetDatabaseMatchCondition(matched bool, configuredDB, availab
 	meta.SetStatusCondition(&f.Status.Conditions, condition)
 }
 
-// SetCriteriaMatchCondition records the outcome of CriteriaExpression evaluation. Optional clusterLabels may be provided
-// as the final variadic parameter to enrich messages for debugging.
-func (f *Function) SetCriteriaMatchCondition(matched bool, expression string, err error, clusterLabels ...map[string]string) {
-	labels := map[string]string{}
-	if len(clusterLabels) > 0 && clusterLabels[0] != nil {
-		labels = clusterLabels[0]
-	}
-	labelSummary := FormatClusterLabels(labels)
+// SetCriteriaMatchCondition records the outcome of CriteriaExpression evaluation. An optional clusterLabels map may be
+// provided to enrich messages for debugging. Passing nil is permitted and treated as "no labels".
+func (f *Function) SetCriteriaMatchCondition(matched bool, expression string, err error, clusterLabels map[string]string) {
+	labelSummary := FormatClusterLabels(clusterLabels)
 	reason := ReasonCriteriaMatched
 	status := metav1.ConditionTrue
 	message := fmt.Sprintf("Criteria expression %q matched cluster labels: %s", expression, labelSummary)
