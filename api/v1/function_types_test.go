@@ -63,7 +63,7 @@ func TestFunctionSetReconcileCondition(t *testing.T) {
 	require.Equal(t, metav1.ConditionFalse, cond.Status)
 	require.Equal(t, "DatabaseMismatch", cond.Reason)
 	require.Equal(t, "Function skipped", cond.Message)
-	require.Equal(t, int64(5), fn.Status.ObservedGeneration)
+	require.Zero(t, fn.Status.ObservedGeneration)
 	require.False(t, cond.LastTransitionTime.IsZero())
 
 	previousTransition := cond.LastTransitionTime

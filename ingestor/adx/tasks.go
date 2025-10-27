@@ -256,9 +256,6 @@ func (t *SyncFunctionsTask) shouldSkipDatabaseMismatchUpdate(fn *v1.Function, av
 	if fn == nil {
 		return false
 	}
-	if fn.Status.ObservedGeneration != fn.GetGeneration() {
-		return false
-	}
 	if fn.Status.Status != v1.Failed || fn.Status.Reason != "DatabaseMismatch" || fn.Status.Error != "" {
 		return false
 	}

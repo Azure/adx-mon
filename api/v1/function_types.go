@@ -164,7 +164,6 @@ func (f *Function) SetCondition(condition metav1.Condition) {
 }
 
 // SetReconcileCondition updates the FunctionReconciled condition with status, reason, and message.
-// ObservedGeneration is synchronised with the Function's current generation to signal which spec was processed.
 func (f *Function) SetReconcileCondition(status metav1.ConditionStatus, reason, message string) {
 	condition := metav1.Condition{
 		Type:               FunctionReconciled,
@@ -175,7 +174,6 @@ func (f *Function) SetReconcileCondition(status metav1.ConditionStatus, reason, 
 		LastTransitionTime: metav1.Now(),
 	}
 	meta.SetStatusCondition(&f.Status.Conditions, condition)
-	f.Status.ObservedGeneration = f.GetGeneration()
 }
 
 // SetDatabaseMatchCondition captures whether the Function's configured database matches the ingestor's database.
