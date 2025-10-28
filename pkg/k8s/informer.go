@@ -37,8 +37,10 @@ func (p *PodInformer) Add(ctx context.Context, handler cache.ResourceEventHandle
 	defer p.mu.Unlock()
 
 	if p.informerFactory == nil {
+		requestTimeoutSeconds := int64(300) // 5m max length for list and watches to prevent stale watches
 		tweakOptions := informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
 			lo.FieldSelector = "spec.nodeName=" + p.NodeName
+			lo.TimeoutSeconds = &requestTimeoutSeconds
 		})
 
 		p.informerFactory = informers.NewSharedInformerFactoryWithOptions(p.K8sClient, time.Minute, tweakOptions)
