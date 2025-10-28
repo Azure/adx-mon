@@ -24,6 +24,7 @@ type Functions interface {
 	UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error
 	Update(ctx context.Context, fn *adxmonv1.Function) error
 	List(ctx context.Context) ([]*adxmonv1.Function, error)
+	UpdateCondition(ctx context.Context, fn *adxmonv1.Function, condition metav1.Condition) error
 }
 
 type functions struct {
@@ -73,7 +74,31 @@ func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) err
 	}
 
 	fn.Status.LastTimeReconciled = metav1.Now()
+	if logger.IsDebug() {
+		for _, condition := range fn.Status.Conditions {
+			logger.Debugf("Function %s/%s condition %s status=%s reason=%s message=%s", fn.Namespace, fn.Name, condition.Type, condition.Status, condition.Reason, condition.Message)
+		}
+	}
 	return f.Client.Status().Update(ctx, fn)
+}
+
+func (f *functions) UpdateCondition(ctx context.Context, fn *adxmonv1.Function, condition metav1.Condition) error {
+	if f.Client == nil {
+		return errors.New("no client provided")
+	}
+	if fn == nil {
+		return errors.New("function cannot be nil")
+	}
+	existing := meta.FindStatusCondition(fn.Status.Conditions, condition.Type)
+	if condition.ObservedGeneration == 0 {
+		condition.ObservedGeneration = fn.GetGeneration()
+	}
+	if condition.LastTransitionTime.IsZero() {
+		condition.LastTransitionTime = metav1.Now()
+	}
+	meta.SetStatusCondition(&fn.Status.Conditions, condition)
+	logConditionStatusUpdate(fn, existing, condition)
+	return f.UpdateStatus(ctx, fn)
 }
 
 func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
@@ -145,4 +170,25 @@ func (f *functions) ensureFinalizer(ctx context.Context, fn *adxmonv1.Function) 
 	}
 
 	return nil
+}
+
+// logConditionStatusUpdate emits a log entry when a status condition transitions in a meaningful way.
+// It keeps the UpdateCondition flow readable and avoids duplicating the change-detection logic elsewhere.
+func logConditionStatusUpdate(fn *adxmonv1.Function, previous *metav1.Condition, updated metav1.Condition) {
+	if previous != nil &&
+		previous.Status == updated.Status &&
+		previous.Reason == updated.Reason &&
+		previous.Message == updated.Message {
+		return
+	}
+
+	logger.Infof(
+		"Function %s/%s condition %s updated status=%s reason=%s message=%s",
+		fn.Namespace,
+		fn.Name,
+		updated.Type,
+		updated.Status,
+		updated.Reason,
+		updated.Message,
+	)
 }

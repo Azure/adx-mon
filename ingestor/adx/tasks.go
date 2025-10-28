@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 )
@@ -134,58 +135,103 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to list functions: %w", err)
 	}
 	for _, function := range functions {
-
-		if function.Spec.Database != v1.AllDatabases && function.Spec.Database != t.kustoCli.Database() {
+		availableDB := t.kustoCli.Database()
+		configuredDB := function.Spec.Database
+		if configuredDB != v1.AllDatabases && !strings.EqualFold(configuredDB, availableDB) {
+			if t.shouldSkipDatabaseMismatchUpdate(function, availableDB) {
+				continue
+			}
+			function.SetDatabaseMatchCondition(false, configuredDB, availableDB)
+			message := fmt.Sprintf("Function skipped due to database mismatch (configured %q, available %q)", configuredDB, availableDB)
+			function.SetReconcileCondition(metav1.ConditionFalse, "DatabaseMismatchSkipped", message)
+			function.Status.Status = v1.Failed
+			function.Status.Error = ""
+			function.Status.Reason = "DatabaseMismatch"
+			function.Status.Message = message
+			if err := t.store.UpdateStatus(ctx, function); err != nil {
+				logger.Errorf("Failed to update function status for %s.%s after database mismatch: %v", configuredDB, function.Name, err)
+			}
 			continue
 		}
+		function.SetDatabaseMatchCondition(true, configuredDB, availableDB)
 
-		if expr := function.Spec.CriteriaExpression; expr != "" {
+		expr := strings.TrimSpace(function.Spec.CriteriaExpression)
+		if expr == "" {
+			function.SetCriteriaMatchCondition(true, expr, nil, t.ClusterLabels)
+		} else {
 			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
 			if err != nil {
 				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
 				logger.Errorf("Function %s/%s criteriaExpression error: %v", function.Namespace, function.Name, err)
+				function.SetCriteriaMatchCondition(false, expr, err, t.ClusterLabels)
+				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaEvaluationFailed", err.Error())
 				if updErr := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); updErr != nil {
 					logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 				}
 				continue
 			}
 			if !ok {
-				if logger.IsDebug() {
-					logger.Debugf("Skipping function %s/%s due to criteriaExpression evaluating to false", function.Namespace, function.Name)
+				function.SetCriteriaMatchCondition(false, expr, nil, t.ClusterLabels)
+				message := fmt.Sprintf("Function skipped because criteria expression evaluated to false for cluster labels: %s", v1.FormatClusterLabels(t.ClusterLabels))
+				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaNotMatched", message)
+				function.Status.Status = v1.Failed
+				function.Status.Error = ""
+				function.Status.Reason = "CriteriaNotMatched"
+				function.Status.Message = message
+				if err := t.store.UpdateStatus(ctx, function); err != nil {
+					logger.Errorf("Failed to update function status for %s.%s after criteria mismatch: %v", function.Spec.Database, function.Name, err)
 				}
 				continue
 			}
+			function.SetCriteriaMatchCondition(true, expr, nil, t.ClusterLabels)
 		}
 
 		if !function.DeletionTimestamp.IsZero() {
-			// Until we can parse KQL we don't actually know the function's
-			// name as described in this CRD; however, we'll make the assumption
-			// that the CRD name is the same as the function name in Kusto and
-			// attempt a delete.
+			function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeleting", "Function deletion in progress")
+			function.Status.Status = v1.Failed
+			function.Status.Error = ""
+			if err := t.store.UpdateStatus(ctx, function); err != nil {
+				logger.Errorf("Failed to update function status for %s.%s prior to deletion: %v", function.Spec.Database, function.Name, err)
+			}
+
 			stmt := kql.New(".drop function ").AddUnsafe(function.Name).AddLiteral(" ifexists")
 			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				parsed := kustoutil.ParseError(err)
 				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
-				// Deletion is best-effort, especially while we still can't parse KQL
+				function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeletionFailed", parsed)
+				function.Status.Status = v1.Failed
+				function.Status.Error = parsed
+				if err := t.store.UpdateStatus(ctx, function); err != nil {
+					logger.Errorf("Failed to persist deletion failure for %s.%s: %v", function.Spec.Database, function.Name, err)
+				}
+				continue
 			}
-			t.updateKQLFunctionStatus(ctx, function, v1.Success, nil)
-			return nil
+
+			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", fmt.Sprintf("Function successfully deleted from %s", availableDB))
+			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
+				logger.Errorf("Failed to update success status following deletion for %s.%s: %v", function.Spec.Database, function.Name, err)
+			}
+			continue
 		}
 
-		// If endpoints have changed, or function is not in Success, re-apply
 		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
 			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+				parsed := kustoutil.ParseError(err)
 				if !errors.Retry(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
+					function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", parsed)
 					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
 						logger.Errorf("Failed to update permanent failure status: %v", err)
 					}
 					continue
-				} else {
-					t.updateKQLFunctionStatus(ctx, function, v1.Failed, err)
-					logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-					continue
 				}
+				function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionRetrying", parsed)
+				if err := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); err != nil {
+					logger.Errorf("Failed to persist transient failure for %s.%s: %v", function.Spec.Database, function.Name, err)
+				}
+				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
+				continue
 			}
 
 			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
@@ -196,6 +242,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				}
 			}
 
+			function.SetReconcileCondition(metav1.ConditionTrue, "KustoExecutionSucceeded", fmt.Sprintf("Function created at %s", t.kustoCli.Endpoint()))
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
 				logger.Errorf("Failed to update success status: %v", err)
 			}
@@ -205,10 +252,49 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	return nil
 }
 
+func (t *SyncFunctionsTask) shouldSkipDatabaseMismatchUpdate(fn *v1.Function, availableDB string) bool {
+	if fn == nil {
+		return false
+	}
+	if fn.Status.Status != v1.Failed || fn.Status.Reason != "DatabaseMismatch" || fn.Status.Error != "" {
+		return false
+	}
+	dbCond := meta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
+	if dbCond == nil || dbCond.Status != metav1.ConditionFalse || dbCond.Reason != "DatabaseMismatch" || dbCond.ObservedGeneration != fn.GetGeneration() {
+		return false
+	}
+	configuredDB := fn.Spec.Database
+	expectedDBCondMessage := expectedDatabaseMismatchConditionMessage(configuredDB, availableDB)
+	if dbCond.Message != expectedDBCondMessage {
+		return false
+	}
+	recCond := fn.GetCondition()
+	if recCond == nil || recCond.Status != metav1.ConditionFalse || recCond.Reason != "DatabaseMismatchSkipped" || recCond.ObservedGeneration != fn.GetGeneration() {
+		return false
+	}
+	expectedStatusMessage := fmt.Sprintf("Function skipped due to database mismatch (configured %q, available %q)", configuredDB, availableDB)
+	if recCond.Message != expectedStatusMessage {
+		return false
+	}
+	if fn.Status.Message != expectedStatusMessage {
+		return false
+	}
+	return true
+}
+
+func expectedDatabaseMismatchConditionMessage(configuredDB, availableDB string) string {
+	if strings.TrimSpace(availableDB) == "" {
+		return fmt.Sprintf("Function database %q does not match any configured ingestor endpoints", configuredDB)
+	}
+	return fmt.Sprintf("Function database %q does not match available ingestor databases: %s", configuredDB, availableDB)
+}
+
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
 	fn.Status.Status = status
 	if err != nil {
 		fn.Status.Error = kustoutil.ParseError(err)
+	} else if fn.Status.Error != "" {
+		fn.Status.Error = ""
 	}
 	if err := t.store.UpdateStatus(ctx, fn); err != nil {
 		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
