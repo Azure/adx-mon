@@ -962,6 +962,18 @@ func getKubeClient(kubeConfig string) (*kubernetes.Clientset, error) {
 		return nil, fmt.Errorf("unable to find kube config [%s]: %w", kubeConfig, err)
 	}
 
+	if config.UserAgent == "" {
+		config.UserAgent = fmt.Sprintf("adx-mon-collector/%s", version.String())
+	}
+
+	if config.QPS == 0 {
+		config.QPS = 25
+	}
+
+	if config.Burst == 0 {
+		config.Burst = 40
+	}
+
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to build kube config: %w", err)
