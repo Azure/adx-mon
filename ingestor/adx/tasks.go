@@ -19,7 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/errors"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -218,7 +218,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
 			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
 				parsed := kustoutil.ParseError(err)
-				if !errors.Retry(err) {
+				if !kustoerrors.Retry(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 					function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", parsed)
 					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
@@ -322,18 +322,24 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 	if err := t.store.List(ctx, managementCommands, storage.FilterCompleted); err != nil {
 		return fmt.Errorf("failed to list management commands: %w", err)
 	}
-	for _, command := range managementCommands.Items {
+	for i := range managementCommands.Items {
+		command := &managementCommands.Items[i]
 		// ManagementCommands database is optional as not all commands are scoped at the database level
 		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
 			continue
 		}
 
-		if expr := command.Spec.CriteriaExpression; expr != "" {
-			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
+		expression := strings.TrimSpace(command.Spec.CriteriaExpression)
+		if expression == "" {
+			command.SetCriteriaMatchCondition(true, expression, nil, t.ClusterLabels)
+		} else {
+			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expression)
 			if err != nil {
 				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
 				logger.Errorf("ManagementCommand %s/%s criteriaExpression error: %v", command.Namespace, command.Name, err)
-				if updErr := t.store.UpdateStatus(ctx, &command, err); updErr != nil {
+				command.SetCriteriaMatchCondition(false, expression, err, t.ClusterLabels)
+				command.SetExecutionCondition(metav1.ConditionFalse, v1.ReasonManagementCommandCriteriaError, err.Error())
+				if updErr := t.store.UpdateStatus(ctx, command, err); updErr != nil {
 					logger.Errorf("Failed to update management command status for %s/%s: %v", command.Namespace, command.Name, updErr)
 				}
 				continue
@@ -342,8 +348,15 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 				if logger.IsDebug() {
 					logger.Debugf("Skipping management command %s/%s due to criteriaExpression evaluating to false", command.Namespace, command.Name)
 				}
+				command.SetCriteriaMatchCondition(false, expression, nil, t.ClusterLabels)
+				message := fmt.Sprintf("Management command skipped because criteria expression evaluated to false for cluster labels: %s", v1.FormatClusterLabels(t.ClusterLabels))
+				command.SetExecutionCondition(metav1.ConditionFalse, v1.ReasonCriteriaNotMatched, message)
+				if updErr := t.store.UpdateStatus(ctx, command, fmt.Errorf("%s", message)); updErr != nil {
+					logger.Errorf("Failed to persist criteria mismatch for %s/%s: %v", command.Namespace, command.Name, updErr)
+				}
 				continue
 			}
+			command.SetCriteriaMatchCondition(true, expression, nil, t.ClusterLabels)
 		}
 
 		var stmt *kql.Builder
@@ -353,14 +366,24 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 			stmt = kql.New(".execute database script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
 		}
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
-			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
-				logger.Errorf("Failed to update management command status: %v", err)
+			parsed := kustoutil.ParseError(err)
+			logger.Errorf("Failed to execute management command %s/%s: %v", command.Namespace, command.Name, err)
+			command.SetExecutionCondition(metav1.ConditionFalse, v1.ReasonManagementCommandExecutionFailed, parsed)
+			if updErr := t.store.UpdateStatus(ctx, command, fmt.Errorf("%s", parsed)); updErr != nil {
+				logger.Errorf("Failed to update management command status: %v", updErr)
 			}
+			continue
 		}
 
 		logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
-		if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
+		message := "Management command executed successfully"
+		if endpoint := strings.TrimSpace(t.kustoCli.Endpoint()); endpoint != "" {
+			message = fmt.Sprintf("Management command executed against %s", endpoint)
+		} else if command.Spec.Database != "" {
+			message = fmt.Sprintf("Management command executed against database %s", command.Spec.Database)
+		}
+		command.SetExecutionCondition(metav1.ConditionTrue, v1.ReasonManagementCommandExecutionSucceeded, message)
+		if err := t.store.UpdateStatus(ctx, command, nil); err != nil {
 			logger.Errorf("Failed to update success status: %v", err)
 		}
 	}

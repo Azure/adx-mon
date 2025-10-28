@@ -24,6 +24,7 @@ const (
 	ReasonCriteriaNotMatched      = "CriteriaNotMatched"
 	ReasonCriteriaExpressionError = "CriteriaExpressionError"
 	ReasonCriteriaMatched         = "CriteriaMatched"
+	ReasonProgressing             = "InProgress"
 )
 
 // ConditionedObject defines interface for objects that can have conditions
