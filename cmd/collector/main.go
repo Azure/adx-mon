@@ -974,6 +974,12 @@ func getKubeClient(kubeConfig string) (*kubernetes.Clientset, error) {
 		config.Burst = 40
 	}
 
+	if config.WarningHandlerWithContext == nil {
+		handler := k8s.WarningLogger{}
+		config.WarningHandlerWithContext = handler
+		config.WarningHandler = handler
+	}
+
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to build kube config: %w", err)
