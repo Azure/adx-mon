@@ -357,11 +357,11 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
-		}
-
-		logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
-		if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
-			logger.Errorf("Failed to update success status: %v", err)
+		} else {
+			logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
+			if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
+				logger.Errorf("Failed to update success status: %v", err)
+			}
 		}
 	}
 
