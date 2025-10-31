@@ -78,29 +78,6 @@ func TestFunctionSetReconcileCondition(t *testing.T) {
 	require.True(t, !cond.LastTransitionTime.Time.Before(previousTransition.Time))
 }
 
-func TestFunctionSetDatabaseMatchCondition(t *testing.T) {
-	fn := &Function{}
-	fn.Generation = 9
-
-	fn.SetDatabaseMatchCondition(false, "ProdDB", "prod, staging")
-	cond := meta.FindStatusCondition(fn.Status.Conditions, FunctionDatabaseMatch)
-	require.NotNil(t, cond)
-	require.Equal(t, metav1.ConditionFalse, cond.Status)
-	require.Equal(t, "DatabaseMismatch", cond.Reason)
-	require.Contains(t, cond.Message, "ProdDB")
-
-	fn.SetDatabaseMatchCondition(true, "ProdDB", "prod")
-	cond = meta.FindStatusCondition(fn.Status.Conditions, FunctionDatabaseMatch)
-	require.NotNil(t, cond)
-	require.Equal(t, metav1.ConditionTrue, cond.Status)
-	require.Equal(t, "DatabaseMatched", cond.Reason)
-
-	fn.SetDatabaseMatchCondition(true, AllDatabases, "prod")
-	cond = meta.FindStatusCondition(fn.Status.Conditions, FunctionDatabaseMatch)
-	require.NotNil(t, cond)
-	require.Equal(t, "DatabaseWildcard", cond.Reason)
-}
-
 func TestFunctionSetCriteriaMatchCondition(t *testing.T) {
 	labels := map[string]string{"region": "eastus", "environment": "prod"}
 
@@ -132,18 +109,14 @@ func TestFunctionMultipleConditionsCoexist(t *testing.T) {
 	fn.Generation = 2
 	labels := map[string]string{"region": "westus"}
 
-	fn.SetDatabaseMatchCondition(true, "Prod", "prod")
 	fn.SetCriteriaMatchCondition(true, "region == 'westus'", nil, labels)
 	fn.SetReconcileCondition(metav1.ConditionTrue, "ReconcileSucceeded", "Created")
 
-	dbCond := meta.FindStatusCondition(fn.Status.Conditions, FunctionDatabaseMatch)
 	critCond := meta.FindStatusCondition(fn.Status.Conditions, FunctionCriteriaMatch)
 	recCond := meta.FindStatusCondition(fn.Status.Conditions, FunctionReconciled)
 
-	require.NotNil(t, dbCond)
 	require.NotNil(t, critCond)
 	require.NotNil(t, recCond)
-	require.Equal(t, metav1.ConditionTrue, dbCond.Status)
 	require.Equal(t, metav1.ConditionTrue, critCond.Status)
 	require.Equal(t, metav1.ConditionTrue, recCond.Status)
 }

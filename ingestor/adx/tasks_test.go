@@ -441,11 +441,6 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		require.NotEmpty(t, exec.stmts)
 
 		fn := store.funcs[0]
-		dbCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
-		require.NotNil(t, dbCond)
-		require.Equal(t, metav1.ConditionTrue, dbCond.Status)
-		require.Equal(t, "DatabaseMatched", dbCond.Reason)
-
 		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionTrue, recCond.Status)
@@ -454,7 +449,7 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		require.Equal(t, v1.Success, fn.Status.Status)
 	})
 
-	t.Run("database mismatch surfaces condition", func(t *testing.T) {
+	t.Run("database mismatch is ignored without status updates", func(t *testing.T) {
 		store := &TestFunctionStore{
 			funcs: []*v1.Function{
 				{
@@ -472,28 +467,19 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		require.Empty(t, exec.stmts)
 
 		fn := store.funcs[0]
-		dbCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
-		require.NotNil(t, dbCond)
-		require.Equal(t, metav1.ConditionFalse, dbCond.Status)
-		require.Equal(t, "DatabaseMismatch", dbCond.Reason)
-		require.Contains(t, dbCond.Message, "Metrics")
-
-		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
-		require.NotNil(t, recCond)
-		require.Equal(t, metav1.ConditionFalse, recCond.Status)
-		require.Equal(t, "DatabaseMismatchSkipped", recCond.Reason)
-		require.Contains(t, recCond.Message, "Metrics")
-		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Empty(t, fn.Status.Conditions)
+		require.Nil(t, apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled))
+		require.Empty(t, fn.Status.Status)
 		require.Empty(t, fn.Status.Error)
-
-		require.Len(t, store.statusUpdates, 1)
+		require.Empty(t, fn.Status.Message)
+		require.Empty(t, store.statusUpdates)
 
 		require.NoError(t, task.Run(ctx))
-		require.Len(t, store.statusUpdates, 1)
+		require.Empty(t, store.statusUpdates)
 
 		store.funcs[0].Generation = 2
 		require.NoError(t, task.Run(ctx))
-		require.Len(t, store.statusUpdates, 2)
+		require.Empty(t, store.statusUpdates)
 	})
 
 	t.Run("wildcard database matches", func(t *testing.T) {
@@ -514,10 +500,6 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 		require.NotEmpty(t, exec.stmts)
 
 		fn := store.funcs[0]
-		dbCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionDatabaseMatch)
-		require.NotNil(t, dbCond)
-		require.Equal(t, metav1.ConditionTrue, dbCond.Status)
-		require.Equal(t, "DatabaseWildcard", dbCond.Reason)
 
 		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
 		require.NotNil(t, recCond)
@@ -2678,45 +2660,4 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 			"Expected: %s, Got: %s",
 		currentTimestamp.Format(time.RFC3339),
 		finalTimestamp.Format(time.RFC3339))
-}
-
-func TestShouldSkipDatabaseMismatchUpdate(t *testing.T) {
-	task := &SyncFunctionsTask{}
-	configured := "db-a"
-	recordedAvailable := "db-b"
-
-	newMismatchFunction := func(recorded string) *v1.Function {
-		fn := &v1.Function{
-			ObjectMeta: metav1.ObjectMeta{
-				Generation: 1,
-			},
-			Spec: v1.FunctionSpec{
-				Database: configured,
-			},
-		}
-		fn.SetDatabaseMatchCondition(false, configured, recorded)
-		message := fmt.Sprintf("Function skipped due to database mismatch (configured %q, available %q)", configured, recorded)
-		fn.SetReconcileCondition(metav1.ConditionFalse, "DatabaseMismatchSkipped", message)
-		fn.Status.Status = v1.Failed
-		fn.Status.Reason = "DatabaseMismatch"
-		fn.Status.Error = ""
-		fn.Status.Message = message
-		return fn
-	}
-
-	t.Run("skip when details unchanged", func(t *testing.T) {
-		fn := newMismatchFunction(recordedAvailable)
-		require.True(t, task.shouldSkipDatabaseMismatchUpdate(fn, recordedAvailable))
-	})
-
-	t.Run("do not skip when available database changes", func(t *testing.T) {
-		fn := newMismatchFunction(recordedAvailable)
-		require.False(t, task.shouldSkipDatabaseMismatchUpdate(fn, "db-c"))
-	})
-
-	t.Run("do not skip when status message differs", func(t *testing.T) {
-		fn := newMismatchFunction(recordedAvailable)
-		fn.Status.Message = "out of date"
-		require.False(t, task.shouldSkipDatabaseMismatchUpdate(fn, recordedAvailable))
-	})
 }
