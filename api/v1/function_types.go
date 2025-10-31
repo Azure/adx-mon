@@ -29,8 +29,6 @@ const (
 	// FunctionReconciled indicates whether the Function has been successfully processed by the ingestor.
 	// True => the Function body has been executed in Kusto and is up to date; False => reconciliation failed or is pending retries.
 	FunctionReconciled = "function.adx-mon.azure.com/Reconciled"
-	// FunctionDatabaseMatch tracks whether the Function spec database matches the executing ingestor's database (case-insensitive).
-	FunctionDatabaseMatch = "function.adx-mon.azure.com/DatabaseMatch"
 	// FunctionCriteriaMatch signals the evaluation outcome of CriteriaExpression against the ingestor's cluster labels.
 	FunctionCriteriaMatch = "function.adx-mon.azure.com/CriteriaMatch"
 )
@@ -97,21 +95,8 @@ type FunctionStatus struct {
 	// Error is a string that communicates any error message if one exists
 	Error string `json:"error,omitempty"`
 	// Conditions conveys detailed reconciliation state in a Kubernetes-native format.
-	// Controllers set FunctionDatabaseMatch and FunctionCriteriaMatch to surface gating
-	// decisions (skipped due to database mismatch or criteria mismatch) and
+	// Controllers set FunctionCriteriaMatch to surface criteria gating decisions and
 	// FunctionReconciled to report the outcome of the most recent reconciliation attempt.
-	//
-	// Example:
-	//   status:
-	//     conditions:
-	//     - type: function.adx-mon.azure.com/DatabaseMatch
-	//       status: "False"
-	//       reason: DatabaseMismatch
-	//       message: "Function database 'AKSProd' does not match available databases: aksprod, aksinfra"
-	//     - type: function.adx-mon.azure.com/Reconciled
-	//       status: "False"
-	//       reason: DatabaseMismatchSkipped
-	//       message: "Function skipped due to database mismatch"
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -148,7 +133,7 @@ func (f *Function) GetCondition() *metav1.Condition {
 
 // SetCondition updates/creates a condition entry while ensuring mandatory fields are populated.
 // This method satisfies the ConditionedObject interface and should generally be used via the
-// higher level helpers (SetReconcileCondition, SetDatabaseMatchCondition, SetCriteriaMatchCondition)
+// higher level helpers (SetReconcileCondition, SetCriteriaMatchCondition)
 // that provide semantic defaults.
 func (f *Function) SetCondition(condition metav1.Condition) {
 	if condition.Type == "" {
@@ -167,36 +152,6 @@ func (f *Function) SetCondition(condition metav1.Condition) {
 func (f *Function) SetReconcileCondition(status metav1.ConditionStatus, reason, message string) {
 	condition := metav1.Condition{
 		Type:               FunctionReconciled,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: f.GetGeneration(),
-		LastTransitionTime: metav1.Now(),
-	}
-	meta.SetStatusCondition(&f.Status.Conditions, condition)
-}
-
-// SetDatabaseMatchCondition captures whether the Function's configured database matches the ingestor's database.
-// availableDBs should list databases visible to the ingestor (case-insensitive display string).
-func (f *Function) SetDatabaseMatchCondition(matched bool, configuredDB, availableDBs string) {
-	reason := "DatabaseMatched"
-	status := metav1.ConditionTrue
-	message := fmt.Sprintf("Function database %q matches ingestor database %q", configuredDB, availableDBs)
-	if configuredDB == AllDatabases {
-		reason = "DatabaseWildcard"
-		message = "Function configured for all databases"
-	}
-	if !matched {
-		reason = "DatabaseMismatch"
-		status = metav1.ConditionFalse
-		if strings.TrimSpace(availableDBs) == "" {
-			message = fmt.Sprintf("Function database %q does not match any configured ingestor endpoints", configuredDB)
-		} else {
-			message = fmt.Sprintf("Function database %q does not match available ingestor databases: %s", configuredDB, availableDBs)
-		}
-	}
-	condition := metav1.Condition{
-		Type:               FunctionDatabaseMatch,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
