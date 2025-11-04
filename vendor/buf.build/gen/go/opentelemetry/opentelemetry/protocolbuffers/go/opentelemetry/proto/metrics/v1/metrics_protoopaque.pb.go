@@ -492,7 +492,8 @@ type ScopeMetrics_builder struct {
 	// is recorded in. Notably, the last part of the URL path is the version number of the
 	// schema: http[s]://server[:port]/path/<version>. To learn more about Schema URL see
 	// https://opentelemetry.io/docs/specs/otel/schemas/#schema-url
-	// This schema_url applies to all metrics in the "metrics" field.
+	// This schema_url applies to the data in the "scope" field and all metrics in the
+	// "metrics" field.
 	SchemaUrl string
 }
 
@@ -871,11 +872,11 @@ func (x *Metric) WhichData() case_Metric_Data {
 type Metric_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// name of the metric.
+	// The name of the metric.
 	Name string
-	// description of the metric, which can be used in documentation.
+	// A description of the metric, which can be used in documentation.
 	Description string
-	// unit in which the metric value is reported. Follows the format
+	// The unit in which the metric value is reported. Follows the format
 	// described by https://unitsofmeasure.org/ucum.html.
 	Unit string
 	// Data determines the aggregation type (if any) of the metric, what is the
@@ -896,6 +897,7 @@ type Metric_builder struct {
 	// for lossless roundtrip translation to / from another data model.
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
+	// The behavior of software that receives duplicated keys can be unpredictable.
 	Metadata []*v11.KeyValue
 }
 
@@ -1026,6 +1028,8 @@ func (x *Gauge) SetDataPoints(v []*NumberDataPoint) {
 type Gauge_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The time series data points.
+	// Note: Multiple time series may be included (same timestamp, different attributes).
 	DataPoints []*NumberDataPoint
 }
 
@@ -1111,11 +1115,13 @@ func (x *Sum) SetIsMonotonic(v bool) {
 type Sum_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The time series data points.
+	// Note: Multiple time series may be included (same timestamp, different attributes).
 	DataPoints []*NumberDataPoint
 	// aggregation_temporality describes if the aggregator reports delta changes
 	// since last report time, or cumulative changes since a fixed start time.
 	AggregationTemporality AggregationTemporality
-	// If "true" means that the sum is monotonic.
+	// Represents whether the sum is monotonic.
 	IsMonotonic bool
 }
 
@@ -1191,6 +1197,8 @@ func (x *Histogram) SetAggregationTemporality(v AggregationTemporality) {
 type Histogram_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The time series data points.
+	// Note: Multiple time series may be included (same timestamp, different attributes).
 	DataPoints []*HistogramDataPoint
 	// aggregation_temporality describes if the aggregator reports delta changes
 	// since last report time, or cumulative changes since a fixed start time.
@@ -1268,6 +1276,8 @@ func (x *ExponentialHistogram) SetAggregationTemporality(v AggregationTemporalit
 type ExponentialHistogram_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The time series data points.
+	// Note: Multiple time series may be included (same timestamp, different attributes).
 	DataPoints []*ExponentialHistogramDataPoint
 	// aggregation_temporality describes if the aggregator reports delta changes
 	// since last report time, or cumulative changes since a fixed start time.
@@ -1340,6 +1350,8 @@ func (x *Summary) SetDataPoints(v []*SummaryDataPoint) {
 type Summary_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The time series data points.
+	// Note: Multiple time series may be included (same timestamp, different attributes).
 	DataPoints []*SummaryDataPoint
 }
 
@@ -1539,16 +1551,7 @@ type NumberDataPoint_builder struct {
 	// where this point belongs. The list may be empty (may contain 0 elements).
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
-	//
-	// The attribute values SHOULD NOT contain empty values.
-	// The attribute values SHOULD NOT contain bytes values.
-	// The attribute values SHOULD NOT contain array values different than array of string values, bool values, int values,
-	// double values.
-	// The attribute values SHOULD NOT contain kvlist values.
-	// The behavior of software that receives attributes containing such values can be unpredictable.
-	// These restrictions can change in a minor release.
-	// The restrictions take origin from the OpenTelemetry specification:
-	// https://github.com/open-telemetry/opentelemetry-specification/blob/v1.47.0/specification/common/README.md#attribute.
+	// The behavior of software that receives duplicated keys can be unpredictable.
 	Attributes []*v11.KeyValue
 	// StartTimeUnixNano is optional but strongly encouraged, see the
 	// the detailed comments above Metric.
@@ -1845,16 +1848,7 @@ type HistogramDataPoint_builder struct {
 	// where this point belongs. The list may be empty (may contain 0 elements).
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
-	//
-	// The attribute values SHOULD NOT contain empty values.
-	// The attribute values SHOULD NOT contain bytes values.
-	// The attribute values SHOULD NOT contain array values different than array of string values, bool values, int values,
-	// double values.
-	// The attribute values SHOULD NOT contain kvlist values.
-	// The behavior of software that receives attributes containing such values can be unpredictable.
-	// These restrictions can change in a minor release.
-	// The restrictions take origin from the OpenTelemetry specification:
-	// https://github.com/open-telemetry/opentelemetry-specification/blob/v1.47.0/specification/common/README.md#attribute.
+	// The behavior of software that receives duplicated keys can be unpredictable.
 	Attributes []*v11.KeyValue
 	// StartTimeUnixNano is optional but strongly encouraged, see the
 	// the detailed comments above Metric.
@@ -2223,16 +2217,7 @@ type ExponentialHistogramDataPoint_builder struct {
 	// where this point belongs. The list may be empty (may contain 0 elements).
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
-	//
-	// The attribute values SHOULD NOT contain empty values.
-	// The attribute values SHOULD NOT contain bytes values.
-	// The attribute values SHOULD NOT contain array values different than array of string values, bool values, int values,
-	// double values.
-	// The attribute values SHOULD NOT contain kvlist values.
-	// The behavior of software that receives attributes containing such values can be unpredictable.
-	// These restrictions can change in a minor release.
-	// The restrictions take origin from the OpenTelemetry specification:
-	// https://github.com/open-telemetry/opentelemetry-specification/blob/v1.47.0/specification/common/README.md#attribute.
+	// The behavior of software that receives duplicated keys can be unpredictable.
 	Attributes []*v11.KeyValue
 	// StartTimeUnixNano is optional but strongly encouraged, see the
 	// the detailed comments above Metric.
@@ -2245,11 +2230,11 @@ type ExponentialHistogramDataPoint_builder struct {
 	// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January
 	// 1970.
 	TimeUnixNano uint64
-	// count is the number of values in the population. Must be
+	// The number of values in the population. Must be
 	// non-negative. This value must be equal to the sum of the "bucket_counts"
 	// values in the positive and negative Buckets plus the "zero_count" field.
 	Count uint64
-	// sum of the values in the population. If count is zero then this field
+	// The sum of the values in the population. If count is zero then this field
 	// must be zero.
 	//
 	// Note: Sum should only be filled out when measuring non-negative discrete
@@ -2274,7 +2259,7 @@ type ExponentialHistogramDataPoint_builder struct {
 	// scale is not restricted by the protocol, as the permissible
 	// values depend on the range of the data.
 	Scale int32
-	// zero_count is the count of values that are either exactly zero or
+	// The count of values that are either exactly zero or
 	// within the region considered zero by the instrumentation at the
 	// tolerated degree of precision.  This bucket stores values that
 	// cannot be expressed using the standard exponential formula as
@@ -2293,9 +2278,9 @@ type ExponentialHistogramDataPoint_builder struct {
 	// (Optional) List of exemplars collected from
 	// measurements that were used to form the data point
 	Exemplars []*Exemplar
-	// min is the minimum value over (start_time, end_time].
+	// The minimum value over (start_time, end_time].
 	Min *float64
-	// max is the maximum value over (start_time, end_time].
+	// The maximum value over (start_time, end_time].
 	Max *float64
 	// ZeroThreshold may be optionally set to convey the width of the zero
 	// region. Where the zero region is defined as the closed interval
@@ -2465,16 +2450,7 @@ type SummaryDataPoint_builder struct {
 	// where this point belongs. The list may be empty (may contain 0 elements).
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
-	//
-	// The attribute values SHOULD NOT contain empty values.
-	// The attribute values SHOULD NOT contain bytes values.
-	// The attribute values SHOULD NOT contain array values different than array of string values, bool values, int values,
-	// double values.
-	// The attribute values SHOULD NOT contain kvlist values.
-	// The behavior of software that receives attributes containing such values can be unpredictable.
-	// These restrictions can change in a minor release.
-	// The restrictions take origin from the OpenTelemetry specification:
-	// https://github.com/open-telemetry/opentelemetry-specification/blob/v1.47.0/specification/common/README.md#attribute.
+	// The behavior of software that receives duplicated keys can be unpredictable.
 	Attributes []*v11.KeyValue
 	// StartTimeUnixNano is optional but strongly encouraged, see the
 	// the detailed comments above Metric.
@@ -2828,11 +2804,11 @@ func (x *ExponentialHistogramDataPoint_Buckets) SetBucketCounts(v []uint64) {
 type ExponentialHistogramDataPoint_Buckets_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Offset is the bucket index of the first entry in the bucket_counts array.
+	// The bucket index of the first entry in the bucket_counts array.
 	//
 	// Note: This uses a varint encoding as a simple form of compression.
 	Offset int32
-	// bucket_counts is an array of count values, where bucket_counts[i] carries
+	// An array of count values, where bucket_counts[i] carries
 	// the count of the bucket at index (offset+i). bucket_counts[i] is the count
 	// of values greater than base^(offset+i) and less than or equal to
 	// base^(offset+i+1).
