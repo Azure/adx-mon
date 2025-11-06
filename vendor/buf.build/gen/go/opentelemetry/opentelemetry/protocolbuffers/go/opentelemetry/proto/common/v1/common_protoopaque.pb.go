@@ -36,7 +36,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// AnyValue is used to represent any type of attribute value. AnyValue may contain a
+// Represents any type of attribute value. AnyValue may contain a
 // primitive value such as a string or integer or it may contain an arbitrary nested
 // object containing arrays, key-value lists and primitives.
 type AnyValue struct {
@@ -533,8 +533,10 @@ type KeyValueList_builder struct {
 
 	// A collection of key/value pairs of key-value pairs. The list may be empty (may
 	// contain 0 elements).
+	//
 	// The keys MUST be unique (it is not allowed to have more than one
 	// value with the same key).
+	// The behavior of software that receives duplicated keys can be unpredictable.
 	Values []*KeyValue
 }
 
@@ -546,7 +548,7 @@ func (b0 KeyValueList_builder) Build() *KeyValueList {
 	return m0
 }
 
-// KeyValue is a key-value pair that is used to store Span attributes, Link
+// Represents a key-value pair that is used to store Span attributes, Link
 // attributes, etc.
 type KeyValue struct {
 	state            protoimpl.MessageState `protogen:"opaque.v1"`
@@ -617,7 +619,9 @@ func (x *KeyValue) ClearValue() {
 type KeyValue_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	Key   string
+	// The key name of the pair.
+	Key string
+	// The value of the pair.
 	Value *AnyValue
 }
 
@@ -716,13 +720,20 @@ func (x *InstrumentationScope) SetDroppedAttributesCount(v uint32) {
 type InstrumentationScope_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// A name denoting the Instrumentation scope.
 	// An empty instrumentation scope name means the name is unknown.
-	Name    string
+	Name string
+	// Defines the version of the instrumentation scope.
+	// An empty instrumentation scope version means the version is unknown.
 	Version string
 	// Additional attributes that describe the scope. [Optional].
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
-	Attributes             []*KeyValue
+	// The behavior of software that receives duplicated keys can be unpredictable.
+	Attributes []*KeyValue
+	// The number of attributes that were discarded. Attributes
+	// can be discarded because their keys are too long or because there are too many
+	// attributes. If this value is 0, then no attributes were dropped.
 	DroppedAttributesCount uint32
 }
 
