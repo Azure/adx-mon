@@ -1755,7 +1755,7 @@ func TestConfig_WALFlushInterval(t *testing.T) {
 		},
 		{
 			name:     "WALFlushIntervalZero",
-			interval: 100,
+			interval: 0,
 			wantErr:  false,
 		},
 		{
