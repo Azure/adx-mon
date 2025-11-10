@@ -33,6 +33,8 @@ type KustoClient struct {
 	endpoint string
 }
 
+const DefaultQueryExecutorMaxRows = 50000
+
 // NewKustoClient creates a new KustoClient with the given endpoint and database
 func NewKustoClient(endpoint, database string) (*KustoClient, error) {
 	kcsb := kusto.NewConnectionStringBuilder(endpoint)
@@ -81,6 +83,7 @@ type QueryResult struct {
 type QueryExecutor struct {
 	kustoClient KustoExecutor
 	clock       clock.Clock
+	maxRows     int
 }
 
 // NewQueryExecutor creates a new QueryExecutor
@@ -88,12 +91,19 @@ func NewQueryExecutor(kustoClient KustoExecutor) *QueryExecutor {
 	return &QueryExecutor{
 		kustoClient: kustoClient,
 		clock:       clock.RealClock{},
+		maxRows:     DefaultQueryExecutorMaxRows,
 	}
 }
 
 // SetClock sets the clock for testing purposes
 func (qe *QueryExecutor) SetClock(clk clock.Clock) {
 	qe.clock = clk
+}
+
+// SetMaxRows overrides the maximum number of rows that will be materialized from a query result.
+// A non-positive limit disables the safeguard.
+func (qe *QueryExecutor) SetMaxRows(limit int) {
+	qe.maxRows = limit
 }
 
 // ExecuteQuery executes a KQL query with time window parameters
@@ -132,6 +142,7 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 // iteratorToRows converts a Kusto RowIterator to a slice of maps
 func (qe *QueryExecutor) iteratorToRows(iter *kusto.RowIterator) ([]map[string]interface{}, error) {
 	var rows []map[string]interface{}
+	limit := qe.maxRows
 
 	for {
 		row, errInline, errFinal := iter.NextRowOrError()
@@ -144,6 +155,10 @@ func (qe *QueryExecutor) iteratorToRows(iter *kusto.RowIterator) ([]map[string]i
 		}
 		if errFinal != nil {
 			return rows, fmt.Errorf("failed to read query results: %w", errFinal)
+		}
+
+		if limit > 0 && len(rows) >= limit {
+			return rows, fmt.Errorf("query result exceeded maximum row limit (%d)", limit)
 		}
 
 		// Convert row to map

@@ -300,6 +300,30 @@ MyTable | summarize avg_value = avg(Value) by ServiceName`
 	})
 }
 
+func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
+	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
+	executor := NewQueryExecutor(mockClient)
+	executor.SetMaxRows(1)
+
+	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
+	mockClient.SetNextResult(t, [][]interface{}{
+		{"metric_one", 1.0, now},
+		{"metric_two", 2.0, now},
+	})
+
+	ctx := context.Background()
+	clusterLabels := map[string]string{}
+	queryBody := "MyTable | project metric_name, value, timestamp"
+
+	result, err := executor.ExecuteQuery(ctx, queryBody, now.Add(-time.Hour), now, clusterLabels)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Error(t, result.Error)
+	require.Contains(t, result.Error.Error(), "maximum row limit")
+	require.Len(t, result.Rows, 1)
+}
+
 func TestNewKustoClient(t *testing.T) {
 	t.Run("valid endpoint", func(t *testing.T) {
 		// Note: This test will only verify the client creation logic,
