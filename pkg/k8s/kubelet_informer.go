@@ -17,7 +17,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
@@ -271,33 +270,42 @@ func (k *KubeletPodInformer) applyPodList(pods []corev1.Pod) {
 	updates := make([]podUpdate, 0)
 	deletions := make([]*corev1.Pod, 0)
 
-	newState := make(map[types.UID]*corev1.Pod, len(pods))
-
 	k.processingMut.Lock()
-	oldState := k.currentPods
+	currentPods := k.currentPods
+
+	// Track which pods we've seen in the new list
+	seen := make(map[types.UID]struct{}, len(pods))
 
 	for i := range pods {
-		pod := &pods[i] // Take address of the slice element, not a copy
-		uid := pod.UID
+		uid := pods[i].UID
+		seen[uid] = struct{}{}
 
-		newState[uid] = pod
-
-		if existing, ok := oldState[uid]; ok {
-			if !equality.Semantic.DeepEqual(existing, pod) {
+		if existing, ok := currentPods[uid]; ok {
+			// Pod exists - check if it changed
+			// Fast path: compare resourceVersion instead of expensive deep equality check.
+			// ResourceVersion changes whenever the pod is updated on the API server,
+			// including container restarts, status changes, etc.
+			if existing.ResourceVersion != pods[i].ResourceVersion {
+				// Pod was updated - take pointer and update map
+				pod := pods[i].DeepCopy()
+				currentPods[uid] = pod
 				updates = append(updates, podUpdate{old: existing, new: pod})
 			}
 		} else {
+			// New pod
+			pod := pods[i].DeepCopy()
+			currentPods[uid] = pod
 			additions = append(additions, pod)
 		}
 	}
 
-	for uid, existing := range oldState {
-		if _, ok := newState[uid]; !ok {
+	// Find deletions - pods in currentPods but not in seen
+	for uid, existing := range currentPods {
+		if _, ok := seen[uid]; !ok {
 			deletions = append(deletions, existing)
+			delete(currentPods, uid)
 		}
 	}
-
-	k.currentPods = newState
 
 	for reg := range k.handlers {
 		handler := reg.handler

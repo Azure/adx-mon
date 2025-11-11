@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -272,8 +273,9 @@ func TestKubeletPodInformerConcurrentHandlersRestart(t *testing.T) {
 }
 
 type fakePodClient struct {
-	mu   sync.RWMutex
-	pods map[types.UID]corev1.Pod
+	mu              sync.RWMutex
+	pods            map[types.UID]corev1.Pod
+	resourceVersion int64
 }
 
 func newFakePodClient() *fakePodClient {
@@ -296,6 +298,11 @@ func (f *fakePodClient) Close() error { return nil }
 func (f *fakePodClient) UpsertPod(pod corev1.Pod) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	// Automatically increment resourceVersion to simulate API server behavior
+	f.resourceVersion++
+	pod.ResourceVersion = fmt.Sprintf("%d", f.resourceVersion)
+
 	f.pods[pod.UID] = *pod.DeepCopy()
 }
 
@@ -622,4 +629,138 @@ func writeServerCA(t *testing.T, server *httptest.Server, dir string) string {
 
 	require.NoError(t, os.WriteFile(caPath, certPEM, 0600))
 	return caPath
+}
+
+// Benchmark functions for applyPodList
+
+func BenchmarkApplyPodList(b *testing.B) {
+	scenarios := []struct {
+		name         string
+		podCount     int
+		handlerCount int
+		updateRatio  float64 // ratio of pods that change between iterations (0.0 to 1.0)
+		addRatio     float64 // ratio of pods that are new additions
+		deleteRatio  float64 // ratio of existing pods that are deleted
+	}{
+		{name: "1000pods_10handlers_mixed_changes", podCount: 1000, handlerCount: 10, updateRatio: 0.01, addRatio: 0.01, deleteRatio: 0.01},
+	}
+
+	for _, scenario := range scenarios {
+		b.Run(scenario.name, func(b *testing.B) {
+			benchmarkApplyPodList(b, scenario.podCount, scenario.handlerCount, scenario.updateRatio, scenario.addRatio, scenario.deleteRatio)
+		})
+	}
+}
+
+func benchmarkApplyPodList(b *testing.B, podCount, handlerCount int, updateRatio, addRatio, deleteRatio float64) {
+	// Create informer with fake client
+	informer := &KubeletPodInformer{
+		handlers:    make(map[*kubeletRegistration]struct{}),
+		currentPods: make(map[types.UID]*corev1.Pod),
+	}
+
+	// Register handlers
+	handlers := make([]*benchHandler, handlerCount)
+	for i := 0; i < handlerCount; i++ {
+		handler := &benchHandler{}
+		reg := &kubeletRegistration{
+			informer: informer,
+			handler:  handler,
+		}
+		informer.handlers[reg] = struct{}{}
+		handlers[i] = handler
+	}
+
+	// Create initial pod set
+	initialPods := make([]corev1.Pod, podCount)
+	for i := 0; i < podCount; i++ {
+		pod := createBenchPod(i, 0)
+		initialPods[i] = pod
+		informer.currentPods[pod.UID] = &initialPods[i]
+	}
+
+	// Calculate change counts
+	updateCount := int(float64(podCount) * updateRatio)
+	deleteCount := int(float64(podCount) * deleteRatio)
+	addCount := int(float64(podCount) * addRatio)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		// Create new pod list with specified changes
+		newPods := make([]corev1.Pod, 0, podCount-deleteCount+addCount)
+
+		// Add unchanged and updated pods
+		podIndex := 0
+		for j := 0; j < podCount-deleteCount; j++ {
+			if j < updateCount {
+				// Updated pod - change a label
+				newPods = append(newPods, createBenchPod(podIndex, i+1))
+			} else {
+				// Unchanged pod
+				newPods = append(newPods, createBenchPod(podIndex, 0))
+			}
+			podIndex++
+		}
+
+		// Add new pods
+		for j := 0; j < addCount; j++ {
+			newPods = append(newPods, createBenchPod(podCount+i*addCount+j, i+1))
+		}
+
+		informer.applyPodList(newPods)
+	}
+}
+
+// benchHandler is a minimal handler implementation for benchmarking
+type benchHandler struct {
+	addCount    int
+	updateCount int
+	deleteCount int
+}
+
+func (h *benchHandler) OnAdd(obj interface{}, isInitialList bool) {
+	h.addCount++
+}
+
+func (h *benchHandler) OnUpdate(oldObj, newObj interface{}) {
+	h.updateCount++
+}
+
+func (h *benchHandler) OnDelete(obj interface{}) {
+	h.deleteCount++
+}
+
+// createBenchPod creates a pod for benchmarking with predictable properties
+func createBenchPod(index, version int) corev1.Pod {
+	labels := map[string]string{
+		"app":     "test",
+		"version": "v1",
+	}
+	if version > 0 {
+		labels["iteration"] = string(rune('0' + version%10))
+	}
+
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "pod-" + string(rune('0'+index/1000)) + string(rune('0'+(index/100)%10)) + string(rune('0'+(index/10)%10)) + string(rune('0'+index%10)),
+			Namespace:       "default",
+			UID:             types.UID("pod-uid-" + string(rune('0'+index/1000)) + string(rune('0'+(index/100)%10)) + string(rune('0'+(index/10)%10)) + string(rune('0'+index%10))),
+			Labels:          labels,
+			ResourceVersion: fmt.Sprintf("%d", version),
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "test-node",
+			Containers: []corev1.Container{
+				{
+					Name:  "container-1",
+					Image: "test-image:latest",
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
 }
