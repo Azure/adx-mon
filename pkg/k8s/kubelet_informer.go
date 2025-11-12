@@ -86,7 +86,7 @@ func (r *kubeletRegistration) HasSynced() bool {
 // NewKubeletPodInformer creates a new informer that sources pod events from the local kubelet.
 func NewKubeletPodInformer(opts KubeletInformerOptions) (*KubeletPodInformer, error) {
 	if opts.ClientFactory == nil && opts.NodeName == "" && opts.KubeletHost == "" {
-		return nil, errors.New("either NodeName, KubeletHost, or ClientFactory must be provided")
+		return nil, errors.New("kubelet pod informer: either NodeName, KubeletHost, or ClientFactory must be provided")
 	}
 
 	pollInterval := opts.PollInterval
@@ -166,26 +166,60 @@ func NewKubeletPodInformer(opts KubeletInformerOptions) (*KubeletPodInformer, er
 	return informer, nil
 }
 
+// Open starts the kubelet polling loop. This must be called before adding any handlers.
+func (k *KubeletPodInformer) Open(ctx context.Context) error {
+	k.runningMut.Lock()
+	defer k.runningMut.Unlock()
+
+	if k.client != nil {
+		return fmt.Errorf("kubelet pod informer: already started")
+	}
+
+	client, err := k.newClient()
+	if err != nil {
+		return fmt.Errorf("kubelet pod informer: create kubelet client: %w", err)
+	}
+	k.client = client
+
+	k.runCtx, k.cancelRun = context.WithCancel(ctx)
+
+	initialSync := make(chan struct{})
+	k.wg.Add(1)
+	go func() {
+		defer k.wg.Done()
+		k.run(k.runCtx, initialSync)
+	}()
+	<-initialSync
+
+	return nil
+}
+
+// Close stops the kubelet polling loop and cleans up resources.
+func (k *KubeletPodInformer) Close() error {
+	k.runningMut.Lock()
+	defer k.runningMut.Unlock()
+
+	if k.client == nil {
+		return nil
+	}
+
+	k.cancelRun()
+	k.wg.Wait()
+
+	k.client.Close()
+	k.client = nil
+	k.cancelRun = nil
+
+	return nil
+}
+
 // Add registers a handler for pod events. The handler receives add, update, and delete notifications.
+// The informer must be started with Open() before calling Add().
 func (k *KubeletPodInformer) Add(ctx context.Context, handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
 	k.runningMut.Lock()
 	if k.client == nil {
-		client, err := k.newClient()
-		if err != nil {
-			k.runningMut.Unlock()
-			return nil, fmt.Errorf("kubelet pod informer: create kubelet client: %w", err)
-		}
-		k.client = client
-
-		k.runCtx, k.cancelRun = context.WithCancel(ctx)
-
-		initialSync := make(chan struct{})
-		k.wg.Add(1)
-		go func() {
-			defer k.wg.Done()
-			k.run(k.runCtx, initialSync)
-		}()
-		<-initialSync
+		k.runningMut.Unlock()
+		return nil, fmt.Errorf("kubelet pod informer: not started - call Open() first")
 	}
 	k.runningMut.Unlock()
 
@@ -203,33 +237,20 @@ func (k *KubeletPodInformer) Add(ctx context.Context, handler cache.ResourceEven
 	return reg, nil
 }
 
-// Remove unregisters the handler. If the last handler is removed, the informer stops polling.
+// Remove unregisters the handler.
 func (k *KubeletPodInformer) Remove(reg cache.ResourceEventHandlerRegistration) error {
 	registration, ok := reg.(*kubeletRegistration)
 	if !ok || registration.informer != k {
-		return fmt.Errorf("registration does not belong to this informer")
+		return fmt.Errorf("kubelet pod informer: registration does not belong to this informer")
 	}
 
 	k.processingMut.Lock()
+	defer k.processingMut.Unlock()
+
 	if _, exists := k.handlers[registration]; !exists {
-		k.processingMut.Unlock()
-		return fmt.Errorf("handler not registered")
+		return fmt.Errorf("kubelet pod informer: handler not registered")
 	}
 	delete(k.handlers, registration)
-
-	shouldStop := len(k.handlers) == 0
-	k.processingMut.Unlock()
-
-	k.runningMut.Lock()
-	if shouldStop && k.client != nil {
-		k.cancelRun()
-		k.wg.Wait()
-		k.cancelRun = nil
-
-		k.client.Close()
-		k.client = nil
-	}
-	k.runningMut.Unlock()
 
 	return nil
 }
@@ -239,7 +260,7 @@ func (k *KubeletPodInformer) run(ctx context.Context, initialSync chan struct{})
 	defer ticker.Stop()
 
 	if err := k.syncOnce(ctx); err != nil {
-		logger.Errorf("kubelet pod informer initial sync failed: %v", err)
+		logger.Errorf("kubelet pod informer: initial sync failed: %v", err)
 	}
 	close(initialSync)
 
@@ -249,7 +270,7 @@ func (k *KubeletPodInformer) run(ctx context.Context, initialSync chan struct{})
 			return
 		case <-ticker.C():
 			if err := k.syncOnce(ctx); err != nil {
-				logger.Errorf("kubelet pod informer sync failed: %v", err)
+				logger.Errorf("kubelet pod informer: sync failed: %v", err)
 			}
 		}
 	}
@@ -424,7 +445,7 @@ func (c *kubeletClient) ListPods(ctx context.Context) ([]corev1.Pod, error) {
 	podsURL := fmt.Sprintf("https://%s/pods", c.opts.Endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, podsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create kubelet pods request: %w", err)
+		return nil, fmt.Errorf("kubeletClient: create kubelet pods request: %w", err)
 	}
 
 	c.mu.RLock()
@@ -436,19 +457,19 @@ func (c *kubeletClient) ListPods(ctx context.Context) ([]corev1.Pod, error) {
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request kubelet pods endpoint: %w", err)
+		return nil, fmt.Errorf("kubeletClient: request kubelet pods endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("kubelet pods endpoint returned status %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("kubeletClient: pods endpoint returned status %s: %s", resp.Status, string(body))
 	}
 
 	var podList corev1.PodList
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(&podList); err != nil {
-		return nil, fmt.Errorf("decode kubelet pods response: %w", err)
+		return nil, fmt.Errorf("kubeletClient: decode kubelet pods response: %w", err)
 	}
 
 	pods := make([]corev1.Pod, len(podList.Items))
@@ -478,7 +499,7 @@ func (c *kubeletClient) refreshToken() {
 		case <-ticker.C():
 			token, err := c.readToken()
 			if err != nil {
-				logger.Errorf("kubelet informer: failed to refresh token: %v", err)
+				logger.Errorf("kubeletClient: failed to refresh token: %v", err)
 				continue
 			}
 			c.mu.Lock()

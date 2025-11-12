@@ -17,7 +17,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/cache"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/stretchr/testify/require"
@@ -40,6 +39,9 @@ func TestKubeletPodInformerEmitsEvents(t *testing.T) {
 
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1", UID: types.UID("pod-1")}}
 	fakeClient.UpsertPod(pod)
+
+	require.NoError(t, informer.Open(ctx))
+	defer informer.Close()
 
 	reg, err := informer.Add(ctx, handler)
 	require.NoError(t, err)
@@ -100,6 +102,9 @@ func TestKubeletPodInformerMultipleAddsUpdatesDeletes(t *testing.T) {
 	pod2 := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2", UID: types.UID("pod-2")}}
 	fakeClient.UpsertPod(pod1)
 	fakeClient.UpsertPod(pod2)
+
+	require.NoError(t, informer.Open(ctx))
+	defer informer.Close()
 
 	reg, err := informer.Add(ctx, handler)
 	require.NoError(t, err)
@@ -187,9 +192,10 @@ func TestKubeletPodInformerMultipleAddsUpdatesDeletes(t *testing.T) {
 	require.NoError(t, informer.Remove(reg))
 }
 
-func TestKubeletPodInformerConcurrentHandlersRestart(t *testing.T) {
+func TestKubeletPodInformerRestart(t *testing.T) {
 	fakeClient := newFakePodClient()
 	clk := clocktesting.NewFakeClock(time.Now())
+	var wg sync.WaitGroup
 
 	informer, err := NewKubeletPodInformer(KubeletInformerOptions{
 		ClientFactory: func() (podListClient, error) { return fakeClient, nil },
@@ -204,72 +210,38 @@ func TestKubeletPodInformerConcurrentHandlersRestart(t *testing.T) {
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-1", UID: types.UID("pod-1")}}
 	fakeClient.UpsertPod(pod)
 
-	const handlerCount = 8
-	handlers := make([]*fakeHandler, handlerCount)
-	regs := make([]cache.ResourceEventHandlerRegistration, handlerCount)
+	require.NoError(t, informer.Open(ctx))
 
-	var addErr error
-	var addErrMu sync.Mutex
-	var wg sync.WaitGroup
-
-	for i := 0; i < handlerCount; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			handler := newFakeHandler()
-			reg, err := informer.Add(ctx, handler)
-			if err != nil {
-				addErrMu.Lock()
-				if addErr == nil {
-					addErr = err
-				}
-				addErrMu.Unlock()
-				return
-			}
-
-			handlers[idx] = handler
-			regs[idx] = reg
-		}(i)
-	}
-
+	// Multiple closes not an error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		require.NoError(t, informer.Close())
+	}()
 	wg.Wait()
-	require.NoError(t, addErr)
+	require.NoError(t, informer.Close())
 
-	for _, handler := range handlers {
-		addEvent := handler.waitAdd(t)
-		require.True(t, addEvent.Initial)
-		require.Equal(t, pod.Name, addEvent.Pod.Name)
-	}
+	podTwo := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-2", UID: types.UID("pod-2")}}
+	fakeClient.UpsertPod(podTwo)
+	require.NoError(t, informer.Open(ctx))
 
-	var removeErr error
-	var removeErrMu sync.Mutex
-	wg = sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		handler := newFakeHandler()
+		reg, err := informer.Add(ctx, handler)
+		require.NoError(t, err)
+		require.True(t, reg.HasSynced())
 
-	for _, reg := range regs {
-		wg.Add(1)
-		go func(r cache.ResourceEventHandlerRegistration) {
-			defer wg.Done()
-			if err := informer.Remove(r); err != nil {
-				removeErrMu.Lock()
-				if removeErr == nil {
-					removeErr = err
-				}
-				removeErrMu.Unlock()
-			}
-		}(reg)
-	}
-
+		// Both should be added initially
+		add1 := handler.waitAdd(t)
+		add2 := handler.waitAdd(t)
+		require.True(t, add1.Initial)
+		require.True(t, add2.Initial)
+	}()
 	wg.Wait()
-	require.NoError(t, removeErr)
 
-	// Ensure informer can start again after full shutdown.
-	restartHandler := newFakeHandler()
-	restartReg, err := informer.Add(ctx, restartHandler)
-	require.NoError(t, err)
-	addEvent := restartHandler.waitAdd(t)
-	require.True(t, addEvent.Initial)
-	require.Equal(t, pod.Name, addEvent.Pod.Name)
-	require.NoError(t, informer.Remove(restartReg))
+	require.NoError(t, informer.Close())
 }
 
 type fakePodClient struct {
