@@ -70,16 +70,18 @@ Each CRD is described below with its current schema and example YAML, strictly r
   - `retentionInDays` (int, optional): Retention period in days. Default: 30.
   - `retentionPolicy` (string, optional): ADX retention policy.
   - `telemetryType` (string, required): One of `Metrics`, `Logs`, or `Traces`.
-- `provision` (object, optional): Azure provisioning details. When this section is present the operator performs Azure resource reconciliation; all required fields must be supplied explicitly (the controller no longer mutates the spec or auto-detects defaults):
-  - `subscriptionId` (string, required when `provision` is set): Azure subscription ID the operator should use.
-  - `resourceGroup` (string, required when `provision` is set): Azure resource group that owns the ADX cluster.
-  - `location` (string, required when `provision` is set): Azure region (e.g., "eastus2").
-  - `skuName` (string, required when `provision` is set): Azure SKU (e.g., "Standard_L8as_v3").
-  - `tier` (string, required when `provision` is set): Azure ADX tier (e.g., "Standard").
-  - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids).
-  - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Defaults to false.
-  - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Defaults to 10.
-  - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Defaults to 2.
+- `provision` (object, optional): Azure provisioning details. When this section is present, the operator performs Azure resource reconciliation. **Required fields must be supplied explicitly; optional fields have defaults as noted below.**
+  - **Required fields:**
+    - `subscriptionId` (string, required): Azure subscription ID the operator should use.
+    - `resourceGroup` (string, required): Azure resource group that owns the ADX cluster.
+    - `location` (string, required): Azure region (e.g., "eastus2").
+    - `skuName` (string, required): Azure SKU (e.g., "Standard_L8as_v3").
+    - `tier` (string, required): Azure ADX tier (e.g., "Standard").
+  - **Optional fields (with defaults):**
+    - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids). Default: empty list.
+    - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Default: `false`.
+    - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Default: `10`.
+    - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Default: `2`.
 
 **Status fields:**
 - `conditions` (array, optional): Standard Kubernetes conditions.

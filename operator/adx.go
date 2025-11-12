@@ -704,6 +704,9 @@ func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.Applied
 		appliedTier = strings.TrimSpace(applied.Tier)
 	}
 
+	// Early return if both desiredSku and desiredTier are empty.
+	// This is safe because the CRD contract requires these fields when spec.provision exists.
+	// If the contract changes, revisit this logic to ensure state changes (removal/reset) are detected.
 	if desiredSku == "" && desiredTier == "" {
 		return clusterUpdate, false
 	}
