@@ -420,22 +420,19 @@ func newKubeletClient(opts kubeletClientOptions) (*kubeletClient, error) {
 	}
 
 	if opts.TokenPath != "" {
-		if _, err := os.Stat(opts.TokenPath); err == nil {
-			if token, err := c.readToken(); err == nil {
-				c.mu.Lock()
-				c.token = token
-				c.mu.Unlock()
-			} else if !os.IsNotExist(err) {
-				return nil, err
-			}
-			c.refreshWG.Add(1)
-			go func() {
-				defer c.refreshWG.Done()
-				c.refreshToken()
-			}()
-		} else if !os.IsNotExist(err) {
-			return nil, err
+		if token, err := c.readToken(); err == nil {
+			c.mu.Lock()
+			c.token = token
+			c.mu.Unlock()
+		} else {
+			return nil, fmt.Errorf("kubeletClient: read initial token: %w", err)
 		}
+
+		c.refreshWG.Add(1)
+		go func() {
+			defer c.refreshWG.Done()
+			c.refreshToken()
+		}()
 	}
 
 	return c, nil
