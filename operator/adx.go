@@ -43,6 +43,9 @@ const (
 	otlpHubSchemaDefinition = "Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic"
 )
 
+// resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
+// preferring the reconciled status endpoint and falling back to the spec when
+// the status has not been populated yet.
 func resolvedClusterEndpoint(cluster *adxmonv1.ADXCluster) string {
 	if cluster.Status.Endpoint != "" {
 		return cluster.Status.Endpoint
@@ -623,7 +626,9 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 
 	logger.Infof("ADXCluster %s: checking for cluster configuration changes", cluster.Spec.ClusterName)
 	clusterUpdate, updated := diffSkus(resp, appliedProvisionState, cluster)
-	if diffIdentities(resp, appliedProvisionState, cluster, &clusterUpdate) {
+	var identitiesUpdated bool
+	clusterUpdate, identitiesUpdated = diffIdentities(resp, appliedProvisionState, cluster, clusterUpdate)
+	if identitiesUpdated {
 		updated = true
 	}
 
@@ -728,13 +733,13 @@ func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.Applied
 	return clusterUpdate, true
 }
 
-func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *armkusto.Cluster) bool {
+func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate armkusto.Cluster) (armkusto.Cluster, bool) {
 	if cluster.Spec.Provision == nil {
-		return false
+		return clusterUpdate, false
 	}
 
 	if resp.Identity == nil || resp.Identity.Type == nil || *resp.Identity.Type != armkusto.IdentityTypeUserAssigned {
-		return false
+		return clusterUpdate, false
 	}
 
 	desiredSet := make(map[string]struct{})
@@ -781,7 +786,7 @@ func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.A
 			}
 		}
 		if same {
-			return false
+			return clusterUpdate, false
 		}
 	}
 
@@ -790,7 +795,7 @@ func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.A
 	}
 	clusterUpdate.Identity.Type = to.Ptr(armkusto.IdentityTypeUserAssigned)
 	clusterUpdate.Identity.UserAssignedIdentities = finalSet
-	return true
+	return clusterUpdate, true
 }
 
 func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -1143,24 +1148,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
-	combined := make(map[string]adxmonv1.ADXClusterDatabaseSpec)
-	for _, db := range cluster.Spec.Databases {
-		combined[db.DatabaseName] = db
-	}
-	for _, db := range dbSpecs {
-		if existing, ok := combined[db.DatabaseName]; ok {
-			if existing.TelemetryType == "" {
-				combined[db.DatabaseName] = db
-			}
-			continue
-		}
-		combined[db.DatabaseName] = db
-	}
-	var merged []adxmonv1.ADXClusterDatabaseSpec
-	for _, db := range combined {
-		merged = append(merged, db)
-	}
-	sort.Slice(merged, func(i, j int) bool { return merged[i].DatabaseName < merged[j].DatabaseName })
+	merged := mergeDatabaseSpecs(cluster.Spec.Databases, dbSpecs)
 	tempCluster := cluster.DeepCopy()
 	tempCluster.Spec.Databases = merged
 	_, err = ensureDatabases(ctx, tempCluster, cred)
@@ -1418,6 +1406,28 @@ func extractDatabasesFromSchemas(schemas map[string][]ADXClusterSchema) map[stri
 		}
 	}
 	return dbSet
+}
+
+func mergeDatabaseSpecs(userDbs, discoveredDbs []adxmonv1.ADXClusterDatabaseSpec) []adxmonv1.ADXClusterDatabaseSpec {
+	combined := make(map[string]adxmonv1.ADXClusterDatabaseSpec, len(userDbs)+len(discoveredDbs))
+	for _, db := range userDbs {
+		combined[db.DatabaseName] = db
+	}
+	for _, db := range discoveredDbs {
+		if existing, ok := combined[db.DatabaseName]; ok {
+			if existing.TelemetryType == "" {
+				combined[db.DatabaseName] = db
+			}
+			continue
+		}
+		combined[db.DatabaseName] = db
+	}
+	merged := make([]adxmonv1.ADXClusterDatabaseSpec, 0, len(combined))
+	for _, db := range combined {
+		merged = append(merged, db)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].DatabaseName < merged[j].DatabaseName })
+	return merged
 }
 
 func collectInventoryByDatabase(schemas map[string][]ADXClusterSchema) map[string][]string {
