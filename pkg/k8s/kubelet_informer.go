@@ -524,10 +524,7 @@ func appendCACert(transport *http.Transport, path string) error {
 	}
 
 	certPool, err := x509.SystemCertPool()
-	if err != nil {
-		return err
-	}
-	if certPool == nil {
+	if err != nil || certPool == nil {
 		certPool = x509.NewCertPool()
 	}
 
