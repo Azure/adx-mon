@@ -132,7 +132,9 @@ func TestKubeletPodInformerMultipleAddsUpdatesDeletes(t *testing.T) {
 
 	// Poll again with no changes - should not generate any events
 	clk.Step(time.Minute)
-	time.Sleep(50 * time.Millisecond) // Give poll cycle time to complete
+	// Give poll cycle time to complete.
+	// We are looking for the absence of events, so not reliable to use Eventually to watch for it to complete.
+	time.Sleep(50 * time.Millisecond)
 	handler.assertNoMoreEvents(t)
 
 	// Update pod-1
