@@ -83,20 +83,6 @@ spec:
                   Conditions conveys detailed reconciliation state in a Kubernetes-native format.
                   Controllers set FunctionCriteriaMatch to surface criteria gating decisions and
                   FunctionReconciled to report the outcome of the most recent reconciliation attempt.
-                  Functions targeting databases that the ingestor does not manage are skipped silently;
-                  their existing conditions remain unchanged to avoid oscillating status between clusters.
-
-                  Example:
-                    status:
-                      conditions:
-                      - type: function.adx-mon.azure.com/CriteriaMatch
-                        status: "False"
-                        reason: CriteriaNotMatched
-                        message: "Criteria expression evaluated to false for cluster labels: environment=prod, location=westus2"
-                      - type: function.adx-mon.azure.com/Reconciled
-                        status: "False"
-                        reason: CriteriaNotMatched
-                        message: "Function skipped because criteria expression evaluated to false for cluster labels: environment=prod, location=westus2"
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

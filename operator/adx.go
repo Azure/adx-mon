@@ -43,6 +43,72 @@ const (
 	otlpHubSchemaDefinition = "Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic"
 )
 
+func resolvedClusterEndpoint(cluster *adxmonv1.ADXCluster) string {
+	if cluster.Status.Endpoint != "" {
+		return cluster.Status.Endpoint
+	}
+	return cluster.Spec.Endpoint
+}
+
+func (r *AdxReconciler) setClusterCondition(ctx context.Context, cluster *adxmonv1.ADXCluster, status metav1.ConditionStatus, reason, message string, mutate func(*adxmonv1.ADXClusterStatus) bool) error {
+	logger.Infof("ADXCluster %s: updating status - %s: %s", cluster.Spec.ClusterName, reason, message)
+	condition := metav1.Condition{
+		Type:               adxmonv1.ADXClusterConditionOwner,
+		Status:             status,
+		ObservedGeneration: cluster.GetGeneration(),
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+	changed := false
+	if mutate != nil {
+		if mutate(&cluster.Status) {
+			changed = true
+		}
+	}
+	if meta.SetStatusCondition(&cluster.Status.Conditions, condition) {
+		changed = true
+	}
+	if changed {
+		if err := r.Status().Update(ctx, cluster); err != nil {
+			return fmt.Errorf("failed to update status: %w", err)
+		}
+	}
+	return nil
+}
+
+func appliedProvisionStateEqual(a, b *adxmonv1.AppliedProvisionState) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.SkuName != b.SkuName || a.Tier != b.Tier {
+		return false
+	}
+	if len(a.UserAssignedIdentities) != len(b.UserAssignedIdentities) {
+		return false
+	}
+	for i := range a.UserAssignedIdentities {
+		if a.UserAssignedIdentities[i] != b.UserAssignedIdentities[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func copyAppliedProvisionState(src *adxmonv1.AppliedProvisionState) *adxmonv1.AppliedProvisionState {
+	if src == nil {
+		return nil
+	}
+	cp := &adxmonv1.AppliedProvisionState{
+		SkuName: src.SkuName,
+		Tier:    src.Tier,
+	}
+	if len(src.UserAssignedIdentities) > 0 {
+		cp.UserAssignedIdentities = append([]string(nil), src.UserAssignedIdentities...)
+	}
+	return cp
+}
+
 func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var cluster adxmonv1.ADXCluster
 	if err := r.Get(ctx, req.NamespacedName, &cluster); err != nil {
@@ -129,65 +195,80 @@ func (r *AdxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
 	logger.Infof("ADXCluster %s: entering CreateCluster phase", cluster.Spec.ClusterName)
 
-	setClusterStatusCondition := func(reason, message string) error {
-		logger.Infof("ADXCluster %s: updating status - %s: %s", cluster.Spec.ClusterName, reason, message)
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionUnknown,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             reason,
-			Message:            message,
+	if cluster.Spec.Provision == nil {
+		if cluster.Spec.Endpoint == "" {
+			_ = r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
+				changed := false
+				if status.Endpoint != "" {
+					status.Endpoint = ""
+					changed = true
+				}
+				if status.AppliedProvisionState != nil {
+					status.AppliedProvisionState = nil
+					changed = true
+				}
+				return changed
+			})
+			return ctrl.Result{}, nil
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return fmt.Errorf("failed to update status: %w", err)
+
+		logger.Infof("ADXCluster %s: provision section not specified; using provided endpoint", cluster.Spec.ClusterName)
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "ProvisioningSkipped", fmt.Sprintf("Using existing endpoint %s", cluster.Spec.Endpoint), func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != cluster.Spec.Endpoint {
+				status.Endpoint = cluster.Spec.Endpoint
+				changed = true
 			}
+			if status.AppliedProvisionState != nil {
+				status.AppliedProvisionState = nil
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
-		return nil
+		return ctrl.Result{}, nil
 	}
 
-	// Set an initial status to communicate our current state.
-	if err := setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Creating ADX cluster %s", cluster.Name)); err != nil {
+	if err := r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Creating ADX cluster %s", cluster.Name), nil); err != nil {
 		return ctrl.Result{}, err
 	}
-	// ADXCluster has many configuration options, but also supports zero-config; however, in order to create a functioning cluster,
-	// we need to ensure certain options are specified, either by the user or by default values.
-	if err := applyDefaults(ctx, r, cluster); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to apply defaults: %w", err)
+
+	prov := cluster.Spec.Provision
+	missing := []string{}
+	if prov.SubscriptionId == "" {
+		missing = append(missing, "subscriptionId")
 	}
-	// If the cluster already has an Endpoint, we assume it exists (either user-provided or previously created),
-	// so the create routine has no work left to do.
-	if cluster.Spec.Endpoint != "" {
-		logger.Infof("ADXCluster %s: endpoint already exists (%s), marking as ready", cluster.Spec.ClusterName, cluster.Spec.Endpoint)
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "ClusterReady",
-			Message:            fmt.Sprintf("Cluster %s is ready", cluster.Spec.ClusterName),
-		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil // Goal state reached, cluster is ready
+	if prov.ResourceGroup == "" {
+		missing = append(missing, "resourceGroup")
+	}
+	if prov.Location == "" {
+		missing = append(missing, "location")
+	}
+	if prov.SkuName == "" {
+		missing = append(missing, "skuName")
+	}
+	if prov.Tier == "" {
+		missing = append(missing, "tier")
+	}
+	if len(missing) > 0 {
+		errMsg := fmt.Sprintf("missing required provisioning fields: %s", strings.Join(missing, ", "))
+		logger.Errorf("ADXCluster %s: %s", cluster.Spec.ClusterName, errMsg)
+		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningInvalid", errMsg, nil)
+		return ctrl.Result{}, nil
 	}
 
-	// Ensure the ADX provider is registered for this subscription.
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
-	registered, err := ensureAdxProvider(ctx, cred, cluster.Spec.Provision.SubscriptionId)
+	registered, err := ensureAdxProvider(ctx, cred, prov.SubscriptionId)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to ensure Kusto provider is registered: %w", err)
 	}
 	if !registered {
 		logger.Infof("ADXCluster %s: waiting for provider registration, requeuing in 5 minutes", cluster.Spec.ClusterName)
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", cluster.Spec.Provision.SubscriptionId))
+		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", prov.SubscriptionId), nil)
 		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
@@ -202,9 +283,8 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, err
 	}
 	if !clusterReady {
-		// We must wait for the cluster to be in a ready state before we can continue configuration.
 		logger.Infof("ADXCluster %s: cluster not ready yet, requeuing in 1 minute", cluster.Spec.ClusterName)
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName))
+		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName), nil)
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
@@ -214,23 +294,12 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, err
 	}
 	if dbCreated {
-		// Wait for databases to be created.
 		logger.Infof("ADXCluster %s: databases created, requeuing in 1 minute", cluster.Spec.ClusterName)
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName))
+		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName), nil)
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
-	_ = setClusterStatusCondition(ADXClusterWaitingReason, "Provisioning ADX clusters")
 
-	logger.Infof("ADXCluster %s: ensuring heartbeat table", cluster.Spec.ClusterName)
-	tblCreated, err := ensureHeartbeatTable(ctx, cluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if tblCreated {
-		// Tables are created synchronously, no waiting is necessary.
-		logger.Infof("ADXCluster %s: heartbeat table created", cluster.Spec.ClusterName)
-		_ = setClusterStatusCondition(ADXClusterCreatingReason, "Provisioned Heartbeat Table")
-	}
+	_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Provisioning ADX clusters", nil)
 
 	logger.Infof("ADXCluster %s: CreateCluster phase complete, requeuing in 1 minute", cluster.Spec.ClusterName)
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
@@ -347,60 +416,6 @@ func createOrUpdateKustoCluster(ctx context.Context, cluster *adxmonv1.ADXCluste
 	return true, nil // Cluster is ready
 }
 
-// databaseExists checks if a database exists in the Kusto cluster by querying .show databases
-func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, databaseName string) (bool, error) {
-	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
-	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
-		// Enables kustainer integration testing
-		ep.WithDefaultAzureCredential()
-	}
-	client, err := kusto.New(ep)
-	if err != nil {
-		return false, fmt.Errorf("failed to create Kusto client: %w", err)
-	}
-
-	// NOTE: Management (dot) commands do not support query parameters. Using parameters here
-	// results in a syntax error like SYN0100 ("Admin commands must have a dot (.) character as their first non-whitespace character").
-	// For this specific usage we escape the database name as a string literal inline.
-	// databaseName originates from the CR spec and is restricted by validation, ensuring no injection.
-	q := kql.New(".show databases | where DatabaseName == ").AddString(databaseName).AddLiteral(" | count")
-
-	// Use any database for the management command - we'll use the first database or default to "master"
-	queryDatabase := "master"
-	if len(cluster.Spec.Databases) > 0 {
-		queryDatabase = cluster.Spec.Databases[0].DatabaseName
-	}
-
-	result, err := client.Mgmt(ctx, queryDatabase, q)
-	if err != nil {
-		return false, fmt.Errorf("failed to check database existence: %w", err)
-	}
-	defer result.Stop()
-
-	for {
-		row, errInline, errFinal := result.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve databases: %w", errFinal)
-		}
-
-		var db DatabaseExistsRec
-		if err := row.ToStruct(&db); err != nil {
-			return false, fmt.Errorf("failed to parse database record: %w", err)
-		}
-		if db.Count > 0 {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
 // ensureDatabases creates databases if they do not exist, returns true if any were created
 func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azcore.TokenCredential) (bool, error) {
 	if cluster.Spec.Provision == nil {
@@ -424,16 +439,6 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 	}
 	var dbCreated bool
 	for _, db := range databases {
-		// First check if the database already exists using Kusto query
-		exists, err := databaseExists(ctx, cluster, db.DatabaseName)
-		if err != nil {
-			logger.Warnf("Failed to check if database %s exists using Kusto query: %v, falling back to ARM API", db.DatabaseName, err)
-		} else if exists {
-			logger.Infof("Database %s already exists in cluster %s", db.DatabaseName, cluster.Spec.ClusterName)
-			continue
-		}
-
-		// If database doesn't exist or we couldn't check, use ARM API to verify availability and create
 		available, err := databasesClient.CheckNameAvailability(
 			ctx,
 			cluster.Spec.Provision.ResourceGroup,
@@ -467,6 +472,8 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 				return false, fmt.Errorf("failed to create database: %w", err)
 			}
 			dbCreated = true
+		} else {
+			logger.Infof("Database %s already exists in cluster %s", db.DatabaseName, cluster.Spec.ClusterName)
 		}
 	}
 	return dbCreated, nil
@@ -480,8 +487,12 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 		cluster.Spec.Federation.HeartbeatTable == nil {
 		return false, nil
 	}
-	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
-	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
+	endpoint := resolvedClusterEndpoint(cluster)
+	if strings.TrimSpace(endpoint) == "" {
+		return false, fmt.Errorf("heartbeat table cannot be ensured without an endpoint")
+	}
+	ep := kusto.NewConnectionStringBuilder(endpoint)
+	if strings.HasPrefix(endpoint, "https://") {
 		// Enables kustainer integration testing
 		ep.WithDefaultAzureCredential()
 	}
@@ -542,26 +553,35 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	// By comparing the current CRD spec to the stored applied state, we can determine exactly which fields the user has updated
 	// and ensure only those changes are propagated to the managed cluster.
 	if cluster.Spec.Provision == nil {
-		logger.Infof("ADXCluster %s: no provision spec, marking as complete", cluster.Spec.ClusterName)
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "Complete",
-			Message:            "Cluster is already reconciled",
+		logger.Infof("ADXCluster %s: no provision spec, marking as bring-your-own", cluster.Spec.ClusterName)
+		endpoint := strings.TrimSpace(cluster.Spec.Endpoint)
+		statusType := metav1.ConditionTrue
+		reason := "ProvisioningSkipped"
+		message := "Cluster is already reconciled"
+		if endpoint == "" {
+			statusType = metav1.ConditionFalse
+			reason = "ProvisioningDisabled"
+			message = "No provisioning configuration or endpoint provided"
+		} else {
+			message = fmt.Sprintf("Using existing endpoint %s", endpoint)
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		if err := r.setClusterCondition(ctx, cluster, statusType, reason, message, func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != endpoint {
+				status.Endpoint = endpoint
+				changed = true
 			}
+			if status.AppliedProvisionState != nil {
+				status.AppliedProvisionState = nil
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // Since we don't have a previous state, we can't update
 	}
-	appliedProvisionState, err := cluster.Spec.Provision.LoadAppliedProvisioningState()
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to load applied provisioning state: %w", err)
-	}
+	appliedProvisionState := cluster.Status.AppliedProvisionState
 	if appliedProvisionState == nil {
 		appliedProvisionState = &adxmonv1.AppliedProvisionState{}
 	}
@@ -654,11 +674,158 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
+func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
+	clusterUpdate := armkusto.Cluster{
+		Location: resp.Location,
+		Identity: resp.Identity,
+		Tags:     resp.Tags,
+	}
+
+	if cluster.Spec.Provision == nil {
+		return clusterUpdate, false
+	}
+
+	desiredSku := strings.TrimSpace(cluster.Spec.Provision.SkuName)
+	desiredTier := strings.TrimSpace(cluster.Spec.Provision.Tier)
+
+	var currentSku, currentTier string
+	if resp.SKU != nil {
+		if resp.SKU.Name != nil {
+			currentSku = string(*resp.SKU.Name)
+		}
+		if resp.SKU.Tier != nil {
+			currentTier = string(*resp.SKU.Tier)
+		}
+	}
+
+	var appliedSku, appliedTier string
+	if applied != nil {
+		appliedSku = strings.TrimSpace(applied.SkuName)
+		appliedTier = strings.TrimSpace(applied.Tier)
+	}
+
+	if desiredSku == "" && desiredTier == "" {
+		return clusterUpdate, false
+	}
+
+	// Nothing to do if the cluster already matches the desired state.
+	if desiredSku == currentSku && desiredTier == currentTier {
+		return clusterUpdate, false
+	}
+
+	// Only attempt an update when the actual state still matches what we previously applied.
+	if applied != nil && (appliedSku != currentSku || appliedTier != currentTier) {
+		return clusterUpdate, false
+	}
+
+	clusterUpdate.SKU = &armkusto.AzureSKU{
+		Name: toSku(desiredSku),
+		Tier: toTier(desiredTier),
+	}
+	return clusterUpdate, true
+}
+
+func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *armkusto.Cluster) bool {
+	if cluster.Spec.Provision == nil {
+		return false
+	}
+
+	if resp.Identity == nil || resp.Identity.Type == nil || *resp.Identity.Type != armkusto.IdentityTypeUserAssigned {
+		return false
+	}
+
+	desiredSet := make(map[string]struct{})
+	for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		desiredSet[id] = struct{}{}
+	}
+
+	appliedSet := make(map[string]struct{})
+	if applied != nil {
+		for _, id := range applied.UserAssignedIdentities {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			appliedSet[id] = struct{}{}
+		}
+	}
+
+	actualSet := make(map[string]struct{})
+	for id := range resp.Identity.UserAssignedIdentities {
+		actualSet[id] = struct{}{}
+	}
+
+	finalSet := make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
+	for id := range actualSet {
+		if _, managed := appliedSet[id]; !managed {
+			finalSet[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+		}
+	}
+	for id := range desiredSet {
+		finalSet[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
+	}
+
+	if len(finalSet) == len(actualSet) {
+		same := true
+		for id := range actualSet {
+			if _, ok := finalSet[id]; !ok {
+				same = false
+				break
+			}
+		}
+		if same {
+			return false
+		}
+	}
+
+	if clusterUpdate.Identity == nil {
+		clusterUpdate.Identity = &armkusto.Identity{}
+	}
+	clusterUpdate.Identity.Type = to.Ptr(armkusto.IdentityTypeUserAssigned)
+	clusterUpdate.Identity.UserAssignedIdentities = finalSet
+	return true
+}
+
 func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
 	logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
 
-	// Note: Like UpdateCluster, this method handles 403 Forbidden errors gracefully
-	// to support federation scenarios with limited permissions.
+	if cluster.Spec.Provision == nil {
+		endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
+		if endpoint == "" {
+			_ = r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
+				changed := false
+				if status.Endpoint != "" {
+					status.Endpoint = ""
+					changed = true
+				}
+				if status.AppliedProvisionState != nil {
+					status.AppliedProvisionState = nil
+					changed = true
+				}
+				return changed
+			})
+			return ctrl.Result{}, nil
+		}
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "ProvisioningSkipped", fmt.Sprintf("Using existing endpoint %s", endpoint), func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != endpoint {
+				status.Endpoint = endpoint
+				changed = true
+			}
+			if status.AppliedProvisionState != nil {
+				status.AppliedProvisionState = nil
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
 
 	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
@@ -671,85 +838,72 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 	resp, err := clustersClient.Get(ctx, cluster.Spec.Provision.ResourceGroup, cluster.Spec.ClusterName, nil)
 	if err != nil {
-		// Check if this is a 403 Forbidden error, which is expected when the operator
-		// is managing existing clusters without sufficient permissions to read cluster details
 		var respErr *azcore.ResponseError
 		if errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden {
 			logger.Warnf("ADXCluster %s: insufficient permissions to check cluster status (403 Forbidden), assuming cluster is ready for federation tasks", cluster.Spec.ClusterName)
-			c := metav1.Condition{
-				Type:               adxmonv1.ADXClusterConditionOwner,
-				Status:             metav1.ConditionTrue,
-				ObservedGeneration: cluster.GetGeneration(),
-				LastTransitionTime: metav1.Now(),
-				Reason:             "PermissionRestricted",
-				Message:            "Cluster status check restricted due to insufficient permissions, federation features remain available",
+			if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "PermissionRestricted", "Cluster status check restricted due to insufficient permissions, federation features remain available", nil); err != nil {
+				return ctrl.Result{}, err
 			}
-			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-				if err := r.Status().Update(ctx, cluster); err != nil {
-					return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-				}
-			}
-			return ctrl.Result{}, nil // Non-terminal state, federation can still work
+			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 	if resp.Properties == nil || resp.Properties.State == nil {
 		logger.Infof("ADXCluster %s: cluster properties not available yet, requeuing in 1 minute", cluster.Spec.ClusterName)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
+		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Cluster properties unavailable", nil)
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
 	logger.Infof("ADXCluster %s: cluster state is %s", cluster.Spec.ClusterName, string(*resp.Properties.State))
 
-	// If the cluster is running, we're done
 	if *resp.Properties.State == armkusto.StateRunning {
-		logger.Infof("ADXCluster %s: cluster is running, marking as ready", cluster.Spec.ClusterName)
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "ClusterReady",
-			Message:            fmt.Sprintf("Cluster %s is ready", cluster.Spec.ClusterName),
+		endpoint := ""
+		if resp.Properties.URI != nil {
+			endpoint = *resp.Properties.URI
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		if endpoint == "" {
+			endpoint = resolvedClusterEndpoint(cluster)
+		}
+
+		var desiredApplied *adxmonv1.AppliedProvisionState
+		if cluster.Spec.Provision != nil {
+			desiredApplied = &adxmonv1.AppliedProvisionState{
+				SkuName: cluster.Spec.Provision.SkuName,
+				Tier:    cluster.Spec.Provision.Tier,
+			}
+			if len(cluster.Spec.Provision.UserAssignedIdentities) > 0 {
+				desiredApplied.UserAssignedIdentities = append([]string(nil), cluster.Spec.Provision.UserAssignedIdentities...)
 			}
 		}
 
-		if err := cluster.Spec.Provision.StoreAppliedProvisioningState(); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to store applied provisioning state: %w", err)
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "ClusterReady", fmt.Sprintf("Cluster %s is ready", cluster.Spec.ClusterName), func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if status.Endpoint != endpoint {
+				status.Endpoint = endpoint
+				changed = true
+			}
+			if !appliedProvisionStateEqual(status.AppliedProvisionState, desiredApplied) {
+				status.AppliedProvisionState = copyAppliedProvisionState(desiredApplied)
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
-		cluster.Spec.Endpoint = *resp.Properties.URI
-		if err := r.Update(ctx, cluster); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update cluster endpoint: %w", err)
-		}
-
-		return ctrl.Result{}, nil // Goal state reached
+		return ctrl.Result{}, nil
 	}
 
-	// If the cluster has failed to provision, we're done
 	if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == armkusto.ProvisioningStateFailed {
 		logger.Errorf("ADXCluster %s: cluster provisioning failed", cluster.Spec.ClusterName)
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             string(armkusto.ProvisioningStateFailed),
-			Message:            "Cluster creation failed",
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, string(armkusto.ProvisioningStateFailed), "Cluster creation failed", nil); err != nil {
+			return ctrl.Result{}, err
 		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
-			}
-		}
-		return ctrl.Result{}, nil // This is a terminal failure
+		return ctrl.Result{}, nil
 	}
 
-	// For all other states, we can safely continue to wait
 	logger.Infof("ADXCluster %s: cluster not ready yet (state: %s), requeuing in 1 minute", cluster.Spec.ClusterName, string(*resp.Properties.State))
-	return ctrl.Result{RequeueAfter: time.Minute}, nil // Not ready yet
+	_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, fmt.Sprintf("Cluster state: %s", string(*resp.Properties.State)), nil)
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
 func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -774,7 +928,7 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 }
 
 func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster, target adxmonv1.ADXClusterFederatedClusterSpec) error {
-	partitionClusterEndpoint := cluster.Spec.Endpoint
+	partitionClusterEndpoint := resolvedClusterEndpoint(cluster)
 	ep := kusto.NewConnectionStringBuilder(partitionClusterEndpoint)
 	if strings.HasPrefix(partitionClusterEndpoint, "https://") {
 		// Enables kustainer integration testing
@@ -944,8 +1098,13 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	logger.Infof("ADXCluster %s: starting federation reconciliation", cluster.Spec.ClusterName)
 
 	// Step 1: Create Kusto client
-	ep := kusto.NewConnectionStringBuilder(cluster.Spec.Endpoint)
-	if strings.HasPrefix(cluster.Spec.Endpoint, "https://") {
+	endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
+	if endpoint == "" {
+		logger.Infof("ADXCluster %s: endpoint unavailable for federation, requeuing", cluster.Spec.ClusterName)
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+	ep := kusto.NewConnectionStringBuilder(endpoint)
+	if strings.HasPrefix(endpoint, "https://") {
 		ep.WithDefaultAzureCredential()
 	}
 	client, err := kusto.New(ep)
@@ -981,8 +1140,27 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create default credential: %w", err)
 	}
-	cluster.Spec.Databases = dbSpecs
-	_, err = ensureDatabases(ctx, cluster, cred)
+	combined := make(map[string]adxmonv1.ADXClusterDatabaseSpec)
+	for _, db := range cluster.Spec.Databases {
+		combined[db.DatabaseName] = db
+	}
+	for _, db := range dbSpecs {
+		if existing, ok := combined[db.DatabaseName]; ok {
+			if existing.TelemetryType == "" {
+				combined[db.DatabaseName] = db
+			}
+			continue
+		}
+		combined[db.DatabaseName] = db
+	}
+	var merged []adxmonv1.ADXClusterDatabaseSpec
+	for _, db := range combined {
+		merged = append(merged, db)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].DatabaseName < merged[j].DatabaseName })
+	tempCluster := cluster.DeepCopy()
+	tempCluster.Spec.Databases = merged
+	_, err = ensureDatabases(ctx, tempCluster, cred)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
@@ -1135,176 +1313,32 @@ func ensureAdxProvider(ctx context.Context, cred azcore.TokenCredential, subscri
 	return true, nil
 }
 
-func applyDefaults(ctx context.Context, r *AdxReconciler, cluster *adxmonv1.ADXCluster) error {
-	// Get IMDS metadata for defaults
-	imdsLocation, imdsSub, imdsRG, _, imdsOK := getIMDSMetadata(ctx, "")
-
-	// Authenticate early since we need it for SKU selection
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return fmt.Errorf("failed to create default credential: %w", err)
-	}
-
-	updated := false
-
-	// Initialize provision and status if needed
-	if cluster.Spec.Provision == nil {
-		logger.Infof("Zero config specified for cluster, discovering defaults")
-		cluster.Spec.Provision = &adxmonv1.ADXClusterProvisionSpec{}
-		updated = true
-	}
-
-	// Fill in defaults from IMDS when available
-	if cluster.Spec.Provision.Location == "" && imdsOK {
-		logger.Infof("Setting location to %s for cluster", imdsLocation)
-		cluster.Spec.Provision.Location = imdsLocation
-		updated = true
-	}
-
-	if cluster.Spec.Provision.SubscriptionId == "" && imdsOK {
-		logger.Infof("Setting subscription ID to %s for cluster", imdsSub)
-		cluster.Spec.Provision.SubscriptionId = imdsSub
-		updated = true
-	}
-
-	if cluster.Spec.Provision.ResourceGroup == "" && imdsOK {
-		logger.Infof("Setting resource group to %s for cluster", imdsRG)
-		cluster.Spec.Provision.ResourceGroup = imdsRG
-		updated = true
-	}
-
-	// Get best available SKU if not specified and Endpoint isn't already set, which means the cluster is already provisioned
-	if cluster.Spec.Provision.SkuName == "" && cluster.Spec.Endpoint == "" {
-		sku, tier, err := getBestAvailableSKU(ctx, cluster.Spec.Provision.SubscriptionId, cluster.Spec.Provision.Location, cred)
-		if err != nil {
-			return fmt.Errorf("failed to determine SKU: %w", err)
-		}
-		cluster.Spec.Provision.SkuName = sku
-		cluster.Spec.Provision.Tier = tier
-		updated = true
-	}
-
-	if len(cluster.Spec.Databases) == 0 {
-		// Default to two databases if none specified
-		cluster.Spec.Databases = []adxmonv1.ADXClusterDatabaseSpec{
-			{
-				DatabaseName:  "Metrics",
-				TelemetryType: adxmonv1.DatabaseTelemetryMetrics,
-			},
-			{
-				DatabaseName:  "Logs",
-				TelemetryType: adxmonv1.DatabaseTelemetryLogs,
-			},
-		}
-		updated = true
-	}
-
-	// Persist any changes back to the API server
-	if updated {
-		if err := r.Update(ctx, cluster); err != nil {
-			logger.Errorf("Failed to update cluster information: %v", err)
-			return fmt.Errorf("failed to update cluster spec: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func diffSkus(resp armkusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
-	clusterUpdate := armkusto.Cluster{
-		Location:   resp.Location,
-		SKU:        resp.SKU,
-		Identity:   resp.Identity,
-		Properties: resp.Properties,
-	}
-	if resp.SKU == nil {
-		return clusterUpdate, false
-	}
-
-	var updated bool
-	if resp.SKU.Name != nil && string(*resp.SKU.Name) == appliedProvisionState.SkuName && appliedProvisionState.SkuName != cluster.Spec.Provision.SkuName {
-		logger.Infof("Updating cluster %s sku from %s to %s", *resp.Name, string(*resp.SKU.Name), cluster.Spec.Provision.SkuName)
-		clusterUpdate.SKU.Name = toSku(cluster.Spec.Provision.SkuName)
-		updated = true
-	}
-	if resp.SKU.Tier != nil && string(*resp.SKU.Tier) == appliedProvisionState.Tier && appliedProvisionState.Tier != cluster.Spec.Provision.Tier {
-		logger.Infof("Updating cluster %s tier from %s to %s", *resp.Name, string(*resp.SKU.Tier), cluster.Spec.Provision.Tier)
-		clusterUpdate.SKU.Tier = toTier(cluster.Spec.Provision.Tier)
-		updated = true
-	}
-	return clusterUpdate, updated
-}
-
-func diffIdentities(resp armkusto.ClustersClientGetResponse, appliedProvisionState *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate *armkusto.Cluster) bool {
-	var updated bool
-	if resp.Identity != nil && resp.Identity.Type != nil && *resp.Identity.Type == armkusto.IdentityTypeUserAssigned && appliedProvisionState.UserAssignedIdentities != nil {
-		// This block is responsible for reconciling the set of user-assigned identities on the cluster.
-		// The goal is to ensure that only the identities managed by the operator (i.e., those specified in the CRD)
-		// are added or removed, without disturbing any identities that may have been added out-of-band (e.g., manually in Azure).
-		//
-		// To do this, we compare the set of user-assigned identities from the last-applied state (appliedProvisionState.UserAssignedIdentities)
-		// with the current desired state from the CRD (cluster.Spec.Provision.UserAssignedIdentities):
-		//   - For any identity present in the CRD but not in the applied state, we add it to resp.Identity.UserAssignedIdentities
-		//     (but only if it isn't already present, to avoid overwriting manual additions).
-		//   - For any identity present in the applied state but not in the CRD, we remove it from resp.Identity.UserAssignedIdentities
-		//     (but only if it is present, and only if it was previously managed by the operator).
-		//
-		// This approach ensures that we do not inadvertently remove or alter any identities that a user may have added
-		// directly in Azure or through other means. Only the identities that the operator is responsible for are managed here.
-		// The 'updated' flag is set to true if any changes are made, so that the update can be persisted.
-
-		// Build sets for comparison
-		currentSet := make(map[string]struct{})
-		for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
-			currentSet[id] = struct{}{}
-		}
-		appliedSet := make(map[string]struct{})
-		for _, id := range appliedProvisionState.UserAssignedIdentities {
-			appliedSet[id] = struct{}{}
-		}
-		// Additions: in currentSet but not in appliedSet
-		for id := range currentSet {
-			if _, wasApplied := appliedSet[id]; !wasApplied {
-				if resp.Identity.UserAssignedIdentities == nil {
-					clusterUpdate.Identity.UserAssignedIdentities = make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)
-				}
-				if _, exists := resp.Identity.UserAssignedIdentities[id]; !exists {
-					clusterUpdate.Identity.UserAssignedIdentities[id] = &armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties{}
-					updated = true
-				}
-			}
-		}
-		// Deletions: in appliedSet but not in currentSet
-		for id := range appliedSet {
-			if _, isCurrent := currentSet[id]; !isCurrent {
-				if resp.Identity.UserAssignedIdentities != nil {
-					if _, exists := resp.Identity.UserAssignedIdentities[id]; exists {
-						delete(clusterUpdate.Identity.UserAssignedIdentities, id)
-						updated = true
-					}
-				}
-			}
-		}
-	}
-	return updated
-}
-
 func toSku(sku string) *armkusto.AzureSKUName {
-	for _, v := range armkusto.PossibleAzureSKUNameValues() {
-		if string(v) == sku {
-			return &v
+	if strings.TrimSpace(sku) == "" {
+		return nil
+	}
+	for _, candidate := range armkusto.PossibleAzureSKUNameValues() {
+		if string(candidate) == sku {
+			value := candidate
+			return &value
 		}
 	}
-	return nil
+	value := armkusto.AzureSKUName(sku)
+	return &value
 }
 
 func toTier(tier string) *armkusto.AzureSKUTier {
-	for _, v := range armkusto.PossibleAzureSKUTierValues() {
-		if string(v) == tier {
-			return &v
+	if strings.TrimSpace(tier) == "" {
+		return nil
+	}
+	for _, candidate := range armkusto.PossibleAzureSKUTierValues() {
+		if string(candidate) == tier {
+			value := candidate
+			return &value
 		}
 	}
-	return nil
+	value := armkusto.AzureSKUTier(tier)
+	return &value
 }
 
 func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.Database {
@@ -1414,6 +1448,49 @@ func collectInventoryByDatabase(schemas map[string][]ADXClusterSchema) map[strin
 		byDatabase[db] = names
 	}
 	return byDatabase
+}
+
+func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, database string) (bool, error) {
+	endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
+	if endpoint == "" {
+		return false, fmt.Errorf("cluster endpoint is empty")
+	}
+	csb := kusto.NewConnectionStringBuilder(endpoint)
+	if strings.HasPrefix(endpoint, "https://") {
+		csb.WithDefaultAzureCredential()
+	}
+	client, err := kusto.New(csb)
+	if err != nil {
+		return false, fmt.Errorf("failed to create Kusto client: %w", err)
+	}
+	defer client.Close()
+
+	stmt := kql.New(".show databases | where Name == ").AddString(database).AddLiteral(" | count")
+	result, err := client.Mgmt(ctx, "", stmt)
+	if err != nil {
+		return false, fmt.Errorf("failed to query database existence: %w", err)
+	}
+	defer result.Stop()
+
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return false, fmt.Errorf("failed to read database existence: %w", errFinal)
+		}
+		var rec DatabaseExistsRec
+		if err := row.ToStruct(&rec); err != nil {
+			return false, fmt.Errorf("failed to parse database existence: %w", err)
+		}
+		return rec.Count > 0, nil
+	}
+
+	return false, nil
 }
 
 func ensureHubTables(ctx context.Context, client *kusto.Client, database string, tables []string) error {
