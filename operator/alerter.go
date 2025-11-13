@@ -347,8 +347,8 @@ func (r *AlerterReconciler) templateData(ctx context.Context, alerter *adxmonv1.
 		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
 			return false, nil, fmt.Errorf("ADXCluster is not ready")
 		}
-		if cluster.Spec.Endpoint != "" {
-			kustoEndpoints = append(kustoEndpoints, cluster.Spec.Endpoint)
+		if endpoint := resolvedClusterEndpoint(&cluster); endpoint != "" {
+			kustoEndpoints = append(kustoEndpoints, endpoint)
 		}
 	}
 	data = &alerterTemplateData{
