@@ -71,14 +71,15 @@ var DefaultConfig = Config{
 }
 
 type Config struct {
-	Endpoint           string `toml:"endpoint,omitempty" comment:"Ingestor URL to send collected telemetry."`
-	Kubeconfig         string `toml:"kube-config,omitempty" comment:"Path to kubernetes client config"`
-	InsecureSkipVerify bool   `toml:"insecure-skip-verify,omitempty" comment:"Skip TLS verification."`
-	ListenAddr         string `toml:"listen-addr,omitempty" comment:"Address to listen on for endpoints."`
-	Region             string `toml:"region,omitempty" comment:"Region is a location identifier."`
-	TLSKeyFile         string `toml:"tls-key-file,omitempty" comment:"Optional path to the TLS key file."`
-	TLSCertFile        string `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
-	StorageBackend     string `toml:"storage-backend,omitempty" comment:"Storage backend used for WAL segments. Valid values: adx, clickhouse."`
+	Endpoint           string            `toml:"endpoint,omitempty" comment:"Ingestor URL to send collected telemetry."`
+	Kubeconfig         string            `toml:"kube-config,omitempty" comment:"Path to kubernetes client config file. If not set, in-cluster config is used for node metadata and pod discovery."`
+	KubeletDiscovery   *KubeletDiscovery `toml:"kubelet-discovery,omitempty" comment:"Optional: Kubelet-based pod discovery configuration.\nWhen present, uses kubelet polling instead of Kubernetes API watch.\nReduces API server load."`
+	InsecureSkipVerify bool              `toml:"insecure-skip-verify,omitempty" comment:"Skip TLS verification."`
+	ListenAddr         string            `toml:"listen-addr,omitempty" comment:"Address to listen on for endpoints."`
+	Region             string            `toml:"region,omitempty" comment:"Region is a location identifier."`
+	TLSKeyFile         string            `toml:"tls-key-file,omitempty" comment:"Optional path to the TLS key file."`
+	TLSCertFile        string            `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
+	StorageBackend     string            `toml:"storage-backend,omitempty" comment:"Storage backend used for WAL segments. Valid values: adx, clickhouse."`
 
 	MaxConnections               int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
 	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
@@ -151,6 +152,31 @@ func (s *PrometheusScrape) Validate() error {
 	if s.ScrapeIntervalSeconds <= 0 {
 		return errors.New("prom-scrape.scrape-interval must be greater than 0")
 	}
+	return nil
+}
+
+type KubeletDiscovery struct {
+	Host           string `toml:"host,omitempty" comment:"Kubelet host address. Defaults to node name from NODE_NAME env var, or '127.0.0.1' if not set"`
+	Port           int    `toml:"port,omitempty" comment:"Kubelet port. Defaults to 10250"`
+	PollInterval   int    `toml:"poll-interval,omitempty" comment:"How often to poll the kubelet for pod updates (seconds). Defaults to 15"`
+	RequestTimeout int    `toml:"request-timeout,omitempty" comment:"Request timeout for kubelet API calls (seconds). Defaults to 10"`
+	TokenPath      string `toml:"token-path,omitempty" comment:"Path to service account token. Defaults to /var/run/secrets/kubernetes.io/serviceaccount/token"`
+	CAPath         string `toml:"ca-path,omitempty" comment:"Path to CA certificate for TLS verification. Defaults to /var/run/secrets/kubernetes.io/serviceaccount/ca.crt"`
+}
+
+func (k *KubeletDiscovery) Validate() error {
+	if k.Port < 0 || k.Port > 65535 {
+		return errors.New("kubelet-discovery.port must be between 0 and 65535")
+	}
+
+	if k.PollInterval != 0 && k.PollInterval < 1 {
+		return errors.New("kubelet-discovery.poll-interval must be at least 1 second")
+	}
+
+	if k.RequestTimeout != 0 && k.RequestTimeout < 1 {
+		return errors.New("kubelet-discovery.request-timeout must be at least 1 second")
+	}
+
 	return nil
 }
 
@@ -530,6 +556,12 @@ func (c *Config) Validate() error {
 
 	if c.StorageBackend == "" {
 		c.StorageBackend = backend
+	}
+
+	if c.KubeletDiscovery != nil {
+		if err := c.KubeletDiscovery.Validate(); err != nil {
+			return err
+		}
 	}
 
 	if c.Exporters != nil {
