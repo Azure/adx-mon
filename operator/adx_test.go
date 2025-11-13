@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -15,6 +16,9 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
 	"github.com/Azure/azure-kusto-go/kusto"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	kustotable "github.com/Azure/azure-kusto-go/kusto/data/table"
+	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -843,4 +847,253 @@ func TestEnsureHubTables(t *testing.T) {
 
 	// Re-run to confirm it remains idempotent when tables already exist.
 	require.NoError(t, ensureHubTables(ctx, client, database, tables))
+}
+
+type stubKustoQueryClient struct {
+	t              *testing.T
+	iterator       *kusto.RowIterator
+	err            error
+	expectDatabase string
+	expectFunction string
+	called         bool
+}
+
+func (s *stubKustoQueryClient) Query(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
+	if s.expectDatabase != "" {
+		require.Equal(s.t, s.expectDatabase, db)
+	}
+	if s.expectFunction != "" {
+		require.Contains(s.t, query.String(), s.expectFunction)
+	}
+	s.called = true
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.iterator, nil
+}
+
+func newMockBlockedClusterIterator(t *testing.T, rows []blockedClusterRow) *kusto.RowIterator {
+	t.Helper()
+	columns := kustotable.Columns{
+		{Name: "ClusterEndpoint", Type: kustotypes.String},
+		{Name: "Endpoint", Type: kustotypes.String},
+	}
+	mockRows, err := kusto.NewMockRows(columns)
+	require.NoError(t, err)
+	for i := range rows {
+		row := rows[i]
+		require.NoError(t, mockRows.Struct(&row))
+	}
+	iter := &kusto.RowIterator{}
+	require.NoError(t, iter.Mock(mockRows))
+	return iter
+}
+
+func makeBlockedCluster(static []string, fn *adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec) *adxmonv1.ADXCluster {
+	return &adxmonv1.ADXCluster{
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test-cluster",
+			Federation: &adxmonv1.ADXClusterFederationSpec{
+				BlockedClusters: &adxmonv1.ADXClusterFederationBlockedClustersSpec{
+					Static:        append([]string(nil), static...),
+					KustoFunction: fn,
+				},
+			},
+		},
+	}
+}
+
+func TestNormalizeEndpoint(t *testing.T) {
+	t.Parallel()
+	testCases := map[string]struct {
+		input string
+		want  string
+	}{
+		"empty":      {input: "", want: ""},
+		"trim":       {input: "  HTTPS://Example.kusto.windows.net/  ", want: "https://example.kusto.windows.net"},
+		"no-scheme":  {input: "FoO/", want: "foo"},
+		"already-ok": {input: "https://cluster", want: "https://cluster"},
+		"multi-slash": {input: "https://cluster///", want: "https://cluster"},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, normalizeEndpoint(tc.input))
+		})
+	}
+}
+
+func TestRestErrorIndicatesNotFound(t *testing.T) {
+	t.Parallel()
+	makeHTTPError := func(body string) *kustoerrors.HttpError {
+		return kustoerrors.HTTP(
+			kustoerrors.OpQuery,
+			"404",
+			http.StatusNotFound,
+			io.NopCloser(strings.NewReader(body)),
+			"prefix",
+		)
+	}
+
+	t.Run("code", func(t *testing.T) {
+		err := makeHTTPError(`{"error":{"code":"NotFound"}}`)
+		require.True(t, restErrorIndicatesNotFound(&err.KustoError))
+	})
+
+	t.Run("message", func(t *testing.T) {
+		err := makeHTTPError(`{"error":{"message":"Function does not exist"}}`)
+		require.True(t, restErrorIndicatesNotFound(&err.KustoError))
+	})
+}
+
+func TestContainsNotFoundText(t *testing.T) {
+	t.Parallel()
+	require.True(t, containsNotFoundText("Entity does not refer to any known entity"))
+	require.True(t, containsNotFoundText("Function not found"))
+	require.False(t, containsNotFoundText("all systems go"))
+}
+
+func TestIsBlockedFunctionNotFoundError(t *testing.T) {
+	t.Parallel()
+	makeHTTPError := func(body string) error {
+		return kustoerrors.HTTP(
+			kustoerrors.OpQuery,
+			"404",
+			http.StatusNotFound,
+			io.NopCloser(strings.NewReader(body)),
+			"prefix",
+		)
+	}
+
+	t.Run("kusto", func(t *testing.T) {
+		err := makeHTTPError(`{"error":{"code":"NotFound"}}`)
+		require.True(t, isBlockedFunctionNotFoundError(err))
+	})
+
+	t.Run("generic", func(t *testing.T) {
+		require.True(t, isBlockedFunctionNotFoundError(fmt.Errorf("Function does not exist")))
+		require.False(t, isBlockedFunctionNotFoundError(fmt.Errorf("permission denied")))
+	})
+}
+
+func TestFilterSchemaByBlockedEndpoints(t *testing.T) {
+	t.Parallel()
+	schema := map[string][]ADXClusterSchema{
+		"https://foo":  {{Database: "db1"}},
+		"https://bar/": {{Database: "db2"}},
+		"https://baz":  {{Database: "db3"}},
+	}
+	blocked := map[string]string{
+		normalizeEndpoint("https://foo/"): "foo",
+		normalizeEndpoint("https://bar"):  "bar",
+		normalizeEndpoint("https://qux"):  "qux",
+	}
+
+	removed, matched := filterSchemaByBlockedEndpoints(schema, blocked)
+	require.Equal(t, 2, removed)
+	require.Equal(t, 2, matched)
+	require.NotContains(t, schema, "https://foo")
+	require.NotContains(t, schema, "https://bar/")
+	require.Contains(t, schema, "https://baz")
+}
+
+func TestResolveBlockedClusterEndpoints_StaticOnly(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{" HTTPS://Foo/ ", " bar "}, nil)
+	result, err := resolveBlockedClusterEndpoints(context.Background(), nil, cluster)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	require.Equal(t, "HTTPS://Foo/", result["https://foo"])
+	require.Equal(t, "bar", result["bar"])
+}
+
+func TestResolveBlockedClusterEndpoints_FunctionSuccess(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{"https://static"}, &adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec{
+		Database: "db1",
+		Name:     "GetBlocked",
+	})
+	iter := newMockBlockedClusterIterator(t, []blockedClusterRow{
+		{ClusterEndpoint: "https://dyn1/"},
+		{Endpoint: " https://dyn2 "},
+	})
+	client := &stubKustoQueryClient{
+		t:              t,
+		iterator:       iter,
+		expectDatabase: "db1",
+		expectFunction: "GetBlocked()",
+	}
+	result, err := resolveBlockedClusterEndpoints(context.Background(), client, cluster)
+	require.NoError(t, err)
+	require.True(t, client.called)
+	require.Len(t, result, 3)
+	require.Contains(t, result, "https://static")
+	require.Equal(t, "https://dyn1/", result["https://dyn1"])
+	require.Contains(t, result, "https://dyn2")
+}
+
+func TestResolveBlockedClusterEndpoints_FunctionDedupesStatic(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{"https://dup"}, &adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec{
+		Database: "db1",
+		Name:     "GetBlocked",
+	})
+	iter := newMockBlockedClusterIterator(t, []blockedClusterRow{{ClusterEndpoint: "https://dup/"}})
+	client := &stubKustoQueryClient{t: t, iterator: iter}
+	result, err := resolveBlockedClusterEndpoints(context.Background(), client, cluster)
+	require.NoError(t, err)
+	require.True(t, client.called)
+	require.Len(t, result, 1)
+	require.Equal(t, "https://dup/", result["https://dup"])
+}
+
+func TestResolveBlockedClusterEndpoints_FunctionNotFound(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{"https://static"}, &adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec{
+		Database: "db1",
+		Name:     "GetBlocked",
+	})
+	client := &stubKustoQueryClient{t: t, err: fmt.Errorf("function not found")}
+	result, err := resolveBlockedClusterEndpoints(context.Background(), client, cluster)
+	require.NoError(t, err)
+	require.True(t, client.called)
+	require.Len(t, result, 1)
+	require.Contains(t, result, "https://static")
+}
+
+func TestResolveBlockedClusterEndpoints_FunctionError(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{"https://static"}, &adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec{
+		Database: "db1",
+		Name:     "GetBlocked",
+	})
+	client := &stubKustoQueryClient{t: t, err: fmt.Errorf("timeout while executing")}
+	result, err := resolveBlockedClusterEndpoints(context.Background(), client, cluster)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.True(t, client.called)
+}
+
+func TestResolveBlockedClusterEndpoints_FunctionRequiresClient(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{"https://static"}, &adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec{
+		Database: "db1",
+		Name:     "GetBlocked",
+	})
+	_, err := resolveBlockedClusterEndpoints(context.Background(), nil, cluster)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "kusto client is required")
+}
+
+func TestResolveBlockedClusterEndpoints_SkipsWhenFunctionIncomplete(t *testing.T) {
+	t.Parallel()
+	cluster := makeBlockedCluster([]string{"https://static"}, &adxmonv1.ADXClusterFederationBlockedClustersFunctionSpec{
+		Name: "GetBlocked",
+	})
+	client := &stubKustoQueryClient{t: t}
+	result, err := resolveBlockedClusterEndpoints(context.Background(), client, cluster)
+	require.NoError(t, err)
+	require.False(t, client.called)
+	require.Len(t, result, 1)
+	require.Contains(t, result, "https://static")
 }
