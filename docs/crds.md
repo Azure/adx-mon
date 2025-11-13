@@ -4,7 +4,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 
 | CRD Kind      | Description                                 | Spec Fields Summary | Example Link |
 |---------------|---------------------------------------------|---------------------|--------------|
-| ADXCluster    | Azure Data Explorer cluster (provisioned or existing, supports federation/partitioning) | clusterName, endpoint, databases, provision, role, federation | [Operator Design](designs/operator.md#adxcluster-crd) |
+| ADXCluster    | Azure Data Explorer cluster (provisioned or existing, supports federation/partitioning) | clusterName, endpoint, databases, provision, role, federation | [ADXCluster Controller](adxcluster-controller.md) |
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
@@ -52,9 +52,13 @@ spec:
 ```
 **Key Fields:**
 - `clusterName`: Name for the ADX cluster.
-- `endpoint`: Existing ADX cluster URI (omit to provision new).
-- `databases`: List of databases to create/use.
-- `provision`: Azure provisioning details (required if not using `endpoint`). When set, supply `subscriptionId`, `resourceGroup`, `location`, `skuName`, and `tier` explicitly—the controller no longer auto-detects or mutates these values.
+- `endpoint`: Existing ADX cluster URI (omit to provision new). When set, the controller mirrors this value into status
+  and skips Azure provisioning.
+- `databases`: List of databases to create/use. The controller only provisions the entries listed here (plus the
+  heartbeat database when federation is enabled); it no longer injects default databases.
+- `provision`: Azure provisioning details (required if not using `endpoint`). When set, supply `subscriptionId`,
+  `resourceGroup`, `location`, `skuName`, and `tier` explicitly—the controller no longer auto-detects or mutates these
+  values.
 - `role`: `Partition` (default) or `Federated` for multi-cluster.
 - `federation`: Federation/partitioning config for multi-cluster.
 
@@ -209,7 +213,7 @@ spec:
 **Key Fields:**
 - `database`: Target ADX database.
 - `name`: Logical name for the rule.
-- `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally use `<key>` placeholders for environment-specific values.
+- `body`: KQL query to run. **Must include `_startTime` and `_endTime` placeholders** for time range filtering. Can optionally reference cluster label variables using underscore-prefixed names (e.g., `_environment`, `_region`).
 - `table`: Destination table for results.
 - `interval`: How often to run the summary (e.g., `1h`).
 - `criteria`: _(Optional)_ Key/value pairs used to determine when a summary rule can execute. If empty or omitted, the rule always executes. Keys and values are deployment-specific and configured on ingestor instances via `--cluster-labels`. For a rule to execute, any one of the criteria must match (OR logic). Matching is case-insensitive.
@@ -219,8 +223,8 @@ spec:
 - `_startTime`: Replaced with the start time of the current execution interval as `datetime(...)`.
 - `_endTime`: Replaced with the end time of the current execution interval as `datetime(...)`.
 
-**Optional Cluster Label Substitutions:**
-- `<key>`: Replaced with cluster-specific values defined by the ingestor's `--cluster-labels=<key>=<value>` command line arguments. Values are automatically quoted with single quotes for safe KQL usage.
+**Optional Cluster Label Variables:**
+Cluster labels defined via `--cluster-labels=<key>=<value>` are exposed as KQL `let` statement variables with underscore prefixes. For example, `--cluster-labels=region=eastus` creates `let _region="eastus";` prepended to the query body. Values are automatically double-quoted for safe KQL usage. These variables can be referenced directly in your KQL queries.
 
 **Intended Use:** Automate rollups, downsampling, or ETL in ADX by running scheduled KQL queries. Use cluster label substitutions to create environment-agnostic rules that work across different deployments.
 
