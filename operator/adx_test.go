@@ -909,10 +909,10 @@ func TestNormalizeEndpoint(t *testing.T) {
 		input string
 		want  string
 	}{
-		"empty":      {input: "", want: ""},
-		"trim":       {input: "  HTTPS://Example.kusto.windows.net/  ", want: "https://example.kusto.windows.net"},
-		"no-scheme":  {input: "FoO/", want: "foo"},
-		"already-ok": {input: "https://cluster", want: "https://cluster"},
+		"empty":       {input: "", want: ""},
+		"trim":        {input: "  HTTPS://Example.kusto.windows.net/  ", want: "https://example.kusto.windows.net"},
+		"no-scheme":   {input: "FoO/", want: "foo"},
+		"already-ok":  {input: "https://cluster", want: "https://cluster"},
 		"multi-slash": {input: "https://cluster///", want: "https://cluster"},
 	}
 
