@@ -158,7 +158,7 @@ type batcher struct {
 	segmentsMaxAgeMetric   prometheus.Gauge
 }
 
-func NewBatcher(opts BatcherOpts) Batcher {
+func NewBatcher(opts BatcherOpts) (Batcher, error) {
 	minUploadSize := opts.MinUploadSize
 	if minUploadSize == 0 {
 		minUploadSize = 100 * 1024 * 1024 // This is the minimal "optimal" size for kusto uploads.
@@ -171,13 +171,13 @@ func NewBatcher(opts BatcherOpts) Batcher {
 
 	// Ensure metrics are provided
 	if opts.SegmentsCountMetric == nil {
-		panic("SegmentsCountMetric is required")
+		return nil, fmt.Errorf("SegmentsCountMetric is required")
 	}
 	if opts.SegmentsSizeBytesMetric == nil {
-		panic("SegmentsSizeBytesMetric is required")
+		return nil, fmt.Errorf("SegmentsSizeBytesMetric is required")
 	}
 	if opts.SegmentsMaxAgeMetric == nil {
-		panic("SegmentsMaxAgeMetric is required")
+		return nil, fmt.Errorf("SegmentsMaxAgeMetric is required")
 	}
 
 	return &batcher{
@@ -196,7 +196,7 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		segmentsCountMetric:     opts.SegmentsCountMetric,
 		segmentsSizeBytesMetric: opts.SegmentsSizeBytesMetric,
 		segmentsMaxAgeMetric:    opts.SegmentsMaxAgeMetric,
-	}
+	}, nil
 }
 
 func (b *batcher) Open(ctx context.Context) error {
