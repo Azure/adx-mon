@@ -92,9 +92,9 @@ spec:
                   type: object
                 type: array
               endpoint:
-                description: 'Endpoint is the URI of an existing ADX cluster. If set,
-                  the operator will use this cluster instead of provisioning a new
-                  one. Example: "https://mycluster.kusto.windows.net"'
+                description: 'Endpoint is the URI of an existing ADX cluster. When
+                  set, the controller treats the cluster as bring-your-own (no Azure
+                  provisioning is attempted). Example: "https://mycluster.kusto.windows.net"'
                 format: uri
                 type: string
               federation:
@@ -151,15 +151,11 @@ spec:
                     type: object
                 type: object
               provision:
-                description: Provision contains optional Azure provisioning details
-                  for the ADX cluster. If omitted, the operator will attempt zero-config
-                  provisioning using Azure IMDS.
+                description: Provision contains Azure provisioning details for the
+                  ADX cluster. Reconciliation of Azure resources only occurs when
+                  this section is provided. If omitted, the operator skips provisioning
+                  and treats the cluster as bring-your-own.
                 properties:
-                  appliedProvisionState:
-                    description: |-
-                      AppliedProvisionState is a JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities
-                      as last applied by the operator. This is set by the operator and is read-only for users.
-                    type: string
                   autoScale:
                     description: |-
                       //+kubebuilder:default=false
@@ -177,25 +173,29 @@ spec:
                     type: integer
                   location:
                     description: Location is the Azure region for the ADX cluster
-                      (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
+                      (e.g., "eastus2"). Required when the operator provisions the
+                      cluster and must be set explicitly by the user.
                     type: string
                   resourceGroup:
                     description: ResourceGroup is the Azure resource group for the
-                      ADX cluster. Optional. If omitted, will be auto-created or detected.
+                      ADX cluster. This must be provided when provisioning is enabled;
+                      the operator no longer mutates the spec to fill this value.
                     type: string
                   skuName:
                     description: SkuName is the Azure SKU for the ADX cluster (e.g.,
-                      "Standard_L8as_v3"). Optional. The operator will select a default
-                      if not specified.
+                      "Standard_L8as_v3"). Required when provisioning is enabled;
+                      defaults are not applied automatically by the controller.
                     type: string
                   subscriptionId:
                     description: SubscriptionId is the Azure subscription ID to use
-                      for provisioning. Optional. If omitted, will be auto-detected
-                      in zero-config mode.
+                      for provisioning. When the operator manages provisioning this
+                      value must be supplied explicitly; it is no longer auto-detected
+                      or defaulted by the controller.
                     type: string
                   tier:
-                    description: Tier is the Azure ADX tier (e.g., "Standard"). Optional.
-                      Defaults to "Standard" if not specified.
+                    description: Tier is the Azure ADX tier (e.g., "Standard"). Required
+                      when provisioning is enabled; the operator no longer assigns
+                      a default.
                     type: string
                   userAssignedIdentities:
                     description: |-
@@ -219,6 +219,19 @@ spec:
           status:
             description: ADXClusterStatus defines the observed state of ADXCluster
             properties:
+              appliedProvisionState:
+                description: AppliedProvisionState captures the last Azure provisioning
+                  state reconciled by the controller.
+                properties:
+                  skuName:
+                    type: string
+                  tier:
+                    type: string
+                  userAssignedIdentities:
+                    items:
+                      type: string
+                    type: array
+                type: object
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -275,6 +288,11 @@ spec:
                   - type
                   type: object
                 type: array
+              endpoint:
+                description: Endpoint reflects the observed Kusto endpoint when the
+                  controller manages provisioning, or mirrors spec.endpoint when running
+                  in BYO mode.
+                type: string
             type: object
         type: object
     served: true

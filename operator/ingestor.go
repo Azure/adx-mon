@@ -457,15 +457,17 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 			return false, nil, fmt.Errorf("ADXCluster is not ready")
 		}
 
+		endpoint := resolvedClusterEndpoint(&cluster)
+
 		for _, db := range cluster.Spec.Databases {
 			if db.TelemetryType == adxmonv1.DatabaseTelemetryMetrics {
-				if cluster.Spec.Endpoint != "" {
-					metricsClusters = append(metricsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, cluster.Spec.Endpoint))
+				if endpoint != "" {
+					metricsClusters = append(metricsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, endpoint))
 				}
 			}
 			if db.TelemetryType == adxmonv1.DatabaseTelemetryLogs {
-				if cluster.Spec.Endpoint != "" {
-					logsClusters = append(logsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, cluster.Spec.Endpoint))
+				if endpoint != "" {
+					logsClusters = append(logsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, endpoint))
 				}
 			}
 		}

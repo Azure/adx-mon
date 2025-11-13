@@ -54,9 +54,13 @@ spec:
 - `clusterName`: Name for the ADX cluster.
 - `endpoint`: Existing ADX cluster URI (omit to provision new).
 - `databases`: List of databases to create/use.
-- `provision`: Azure provisioning details (required if not using `endpoint`).
+- `provision`: Azure provisioning details (required if not using `endpoint`). When set, supply `subscriptionId`, `resourceGroup`, `location`, `skuName`, and `tier` explicitly—the controller no longer auto-detects or mutates these values.
 - `role`: `Partition` (default) or `Federated` for multi-cluster.
 - `federation`: Federation/partitioning config for multi-cluster.
+
+**Status highlights:**
+- `status.endpoint`: Observed Kusto endpoint used by dependent components (mirrors `spec.endpoint` in BYO mode).
+- `status.appliedProvisionState`: Snapshot of the SKU, tier, and identities last reconciled in Azure. This lets the operator detect when a user changed the spec, ignore out-of-band Azure edits that would otherwise cause thrash, and surface the live provisioning settings to other controllers.
 
 **Intended Use:** Provision or connect to ADX clusters, including advanced federation/partitioning for geo-distributed or multi-tenant setups.
 

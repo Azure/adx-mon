@@ -70,20 +70,26 @@ Each CRD is described below with its current schema and example YAML, strictly r
   - `retentionInDays` (int, optional): Retention period in days. Default: 30.
   - `retentionPolicy` (string, optional): ADX retention policy.
   - `telemetryType` (string, required): One of `Metrics`, `Logs`, or `Traces`.
-- `provision` (object, optional): Azure provisioning details:
-  - `subscriptionId` (string, optional): Azure subscription ID. If omitted, will be auto-detected in zero-config mode.
-  - `resourceGroup` (string, optional): Azure resource group. If omitted, will be auto-created or detected.
-  - `location` (string, optional): Azure region (e.g., "eastus2"). If omitted, will be auto-detected.
-  - `skuName` (string, optional): Azure SKU (e.g., "Standard_L8as_v3").
-  - `tier` (string, optional): Azure ADX tier (e.g., "Standard"). Defaults to "Standard" if not specified.
-  - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids).
-  - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Defaults to false.
-  - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Defaults to 10.
-  - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Defaults to 2.
-  - `appliedProvisionState` (string, optional, read-only): JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities as last applied by the operator.
+- `provision` (object, optional): Azure provisioning details. When this section is present, the operator performs Azure resource reconciliation. **Required fields must be supplied explicitly; optional fields have defaults as noted below.**
+  - **Required fields:**
+    - `subscriptionId` (string, required): Azure subscription ID the operator should use.
+    - `resourceGroup` (string, required): Azure resource group that owns the ADX cluster.
+    - `location` (string, required): Azure region (e.g., "eastus2").
+    - `skuName` (string, required): Azure SKU (e.g., "Standard_L8as_v3").
+    - `tier` (string, required): Azure ADX tier (e.g., "Standard").
+  - **Optional fields (with defaults):**
+    - `userAssignedIdentities` (array of strings, optional): List of MSIs to attach to the cluster (resource-ids). Default: empty list.
+    - `autoScale` (bool, optional): Enable auto-scaling for the ADX cluster. Default: `false`.
+    - `autoScaleMax` (int, optional): Maximum number of nodes for auto-scaling. Default: `10`.
+    - `autoScaleMin` (int, optional): Minimum number of nodes for auto-scaling. Default: `2`.
 
 **Status fields:**
 - `conditions` (array, optional): Standard Kubernetes conditions.
+- `endpoint` (string, optional): Observed Kusto endpoint. Mirrors `spec.endpoint` in BYO scenarios or reflects the provisioned endpoint when the operator manages the cluster.
+- `appliedProvisionState` (object, optional): Snapshot of the last provisioned SKU, tier, and user-assigned identities reconciled by the controller. The operator uses this record to:
+  - detect spec-driven changes (e.g., user bumps the SKU) without mutating `spec`;
+  - tolerate out-of-band edits made directly in Azure by skipping updates when the live cluster no longer matches the previously applied values;
+  - expose the currently effective provisioning settings to other reconcilers without forcing them to reach back into Azure.
 
 **Minimal Example:**
 ```yaml
