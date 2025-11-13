@@ -1,9 +1,6 @@
 package v1
 
 import (
-	"encoding/json"
-	"fmt"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -16,7 +13,7 @@ type ADXClusterSpec struct {
 	ClusterName string `json:"clusterName"`
 
 	//+kubebuilder:validation:Format=uri
-	// Endpoint is the URI of an existing ADX cluster. If set, the operator will use this cluster instead of provisioning a new one. Example: "https://mycluster.kusto.windows.net"
+	// Endpoint is the URI of an existing ADX cluster. When set, the controller treats the cluster as bring-your-own (no Azure provisioning is attempted). Example: "https://mycluster.kusto.windows.net"
 	Endpoint string `json:"endpoint,omitempty"`
 
 	//+kubebuilder:validation:Optional
@@ -24,7 +21,7 @@ type ADXClusterSpec struct {
 	Databases []ADXClusterDatabaseSpec `json:"databases,omitempty"`
 
 	//+kubebuilder:validation:Optional
-	// Provision contains optional Azure provisioning details for the ADX cluster. If omitted, the operator will attempt zero-config provisioning using Azure IMDS.
+	// Provision contains Azure provisioning details for the ADX cluster. Reconciliation of Azure resources only occurs when this section is provided. If omitted, the operator skips provisioning and treats the cluster as bring-your-own.
 	Provision *ADXClusterProvisionSpec `json:"provision,omitempty"`
 
 	//+kubebuilder:validation:Optional
@@ -107,19 +104,19 @@ type ADXClusterFederatedClusterSpec struct {
 
 type ADXClusterProvisionSpec struct {
 	//+kubebuilder:validation:Optional
-	// SubscriptionId is the Azure subscription ID to use for provisioning. Optional. If omitted, will be auto-detected in zero-config mode.
+	// SubscriptionId is the Azure subscription ID to use for provisioning. When the operator manages provisioning this value must be supplied explicitly; it is no longer auto-detected or defaulted by the controller.
 	SubscriptionId string `json:"subscriptionId,omitempty"`
 	//+kubebuilder:validation:Optional
-	// ResourceGroup is the Azure resource group for the ADX cluster. Optional. If omitted, will be auto-created or detected.
+	// ResourceGroup is the Azure resource group for the ADX cluster. This must be provided when provisioning is enabled; the operator no longer mutates the spec to fill this value.
 	ResourceGroup string `json:"resourceGroup,omitempty"`
 	//+kubebuilder:validation:Optional
-	// Location is the Azure region for the ADX cluster (e.g., "eastus2"). Optional. If omitted, will be auto-detected.
+	// Location is the Azure region for the ADX cluster (e.g., "eastus2"). Required when the operator provisions the cluster and must be set explicitly by the user.
 	Location string `json:"location,omitempty"`
 	//+kubebuilder:validation:Optional
-	// SkuName is the Azure SKU for the ADX cluster (e.g., "Standard_L8as_v3"). Optional. The operator will select a default if not specified.
+	// SkuName is the Azure SKU for the ADX cluster (e.g., "Standard_L8as_v3"). Required when provisioning is enabled; defaults are not applied automatically by the controller.
 	SkuName string `json:"skuName,omitempty"`
 	//+kubebuilder:validation:Optional
-	// Tier is the Azure ADX tier (e.g., "Standard"). Optional. Defaults to "Standard" if not specified.
+	// Tier is the Azure ADX tier (e.g., "Standard"). Required when provisioning is enabled; the operator no longer assigns a default.
 	Tier string `json:"tier,omitempty"`
 	//+kubebuilder:validation:Optional
 	// UserAssignedIdentities is a list of MSIs that can be attached to the cluster. They should be resource-ids of the form
@@ -137,43 +134,12 @@ type ADXClusterProvisionSpec struct {
 	//+kubebuilder:default=2
 	// AutoScaleMin is the minimum number of nodes for auto-scaling. Optional. Defaults to 2 if not specified.
 	AutoScaleMin int `json:"autoScaleMin,omitempty"`
-	//+kubebuilder:validation:Optional
-	// AppliedProvisionState is a JSON-serialized snapshot of the SkuName, Tier, and UserAssignedIdentities
-	// as last applied by the operator. This is set by the operator and is read-only for users.
-	AppliedProvisionState string `json:"appliedProvisionState,omitempty"`
 }
 
 type AppliedProvisionState struct {
 	SkuName                string   `json:"skuName,omitempty"`
 	Tier                   string   `json:"tier,omitempty"`
 	UserAssignedIdentities []string `json:"userAssignedIdentities,omitempty"`
-}
-
-func (s *ADXClusterProvisionSpec) StoreAppliedProvisioningState() error {
-	// Store the current provisioning state as a JSON string
-	provisionState, err := json.Marshal(AppliedProvisionState{
-		SkuName:                s.SkuName,
-		Tier:                   s.Tier,
-		UserAssignedIdentities: s.UserAssignedIdentities,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to marshal provision state: %w", err)
-	}
-	s.AppliedProvisionState = string(provisionState)
-	return nil
-}
-
-func (s *ADXClusterProvisionSpec) LoadAppliedProvisioningState() (*AppliedProvisionState, error) {
-	// Unmarshal the JSON string back into the struct
-	if s.AppliedProvisionState == "" {
-		return nil, nil
-	}
-	var stored AppliedProvisionState
-	err := json.Unmarshal([]byte(s.AppliedProvisionState), &stored)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal provision state: %w", err)
-	}
-	return &stored, nil
 }
 
 type ADXClusterDatabaseSpec struct {
@@ -210,6 +176,12 @@ const (
 type ADXClusterStatus struct {
 	//+kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	//+kubebuilder:validation:Optional
+	// Endpoint reflects the observed Kusto endpoint when the controller manages provisioning, or mirrors spec.endpoint when running in BYO mode.
+	Endpoint string `json:"endpoint,omitempty"`
+	//+kubebuilder:validation:Optional
+	// AppliedProvisionState captures the last Azure provisioning state reconciled by the controller.
+	AppliedProvisionState *AppliedProvisionState `json:"appliedProvisionState,omitempty"`
 }
 
 //+kubebuilder:object:root=true

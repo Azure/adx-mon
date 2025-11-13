@@ -507,7 +507,8 @@ func TestDiffIdentities(t *testing.T) {
 			clusterUpdate := armkusto.Cluster{
 				Identity: tt.resp.Identity,
 			}
-			updated := diffIdentities(tt.resp, tt.applied, tt.cluster, &clusterUpdate)
+			var updated bool
+			clusterUpdate, updated = diffIdentities(tt.resp, tt.applied, tt.cluster, clusterUpdate)
 			require.Equal(t, tt.wantUpdated, updated)
 			if tt.wantIDs == nil {
 				require.Nil(t, clusterUpdate.Identity.UserAssignedIdentities)
@@ -518,6 +519,60 @@ func TestDiffIdentities(t *testing.T) {
 				gotIDs = append(gotIDs, id)
 			}
 			require.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
+}
+
+func TestMergeDatabaseSpecs(t *testing.T) {
+	tests := []struct {
+		name       string
+		userDbs    []adxmonv1.ADXClusterDatabaseSpec
+		discovered []adxmonv1.ADXClusterDatabaseSpec
+		wantMerged []adxmonv1.ADXClusterDatabaseSpec
+	}{
+		{
+			name: "adds discovered databases",
+			userDbs: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "userdb", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+			discovered: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "federateddb"},
+			},
+			wantMerged: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "federateddb"},
+				{DatabaseName: "userdb", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		{
+			name: "overrides empty telemetry",
+			userDbs: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "logs"},
+			},
+			discovered: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+			},
+			wantMerged: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+			},
+		},
+		{
+			name: "preserves explicit telemetry",
+			userDbs: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+			discovered: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "metrics"},
+			},
+			wantMerged: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged := mergeDatabaseSpecs(tt.userDbs, tt.discovered)
+			require.Equal(t, tt.wantMerged, merged)
 		})
 	}
 }
