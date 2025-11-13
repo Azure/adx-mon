@@ -50,6 +50,7 @@ nav:
   - Reference:
       - 'config.md'
       - 'ingestor.md'
+      - 'adxcluster-controller.md'
   - Designs:
       - 'designs/log-integration-with-kubernetes.md'
       - 'designs/schema-etl.md'
