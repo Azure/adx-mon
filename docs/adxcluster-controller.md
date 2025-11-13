@@ -76,6 +76,19 @@ Federation mode: `Partition` (local storage + heartbeat to hub) or `Federated` (
 - `heartbeatDatabase`, `heartbeatTable`: where partitions write
 - `heartbeatTTL`: freshness window (default `1h`)
 
+#### Blocked partition list (Federated hubs)
+`spec.federation.blockedClusters` lets hub clusters exclude quarantined or misbehaving partitions from macro generation
+without editing the partition CRDs. The controller merges two sources into a normalized block list (lower-cased, trimmed
+of whitespace and trailing slashes):
+
+- `blockedClusters.static`: literal list of partition endpoints to suppress.
+- `blockedClusters.kustoFunction`: optional break-glass function looked up in the specified `database`/`name`. The
+  function must return a tabular result with a string column named `ClusterEndpoint` (preferred) or `Endpoint`. Missing
+  functions are treated as warnings; other errors halt the reconciliation so ops teams can inspect the failure.
+
+After fetching heartbeats the controller filters any partitions whose endpoints match the block list, logs how many
+entries were removed vs. matched, and proceeds with macro creation using the remaining schema.
+
 ### `criteriaExpression`
 Optional CEL expression against operator cluster labels. Empty/missing = `true`. Errors/false → reconciliation blocked. Example: `labels["geo"] == "eu" && labels.has("tier")` keeps the object scoped to European, tiered operators. See the [CEL language spec](https://opensource.google/projects/cel) for expression syntax.
 
@@ -91,7 +104,8 @@ Authentication: `DefaultAzureCredential` for local cluster; switches to `managed
 Failures to push heartbeats surface in the operator logs (`adxcluster-controller` logger) alongside the CRD name; reconcile once connectivity or permissions are restored.
 
 ### Federated Hubs  
-Every 10min: query heartbeat table (`WHERE Timestamp > ago(heartbeatTTL)`) → extract partition schemas → ensure OTLP hub tables exist → generate cross-cluster functions.
+Every 10min: query heartbeat table (`WHERE Timestamp > ago(heartbeatTTL)`) → extract partition schemas → optionally
+filter out any endpoints listed in `spec.federation.blockedClusters` (static values plus any returned by the Kusto function) → ensure OTLP hub tables exist → generate cross-cluster functions. Filtering happens before schema aggregation so blocked partitions contribute neither tables nor functions.
 
 Heartbeat table schema: `Timestamp:datetime, ClusterEndpoint:string, Schema:dynamic, PartitionMetadata:dynamic`
 
@@ -184,7 +198,17 @@ spec:
     heartbeatDatabase: "FleetDiscovery"
     heartbeatTable: "Heartbeats"
     heartbeatTTL: "2h"
+    blockedClusters:
+      static:
+        - "https://rogue-partition.kusto.windows.net"
+      kustoFunction:
+        database: FleetDiscovery
+        name: GetBlockedPartitions
 ```
+
+The static list handles known quarantined clusters, while the `GetBlockedPartitions()` function can emit emergent
+endpoints discovered by external tooling. The controller merges both sources and keeps deduplicated, normalized entries
+for filtering during macro reconciliation.
 
 ### Gate Reconciliation with Criteria
 Restrict reconciliation to operators that carry matching labels.
