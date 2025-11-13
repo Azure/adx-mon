@@ -9,8 +9,16 @@ import (
 	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestMetrics creates no-op metrics for testing
+func newTestMetrics() (prometheus.Gauge, prometheus.Gauge, prometheus.Gauge) {
+	return prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_segments_count"}),
+		prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_segments_size_bytes"}),
+		prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_segments_max_age"})
+}
 
 func TestBatcher_ClosedSegments(t *testing.T) {
 	dir := t.TempDir()
@@ -32,13 +40,17 @@ func TestBatcher_ClosedSegments(t *testing.T) {
 		CreatedAt: time.Unix(0, 0),
 	})
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:      "node1",
-		storageDir:    dir,
-		Partitioner:   &fakePartitioner{owner: "node1"},
-		Segmenter:     idx,
-		segments:      partmap.NewMap[int](64),
-		minUploadSize: 1,
+		hostname:                "node1",
+		storageDir:              dir,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		segments:                partmap.NewMap[int](64),
+		minUploadSize:           1,
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -82,17 +94,21 @@ func TestBatcher_NodeOwned(t *testing.T) {
 	}
 	idx.Add(f2)
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:         "node1",
-		storageDir:       dir,
-		maxTransferAge:   30 * time.Second,
-		maxTransferSize:  100 * 1024 * 1024,
-		minUploadSize:    100 * 1024 * 1024,
-		maxBatchSegments: 25,
-		Partitioner:      &fakePartitioner{owner: "node2"},
-		Segmenter:        idx,
-		health:           &fakeHealthChecker{healthy: true},
-		segments:         partmap.NewMap[int](64),
+		hostname:                "node1",
+		storageDir:              dir,
+		maxTransferAge:          30 * time.Second,
+		maxTransferSize:         100 * 1024 * 1024,
+		minUploadSize:           100 * 1024 * 1024,
+		maxBatchSegments:        25,
+		Partitioner:             &fakePartitioner{owner: "node2"},
+		Segmenter:               idx,
+		health:                  &fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -131,13 +147,17 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	}
 	idx.Add(f2)
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:      "node1",
-		storageDir:    dir,
-		Partitioner:   &fakePartitioner{owner: "node1"},
-		Segmenter:     idx,
-		segments:      partmap.NewMap[int](64),
-		minUploadSize: 1,
+		hostname:                "node1",
+		storageDir:              dir,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		segments:                partmap.NewMap[int](64),
+		minUploadSize:           1,
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 	owner, notOwned, err := a.processSegments()
 	require.NoError(t, err)
@@ -195,16 +215,20 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 	}
 	idx.Add(f3)
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:        "node1",
-		storageDir:      dir,
-		maxTransferSize: 100 * 1024,
-		minUploadSize:   100 * 1024,
-		maxTransferAge:  time.Minute,
-		Partitioner:     &fakePartitioner{owner: "node1"},
-		Segmenter:       idx,
-		health:          fakeHealthChecker{healthy: true},
-		segments:        partmap.NewMap[int](64),
+		hostname:                "node1",
+		storageDir:              dir,
+		maxTransferSize:         100 * 1024,
+		minUploadSize:           100 * 1024,
+		maxTransferAge:          time.Minute,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		health:                  fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -272,17 +296,21 @@ func TestBatcher_BigBatch(t *testing.T) {
 	}
 	idx.Add(f4)
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:         "node1",
-		storageDir:       dir,
-		maxTransferSize:  100 * 1024,
-		minUploadSize:    100 * 1024,
-		maxTransferAge:   1000 * 24 * time.Hour,
-		maxBatchSegments: 25,
-		Partitioner:      &fakePartitioner{owner: "node1"},
-		Segmenter:        idx,
-		health:           fakeHealthChecker{healthy: true},
-		segments:         partmap.NewMap[int](64),
+		hostname:                "node1",
+		storageDir:              dir,
+		maxTransferSize:         100 * 1024,
+		minUploadSize:           100 * 1024,
+		maxTransferAge:          1000 * 24 * time.Hour,
+		maxBatchSegments:        25,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		health:                  fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -350,17 +378,21 @@ func TestBatcher_MaxSegmentCount(t *testing.T) {
 	}
 	idx.Add(f4)
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:         "node1",
-		storageDir:       dir,
-		maxTransferSize:  100 * 1024,
-		minUploadSize:    100 * 1024,
-		maxTransferAge:   1000 * 24 * time.Hour,
-		maxBatchSegments: 1,
-		Partitioner:      &fakePartitioner{owner: "node1"},
-		Segmenter:        idx,
-		health:           fakeHealthChecker{healthy: true},
-		segments:         partmap.NewMap[int](64),
+		hostname:                "node1",
+		storageDir:              dir,
+		maxTransferSize:         100 * 1024,
+		minUploadSize:           100 * 1024,
+		maxTransferAge:          1000 * 24 * time.Hour,
+		maxBatchSegments:        1,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		health:                  fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 	owned, notOwned, err := a.processSegments()
 
@@ -435,16 +467,20 @@ func TestBatcher_Stats(t *testing.T) {
 	idx.Add(f4)
 	segments = append(segments, f4)
 
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
 	a := &batcher{
-		hostname:        "node1",
-		storageDir:      dir,
-		maxTransferSize: 100 * 1024,
-		minUploadSize:   100 * 1024,
-		maxTransferAge:  time.Minute,
-		Partitioner:     &fakePartitioner{owner: "node1"},
-		Segmenter:       idx,
-		health:          fakeHealthChecker{healthy: true},
-		segments:        partmap.NewMap[int](64),
+		hostname:                "node1",
+		storageDir:              dir,
+		maxTransferSize:         100 * 1024,
+		minUploadSize:           100 * 1024,
+		maxTransferAge:          time.Minute,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		health:                  fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
 	}
 
 	owned, _, err := a.processSegments()

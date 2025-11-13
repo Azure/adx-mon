@@ -169,6 +169,17 @@ func NewBatcher(opts BatcherOpts) Batcher {
 		maxBatchSegments = opts.MaxBatchSegments
 	}
 
+	// Ensure metrics are provided
+	if opts.SegmentsCountMetric == nil {
+		panic("SegmentsCountMetric is required")
+	}
+	if opts.SegmentsSizeBytesMetric == nil {
+		panic("SegmentsSizeBytesMetric is required")
+	}
+	if opts.SegmentsMaxAgeMetric == nil {
+		panic("SegmentsMaxAgeMetric is required")
+	}
+
 	return &batcher{
 		storageDir:              opts.StorageDir,
 		maxTransferAge:          opts.MaxTransferAge,
@@ -273,16 +284,10 @@ func (b *batcher) BatchSegments() error {
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
 func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
-	// Update metrics if they are provided
-	if b.segmentsSizeBytesMetric != nil {
-		b.segmentsSizeBytesMetric.Set(float64(b.SegmentsSize()))
-	}
-	if b.segmentsCountMetric != nil {
-		b.segmentsCountMetric.Set(float64(b.SegmentsTotal()))
-	}
-	if b.segmentsMaxAgeMetric != nil {
-		b.segmentsMaxAgeMetric.Set(b.MaxSegmentAge().Seconds())
-	}
+	// Update metrics
+	b.segmentsSizeBytesMetric.Set(float64(b.SegmentsSize()))
+	b.segmentsCountMetric.Set(float64(b.SegmentsTotal()))
+	b.segmentsMaxAgeMetric.Set(b.MaxSegmentAge().Seconds())
 
 	// Groups is b map of metrics name to b list of segments for that metric.
 	groups := make(map[string][]wal.SegmentInfo)
