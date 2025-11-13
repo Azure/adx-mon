@@ -191,17 +191,20 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      opts.MaxSegmentAge,
-		MaxTransferSize:    opts.MaxTransferSize,
-		MaxTransferAge:     opts.MaxTransferAge,
-		MaxBatchSegments:   opts.MaxBatchSegments,
-		Partitioner:        coord,
-		Segmenter:          store.Index(),
-		UploadQueue:        opts.Uploader.UploadQueue(),
-		TransferQueue:      repl.TransferQueue(),
-		PeerHealthReporter: health,
-		TransfersDisabled:  opts.DisablePeerTransfer,
+		StorageDir:              opts.StorageDir,
+		MaxSegmentAge:           opts.MaxSegmentAge,
+		MaxTransferSize:         opts.MaxTransferSize,
+		MaxTransferAge:          opts.MaxTransferAge,
+		MaxBatchSegments:        opts.MaxBatchSegments,
+		Partitioner:             coord,
+		Segmenter:               store.Index(),
+		UploadQueue:             opts.Uploader.UploadQueue(),
+		TransferQueue:           repl.TransferQueue(),
+		PeerHealthReporter:      health,
+		TransfersDisabled:       opts.DisablePeerTransfer,
+		SegmentsCountMetric:     metrics.IngestorSegmentsTotal,
+		SegmentsSizeBytesMetric: metrics.IngestorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    metrics.IngestorSegmentsMaxAge,
 	})
 
 	health.QueueSizer = &queueSizerAdapter{

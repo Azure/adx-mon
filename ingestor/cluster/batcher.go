@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // DefaultMaxSegmentCount is the default maximum number of segments to include in a batch before creating a new batch.
@@ -47,6 +48,11 @@ type BatcherOpts struct {
 	PeerHealthReporter PeerHealthReporter
 
 	TransfersDisabled bool
+
+	// Metrics for observability
+	SegmentsCountMetric    prometheus.Gauge
+	SegmentsSizeBytesMetric prometheus.Gauge
+	SegmentsMaxAgeMetric   prometheus.Gauge
 }
 
 type Batch struct {
@@ -145,6 +151,11 @@ type batcher struct {
 	tempSet []wal.SegmentInfo
 
 	segments *partmap.Map[int]
+
+	// Metrics for observability
+	segmentsCountMetric    prometheus.Gauge
+	segmentsSizeBytesMetric prometheus.Gauge
+	segmentsMaxAgeMetric   prometheus.Gauge
 }
 
 func NewBatcher(opts BatcherOpts) Batcher {
@@ -159,18 +170,21 @@ func NewBatcher(opts BatcherOpts) Batcher {
 	}
 
 	return &batcher{
-		storageDir:       opts.StorageDir,
-		maxTransferAge:   opts.MaxTransferAge,
-		maxTransferSize:  opts.MaxTransferSize,
-		minUploadSize:    minUploadSize,    // This is the minimal "optimal" size for kusto uploads.
-		maxBatchSegments: maxBatchSegments, // The maximum number of segments to include in a merged batch
-		Partitioner:      opts.Partitioner,
-		Segmenter:        opts.Segmenter,
-		uploadQueue:      opts.UploadQueue,
-		transferQueue:    opts.TransferQueue,
-		health:           opts.PeerHealthReporter,
-		transferDisabled: opts.TransfersDisabled,
-		segments:         partmap.NewMap[int](64),
+		storageDir:              opts.StorageDir,
+		maxTransferAge:          opts.MaxTransferAge,
+		maxTransferSize:         opts.MaxTransferSize,
+		minUploadSize:           minUploadSize,    // This is the minimal "optimal" size for kusto uploads.
+		maxBatchSegments:        maxBatchSegments, // The maximum number of segments to include in a merged batch
+		Partitioner:             opts.Partitioner,
+		Segmenter:               opts.Segmenter,
+		uploadQueue:             opts.UploadQueue,
+		transferQueue:           opts.TransferQueue,
+		health:                  opts.PeerHealthReporter,
+		transferDisabled:        opts.TransfersDisabled,
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     opts.SegmentsCountMetric,
+		segmentsSizeBytesMetric: opts.SegmentsSizeBytesMetric,
+		segmentsMaxAgeMetric:    opts.SegmentsMaxAgeMetric,
 	}
 }
 
@@ -259,9 +273,16 @@ func (b *batcher) BatchSegments() error {
 // thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
 // lagging segments over new ones.
 func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
-	metrics.IngestorSegmentsSizeBytes.Set(float64(b.SegmentsSize()))
-	metrics.IngestorSegmentsTotal.Set(float64(b.SegmentsTotal()))
-	metrics.IngestorSegmentsMaxAge.Set(b.MaxSegmentAge().Seconds())
+	// Update metrics if they are provided
+	if b.segmentsSizeBytesMetric != nil {
+		b.segmentsSizeBytesMetric.Set(float64(b.SegmentsSize()))
+	}
+	if b.segmentsCountMetric != nil {
+		b.segmentsCountMetric.Set(float64(b.SegmentsTotal()))
+	}
+	if b.segmentsMaxAgeMetric != nil {
+		b.segmentsMaxAgeMetric.Set(b.MaxSegmentAge().Seconds())
+	}
 
 	// Groups is b map of metrics name to b list of segments for that metric.
 	groups := make(map[string][]wal.SegmentInfo)

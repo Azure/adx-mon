@@ -232,4 +232,25 @@ var (
 		Name:      "samples_stored_total",
 		Help:      "Counter of samples stored for an collector instance",
 	})
+
+	CollectorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "wal_segments_count",
+		Help:      "Gauge indicating the number of WAL segments for a collector instance",
+	})
+
+	CollectorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "wal_segments_size_bytes",
+		Help:      "Gauge indicating the size of WAL segments for a collector instance",
+	})
+
+	CollectorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "wal_segments_max_age_seconds",
+		Help:      "Gauge indicating the max age of WAL segments for a collector instance",
+	})
 )
