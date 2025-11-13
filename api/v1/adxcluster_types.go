@@ -82,6 +82,32 @@ type ADXClusterFederationSpec struct {
 	//+kubebuilder:validation:Pattern=^(\d+h)?(\d+m)?(\d+s)?$
 	// If role is "Federated", specifies the ADX cluster's heartbeat table TTL.
 	HeartbeatTTL *string `json:"heartbeatTTL,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// Specifies partition clusters that should be excluded from federation macros.
+	BlockedClusters *ADXClusterFederationBlockedClustersSpec `json:"blockedClusters,omitempty"`
+}
+
+type ADXClusterFederationBlockedClustersSpec struct {
+	//+kubebuilder:validation:Optional
+	// Static list of partition cluster endpoints to exclude from macro generation. Values are case-insensitive and trimmed of trailing slashes before comparison.
+	Static []string `json:"static,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// Optional Kusto function that returns additional endpoints to block. The function should return a tabular result with a string column named "ClusterEndpoint" (or "Endpoint").
+	KustoFunction *ADXClusterFederationBlockedClustersFunctionSpec `json:"kustoFunction,omitempty"`
+}
+
+type ADXClusterFederationBlockedClustersFunctionSpec struct {
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
+	// Database containing the break-glass function.
+	Database string `json:"database"`
+
+	//+kubebuilder:validation:Required
+	//+kubebuilder:validation:Pattern=^[A-Za-z_][A-Za-z0-9_]*$
+	// Name of the Kusto function returning blocked cluster endpoints.
+	Name string `json:"name"`
 }
 
 type ADXClusterFederatedClusterSpec struct {
