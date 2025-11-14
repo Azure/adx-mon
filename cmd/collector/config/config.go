@@ -158,8 +158,8 @@ func (s *PrometheusScrape) Validate() error {
 type KubeletDiscovery struct {
 	Host           string `toml:"host,omitempty" comment:"Kubelet host address. Defaults to node name from NODE_NAME env var, or '127.0.0.1' if not set"`
 	Port           int    `toml:"port,omitempty" comment:"Kubelet port. Defaults to 10250"`
-	PollInterval   int    `toml:"poll-interval,omitempty" comment:"How often to poll the kubelet for pod updates (seconds). Defaults to 15"`
-	RequestTimeout int    `toml:"request-timeout,omitempty" comment:"Request timeout for kubelet API calls (seconds). Defaults to 10"`
+	PollInterval   int    `toml:"poll-interval,omitempty" comment:"How often to poll the kubelet for pod updates (seconds). Defaults to 10"`
+	RequestTimeout int    `toml:"request-timeout,omitempty" comment:"Request timeout for kubelet API calls (seconds). Defaults to 9"`
 	TokenPath      string `toml:"token-path,omitempty" comment:"Path to service account token. Defaults to /var/run/secrets/kubernetes.io/serviceaccount/token"`
 	CAPath         string `toml:"ca-path,omitempty" comment:"Path to CA certificate for TLS verification. Defaults to /var/run/secrets/kubernetes.io/serviceaccount/ca.crt"`
 }
