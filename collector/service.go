@@ -319,17 +319,26 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		replicator = r
 	}
 
-	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      time.Minute,
-		Partitioner:        partitioner,
-		Segmenter:          store.Index(),
-		MinUploadSize:      4 * 1024 * 1024,
-		MaxBatchSegments:   opts.MaxBatchSegments,
-		UploadQueue:        transferQueue,
-		TransferQueue:      transferQueue,
-		PeerHealthReporter: health,
+	// Create collector-specific WAL segment metrics lazily to avoid exposing ingestor metrics
+	collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge := metrics.NewCollectorSegmentMetrics()
+
+	batcher, err := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:              opts.StorageDir,
+		MaxSegmentAge:           time.Minute,
+		Partitioner:             partitioner,
+		Segmenter:               store.Index(),
+		MinUploadSize:           4 * 1024 * 1024,
+		MaxBatchSegments:        opts.MaxBatchSegments,
+		UploadQueue:             transferQueue,
+		TransferQueue:           transferQueue,
+		PeerHealthReporter:      health,
+		SegmentsCountMetric:     collectorSegmentsTotal,
+		SegmentsSizeBytesMetric: collectorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    collectorSegmentsMaxAge,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create batcher: %w", err)
+	}
 
 	health.QueueSizer = batcher
 
