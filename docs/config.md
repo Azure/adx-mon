@@ -10,7 +10,7 @@ This is the top level configuration for the collector. The only required fields 
 ```toml
 # Ingestor URL to send collected telemetry.
 endpoint = 'https://ingestor.adx-mon.svc.cluster.local'
-# Path to kubernetes client config
+# Path to kubernetes client config file. If not set, in-cluster config is used for node metadata and pod discovery.
 kube-config = '.kube/config'
 # Skip TLS verification.
 insecure-skip-verify = true

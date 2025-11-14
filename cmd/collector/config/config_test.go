@@ -1858,3 +1858,189 @@ func TestConfig_ValidateExporters(t *testing.T) {
 		})
 	}
 }
+
+func TestKubeletDiscovery_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  KubeletDiscovery
+		wantErr string
+	}{
+		{
+			name:    "valid config with defaults",
+			config:  KubeletDiscovery{},
+			wantErr: "",
+		},
+		{
+			name: "valid config with all fields set",
+			config: KubeletDiscovery{
+				Host:           "127.0.0.1",
+				Port:           10250,
+				PollInterval:   15,
+				RequestTimeout: 10,
+				TokenPath:      "/var/run/secrets/kubernetes.io/serviceaccount/token",
+				CAPath:         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid config with custom values",
+			config: KubeletDiscovery{
+				Host:           "10.0.0.1",
+				Port:           10255,
+				PollInterval:   30,
+				RequestTimeout: 20,
+				TokenPath:      "/custom/token",
+				CAPath:         "/custom/ca.crt",
+			},
+			wantErr: "",
+		},
+		{
+			name: "invalid port - negative",
+			config: KubeletDiscovery{
+				Port: -1,
+			},
+			wantErr: "kubelet-discovery.port must be between 0 and 65535",
+		},
+		{
+			name: "invalid port - too large",
+			config: KubeletDiscovery{
+				Port: 65536,
+			},
+			wantErr: "kubelet-discovery.port must be between 0 and 65535",
+		},
+		{
+			name: "invalid poll interval - less than 1",
+			config: KubeletDiscovery{
+				PollInterval: -1,
+			},
+			wantErr: "kubelet-discovery.poll-interval must be at least 1 second",
+		},
+		{
+			name: "invalid request timeout - less than 1",
+			config: KubeletDiscovery{
+				RequestTimeout: -1,
+			},
+			wantErr: "kubelet-discovery.request-timeout must be at least 1 second",
+		},
+		{
+			name: "valid edge case - port 0",
+			config: KubeletDiscovery{
+				Port: 0,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid edge case - port 65535",
+			config: KubeletDiscovery{
+				Port: 65535,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid edge case - zero timeouts (use defaults)",
+			config: KubeletDiscovery{
+				PollInterval:   0,
+				RequestTimeout: 0,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid edge case - minimum valid timeouts",
+			config: KubeletDiscovery{
+				PollInterval:   1,
+				RequestTimeout: 1,
+			},
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_KubeletDiscovery(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "kubelet discovery omitted",
+			cfg:  Config{},
+		},
+		{
+			name: "kubelet discovery with defaults",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{},
+			},
+		},
+		{
+			name: "kubelet discovery with valid config",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					Host:           "127.0.0.1",
+					Port:           10250,
+					PollInterval:   15,
+					RequestTimeout: 10,
+					TokenPath:      "/var/run/secrets/kubernetes.io/serviceaccount/token",
+					CAPath:         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+				},
+			},
+		},
+		{
+			name: "kubelet discovery with invalid port",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					Port: -1,
+				},
+			},
+			wantErr: "kubelet-discovery.port must be between 0 and 65535",
+		},
+		{
+			name: "kubelet discovery with invalid poll interval",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					PollInterval: -5,
+				},
+			},
+			wantErr: "kubelet-discovery.poll-interval must be at least 1 second",
+		},
+		{
+			name: "kubelet discovery with invalid request timeout",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					RequestTimeout: -10,
+				},
+			},
+			wantErr: "kubelet-discovery.request-timeout must be at least 1 second",
+		},
+		{
+			name: "kubelet discovery with custom paths",
+			cfg: Config{
+				KubeletDiscovery: &KubeletDiscovery{
+					TokenPath: "/custom/path/token",
+					CAPath:    "/custom/path/ca.crt",
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

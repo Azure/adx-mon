@@ -203,10 +203,10 @@ func realMain(ctx *cli.Context) error {
 	schema.DefaultMetricsMapping = defaultMapping
 
 	metricExporterCache := make(map[string]remote.RemoteWriteClient)
-	var informer *k8s.PodInformer
+	var informer k8s.PodInformerInterface = nil
 	var scraperOpts *collector.ScraperOpts
 	if cfg.PrometheusScrape != nil {
-		informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
+		informer, err = getInformer(ctx.Context, &cfg, hostname, informer)
 		if err != nil {
 			return fmt.Errorf("failed to get informer for prometheus scrape: %w", err)
 		}
@@ -347,6 +347,7 @@ func realMain(ctx *cli.Context) error {
 	opts := &collector.ServiceOpts{
 		EnablePprof:            cfg.EnablePprof,
 		Scraper:                scraperOpts,
+		PodInformer:            informer,
 		ListenAddr:             cfg.ListenAddr,
 		NodeName:               hostname,
 		Endpoint:               endpoint,
@@ -626,7 +627,7 @@ func realMain(ctx *cli.Context) error {
 	for _, v := range cfg.HostLog {
 		tailSourceConfig := tail.TailSourceConfig{}
 		if !v.DisableKubeDiscovery {
-			informer, err = getInformer(cfg.Kubeconfig, hostname, informer)
+			informer, err = getInformer(ctx.Context, &cfg, hostname, informer)
 			if err != nil {
 				return fmt.Errorf("failed to get informer for tail: %w", err)
 			}
@@ -988,12 +989,42 @@ func getKubeClient(kubeConfig string) (*kubernetes.Clientset, error) {
 	return client, nil
 }
 
-func getInformer(kubeConfig string, nodeName string, informer *k8s.PodInformer) (*k8s.PodInformer, error) {
+func getInformer(ctx context.Context, cfg *config.Config, nodeName string, informer k8s.PodInformerInterface) (k8s.PodInformerInterface, error) {
 	if informer != nil {
 		return informer, nil
 	}
 
-	client, err := getKubeClient(kubeConfig)
+	// Use kubelet informer if configured
+	if cfg.KubeletDiscovery != nil {
+		opts := k8s.KubeletInformerOptions{
+			NodeName:    nodeName,
+			KubeletHost: cfg.KubeletDiscovery.Host,
+			KubeletPort: cfg.KubeletDiscovery.Port,
+			TokenPath:   cfg.KubeletDiscovery.TokenPath,
+			CAPath:      cfg.KubeletDiscovery.CAPath,
+		}
+
+		if cfg.KubeletDiscovery.PollInterval > 0 {
+			opts.PollInterval = time.Duration(cfg.KubeletDiscovery.PollInterval) * time.Second
+		}
+		if cfg.KubeletDiscovery.RequestTimeout > 0 {
+			opts.RequestTimeout = time.Duration(cfg.KubeletDiscovery.RequestTimeout) * time.Second
+		}
+
+		kubeletInformer, err := k8s.NewKubeletPodInformer(opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create kubelet informer: %w", err)
+		}
+
+		if err := kubeletInformer.Open(ctx); err != nil {
+			return nil, fmt.Errorf("failed to start kubelet informer: %w", err)
+		}
+
+		return kubeletInformer, nil
+	}
+
+	// Fall back to standard Kubernetes API informer
+	client, err := getKubeClient(cfg.Kubeconfig)
 	if err != nil {
 		return nil, err
 	}
