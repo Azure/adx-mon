@@ -190,6 +190,9 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
+	// Create ingestor-specific WAL segment metrics lazily to avoid exposing collector metrics
+	ingestorSegmentsTotal, ingestorSegmentsSizeBytes, ingestorSegmentsMaxAge := metrics.NewIngestorSegmentMetrics()
+
 	batcher, err := cluster.NewBatcher(cluster.BatcherOpts{
 		StorageDir:              opts.StorageDir,
 		MaxSegmentAge:           opts.MaxSegmentAge,
@@ -202,9 +205,9 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		TransferQueue:           repl.TransferQueue(),
 		PeerHealthReporter:      health,
 		TransfersDisabled:       opts.DisablePeerTransfer,
-		SegmentsCountMetric:     metrics.IngestorSegmentsTotal,
-		SegmentsSizeBytesMetric: metrics.IngestorSegmentsSizeBytes,
-		SegmentsMaxAgeMetric:    metrics.IngestorSegmentsMaxAge,
+		SegmentsCountMetric:     ingestorSegmentsTotal,
+		SegmentsSizeBytesMetric: ingestorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    ingestorSegmentsMaxAge,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create batcher: %w", err)
