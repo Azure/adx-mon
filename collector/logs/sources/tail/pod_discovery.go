@@ -25,7 +25,7 @@ type TailerSourceInterface interface {
 
 type PodDiscoveryOpts struct {
 	NodeName         string
-	PodInformer      *k8s.PodInformer
+	PodInformer      k8s.PodInformerInterface
 	StaticPodTargets []*StaticPodTargets
 }
 
@@ -49,7 +49,7 @@ type PodDiscovery struct {
 	mut            sync.Mutex // protect podidToTargets
 
 	cancel               context.CancelFunc
-	podInformer          *k8s.PodInformer
+	podInformer          k8s.PodInformerInterface
 	informerRegistration cache.ResourceEventHandlerRegistration
 	wg                   sync.WaitGroup
 }

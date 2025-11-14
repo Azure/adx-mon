@@ -57,7 +57,7 @@ type ScraperOpts struct {
 	// DisableDiscovery disables the discovery of scrape targets.
 	DisableDiscovery bool
 
-	PodInformer *k8s.PodInformer
+	PodInformer k8s.PodInformerInterface
 
 	// Targets is a list of static scrape targets.
 	Targets []ScrapeTarget
@@ -110,7 +110,7 @@ func (t ScrapeTarget) Equals(other ScrapeTarget) bool {
 
 type Scraper struct {
 	opts                 ScraperOpts
-	podInformer          *k8s.PodInformer
+	podInformer          k8s.PodInformerInterface
 	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
