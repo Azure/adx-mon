@@ -50,9 +50,9 @@ type BatcherOpts struct {
 	TransfersDisabled bool
 
 	// Metrics for observability
-	SegmentsCountMetric    prometheus.Gauge
+	SegmentsCountMetric     prometheus.Gauge
 	SegmentsSizeBytesMetric prometheus.Gauge
-	SegmentsMaxAgeMetric   prometheus.Gauge
+	SegmentsMaxAgeMetric    prometheus.Gauge
 }
 
 type Batch struct {
@@ -153,9 +153,9 @@ type batcher struct {
 	segments *partmap.Map[int]
 
 	// Metrics for observability
-	segmentsCountMetric    prometheus.Gauge
+	segmentsCountMetric     prometheus.Gauge
 	segmentsSizeBytesMetric prometheus.Gauge
-	segmentsMaxAgeMetric   prometheus.Gauge
+	segmentsMaxAgeMetric    prometheus.Gauge
 }
 
 func NewBatcher(opts BatcherOpts) (Batcher, error) {

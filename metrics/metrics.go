@@ -216,11 +216,13 @@ var (
 
 var (
 	// Lazy-initialized segment metrics to avoid exposing them in both services
-	ingestorSegmentsOnce       sync.Once
-	ingestorSegmentsTotal      prometheus.Gauge
-	ingestorSegmentsSizeBytes  prometheus.Gauge
-	ingestorSegmentsMaxAge     prometheus.Gauge
-	
+	// When metrics do not have dimensions but are shared between services, they need to be lazily
+	// initialized to avoid multiple services exposing them.
+	ingestorSegmentsOnce      sync.Once
+	ingestorSegmentsTotal     prometheus.Gauge
+	ingestorSegmentsSizeBytes prometheus.Gauge
+	ingestorSegmentsMaxAge    prometheus.Gauge
+
 	collectorSegmentsOnce      sync.Once
 	collectorSegmentsTotal     prometheus.Gauge
 	collectorSegmentsSizeBytes prometheus.Gauge
@@ -280,4 +282,3 @@ func NewCollectorSegmentMetrics() (segmentsTotal, segmentsSizeBytes, segmentsMax
 	})
 	return collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge
 }
-
