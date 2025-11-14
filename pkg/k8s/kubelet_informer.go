@@ -91,12 +91,12 @@ func NewKubeletPodInformer(opts KubeletInformerOptions) (*KubeletPodInformer, er
 
 	pollInterval := opts.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = 15 * time.Second
+		pollInterval = 10 * time.Second
 	}
 
 	requestTimeout := opts.RequestTimeout
 	if requestTimeout <= 0 {
-		requestTimeout = 10 * time.Second
+		requestTimeout = 9 * time.Second
 	}
 
 	dialTimeout := opts.DialTimeout
