@@ -880,8 +880,7 @@ func newMockBlockedClusterIterator(t *testing.T, rows []blockedClusterRow) *kust
 	}
 	mockRows, err := kusto.NewMockRows(columns)
 	require.NoError(t, err)
-	for i := range rows {
-		row := rows[i]
+	for _, row := range rows {
 		require.NoError(t, mockRows.Struct(&row))
 	}
 	iter := &kusto.RowIterator{}

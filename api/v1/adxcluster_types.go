@@ -101,7 +101,7 @@ type ADXClusterFederationBlockedClustersSpec struct {
 type ADXClusterFederationBlockedClustersFunctionSpec struct {
 	//+kubebuilder:validation:Required
 	//+kubebuilder:validation:Pattern=^[a-zA-Z0-9_]+$
-	// Database containing the break-glass function.
+	// Database containing the Kusto function.
 	Database string `json:"database"`
 
 	//+kubebuilder:validation:Required

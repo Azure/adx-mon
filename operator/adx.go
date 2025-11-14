@@ -1668,7 +1668,7 @@ func resolveBlockedClusterEndpoints(ctx context.Context, client kustoQueryClient
 	config := federation.BlockedClusters
 	for _, entry := range config.Static {
 		if normalized := normalizeEndpoint(entry); normalized != "" {
-			blocked[normalized] = strings.TrimSpace(entry)
+			blocked[normalized] = entry
 		}
 	}
 
@@ -1697,7 +1697,9 @@ func resolveBlockedClusterEndpoints(ctx context.Context, client kustoQueryClient
 
 	for _, endpoint := range endpoints {
 		if normalized := normalizeEndpoint(endpoint); normalized != "" {
-			blocked[normalized] = endpoint
+			if _, exists := blocked[normalized]; !exists {
+				blocked[normalized] = endpoint
+			}
 		}
 	}
 
@@ -1705,6 +1707,9 @@ func resolveBlockedClusterEndpoints(ctx context.Context, client kustoQueryClient
 }
 
 func fetchBlockedEndpointsFromFunction(ctx context.Context, client kustoQueryClient, database, functionName string) ([]string, error) {
+	// NOTE: The function name is provided via ADXCluster CRD and validated by the pattern ^[A-Za-z_][A-Za-z0-9_]*$ at the CRD level.
+	// This ensures only valid KQL function names are allowed, mitigating injection risks.
+	// AddUnsafe is required here because the Kusto SDK does not provide a safe way to interpolate function names.
 	stmt := kql.New("").AddUnsafe(functionName).AddUnsafe("()")
 	iter, err := client.Query(ctx, database, stmt)
 	if err != nil {
