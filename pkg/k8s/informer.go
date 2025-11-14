@@ -11,6 +11,12 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// PodInformerInterface defines the common interface for pod informers
+type PodInformerInterface interface {
+	Add(ctx context.Context, handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error)
+	Remove(reg cache.ResourceEventHandlerRegistration) error
+}
+
 type PodInformer struct {
 	K8sClient kubernetes.Interface
 	NodeName  string
