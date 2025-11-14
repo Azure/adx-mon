@@ -261,6 +261,7 @@ func (k *KubeletPodInformer) run(ctx context.Context, initialSync chan struct{})
 
 	if err := k.syncOnce(ctx); err != nil {
 		logger.Errorf("kubelet pod informer: initial sync failed: %v", err)
+		// Do not block startup on initial sync failure - just log the error and allow next sync attempts to retry.
 	}
 	close(initialSync)
 
