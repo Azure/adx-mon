@@ -1645,7 +1645,7 @@ func executeKustoScripts(ctx context.Context, client *kusto.Client, database str
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("one or more Kusto scripts failed: %w", errors.Join(errs...))
+		return fmt.Errorf("one or more Kusto scripts failed")
 	}
 	return nil
 }
@@ -1668,7 +1668,7 @@ func resolveBlockedClusterEndpoints(ctx context.Context, client kustoQueryClient
 	config := federation.BlockedClusters
 	for _, entry := range config.Static {
 		if normalized := normalizeEndpoint(entry); normalized != "" {
-			blocked[normalized] = entry
+			blocked[normalized] = strings.TrimSpace(entry)
 		}
 	}
 
@@ -1696,10 +1696,9 @@ func resolveBlockedClusterEndpoints(ctx context.Context, client kustoQueryClient
 	}
 
 	for _, endpoint := range endpoints {
-		if normalized := normalizeEndpoint(endpoint); normalized != "" {
-			if _, exists := blocked[normalized]; !exists {
-				blocked[normalized] = endpoint
-			}
+		trimmed := strings.TrimSpace(endpoint)
+		if normalized := normalizeEndpoint(trimmed); normalized != "" {
+			blocked[normalized] = trimmed
 		}
 	}
 
