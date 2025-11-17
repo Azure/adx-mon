@@ -1,12 +1,10 @@
 package collector
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -20,7 +18,6 @@ import (
 	prom_model "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-	corev1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -212,51 +209,6 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 		}
 	}
 	return prompb.NewIterator(br), nil
-}
-
-// Pods returns a list of pods running on the node. This uses the kubelet API instead of the kubernetes API server.
-func (c *MetricsClient) Pods() (corev1.PodList, error) {
-	url := fmt.Sprintf("https://%s:10250/pods", c.NodeName)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return corev1.PodList{}, fmt.Errorf("failed to create request for %s: %w", url, err)
-	}
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
-	if token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	}
-	resp, err := c.client.Do(req)
-	if err != nil || resp == nil {
-		return corev1.PodList{}, fmt.Errorf("failed to request %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(resp.Body)
-	if err != nil {
-		return corev1.PodList{}, fmt.Errorf("failed to read response body from %s (status: %s): %w", url, resp.Status, err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		bodyText := buf.String()
-		if len(bodyText) > 500 {
-			bodyText = bodyText[:500] + "..."
-		}
-		return corev1.PodList{}, fmt.Errorf("kubelet API request to %s failed with status %s: %s", url, resp.Status, bodyText)
-	}
-
-	var pl corev1.PodList
-	err = json.Unmarshal(buf.Bytes(), &pl)
-	if err != nil {
-		bodyText := buf.String()
-		if len(bodyText) > 200 {
-			bodyText = bodyText[:200] + "..."
-		}
-		return corev1.PodList{}, fmt.Errorf("failed to parse JSON response from %s (status: %s, body: %s): %w", url, resp.Status, bodyText, err)
-	}
-	return pl, nil
 }
 
 func (c *MetricsClient) Close() error {
