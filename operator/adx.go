@@ -503,6 +503,7 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 	if err != nil {
 		return false, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
+	defer client.Close()
 
 	q := kql.New(".show tables | where TableName == '").AddUnsafe(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("' | count")
 	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q)
