@@ -1136,6 +1136,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
+	defer client.Close()
 
 	// Step 2: Ensure heartbeat table exists
 	_, err = ensureHeartbeatTable(ctx, cluster)
