@@ -808,9 +808,43 @@ func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.A
 	if clusterUpdate.Identity == nil {
 		clusterUpdate.Identity = &armkusto.Identity{}
 	}
-	clusterUpdate.Identity.Type = to.Ptr(armkusto.IdentityTypeUserAssigned)
-	clusterUpdate.Identity.UserAssignedIdentities = finalSet
+	clusterUpdate.Identity.Type = identityTypeForUpdate(resp.Identity, len(finalSet) > 0)
+	if len(finalSet) == 0 {
+		clusterUpdate.Identity.UserAssignedIdentities = nil
+	} else {
+		clusterUpdate.Identity.UserAssignedIdentities = finalSet
+	}
 	return clusterUpdate, true
+}
+
+func identityTypeForUpdate(existing *armkusto.Identity, includeUserAssigned bool) *armkusto.IdentityType {
+	hasSystemAssigned := identityHasSystem(existing)
+	switch {
+	case hasSystemAssigned && includeUserAssigned:
+		t := armkusto.IdentityTypeSystemAssignedUserAssigned
+		return &t
+	case hasSystemAssigned:
+		t := armkusto.IdentityTypeSystemAssigned
+		return &t
+	case includeUserAssigned:
+		t := armkusto.IdentityTypeUserAssigned
+		return &t
+	default:
+		t := armkusto.IdentityTypeNone
+		return &t
+	}
+}
+
+func identityHasSystem(identity *armkusto.Identity) bool {
+	if identity == nil || identity.Type == nil {
+		return false
+	}
+	switch *identity.Type {
+	case armkusto.IdentityTypeSystemAssigned, armkusto.IdentityTypeSystemAssignedUserAssigned:
+		return true
+	default:
+		return strings.Contains(string(*identity.Type), "SystemAssigned")
+	}
 }
 
 func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
