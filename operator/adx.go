@@ -438,7 +438,9 @@ func ensureDatabases(ctx context.Context, cluster *adxmonv1.ADXCluster, cred azc
 	if err != nil {
 		return false, fmt.Errorf("failed to create databases client: %w", err)
 	}
-	databases := cluster.Spec.Databases
+	// Copy the database slice before appending so we don't mutate the
+	// CR spec's backing array (Reconcile must treat spec as immutable).
+	databases := append([]adxmonv1.ADXClusterDatabaseSpec(nil), cluster.Spec.Databases...)
 	if cluster.Spec.Federation != nil && cluster.Spec.Federation.HeartbeatDatabase != nil {
 		databases = append(databases, adxmonv1.ADXClusterDatabaseSpec{
 			DatabaseName:  *cluster.Spec.Federation.HeartbeatDatabase,
