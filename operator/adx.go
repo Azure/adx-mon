@@ -521,7 +521,7 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 			continue
 		}
 		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve tables: %w", err)
+			return false, fmt.Errorf("failed to retrieve tables: %w", errFinal)
 		}
 
 		var t TableExists
