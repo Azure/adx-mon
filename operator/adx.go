@@ -635,18 +635,27 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 
 	if !updated {
 		logger.Infof("ADXCluster %s: no updates needed, marking as complete", cluster.Spec.ClusterName)
-		c := metav1.Condition{
-			Type:               adxmonv1.ADXClusterConditionOwner,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.GetGeneration(),
-			LastTransitionTime: metav1.Now(),
-			Reason:             "Complete",
-			Message:            "Cluster is already reconciled",
-		}
-		if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-			if err := r.Status().Update(ctx, cluster); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
+		
+		var desiredApplied *adxmonv1.AppliedProvisionState
+		if cluster.Spec.Provision != nil {
+			desiredApplied = &adxmonv1.AppliedProvisionState{
+				SkuName: cluster.Spec.Provision.SkuName,
+				Tier:    cluster.Spec.Provision.Tier,
 			}
+			if len(cluster.Spec.Provision.UserAssignedIdentities) > 0 {
+				desiredApplied.UserAssignedIdentities = append([]string(nil), cluster.Spec.Provision.UserAssignedIdentities...)
+			}
+		}
+		
+		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "Complete", "Cluster is already reconciled", func(status *adxmonv1.ADXClusterStatus) bool {
+			changed := false
+			if !appliedProvisionStateEqual(status.AppliedProvisionState, desiredApplied) {
+				status.AppliedProvisionState = copyAppliedProvisionState(desiredApplied)
+				changed = true
+			}
+			return changed
+		}); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // Terminal state, cluster is up-to-date
 	}
