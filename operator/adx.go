@@ -963,7 +963,6 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	if err != nil {
 		return fmt.Errorf("failed to query databases: %w", err)
 	}
-	defer result.Stop()
 
 	var databases []string
 	for {
@@ -975,15 +974,18 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 			continue
 		}
 		if errFinal != nil {
+			result.Stop()
 			return fmt.Errorf("failed to retrieve databases: %w", errFinal)
 		}
 
 		var dbr DatabaseRec
 		if err := row.ToStruct(&dbr); err != nil {
+			result.Stop()
 			return fmt.Errorf("failed to parse database: %w", err)
 		}
 		databases = append(databases, dbr.DatabaseName)
 	}
+	result.Stop()
 
 	var schema []ADXClusterSchema
 	for _, database := range databases {
