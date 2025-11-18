@@ -965,7 +965,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 			continue
 		}
 		if errFinal != nil {
-			return fmt.Errorf("failed to retrieve databases: %w", err)
+			return fmt.Errorf("failed to retrieve databases: %w", errFinal)
 		}
 
 		var dbr DatabaseRec
