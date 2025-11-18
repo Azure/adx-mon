@@ -994,22 +994,24 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 				continue
 			}
 			if errFinal != nil {
-				return fmt.Errorf("failed to retrieve tables: %w", err)
+				result.Stop()
+				return fmt.Errorf("failed to retrieve tables: %w", errFinal)
 			}
 
 			var tbl TableRec
 			if err := row.ToStruct(&tbl); err != nil {
+				result.Stop()
 				return fmt.Errorf("failed to parse table: %w", err)
 			}
 			s.Tables = append(s.Tables, tbl.TableName)
 		}
+		result.Stop()
 
 		q = kql.New(".show functions")
 		result, err = client.Mgmt(ctx, database, q)
 		if err != nil {
 			return fmt.Errorf("failed to query functions: %w", err)
 		}
-		defer result.Stop()
 
 		for {
 			row, errInline, errFinal := result.NextRowOrError()
@@ -1020,11 +1022,13 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 				continue
 			}
 			if errFinal != nil {
+				result.Stop()
 				return fmt.Errorf("failed to retrieve functions: %w", errFinal)
 			}
 
 			var fn FunctionRec
 			if err := row.ToStruct(&fn); err != nil {
+				result.Stop()
 				return fmt.Errorf("failed to parse function: %w", err)
 			}
 
@@ -1033,6 +1037,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 				s.Views = append(s.Views, fn.Name)
 			}
 		}
+		result.Stop()
 
 		schema = append(schema, s)
 	}
