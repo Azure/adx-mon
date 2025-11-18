@@ -350,6 +350,20 @@ func getContents() Contents {
 					},
 				},
 			},
+			{
+				Title:       "Kubelet Discovery",
+				Description: KubeletDiscoveryDescription,
+				Config: &config.Config{
+					KubeletDiscovery: &config.KubeletDiscovery{
+						Host:           "127.0.0.1",
+						Port:           10250,
+						PollInterval:   15,
+						RequestTimeout: 10,
+						TokenPath:      "/var/run/secrets/kubernetes.io/serviceaccount/token",
+						CAPath:         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+					},
+				},
+			},
 		},
 		MetadataSections: []Section{
 			{
@@ -560,6 +574,11 @@ var HostLogDescription = "The host log config configures file and journald log c
 	"*   **`json`**: Attempts to parse the entire log message string as a JSON object. If successful, the key-value pairs from the JSON object are merged into the log body. The original `message` field is typically removed or overwritten by a field from the JSON payload if one exists with the key \"message\".\n" +
 	"*   **`keyvalue`**: Parses log messages formatted as `key1=value1 key2=\"quoted value\" key3=value3 ...`. It extracts these key-value pairs and adds them to the log body. Keys and values are strings. Values containing spaces should be quoted.\n" +
 	"*   **`space`**: Splits the log message string by whitespace (using `strings.Fields`, which handles multiple spaces, tabs, etc.). Each resulting part is added to the log body with keys named sequentially: `field0`, `field1`, `field2`, and so on. All resulting fields are strings.\n"
+
+var KubeletDiscoveryDescription = "The kubelet-discovery configuration enables pod discovery via the local kubelet API instead of the Kubernetes API server. When configured, the collector polls the kubelet's `/pods` endpoint to discover running pods on the node." +
+	" This method of discovery is useful in large cluster scenarios where minimizing API server load is important. When the `[kubelet-discovery]` block exists, [Prometheus Scrape](#prometheus-scrape) and [Host Log](#host-log) will utilize this mechanism to discover pods.\n\n" +
+	"!!! tip\n\n" +
+	"    Kubelet polling can prevent discovery of short-lived pods that are created and deleted between polling intervals. Consider reducing the `poll-interval` if this is a concern, or have these components send logs and metrics directly to collector via [Prometheus Remote Write](#prometheus-remote-write), [Otel Metrics](#otel-metrics), or [Otel Log](#otel-log).\n\n"
 
 var MetricExporterDescription = "\n" +
 	"Metrics currently support exporting to [OpenTelemetry OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) endpoints with `otlp-metric-exporter`. The exporter can be configured to drop metrics by default, and only keep metrics that match a regex or have a specific label and value.\n\n" +
