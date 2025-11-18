@@ -755,10 +755,6 @@ func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.A
 		return clusterUpdate, false
 	}
 
-	if resp.Identity == nil || resp.Identity.Type == nil || *resp.Identity.Type != armkusto.IdentityTypeUserAssigned {
-		return clusterUpdate, false
-	}
-
 	desiredSet := make(map[string]struct{})
 	for _, id := range cluster.Spec.Provision.UserAssignedIdentities {
 		id = strings.TrimSpace(id)
@@ -780,8 +776,10 @@ func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.A
 	}
 
 	actualSet := make(map[string]struct{})
-	for id := range resp.Identity.UserAssignedIdentities {
-		actualSet[id] = struct{}{}
+	if resp.Identity != nil && resp.Identity.UserAssignedIdentities != nil {
+		for id := range resp.Identity.UserAssignedIdentities {
+			actualSet[id] = struct{}{}
+		}
 	}
 
 	finalSet := make(map[string]*armkusto.ComponentsSgqdofSchemasIdentityPropertiesUserassignedidentitiesAdditionalproperties)

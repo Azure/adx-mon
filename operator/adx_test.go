@@ -478,7 +478,7 @@ func TestDiffIdentities(t *testing.T) {
 		},
 		{
 			// Scenario: The identity type is not user-assigned (e.g., system-assigned only).
-			// Tests that the operator does not attempt to update user-assigned identities in this case.
+			// Tests that the operator transitions the cluster to user-assigned identities when requested.
 			name: "identity type not user assigned",
 			resp: armkusto.ClustersClientGetResponse{
 				Cluster: armkusto.Cluster{
@@ -497,8 +497,8 @@ func TestDiffIdentities(t *testing.T) {
 					},
 				},
 			},
-			wantUpdated: false,
-			wantIDs:     nil,
+			wantUpdated: true,
+			wantIDs:     []string{"/id1"},
 		},
 	}
 
