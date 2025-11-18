@@ -1236,16 +1236,6 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
-	entityInventory := collectInventoryByDatabase(schemaByEndpoint)
-	for db, entities := range entityInventory {
-		if len(entities) == 0 {
-			continue
-		}
-		if err := ensureHubTables(ctx, client, db, entities); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to ensure tables for database %s: %w", db, err)
-		}
-	}
-
 	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
