@@ -1029,14 +1029,16 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	var schema []ADXClusterSchema
 	for _, database := range databases {
 		s := ADXClusterSchema{
-			Database: database,
+			Database:     database,
+			TableSchemas: make(map[string]string),
 		}
-		q := kql.New(".show tables")
+		q := kql.New(".show database schema")
 		result, err := client.Mgmt(ctx, database, q)
 		if err != nil {
-			return fmt.Errorf("failed to query tables: %w", err)
+			return fmt.Errorf("failed to query database schema: %w", err)
 		}
 
+		tableColumns := make(map[string][]string)
 		for {
 			row, errInline, errFinal := result.NextRowOrError()
 			if errFinal == io.EOF {
@@ -1047,17 +1049,27 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 			}
 			if errFinal != nil {
 				result.Stop()
-				return fmt.Errorf("failed to retrieve tables: %w", errFinal)
+				return fmt.Errorf("failed to retrieve database schema: %w", errFinal)
 			}
 
-			var tbl TableRec
-			if err := row.ToStruct(&tbl); err != nil {
+			var rec DatabaseSchemaRec
+			if err := row.ToStruct(&rec); err != nil {
 				result.Stop()
-				return fmt.Errorf("failed to parse table: %w", err)
+				return fmt.Errorf("failed to parse database schema: %w", err)
 			}
-			s.Tables = append(s.Tables, tbl.TableName)
+			if rec.TableName == "" {
+				continue
+			}
+			colDef := fmt.Sprintf("['%s']:%s", rec.ColumnName, rec.ColumnType)
+			tableColumns[rec.TableName] = append(tableColumns[rec.TableName], colDef)
 		}
 		result.Stop()
+
+		for tableName, cols := range tableColumns {
+			s.Tables = append(s.Tables, tableName)
+			s.TableSchemas[tableName] = strings.Join(cols, ", ")
+		}
+		sort.Strings(s.Tables)
 
 		q = kql.New(".show functions")
 		result, err = client.Mgmt(ctx, database, q)
@@ -1084,12 +1096,14 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 				return fmt.Errorf("failed to parse function: %w", err)
 			}
 
-			isView, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
+			isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
 			if err == nil && isView {
 				s.Views = append(s.Views, fn.Name)
+				s.TableSchemas[fn.Name] = viewSchema
 			}
 		}
 		result.Stop()
+		sort.Strings(s.Views)
 
 		schema = append(schema, s)
 	}
@@ -1146,10 +1160,17 @@ type DatabaseExistsRec struct {
 	Count int64 `kusto:"Count"`
 }
 
+type DatabaseSchemaRec struct {
+	TableName  string `kusto:"TableName"`
+	ColumnName string `kusto:"ColumnName"`
+	ColumnType string `kusto:"ColumnType"`
+}
+
 type ADXClusterSchema struct {
-	Database string   `json:"database"`
-	Tables   []string `json:"tables"`
-	Views    []string `json:"views"`
+	Database     string            `json:"database"`
+	Tables       []string          `json:"tables"`
+	TableSchemas map[string]string `json:"tableSchemas,omitempty"`
+	Views        []string          `json:"views"`
 }
 
 func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -1489,37 +1510,40 @@ func mergeDatabaseSpecs(userDbs, discoveredDbs []adxmonv1.ADXClusterDatabaseSpec
 	return merged
 }
 
-func collectInventoryByDatabase(schemas map[string][]ADXClusterSchema) map[string][]string {
-	inventory := make(map[string]map[string]struct{})
+func collectInventoryByDatabase(schemas map[string][]ADXClusterSchema) map[string]map[string]string {
+	inventory := make(map[string]map[string]string)
 	for _, dbSchemas := range schemas {
 		for _, schema := range dbSchemas {
 			if inventory[schema.Database] == nil {
-				inventory[schema.Database] = make(map[string]struct{})
+				inventory[schema.Database] = make(map[string]string)
 			}
 			for _, table := range schema.Tables {
 				if strings.TrimSpace(table) == "" {
 					continue
 				}
-				inventory[schema.Database][table] = struct{}{}
+				if s, ok := schema.TableSchemas[table]; ok {
+					inventory[schema.Database][table] = s
+				} else {
+					if _, exists := inventory[schema.Database][table]; !exists {
+						inventory[schema.Database][table] = ""
+					}
+				}
 			}
 			for _, view := range schema.Views {
 				if strings.TrimSpace(view) == "" {
 					continue
 				}
-				inventory[schema.Database][view] = struct{}{}
+				if s, ok := schema.TableSchemas[view]; ok {
+					inventory[schema.Database][view] = s
+				} else {
+					if _, exists := inventory[schema.Database][view]; !exists {
+						inventory[schema.Database][view] = ""
+					}
+				}
 			}
 		}
 	}
-	byDatabase := make(map[string][]string, len(inventory))
-	for db, entries := range inventory {
-		var names []string
-		for name := range entries {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		byDatabase[db] = names
-	}
-	return byDatabase
+	return inventory
 }
 
 func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, database string) (bool, error) {
@@ -1565,8 +1589,15 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, database 
 	return false, nil
 }
 
-func ensureHubTables(ctx context.Context, client *kusto.Client, database string, tables []string) error {
-	for _, table := range tables {
+func ensureHubTables(ctx context.Context, client *kusto.Client, database string, tables map[string]string) error {
+	var tableNames []string
+	for t := range tables {
+		tableNames = append(tableNames, t)
+	}
+	sort.Strings(tableNames)
+
+	for _, table := range tableNames {
+		schema := tables[table]
 		if strings.TrimSpace(table) == "" {
 			continue
 		}
@@ -1577,15 +1608,21 @@ func ensureHubTables(ctx context.Context, client *kusto.Client, database string,
 		if exists {
 			continue
 		}
+
+		schemaDef := otlpHubSchemaDefinition
+		if schema != "" {
+			schemaDef = schema
+		}
+
 		stmt := kql.New(".create table ").
 			AddUnsafe(table).
 			AddLiteral(" (").
-			AddUnsafe(otlpHubSchemaDefinition).
+			AddUnsafe(schemaDef).
 			AddLiteral(")")
 		if _, err := client.Mgmt(ctx, database, stmt); err != nil {
 			return fmt.Errorf("failed to create table %s.%s: %w", database, table, err)
 		}
-		logger.Infof("Created hub table %s.%s using OTLP schema", database, table)
+		logger.Infof("Created hub table %s.%s using schema: %s", database, table, schemaDef)
 	}
 	return nil
 }
@@ -1702,11 +1739,21 @@ type FunctionKind struct {
 	Kind string `kusto:"FunctionKind"`
 }
 
-func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, error) {
-	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind")
+type FunctionSchemaRec struct {
+	Kind          string          `kusto:"FunctionKind"`
+	OutputColumns json.RawMessage `kusto:"OutputColumns"`
+}
+
+type OutputColumn struct {
+	Name    string `json:"Name"`
+	CslType string `json:"CslType"`
+}
+
+func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, string, error) {
+	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind, OutputColumns = todynamic(Schema).OutputColumns")
 	result, err := client.Mgmt(ctx, database, q)
 	if err != nil {
-		return false, fmt.Errorf("failed to query function schema: %w", err)
+		return false, "", fmt.Errorf("failed to query function schema: %w", err)
 	}
 	defer result.Stop()
 
@@ -1719,15 +1766,29 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 			continue
 		}
 		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve function schema: %w", errFinal)
+			return false, "", fmt.Errorf("failed to retrieve function schema: %w", errFinal)
 		}
 
-		var fk FunctionKind
-		if err := row.ToStruct(&fk); err != nil {
-			return false, fmt.Errorf("failed to parse function kind: %w", err)
+		var rec FunctionSchemaRec
+		if err := row.ToStruct(&rec); err != nil {
+			return false, "", fmt.Errorf("failed to parse function schema: %w", err)
 		}
-		return fk.Kind == "ViewFunction", nil
+
+		if rec.Kind != "ViewFunction" {
+			return false, "", nil
+		}
+
+		var cols []OutputColumn
+		if err := json.Unmarshal(rec.OutputColumns, &cols); err != nil {
+			return false, "", fmt.Errorf("failed to parse output columns: %w", err)
+		}
+
+		var parts []string
+		for _, col := range cols {
+			parts = append(parts, fmt.Sprintf("['%s']:%s", col.Name, col.CslType))
+		}
+		return true, strings.Join(parts, ", "), nil
 	}
 
-	return false, nil
+	return false, "", nil
 }

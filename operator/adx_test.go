@@ -751,7 +751,12 @@ func TestCollectInventoryByDatabase(t *testing.T) {
 	}
 	inventory := collectInventoryByDatabase(schemas)
 	require.Contains(t, inventory, "db1")
-	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, inventory["db1"])
+
+	var names []string
+	for name := range inventory["db1"] {
+		names = append(names, name)
+	}
+	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, names)
 }
 
 func TestMapTablesToEndpoints(t *testing.T) {
@@ -853,9 +858,9 @@ func TestEnsureHubTables(t *testing.T) {
 	defer client.Close()
 
 	database := "NetDefaultDB"
-	tables := []string{"MirrorTable", "MirrorView"}
+	tables := map[string]string{"MirrorTable": "", "MirrorView": ""}
 
-	for _, tbl := range tables {
+	for tbl := range tables {
 		exists, err := tableExists(ctx, client, database, tbl)
 		require.NoError(t, err)
 		require.False(t, exists)
@@ -863,7 +868,7 @@ func TestEnsureHubTables(t *testing.T) {
 
 	require.NoError(t, ensureHubTables(ctx, client, database, tables))
 
-	for _, tbl := range tables {
+	for tbl := range tables {
 		exists, err := tableExists(ctx, client, database, tbl)
 		require.NoError(t, err)
 		require.True(t, exists)
