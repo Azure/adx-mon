@@ -956,6 +956,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	if err != nil {
 		return fmt.Errorf("failed to create Kusto client: %w", err)
 	}
+	defer client.Close()
 
 	q := kql.New(".show databases")
 	result, err := client.Mgmt(ctx, target.HeartbeatDatabase, q)
@@ -1058,10 +1059,11 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		// Enables kustainer integration testing
 		ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
 	}
-	client, err = kusto.New(ep)
+	federatedClient, err := kusto.New(ep)
 	if err != nil {
 		return fmt.Errorf("failed to create Kusto client: %w", err)
 	}
+	defer federatedClient.Close()
 
 	schemaData, err := json.Marshal(schema)
 	if err != nil {
@@ -1087,7 +1089,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	stmt := kql.New(".ingest inline into table ").
 		AddTable(target.HeartbeatTable).
 		AddLiteral(" <| ").AddUnsafe(row)
-	_, err = client.Mgmt(ctx, target.HeartbeatDatabase, stmt)
+	_, err = federatedClient.Mgmt(ctx, target.HeartbeatDatabase, stmt)
 	return err
 }
 
