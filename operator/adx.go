@@ -635,7 +635,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 
 	if !updated {
 		logger.Infof("ADXCluster %s: no updates needed, marking as complete", cluster.Spec.ClusterName)
-		
+
 		var desiredApplied *adxmonv1.AppliedProvisionState
 		if cluster.Spec.Provision != nil {
 			desiredApplied = &adxmonv1.AppliedProvisionState{
@@ -646,7 +646,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 				desiredApplied.UserAssignedIdentities = append([]string(nil), cluster.Spec.Provision.UserAssignedIdentities...)
 			}
 		}
-		
+
 		if err := r.setClusterCondition(ctx, cluster, metav1.ConditionTrue, "Complete", "Cluster is already reconciled", func(status *adxmonv1.ADXClusterStatus) bool {
 			changed := false
 			if !appliedProvisionStateEqual(status.AppliedProvisionState, desiredApplied) {
