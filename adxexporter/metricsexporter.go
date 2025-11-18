@@ -3,6 +3,8 @@ package adxexporter
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -18,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,7 +45,20 @@ type MetricsExporterReconciler struct {
 	Clock          clock.Clock
 
 	// Metrics components
-	Meter metric.Meter
+	Meter              metric.Meter
+	latestMetrics      map[types.NamespacedName][]transform.MetricData
+	observableGauges   map[string]metric.Float64ObservableGauge
+	gaugeRegistrations map[string]metric.Registration
+	metricsMu          sync.RWMutex
+}
+
+// Ready reports whether the metrics exporter has initialized the telemetry plumbing
+func (r *MetricsExporterReconciler) Ready() bool {
+	if !r.EnableMetricsEndpoint {
+		return true
+	}
+
+	return r.Meter != nil && r.latestMetrics != nil
 }
 
 // Reconcile handles MetricsExporter reconciliation
@@ -55,6 +71,7 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			if logger.IsDebug() {
 				logger.Debugf("MetricsExporter %s/%s not found, likely deleted", req.Namespace, req.Name)
 			}
+			r.removeMetrics(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		logger.Errorf("Failed to get MetricsExporter %s/%s: %v", req.Namespace, req.Name, err)
@@ -122,6 +139,9 @@ func (r *MetricsExporterReconciler) exposeMetricsServer() error {
 	otel.SetMeterProvider(provider)
 
 	r.Meter = otel.GetMeterProvider().Meter("adxexporter")
+	r.latestMetrics = make(map[types.NamespacedName][]transform.MetricData)
+	r.observableGauges = make(map[string]metric.Float64ObservableGauge)
+	r.gaugeRegistrations = make(map[string]metric.Registration)
 
 	return nil
 }
@@ -271,6 +291,7 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 		if logger.IsDebug() {
 			logger.Debugf("No rows returned from query for MetricsExporter %s/%s", me.Namespace, me.Name)
 		}
+		r.removeMetrics(types.NamespacedName{Name: me.Name, Namespace: me.Namespace})
 		return nil
 	}
 
@@ -298,7 +319,7 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 		return fmt.Errorf("failed to transform rows to metrics: %w", err)
 	}
 
-	if err := r.registerMetrics(ctx, metrics); err != nil {
+	if err := r.registerMetrics(me, metrics); err != nil {
 		return fmt.Errorf("failed to register metrics: %w", err)
 	}
 
@@ -308,34 +329,134 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 	return nil
 }
 
-func (r *MetricsExporterReconciler) registerMetrics(ctx context.Context, metrics []transform.MetricData) error {
-	// Group metrics by name for efficient registration
-	metricsByName := make(map[string][]transform.MetricData)
-	for _, metric := range metrics {
-		metricsByName[metric.Name] = append(metricsByName[metric.Name], metric)
+func (r *MetricsExporterReconciler) registerMetrics(me *adxmonv1.MetricsExporter, metrics []transform.MetricData) error {
+	if !r.EnableMetricsEndpoint {
+		return nil
 	}
 
-	// Register each unique metric name as a gauge
-	for metricName, metricData := range metricsByName {
-		gauge, err := r.Meter.Float64Gauge(metricName)
-		if err != nil {
-			return fmt.Errorf("failed to create gauge for metric '%s': %w", metricName, err)
+	key := types.NamespacedName{Name: me.Name, Namespace: me.Namespace}
+
+	var gaugesToEnsure []string
+
+	r.metricsMu.Lock()
+	if r.latestMetrics == nil {
+		r.latestMetrics = make(map[types.NamespacedName][]transform.MetricData)
+	}
+	r.latestMetrics[key] = metrics
+
+	seen := make(map[string]struct{})
+	for _, data := range metrics {
+		if _, added := seen[data.Name]; added {
+			continue
 		}
+		seen[data.Name] = struct{}{}
+		if r.observableGauges == nil {
+			r.observableGauges = make(map[string]metric.Float64ObservableGauge)
+		}
+		if _, exists := r.observableGauges[data.Name]; !exists {
+			gaugesToEnsure = append(gaugesToEnsure, data.Name)
+		}
+	}
+	r.metricsMu.Unlock()
 
-		// Record all data points for this metric
-		for _, data := range metricData {
-			// Convert labels to OpenTelemetry attributes
-			attrs := make([]attribute.KeyValue, 0, len(data.Labels))
-			for key, value := range data.Labels {
-				attrs = append(attrs, attribute.String(key, value))
-			}
-
-			// Record the metric value
-			gauge.Record(ctx, data.Value, metric.WithAttributes(attrs...))
+	for _, name := range gaugesToEnsure {
+		if err := r.ensureObservableGauge(name); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func (r *MetricsExporterReconciler) ensureObservableGauge(metricName string) error {
+	if !r.EnableMetricsEndpoint {
+		return nil
+	}
+
+	r.metricsMu.RLock()
+	if r.observableGauges != nil {
+		if _, exists := r.observableGauges[metricName]; exists {
+			r.metricsMu.RUnlock()
+			return nil
+		}
+	}
+	r.metricsMu.RUnlock()
+
+	gauge, err := r.Meter.Float64ObservableGauge(metricName)
+	if err != nil {
+		return fmt.Errorf("failed to create observable gauge for metric '%s': %w", metricName, err)
+	}
+
+	callback := func(ctx context.Context, observer metric.Observer) error {
+		r.metricsMu.RLock()
+		defer r.metricsMu.RUnlock()
+
+		for _, metrics := range r.latestMetrics {
+			for _, data := range metrics {
+				if data.Name != metricName {
+					continue
+				}
+				observer.ObserveFloat64(gauge, data.Value, metric.WithAttributes(labelsToAttributes(data.Labels)...))
+			}
+		}
+		return nil
+	}
+
+	registration, err := r.Meter.RegisterCallback(callback, gauge)
+	if err != nil {
+		return fmt.Errorf("failed to register callback for metric '%s': %w", metricName, err)
+	}
+
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+
+	if r.observableGauges == nil {
+		r.observableGauges = make(map[string]metric.Float64ObservableGauge)
+	}
+	if r.gaugeRegistrations == nil {
+		r.gaugeRegistrations = make(map[string]metric.Registration)
+	}
+
+	if _, exists := r.observableGauges[metricName]; exists {
+		registration.Unregister()
+		return nil
+	}
+
+	r.observableGauges[metricName] = gauge
+	r.gaugeRegistrations[metricName] = registration
+
+	return nil
+}
+
+func (r *MetricsExporterReconciler) removeMetrics(key types.NamespacedName) {
+	if !r.EnableMetricsEndpoint {
+		return
+	}
+
+	r.metricsMu.Lock()
+	if r.latestMetrics != nil {
+		delete(r.latestMetrics, key)
+	}
+	r.metricsMu.Unlock()
+}
+
+func labelsToAttributes(labels map[string]string) []attribute.KeyValue {
+	if len(labels) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	attrs := make([]attribute.KeyValue, 0, len(keys))
+	for _, k := range keys {
+		attrs = append(attrs, attribute.String(k, labels[k]))
+	}
+
+	return attrs
 }
 
 // initializeQueryExecutors creates QueryExecutors for all configured databases
