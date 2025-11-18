@@ -90,8 +90,13 @@ func appliedProvisionStateEqual(a, b *adxmonv1.AppliedProvisionState) bool {
 	if len(a.UserAssignedIdentities) != len(b.UserAssignedIdentities) {
 		return false
 	}
-	for i := range a.UserAssignedIdentities {
-		if a.UserAssignedIdentities[i] != b.UserAssignedIdentities[i] {
+	// Compare identities as sets (order-independent)
+	aSet := make(map[string]struct{}, len(a.UserAssignedIdentities))
+	for _, id := range a.UserAssignedIdentities {
+		aSet[id] = struct{}{}
+	}
+	for _, id := range b.UserAssignedIdentities {
+		if _, found := aSet[id]; !found {
 			return false
 		}
 	}
