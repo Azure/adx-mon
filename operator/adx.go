@@ -505,7 +505,7 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 	}
 	defer client.Close()
 
-	q := kql.New(".show tables | where TableName == '").AddUnsafe(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("' | count")
+	q := kql.New(".show tables | where TableName == ").AddString(*cluster.Spec.Federation.HeartbeatTable).AddLiteral(" | count")
 	result, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, q)
 	if err != nil {
 		return false, fmt.Errorf("failed to query Kusto tables: %w", err)
