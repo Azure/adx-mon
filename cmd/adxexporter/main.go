@@ -135,24 +135,19 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	if err := mgr.AddReadyzCheck("metrics-ready", func(req *http.Request) error {
-		if !adxexp.EnableMetricsEndpoint {
-			return nil // Always ready if metrics are disabled
+		if adxexp.Ready() {
+			return nil
 		}
-
-		if adxexp.Meter == nil {
-			return fmt.Errorf("metrics not ready")
-		}
-
-		return nil
+		return fmt.Errorf("metrics not ready")
 	}); err != nil {
 		return fmt.Errorf("unable to add readyz check: %w", err)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", func(req *http.Request) error {
-		if adxexp.Meter == nil {
-			return fmt.Errorf("metrics not ready")
+		if adxexp.Ready() {
+			return nil
 		}
-		return nil
+		return fmt.Errorf("metrics not ready")
 	}); err != nil {
 		return fmt.Errorf("unable to add healthz check: %w", err)
 	}
