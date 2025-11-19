@@ -375,6 +375,7 @@ func TestDiffIdentities(t *testing.T) {
 		cluster     *adxmonv1.ADXCluster               // The current configuration, or the desired state
 		wantUpdated bool
 		wantIDs     []string
+		wantType    *armkusto.IdentityType
 	}{
 		{
 			// Scenario: Adding a new user-assigned identity via the CRD when none existed before.
@@ -424,7 +425,8 @@ func TestDiffIdentities(t *testing.T) {
 				},
 			},
 			wantUpdated: true,
-			wantIDs:     []string{},
+			wantIDs:     nil,
+			wantType:    to.Ptr(armkusto.IdentityTypeNone),
 		},
 		{
 			// Scenario: No change in user-assigned identities between CRD, applied, and Azure state.
@@ -478,7 +480,8 @@ func TestDiffIdentities(t *testing.T) {
 		},
 		{
 			// Scenario: The identity type is not user-assigned (e.g., system-assigned only).
-			// Tests that the operator does not attempt to update user-assigned identities in this case.
+			// Tests that the operator transitions the cluster to user-assigned identities when requested
+			// without removing the existing system identity.
 			name: "identity type not user assigned",
 			resp: armkusto.ClustersClientGetResponse{
 				Cluster: armkusto.Cluster{
@@ -487,9 +490,7 @@ func TestDiffIdentities(t *testing.T) {
 					},
 				},
 			},
-			applied: &adxmonv1.AppliedProvisionState{
-				UserAssignedIdentities: []string{"/id1"},
-			},
+			applied: &adxmonv1.AppliedProvisionState{},
 			cluster: &adxmonv1.ADXCluster{
 				Spec: adxmonv1.ADXClusterSpec{
 					Provision: &adxmonv1.ADXClusterProvisionSpec{
@@ -497,8 +498,31 @@ func TestDiffIdentities(t *testing.T) {
 					},
 				},
 			},
-			wantUpdated: false,
+			wantUpdated: true,
+			wantIDs:     []string{"/id1"},
+			wantType:    to.Ptr(armkusto.IdentityTypeSystemAssignedUserAssigned),
+		},
+		{
+			name: "removing managed identity preserves system assignment",
+			resp: armkusto.ClustersClientGetResponse{
+				Cluster: armkusto.Cluster{
+					Identity: &armkusto.Identity{
+						Type:                   to.Ptr(armkusto.IdentityTypeSystemAssignedUserAssigned),
+						UserAssignedIdentities: makeUserAssignedIdentitiesMap("/managed"),
+					},
+				},
+			},
+			applied: &adxmonv1.AppliedProvisionState{
+				UserAssignedIdentities: []string{"/managed"},
+			},
+			cluster: &adxmonv1.ADXCluster{
+				Spec: adxmonv1.ADXClusterSpec{
+					Provision: &adxmonv1.ADXClusterProvisionSpec{},
+				},
+			},
+			wantUpdated: true,
 			wantIDs:     nil,
+			wantType:    to.Ptr(armkusto.IdentityTypeSystemAssigned),
 		},
 	}
 
@@ -512,13 +536,17 @@ func TestDiffIdentities(t *testing.T) {
 			require.Equal(t, tt.wantUpdated, updated)
 			if tt.wantIDs == nil {
 				require.Nil(t, clusterUpdate.Identity.UserAssignedIdentities)
-				return
+			} else {
+				var gotIDs []string
+				for id := range clusterUpdate.Identity.UserAssignedIdentities {
+					gotIDs = append(gotIDs, id)
+				}
+				require.ElementsMatch(t, tt.wantIDs, gotIDs)
 			}
-			var gotIDs []string
-			for id := range clusterUpdate.Identity.UserAssignedIdentities {
-				gotIDs = append(gotIDs, id)
+			if tt.wantType != nil {
+				require.NotNil(t, clusterUpdate.Identity.Type)
+				require.Equal(t, *tt.wantType, *clusterUpdate.Identity.Type)
 			}
-			require.ElementsMatch(t, tt.wantIDs, gotIDs)
 		})
 	}
 }
@@ -723,7 +751,12 @@ func TestCollectInventoryByDatabase(t *testing.T) {
 	}
 	inventory := collectInventoryByDatabase(schemas)
 	require.Contains(t, inventory, "db1")
-	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, inventory["db1"])
+
+	var names []string
+	for name := range inventory["db1"] {
+		names = append(names, name)
+	}
+	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, names)
 }
 
 func TestMapTablesToEndpoints(t *testing.T) {
@@ -825,9 +858,9 @@ func TestEnsureHubTables(t *testing.T) {
 	defer client.Close()
 
 	database := "NetDefaultDB"
-	tables := []string{"MirrorTable", "MirrorView"}
+	tables := map[string]string{"MirrorTable": "", "MirrorView": ""}
 
-	for _, tbl := range tables {
+	for tbl := range tables {
 		exists, err := tableExists(ctx, client, database, tbl)
 		require.NoError(t, err)
 		require.False(t, exists)
@@ -835,7 +868,7 @@ func TestEnsureHubTables(t *testing.T) {
 
 	require.NoError(t, ensureHubTables(ctx, client, database, tables))
 
-	for _, tbl := range tables {
+	for tbl := range tables {
 		exists, err := tableExists(ctx, client, database, tbl)
 		require.NoError(t, err)
 		require.True(t, exists)
