@@ -156,12 +156,12 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/shared
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/version
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/managedidentity
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
-# github.com/ClickHouse/ch-go v0.68.0
-## explicit; go 1.23.0
+# github.com/ClickHouse/ch-go v0.69.0
+## explicit; go 1.24.0
 github.com/ClickHouse/ch-go/compress
 github.com/ClickHouse/ch-go/proto
-# github.com/ClickHouse/clickhouse-go/v2 v2.40.3
-## explicit; go 1.24.0
+# github.com/ClickHouse/clickhouse-go/v2 v2.41.0
+## explicit; go 1.25.3
 github.com/ClickHouse/clickhouse-go/v2
 github.com/ClickHouse/clickhouse-go/v2/contributors
 github.com/ClickHouse/clickhouse-go/v2/ext
@@ -240,7 +240,7 @@ github.com/davidnarayan/go-flake
 # github.com/distribution/reference v0.6.0
 ## explicit; go 1.20
 github.com/distribution/reference
-# github.com/docker/docker v28.5.1+incompatible
+# github.com/docker/docker v28.5.2+incompatible
 ## explicit
 github.com/docker/docker/api
 github.com/docker/docker/api/types
@@ -494,7 +494,7 @@ github.com/opencontainers/go-digest
 ## explicit; go 1.18
 github.com/opencontainers/image-spec/specs-go
 github.com/opencontainers/image-spec/specs-go/v1
-# github.com/paulmach/orb v0.11.1
+# github.com/paulmach/orb v0.12.0
 ## explicit; go 1.15
 github.com/paulmach/orb
 # github.com/pelletier/go-toml/v2 v2.2.4
@@ -562,7 +562,7 @@ github.com/russross/blackfriday/v2
 # github.com/samber/lo v1.38.1
 ## explicit; go 1.18
 github.com/samber/lo
-# github.com/segmentio/asm v1.2.0
+# github.com/segmentio/asm v1.2.1
 ## explicit; go 1.18
 github.com/segmentio/asm/bswap
 github.com/segmentio/asm/cpu
