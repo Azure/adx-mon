@@ -8,12 +8,14 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -555,6 +557,12 @@ func TestTransformAndRegisterMetrics(t *testing.T) {
 	// Execute transformation and registration
 	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
 	require.NoError(t, err)
+
+	key := types.NamespacedName{Name: me.Name, Namespace: me.Namespace}
+	reconciler.metricsMu.RLock()
+	defer reconciler.metricsMu.RUnlock()
+	metrics := reconciler.latestMetrics[key]
+	assert.Len(t, metrics, 2)
 }
 
 func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
@@ -603,6 +611,12 @@ func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
 	// Execute transformation and registration
 	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
 	require.NoError(t, err)
+
+	key := types.NamespacedName{Name: me.Name, Namespace: me.Namespace}
+	reconciler.metricsMu.RLock()
+	metrics := reconciler.latestMetrics[key]
+	reconciler.metricsMu.RUnlock()
+	assert.Len(t, metrics, 2)
 }
 
 func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
@@ -660,4 +674,117 @@ func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
 	// Execute transformation and registration
 	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
 	require.NoError(t, err)
+
+	key := types.NamespacedName{Name: me.Name, Namespace: me.Namespace}
+	reconciler.metricsMu.RLock()
+	metrics := reconciler.latestMetrics[key]
+	reconciler.metricsMu.RUnlock()
+	require.Len(t, metrics, 6)
+
+	expectedNames := map[string]struct{}{
+		"app_default_metric_cpu_usage":    {},
+		"app_default_metric_memory_usage": {},
+		"app_default_metric_disk_usage":   {},
+	}
+
+	seen := make(map[string]int)
+	for _, data := range metrics {
+		seen[data.Name]++
+	}
+
+	for name := range expectedNames {
+		assert.Equal(t, 2, seen[name], "expected two samples for metric %s", name)
+	}
+}
+
+func TestTransformAndRegisterMetrics_NoRowsClearsState(t *testing.T) {
+	reconciler := &MetricsExporterReconciler{
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "empty-test",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumns:     []string{"value"},
+				TimestampColumn:  "timestamp",
+			},
+		},
+	}
+
+	rows := []map[string]any{
+		{
+			"metric_name": "initial_metric",
+			"value":       1.0,
+			"timestamp":   time.Now(),
+		},
+	}
+
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+
+	key := types.NamespacedName{Name: me.Name, Namespace: me.Namespace}
+	reconciler.metricsMu.RLock()
+	_, exists := reconciler.latestMetrics[key]
+	reconciler.metricsMu.RUnlock()
+	assert.True(t, exists)
+
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, nil)
+	require.NoError(t, err)
+
+	reconciler.metricsMu.RLock()
+	_, exists = reconciler.latestMetrics[key]
+	reconciler.metricsMu.RUnlock()
+	assert.False(t, exists)
+}
+
+func TestReconcile_DeleteClearsMetrics(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = adxmonv1.AddToScheme(s)
+
+	reconciler := &MetricsExporterReconciler{
+		Client:                fake.NewClientBuilder().WithScheme(s).Build(),
+		Scheme:                s,
+		EnableMetricsEndpoint: true,
+		MetricsPort:           ":0",
+		MetricsPath:           "/metrics",
+	}
+
+	err := reconciler.exposeMetricsServer()
+	require.NoError(t, err)
+
+	// Manually populate latestMetrics
+	key := types.NamespacedName{Name: "deleted-exporter", Namespace: "default"}
+	reconciler.metricsMu.Lock()
+	reconciler.latestMetrics[key] = []transform.MetricData{
+		{Name: "test_metric", Value: 1.0},
+	}
+	reconciler.metricsMu.Unlock()
+
+	// Verify it exists
+	reconciler.metricsMu.RLock()
+	_, exists := reconciler.latestMetrics[key]
+	reconciler.metricsMu.RUnlock()
+	require.True(t, exists)
+
+	// Reconcile with a request for the non-existent exporter
+	req := ctrl.Request{NamespacedName: key}
+	_, err = reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	// Verify it's gone
+	reconciler.metricsMu.RLock()
+	_, exists = reconciler.latestMetrics[key]
+	reconciler.metricsMu.RUnlock()
+	assert.False(t, exists)
 }
