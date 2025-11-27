@@ -101,6 +101,37 @@ spec:
                 description: Supports cluster partitioning. Only relevant if Role
                   is set.
                 properties:
+                  blockedClusters:
+                    description: Specifies partition clusters that should be excluded
+                      from federation macros.
+                    properties:
+                      kustoFunction:
+                        description: Optional Kusto function that returns additional
+                          endpoints to block. The function should return a tabular
+                          result with a string column named "ClusterEndpoint" (or
+                          "Endpoint").
+                        properties:
+                          database:
+                            description: Database containing the break-glass function.
+                            pattern: ^[a-zA-Z0-9_]+$
+                            type: string
+                          name:
+                            description: Name of the Kusto function returning blocked
+                              cluster endpoints.
+                            pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                            type: string
+                        required:
+                        - database
+                        - name
+                        type: object
+                      static:
+                        description: Static list of partition cluster endpoints to
+                          exclude from macro generation. Values are case-insensitive
+                          and trimmed of trailing slashes before comparison.
+                        items:
+                          type: string
+                        type: array
+                    type: object
                   federatedTargets:
                     description: If role is "Partition", specifies the Federated cluster(s)
                       details for heartbeating.
