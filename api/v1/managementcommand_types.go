@@ -5,9 +5,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-const ManagementCommandConditionOwner = "managementcommand.adx-mon.azure.com"
+const (
+	ManagementCommandConditionOwner = "managementcommand.adx-mon.azure.com"
+	ManagementCommandCriteriaMatch  = "managementcommand.adx-mon.azure.com/CriteriaMatch"
+	ManagementCommandExecuted       = "managementcommand.adx-mon.azure.com/Executed"
+)
+
+const (
+	ReasonManagementCommandExecutionSucceeded = "ExecutionSucceeded"
+	ReasonManagementCommandExecutionFailed    = "ExecutionFailed"
+	ReasonManagementCommandCriteriaError      = "CriteriaEvaluationFailed"
+)
 
 // ManagementCommandSpec defines the desired state of ManagementCommand
 type ManagementCommandSpec struct {
@@ -51,18 +59,45 @@ func (m *ManagementCommand) GetCondition() *metav1.Condition {
 }
 
 func (m *ManagementCommand) SetCondition(c metav1.Condition) {
+	if c.Type == "" {
+		c.Type = ManagementCommandConditionOwner
+	}
+
+	existing := meta.FindStatusCondition(m.Status.Conditions, c.Type)
+	if c.Reason == "" {
+		if existing != nil && existing.Reason != "" {
+			c.Reason = existing.Reason
+		} else {
+			c.Reason = defaultOwnerReason(c.Status)
+		}
+	}
+	if c.Message == "" && existing != nil {
+		c.Message = existing.Message
+	}
 	if c.ObservedGeneration == 0 {
-		c.Reason = "Created"
-	} else {
-		c.Reason = "Updated"
+		c.ObservedGeneration = m.GetGeneration()
 	}
-	if c.Status == metav1.ConditionFalse {
-		c.Reason = "Failed"
+	if c.LastTransitionTime.IsZero() {
+		c.LastTransitionTime = metav1.Now()
 	}
-	c.ObservedGeneration = m.GetGeneration()
-	c.Type = ManagementCommandConditionOwner
 
 	meta.SetStatusCondition(&m.Status.Conditions, c)
+}
+
+// SetCriteriaMatchCondition records the criteria evaluation state for the ManagementCommand.
+func (m *ManagementCommand) SetCriteriaMatchCondition(matched bool, expression string, evaluationErr error, clusterLabels map[string]string) {
+	condition := NewCriteriaCondition(ManagementCommandCriteriaMatch, m.GetGeneration(), matched, expression, evaluationErr, clusterLabels)
+	m.SetCondition(condition)
+}
+
+// SetExecutionCondition updates both the ManagementCommandExecuted condition and the owner condition to reflect execution state.
+func (m *ManagementCommand) SetExecutionCondition(status metav1.ConditionStatus, reason, message string) {
+	execution := NewOwnerCondition(ManagementCommandExecuted, m.GetGeneration(), status, reason, message)
+	m.SetCondition(execution)
+
+	owner := execution
+	owner.Type = ManagementCommandConditionOwner
+	m.SetCondition(owner)
 }
 
 //+kubebuilder:object:root=true
