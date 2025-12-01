@@ -1672,7 +1672,7 @@ func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]s
 			for _, ep := range endpoints {
 				clusters = append(clusters, fmt.Sprintf("cluster('%s').database('%s')", ep, db))
 			}
-			macro := fmt.Sprintf("macro-expand entity_group [%s] as X { X.%s }", strings.Join(clusters, ", "), table)
+			macro := fmt.Sprintf("macro-expand entity_group [%s] as X ( X.%s )", strings.Join(clusters, ", "), table)
 			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}
