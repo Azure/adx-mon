@@ -8,6 +8,7 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/azure-kusto-go/kusto"
+	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 
@@ -55,20 +56,41 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 		}
 	}
 
-	var n int
+	var rows []*table.Row
 	defer iter.Stop()
-	if err := iter.Do(func(row *table.Row) error {
-		n++
-		if n > c.maxNotifications {
+
+	// Accumulate rows and check for errors
+	if err := iter.DoOnRowOrError(func(row *table.Row, err *kerrors.Error) error {
+		if err != nil {
+			// Error encountered - don't callback any accumulated rows, just return the error
+			// This can happen in cases of internalservererrors where the returned rows can be incomplete or broken, causing incorrect alerts to fire.
+			return err
+		}
+
+		// Already have max rows, but trying to add another. Send existing rows, then return error.
+		if len(rows) >= c.maxNotifications {
+			for _, row := range rows {
+				if callbackErr := fn(ctx, client.Endpoint(), qc, row); callbackErr != nil {
+					return callbackErr
+				}
+			}
 			return fmt.Errorf("%s/%s returned more than %d icm, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, alert.ErrTooManyRequests)
 		}
 
-		return fn(ctx, client.Endpoint(), qc, row)
+		rows = append(rows, row)
+
+		return nil
 	}); err != nil {
 		return err, 0
 	}
 
-	return nil, n
+	for _, row := range rows {
+		if err := fn(ctx, client.Endpoint(), qc, row); err != nil {
+			return err, 0
+		}
+	}
+
+	return nil, len(rows)
 }
 
 func (c multiKustoClient) Endpoint(db string) string {
