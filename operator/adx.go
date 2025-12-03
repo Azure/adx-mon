@@ -1238,11 +1238,30 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 
 	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
+	aliasTableSchemas := aliasTableSchemasFromHeartbeat(schemaByEndpoint)
 
 	// Step 7: Generate function definitions
 	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
 
-	// Step 8/9: For each database, split scripts and execute
+	// Step 8: Ensure alias tables exist in the hub (one per alias function)
+	for db, tableEndpointMap := range dbTableEndpoints {
+		aliasTables := aliasTableSchemas[db]
+		filteredTables := make(map[string]string, len(tableEndpointMap))
+		for table := range tableEndpointMap {
+			if aliasTables != nil {
+				if s, ok := aliasTables[table]; ok && isNonEmptySchema(s) {
+					filteredTables[table] = s
+					continue
+				}
+			}
+			filteredTables[table] = otlpHubSchemaDefinition
+		}
+		if err := ensureHubTables(ctx, client, db, filteredTables); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to ensure alias tables for db %s: %w", db, err)
+		}
+	}
+
+	// Step 9: For each database, split scripts and execute
 	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
 	const maxScriptSize = 1024 * 1024 // 1MB
 	for db, funcs := range funcsByDB {
@@ -1661,6 +1680,95 @@ func mapTablesToEndpoints(schemas map[string][]ADXClusterSchema) map[string]map[
 		}
 	}
 	return dbTableEndpoints
+}
+
+// Helper: Derive best-known table schemas for alias tables from heartbeat payloads.
+// Endpoints are processed in lexicographic order so reconciliation is deterministic across runs.
+// For each table/view we keep the first non-empty schema encountered; if none is supplied,
+// we later fall back to the default OTLP hub schema.
+func aliasTableSchemasFromHeartbeat(schemasByEndpoint map[string][]ADXClusterSchema) map[string]map[string]string {
+	tableSchemas := make(map[string]map[string]string)
+
+	// Process endpoints in deterministic order for stable results
+	var endpoints []string
+	for ep := range schemasByEndpoint {
+		endpoints = append(endpoints, ep)
+	}
+	sort.Strings(endpoints)
+
+	for _, ep := range endpoints {
+		schemas := schemasByEndpoint[ep]
+		processEndpointSchemas(schemas, tableSchemas)
+	}
+
+	// Ensure every discovered table has at least the default schema
+	for db, tables := range tableSchemas {
+		for table, s := range tables {
+			if !isNonEmptySchema(s) {
+				tableSchemas[db][table] = otlpHubSchemaDefinition
+			}
+		}
+	}
+
+	return tableSchemas
+}
+
+// Helper: Collect table/view schemas for a specific endpoint payload into the aggregate map.
+func processEndpointSchemas(endpointSchemas []ADXClusterSchema, tableSchemas map[string]map[string]string) {
+	for _, schema := range endpointSchemas {
+		db := schema.Database
+		if tableSchemas[db] == nil {
+			tableSchemas[db] = make(map[string]string)
+		}
+		processTableList(tableSchemas, db, schema.Tables, schema.TableSchemas)
+		processTableList(tableSchemas, db, schema.Views, schema.TableSchemas)
+	}
+}
+
+// Helper: Record schemas for a list of tables/views, keeping the first non-empty schema seen.
+// Ensures an entry exists for every discovered name so defaults can be applied later.
+func processTableList(tableSchemas map[string]map[string]string, db string, names []string, schemaMap map[string]string) {
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if shouldSkipTableSchema(tableSchemas, db, trimmed) {
+			continue
+		}
+		if s, ok := getSchemaFromMap(schemaMap, trimmed); ok {
+			tableSchemas[db][trimmed] = s
+			continue
+		}
+		// Track the table/view so a default schema can be applied later
+		if _, ok := tableSchemas[db][trimmed]; !ok {
+			tableSchemas[db][trimmed] = ""
+		}
+	}
+}
+
+// Helper: True if the schema string contains non-whitespace content.
+func isNonEmptySchema(s string) bool {
+	return strings.TrimSpace(s) != ""
+}
+
+// Helper: Skip when we already have a non-empty schema recorded.
+func shouldSkipTableSchema(tableSchemas map[string]map[string]string, db, name string) bool {
+	if current, ok := tableSchemas[db][name]; ok && isNonEmptySchema(current) {
+		return true
+	}
+	return false
+}
+
+// Helper: Fetch a non-empty schema definition from the heartbeat schema map.
+func getSchemaFromMap(schemaMap map[string]string, name string) (string, bool) {
+	if schemaMap == nil {
+		return "", false
+	}
+	if s, ok := schemaMap[name]; ok && isNonEmptySchema(s) {
+		return s, true
+	}
+	return "", false
 }
 
 // Helper: Generate Kusto function definitions for each table
