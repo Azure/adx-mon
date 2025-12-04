@@ -769,6 +769,23 @@ func TestMapTablesToEndpoints(t *testing.T) {
 	require.ElementsMatch(t, m["db1"]["t2"], []string{"ep1", "ep2"})
 }
 
+func TestMapTablesToEndpointsIncludesViews(t *testing.T) {
+	schemas := map[string][]ADXClusterSchema{
+		"ep1": {{Database: "db1", Tables: []string{"t1"}, Views: []string{"v1", "v2"}}},
+		"ep2": {{Database: "db1", Tables: []string{"t1"}, Views: []string{"v2"}}},
+		"ep3": {{Database: "db2", Views: []string{"v3"}}},
+	}
+	m := mapTablesToEndpoints(schemas)
+
+	// Tables should be mapped
+	require.ElementsMatch(t, m["db1"]["t1"], []string{"ep1", "ep2"})
+
+	// Views should also be mapped
+	require.ElementsMatch(t, m["db1"]["v1"], []string{"ep1"})
+	require.ElementsMatch(t, m["db1"]["v2"], []string{"ep1", "ep2"})
+	require.ElementsMatch(t, m["db2"]["v3"], []string{"ep3"})
+}
+
 func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	m := map[string]map[string][]string{
 		"db1": {
