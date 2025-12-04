@@ -1239,12 +1239,29 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	// Step 6: Map tables to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
-	// Step 7: Generate function definitions
+	// Step 7: Extract hub database names for entity group replication
+	var hubDatabases []string
+	for _, dbSpec := range merged {
+		hubDatabases = append(hubDatabases, dbSpec.DatabaseName)
+	}
+
+	// Step 8: Generate and execute entity group definitions
+	entityGroupsByDB := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	logger.Infof("ADXCluster %s: updating entity groups for %d databases", cluster.Spec.ClusterName, len(entityGroupsByDB))
+	const maxScriptSize = 1024 * 1024 // 1MB
+	for db, entityGroups := range entityGroupsByDB {
+		logger.Infof("ADXCluster %s: executing %d entity groups for database %s", cluster.Spec.ClusterName, len(entityGroups), db)
+		scripts := splitKustoScripts(entityGroups, maxScriptSize)
+		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to execute entity group scripts for db %s: %w", db, err)
+		}
+	}
+
+	// Step 9: Generate function definitions
 	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
 
-	// Step 8/9: For each database, split scripts and execute
+	// Step 10/11: For each database, split scripts and execute
 	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
-	const maxScriptSize = 1024 * 1024 // 1MB
 	for db, funcs := range funcsByDB {
 		logger.Infof("ADXCluster %s: executing %d functions for database %s", cluster.Spec.ClusterName, len(funcs), db)
 		scripts := splitKustoScripts(funcs, maxScriptSize)
@@ -1661,6 +1678,72 @@ func mapTablesToEndpoints(schemas map[string][]ADXClusterSchema) map[string]map[
 		}
 	}
 	return dbTableEndpoints
+}
+
+// Helper: Map spoke databases to their endpoints
+func mapSpokeDatabases(schemas map[string][]ADXClusterSchema) map[string][]string {
+	dbEndpoints := make(map[string][]string)
+	for endpoint, dbSchemas := range schemas {
+		for _, schema := range dbSchemas {
+			db := schema.Database
+			dbEndpoints[db] = append(dbEndpoints[db], endpoint)
+		}
+	}
+	return dbEndpoints
+}
+
+// Helper: Generate entity group definitions for spoke databases, replicated across all hub databases
+// Each spoke database gets an entity group named "{SpokeDatabaseName}Spoke" containing all cluster endpoints
+// that have that database. These entity groups are created in every hub database.
+// Note: ADX does not support .create-or-alter for entity groups, so we use .drop followed by .create.
+// The script executes with ContinueOnErrors=true, so the drop will succeed even if the entity group doesn't exist.
+func generateEntityGroupDefinitions(schemaByEndpoint map[string][]ADXClusterSchema, hubDatabases []string) map[string][]string {
+	// Map spoke databases to their endpoints
+	spokeDBEndpoints := mapSpokeDatabases(schemaByEndpoint)
+
+	// Sort spoke database names for deterministic output
+	var spokeDBNames []string
+	for db := range spokeDBEndpoints {
+		spokeDBNames = append(spokeDBNames, db)
+	}
+	sort.Strings(spokeDBNames)
+
+	// Sort hub databases for deterministic output
+	sortedHubDBs := append([]string(nil), hubDatabases...)
+	sort.Strings(sortedHubDBs)
+
+	// Generate entity group statements for each spoke database
+	entityGroupsByHubDB := make(map[string][]string)
+	for _, spokeDB := range spokeDBNames {
+		endpoints := spokeDBEndpoints[spokeDB]
+		if len(endpoints) == 0 {
+			continue
+		}
+
+		// Sort endpoints for deterministic output
+		sortedEndpoints := append([]string(nil), endpoints...)
+		sort.Strings(sortedEndpoints)
+
+		// Build the entity list: cluster('ep1').database('db'), cluster('ep2').database('db'), ...
+		var entities []string
+		for _, ep := range sortedEndpoints {
+			entities = append(entities, fmt.Sprintf("cluster('%s').database('%s')", ep, spokeDB))
+		}
+
+		// Entity group name: {SpokeDatabaseName}Spoke
+		entityGroupName := fmt.Sprintf("%sSpoke", spokeDB)
+		// ADX doesn't support .create-or-alter for entity groups, so we drop first then create.
+		// The drop may fail if the entity group doesn't exist, but ContinueOnErrors=true handles this.
+		dropStmt := fmt.Sprintf(".drop entity_group %s", entityGroupName)
+		createStmt := fmt.Sprintf(".create entity_group %s (%s)", entityGroupName, strings.Join(entities, ", "))
+
+		// Replicate this entity group definition to all hub databases
+		for _, hubDB := range sortedHubDBs {
+			entityGroupsByHubDB[hubDB] = append(entityGroupsByHubDB[hubDB], dropStmt, createStmt)
+		}
+	}
+
+	return entityGroupsByHubDB
 }
 
 // Helper: Generate Kusto function definitions for each table

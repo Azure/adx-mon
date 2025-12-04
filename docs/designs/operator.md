@@ -606,6 +606,17 @@ The operator supports a federated ADX cluster model to enable organizations to p
   - This enables the federated cluster to present a single logical view for each table, while queries are transparently federated across all relevant clusters and databases.
   - The federated operator updates KQL functions and entity groups as the fleet topology changes.
 
+- **Named Entity Groups:**  
+  - The federated operator creates persistent named entity groups in ADX using the naming pattern `{SpokeDatabaseName}Spoke` (e.g., `MetricsSpoke`, `LogsSpoke`).
+  - Each entity group contains references to all partition cluster endpoints that have that database: `cluster('ep1').database('db'), cluster('ep2').database('db'), ...`
+  - Entity groups are replicated across all hub databases, ensuring consistent cross-cluster query capabilities.
+  - Since ADX does not support `.create-or-alter` for entity groups, the operator uses a drop-then-create pattern:
+    ```kql
+    .drop entity_group MetricsSpoke
+    .create entity_group MetricsSpoke (cluster('https://cluster1.kusto.net').database('Metrics'), cluster('https://cluster2.kusto.net').database('Metrics'))
+    ```
+  - Named entity groups provide better manageability than inline definitions: they can be inspected with `.show entity_groups`, updated independently, and referenced by multiple functions.
+
 - **Schema Flexibility:**  
   - The dynamic object for database/table topology allows the federated operator to only federate queries to clusters that actually contain the relevant table, improving efficiency and flexibility.
 
