@@ -41,7 +41,7 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 
 	batchQueue := make(chan *types.Log, 512)
 	outputQueue := make(chan *types.LogBatch, 1)
-	tailConfig := tail.Config{Follow: true, ReOpen: true, Poll: true}
+	tailConfig := tail.Config{Follow: true, ReOpen: true, Poll: true, Logger: &tailLogger{}}
 	existingCursorPath := cursorPath(config.CursorDirectory, config.Target.FilePath)
 	fileId, position, err := readCursor(existingCursorPath)
 	if err == nil {
