@@ -33,6 +33,17 @@ import (
 //go:embed manifests/crds/functions_crd.yaml manifests/crds/managementcommands_crd.yaml manifests/crds/summaryrules_crd.yaml manifests/ingestor.yaml
 var ingestorCrdsFS embed.FS
 
+// Condition reason constants for Ingestor status
+const (
+	ReasonWaitForReady            = "WaitForReady"
+	ReasonCRDsInstalled           = "CRDsInstalled"
+	ReasonTemplateError           = "TemplateError"
+	ReasonNotReady                = "NotReady"
+	ReasonReady                   = "Ready"
+	ReasonCriteriaExpressionError = "CriteriaExpressionError"
+	ReasonCriteriaExpressionFalse = "CriteriaExpressionFalse"
+)
+
 type IngestorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -52,7 +63,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err != nil {
 			logger.Errorf("Ingestor %s/%s criteriaExpression error: %v", req.Namespace, req.Name, err)
 			// Expression errors are terminal until the CRD changes; set status and exit without requeue.
-			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
+			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: ReasonCriteriaExpressionError, Message: err.Error(), ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
 				if err := r.Status().Update(ctx, ingestor); err != nil {
 					logger.Errorf("Failed to update status for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
@@ -61,7 +72,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, nil
 		}
 		if !ok {
-			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
+			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: ReasonCriteriaExpressionFalse, Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
 				if err := r.Status().Update(ctx, ingestor); err != nil {
 					logger.Errorf("Failed to update status for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
@@ -108,7 +119,7 @@ func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ing
 	}
 
 	if sts.Status.ReadyReplicas == *sts.Spec.Replicas {
-		if err := r.setCondition(ctx, ingestor, "Ready", "All ingestor replicas are ready", metav1.ConditionTrue); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonReady, "All ingestor replicas are ready", metav1.ConditionTrue); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
@@ -261,7 +272,7 @@ func (r *IngestorReconciler) handleADXClusterSelectorChange(ctx context.Context,
 }
 
 func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.waitForReadyReason = "WaitForReady"
+	r.waitForReadyReason = ReasonWaitForReady
 
 	// Define the mapping function for ADXCluster changes to enqueue Ingestor reconciliations
 	mapFn := func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -333,7 +344,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	if err := r.installCrds(ctx); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", err)
 	}
-	if err := r.setCondition(ctx, ingestor, "CRDsInstalled", "CRDs installed successfully", metav1.ConditionUnknown); err != nil {
+	if err := r.setCondition(ctx, ingestor, ReasonCRDsInstalled, "CRDs installed successfully", metav1.ConditionUnknown); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 	}
 
@@ -341,7 +352,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor.yaml")
 	if err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, "TemplateError", "Failed to read ingestor template", metav1.ConditionFalse); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to read ingestor template", metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -349,7 +360,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	tmpl, err := template.New("ingestor").Parse(string(tmplBytes))
 	if err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, "TemplateError", "Failed to parse ingestor template", metav1.ConditionFalse); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to parse ingestor template", metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -360,7 +371,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		return ctrl.Result{}, fmt.Errorf("failed to get template data: %w", err)
 	}
 	if !ready {
-		if err := r.setCondition(ctx, ingestor, "NotReady", "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonNotReady, "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
@@ -369,7 +380,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	var rendered bytes.Buffer
 	if err := tmpl.Execute(&rendered, data); err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, "TemplateError", "Failed to render ingestor template", metav1.ConditionFalse); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to render ingestor template", metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
