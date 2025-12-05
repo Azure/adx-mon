@@ -44,10 +44,10 @@ const (
 	otlpHubSchemaDefinition = "Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic"
 
 	// Reconciliation requeue durations
-	requeueShort      = time.Minute      // Used for in-progress operations
-	requeueMedium     = 5 * time.Minute  // Used for provider registration
-	requeueLong       = 10 * time.Minute // Used for heartbeat/federation cycles
-	maxKustoScriptSz  = 1 << 20          // 1MB max size for Kusto script batches
+	requeueShort     = time.Minute      // Used for in-progress operations
+	requeueMedium    = 5 * time.Minute  // Used for provider registration
+	requeueLong      = 10 * time.Minute // Used for heartbeat/federation cycles
+	maxKustoScriptSz = 1 << 20          // 1MB max size for Kusto script batches
 )
 
 // resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
