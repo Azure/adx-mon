@@ -716,6 +716,11 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
+// diffSkus compares the desired SKU configuration from the CRD against the current Azure state
+// and the previously applied state. Returns an updated cluster configuration and true if an update
+// is needed. The function only triggers an update when:
+//   - The desired state differs from current Azure state
+//   - The current Azure state matches what was previously applied (to avoid overwriting manual changes)
 func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
 	clusterUpdate := armkusto.Cluster{
 		Location: resp.Location,
@@ -770,6 +775,10 @@ func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.Applied
 	return clusterUpdate, true
 }
 
+// diffIdentities compares the desired user-assigned identities from the CRD against the current
+// Azure state and the previously applied state. It preserves unmanaged identities (those not
+// previously applied by the operator) while reconciling the operator-managed set. Returns an
+// updated cluster configuration and true if an update is needed.
 func diffIdentities(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster, clusterUpdate armkusto.Cluster) (armkusto.Cluster, bool) {
 	if cluster.Spec.Provision == nil {
 		return clusterUpdate, false
@@ -1369,6 +1378,9 @@ func ensureAdxProvider(ctx context.Context, cred azcore.TokenCredential, subscri
 	return true, nil
 }
 
+// toSku converts a string SKU name to an armkusto.AzureSKUName pointer.
+// Returns nil for empty strings. Validates against known SKU values and falls
+// back to using the raw string if no match is found.
 func toSku(sku string) *armkusto.AzureSKUName {
 	if strings.TrimSpace(sku) == "" {
 		return nil
@@ -1383,6 +1395,9 @@ func toSku(sku string) *armkusto.AzureSKUName {
 	return &value
 }
 
+// toTier converts a string tier name to an armkusto.AzureSKUTier pointer.
+// Returns nil for empty strings. Validates against known tier values and falls
+// back to using the raw string if no match is found.
 func toTier(tier string) *armkusto.AzureSKUTier {
 	if strings.TrimSpace(tier) == "" {
 		return nil
@@ -1397,6 +1412,8 @@ func toTier(tier string) *armkusto.AzureSKUTier {
 	return &value
 }
 
+// toDatabase constructs an armkusto.Database object with the standard Azure resource ID format
+// for a Kusto database. Used when creating new databases in a cluster.
 func toDatabase(subId, clusterName, rgName, location, dbName string) *armkusto.Database {
 	return &armkusto.Database{
 		Kind:     to.Ptr(armkusto.KindReadWrite),
