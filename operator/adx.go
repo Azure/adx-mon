@@ -1279,7 +1279,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	entityGroupsByDB := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
 	logger.Infof("ADXCluster %s: updating entity groups for %d databases", cluster.Spec.ClusterName, len(entityGroupsByDB))
 	for db, entityGroups := range entityGroupsByDB {
-		logger.Infof("ADXCluster %s: executing %d entity groups for database %s", cluster.Spec.ClusterName, len(entityGroups), db)
+		logger.Infof("ADXCluster %s: executing %d entity group statements for database %s", cluster.Spec.ClusterName, len(entityGroups), db)
 		scripts := splitKustoScripts(entityGroups, maxKustoScriptSz)
 		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to execute entity group scripts for db %s: %w", db, err)
