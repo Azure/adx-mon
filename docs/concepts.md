@@ -404,7 +404,7 @@ The **Operator** is the control plane component that manages the lifecycle of al
 2. **Azure Resource Management:** Provisions or connects to ADX clusters/databases as specified in the `ADXCluster` CRD.
 3. **Component Deployment:** Deploys or updates StatefulSets/Deployments for Ingestor, Collector, and Alerter based on their CRDs.
 4. **Status & Health:** Updates CRD status fields and subresource conditions to reflect readiness and errors.
-5. **Federation Support:** Manages federated clusters, heartbeats, and macro-expand KQL functions for cross-cluster querying.
+5. **Federation Support:** Manages federated clusters, heartbeats, named entity groups, and macro-expand KQL functions for cross-cluster querying.
 
 #### Example Operator Workflow
 ```mermaid
@@ -477,8 +477,9 @@ flowchart TD
 
 #### Federation & Multi-Cluster
 - **Partition Clusters:** Each partition cluster is managed by its own operator and contains a subset of the data (e.g., by geo or tenant).
-- **Federated Cluster:** A central operator manages a federated ADX cluster, providing a unified query interface and managing heartbeats and macro-expand KQL functions.
+- **Federated Cluster:** A central operator manages a federated ADX cluster, providing a unified query interface and managing heartbeats, named entity groups, and macro-expand KQL functions.
 - **Heartbeat Table:** Partition clusters send periodic heartbeats to the federated cluster, which uses them to discover topology and liveness.
+- **Named Entity Groups:** The federated operator creates named entity groups (e.g., `MetricsSpoke`, `LogsSpoke`) that reference all partition cluster endpoints for each database, enabling efficient cross-cluster querying via macro-expand.
 
 #### Development & Testing
 - Operator can be run locally or in-cluster.
