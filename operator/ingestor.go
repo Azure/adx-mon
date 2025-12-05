@@ -400,6 +400,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			continue
 		}
 		if obj.Object == nil || obj.GetKind() == "" {
+			logger.Debugf("Skipping empty or invalid YAML document in ingestor manifest")
 			continue
 		}
 		// Set the owner reference, this enables garbage collection for the ingestor
