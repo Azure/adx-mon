@@ -39,7 +39,7 @@ require (
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/k3s v0.40.0
-	github.com/tinylib/msgp v1.5.0
+	github.com/tinylib/msgp v1.6.1
 	github.com/traefik/yaegi v0.16.1
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/valyala/fastjson v1.6.4
