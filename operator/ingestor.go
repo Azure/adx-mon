@@ -377,6 +377,9 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(rendered.Bytes()), 4096)
 	for {
+		if ctx.Err() != nil {
+			return ctrl.Result{}, ctx.Err()
+		}
 		obj := &unstructured.Unstructured{}
 		err := decoder.Decode(obj)
 		if err != nil {
