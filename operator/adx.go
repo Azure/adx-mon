@@ -40,7 +40,14 @@ const (
 	// ADXClusterWaitingReason denotes a cluster that is fully configured and is waiting to become available.
 	ADXClusterWaitingReason = "Waiting"
 
+	// otlpHubSchemaDefinition is the default OTLP schema for hub tables.
 	otlpHubSchemaDefinition = "Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic"
+
+	// Reconciliation requeue durations
+	requeueShort      = time.Minute      // Used for in-progress operations
+	requeueMedium     = 5 * time.Minute  // Used for provider registration
+	requeueLong       = 10 * time.Minute // Used for heartbeat/federation cycles
+	maxKustoScriptSz  = 1 << 20          // 1MB max size for Kusto script batches
 )
 
 // resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
@@ -275,9 +282,9 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to ensure Kusto provider is registered: %w", err)
 	}
 	if !registered {
-		logger.Infof("ADXCluster %s: waiting for provider registration, requeuing in 5 minutes", cluster.Spec.ClusterName)
+		logger.Infof("ADXCluster %s: waiting for provider registration, requeuing in %v", cluster.Spec.ClusterName, requeueMedium)
 		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", prov.SubscriptionId), nil)
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: requeueMedium}, nil
 	}
 
 	logger.Infof("ADXCluster %s: ensuring resource group", cluster.Spec.ClusterName)
@@ -291,9 +298,9 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, err
 	}
 	if !clusterReady {
-		logger.Infof("ADXCluster %s: cluster not ready yet, requeuing in 1 minute", cluster.Spec.ClusterName)
+		logger.Infof("ADXCluster %s: cluster not ready yet, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
 		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName), nil)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
 	logger.Infof("ADXCluster %s: ensuring databases", cluster.Spec.ClusterName)
@@ -302,15 +309,15 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, err
 	}
 	if dbCreated {
-		logger.Infof("ADXCluster %s: databases created, requeuing in 1 minute", cluster.Spec.ClusterName)
+		logger.Infof("ADXCluster %s: databases created, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
 		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName), nil)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
 	_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Provisioning ADX clusters", nil)
 
-	logger.Infof("ADXCluster %s: CreateCluster phase complete, requeuing in 1 minute", cluster.Spec.ClusterName)
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	logger.Infof("ADXCluster %s: CreateCluster phase complete, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
 // ensureResourceGroup checks if the resource group exists and creates it if needed
@@ -679,7 +686,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 		return ctrl.Result{}, fmt.Errorf("failed to update Kusto cluster: %w", err)
 	}
 
-	logger.Infof("ADXCluster %s: cluster update initiated, requeuing in 1 minute", cluster.Spec.ClusterName)
+	logger.Infof("ADXCluster %s: cluster update initiated, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
 	c := metav1.Condition{
 		Type:               adxmonv1.ADXClusterConditionOwner,
 		Status:             metav1.ConditionUnknown,
@@ -693,7 +700,7 @@ func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADX
 			return ctrl.Result{}, fmt.Errorf("failed to update status: %w", err)
 		}
 	}
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
 func diffSkus(resp armkusto.ClustersClientGetResponse, applied *adxmonv1.AppliedProvisionState, cluster *adxmonv1.ADXCluster) (armkusto.Cluster, bool) {
@@ -906,9 +913,9 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster status: %w", err)
 	}
 	if resp.Properties == nil || resp.Properties.State == nil {
-		logger.Infof("ADXCluster %s: cluster properties not available yet, requeuing in 1 minute", cluster.Spec.ClusterName)
+		logger.Infof("ADXCluster %s: cluster properties not available yet, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
 		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Cluster properties unavailable", nil)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
 	logger.Infof("ADXCluster %s: cluster state is %s", cluster.Spec.ClusterName, string(*resp.Properties.State))
@@ -958,9 +965,9 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 		return ctrl.Result{}, nil
 	}
 
-	logger.Infof("ADXCluster %s: cluster not ready yet (state: %s), requeuing in 1 minute", cluster.Spec.ClusterName, string(*resp.Properties.State))
+	logger.Infof("ADXCluster %s: cluster not ready yet (state: %s), requeuing in %v", cluster.Spec.ClusterName, string(*resp.Properties.State), requeueShort)
 	_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, fmt.Sprintf("Cluster state: %s", string(*resp.Properties.State)), nil)
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
 func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -980,8 +987,8 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 		}
 		logger.Infof("Heartbeat sent to federated cluster %s", target.Endpoint)
 	}
-	logger.Infof("ADXCluster %s: heartbeat cycle complete, requeuing in 10 minutes", cluster.Spec.ClusterName)
-	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+	logger.Infof("ADXCluster %s: heartbeat cycle complete, requeuing in %v", cluster.Spec.ClusterName, requeueLong)
+	return ctrl.Result{RequeueAfter: requeueLong}, nil
 }
 
 func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster, target adxmonv1.ADXClusterFederatedClusterSpec) error {
@@ -1188,8 +1195,8 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	// Step 1: Create Kusto client
 	endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
 	if endpoint == "" {
-		logger.Infof("ADXCluster %s: endpoint unavailable for federation, requeuing", cluster.Spec.ClusterName)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		logger.Infof("ADXCluster %s: endpoint unavailable for federation, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
+		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 	ep := kusto.NewConnectionStringBuilder(endpoint)
 	if strings.HasPrefix(endpoint, "https://") {
@@ -1249,10 +1256,9 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	// Step 8: Generate and execute entity group definitions
 	entityGroupsByDB := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
 	logger.Infof("ADXCluster %s: updating entity groups for %d databases", cluster.Spec.ClusterName, len(entityGroupsByDB))
-	const maxScriptSize = 1024 * 1024 // 1MB
 	for db, entityGroups := range entityGroupsByDB {
 		logger.Infof("ADXCluster %s: executing %d entity groups for database %s", cluster.Spec.ClusterName, len(entityGroups), db)
-		scripts := splitKustoScripts(entityGroups, maxScriptSize)
+		scripts := splitKustoScripts(entityGroups, maxKustoScriptSz)
 		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to execute entity group scripts for db %s: %w", db, err)
 		}
@@ -1278,14 +1284,14 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
 	for db, funcs := range funcsByDB {
 		logger.Infof("ADXCluster %s: executing %d functions for database %s", cluster.Spec.ClusterName, len(funcs), db)
-		scripts := splitKustoScripts(funcs, maxScriptSize)
+		scripts := splitKustoScripts(funcs, maxKustoScriptSz)
 		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to execute Kusto scripts for db %s: %w", db, err)
 		}
 	}
 
-	logger.Infof("ADXCluster %s: federation reconciliation complete, requeuing in 10 minutes", cluster.Spec.ClusterName)
-	return ctrl.Result{RequeueAfter: 10 * time.Minute}, nil
+	logger.Infof("ADXCluster %s: federation reconciliation complete, requeuing in %v", cluster.Spec.ClusterName, requeueLong)
+	return ctrl.Result{RequeueAfter: requeueLong}, nil
 }
 
 // getIMDSMetadata queries Azure IMDS for metadata about the current environment
