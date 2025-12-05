@@ -1674,7 +1674,10 @@ func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]s
 		// Reference the named entity group for this spoke database
 		entityGroupName := fmt.Sprintf("%sSpoke", db)
 		for table := range tableMap {
-			macro := fmt.Sprintf("macro-expand entity_group %s as X ( X.%s )", entityGroupName, table)
+			// Note: When referencing a stored entity group, do NOT use "entity_group" keyword prefix.
+			// Correct: macro-expand MyGroup as X ( X.Table )
+			// Wrong:   macro-expand entity_group MyGroup as X ( X.Table )
+			macro := fmt.Sprintf("macro-expand %s as X ( X.%s )", entityGroupName, table)
 			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}

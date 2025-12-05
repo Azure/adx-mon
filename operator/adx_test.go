@@ -987,13 +987,17 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 		if strings.Contains(f, ".create-or-alter function t1()") {
 			foundT1 = true
 			// Verify it references the named entity group, not an inline list
-			require.Contains(t, f, "macro-expand entity_group db1Spoke as X")
+			// Note: stored entity groups are referenced without the "entity_group" keyword
+			require.Contains(t, f, "macro-expand db1Spoke as X")
+			require.NotContains(t, f, "entity_group")
 			require.Contains(t, f, "X.t1")
 		}
 		if strings.Contains(f, ".create-or-alter function t2()") {
 			foundT2 = true
 			// Verify it references the named entity group, not an inline list
-			require.Contains(t, f, "macro-expand entity_group db1Spoke as X")
+			// Note: stored entity groups are referenced without the "entity_group" keyword
+			require.Contains(t, f, "macro-expand db1Spoke as X")
+			require.NotContains(t, f, "entity_group")
 			require.Contains(t, f, "X.t2")
 		}
 	}
