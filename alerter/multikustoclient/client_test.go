@@ -186,6 +186,45 @@ func TestQuery(t *testing.T) {
 			expectedSent: 2,
 			expectError:  false,
 		},
+		{
+			name: "Error after first row - no rows should be sent",
+			rows: newRowsWithError(t, []string{
+				"rowOne",
+			}, errors.New("iterator error after first row")),
+			rule: &rules.Rule{
+				Database: "dbOne",
+			},
+			queryErr:     nil,
+			callbackErr:  nil,
+			expectedSent: 0, // no rows should be sent when error occurs
+			expectError:  true,
+		},
+		{
+			name: "Error after third row - no rows should be sent",
+			rows: newRowsWithError(t, []string{
+				"rowOne",
+				"rowTwo",
+				"rowThree",
+			}, errors.New("iterator error after third row")),
+			rule: &rules.Rule{
+				Database: "dbOne",
+			},
+			queryErr:     nil,
+			callbackErr:  nil,
+			expectedSent: 0, // no rows should be sent when error occurs
+			expectError:  true,
+		},
+		{
+			name: "Error on first row - no rows should be sent",
+			rows: newRowsWithError(t, []string{}, errors.New("iterator error immediately")),
+			rule: &rules.Rule{
+				Database: "dbOne",
+			},
+			queryErr:     nil,
+			callbackErr:  nil,
+			expectedSent: 0,
+			expectError:  true,
+		},
 	}
 
 	for _, tc := range testcases {
@@ -251,5 +290,22 @@ func newRows(t *testing.T, values []string) *kusto.MockRows {
 		err = rows.Row(value.Values{value.String{Value: val, Valid: true}})
 		require.NoError(t, err)
 	}
+	return rows
+}
+
+func newRowsWithError(t *testing.T, values []string, rowError error) *kusto.MockRows {
+	t.Helper()
+
+	rows, err := kusto.NewMockRows(table.Columns{
+		{Name: "columnOne", Type: types.String},
+	})
+	require.NoError(t, err)
+	for _, val := range values {
+		err = rows.Row(value.Values{value.String{Value: val, Valid: true}})
+		require.NoError(t, err)
+	}
+	// Add error to the stream
+	err = rows.Error(rowError)
+	require.NoError(t, err)
 	return rows
 }
