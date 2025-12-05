@@ -33,6 +33,17 @@ import (
 //go:embed manifests/crds/functions_crd.yaml manifests/crds/managementcommands_crd.yaml manifests/crds/summaryrules_crd.yaml manifests/ingestor.yaml
 var ingestorCrdsFS embed.FS
 
+// Condition reason constants for Ingestor status
+const (
+	ReasonWaitForReady            = "WaitForReady"
+	ReasonCRDsInstalled           = "CRDsInstalled"
+	ReasonTemplateError           = "TemplateError"
+	ReasonNotReady                = "NotReady"
+	ReasonReady                   = "Ready"
+	ReasonCriteriaExpressionError = "CriteriaExpressionError"
+	ReasonCriteriaExpressionFalse = "CriteriaExpressionFalse"
+)
+
 type IngestorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -52,16 +63,20 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err != nil {
 			logger.Errorf("Ingestor %s/%s criteriaExpression error: %v", req.Namespace, req.Name, err)
 			// Expression errors are terminal until the CRD changes; set status and exit without requeue.
-			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
+			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: ReasonCriteriaExpressionError, Message: err.Error(), ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, ingestor)
+				if err := r.Status().Update(ctx, ingestor); err != nil {
+					logger.Errorf("Failed to update status for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
 		if !ok {
-			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
+			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: ReasonCriteriaExpressionFalse, Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, ingestor)
+				if err := r.Status().Update(ctx, ingestor); err != nil {
+					logger.Errorf("Failed to update status for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
@@ -104,7 +119,7 @@ func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ing
 	}
 
 	if sts.Status.ReadyReplicas == *sts.Spec.Replicas {
-		if err := r.setCondition(ctx, ingestor, "Ready", "All ingestor replicas are ready", metav1.ConditionTrue); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonReady, "All ingestor replicas are ready", metav1.ConditionTrue); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
@@ -205,8 +220,14 @@ func (r *IngestorReconciler) handleADXClusterSelectorChange(ctx context.Context,
 		// If there's no stored spec, we can't compare, assume no change needed based on selector diff
 		return false, nil
 	}
-	storedSel, _ := json.Marshal(stored.ADXClusterSelector)
-	currentSel, _ := json.Marshal(ingestor.Spec.ADXClusterSelector)
+	storedSel, err := json.Marshal(stored.ADXClusterSelector)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal stored ADXClusterSelector: %w", err)
+	}
+	currentSel, err := json.Marshal(ingestor.Spec.ADXClusterSelector)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal current ADXClusterSelector: %w", err)
+	}
 	if string(storedSel) == string(currentSel) {
 		// Selector hasn't changed
 		return false, nil
@@ -257,7 +278,7 @@ func (r *IngestorReconciler) handleADXClusterSelectorChange(ctx context.Context,
 }
 
 func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.waitForReadyReason = "WaitForReady"
+	r.waitForReadyReason = ReasonWaitForReady
 
 	// Define the mapping function for ADXCluster changes to enqueue Ingestor reconciliations
 	mapFn := func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -300,10 +321,6 @@ func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				})
 				logger.Infof("Enqueuing reconcile request for Ingestor %s/%s due to change in ADXCluster %s/%s", ingestor.Namespace, ingestor.Name, cluster.Namespace, cluster.Name)
-
-				if err := r.setCondition(ctx, &ingestor, "ADXClusterChanged", fmt.Sprintf("ADXCluster %s/%s changed", cluster.Namespace, cluster.Name), metav1.ConditionUnknown); err != nil {
-					logger.Errorf("Failed to set condition for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
-				}
 			}
 		}
 		return requests
@@ -333,7 +350,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	if err := r.installCrds(ctx); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", err)
 	}
-	if err := r.setCondition(ctx, ingestor, "CRDsInstalled", "CRDs installed successfully", metav1.ConditionUnknown); err != nil {
+	if err := r.setCondition(ctx, ingestor, ReasonCRDsInstalled, "CRDs installed successfully", metav1.ConditionUnknown); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 	}
 
@@ -341,7 +358,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor.yaml")
 	if err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, "TemplateError", "Failed to read ingestor template", metav1.ConditionFalse); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to read ingestor template", metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -349,7 +366,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	tmpl, err := template.New("ingestor").Parse(string(tmplBytes))
 	if err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, "TemplateError", "Failed to parse ingestor template", metav1.ConditionFalse); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to parse ingestor template", metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -360,7 +377,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		return ctrl.Result{}, fmt.Errorf("failed to get template data: %w", err)
 	}
 	if !ready {
-		if err := r.setCondition(ctx, ingestor, "NotReady", "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonNotReady, "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
@@ -369,7 +386,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	var rendered bytes.Buffer
 	if err := tmpl.Execute(&rendered, data); err != nil {
 		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, "TemplateError", "Failed to render ingestor template", metav1.ConditionFalse); err != nil {
+		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to render ingestor template", metav1.ConditionFalse); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil // No need to retry
@@ -377,6 +394,9 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(rendered.Bytes()), 4096)
 	for {
+		if ctx.Err() != nil {
+			return ctrl.Result{}, ctx.Err()
+		}
 		obj := &unstructured.Unstructured{}
 		err := decoder.Decode(obj)
 		if err != nil {
@@ -386,6 +406,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			continue
 		}
 		if obj.Object == nil || obj.GetKind() == "" {
+			logger.Debugf("Skipping empty or invalid YAML document in ingestor manifest")
 			continue
 		}
 		// Set the owner reference, this enables garbage collection for the ingestor
@@ -433,6 +454,11 @@ type ingestorTemplateData struct {
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
+	// ADXClusterSelector is required - nil selector means nothing is selected
+	if ingestor.Spec.ADXClusterSelector == nil {
+		return false, nil, fmt.Errorf("ADXClusterSelector is required")
+	}
+
 	// List ADXClusters matching the selector
 	selector, err := metav1.LabelSelectorAsSelector(ingestor.Spec.ADXClusterSelector)
 	if err != nil {
@@ -440,10 +466,7 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	}
 
 	var adxClusterList adxmonv1.ADXClusterList
-	listOpts := []client.ListOption{}
-	if ingestor.Spec.ADXClusterSelector != nil {
-		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
-	}
+	listOpts := []client.ListOption{client.MatchingLabelsSelector{Selector: selector}}
 	if err := r.Client.List(ctx, &adxClusterList, listOpts...); err != nil {
 		return false, nil, fmt.Errorf("failed to list ADXClusters: %w", err)
 	}
@@ -453,22 +476,22 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	for _, cluster := range adxClusterList.Items {
 		// wait for the cluster to be ready
 		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
-			// Cluster is not ready
-			return false, nil, fmt.Errorf("ADXCluster is not ready")
+			// Cluster is not ready yet, but this is not an error
+			return false, nil, nil
 		}
 
 		endpoint := resolvedClusterEndpoint(&cluster)
 
 		for _, db := range cluster.Spec.Databases {
-			if db.TelemetryType == adxmonv1.DatabaseTelemetryMetrics {
-				if endpoint != "" {
-					metricsClusters = append(metricsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, endpoint))
-				}
+			if endpoint == "" {
+				continue
 			}
-			if db.TelemetryType == adxmonv1.DatabaseTelemetryLogs {
-				if endpoint != "" {
-					logsClusters = append(logsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, endpoint))
-				}
+			entry := fmt.Sprintf("%s=%s", db.DatabaseName, endpoint)
+			switch db.TelemetryType {
+			case adxmonv1.DatabaseTelemetryMetrics:
+				metricsClusters = append(metricsClusters, entry)
+			case adxmonv1.DatabaseTelemetryLogs:
+				logsClusters = append(logsClusters, entry)
 			}
 		}
 	}

@@ -392,6 +392,11 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 		},
 		Spec: adxmonv1.IngestorSpec{
 			Image: "test-image:v1",
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "adx-mon",
+				},
+			},
 		},
 	}
 
