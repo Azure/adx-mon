@@ -87,6 +87,15 @@ func (r *AdxReconciler) setClusterCondition(ctx context.Context, cluster *adxmon
 	return nil
 }
 
+// logSetClusterCondition calls setClusterCondition and logs any error without propagating it.
+// Use this when setting status in non-critical paths where failing to update status should not
+// block reconciliation (e.g., when already returning an error or in skip paths).
+func (r *AdxReconciler) logSetClusterCondition(ctx context.Context, cluster *adxmonv1.ADXCluster, status metav1.ConditionStatus, reason, message string, mutate func(*adxmonv1.ADXClusterStatus) bool) {
+	if err := r.setClusterCondition(ctx, cluster, status, reason, message, mutate); err != nil {
+		logger.Warnf("ADXCluster %s: failed to update status condition: %v", cluster.Spec.ClusterName, err)
+	}
+}
+
 func appliedProvisionStateEqual(a, b *adxmonv1.AppliedProvisionState) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -140,14 +149,18 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 			// terminal error until the user edits the CRD (a CR update will trigger reconcile).
 			c := metav1.Condition{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: cluster.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, &cluster)
+				if updateErr := r.Status().Update(ctx, &cluster); updateErr != nil {
+					logger.Warnf("ADXCluster %s/%s: failed to update status condition: %v", req.Namespace, req.Name, updateErr)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
 		if !ok { // Expression false, mark condition and skip until spec changes
 			c := metav1.Condition{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping reconciliation", ObservedGeneration: cluster.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&cluster.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, &cluster)
+				if updateErr := r.Status().Update(ctx, &cluster); updateErr != nil {
+					logger.Warnf("ADXCluster %s/%s: failed to update status condition: %v", req.Namespace, req.Name, updateErr)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
@@ -212,7 +225,7 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 
 	if cluster.Spec.Provision == nil {
 		if cluster.Spec.Endpoint == "" {
-			_ = r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
+			r.logSetClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
 				changed := false
 				if status.Endpoint != "" {
 					status.Endpoint = ""
@@ -269,7 +282,7 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	if len(missing) > 0 {
 		errMsg := fmt.Sprintf("missing required provisioning fields: %s", strings.Join(missing, ", "))
 		logger.Errorf("ADXCluster %s: %s", cluster.Spec.ClusterName, errMsg)
-		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningInvalid", errMsg, nil)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningInvalid", errMsg, nil)
 		return ctrl.Result{}, nil
 	}
 
@@ -283,7 +296,7 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	}
 	if !registered {
 		logger.Infof("ADXCluster %s: waiting for provider registration, requeuing in %v", cluster.Spec.ClusterName, requeueMedium)
-		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", prov.SubscriptionId), nil)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Registering provider for subscription %s", prov.SubscriptionId), nil)
 		return ctrl.Result{RequeueAfter: requeueMedium}, nil
 	}
 
@@ -299,7 +312,7 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	}
 	if !clusterReady {
 		logger.Infof("ADXCluster %s: cluster not ready yet, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
-		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName), nil)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s", cluster.Spec.ClusterName), nil)
 		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
@@ -310,11 +323,11 @@ func (r *AdxReconciler) CreateCluster(ctx context.Context, cluster *adxmonv1.ADX
 	}
 	if dbCreated {
 		logger.Infof("ADXCluster %s: databases created, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
-		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName), nil)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterCreatingReason, fmt.Sprintf("Provisioning ADX cluster %s databases", cluster.Spec.ClusterName), nil)
 		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
-	_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Provisioning ADX clusters", nil)
+	r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Provisioning ADX clusters", nil)
 
 	logger.Infof("ADXCluster %s: CreateCluster phase complete, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
 	return ctrl.Result{RequeueAfter: requeueShort}, nil
@@ -860,7 +873,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	if cluster.Spec.Provision == nil {
 		endpoint := strings.TrimSpace(resolvedClusterEndpoint(cluster))
 		if endpoint == "" {
-			_ = r.setClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
+			r.logSetClusterCondition(ctx, cluster, metav1.ConditionFalse, "ProvisioningDisabled", "No provisioning configuration or endpoint provided", func(status *adxmonv1.ADXClusterStatus) bool {
 				changed := false
 				if status.Endpoint != "" {
 					status.Endpoint = ""
@@ -914,7 +927,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 	if resp.Properties == nil || resp.Properties.State == nil {
 		logger.Infof("ADXCluster %s: cluster properties not available yet, requeuing in %v", cluster.Spec.ClusterName, requeueShort)
-		_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Cluster properties unavailable", nil)
+		r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, "Cluster properties unavailable", nil)
 		return ctrl.Result{RequeueAfter: requeueShort}, nil
 	}
 
@@ -966,7 +979,7 @@ func (r *AdxReconciler) CheckStatus(ctx context.Context, cluster *adxmonv1.ADXCl
 	}
 
 	logger.Infof("ADXCluster %s: cluster not ready yet (state: %s), requeuing in %v", cluster.Spec.ClusterName, string(*resp.Properties.State), requeueShort)
-	_ = r.setClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, fmt.Sprintf("Cluster state: %s", string(*resp.Properties.State)), nil)
+	r.logSetClusterCondition(ctx, cluster, metav1.ConditionUnknown, ADXClusterWaitingReason, fmt.Sprintf("Cluster state: %s", string(*resp.Properties.State)), nil)
 	return ctrl.Result{RequeueAfter: requeueShort}, nil
 }
 
