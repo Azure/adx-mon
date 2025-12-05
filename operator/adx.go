@@ -1236,7 +1236,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
-	// Step 6: Map tables to endpoints
+	// Step 6: Map tables and views to endpoints
 	dbTableEndpoints := mapTablesToEndpoints(schemaByEndpoint)
 
 	// Step 7: Extract hub database names for entity group replication
@@ -1257,10 +1257,23 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		}
 	}
 
-	// Step 9: Generate function definitions
+	// Step 9: Ensure hub tables exist for all tables and views
+	logger.Infof("ADXCluster %s: ensuring hub tables exist for alias functions", cluster.Spec.ClusterName)
+	for db, tableMap := range dbTableEndpoints {
+		// Build a map with empty schemas to use OTLP default for all tables
+		tables := make(map[string]string)
+		for table := range tableMap {
+			tables[table] = ""
+		}
+		if err := ensureHubTables(ctx, client, db, tables); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to ensure hub tables for database %s: %w", db, err)
+		}
+	}
+
+	// Step 10: Generate function definitions
 	funcsByDB := generateKustoFunctionDefinitions(dbTableEndpoints)
 
-	// Step 10/11: For each database, split scripts and execute
+	// Step 11: For each database, split scripts and execute
 	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
 	for db, funcs := range funcsByDB {
 		logger.Infof("ADXCluster %s: executing %d functions for database %s", cluster.Spec.ClusterName, len(funcs), db)
@@ -1663,7 +1676,7 @@ func tableExists(ctx context.Context, client *kusto.Client, database, table stri
 	return false, nil
 }
 
-// Helper: Map tables to endpoints for each database
+// Helper: Map tables and views to endpoints for each database
 func mapTablesToEndpoints(schemas map[string][]ADXClusterSchema) map[string]map[string][]string {
 	dbTableEndpoints := make(map[string]map[string][]string)
 	for endpoint, dbSchemas := range schemas {
@@ -1672,8 +1685,12 @@ func mapTablesToEndpoints(schemas map[string][]ADXClusterSchema) map[string]map[
 			if dbTableEndpoints[db] == nil {
 				dbTableEndpoints[db] = make(map[string][]string)
 			}
+			// Include both tables and views from spoke clusters
 			for _, table := range schema.Tables {
 				dbTableEndpoints[db][table] = append(dbTableEndpoints[db][table], endpoint)
+			}
+			for _, view := range schema.Views {
+				dbTableEndpoints[db][view] = append(dbTableEndpoints[db][view], endpoint)
 			}
 		}
 	}

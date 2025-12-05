@@ -462,12 +462,13 @@ The federated feature relies on a `heartbeat` table in the federated cluster to 
 #### Field Explanations
 - **Timestamp**: The UTC time when the partition cluster emitted the heartbeat.
 - **ClusterEndpoint**: The fully qualified endpoint URL of the partition cluster.
-- **Schema**: A dynamic object describing the databases and tables present in the partition cluster. For example:
+- **Schema**: A dynamic object describing the databases, tables, and views present in the partition cluster. For example:
   ```json
   [
     {
       "database": "Logs",
-      "tables": ["A", "B", "C"]
+      "tables": ["A", "B", "C"],
+      "views": ["MyView", "AnotherView"]
     }
   ]
   ```
@@ -487,7 +488,8 @@ The federated feature relies on a `heartbeat` table in the federated cluster to 
     "Schema": [
         {
             "database": "Logs",
-            "tables": ["A", "B", "C"]
+            "tables": ["A", "B", "C"],
+            "views": ["MyView", "AnotherView"]
         }
     ],
     "PartitionMetadata": {
