@@ -220,8 +220,14 @@ func (r *IngestorReconciler) handleADXClusterSelectorChange(ctx context.Context,
 		// If there's no stored spec, we can't compare, assume no change needed based on selector diff
 		return false, nil
 	}
-	storedSel, _ := json.Marshal(stored.ADXClusterSelector)
-	currentSel, _ := json.Marshal(ingestor.Spec.ADXClusterSelector)
+	storedSel, err := json.Marshal(stored.ADXClusterSelector)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal stored ADXClusterSelector: %w", err)
+	}
+	currentSel, err := json.Marshal(ingestor.Spec.ADXClusterSelector)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal current ADXClusterSelector: %w", err)
+	}
 	if string(storedSel) == string(currentSel) {
 		// Selector hasn't changed
 		return false, nil
