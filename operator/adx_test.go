@@ -1001,9 +1001,15 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	for _, f := range funcs["db1"] {
 		if strings.Contains(f, ".create-or-alter function t1()") {
 			foundT1 = true
+			// Verify it references the named entity group, not an inline list
+			require.Contains(t, f, "macro-expand entity_group db1Spoke as X")
+			require.Contains(t, f, "X.t1")
 		}
 		if strings.Contains(f, ".create-or-alter function t2()") {
 			foundT2 = true
+			// Verify it references the named entity group, not an inline list
+			require.Contains(t, f, "macro-expand entity_group db1Spoke as X")
+			require.Contains(t, f, "X.t2")
 		}
 	}
 	require.True(t, foundT1)

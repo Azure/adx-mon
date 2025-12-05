@@ -1178,7 +1178,8 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		*cluster.Spec.Role != adxmonv1.ClusterRoleFederated ||
 		cluster.Spec.Federation == nil ||
 		cluster.Spec.Federation.HeartbeatDatabase == nil ||
-		cluster.Spec.Federation.HeartbeatTable == nil {
+		cluster.Spec.Federation.HeartbeatTable == nil ||
+		cluster.Spec.Federation.HeartbeatTTL == nil {
 		return ctrl.Result{}, nil
 	}
 
@@ -1764,15 +1765,14 @@ func generateEntityGroupDefinitions(schemaByEndpoint map[string][]ADXClusterSche
 }
 
 // Helper: Generate Kusto function definitions for each table
+// References the named entity groups created by generateEntityGroupDefinitions (e.g., "MetricsSpoke", "LogsSpoke")
 func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]string) map[string][]string {
 	funcsByDB := make(map[string][]string)
 	for db, tableMap := range dbTableEndpoints {
-		for table, endpoints := range tableMap {
-			var clusters []string
-			for _, ep := range endpoints {
-				clusters = append(clusters, fmt.Sprintf("cluster('%s').database('%s')", ep, db))
-			}
-			macro := fmt.Sprintf("macro-expand entity_group [%s] as X ( X.%s )", strings.Join(clusters, ", "), table)
+		// Reference the named entity group for this spoke database
+		entityGroupName := fmt.Sprintf("%sSpoke", db)
+		for table := range tableMap {
+			macro := fmt.Sprintf("macro-expand entity_group %s as X ( X.%s )", entityGroupName, table)
 			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}
