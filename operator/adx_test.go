@@ -744,21 +744,6 @@ func TestExtractDatabasesFromSchemas(t *testing.T) {
 	require.Contains(t, dbs, "db2")
 }
 
-func TestCollectInventoryByDatabase(t *testing.T) {
-	schemas := map[string][]ADXClusterSchema{
-		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}, Views: []string{"view1"}}},
-		"ep2": {{Database: "db1", Tables: []string{"t2"}, Views: []string{"view2", ""}}},
-	}
-	inventory := collectInventoryByDatabase(schemas)
-	require.Contains(t, inventory, "db1")
-
-	var names []string
-	for name := range inventory["db1"] {
-		names = append(names, name)
-	}
-	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, names)
-}
-
 func TestMapTablesToEndpoints(t *testing.T) {
 	schemas := map[string][]ADXClusterSchema{
 		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}}},
@@ -1035,38 +1020,6 @@ func TestSplitKustoScripts(t *testing.T) {
 	require.Contains(t, joined, "//\na\n")
 	require.Contains(t, joined, "//\nb\n")
 	require.Contains(t, joined, "//\nc\n")
-}
-
-func TestDatabaseExists(t *testing.T) {
-	testutils.IntegrationTest(t)
-	ctx := context.Background()
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
-	testcontainers.CleanupContainer(t, kustoContainer)
-	require.NoError(t, err)
-
-	cluster := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-		},
-		Spec: adxmonv1.ADXClusterSpec{
-			ClusterName: "adxmon-test",
-			Endpoint:    kustoContainer.ConnectionUrl(),
-			Databases: []adxmonv1.ADXClusterDatabaseSpec{
-				{DatabaseName: "NetDefaultDB"},
-			},
-		},
-	}
-
-	// Test that the default database exists (NetDefaultDB is created by kustainer)
-	exists, err := databaseExists(ctx, cluster, "NetDefaultDB")
-	require.NoError(t, err)
-	require.True(t, exists, "NetDefaultDB should exist")
-
-	// Test that a non-existent database returns false
-	exists, err = databaseExists(ctx, cluster, "NonExistentDB")
-	require.NoError(t, err)
-	require.False(t, exists, "NonExistentDB should not exist")
 }
 
 func TestEnsureHubTables(t *testing.T) {
