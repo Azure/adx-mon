@@ -453,8 +453,8 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	for _, cluster := range adxClusterList.Items {
 		// wait for the cluster to be ready
 		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
-			// Cluster is not ready
-			return false, nil, fmt.Errorf("ADXCluster is not ready")
+			// Cluster is not ready yet, but this is not an error
+			return false, nil, nil
 		}
 
 		endpoint := resolvedClusterEndpoint(&cluster)
