@@ -304,10 +304,6 @@ func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					},
 				})
 				logger.Infof("Enqueuing reconcile request for Ingestor %s/%s due to change in ADXCluster %s/%s", ingestor.Namespace, ingestor.Name, cluster.Namespace, cluster.Name)
-
-				if err := r.setCondition(ctx, &ingestor, "ADXClusterChanged", fmt.Sprintf("ADXCluster %s/%s changed", cluster.Namespace, cluster.Name), metav1.ConditionUnknown); err != nil {
-					logger.Errorf("Failed to set condition for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
-				}
 			}
 		}
 		return requests
