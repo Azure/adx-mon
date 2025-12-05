@@ -437,6 +437,11 @@ type ingestorTemplateData struct {
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
+	// ADXClusterSelector is required - nil selector means nothing is selected
+	if ingestor.Spec.ADXClusterSelector == nil {
+		return false, nil, fmt.Errorf("ADXClusterSelector is required")
+	}
+
 	// List ADXClusters matching the selector
 	selector, err := metav1.LabelSelectorAsSelector(ingestor.Spec.ADXClusterSelector)
 	if err != nil {
@@ -444,10 +449,7 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	}
 
 	var adxClusterList adxmonv1.ADXClusterList
-	listOpts := []client.ListOption{}
-	if ingestor.Spec.ADXClusterSelector != nil {
-		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
-	}
+	listOpts := []client.ListOption{client.MatchingLabelsSelector{Selector: selector}}
 	if err := r.Client.List(ctx, &adxClusterList, listOpts...); err != nil {
 		return false, nil, fmt.Errorf("failed to list ADXClusters: %w", err)
 	}
