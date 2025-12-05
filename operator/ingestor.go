@@ -483,15 +483,15 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		endpoint := resolvedClusterEndpoint(&cluster)
 
 		for _, db := range cluster.Spec.Databases {
-			if db.TelemetryType == adxmonv1.DatabaseTelemetryMetrics {
-				if endpoint != "" {
-					metricsClusters = append(metricsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, endpoint))
-				}
+			if endpoint == "" {
+				continue
 			}
-			if db.TelemetryType == adxmonv1.DatabaseTelemetryLogs {
-				if endpoint != "" {
-					logsClusters = append(logsClusters, fmt.Sprintf("%s=%s", db.DatabaseName, endpoint))
-				}
+			entry := fmt.Sprintf("%s=%s", db.DatabaseName, endpoint)
+			switch db.TelemetryType {
+			case adxmonv1.DatabaseTelemetryMetrics:
+				metricsClusters = append(metricsClusters, entry)
+			case adxmonv1.DatabaseTelemetryLogs:
+				logsClusters = append(logsClusters, entry)
 			}
 		}
 	}
