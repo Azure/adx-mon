@@ -89,17 +89,17 @@ The solution introduces a new `adxexporter` component that operates as a Kuberne
 
 ### Output Modes
 
-#### Phase 1: Prometheus Scraping Mode
-- `adxexporter` exposes `/metrics` endpoint with OpenTelemetry metrics library
-- Metrics refreshed per `MetricsExporter.Interval`
-- Collector discovers via pod annotations: `adx-mon/scrape: "true"`
-- Simple, fast implementation leveraging existing Collector scraping infrastructure
+#### Primary: Direct OTLP Push Mode (Implemented)
+- `adxexporter` pushes metrics directly to OTLP endpoints using `PromToOtlpExporter`
+- Leverages `pkg/prompb` for memory-efficient metric serialization with object pooling
+- Preserves actual timestamps from KQL query results
+- Requires `--otlp-endpoint` CLI flag
+- Reuses battle-tested OTLP export infrastructure from the Collector
 
-#### Phase 2: Direct OTLP Push Mode  
-- `adxexporter` pushes metrics directly to OTLP endpoints
-- Failed exports queued in CRD backlog for retry
-- Supports historical data backfill capabilities
-- More resilient but requires additional backlog management infrastructure
+#### Alternative: Prometheus Scraping Mode (Future Enhancement)
+- `adxexporter` could expose `/metrics` endpoint with OpenTelemetry metrics library
+- Collector discovers via pod annotations: `adx-mon/scrape: "true"`
+- Deprioritized in favor of direct OTLP push for better timestamp fidelity
 
 ## Design Approach
 
@@ -112,23 +112,19 @@ The `adxexporter` is a new standalone Kubernetes component with its own binary a
 ```bash
 adxexporter \
   --cluster-labels="region=eastus,environment=production,team=platform" \
-  --otlp-endpoint="http://otel-collector:4317" \
-  --web.enable-lifecycle=true \
-  --web.listen-address=":8080" \
-  --web.telemetry-path="/metrics"
+  --kusto-endpoint="MetricsDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
 ```
 
 **Parameters:**
 
 - **`--cluster-labels`**: Comma-separated key=value pairs defining this instance's cluster identity. Used for criteria-based filtering of MetricsExporter CRDs. This follows the same pattern as the Ingestor component documented in [ADX-Mon Configuration](../config.md).
 
-- **`--otlp-endpoint`**: (Phase 2) OTLP endpoint URL for direct push mode. When specified, enables direct OTLP export with backlog capabilities.
+- **`--kusto-endpoint`**: ADX endpoint in format `<database>=<endpoint>`. Multiple endpoints can be specified for multi-database support.
 
-- **`--web.enable-lifecycle`**: (Phase 1) Boolean flag to enable the Prometheus metrics HTTP server. When enabled, exposes query results as Prometheus metrics on the specified address/path for Collector scraping. This follows Prometheus naming conventions.
+- **`--otlp-endpoint`**: (Required) OTLP HTTP endpoint URL for pushing metrics. The adxexporter converts KQL results to `prompb.WriteRequest` format and pushes them to this endpoint.
 
-- **`--web.listen-address`**: Address and port for the Prometheus metrics server (default: ":8080")
-
-- **`--web.telemetry-path`**: HTTP path for metrics endpoint (default: "/metrics")
+- **`--health-probe-port`**: Port for health probe endpoints (default: 8081). Exposes `/healthz` and `/readyz` endpoints.
 
 #### Criteria-Based Execution
 
@@ -485,23 +481,25 @@ spec:
     metadata:
       labels:
         app: adxexporter
-      annotations:
-        # Enable Collector discovery and scraping
-        adx-mon/scrape: "true"
-        adx-mon/port: "8080"
-        adx-mon/path: "/metrics"
     spec:
       containers:
       - name: adxexporter
         image: adx-mon/adxexporter:latest
         args:
         - --cluster-labels=region=eastus,environment=production,team=platform
-        - --web.enable-lifecycle=true
-        - --web.listen-address=:8080
-        - --web.telemetry-path=/metrics
+        - --kusto-endpoint=MetricsDB=https://cluster.kusto.windows.net
+        - --otlp-endpoint=http://otel-collector:4318/v1/metrics
         ports:
-        - containerPort: 8080
-          name: metrics
+        - containerPort: 8081
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
         resources:
           requests:
             memory: "256Mi"
@@ -515,10 +513,10 @@ spec:
 
 The `adxexporter` component integrates with existing ADX-Mon infrastructure while maintaining independence:
 
-1. **Collector Integration**: 
-   - Collector automatically discovers `adxexporter` instances via pod annotations
-   - Scrapes `/metrics` endpoint and forwards to configured destinations
-   - No additional Collector configuration required
+1. **OTLP Push Integration**: 
+   - `adxexporter` pushes metrics directly to any OTLP-compatible endpoint
+   - Uses the same `PromToOtlpExporter` infrastructure as the Collector
+   - No scraping configuration required
 
 2. **Kubernetes API Integration**:
    - `adxexporter` watches `MetricsExporter` CRDs via standard Kubernetes client-go
@@ -599,14 +597,16 @@ spec:
 # adxexporter instance matching criteria
 adxexporter \
   --cluster-labels="environment=production,team=platform,region=eastus" \
-  --web.enable-lifecycle=true
+  --kusto-endpoint="TelemetryDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
 ```
 
 **Key Benefits:**
 - **Direct Execution**: No intermediate table storage required
-- **Real-time Metrics**: Fresh data exposed every minute via `/metrics` endpoint
+- **Real-time Metrics**: Fresh data pushed to OTLP endpoint on each interval
+- **Timestamp Fidelity**: Preserves actual KQL query timestamps
 - **Environment Isolation**: Only processed by `adxexporter` instances with matching criteria
-- **Standard Integration**: Collector automatically discovers and scrapes metrics
+- **Memory Efficient**: Uses `pkg/prompb` object pooling for high cardinality metrics
 
 ### Use Case 2: Advanced Analytics with Rich Metadata
 
@@ -647,8 +647,8 @@ spec:
 # adxexporter instance for analytics team
 adxexporter \
   --cluster-labels="team=analytics,data-classification=customer-approved,region=westus" \
-  --web.enable-lifecycle=true \
-  --otlp-endpoint="http://analytics-otel-collector:4317"  # Phase 2
+  --kusto-endpoint="AnalyticsDB=https://analytics.kusto.windows.net" \
+  --otlp-endpoint="http://analytics-otel-collector:4318/v1/metrics"
 ```
 
 **Resulting Metrics:**
@@ -690,13 +690,22 @@ spec:
 **Multi-Region Deployment:**
 ```bash
 # East US adxexporter
-adxexporter --cluster-labels="role=infrastructure,region=eastus" --web.enable-lifecycle=true
+adxexporter \
+  --cluster-labels="role=infrastructure,region=eastus" \
+  --kusto-endpoint="InfrastructureDB=https://eastus.kusto.windows.net" \
+  --otlp-endpoint="http://eastus-collector:4318/v1/metrics"
 
 # West US adxexporter  
-adxexporter --cluster-labels="role=infrastructure,region=westus" --web.enable-lifecycle=true
+adxexporter \
+  --cluster-labels="role=infrastructure,region=westus" \
+  --kusto-endpoint="InfrastructureDB=https://westus.kusto.windows.net" \
+  --otlp-endpoint="http://westus-collector:4318/v1/metrics"
 
 # Europe adxexporter
-adxexporter --cluster-labels="role=infrastructure,region=europe" --web.enable-lifecycle=true
+adxexporter \
+  --cluster-labels="role=infrastructure,region=europe" \
+  --kusto-endpoint="InfrastructureDB=https://europe.kusto.windows.net" \
+  --otlp-endpoint="http://europe-collector:4318/v1/metrics"
 ```
 
 **Key Benefits:**
@@ -739,51 +748,43 @@ spec:
     labelColumns: ["Region", "ServiceName", "error_rate"]
 ```
 
-**Phase 2 Deployment with Direct Push:**
+**Deployment with Direct OTLP Push:**
 ```bash
 # Global monitoring adxexporter with OTLP push
 adxexporter \
   --cluster-labels="scope=global,priority=high" \
-  --otlp-endpoint="http://central-prometheus-gateway:4317" \
-  --web.enable-lifecycle=false  # Disable scraping, use direct push only
+  --kusto-endpoint="GlobalMetrics=https://global.kusto.windows.net" \
+  --otlp-endpoint="http://central-prometheus-gateway:4318/v1/metrics"
 ```
 
 **Global Monitoring Benefits:**
 - **Cross-Cluster Aggregation**: Single query across multiple ADX clusters
 - **Priority-Based Processing**: Only runs on high/critical priority `adxexporter` instances  
-- **Direct Push Reliability**: OTLP endpoint receives metrics with backlog/retry capabilities
+- **Direct OTLP Push**: Metrics pushed directly to central endpoint with pooled serialization
 - **Rich Context**: Includes both raw counts and calculated error rates in labels
+- **Memory Efficient**: Uses `pkg/prompb` pooling for high cardinality cross-cluster metrics
 
 ## Configuration Strategy and Best Practices
 
 ### adxexporter Configuration
 
-The `adxexporter` component provides flexible configuration for different deployment scenarios:
+The `adxexporter` component uses direct OTLP push for exporting metrics:
 
-#### Phase 1: Prometheus Scraping Mode
+#### Standard OTLP Push Configuration
 ```bash
 adxexporter \
   --cluster-labels="team=platform,environment=production,region=eastus" \
-  --web.enable-lifecycle=true \
-  --web.listen-address=":8080" \
-  --web.telemetry-path="/metrics"
+  --kusto-endpoint="MetricsDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
 ```
 
-#### Phase 2: Direct OTLP Push Mode  
+#### Multi-Database Configuration
 ```bash
 adxexporter \
   --cluster-labels="team=analytics,data-classification=approved" \
-  --otlp-endpoint="http://otel-collector:4317" \
-  --web.enable-lifecycle=false
-```
-
-#### Hybrid Mode (Both Scraping and Push)
-```bash
-adxexporter \
-  --cluster-labels="team=sre,priority=critical" \
-  --web.enable-lifecycle=true \
-  --web.listen-address=":8080" \
-  --otlp-endpoint="http://central-monitoring:4317"
+  --kusto-endpoint="MetricsDB=https://metrics.kusto.windows.net" \
+  --kusto-endpoint="LogsDB=https://logs.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
 ```
 
 ### Criteria-Based Deployment Strategy
@@ -836,12 +837,14 @@ spec:
 4. **Team Autonomy**: Teams deploy their own `adxexporter` instances with appropriate cluster labels
 5. **Resource Optimization**: Distribute MetricsExporter processing load across appropriate instances
 
-### Collector Integration
+### Collector Integration (Optional)
 
-The existing Collector component automatically discovers `adxexporter` instances through Kubernetes pod annotations:
+With the direct OTLP push implementation, Collector scraping is no longer required. The `adxexporter` pushes metrics directly to any OTLP-compatible endpoint (OpenTelemetry Collector, Prometheus with remote-write receiver, etc.).
+
+If you want to use Collector scraping as an alternative to OTLP push, you can configure pod annotations:
 
 ```yaml
-# Pod annotations for Collector discovery
+# Pod annotations for Collector discovery (optional)
 metadata:
   annotations:
     adx-mon/scrape: "true"        # Enable scraping
@@ -849,47 +852,53 @@ metadata:
     adx-mon/path: "/metrics"      # Metrics path
 ```
 
-No additional Collector configuration is required - discovery and scraping happen automatically.
+However, the primary recommended configuration is direct OTLP push for better timestamp fidelity and simpler deployment.
 
 ## Implementation Roadmap
 
 This section provides a methodical breakdown of implementing the `adxexporter` component and `MetricsExporter` CRD across multiple PRs, with Phase 1 focusing on Prometheus scraping and Phase 2 adding direct OTLP push capabilities.
 
-### 📊 Phase 1 Status Summary
+### 📊 Implementation Status Summary
 
-**Overall Progress: 5/7 tasks complete (71%)**
+**Overall Progress: Phase 2 OTLP Push Mode Implemented**
 
-- ✅ **Complete (5 tasks)**: Foundation, Scaffolding, Query Execution, Transform Engine, Metrics Server  
-- 🔄 **Partially Complete (1 task)**: Status Management  
-- ❌ **Not Started (1 task)**: Collector Discovery Integration
+- ✅ **Phase 1 Complete**: Foundation, Scaffolding, Query Execution, Transform Engine
+- ✅ **Phase 2 OTLP Push Mode**: Direct OTLP push using existing `PromToOtlpExporter`
+- ⏸️ **Prometheus Scraping Mode**: Deprioritized in favor of direct OTLP push
 
 **Key Achievements:**
 - Complete MetricsExporter CRD with time window management and criteria matching
 - Functional adxexporter component with Kubernetes controller framework
 - Working KQL query execution with ADX integration and time window management
-- Full transform engine for KQL to OpenTelemetry metrics conversion with validation
-- Complete Prometheus metrics server using controller-runtime's shared registry
-- Comprehensive unit tests for all core functionality
+- Full transform engine for KQL to metrics conversion with validation
+- **Direct OTLP push using `collector/export/PromToOtlpExporter`** with `pkg/prompb` pooling
+- **ToWriteRequest() function** converts `[]MetricData` to `prompb.WriteRequest` with object pooling
+- Comprehensive unit tests and benchmarks for all core functionality
 
-**Remaining Work for Phase 1:**
-- **Task 6**: Create Kubernetes deployment manifests with collector discovery annotations  
-- **Task 7**: Implement CRD status updates to cluster (methods exist, need cluster integration)
-- **Integration**: Add end-to-end tests with Collector discovery and scraping
+**Architecture Decision: OTLP Push Over Prometheus Scraping**
+
+The implementation prioritizes Phase 2's direct OTLP push mode over Phase 1's Prometheus scraping for several reasons:
+- **Timestamp Fidelity**: Preserves actual KQL query timestamps instead of scrape-time timestamps
+- **Memory Efficiency**: Leverages `pkg/prompb` object pooling (`WriteRequestPool`, `TimeSeriesPool`)
+- **Existing Infrastructure**: Reuses battle-tested `PromToOtlpExporter` from the Collector
+- **Simpler Deployment**: No need for Collector discovery annotations or scraping configuration
+- **High Cardinality Support**: Optimized for high-volume metric export scenarios
 
 **Code Quality**: 
 - ✅ Extensive unit test coverage
 - ✅ Follows ADX-Mon patterns (SummaryRule consistency)
 - ✅ Proper error handling and logging
-- ✅ Command-line interface with flag parsing
+- ✅ Memory-efficient prompb pooling
+- ✅ Benchmarks for ToWriteRequest transformation
 
-### 🔍 Implementation Details Found
+### 🔍 Implementation Details
 
 **Files Implemented:**
 - `api/v1/metricsexporter_types.go` - Complete CRD definition with time management methods
-- `cmd/adxexporter/main.go` - Main component with CLI parsing and manager setup
-- `adxexporter/service.go` - Controller reconciler with criteria matching and query execution
+- `cmd/adxexporter/main.go` - Main component with CLI parsing and OTLP exporter initialization
+- `adxexporter/metricsexporter.go` - Controller reconciler with criteria matching, query execution, and OTLP push
 - `adxexporter/kusto.go` - KQL query executor with ADX client integration
-- `transform/kusto_to_metrics.go` - Transform engine for KQL results to OpenTelemetry metrics
+- `transform/kusto_to_metrics.go` - Transform engine with `ToWriteRequest()` for prompb conversion
 - Generated CRD manifests in `kustomize/bases/` and `operator/manifests/crds/`
 
 **Key Features Working:**
@@ -898,14 +907,18 @@ This section provides a methodical breakdown of implementing the `adxexporter` c
 - ✅ Cluster-label based criteria matching (case-insensitive)
 - ✅ KQL query execution with `_startTime`/`_endTime` substitution
 - ✅ Transform validation and column mapping (value, labels, timestamps, metric names)
-- ✅ OpenTelemetry Prometheus exporter setup with namespace
+- ✅ `ToWriteRequest()` conversion with `pkg/prompb` object pooling
+- ✅ Direct OTLP push via `PromToOtlpExporter`
 - ✅ Controller-runtime manager with graceful shutdown
-- ✅ Health checks (readyz/healthz endpoints on port 8081)
+- ✅ Health checks (readyz/healthz endpoints)
 
-**Missing Implementation:**
-- HTTP server startup for `/metrics` endpoint (OpenTelemetry backend configured but not served)
-- Kubernetes deployment manifests with `adx-mon/scrape` annotations
-- CRD status updates to Kubernetes cluster (status methods implemented locally only)
+**CLI Configuration:**
+```bash
+adxexporter \
+  --cluster-labels="region=eastus,environment=production" \
+  --kusto-endpoint="MetricsDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"  # Required
+```
 
 ### Phase 1: Prometheus Scraping Implementation
 
@@ -1166,28 +1179,27 @@ This roadmap ensures incremental delivery with Phase 1 providing immediate value
 
 ## Conclusion
 
-The `adxexporter` component and `MetricsExporter` CRD provide a comprehensive solution for transforming ADX data into standardized metrics for observability platforms. The phased approach ensures rapid time-to-value while building toward enterprise-grade reliability:
+The `adxexporter` component and `MetricsExporter` CRD provide a comprehensive solution for transforming ADX data into standardized metrics for observability platforms. The implementation prioritizes direct OTLP push for enterprise-grade reliability:
 
-**Phase 1 Benefits:**
-- **Fast Implementation**: Leverages existing Collector scraping infrastructure
-- **Immediate Value**: Enables KQL-to-metrics transformation without intermediate storage
-- **Cloud-Native**: Kubernetes-native discovery and deployment patterns
+**Implementation Benefits:**
+- **Direct OTLP Push**: Push metrics directly to any OTLP-compatible endpoint
+- **Timestamp Fidelity**: Preserves actual KQL query result timestamps instead of export time
+- **Memory Efficiency**: Leverages `pkg/prompb` object pooling (`WriteRequestPool`, `TimeSeriesPool`) for high cardinality metrics
+- **Existing Infrastructure**: Reuses battle-tested `PromToOtlpExporter` from the Collector
 - **Criteria-Based Security**: Secure, distributed processing with team and environment isolation
-
-**Phase 2 Enhancements:**
-- **Enterprise Reliability**: Backlog management and retry capabilities for guaranteed delivery
-- **Historical Backfill**: Process historical data gaps during outages with proper timestamp preservation
-- **Direct Integration**: Push metrics directly to OTLP and Prometheus remote write endpoints
-- **Hybrid Flexibility**: Support scraping and multiple push modes simultaneously
-- **Performance Optimization**: Leverage `pkg/prompb` pooling for memory efficiency and reduced GC pressure
-- **Timestamp Fidelity**: Preserve actual query result timestamps instead of current time
+- **No Intermediate Storage**: Enables KQL-to-metrics transformation without ADX table materialization
 
 **Key Technical Advantage: `pkg/prompb` Integration**
 
-Phase 2 implementation should leverage the existing `pkg/prompb` package for:
+The implementation leverages the existing `pkg/prompb` package for:
 - **Memory Efficiency**: Object pooling reduces allocation overhead during high-frequency processing
 - **Timestamp Accuracy**: Preserve temporal fidelity from KQL query results for proper historical analysis
-- **Protocol Compatibility**: Native Prometheus remote write support alongside OTLP
+- **Protocol Compatibility**: Native Prometheus remote write support via OTLP endpoints
 - **Performance**: Optimized protobuf serialization for large-scale deployments
 
-This design provides a scalable, secure, and maintainable foundation for organizations to operationalize their ADX analytics data across their observability infrastructure with both immediate scraping capabilities and future-ready push architectures.
+**Transform Pipeline:**
+```
+KQL Query Results → KustoToMetricsTransformer → []MetricData → ToWriteRequest() → prompb.WriteRequest → PromToOtlpExporter → OTLP Endpoint
+```
+
+This design provides a scalable, secure, and maintainable foundation for organizations to operationalize their ADX analytics data across their observability infrastructure.

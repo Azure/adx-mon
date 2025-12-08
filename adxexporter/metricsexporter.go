@@ -6,22 +6,17 @@ import (
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/Azure/adx-mon/collector/export"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/transform"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // MetricsExporterReconciler reconciles MetricsExporter objects
@@ -33,16 +28,16 @@ type MetricsExporterReconciler struct {
 	ClusterLabels         map[string]string
 	KustoClusters         map[string]string // database name -> endpoint URL
 	OTLPEndpoint          string
-	EnableMetricsEndpoint bool
-	MetricsPort           string // Used for controller-runtime metrics server configuration
-	MetricsPath           string // For documentation/consistency (controller-runtime uses /metrics)
+	EnableMetricsEndpoint bool   // Deprecated: kept for backward compatibility, not used with OTLP push
+	MetricsPort           string // Deprecated: kept for backward compatibility
+	MetricsPath           string // Deprecated: kept for backward compatibility
 
 	// Query execution components
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
 	Clock          clock.Clock
 
-	// Metrics components
-	Meter metric.Meter
+	// OTLP push client for metrics delivery
+	OtlpExporter *export.PromToOtlpExporter
 }
 
 // Reconcile handles MetricsExporter reconciliation
@@ -101,34 +96,35 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-func (r *MetricsExporterReconciler) exposeMetricsServer() error {
-	if !r.EnableMetricsEndpoint {
-		r.Meter = noop.NewMeterProvider().Meter("noop")
-		return nil
+func (r *MetricsExporterReconciler) initOtlpExporter() error {
+	if r.OTLPEndpoint == "" {
+		return fmt.Errorf("OTLP endpoint is required: specify --otlp-endpoint")
 	}
 
-	// Register with controller-runtime's shared metrics registry, replacing the default registry
-	exporter, err := prometheus.New(
-		prometheus.WithRegisterer(crmetrics.Registry),
-		// Adds a namespace prefix to all metrics
-		prometheus.WithNamespace("adxexporter"),
-		// Disables the long otel specific scope string since we're only exposing through metrics
-		prometheus.WithoutScopeInfo(),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create metrics exporter: %w", err)
+	// Create resource attributes from cluster labels for OTLP resource-level metadata
+	resourceAttrs := make(map[string]string, len(r.ClusterLabels))
+	for k, v := range r.ClusterLabels {
+		resourceAttrs[k] = v
 	}
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
-	otel.SetMeterProvider(provider)
 
-	r.Meter = otel.GetMeterProvider().Meter("adxexporter")
+	// Create a pass-through transformer (no filtering - KQL already selected the data)
+	transformer := &transform.RequestTransformer{
+		DefaultDropMetrics: false,
+	}
 
+	opts := export.PromToOtlpExporterOpts{
+		Transformer:           transformer,
+		Destination:           r.OTLPEndpoint,
+		AddResourceAttributes: resourceAttrs,
+	}
+
+	r.OtlpExporter = export.NewPromToOtlpExporter(opts)
 	return nil
 }
 
 // SetupWithManager sets up the service with the Manager
 func (r *MetricsExporterReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := r.exposeMetricsServer(); err != nil {
+	if err := r.initOtlpExporter(); err != nil {
 		return err
 	}
 
@@ -265,7 +261,7 @@ func (r *MetricsExporterReconciler) executeMetricsExporter(ctx context.Context, 
 	return true, nil
 }
 
-// transformAndRegisterMetrics converts KQL query results to metrics and registers them
+// transformAndRegisterMetrics converts KQL query results to metrics and pushes them via OTLP
 func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Context, me *adxmonv1.MetricsExporter, rows []map[string]any) error {
 	if len(rows) == 0 {
 		if logger.IsDebug() {
@@ -275,6 +271,7 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 	}
 
 	// Create transformer with the MetricsExporter's transform configuration
+	// Note: meter parameter is nil since we're using OTLP push instead of OTel SDK registration
 	transformer := transform.NewKustoToMetricsTransformer(
 		transform.TransformConfig{
 			MetricNameColumn:  me.Spec.Transform.MetricNameColumn,
@@ -284,7 +281,7 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 			LabelColumns:      me.Spec.Transform.LabelColumns,
 			DefaultMetricName: me.Spec.Transform.DefaultMetricName,
 		},
-		r.Meter,
+		nil, // meter not needed for OTLP push path
 	)
 
 	// Validate the transform configuration against the query results
@@ -298,44 +295,32 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 		return fmt.Errorf("failed to transform rows to metrics: %w", err)
 	}
 
-	if err := r.registerMetrics(ctx, metrics); err != nil {
-		return fmt.Errorf("failed to register metrics: %w", err)
+	if err := r.pushMetrics(ctx, metrics); err != nil {
+		return fmt.Errorf("failed to push metrics: %w", err)
 	}
 
-	logger.Infof("Successfully transformed and registered %d metrics for MetricsExporter %s/%s",
+	logger.Infof("Successfully transformed and pushed %d metrics for MetricsExporter %s/%s",
 		len(metrics), me.Namespace, me.Name)
 
 	return nil
 }
 
-func (r *MetricsExporterReconciler) registerMetrics(ctx context.Context, metrics []transform.MetricData) error {
-	// Group metrics by name for efficient registration
-	metricsByName := make(map[string][]transform.MetricData)
-	for _, metric := range metrics {
-		metricsByName[metric.Name] = append(metricsByName[metric.Name], metric)
+// pushMetrics converts MetricData to WriteRequest and sends via OTLP
+func (r *MetricsExporterReconciler) pushMetrics(ctx context.Context, metrics []transform.MetricData) error {
+	if len(metrics) == 0 {
+		return nil
 	}
 
-	// Register each unique metric name as a gauge
-	for metricName, metricData := range metricsByName {
-		gauge, err := r.Meter.Float64Gauge(metricName)
-		if err != nil {
-			return fmt.Errorf("failed to create gauge for metric '%s': %w", metricName, err)
-		}
+	// Convert to WriteRequest using pooled objects for efficiency
+	wr := transform.ToWriteRequest(metrics)
+	defer func() {
+		// Return pooled objects
+		wr.Reset()
+		prompb.WriteRequestPool.Put(wr)
+	}()
 
-		// Record all data points for this metric
-		for _, data := range metricData {
-			// Convert labels to OpenTelemetry attributes
-			attrs := make([]attribute.KeyValue, 0, len(data.Labels))
-			for key, value := range data.Labels {
-				attrs = append(attrs, attribute.String(key, value))
-			}
-
-			// Record the metric value
-			gauge.Record(ctx, data.Value, metric.WithAttributes(attrs...))
-		}
-	}
-
-	return nil
+	// Push via OTLP exporter
+	return r.OtlpExporter.Write(ctx, wr)
 }
 
 // initializeQueryExecutors creates QueryExecutors for all configured databases

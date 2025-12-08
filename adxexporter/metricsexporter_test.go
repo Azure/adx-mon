@@ -3,7 +3,9 @@ package adxexporter
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -361,11 +363,20 @@ func TestReconcile(t *testing.T) {
 				QueryExecutors: map[string]*QueryExecutor{
 					"test-db": NewQueryExecutor(mockKustoClient),
 				},
-				EnableMetricsEndpoint: false, // Disable metrics to avoid initialization complexity
 			}
 
-			// Initialize the meter (this sets up r.Meter)
-			err := reconciler.exposeMetricsServer()
+			// Set up mock OTLP server and initialize exporter
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Accept all metrics and return success
+				io.Copy(io.Discard, r.Body)
+				r.Body.Close()
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte{}) // Empty ExportMetricsServiceResponse
+			}))
+			defer mockServer.Close()
+
+			reconciler.OTLPEndpoint = mockServer.URL
+			err = reconciler.initOtlpExporter()
 			require.NoError(t, err)
 
 			req := reconcile.Request{
@@ -431,48 +442,46 @@ func TestReconcile_NotFound(t *testing.T) {
 	assert.Equal(t, time.Duration(0), result.RequeueAfter, "Expected no requeue for deleted object")
 }
 
-func TestExposeMetrics(t *testing.T) {
+func TestInitOtlpExporter(t *testing.T) {
 	tests := []struct {
-		name                  string
-		enableMetricsEndpoint bool
-		expectedError         bool
+		name          string
+		otlpEndpoint  string
+		expectedError bool
+		errorContains string
 	}{
 		{
-			name:                  "metrics endpoint disabled",
-			enableMetricsEndpoint: false,
-			expectedError:         false,
+			name:          "valid OTLP endpoint",
+			otlpEndpoint:  "http://localhost:4318/v1/metrics",
+			expectedError: false,
 		},
 		{
-			name:                  "metrics endpoint enabled",
-			enableMetricsEndpoint: true,
-			expectedError:         false,
+			name:          "empty OTLP endpoint should error",
+			otlpEndpoint:  "",
+			expectedError: true,
+			errorContains: "OTLP endpoint is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Reset any existing handlers to avoid conflicts
-			http.DefaultServeMux = http.NewServeMux()
-
 			reconciler := &MetricsExporterReconciler{
-				EnableMetricsEndpoint: tt.enableMetricsEndpoint,
-				MetricsPort:           ":0", // Use random port to avoid conflicts
-				MetricsPath:           "/metrics",
+				OTLPEndpoint:  tt.otlpEndpoint,
+				ClusterLabels: map[string]string{"env": "test"},
 				KustoClusters: map[string]string{
 					"test-db": "https://test-cluster.kusto.windows.net",
 				},
 			}
 
-			err := reconciler.exposeMetricsServer()
+			err := reconciler.initOtlpExporter()
 
 			if tt.expectedError {
 				assert.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
 			} else {
 				assert.NoError(t, err)
-			}
-
-			if tt.enableMetricsEndpoint {
-				assert.NotNil(t, reconciler.Meter, "Meter should be initialized when metrics are enabled")
+				assert.NotNil(t, reconciler.OtlpExporter, "OtlpExporter should be initialized")
 			}
 		})
 	}
@@ -505,17 +514,25 @@ func TestInitializeQueryExecutors(t *testing.T) {
 }
 
 func TestTransformAndRegisterMetrics(t *testing.T) {
-	// Test the integration between transformation and metrics registration
+	// Create mock OTLP server
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		r.Body.Close()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{})
+	}))
+	defer mockServer.Close()
+
+	// Test the integration between transformation and metrics push
 	reconciler := &MetricsExporterReconciler{
-		EnableMetricsEndpoint: true,
-		MetricsPort:           ":0",
-		MetricsPath:           "/metrics",
+		OTLPEndpoint:  mockServer.URL,
+		ClusterLabels: map[string]string{"env": "test"},
 	}
 
-	// Initialize the metrics server to set up the meter
-	err := reconciler.exposeMetricsServer()
+	// Initialize the OTLP exporter
+	err := reconciler.initOtlpExporter()
 	require.NoError(t, err)
-	require.NotNil(t, reconciler.Meter)
+	require.NotNil(t, reconciler.OtlpExporter)
 
 	// Create test MetricsExporter with transform configuration
 	me := &adxmonv1.MetricsExporter{
@@ -558,14 +575,22 @@ func TestTransformAndRegisterMetrics(t *testing.T) {
 }
 
 func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
+	// Create mock OTLP server
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		r.Body.Close()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{})
+	}))
+	defer mockServer.Close()
+
 	// Test transformation when using default metric name (no metric name column)
 	reconciler := &MetricsExporterReconciler{
-		EnableMetricsEndpoint: true,
-		MetricsPort:           ":0",
-		MetricsPath:           "/metrics",
+		OTLPEndpoint:  mockServer.URL,
+		ClusterLabels: map[string]string{"env": "test"},
 	}
 
-	err := reconciler.exposeMetricsServer()
+	err := reconciler.initOtlpExporter()
 	require.NoError(t, err)
 
 	// Create MetricsExporter with default metric name (no MetricNameColumn)
@@ -606,18 +631,26 @@ func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {
 }
 
 func TestTransformAndRegisterMetrics_MultiValueColumns(t *testing.T) {
+	// Create mock OTLP server
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		r.Body.Close()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{})
+	}))
+	defer mockServer.Close()
+
 	reconciler := &MetricsExporterReconciler{
-		Client:                fake.NewClientBuilder().Build(),
-		Scheme:                scheme.Scheme,
-		EnableMetricsEndpoint: true,
-		MetricsPort:           ":0",
-		MetricsPath:           "/metrics",
+		Client:        fake.NewClientBuilder().Build(),
+		Scheme:        scheme.Scheme,
+		OTLPEndpoint:  mockServer.URL,
+		ClusterLabels: map[string]string{"env": "test"},
 	}
 
-	// Initialize the metrics server to set up the meter
-	err := reconciler.exposeMetricsServer()
+	// Initialize the OTLP exporter
+	err := reconciler.initOtlpExporter()
 	require.NoError(t, err)
-	require.NotNil(t, reconciler.Meter)
+	require.NotNil(t, reconciler.OtlpExporter)
 
 	// Configure MetricsExporter with multiple value columns
 	me := &adxmonv1.MetricsExporter{

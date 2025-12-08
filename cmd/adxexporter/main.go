@@ -31,23 +31,14 @@ func main() {
 				Usage: "Kusto endpoint in the format of <db>=<endpoint> for query execution",
 			},
 			&cli.StringFlag{
-				Name:  "otlp-endpoint",
-				Usage: "OTLP endpoint URL for direct push mode (Phase 2)",
-			},
-			&cli.BoolFlag{
-				Name:  "enable-metrics-endpoint",
-				Usage: "Enable the Prometheus metrics HTTP server",
-				Value: false,
+				Name:     "otlp-endpoint",
+				Usage:    "OTLP/HTTP endpoint URL for pushing metrics (required)",
+				Required: true,
 			},
 			&cli.StringFlag{
-				Name:  "metrics-port",
-				Usage: "Address and port for the health checks and metrics server",
-				Value: ":8080",
-			},
-			&cli.StringFlag{
-				Name:  "metrics-path",
-				Usage: "HTTP path for metrics endpoint",
-				Value: "/metrics",
+				Name:  "health-probe-port",
+				Usage: "Address and port for health probe endpoints",
+				Value: ":8081",
 			},
 		},
 		Action:  realMain,
@@ -88,19 +79,11 @@ func realMain(ctx *cli.Context) error {
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
 
-	// Configure server address - use same port for health checks and metrics
-	var serverBindAddress string
-	if ctx.Bool("enable-metrics-endpoint") {
-		serverBindAddress = ctx.String("metrics-port")
-	} else {
-		serverBindAddress = "0" // Disable server
-	}
-
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
-		HealthProbeBindAddress: ":8081", // Port for health endpoints
+		HealthProbeBindAddress: ctx.String("health-probe-port"),
 		Metrics: metricsserver.Options{
-			BindAddress: serverBindAddress,
+			BindAddress: "0", // Disable built-in metrics server - we push via OTLP
 		},
 	})
 	if err != nil {
@@ -112,12 +95,9 @@ func realMain(ctx *cli.Context) error {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 
-		ClusterLabels:         clusterLabels,
-		KustoClusters:         kustoClusters,
-		OTLPEndpoint:          ctx.String("otlp-endpoint"),
-		EnableMetricsEndpoint: ctx.Bool("enable-metrics-endpoint"),
-		MetricsPort:           ctx.String("metrics-port"),
-		MetricsPath:           ctx.String("metrics-path"),
+		ClusterLabels: clusterLabels,
+		KustoClusters: kustoClusters,
+		OTLPEndpoint:  ctx.String("otlp-endpoint"),
 	}
 	if err = adxexp.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)
@@ -134,23 +114,18 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create summaryrule controller: %w", err)
 	}
 
-	if err := mgr.AddReadyzCheck("metrics-ready", func(req *http.Request) error {
-		if !adxexp.EnableMetricsEndpoint {
-			return nil // Always ready if metrics are disabled
+	if err := mgr.AddReadyzCheck("readyz", func(req *http.Request) error {
+		if adxexp.OtlpExporter == nil {
+			return fmt.Errorf("OTLP exporter not initialized")
 		}
-
-		if adxexp.Meter == nil {
-			return fmt.Errorf("metrics not ready")
-		}
-
 		return nil
 	}); err != nil {
 		return fmt.Errorf("unable to add readyz check: %w", err)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", func(req *http.Request) error {
-		if adxexp.Meter == nil {
-			return fmt.Errorf("metrics not ready")
+		if adxexp.OtlpExporter == nil {
+			return fmt.Errorf("OTLP exporter not initialized")
 		}
 		return nil
 	}); err != nil {
