@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -537,6 +539,220 @@ func TestInitOtlpExporterResourceAttributes(t *testing.T) {
 			// The exporter should have been created with merged resource attributes
 			// We can't directly inspect the resourceAttributes field (it's unexported),
 			// but we verify initialization succeeded which means the merge worked.
+		})
+	}
+}
+
+// TestResourceAttributesInOTLPPayload verifies that resource attributes
+// (from --add-resource-attributes and --cluster-labels) are correctly included
+// in the OTLP ExportMetricsServiceRequest payload
+func TestResourceAttributesInOTLPPayload(t *testing.T) {
+	// Channel to receive the parsed OTLP request
+	requestChan := make(chan *v1.ExportMetricsServiceRequest, 1)
+
+	// Create mock OTLP server that captures and parses the request
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		r.Body.Close()
+
+		// Parse the OTLP protobuf request
+		exportRequest := &v1.ExportMetricsServiceRequest{}
+		err = proto.Unmarshal(body, exportRequest)
+		require.NoError(t, err)
+
+		requestChan <- exportRequest
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{})
+	}))
+	defer mockServer.Close()
+
+	// Configure reconciler with specific resource attributes (like the real deployment)
+	reconciler := &MetricsExporterReconciler{
+		OTLPEndpoint:  mockServer.URL,
+		ClusterLabels: map[string]string{"environment": "test", "region": "eastus"},
+		AddResourceAttributes: map[string]string{
+			"_microsoft_metrics_account":   "RPACSINTv2",
+			"_microsoft_metrics_namespace": "Platform",
+		},
+	}
+
+	// Initialize the OTLP exporter
+	err := reconciler.initOtlpExporter()
+	require.NoError(t, err)
+
+	// Create test MetricsExporter
+	me := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-resource-attrs",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				ValueColumns:      []string{"count"},
+				MetricNameColumn:  "metric_name",
+				TimestampColumn:   "PreciseTimeStamp",
+				DefaultMetricName: "test_metric",
+			},
+		},
+	}
+
+	// Create test data
+	rows := []map[string]any{
+		{
+			"metric_name":     "infra_host_count",
+			"count":           float64(42),
+			"PreciseTimeStamp": time.Now(),
+		},
+	}
+
+	// Execute transformation and push
+	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+	require.NoError(t, err)
+
+	// Verify the OTLP request contains the resource attributes
+	select {
+	case exportRequest := <-requestChan:
+		require.Len(t, exportRequest.ResourceMetrics, 1, "Should have one ResourceMetrics")
+		resourceMetric := exportRequest.ResourceMetrics[0]
+
+		// Extract resource attributes into a map for easier verification
+		resourceAttrs := make(map[string]string)
+		for _, attr := range resourceMetric.Resource.Attributes {
+			resourceAttrs[attr.Key] = attr.Value.GetStringValue()
+		}
+
+		// Verify critical Microsoft metrics attributes are present
+		assert.Equal(t, "RPACSINTv2", resourceAttrs["_microsoft_metrics_account"],
+			"_microsoft_metrics_account resource attribute should be present")
+		assert.Equal(t, "Platform", resourceAttrs["_microsoft_metrics_namespace"],
+			"_microsoft_metrics_namespace resource attribute should be present")
+
+		// Verify cluster labels are also present as resource attributes
+		assert.Equal(t, "test", resourceAttrs["environment"],
+			"environment cluster label should be present as resource attribute")
+		assert.Equal(t, "eastus", resourceAttrs["region"],
+			"region cluster label should be present as resource attribute")
+
+		// Verify we have the expected total count (2 cluster labels + 2 explicit attributes)
+		assert.Len(t, resourceMetric.Resource.Attributes, 4,
+			"Should have 4 resource attributes total")
+
+		// Also verify that metrics data was included
+		require.Len(t, resourceMetric.ScopeMetrics, 1, "Should have one ScopeMetrics")
+		require.GreaterOrEqual(t, len(resourceMetric.ScopeMetrics[0].Metrics), 1, "Should have at least one metric")
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for OTLP request")
+	}
+}
+
+// TestMetricNamePrefixInOTLPPayload verifies that the user-specified metricNamePrefix
+// is correctly applied to metric names in the OTLP payload.
+func TestMetricNamePrefixInOTLPPayload(t *testing.T) {
+	tests := []struct {
+		name             string
+		metricNamePrefix string
+		metricName       string
+		expectedMetric   string
+	}{
+		{
+			name:             "with user-defined prefix",
+			metricNamePrefix: "infra",
+			metricName:       "host_count",
+			expectedMetric:   "infra_host_count_value",
+		},
+		{
+			name:             "without user-defined prefix",
+			metricNamePrefix: "",
+			metricName:       "my_metric",
+			expectedMetric:   "my_metric_value",
+		},
+		{
+			name:             "with adxexporter prefix specified by user",
+			metricNamePrefix: "adxexporter_cluster_autoscaler",
+			metricName:       "availability",
+			expectedMetric:   "adxexporter_cluster_autoscaler_availability_numerator",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Channel to receive the parsed OTLP request
+			requestChan := make(chan *v1.ExportMetricsServiceRequest, 1)
+
+			// Create mock OTLP server that captures the metric names
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				r.Body.Close()
+
+				exportRequest := &v1.ExportMetricsServiceRequest{}
+				err = proto.Unmarshal(body, exportRequest)
+				require.NoError(t, err)
+
+				requestChan <- exportRequest
+
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte{})
+			}))
+			defer mockServer.Close()
+
+			reconciler := &MetricsExporterReconciler{
+				OTLPEndpoint:  mockServer.URL,
+				ClusterLabels: map[string]string{},
+			}
+
+			err := reconciler.initOtlpExporter()
+			require.NoError(t, err)
+
+			// Determine value column based on test case
+			valueColumn := "value"
+			if tt.name == "with adxexporter prefix specified by user" {
+				valueColumn = "numerator"
+			}
+
+			me := &adxmonv1.MetricsExporter{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-prefix",
+					Namespace: "default",
+				},
+				Spec: adxmonv1.MetricsExporterSpec{
+					Transform: adxmonv1.TransformConfig{
+						ValueColumns:     []string{valueColumn},
+						MetricNameColumn: "metric_name",
+						MetricNamePrefix: tt.metricNamePrefix,
+						TimestampColumn:  "timestamp",
+					},
+				},
+			}
+
+			rows := []map[string]any{
+				{
+					"metric_name": tt.metricName,
+					valueColumn:   float64(100),
+					"timestamp":   time.Now(),
+				},
+			}
+
+			err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+			require.NoError(t, err)
+
+			select {
+			case exportRequest := <-requestChan:
+				require.Len(t, exportRequest.ResourceMetrics, 1)
+				require.Len(t, exportRequest.ResourceMetrics[0].ScopeMetrics, 1)
+				metrics := exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics
+				require.GreaterOrEqual(t, len(metrics), 1, "Should have at least one metric")
+
+				actualMetricName := metrics[0].Name
+				assert.Equal(t, tt.expectedMetric, actualMetricName,
+					"Metric name should match expected format with user-specified prefix")
+
+			case <-time.After(5 * time.Second):
+				t.Fatal("Timeout waiting for OTLP request")
+			}
 		})
 	}
 }
