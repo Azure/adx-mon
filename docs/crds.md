@@ -334,14 +334,28 @@ spec:
 adxexporter \
   --cluster-labels="region=eastus,environment=production" \
   --kusto-endpoint="TelemetryDB=https://cluster.kusto.windows.net" \
-  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics" \
+  --default-metric-name-prefix="adxexporter"
 ```
 
 **CLI Parameters:**
 - `--cluster-labels`: Comma-separated key=value pairs for criteria matching.
 - `--kusto-endpoint`: ADX endpoint in format `<database>=<endpoint>`. Can specify multiple.
 - `--otlp-endpoint`: **(Required)** OTLP HTTP endpoint for pushing metrics.
+- `--add-resource-attributes`: Key/value pairs of resource attributes to add to all exported metrics. Format: `<key>=<value>`. These are merged with cluster-labels (explicit attributes take precedence).
+- `--default-metric-name-prefix`: Default prefix for metric names when the CRD doesn't specify a `metricNamePrefix`. Useful for ensuring consistent naming conventions across all exported metrics.
 - `--health-probe-port`: Port for health endpoints (default: 8081).
+
+**Metric Naming:**
+
+The final metric name is constructed as: `<prefix>_<metricName>_<valueColumn>`
+
+The prefix is determined by:
+1. **CRD's `metricNamePrefix`** (if specified) — takes precedence
+2. **CLI's `--default-metric-name-prefix`** (if CRD prefix is empty) — cluster-wide default
+3. **No prefix** (if both are empty)
+
+This allows operators to set a cluster-wide default (e.g., `adxexporter`) while still permitting individual CRDs to override when needed.
 
 **How It Works:**
 1. **CRD Discovery**: `adxexporter` watches MetricsExporter CRDs matching its cluster labels.

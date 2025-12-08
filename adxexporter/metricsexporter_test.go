@@ -601,8 +601,8 @@ func TestResourceAttributesInOTLPPayload(t *testing.T) {
 	// Create test data
 	rows := []map[string]any{
 		{
-			"metric_name":     "infra_host_count",
-			"count":           float64(42),
+			"metric_name":      "infra_host_count",
+			"count":            float64(42),
 			"PreciseTimeStamp": time.Now(),
 		},
 	}
@@ -645,6 +645,119 @@ func TestResourceAttributesInOTLPPayload(t *testing.T) {
 
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for OTLP request")
+	}
+}
+
+// TestDefaultMetricNamePrefix verifies that the DefaultMetricNamePrefix from CLI
+// is applied when the CRD doesn't specify a metricNamePrefix, and that CRD prefix
+// takes precedence when specified.
+func TestDefaultMetricNamePrefix(t *testing.T) {
+	tests := []struct {
+		name                    string
+		defaultMetricNamePrefix string // CLI flag
+		crdMetricNamePrefix     string // CRD transform.metricNamePrefix
+		metricName              string
+		expectedMetric          string
+	}{
+		{
+			name:                    "default prefix applied when CRD has no prefix",
+			defaultMetricNamePrefix: "adxexporter",
+			crdMetricNamePrefix:     "",
+			metricName:              "host_count",
+			expectedMetric:          "adxexporter_host_count_value",
+		},
+		{
+			name:                    "CRD prefix overrides default",
+			defaultMetricNamePrefix: "adxexporter",
+			crdMetricNamePrefix:     "custom",
+			metricName:              "host_count",
+			expectedMetric:          "custom_host_count_value",
+		},
+		{
+			name:                    "no prefix when both are empty",
+			defaultMetricNamePrefix: "",
+			crdMetricNamePrefix:     "",
+			metricName:              "host_count",
+			expectedMetric:          "host_count_value",
+		},
+		{
+			name:                    "CRD can specify full prefix including adxexporter",
+			defaultMetricNamePrefix: "something_else",
+			crdMetricNamePrefix:     "adxexporter_cluster_autoscaler",
+			metricName:              "availability",
+			expectedMetric:          "adxexporter_cluster_autoscaler_availability_value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestChan := make(chan *v1.ExportMetricsServiceRequest, 1)
+
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				r.Body.Close()
+
+				exportRequest := &v1.ExportMetricsServiceRequest{}
+				err = proto.Unmarshal(body, exportRequest)
+				require.NoError(t, err)
+
+				requestChan <- exportRequest
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte{})
+			}))
+			defer mockServer.Close()
+
+			reconciler := &MetricsExporterReconciler{
+				OTLPEndpoint:            mockServer.URL,
+				ClusterLabels:           map[string]string{},
+				DefaultMetricNamePrefix: tt.defaultMetricNamePrefix,
+			}
+
+			err := reconciler.initOtlpExporter()
+			require.NoError(t, err)
+
+			me := &adxmonv1.MetricsExporter{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-default-prefix",
+					Namespace: "default",
+				},
+				Spec: adxmonv1.MetricsExporterSpec{
+					Transform: adxmonv1.TransformConfig{
+						ValueColumns:     []string{"value"},
+						MetricNameColumn: "metric_name",
+						MetricNamePrefix: tt.crdMetricNamePrefix,
+						TimestampColumn:  "timestamp",
+					},
+				},
+			}
+
+			rows := []map[string]any{
+				{
+					"metric_name": tt.metricName,
+					"value":       float64(100),
+					"timestamp":   time.Now(),
+				},
+			}
+
+			err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
+			require.NoError(t, err)
+
+			select {
+			case exportRequest := <-requestChan:
+				require.Len(t, exportRequest.ResourceMetrics, 1)
+				require.Len(t, exportRequest.ResourceMetrics[0].ScopeMetrics, 1)
+				metrics := exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics
+				require.GreaterOrEqual(t, len(metrics), 1)
+
+				actualMetricName := metrics[0].Name
+				assert.Equal(t, tt.expectedMetric, actualMetricName,
+					"Metric name should reflect default/CRD prefix precedence")
+
+			case <-time.After(5 * time.Second):
+				t.Fatal("Timeout waiting for OTLP request")
+			}
+		})
 	}
 }
 

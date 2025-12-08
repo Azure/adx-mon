@@ -25,13 +25,14 @@ type MetricsExporterReconciler struct {
 	Scheme *runtime.Scheme
 
 	// Configuration
-	ClusterLabels         map[string]string
-	KustoClusters         map[string]string // database name -> endpoint URL
-	OTLPEndpoint          string
-	AddResourceAttributes map[string]string // Additional OTLP resource attributes (merged with ClusterLabels)
-	EnableMetricsEndpoint bool              // Deprecated: kept for backward compatibility, not used with OTLP push
-	MetricsPort           string            // Deprecated: kept for backward compatibility
-	MetricsPath           string            // Deprecated: kept for backward compatibility
+	ClusterLabels           map[string]string
+	KustoClusters           map[string]string // database name -> endpoint URL
+	OTLPEndpoint            string
+	AddResourceAttributes   map[string]string // Additional OTLP resource attributes (merged with ClusterLabels)
+	DefaultMetricNamePrefix string            // Default prefix for metric names when CRD doesn't specify one
+	EnableMetricsEndpoint   bool              // Deprecated: kept for backward compatibility, not used with OTLP push
+	MetricsPort             string            // Deprecated: kept for backward compatibility
+	MetricsPath             string            // Deprecated: kept for backward compatibility
 
 	// Query execution components
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
@@ -277,12 +278,20 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 		return nil
 	}
 
+	// Determine the effective metric name prefix:
+	// 1. If CRD specifies a prefix, use it
+	// 2. Otherwise, use the default prefix from CLI configuration
+	effectivePrefix := me.Spec.Transform.MetricNamePrefix
+	if effectivePrefix == "" {
+		effectivePrefix = r.DefaultMetricNamePrefix
+	}
+
 	// Create transformer with the MetricsExporter's transform configuration
 	// Note: meter parameter is nil since we're using OTLP push instead of OTel SDK registration
 	transformer := transform.NewKustoToMetricsTransformer(
 		transform.TransformConfig{
 			MetricNameColumn:  me.Spec.Transform.MetricNameColumn,
-			MetricNamePrefix:  me.Spec.Transform.MetricNamePrefix,
+			MetricNamePrefix:  effectivePrefix,
 			ValueColumns:      me.Spec.Transform.ValueColumns,
 			TimestampColumn:   me.Spec.Transform.TimestampColumn,
 			LabelColumns:      me.Spec.Transform.LabelColumns,
