@@ -35,6 +35,10 @@ func main() {
 				Usage:    "OTLP/HTTP endpoint URL for pushing metrics (required)",
 				Required: true,
 			},
+			&cli.StringSliceFlag{
+				Name:  "add-resource-attributes",
+				Usage: "Key/value pairs of resource attributes to add to all exported metrics. Format: <key>=<value>. These are merged with cluster-labels (explicit attributes take precedence).",
+			},
 			&cli.StringFlag{
 				Name:  "health-probe-port",
 				Usage: "Address and port for health probe endpoints",
@@ -54,6 +58,11 @@ func realMain(ctx *cli.Context) error {
 	clusterLabels, err := parseClusterLabels(ctx.StringSlice("cluster-labels"))
 	if err != nil {
 		return err
+	}
+
+	addResourceAttributes, err := parseKeyValuePairs(ctx.StringSlice("add-resource-attributes"))
+	if err != nil {
+		return fmt.Errorf("invalid add-resource-attributes: %w", err)
 	}
 
 	kustoClusters, err := parseKustoEndpoints(ctx.StringSlice("kusto-endpoints"))
@@ -95,9 +104,10 @@ func realMain(ctx *cli.Context) error {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 
-		ClusterLabels: clusterLabels,
-		KustoClusters: kustoClusters,
-		OTLPEndpoint:  ctx.String("otlp-endpoint"),
+		ClusterLabels:         clusterLabels,
+		KustoClusters:         kustoClusters,
+		OTLPEndpoint:          ctx.String("otlp-endpoint"),
+		AddResourceAttributes: addResourceAttributes,
 	}
 	if err = adxexp.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)
@@ -143,22 +153,27 @@ func realMain(ctx *cli.Context) error {
 // parseClusterLabels processes --cluster-labels CLI arguments into a map
 // Similar to the ingestor implementation for consistency
 func parseClusterLabels(labels []string) (map[string]string, error) {
-	clusterLabels := make(map[string]string)
+	return parseKeyValuePairs(labels)
+}
 
-	for _, label := range labels {
-		split := strings.SplitN(label, "=", 2)
+// parseKeyValuePairs processes key=value CLI arguments into a map
+func parseKeyValuePairs(pairs []string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	for _, pair := range pairs {
+		split := strings.SplitN(pair, "=", 2)
 		if len(split) != 2 {
-			return nil, fmt.Errorf("invalid cluster label format: %s, expected <key>=<value>", label)
+			return nil, fmt.Errorf("invalid format: %s, expected <key>=<value>", pair)
 		}
 
 		key := split[0]
 		value := split[1]
 
-		// Store the key-value pair as-is for criteria matching
-		clusterLabels[key] = value
+		// Store the key-value pair as-is
+		result[key] = value
 	}
 
-	return clusterLabels, nil
+	return result, nil
 }
 
 // parseKustoEndpoints processes --kusto-endpoints CLI arguments into a map

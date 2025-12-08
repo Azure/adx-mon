@@ -28,9 +28,10 @@ type MetricsExporterReconciler struct {
 	ClusterLabels         map[string]string
 	KustoClusters         map[string]string // database name -> endpoint URL
 	OTLPEndpoint          string
-	EnableMetricsEndpoint bool   // Deprecated: kept for backward compatibility, not used with OTLP push
-	MetricsPort           string // Deprecated: kept for backward compatibility
-	MetricsPath           string // Deprecated: kept for backward compatibility
+	AddResourceAttributes map[string]string // Additional OTLP resource attributes (merged with ClusterLabels)
+	EnableMetricsEndpoint bool              // Deprecated: kept for backward compatibility, not used with OTLP push
+	MetricsPort           string            // Deprecated: kept for backward compatibility
+	MetricsPath           string            // Deprecated: kept for backward compatibility
 
 	// Query execution components
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
@@ -101,9 +102,15 @@ func (r *MetricsExporterReconciler) initOtlpExporter() error {
 		return fmt.Errorf("OTLP endpoint is required: specify --otlp-endpoint")
 	}
 
-	// Create resource attributes from cluster labels for OTLP resource-level metadata
-	resourceAttrs := make(map[string]string, len(r.ClusterLabels))
+	// Create resource attributes by merging cluster labels with explicit attributes.
+	// ClusterLabels provide a base set of resource attributes for identification.
+	// AddResourceAttributes allows explicit overrides or additional attributes.
+	resourceAttrs := make(map[string]string, len(r.ClusterLabels)+len(r.AddResourceAttributes))
 	for k, v := range r.ClusterLabels {
+		resourceAttrs[k] = v
+	}
+	// Explicit attributes take precedence over cluster labels
+	for k, v := range r.AddResourceAttributes {
 		resourceAttrs[k] = v
 	}
 
