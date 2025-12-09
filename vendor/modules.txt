@@ -181,7 +181,7 @@ github.com/Microsoft/go-winio/internal/stringbuffer
 github.com/Microsoft/go-winio/pkg/guid
 # github.com/OneOfOne/xxhash v1.2.8
 ## explicit; go 1.11
-# github.com/VictoriaMetrics/easyproto v0.1.4
+# github.com/VictoriaMetrics/easyproto v1.1.3
 ## explicit; go 1.18
 github.com/VictoriaMetrics/easyproto
 # github.com/andybalholm/brotli v1.2.0
