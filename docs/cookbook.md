@@ -277,13 +277,29 @@ metadata:
   name: core-metrics-eu
 spec:
   database: Metrics
-  name: CoreMetrics
-  query: |
+  interval: 5m
+  criteriaExpression: region in ['westeurope','northeurope'] && env != 'dev'
+  body: |
     Metrics
     | where Timestamp between (_startTime .. _endTime)
     | where Region == '_region'
-  interval: 5m
-  criteriaExpression: region in ['westeurope','northeurope'] && env != 'dev'
+    | summarize 
+        metric_value = avg(Value),
+        timestamp = max(Timestamp)
+        by Name, Pod, Namespace
+  transform:
+    metricNameColumn: "Name"
+    valueColumns: ["metric_value"]
+    timestampColumn: "timestamp"
+    labelColumns: ["Pod", "Namespace"]
+```
+
+**adxexporter Deployment:**
+```bash
+adxexporter \
+  --cluster-labels="region=westeurope,env=prod" \
+  --kusto-endpoint="Metrics=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
 ```
 
 If the expression fails to parse or evaluate the exporter execution is skipped.

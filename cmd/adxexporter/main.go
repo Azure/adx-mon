@@ -31,23 +31,22 @@ func main() {
 				Usage: "Kusto endpoint in the format of <db>=<endpoint> for query execution",
 			},
 			&cli.StringFlag{
-				Name:  "otlp-endpoint",
-				Usage: "OTLP endpoint URL for direct push mode (Phase 2)",
+				Name:     "otlp-endpoint",
+				Usage:    "OTLP/HTTP endpoint URL for pushing metrics (required)",
+				Required: true,
 			},
-			&cli.BoolFlag{
-				Name:  "enable-metrics-endpoint",
-				Usage: "Enable the Prometheus metrics HTTP server",
-				Value: false,
-			},
-			&cli.StringFlag{
-				Name:  "metrics-port",
-				Usage: "Address and port for the health checks and metrics server",
-				Value: ":8080",
+			&cli.StringSliceFlag{
+				Name:  "add-resource-attributes",
+				Usage: "Key/value pairs of resource attributes to add to all exported metrics. Format: <key>=<value>. These are merged with cluster-labels (explicit attributes take precedence).",
 			},
 			&cli.StringFlag{
-				Name:  "metrics-path",
-				Usage: "HTTP path for metrics endpoint",
-				Value: "/metrics",
+				Name:  "metric-name-prefix",
+				Usage: "Global prefix prepended to all metric names. Combined with CRD's metricNamePrefix (CLI prefix comes first). Useful for enforcing naming conventions or allow-list compliance.",
+			},
+			&cli.StringFlag{
+				Name:  "health-probe-port",
+				Usage: "Address and port for health probe endpoints",
+				Value: ":8081",
 			},
 		},
 		Action:  realMain,
@@ -63,6 +62,11 @@ func realMain(ctx *cli.Context) error {
 	clusterLabels, err := parseClusterLabels(ctx.StringSlice("cluster-labels"))
 	if err != nil {
 		return err
+	}
+
+	addResourceAttributes, err := parseKeyValuePairs(ctx.StringSlice("add-resource-attributes"))
+	if err != nil {
+		return fmt.Errorf("invalid add-resource-attributes: %w", err)
 	}
 
 	kustoClusters, err := parseKustoEndpoints(ctx.StringSlice("kusto-endpoints"))
@@ -88,19 +92,11 @@ func realMain(ctx *cli.Context) error {
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
 
-	// Configure server address - use same port for health checks and metrics
-	var serverBindAddress string
-	if ctx.Bool("enable-metrics-endpoint") {
-		serverBindAddress = ctx.String("metrics-port")
-	} else {
-		serverBindAddress = "0" // Disable server
-	}
-
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
-		HealthProbeBindAddress: ":8081", // Port for health endpoints
+		HealthProbeBindAddress: ctx.String("health-probe-port"),
 		Metrics: metricsserver.Options{
-			BindAddress: serverBindAddress,
+			BindAddress: "0", // Disable built-in metrics server - we push via OTLP
 		},
 	})
 	if err != nil {
@@ -115,9 +111,8 @@ func realMain(ctx *cli.Context) error {
 		ClusterLabels:         clusterLabels,
 		KustoClusters:         kustoClusters,
 		OTLPEndpoint:          ctx.String("otlp-endpoint"),
-		EnableMetricsEndpoint: ctx.Bool("enable-metrics-endpoint"),
-		MetricsPort:           ctx.String("metrics-port"),
-		MetricsPath:           ctx.String("metrics-path"),
+		AddResourceAttributes: addResourceAttributes,
+		MetricNamePrefix:      ctx.String("metric-name-prefix"),
 	}
 	if err = adxexp.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)
@@ -134,23 +129,18 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create summaryrule controller: %w", err)
 	}
 
-	if err := mgr.AddReadyzCheck("metrics-ready", func(req *http.Request) error {
-		if !adxexp.EnableMetricsEndpoint {
-			return nil // Always ready if metrics are disabled
+	if err := mgr.AddReadyzCheck("readyz", func(req *http.Request) error {
+		if adxexp.OtlpExporter == nil {
+			return fmt.Errorf("OTLP exporter not initialized")
 		}
-
-		if adxexp.Meter == nil {
-			return fmt.Errorf("metrics not ready")
-		}
-
 		return nil
 	}); err != nil {
 		return fmt.Errorf("unable to add readyz check: %w", err)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", func(req *http.Request) error {
-		if adxexp.Meter == nil {
-			return fmt.Errorf("metrics not ready")
+		if adxexp.OtlpExporter == nil {
+			return fmt.Errorf("OTLP exporter not initialized")
 		}
 		return nil
 	}); err != nil {
@@ -168,22 +158,27 @@ func realMain(ctx *cli.Context) error {
 // parseClusterLabels processes --cluster-labels CLI arguments into a map
 // Similar to the ingestor implementation for consistency
 func parseClusterLabels(labels []string) (map[string]string, error) {
-	clusterLabels := make(map[string]string)
+	return parseKeyValuePairs(labels)
+}
 
-	for _, label := range labels {
-		split := strings.SplitN(label, "=", 2)
+// parseKeyValuePairs processes key=value CLI arguments into a map
+func parseKeyValuePairs(pairs []string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	for _, pair := range pairs {
+		split := strings.SplitN(pair, "=", 2)
 		if len(split) != 2 {
-			return nil, fmt.Errorf("invalid cluster label format: %s, expected <key>=<value>", label)
+			return nil, fmt.Errorf("invalid format: %s, expected <key>=<value>", pair)
 		}
 
 		key := split[0]
 		value := split[1]
 
-		// Store the key-value pair as-is for criteria matching
-		clusterLabels[key] = value
+		// Store the key-value pair as-is
+		result[key] = value
 	}
 
-	return clusterLabels, nil
+	return result, nil
 }
 
 // parseKustoEndpoints processes --kusto-endpoints CLI arguments into a map

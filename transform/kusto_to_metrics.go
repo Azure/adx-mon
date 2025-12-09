@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -566,4 +567,62 @@ func (t *KustoToMetricsTransformer) validateValueColumn(row map[string]any, colu
 	}
 
 	return nil
+}
+
+// ToWriteRequest converts a slice of MetricData to a prompb.WriteRequest.
+// This enables integration with PromToOtlpExporter for OTLP push-based delivery.
+//
+// For high cardinality scenarios, callers should:
+//   - Use WriteRequestPool to obtain the WriteRequest
+//   - Call WriteRequest.Reset() and return to pool after use
+//
+// The function creates one TimeSeries per MetricData entry. Labels are sorted
+// by key to ensure consistent ordering (required by some backends).
+func ToWriteRequest(metrics []MetricData) *prompb.WriteRequest {
+	wr := prompb.WriteRequestPool.Get()
+	wr.Reset()
+
+	// Pre-allocate capacity if needed
+	if cap(wr.Timeseries) < len(metrics) {
+		wr.Timeseries = make([]*prompb.TimeSeries, 0, len(metrics))
+	}
+
+	for i := range metrics {
+		m := &metrics[i]
+		ts := prompb.TimeSeriesPool.Get()
+		ts.Reset()
+
+		// Add __name__ label first (convention)
+		ts.AppendLabelString("__name__", m.Name)
+
+		// Add metric labels - collect keys for sorted iteration
+		// This ensures deterministic label ordering
+		keys := make([]string, 0, len(m.Labels))
+		for k := range m.Labels {
+			keys = append(keys, k)
+		}
+		sortStrings(keys)
+
+		for _, k := range keys {
+			ts.AppendLabelString(k, m.Labels[k])
+		}
+
+		// Add sample with timestamp in milliseconds (prom wire format)
+		ts.AppendSample(m.Timestamp.UnixMilli(), m.Value)
+
+		wr.Timeseries = append(wr.Timeseries, ts)
+	}
+
+	return wr
+}
+
+// sortStrings sorts a slice of strings in place using insertion sort.
+// For small slices (typical label counts), this is faster than sort.Strings
+// due to lower overhead.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
 }
