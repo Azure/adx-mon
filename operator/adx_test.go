@@ -744,21 +744,6 @@ func TestExtractDatabasesFromSchemas(t *testing.T) {
 	require.Contains(t, dbs, "db2")
 }
 
-func TestCollectInventoryByDatabase(t *testing.T) {
-	schemas := map[string][]ADXClusterSchema{
-		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}, Views: []string{"view1"}}},
-		"ep2": {{Database: "db1", Tables: []string{"t2"}, Views: []string{"view2", ""}}},
-	}
-	inventory := collectInventoryByDatabase(schemas)
-	require.Contains(t, inventory, "db1")
-
-	var names []string
-	for name := range inventory["db1"] {
-		names = append(names, name)
-	}
-	require.ElementsMatch(t, []string{"t1", "t2", "view1", "view2"}, names)
-}
-
 func TestMapTablesToEndpoints(t *testing.T) {
 	schemas := map[string][]ADXClusterSchema{
 		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}}},
@@ -786,6 +771,207 @@ func TestMapTablesToEndpointsIncludesViews(t *testing.T) {
 	require.ElementsMatch(t, m["db2"]["v3"], []string{"ep3"})
 }
 
+func TestMapSpokeDatabases(t *testing.T) {
+	schemas := map[string][]ADXClusterSchema{
+		"https://cluster1.kusto.net": {
+			{Database: "Metrics", Tables: []string{"t1"}},
+			{Database: "Logs", Tables: []string{"l1"}},
+		},
+		"https://cluster2.kusto.net": {
+			{Database: "Metrics", Tables: []string{"t1", "t2"}},
+		},
+		"https://cluster3.kusto.net": {
+			{Database: "Logs", Tables: []string{"l2"}},
+		},
+	}
+	m := mapSpokeDatabases(schemas)
+
+	// Metrics should have cluster1 and cluster2
+	require.ElementsMatch(t, m["Metrics"], []string{"https://cluster1.kusto.net", "https://cluster2.kusto.net"})
+
+	// Logs should have cluster1 and cluster3
+	require.ElementsMatch(t, m["Logs"], []string{"https://cluster1.kusto.net", "https://cluster3.kusto.net"})
+}
+
+func TestGenerateEntityGroupDefinitions(t *testing.T) {
+	tests := []struct {
+		name             string
+		schemaByEndpoint map[string][]ADXClusterSchema
+		hubDatabases     []string
+		wantEntityGroups map[string][]string // hubDB -> expected entity group statements
+		wantReplication  int                 // expected number of hub DBs with entity groups
+		wantGroupsPerHub int                 // expected number of entity groups per hub DB (each group = 2 statements: drop + create)
+	}{
+		{
+			name: "single spoke database, multiple hub databases",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+				"https://cluster2.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+			},
+			hubDatabases:     []string{"HubDB1", "HubDB2", "HubDB3"},
+			wantReplication:  3,
+			wantGroupsPerHub: 1,
+		},
+		{
+			name: "multiple spoke databases, single hub database",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {
+					{Database: "Metrics", Tables: []string{"t1"}},
+					{Database: "Logs", Tables: []string{"l1"}},
+				},
+			},
+			hubDatabases:     []string{"HubDB"},
+			wantReplication:  1,
+			wantGroupsPerHub: 2,
+		},
+		{
+			name: "multiple spoke databases, multiple hub databases",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {
+					{Database: "Metrics", Tables: []string{"t1"}},
+					{Database: "Logs", Tables: []string{"l1"}},
+				},
+				"https://cluster2.kusto.net": {
+					{Database: "Metrics", Tables: []string{"t2"}},
+				},
+			},
+			hubDatabases:     []string{"Hub1", "Hub2"},
+			wantReplication:  2,
+			wantGroupsPerHub: 2, // MetricsSpoke and LogsSpoke
+		},
+		{
+			name:             "empty schemas",
+			schemaByEndpoint: map[string][]ADXClusterSchema{},
+			hubDatabases:     []string{"HubDB"},
+			wantReplication:  0,
+			wantGroupsPerHub: 0,
+		},
+		{
+			name: "empty hub databases",
+			schemaByEndpoint: map[string][]ADXClusterSchema{
+				"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+			},
+			hubDatabases:     []string{},
+			wantReplication:  0,
+			wantGroupsPerHub: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := generateEntityGroupDefinitions(tt.schemaByEndpoint, tt.hubDatabases)
+
+			// Check replication count
+			require.Len(t, result, tt.wantReplication)
+
+			// Check entity groups per hub (each entity group generates 2 statements: drop + create)
+			for hubDB, entityGroups := range result {
+				require.Len(t, entityGroups, tt.wantGroupsPerHub*2, "hub database %s should have %d statements (%d entity groups x 2 statements each)", hubDB, tt.wantGroupsPerHub*2, tt.wantGroupsPerHub)
+			}
+		})
+	}
+}
+
+func TestGenerateEntityGroupDefinitions_Naming(t *testing.T) {
+	schemaByEndpoint := map[string][]ADXClusterSchema{
+		"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+		"https://cluster2.kusto.net": {{Database: "Logs", Tables: []string{"l1"}}},
+	}
+	hubDatabases := []string{"HubDB"}
+
+	result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	require.Contains(t, result, "HubDB")
+
+	entityGroups := result["HubDB"]
+	// 2 entity groups x 2 statements each (drop + create) = 4 statements
+	require.Len(t, entityGroups, 4)
+
+	// Check naming pattern: {SpokeDatabaseName}Spoke
+	// Statements should be in order: drop LogsSpoke, create LogsSpoke, drop MetricsSpoke, create MetricsSpoke
+	// (sorted by database name: Logs < Metrics)
+	foundMetricsDrop := false
+	foundMetricsCreate := false
+	foundLogsDrop := false
+	foundLogsCreate := false
+	for _, stmt := range entityGroups {
+		if stmt == ".drop entity_group MetricsSpoke" {
+			foundMetricsDrop = true
+		}
+		if strings.Contains(stmt, ".create entity_group MetricsSpoke") {
+			foundMetricsCreate = true
+			require.Contains(t, stmt, "cluster('https://cluster1.kusto.net').database('Metrics')")
+		}
+		if stmt == ".drop entity_group LogsSpoke" {
+			foundLogsDrop = true
+		}
+		if strings.Contains(stmt, ".create entity_group LogsSpoke") {
+			foundLogsCreate = true
+			require.Contains(t, stmt, "cluster('https://cluster2.kusto.net').database('Logs')")
+		}
+	}
+	require.True(t, foundMetricsDrop, "should have .drop MetricsSpoke")
+	require.True(t, foundMetricsCreate, "should have .create MetricsSpoke")
+	require.True(t, foundLogsDrop, "should have .drop LogsSpoke")
+	require.True(t, foundLogsCreate, "should have .create LogsSpoke")
+}
+
+func TestGenerateEntityGroupDefinitions_MultipleEndpoints(t *testing.T) {
+	// Test that a spoke database with multiple endpoints includes all of them
+	schemaByEndpoint := map[string][]ADXClusterSchema{
+		"https://cluster1.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+		"https://cluster2.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+		"https://cluster3.kusto.net": {{Database: "Metrics", Tables: []string{"t1"}}},
+	}
+	hubDatabases := []string{"HubDB"}
+
+	result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	require.Contains(t, result, "HubDB")
+	// 1 entity group x 2 statements (drop + create) = 2 statements
+	require.Len(t, result["HubDB"], 2)
+
+	// First statement should be drop, second should be create
+	require.Equal(t, ".drop entity_group MetricsSpoke", result["HubDB"][0])
+
+	createStmt := result["HubDB"][1]
+	require.Contains(t, createStmt, ".create entity_group MetricsSpoke")
+	require.Contains(t, createStmt, "cluster('https://cluster1.kusto.net').database('Metrics')")
+	require.Contains(t, createStmt, "cluster('https://cluster2.kusto.net').database('Metrics')")
+	require.Contains(t, createStmt, "cluster('https://cluster3.kusto.net').database('Metrics')")
+}
+
+func TestGenerateEntityGroupDefinitions_DeterministicOrdering(t *testing.T) {
+	// Run multiple times to ensure deterministic output
+	schemaByEndpoint := map[string][]ADXClusterSchema{
+		"https://clusterC.kusto.net": {{Database: "DBZ", Tables: []string{"t1"}}},
+		"https://clusterA.kusto.net": {{Database: "DBA", Tables: []string{"t1"}}},
+		"https://clusterB.kusto.net": {{Database: "DBM", Tables: []string{"t1"}}},
+	}
+	hubDatabases := []string{"Hub3", "Hub1", "Hub2"}
+
+	var previousResult map[string][]string
+	for i := 0; i < 5; i++ {
+		result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+		if previousResult != nil {
+			require.Equal(t, previousResult, result, "results should be deterministic across runs")
+		}
+		previousResult = result
+	}
+
+	// Also verify that entity groups within each hub are sorted by spoke database name
+	// Each entity group generates 2 statements (drop + create), so 3 groups = 6 statements
+	result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	for _, entityGroups := range result {
+		require.Len(t, entityGroups, 6) // 3 entity groups x 2 statements each
+		// Should be sorted: DBASpoke, DBMSpoke, DBZSpoke (with drop then create for each)
+		require.Equal(t, ".drop entity_group DBASpoke", entityGroups[0])
+		require.Contains(t, entityGroups[1], ".create entity_group DBASpoke")
+		require.Equal(t, ".drop entity_group DBMSpoke", entityGroups[2])
+		require.Contains(t, entityGroups[3], ".create entity_group DBMSpoke")
+		require.Equal(t, ".drop entity_group DBZSpoke", entityGroups[4])
+		require.Contains(t, entityGroups[5], ".create entity_group DBZSpoke")
+	}
+}
+
 func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	m := map[string]map[string][]string{
 		"db1": {
@@ -800,9 +986,19 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	for _, f := range funcs["db1"] {
 		if strings.Contains(f, ".create-or-alter function t1()") {
 			foundT1 = true
+			// Verify it references the named entity group, not an inline list
+			// Note: stored entity groups are referenced without the "entity_group" keyword
+			require.Contains(t, f, "macro-expand db1Spoke as X")
+			require.NotContains(t, f, "entity_group")
+			require.Contains(t, f, "X.t1")
 		}
 		if strings.Contains(f, ".create-or-alter function t2()") {
 			foundT2 = true
+			// Verify it references the named entity group, not an inline list
+			// Note: stored entity groups are referenced without the "entity_group" keyword
+			require.Contains(t, f, "macro-expand db1Spoke as X")
+			require.NotContains(t, f, "entity_group")
+			require.Contains(t, f, "X.t2")
 		}
 	}
 	require.True(t, foundT1)
@@ -828,38 +1024,6 @@ func TestSplitKustoScripts(t *testing.T) {
 	require.Contains(t, joined, "//\na\n")
 	require.Contains(t, joined, "//\nb\n")
 	require.Contains(t, joined, "//\nc\n")
-}
-
-func TestDatabaseExists(t *testing.T) {
-	testutils.IntegrationTest(t)
-	ctx := context.Background()
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
-	testcontainers.CleanupContainer(t, kustoContainer)
-	require.NoError(t, err)
-
-	cluster := &adxmonv1.ADXCluster{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-cluster",
-			Namespace: "default",
-		},
-		Spec: adxmonv1.ADXClusterSpec{
-			ClusterName: "adxmon-test",
-			Endpoint:    kustoContainer.ConnectionUrl(),
-			Databases: []adxmonv1.ADXClusterDatabaseSpec{
-				{DatabaseName: "NetDefaultDB"},
-			},
-		},
-	}
-
-	// Test that the default database exists (NetDefaultDB is created by kustainer)
-	exists, err := databaseExists(ctx, cluster, "NetDefaultDB")
-	require.NoError(t, err)
-	require.True(t, exists, "NetDefaultDB should exist")
-
-	// Test that a non-existent database returns false
-	exists, err = databaseExists(ctx, cluster, "NonExistentDB")
-	require.NoError(t, err)
-	require.False(t, exists, "NonExistentDB should not exist")
 }
 
 func TestEnsureHubTables(t *testing.T) {
