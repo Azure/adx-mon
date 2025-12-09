@@ -386,6 +386,86 @@ cd cmd/alerter
 
 ---
 
+### ADX Exporter
+
+The **ADX Exporter** (`adxexporter`) component executes KQL queries against Azure Data Explorer and exports the results as metrics to OTLP-compatible endpoints. It enables organizations to transform ADX analytics data into standardized metrics for external observability platforms without creating intermediate ADX tables.
+
+#### Key Features
+- **Direct KQL Execution:** Execute KQL queries and transform results to metrics without intermediate table storage.
+- **OTLP Push:** Push metrics directly to any OTLP-compatible endpoint (OpenTelemetry Collector, Prometheus with remote-write receiver, etc.).
+- **Memory Efficient:** Uses `pkg/prompb` object pooling for high cardinality metrics with reduced GC pressure.
+- **Timestamp Fidelity:** Preserves actual KQL query timestamps instead of export-time timestamps.
+- **Criteria-Based Execution:** Supports the same cluster-label filtering as Alerter and SummaryRules for secure, distributed execution.
+- **CRD-Driven:** MetricsExporter CRDs define KQL queries, transform configuration, and scheduling.
+
+#### Configuration & Usage
+- **Deployment:** Deploy as a standalone Kubernetes Deployment with appropriate cluster labels.
+- **CLI Flags:**
+  - `--cluster-labels`: Comma-separated key=value pairs for criteria matching (e.g., `region=eastus,environment=production`).
+  - `--kusto-endpoint`: ADX endpoint in format `<database>=<endpoint>`. Can specify multiple.
+  - `--otlp-endpoint`: **(Required)** OTLP HTTP endpoint for pushing metrics.
+  - `--health-probe-port`: Port for health endpoints (default: 8081).
+
+#### Example CLI Usage
+```bash
+adxexporter \
+  --cluster-labels="region=eastus,environment=production,team=platform" \
+  --kusto-endpoint="MetricsDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics"
+```
+
+#### Example MetricsExporter CRD
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: service-response-times
+  namespace: monitoring
+spec:
+  database: TelemetryDB
+  interval: 5m
+  criteria:
+    region: ["eastus", "westus"]
+    environment: ["production"]
+  body: |
+    ServiceTelemetry
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize 
+        metric_value = avg(ResponseTimeMs),
+        timestamp = bin(Timestamp, 1m)
+        by ServiceName, Environment
+    | extend metric_name = "service_response_time_avg"
+  transform:
+    metricNameColumn: "metric_name"
+    valueColumns: ["metric_value"]
+    timestampColumn: "timestamp"
+    labelColumns: ["ServiceName", "Environment"]
+```
+
+#### How It Works
+1. **CRD Discovery:** Watches MetricsExporter CRDs matching its cluster labels via criteria filtering.
+2. **Query Execution:** Executes KQL queries on schedule with `_startTime`/`_endTime` parameter substitution.
+3. **Transform:** Converts KQL results to `MetricData` using the transform configuration.
+4. **OTLP Push:** Converts metrics to `prompb.WriteRequest` format using pooled objects and pushes to the OTLP endpoint.
+
+#### Transform Configuration
+The transform configuration maps KQL columns to metrics format:
+- `metricNameColumn`: Column containing metric names (or use `defaultMetricName` for a static name).
+- `valueColumns`: Array of columns containing numeric metric values.
+- `timestampColumn`: Column containing timestamps.
+- `labelColumns`: Columns to use as metric labels/attributes.
+- `metricNamePrefix`: Optional prefix for all metric names.
+
+#### Health & Metrics
+- Exposes `/healthz` and `/readyz` endpoints on the health probe port (default: 8081).
+- Metrics are pushed to the configured OTLP endpoint, not scraped.
+
+#### Development & Testing
+- Supports local testing with mock OTLP endpoints.
+- See the [Kusto-to-Metrics Design](designs/kusto-to-metrics.md) for detailed architecture and implementation.
+
+---
+
 ### Operator
 
 The **Operator** is the control plane component that manages the lifecycle of all adx-mon resources—including Collectors, Ingestors, Alerters, and Azure Data Explorer (ADX) infrastructure—using Kubernetes Custom Resource Definitions (CRDs). It provides a declarative, automated, and production-ready way to deploy, scale, and manage the entire ADX-Mon stack.

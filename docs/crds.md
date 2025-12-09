@@ -9,6 +9,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
 | SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
+| MetricsExporter | Executes KQL queries and exports results as metrics to OTLP endpoints | database, body, interval, transform, criteria | [Kusto-to-Metrics](designs/kusto-to-metrics.md) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
 
@@ -276,6 +277,101 @@ SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodi
 - Time for next interval has elapsed
 
 **Error Handling**: Uses `UpdateStatusWithKustoErrorParsing()` to extract meaningful error messages from ADX responses and truncate long errors to 256 characters.
+
+---
+
+## MetricsExporter
+**Purpose:** Executes KQL queries against Azure Data Explorer and exports the results as metrics to OTLP-compatible endpoints. Unlike SummaryRules which store results in ADX tables, MetricsExporter transforms query results into metrics format and pushes them directly to observability platforms.
+
+**Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: MetricsExporter
+metadata:
+  name: service-response-times
+  namespace: monitoring
+spec:
+  database: TelemetryDB
+  interval: 5m
+  criteria:
+    region: ["eastus", "westus"]
+    environment: ["production"]
+  body: |
+    ServiceTelemetry
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize 
+        metric_value = avg(ResponseTimeMs),
+        timestamp = bin(Timestamp, 1m)
+        by ServiceName, Environment
+    | extend metric_name = "service_response_time_avg"
+  transform:
+    metricNameColumn: "metric_name"
+    valueColumns: ["metric_value"]
+    timestampColumn: "timestamp"
+    labelColumns: ["ServiceName", "Environment"]
+```
+
+**Key Fields:**
+- `database`: Target ADX database to query.
+- `body`: KQL query to execute. **Must include `_startTime` and `_endTime` placeholders** for time range filtering.
+- `interval`: How often to execute the query and export metrics (e.g., `5m`, `1h`).
+- `transform`: Configuration for transforming KQL results to metrics:
+  - `metricNameColumn`: Column containing metric names (optional if `defaultMetricName` is set).
+  - `valueColumns`: Array of columns containing numeric metric values.
+  - `timestampColumn`: Column containing timestamps for the metrics.
+  - `labelColumns`: Columns to use as metric labels/attributes.
+  - `defaultMetricName`: Fallback metric name if `metricNameColumn` is not specified.
+  - `metricNamePrefix`: Optional prefix to prepend to all metric names.
+- `criteria`: _(Optional)_ Key/value pairs for criteria-based execution selection (same as SummaryRule).
+- `criteriaExpression`: _(Optional)_ CEL expression for advanced criteria matching.
+
+**Required Placeholders:**
+- `_startTime`: Replaced with the start time of the execution window.
+- `_endTime`: Replaced with the end time of the execution window.
+
+**adxexporter CLI Configuration:**
+```bash
+adxexporter \
+  --cluster-labels="region=eastus,environment=production" \
+  --kusto-endpoint="TelemetryDB=https://cluster.kusto.windows.net" \
+  --otlp-endpoint="http://otel-collector:4318/v1/metrics" \
+  --metric-name-prefix="adxexporter"
+```
+
+**CLI Parameters:**
+- `--cluster-labels`: Comma-separated key=value pairs for criteria matching.
+- `--kusto-endpoint`: ADX endpoint in format `<database>=<endpoint>`. Can specify multiple.
+- `--otlp-endpoint`: **(Required)** OTLP HTTP endpoint for pushing metrics.
+- `--add-resource-attributes`: Key/value pairs of resource attributes to add to all exported metrics. Format: `<key>=<value>`. These are merged with cluster-labels (explicit attributes take precedence).
+- `--metric-name-prefix`: Global prefix prepended to all metric names. Combined with CRD's `metricNamePrefix` (CLI prefix comes first). Useful for enforcing naming conventions or allow-list compliance.
+- `--health-probe-port`: Port for health endpoints (default: 8081).
+
+**Metric Naming:**
+
+The final metric name is constructed as: `<CLI_prefix>_<CRD_prefix>_<metricName>_<valueColumn>`
+
+The prefix is built by combining:
+1. **CLI's `--metric-name-prefix`** — always prepended first (if set)
+2. **CRD's `metricNamePrefix`** — appended after CLI prefix (if set)
+
+For example, with `--metric-name-prefix=adxexporter` and a CRD with `metricNamePrefix: infra`:
+- Metric name `host_count` with value column `count` → `adxexporter_infra_host_count_count`
+
+This ensures operators can enforce a global prefix (e.g., for allow-list compliance) while teams can still add their own sub-prefixes via CRD.
+
+**How It Works:**
+1. **CRD Discovery**: `adxexporter` watches MetricsExporter CRDs matching its cluster labels.
+2. **Query Execution**: Executes KQL queries on schedule with `_startTime`/`_endTime` substitution.
+3. **Transform**: Converts query results to `MetricData` using the transform configuration.
+4. **OTLP Push**: Converts metrics to `prompb.WriteRequest` format and pushes to the OTLP endpoint.
+
+**Key Benefits:**
+- **No Intermediate Storage**: Query results are transformed and exported directly without ADX table materialization.
+- **Timestamp Fidelity**: Preserves actual query result timestamps (unlike Prometheus scraping).
+- **Memory Efficient**: Uses `pkg/prompb` object pooling for high cardinality metrics.
+- **Criteria-Based Execution**: Same security and distribution model as SummaryRules.
+
+**Intended Use:** Export ADX analytics data as standardized metrics to external observability platforms (Prometheus, Grafana, DataDog, etc.) without creating intermediate tables.
 
 ---
 

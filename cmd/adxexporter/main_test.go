@@ -135,3 +135,64 @@ func TestParseClusterLabels(t *testing.T) {
 		})
 	}
 }
+
+func TestParseKeyValuePairs(t *testing.T) {
+	tests := []struct {
+		name          string
+		pairs         []string
+		expected      map[string]string
+		expectedError bool
+	}{
+		{
+			name:     "empty pairs",
+			pairs:    []string{},
+			expected: map[string]string{},
+		},
+		{
+			name:  "single valid pair",
+			pairs: []string{"service.name=adxexporter"},
+			expected: map[string]string{
+				"service.name": "adxexporter",
+			},
+		},
+		{
+			name: "multiple valid pairs with dots in keys",
+			pairs: []string{
+				"service.name=adxexporter",
+				"service.version=1.0.0",
+				"deployment.environment=production",
+			},
+			expected: map[string]string{
+				"service.name":           "adxexporter",
+				"service.version":        "1.0.0",
+				"deployment.environment": "production",
+			},
+		},
+		{
+			name:  "value with equals sign",
+			pairs: []string{"url=http://localhost:8080?param=value"},
+			expected: map[string]string{
+				"url": "http://localhost:8080?param=value",
+			},
+		},
+		{
+			name:          "invalid format - missing equals",
+			pairs:         []string{"invalid-pair"},
+			expectedError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseKeyValuePairs(tt.pairs)
+
+			if tt.expectedError {
+				require.Error(t, err)
+				require.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}

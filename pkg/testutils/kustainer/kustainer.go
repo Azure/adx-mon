@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/docker/docker/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -39,15 +40,19 @@ type KustainerContainer struct {
 }
 
 func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KustainerContainer, error) {
+	initEnabled := true
 	req := testcontainers.ContainerRequest{
 		Image:        img,
 		ExposedPorts: []string{"8080/tcp"},
 		Env: map[string]string{
 			"ACCEPT_EULA": "Y",
 		},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.Init = &initEnabled // Enable tini init process to handle reaping, which greatly speeds up shutting down this container
+		},
 		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("8080/tcp"),
-			wait.ForLog(".*Hit 'CTRL-C' or 'CTRL-BREAK' to quit.*").AsRegexp(),
+			wait.ForListeningPort("8080/tcp").WithPollInterval(50*time.Millisecond),
+			wait.ForLog(".*Hit 'CTRL-C' or 'CTRL-BREAK' to quit.*").AsRegexp().WithPollInterval(50*time.Millisecond),
 		),
 	}
 	genericContainerReq := testcontainers.GenericContainerRequest{
