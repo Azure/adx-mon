@@ -1564,7 +1564,7 @@ func databaseExists(ctx context.Context, cluster *adxmonv1.ADXCluster, database 
 	}
 	defer client.Close()
 
-	stmt := kql.New(".show databases | where Name == ").AddString(database).AddLiteral(" | count")
+	stmt := kql.New(".show databases | where DatabaseName == ").AddString(database).AddLiteral(" | count")
 	result, err := client.Mgmt(ctx, "", stmt)
 	if err != nil {
 		return false, fmt.Errorf("failed to query database existence: %w", err)
