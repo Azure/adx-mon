@@ -40,8 +40,8 @@ func main() {
 				Usage: "Key/value pairs of resource attributes to add to all exported metrics. Format: <key>=<value>. These are merged with cluster-labels (explicit attributes take precedence).",
 			},
 			&cli.StringFlag{
-				Name:  "default-metric-name-prefix",
-				Usage: "Default prefix for metric names when the MetricsExporter CRD doesn't specify a metricNamePrefix. Useful for ensuring consistent naming conventions across all exported metrics.",
+				Name:  "metric-name-prefix",
+				Usage: "Global prefix prepended to all metric names. Combined with CRD's metricNamePrefix (CLI prefix comes first). Useful for enforcing naming conventions or allow-list compliance.",
 			},
 			&cli.StringFlag{
 				Name:  "health-probe-port",
@@ -108,11 +108,11 @@ func realMain(ctx *cli.Context) error {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 
-		ClusterLabels:           clusterLabels,
-		KustoClusters:           kustoClusters,
-		OTLPEndpoint:            ctx.String("otlp-endpoint"),
-		AddResourceAttributes:   addResourceAttributes,
-		DefaultMetricNamePrefix: ctx.String("default-metric-name-prefix"),
+		ClusterLabels:         clusterLabels,
+		KustoClusters:         kustoClusters,
+		OTLPEndpoint:          ctx.String("otlp-endpoint"),
+		AddResourceAttributes: addResourceAttributes,
+		MetricNamePrefix:      ctx.String("metric-name-prefix"),
 	}
 	if err = adxexp.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create adxexporter controller: %w", err)

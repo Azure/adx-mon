@@ -3,6 +3,7 @@ package adxexporter
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -25,14 +26,14 @@ type MetricsExporterReconciler struct {
 	Scheme *runtime.Scheme
 
 	// Configuration
-	ClusterLabels           map[string]string
-	KustoClusters           map[string]string // database name -> endpoint URL
-	OTLPEndpoint            string
-	AddResourceAttributes   map[string]string // Additional OTLP resource attributes (merged with ClusterLabels)
-	DefaultMetricNamePrefix string            // Default prefix for metric names when CRD doesn't specify one
-	EnableMetricsEndpoint   bool              // Deprecated: kept for backward compatibility, not used with OTLP push
-	MetricsPort             string            // Deprecated: kept for backward compatibility
-	MetricsPath             string            // Deprecated: kept for backward compatibility
+	ClusterLabels         map[string]string
+	KustoClusters         map[string]string // database name -> endpoint URL
+	OTLPEndpoint          string
+	AddResourceAttributes map[string]string // Additional OTLP resource attributes (merged with ClusterLabels)
+	MetricNamePrefix      string            // Global prefix prepended to all metric names (combined with CRD prefix)
+	EnableMetricsEndpoint bool              // Deprecated: kept for backward compatibility, not used with OTLP push
+	MetricsPort           string            // Deprecated: kept for backward compatibility
+	MetricsPath           string            // Deprecated: kept for backward compatibility
 
 	// Query execution components
 	QueryExecutors map[string]*QueryExecutor // keyed by database name
@@ -278,13 +279,19 @@ func (r *MetricsExporterReconciler) transformAndRegisterMetrics(ctx context.Cont
 		return nil
 	}
 
-	// Determine the effective metric name prefix:
-	// 1. If CRD specifies a prefix, use it
-	// 2. Otherwise, use the default prefix from CLI configuration
-	effectivePrefix := me.Spec.Transform.MetricNamePrefix
-	if effectivePrefix == "" {
-		effectivePrefix = r.DefaultMetricNamePrefix
+	// Build the effective metric name prefix by combining CLI and CRD prefixes:
+	// - CLI prefix (--metric-name-prefix) is always prepended first if set
+	// - CRD prefix (transform.metricNamePrefix) is appended after CLI prefix if set
+	// This ensures operators can enforce a global prefix (e.g., for allow-lists)
+	// while teams can still add their own sub-prefixes via CRD.
+	var prefixParts []string
+	if r.MetricNamePrefix != "" {
+		prefixParts = append(prefixParts, r.MetricNamePrefix)
 	}
+	if me.Spec.Transform.MetricNamePrefix != "" {
+		prefixParts = append(prefixParts, me.Spec.Transform.MetricNamePrefix)
+	}
+	effectivePrefix := strings.Join(prefixParts, "_")
 
 	// Create transformer with the MetricsExporter's transform configuration
 	// Note: meter parameter is nil since we're using OTLP push instead of OTel SDK registration

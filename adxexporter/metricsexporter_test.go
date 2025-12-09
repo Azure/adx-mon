@@ -648,44 +648,43 @@ func TestResourceAttributesInOTLPPayload(t *testing.T) {
 	}
 }
 
-// TestDefaultMetricNamePrefix verifies that the DefaultMetricNamePrefix from CLI
-// is applied when the CRD doesn't specify a metricNamePrefix, and that CRD prefix
-// takes precedence when specified.
-func TestDefaultMetricNamePrefix(t *testing.T) {
+// TestMetricNamePrefix verifies that the MetricNamePrefix from CLI
+// is always prepended to metric names, and CRD prefix is appended after it.
+func TestMetricNamePrefix(t *testing.T) {
 	tests := []struct {
-		name                    string
-		defaultMetricNamePrefix string // CLI flag
-		crdMetricNamePrefix     string // CRD transform.metricNamePrefix
-		metricName              string
-		expectedMetric          string
+		name            string
+		cliMetricPrefix string // CLI flag --metric-name-prefix
+		crdMetricPrefix string // CRD transform.metricNamePrefix
+		metricName      string
+		expectedMetric  string
 	}{
 		{
-			name:                    "default prefix applied when CRD has no prefix",
-			defaultMetricNamePrefix: "adxexporter",
-			crdMetricNamePrefix:     "",
-			metricName:              "host_count",
-			expectedMetric:          "adxexporter_host_count_value",
+			name:            "CLI prefix applied when CRD has no prefix",
+			cliMetricPrefix: "adxexporter",
+			crdMetricPrefix: "",
+			metricName:      "host_count",
+			expectedMetric:  "adxexporter_host_count_value",
 		},
 		{
-			name:                    "CRD prefix overrides default",
-			defaultMetricNamePrefix: "adxexporter",
-			crdMetricNamePrefix:     "custom",
-			metricName:              "host_count",
-			expectedMetric:          "custom_host_count_value",
+			name:            "CLI and CRD prefixes combined",
+			cliMetricPrefix: "adxexporter",
+			crdMetricPrefix: "infra",
+			metricName:      "host_count",
+			expectedMetric:  "adxexporter_infra_host_count_value",
 		},
 		{
-			name:                    "no prefix when both are empty",
-			defaultMetricNamePrefix: "",
-			crdMetricNamePrefix:     "",
-			metricName:              "host_count",
-			expectedMetric:          "host_count_value",
+			name:            "no prefix when both are empty",
+			cliMetricPrefix: "",
+			crdMetricPrefix: "",
+			metricName:      "host_count",
+			expectedMetric:  "host_count_value",
 		},
 		{
-			name:                    "CRD can specify full prefix including adxexporter",
-			defaultMetricNamePrefix: "something_else",
-			crdMetricNamePrefix:     "adxexporter_cluster_autoscaler",
-			metricName:              "availability",
-			expectedMetric:          "adxexporter_cluster_autoscaler_availability_value",
+			name:            "only CRD prefix when CLI is empty",
+			cliMetricPrefix: "",
+			crdMetricPrefix: "custom",
+			metricName:      "availability",
+			expectedMetric:  "custom_availability_value",
 		},
 	}
 
@@ -709,9 +708,9 @@ func TestDefaultMetricNamePrefix(t *testing.T) {
 			defer mockServer.Close()
 
 			reconciler := &MetricsExporterReconciler{
-				OTLPEndpoint:            mockServer.URL,
-				ClusterLabels:           map[string]string{},
-				DefaultMetricNamePrefix: tt.defaultMetricNamePrefix,
+				OTLPEndpoint:     mockServer.URL,
+				ClusterLabels:    map[string]string{},
+				MetricNamePrefix: tt.cliMetricPrefix,
 			}
 
 			err := reconciler.initOtlpExporter()
@@ -719,14 +718,14 @@ func TestDefaultMetricNamePrefix(t *testing.T) {
 
 			me := &adxmonv1.MetricsExporter{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-default-prefix",
+					Name:      "test-prefix",
 					Namespace: "default",
 				},
 				Spec: adxmonv1.MetricsExporterSpec{
 					Transform: adxmonv1.TransformConfig{
 						ValueColumns:     []string{"value"},
 						MetricNameColumn: "metric_name",
-						MetricNamePrefix: tt.crdMetricNamePrefix,
+						MetricNamePrefix: tt.crdMetricPrefix,
 						TimestampColumn:  "timestamp",
 					},
 				},
@@ -752,7 +751,7 @@ func TestDefaultMetricNamePrefix(t *testing.T) {
 
 				actualMetricName := metrics[0].Name
 				assert.Equal(t, tt.expectedMetric, actualMetricName,
-					"Metric name should reflect default/CRD prefix precedence")
+					"Metric name should combine CLI and CRD prefixes")
 
 			case <-time.After(5 * time.Second):
 				t.Fatal("Timeout waiting for OTLP request")
