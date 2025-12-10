@@ -43,7 +43,7 @@ require (
 	github.com/tinylib/msgp v1.6.1
 	github.com/traefik/yaegi v0.16.1
 	github.com/urfave/cli/v2 v2.27.7
-	github.com/valyala/fastjson v1.6.4
+	github.com/valyala/fastjson v1.6.5
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/metric v1.39.0
 	go.uber.org/multierr v1.11.0
