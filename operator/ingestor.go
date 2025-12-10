@@ -34,6 +34,18 @@ import (
 var ingestorCrdsFS embed.FS
 
 // Condition reason constants for Ingestor status
+//
+// Error Handling Pattern:
+// This controller uses two distinct error handling strategies:
+//
+//  1. Transient errors (return error): Used when the error might resolve on retry,
+//     such as API server communication failures or resource conflicts. Returning
+//     an error causes the controller-runtime to requeue with exponential backoff.
+//
+//  2. Terminal errors (return nil): Used when retrying won't help, such as invalid
+//     templates or malformed CRD specifications. These set a status condition with
+//     ConditionFalse and return nil to avoid infinite retry loops. The resource
+//     will only be re-reconciled when the CRD is modified (triggering a new event).
 const (
 	ReasonWaitForReady            = "WaitForReady"
 	ReasonCRDsInstalled           = "CRDsInstalled"
