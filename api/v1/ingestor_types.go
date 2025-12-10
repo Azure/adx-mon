@@ -50,8 +50,13 @@ type IngestorSpec struct {
 }
 
 func (s *IngestorSpec) StoreAppliedProvisioningState() error {
-	// Store the current provisioning state as a JSON string
-	provisionState, err := json.Marshal(s)
+	// Store the current provisioning state as a JSON string.
+	// Create a copy with AppliedProvisionState cleared to avoid recursive escaping -
+	// otherwise each reconciliation would nest the previous JSON inside itself,
+	// causing exponential growth in escape characters.
+	toMarshal := *s
+	toMarshal.AppliedProvisionState = ""
+	provisionState, err := json.Marshal(toMarshal)
 	if err != nil {
 		return fmt.Errorf("failed to marshal provision state: %w", err)
 	}
