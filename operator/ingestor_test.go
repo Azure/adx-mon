@@ -439,7 +439,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	// Verify that a statefulset was created
 	sts := &appsv1.StatefulSet{}
 	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
-		Name:      "ingestor",
+		Name:      "test-ingestor",
 		Namespace: "default",
 	}, sts))
 
@@ -476,7 +476,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	// Verify that service account has automountServiceAccountToken set to false
 	sa := &corev1.ServiceAccount{}
 	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
-		Name:      "ingestor",
+		Name:      "test-ingestor",
 		Namespace: "default",
 	}, sa))
 	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")

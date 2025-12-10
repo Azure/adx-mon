@@ -481,7 +481,9 @@ func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
 }
 
 type ingestorTemplateData struct {
+	Name            string
 	Image           string
+	Replicas        int32
 	MetricsClusters []string
 	LogsClusters    []string
 	Namespace       string
@@ -533,7 +535,9 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	}
 
 	data = &ingestorTemplateData{
+		Name:            ingestor.Name,
 		Image:           ingestor.Spec.Image,
+		Replicas:        ingestor.Spec.Replicas,
 		MetricsClusters: metricsClusters,
 		LogsClusters:    logsClusters,
 		Namespace:       ingestor.Namespace,
