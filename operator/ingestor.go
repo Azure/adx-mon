@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -69,6 +70,10 @@ type IngestorReconciler struct {
 	Scheme *runtime.Scheme
 
 	waitForReadyReason string
+
+	// crdsOnce ensures CRDs are installed only once per operator lifetime.
+	crdsOnce       sync.Once
+	crdsInstallErr error
 }
 
 func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -366,9 +371,12 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		return ctrl.Result{}, fmt.Errorf("failed to update ingestor: %w", err)
 	}
 
-	// Install CRDs
-	if err := r.installCrds(ctx); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", err)
+	// Install CRDs once per operator lifetime to avoid redundant API calls.
+	r.crdsOnce.Do(func() {
+		r.crdsInstallErr = r.installCrds(ctx)
+	})
+	if r.crdsInstallErr != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", r.crdsInstallErr)
 	}
 	if err := r.setCondition(ctx, ingestor, ReasonCRDsInstalled, "CRDs installed successfully", metav1.ConditionUnknown); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
