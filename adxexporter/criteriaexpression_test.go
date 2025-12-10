@@ -3,6 +3,9 @@ package adxexporter
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -158,15 +161,25 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 			if tt.expectExecuted {
 				mockKusto.SetNextResult(t, [][]interface{}{{"test_metric", 1.0, time.Now()}})
 			}
+
+			// Create mock OTLP server
+			mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.Copy(io.Discard, r.Body)
+				r.Body.Close()
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte{})
+			}))
+			defer mockServer.Close()
+
 			reconciler := &MetricsExporterReconciler{
-				Client:                fakeClient,
-				Scheme:                s,
-				ClusterLabels:         labels,
-				KustoClusters:         map[string]string{"test-db": "https://test-cluster.kusto.windows.net"},
-				QueryExecutors:        map[string]*QueryExecutor{"test-db": NewQueryExecutor(mockKusto)},
-				EnableMetricsEndpoint: false,
+				Client:         fakeClient,
+				Scheme:         s,
+				ClusterLabels:  labels,
+				KustoClusters:  map[string]string{"test-db": "https://test-cluster.kusto.windows.net"},
+				QueryExecutors: map[string]*QueryExecutor{"test-db": NewQueryExecutor(mockKusto)},
+				OTLPEndpoint:   mockServer.URL,
 			}
-			require.NoError(t, reconciler.exposeMetricsServer())
+			require.NoError(t, reconciler.initOtlpExporter())
 			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: me.Name, Namespace: me.Namespace}}
 			res, err := reconciler.Reconcile(context.Background(), req)
 			require.NoError(t, err)

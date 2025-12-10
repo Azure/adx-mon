@@ -481,17 +481,19 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		}
 
 		endpoint := resolvedClusterEndpoint(&cluster)
+		if endpoint == "" {
+			continue // Skip this cluster entirely if no endpoint
+		}
 
 		for _, db := range cluster.Spec.Databases {
-			if endpoint == "" {
-				continue
-			}
 			entry := fmt.Sprintf("%s=%s", db.DatabaseName, endpoint)
 			switch db.TelemetryType {
 			case adxmonv1.DatabaseTelemetryMetrics:
 				metricsClusters = append(metricsClusters, entry)
 			case adxmonv1.DatabaseTelemetryLogs:
 				logsClusters = append(logsClusters, entry)
+			default:
+				// Traces and other telemetry types are not currently supported by the ingestor
 			}
 		}
 	}
