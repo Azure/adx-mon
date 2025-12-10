@@ -49,7 +49,6 @@ var ingestorCrdsFS embed.FS
 //     will only be re-reconciled when the CRD is modified (triggering a new event).
 const (
 	ReasonWaitForReady            = "WaitForReady"
-	ReasonCRDsInstalled           = "CRDsInstalled"
 	ReasonTemplateError           = "TemplateError"
 	ReasonNotReady                = "NotReady"
 	ReasonReady                   = "Ready"
@@ -128,10 +127,6 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	case condition.ObservedGeneration != ingestor.GetGeneration():
 		// CRD has been updated, re-render the ingestor manifests
-		return r.CreateIngestor(ctx, ingestor)
-
-	case condition.Status == metav1.ConditionUnknown && condition.Reason == ReasonCRDsInstalled:
-		// CRDs are installed, continue with CreateIngestor to proceed with template rendering
 		return r.CreateIngestor(ctx, ingestor)
 	}
 
@@ -382,14 +377,15 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	}
 
 	// Install CRDs once per operator lifetime to avoid redundant API calls.
+	// Note: We do NOT set a CRDsInstalled condition here because that would cause
+	// a state machine loop. When CreateIngestor is called from NotReady state,
+	// setting CRDsInstalled would trigger a new reconcile that matches the
+	// CRDsInstalled case, which calls CreateIngestor again, creating a loop.
 	r.crdsOnce.Do(func() {
 		r.crdsInstallErr = r.installCrds(ctx)
 	})
 	if r.crdsInstallErr != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", r.crdsInstallErr)
-	}
-	if err := r.setCondition(ctx, ingestor, ReasonCRDsInstalled, "CRDs installed successfully", metav1.ConditionUnknown); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 	}
 
 	// Render the ingestor manifest

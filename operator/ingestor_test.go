@@ -536,16 +536,6 @@ func TestIngestorReconciler_StateMachine(t *testing.T) {
 			expectAction:  "create",
 			expectRequeue: true,
 		},
-		// CRDsInstalled - should continue to template rendering
-		{
-			name:          "crds_installed_continue",
-			reason:        ReasonCRDsInstalled,
-			status:        metav1.ConditionUnknown,
-			generation:    1,
-			observedGen:   1,
-			expectAction:  "create",
-			expectRequeue: true,
-		},
 		// Ready - no action needed
 		{
 			name:          "ready_noop",
@@ -797,7 +787,7 @@ func TestIngestorReconciler_NoSelfTriggeringLoop(t *testing.T) {
 	require.NotNil(t, condition, "Should have a status condition")
 
 	// The condition should be in a stable waiting state, not flipping
-	validWaitingReasons := []string{ReasonNotReady, ReasonCRDsInstalled, ReasonWaitForReady}
+	validWaitingReasons := []string{ReasonNotReady, ReasonWaitForReady}
 	found := false
 	for _, r := range validWaitingReasons {
 		if condition.Reason == r {
