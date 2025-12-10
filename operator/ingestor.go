@@ -44,6 +44,14 @@ const (
 	ReasonCriteriaExpressionFalse = "CriteriaExpressionFalse"
 )
 
+// Requeue intervals for Ingestor reconciliation
+const (
+	// defaultRequeueInterval is the standard requeue interval for operations that are in progress.
+	defaultRequeueInterval = time.Minute
+	// extendedRequeueInterval is used when waiting for external dependencies (e.g., ADXCluster readiness).
+	extendedRequeueInterval = 5 * time.Minute
+)
+
 type IngestorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -113,7 +121,7 @@ func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ing
 	var sts appsv1.StatefulSet
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ingestor.GetNamespace(), Name: ingestor.GetName()}, &sts); err != nil {
 		if errors.IsNotFound(err) {
-			return ctrl.Result{RequeueAfter: time.Minute}, nil
+			return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -125,7 +133,7 @@ func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ing
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
 }
 
 func (r *IngestorReconciler) ReconcileComponent(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -178,7 +186,7 @@ func (r *IngestorReconciler) ReconcileComponent(ctx context.Context, req ctrl.Re
 		if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifest updating...", metav1.ConditionUnknown); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
 	}
 
 	// No changes to apply
@@ -380,7 +388,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		if err := r.setCondition(ctx, ingestor, ReasonNotReady, "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		return ctrl.Result{RequeueAfter: extendedRequeueInterval}, nil
 	}
 
 	var rendered bytes.Buffer
@@ -434,7 +442,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifests installing", metav1.ConditionTrue); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 	}
-	return ctrl.Result{RequeueAfter: time.Minute}, nil
+	return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
 }
 
 func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
