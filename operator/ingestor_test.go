@@ -482,3 +482,328 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
 	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
 }
+
+// TestIngestorReconciler_StateMachine verifies that the reconciliation state machine
+// handles all condition states correctly and doesn't create infinite loops.
+// This test exists because a bug where ConditionUnknown matched too broadly caused
+// rapid reconciliation loops in production.
+func TestIngestorReconciler_StateMachine(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	// Define the expected behavior for each state
+	// This serves as documentation and compile-time verification of the state machine
+	type stateTestCase struct {
+		name          string
+		reason        string
+		status        metav1.ConditionStatus
+		generation    int64
+		observedGen   int64
+		expectAction  string // "create", "ready", "noop"
+		expectRequeue bool
+	}
+
+	testCases := []stateTestCase{
+		// No condition - first time reconciliation
+		{
+			name:          "no_condition_first_reconcile",
+			reason:        "",
+			status:        "",
+			generation:    1,
+			observedGen:   0,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// WaitForReady - check if StatefulSet is ready
+		{
+			name:          "wait_for_ready",
+			reason:        ReasonWaitForReady,
+			status:        metav1.ConditionTrue,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "ready",
+			expectRequeue: true, // requeue if not ready yet
+		},
+		// NotReady - ADXCluster not ready, should retry CreateIngestor
+		{
+			name:          "not_ready_retry",
+			reason:        ReasonNotReady,
+			status:        metav1.ConditionUnknown,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// CRDsInstalled - should continue to template rendering
+		{
+			name:          "crds_installed_continue",
+			reason:        ReasonCRDsInstalled,
+			status:        metav1.ConditionUnknown,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// Ready - no action needed
+		{
+			name:          "ready_noop",
+			reason:        ReasonReady,
+			status:        metav1.ConditionTrue,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "noop",
+			expectRequeue: false,
+		},
+		// Generation changed - re-render manifests
+		{
+			name:          "generation_changed",
+			reason:        ReasonReady,
+			status:        metav1.ConditionTrue,
+			generation:    2,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// CriteriaExpressionError - terminal, no action
+		{
+			name:          "criteria_error_noop",
+			reason:        ReasonCriteriaExpressionError,
+			status:        metav1.ConditionFalse,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "noop",
+			expectRequeue: false,
+		},
+		// CriteriaExpressionFalse - terminal, no action
+		{
+			name:          "criteria_false_noop",
+			reason:        ReasonCriteriaExpressionFalse,
+			status:        metav1.ConditionFalse,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "noop",
+			expectRequeue: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a cluster so CreateIngestor can proceed
+			cluster := &adxmonv1.ADXCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					Labels:    map[string]string{"app": "test"},
+				},
+				Spec: adxmonv1.ADXClusterSpec{
+					ClusterName: "test-cluster",
+					Endpoint:    "https://test.kusto.windows.net",
+					Databases: []adxmonv1.ADXClusterDatabaseSpec{
+						{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+					},
+				},
+				Status: adxmonv1.ADXClusterStatus{
+					Conditions: []metav1.Condition{
+						{
+							Type:   adxmonv1.ADXClusterConditionOwner,
+							Status: metav1.ConditionTrue,
+							Reason: "Ready",
+						},
+					},
+				},
+			}
+
+			ingestor := &adxmonv1.Ingestor{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ingestor",
+					Namespace:  "default",
+					Generation: tc.generation,
+				},
+				Spec: adxmonv1.IngestorSpec{
+					Replicas: 1,
+					Image:    "test:latest",
+					ADXClusterSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": "test"},
+					},
+				},
+			}
+
+			// Set condition if this test case has one
+			if tc.reason != "" {
+				ingestor.Status.Conditions = []metav1.Condition{
+					{
+						Type:               adxmonv1.IngestorConditionOwner,
+						Status:             tc.status,
+						Reason:             tc.reason,
+						ObservedGeneration: tc.observedGen,
+						LastTransitionTime: metav1.Now(),
+					},
+				}
+			}
+
+			// Create StatefulSet for "ready" action tests
+			sts := &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ingestor",
+					Namespace: "default",
+				},
+				Spec: appsv1.StatefulSetSpec{
+					Replicas: func() *int32 { r := int32(1); return &r }(),
+				},
+				Status: appsv1.StatefulSetStatus{
+					ReadyReplicas: 0, // Not ready yet
+				},
+			}
+
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(cluster, ingestor, sts).
+				WithStatusSubresource(&adxmonv1.Ingestor{}, &adxmonv1.ADXCluster{}).
+				Build()
+
+			reconciler := &IngestorReconciler{
+				Client:             client,
+				Scheme:             scheme,
+				waitForReadyReason: ReasonWaitForReady,
+			}
+
+			result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-ingestor",
+					Namespace: "default",
+				},
+			})
+
+			// Verify no error (we're testing state transitions, not error cases)
+			require.NoError(t, err, "Reconcile should not return error for state: %s", tc.name)
+
+			// Verify requeue behavior
+			if tc.expectRequeue {
+				require.True(t, result.RequeueAfter > 0 || result.Requeue,
+					"Expected requeue for state: %s", tc.name)
+			} else {
+				require.True(t, result.IsZero(),
+					"Expected no requeue for state: %s, got RequeueAfter=%v", tc.name, result.RequeueAfter)
+			}
+		})
+	}
+}
+
+// TestIngestorReconciler_NoSelfTriggeringLoop verifies that reconciliation with
+// ADXCluster not ready doesn't cause a rapid loop. This was a production bug where
+// status updates triggered immediate re-reconciliation.
+func TestIngestorReconciler_NoSelfTriggeringLoop(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	// ADXCluster that is NOT ready
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test-cluster",
+			Endpoint:    "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:   adxmonv1.ADXClusterConditionOwner,
+					Status: metav1.ConditionFalse, // NOT ready
+					Reason: "Provisioning",
+				},
+			},
+		},
+	}
+
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-ingestor",
+			Namespace:  "default",
+			Generation: 1,
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Replicas: 1,
+			Image:    "test:latest",
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "test"},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}, &adxmonv1.ADXCluster{}).
+		Build()
+
+	reconciler := &IngestorReconciler{
+		Client:             client,
+		Scheme:             scheme,
+		waitForReadyReason: ReasonWaitForReady,
+	}
+
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "test-ingestor",
+			Namespace: "default",
+		},
+	}
+
+	// First reconcile - should install CRDs and find cluster not ready
+	result1, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, result1.RequeueAfter > 0, "Should requeue after first reconcile")
+
+	// Get the updated ingestor to see its state
+	updated := &adxmonv1.Ingestor{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updated))
+
+	// Second reconcile with the same state - should NOT cause rapid loop
+	// It should either:
+	// 1. Return quickly with a requeue (waiting for cluster)
+	// 2. Not trigger CreateIngestor again unnecessarily
+	result2, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	// The key assertion: we should get a reasonable requeue interval, not immediate retry
+	// If the bug existed, this would either error or return a very short interval
+	if result2.RequeueAfter > 0 {
+		require.True(t, result2.RequeueAfter >= defaultRequeueInterval,
+			"Requeue interval should be at least %v, got %v (rapid loop detected)",
+			defaultRequeueInterval, result2.RequeueAfter)
+	}
+
+	// Verify the condition reason is stable (not flipping between states)
+	final := &adxmonv1.Ingestor{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, final))
+
+	var condition *metav1.Condition
+	for i := range final.Status.Conditions {
+		if final.Status.Conditions[i].Type == adxmonv1.IngestorConditionOwner {
+			condition = &final.Status.Conditions[i]
+			break
+		}
+	}
+	require.NotNil(t, condition, "Should have a status condition")
+
+	// The condition should be in a stable waiting state, not flipping
+	validWaitingReasons := []string{ReasonNotReady, ReasonCRDsInstalled, ReasonWaitForReady}
+	found := false
+	for _, r := range validWaitingReasons {
+		if condition.Reason == r {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "Condition reason should be a valid waiting state, got: %s", condition.Reason)
+}

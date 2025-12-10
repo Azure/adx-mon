@@ -122,12 +122,16 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// Ingestor is installing, check if the ADXCluster is ready
 		return r.IsReady(ctx, ingestor)
 
-	case condition.Status == metav1.ConditionUnknown:
-		// Retry installation of ingestor manifests
+	case condition.Reason == ReasonNotReady:
+		// ADXCluster is not ready, retry CreateIngestor to check again
 		return r.CreateIngestor(ctx, ingestor)
 
 	case condition.ObservedGeneration != ingestor.GetGeneration():
 		// CRD has been updated, re-render the ingestor manifests
+		return r.CreateIngestor(ctx, ingestor)
+
+	case condition.Status == metav1.ConditionUnknown && condition.Reason == ReasonCRDsInstalled:
+		// CRDs are installed, continue with CreateIngestor to proceed with template rendering
 		return r.CreateIngestor(ctx, ingestor)
 	}
 
