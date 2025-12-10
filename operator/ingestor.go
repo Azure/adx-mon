@@ -364,11 +364,17 @@ func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
 	r.applyDefaults(ingestor)
+
+	// Store the applied provisioning state for drift detection, but only update
+	// the resource if there are actual changes to avoid unnecessary re-triggers.
+	previousState := ingestor.Spec.AppliedProvisionState
 	if err := ingestor.Spec.StoreAppliedProvisioningState(); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to store applied provisioning state: %w", err)
 	}
-	if err := r.Update(ctx, ingestor); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update ingestor: %w", err)
+	if previousState != ingestor.Spec.AppliedProvisionState {
+		if err := r.Update(ctx, ingestor); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update ingestor: %w", err)
+		}
 	}
 
 	// Install CRDs once per operator lifetime to avoid redundant API calls.
