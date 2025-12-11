@@ -125,6 +125,12 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// ADXCluster is not ready, retry CreateIngestor to check again
 		return r.CreateIngestor(ctx, ingestor)
 
+	case condition.Reason == ReasonCriteriaExpressionError,
+		condition.Reason == ReasonCriteriaExpressionFalse:
+		// CriteriaExpression now evaluates successfully (we passed the check above),
+		// recover from previous error state by re-running creation.
+		return r.CreateIngestor(ctx, ingestor)
+
 	case condition.ObservedGeneration != ingestor.GetGeneration():
 		// CRD has been updated, re-render the ingestor manifests
 		return r.CreateIngestor(ctx, ingestor)

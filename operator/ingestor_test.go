@@ -556,25 +556,25 @@ func TestIngestorReconciler_StateMachine(t *testing.T) {
 			expectAction:  "create",
 			expectRequeue: true,
 		},
-		// CriteriaExpressionError - terminal, no action
+		// CriteriaExpressionError - recover by re-creating (CEL now passes or is unset)
 		{
-			name:          "criteria_error_noop",
+			name:          "criteria_error_recovery",
 			reason:        ReasonCriteriaExpressionError,
 			status:        metav1.ConditionFalse,
 			generation:    1,
 			observedGen:   1,
-			expectAction:  "noop",
-			expectRequeue: false,
+			expectAction:  "create",
+			expectRequeue: true,
 		},
-		// CriteriaExpressionFalse - terminal, no action
+		// CriteriaExpressionFalse - recover by re-creating (CEL now passes or is unset)
 		{
-			name:          "criteria_false_noop",
+			name:          "criteria_false_recovery",
 			reason:        ReasonCriteriaExpressionFalse,
 			status:        metav1.ConditionFalse,
 			generation:    1,
 			observedGen:   1,
-			expectAction:  "noop",
-			expectRequeue: false,
+			expectAction:  "create",
+			expectRequeue: true,
 		},
 	}
 
