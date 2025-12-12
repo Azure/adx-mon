@@ -117,6 +117,10 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// First time reconciliation
 		return r.CreateIngestor(ctx, ingestor)
 
+	case condition.ObservedGeneration != ingestor.GetGeneration():
+		// CRD has been updated, re-render the ingestor manifests
+		return r.CreateIngestor(ctx, ingestor)
+
 	case condition.Reason == r.waitForReadyReason:
 		// Ingestor is installing, check if the ADXCluster is ready
 		return r.IsReady(ctx, ingestor)
@@ -129,10 +133,6 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		condition.Reason == ReasonCriteriaExpressionFalse:
 		// CriteriaExpression now evaluates successfully (we passed the check above),
 		// recover from previous error state by re-running creation.
-		return r.CreateIngestor(ctx, ingestor)
-
-	case condition.ObservedGeneration != ingestor.GetGeneration():
-		// CRD has been updated, re-render the ingestor manifests
 		return r.CreateIngestor(ctx, ingestor)
 	}
 
