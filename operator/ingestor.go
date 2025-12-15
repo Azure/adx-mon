@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -538,6 +539,7 @@ type ingestorTemplateData struct {
 	LogsClusters     []string
 	Namespace        string
 	ImagePullSecrets []string
+	AzureClientID    string
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
@@ -599,6 +601,7 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		LogsClusters:     logsClusters,
 		Namespace:        ingestor.Namespace,
 		ImagePullSecrets: imagePullSecretNames,
+		AzureClientID:    os.Getenv("AZURE_CLIENT_ID"),
 	}
 	return true, data, nil
 }

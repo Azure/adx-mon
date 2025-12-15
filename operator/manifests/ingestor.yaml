@@ -157,10 +157,10 @@ spec:
               value: INFO
             - name: "GODEBUG"
               value: "http2client=0"
-            - name: "AZURE_RESOURCE"
-              value: "$ADX_URL"
-            - name:  "AZURE_CLIENT_ID"
-              value: "$CLIENT_ID"
+            {{- if .AzureClientID }}
+            - name: "AZURE_CLIENT_ID"
+              value: "{{ .AzureClientID }}"
+            {{- end }}
           command:
             - /ingestor
           args:
