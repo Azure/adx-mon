@@ -75,9 +75,9 @@ type IngestorReconciler struct {
 
 	waitForReadyReason string
 
-	// crdsOnce ensures CRDs are installed only once per operator lifetime.
-	crdsOnce       sync.Once
-	crdsInstallErr error
+	// crdsMu protects crdsInstalled; CRD installation is attempted until it succeeds.
+	crdsMu        sync.RWMutex
+	crdsInstalled bool
 }
 
 func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -392,11 +392,9 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	// a state machine loop. When CreateIngestor is called from NotReady state,
 	// setting CRDsInstalled would trigger a new reconcile that matches the
 	// CRDsInstalled case, which calls CreateIngestor again, creating a loop.
-	r.crdsOnce.Do(func() {
-		r.crdsInstallErr = r.installCrds(ctx)
-	})
-	if r.crdsInstallErr != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", r.crdsInstallErr)
+	// We use a mutex + boolean instead of sync.Once so transient failures can be retried.
+	if err := r.ensureCRDsInstalled(ctx); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", err)
 	}
 
 	// Render the ingestor manifest
@@ -619,6 +617,31 @@ func (r *IngestorReconciler) setCondition(ctx context.Context, ingestor *adxmonv
 			return fmt.Errorf("failed to update status: %w", err)
 		}
 	}
+	return nil
+}
+
+// ensureCRDsInstalled installs CRDs if not already done.
+// Unlike sync.Once, this allows retries after transient failures.
+func (r *IngestorReconciler) ensureCRDsInstalled(ctx context.Context) error {
+	// Fast path: check if already installed using read lock.
+	r.crdsMu.RLock()
+	installed := r.crdsInstalled
+	r.crdsMu.RUnlock()
+	if installed {
+		return nil
+	}
+
+	// Slow path: acquire write lock and install if still needed.
+	r.crdsMu.Lock()
+	defer r.crdsMu.Unlock()
+	if r.crdsInstalled {
+		return nil // Another goroutine installed while we waited.
+	}
+
+	if err := r.installCrds(ctx); err != nil {
+		return err
+	}
+	r.crdsInstalled = true
 	return nil
 }
 
