@@ -10,9 +10,11 @@ import (
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	operator "github.com/Azure/adx-mon/operator"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/urfave/cli/v2"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -79,6 +81,14 @@ func realMain(ctx *cli.Context) error {
 		return fmt.Errorf("unable to create manager: %w", err)
 	}
 
+	// Discover imagePullSecrets from the operator's own pod to propagate to created workloads.
+	// This requires POD_NAME and POD_NAMESPACE environment variables to be set (via downward API).
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("unable to create kubernetes clientset: %w", err)
+	}
+	imagePullSecrets := k8s.DiscoverImagePullSecrets(svcCtx, clientset)
+
 	// Set up controllers
 	adxr := &operator.AdxReconciler{
 		Client: mgr.GetClient(),
@@ -89,8 +99,9 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	ir := &operator.IngestorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		ImagePullSecrets: imagePullSecrets,
 	}
 	if err = ir.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create ingestor controller: %w", err)

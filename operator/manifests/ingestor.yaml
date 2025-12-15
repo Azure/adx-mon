@@ -131,6 +131,12 @@ spec:
       automountServiceAccountToken: true
       securityContext: {}
       serviceAccountName: {{ .Name }}
+      {{- if .ImagePullSecrets }}
+      imagePullSecrets:
+        {{- range .ImagePullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: ingestor
           image: {{ .Image }}

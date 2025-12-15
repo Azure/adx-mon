@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -67,6 +68,10 @@ const (
 type IngestorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// ImagePullSecrets are propagated to created workloads. Typically discovered
+	// from the operator's own pod at startup.
+	ImagePullSecrets []corev1.LocalObjectReference
 
 	waitForReadyReason string
 
@@ -528,12 +533,13 @@ func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
 }
 
 type ingestorTemplateData struct {
-	Name            string
-	Image           string
-	Replicas        int32
-	MetricsClusters []string
-	LogsClusters    []string
-	Namespace       string
+	Name             string
+	Image            string
+	Replicas         int32
+	MetricsClusters  []string
+	LogsClusters     []string
+	Namespace        string
+	ImagePullSecrets []string
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
@@ -581,13 +587,20 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		}
 	}
 
+	// Convert ImagePullSecrets to string slice for template
+	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))
+	for i, s := range r.ImagePullSecrets {
+		imagePullSecretNames[i] = s.Name
+	}
+
 	data = &ingestorTemplateData{
-		Name:            ingestor.Name,
-		Image:           ingestor.Spec.Image,
-		Replicas:        ingestor.Spec.Replicas,
-		MetricsClusters: metricsClusters,
-		LogsClusters:    logsClusters,
-		Namespace:       ingestor.Namespace,
+		Name:             ingestor.Name,
+		Image:            ingestor.Spec.Image,
+		Replicas:         ingestor.Spec.Replicas,
+		MetricsClusters:  metricsClusters,
+		LogsClusters:     logsClusters,
+		Namespace:        ingestor.Namespace,
+		ImagePullSecrets: imagePullSecretNames,
 	}
 	return true, data, nil
 }

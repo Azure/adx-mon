@@ -711,6 +711,163 @@ func TestIngestorReconciler_SkipsUnownedResources(t *testing.T) {
 		"Unowned StatefulSet should NOT be updated - image should remain unchanged")
 }
 
+// TestIngestorReconciler_ImagePullSecrets verifies that imagePullSecrets configured
+// on the reconciler are propagated to created StatefulSets.
+func TestIngestorReconciler_ImagePullSecrets(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "my-registry.io/ingestor:v1",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	// Configure reconciler with imagePullSecrets (simulating operator discovery)
+	reconciler := &IngestorReconciler{
+		Client: client,
+		Scheme: scheme,
+		ImagePullSecrets: []corev1.LocalObjectReference{
+			{Name: "acr-pull-secret"},
+			{Name: "another-registry-secret"},
+		},
+		waitForReadyReason: ReasonWaitForReady,
+	}
+
+	// Run CreateIngestor
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was created with imagePullSecrets
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, sts))
+
+	require.Len(t, sts.Spec.Template.Spec.ImagePullSecrets, 2, "Should have two imagePullSecrets")
+	require.Equal(t, "acr-pull-secret", sts.Spec.Template.Spec.ImagePullSecrets[0].Name)
+	require.Equal(t, "another-registry-secret", sts.Spec.Template.Spec.ImagePullSecrets[1].Name)
+}
+
+// TestIngestorReconciler_NoImagePullSecrets verifies that when no imagePullSecrets
+// are configured, the StatefulSet is created without the imagePullSecrets field.
+func TestIngestorReconciler_NoImagePullSecrets(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "ghcr.io/azure/adx-mon/ingestor:latest",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	// Configure reconciler WITHOUT imagePullSecrets
+	reconciler := &IngestorReconciler{
+		Client:             client,
+		Scheme:             scheme,
+		ImagePullSecrets:   nil, // No pull secrets
+		waitForReadyReason: ReasonWaitForReady,
+	}
+
+	// Run CreateIngestor
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was created without imagePullSecrets
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, sts))
+
+	require.Empty(t, sts.Spec.Template.Spec.ImagePullSecrets, "Should have no imagePullSecrets when not configured")
+}
+
 // TestIngestorReconciler_StateMachine verifies that the reconciliation state machine
 // handles all condition states correctly and doesn't create infinite loops.
 // This test exists because a bug where ConditionUnknown matched too broadly caused
