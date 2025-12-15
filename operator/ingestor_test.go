@@ -483,6 +483,234 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
 }
 
+// TestIngestorReconciler_UpdateExistingResources verifies that existing resources with
+// proper ownership are updated when the Ingestor CRD changes (e.g., image updates).
+// This test was added to catch a bug where existing StatefulSets were not updated.
+func TestIngestorReconciler_UpdateExistingResources(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "new-image:v2",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	// Create existing StatefulSet with OLD image and proper owner reference
+	existingSts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "test-ingestor",
+				"app.kubernetes.io/component":  "ingestor",
+				"app.kubernetes.io/managed-by": "adx-mon-operator",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         "adx-mon.azure.com/v1",
+					Kind:               "Ingestor",
+					Name:               "test-ingestor",
+					UID:                "test-uid-12345",
+					Controller:         func() *bool { b := true; return &b }(),
+					BlockOwnerDeletion: func() *bool { b := true; return &b }(),
+				},
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: func() *int32 { r := int32(1); return &r }(),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "test-ingestor",
+					"app.kubernetes.io/component": "ingestor",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "test-ingestor",
+						"app.kubernetes.io/component": "ingestor",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "ingestor",
+							Image: "old-image:v1", // OLD image that should be updated
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor, existingSts).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+	// Run CreateIngestor which should update the existing StatefulSet
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was updated with the new image
+	updatedSts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, updatedSts))
+
+	require.Len(t, updatedSts.Spec.Template.Spec.Containers, 1, "Should have exactly one container")
+	require.Equal(t, "new-image:v2", updatedSts.Spec.Template.Spec.Containers[0].Image,
+		"StatefulSet image should be updated to the new image from Ingestor spec")
+}
+
+// TestIngestorReconciler_SkipsUnownedResources verifies that the reconciler does not
+// update resources that are not owned by the Ingestor, preventing conflicts.
+func TestIngestorReconciler_SkipsUnownedResources(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "new-image:v2",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	// Create existing StatefulSet WITHOUT owner reference (simulating external creation)
+	unownedSts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "test-ingestor",
+			},
+			// No OwnerReferences - this resource is not owned by the Ingestor
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: func() *int32 { r := int32(1); return &r }(),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name": "test-ingestor",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app.kubernetes.io/name": "test-ingestor",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "ingestor",
+							Image: "external-image:v1", // Should NOT be updated
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor, unownedSts).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+	// Run CreateIngestor - should skip the unowned StatefulSet
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was NOT updated (still has old image)
+	unchangedSts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, unchangedSts))
+
+	require.Len(t, unchangedSts.Spec.Template.Spec.Containers, 1, "Should have exactly one container")
+	require.Equal(t, "external-image:v1", unchangedSts.Spec.Template.Spec.Containers[0].Image,
+		"Unowned StatefulSet should NOT be updated - image should remain unchanged")
+}
+
 // TestIngestorReconciler_StateMachine verifies that the reconciliation state machine
 // handles all condition states correctly and doesn't create infinite loops.
 // This test exists because a bug where ConditionUnknown matched too broadly caused

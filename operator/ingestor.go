@@ -466,8 +466,8 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			logger.Infof("Skipping owner reference for cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
 		}
 
-		if err := r.Create(ctx, obj); err != nil && !errors.IsAlreadyExists(err) {
-			return ctrl.Result{}, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		if err := r.createOrUpdate(ctx, obj, ingestor); err != nil {
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -475,6 +475,47 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
 	}
 	return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+}
+
+// createOrUpdate attempts to create a resource. If it already exists and is owned by the
+// given Ingestor, it updates the resource. Cluster-scoped resources are only created, never
+// updated, to avoid conflicts between multiple Ingestor instances.
+func (r *IngestorReconciler) createOrUpdate(ctx context.Context, obj *unstructured.Unstructured, owner *adxmonv1.Ingestor) error {
+	if err := r.Create(ctx, obj); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+
+		// Resource exists - fetch it to check ownership and get resourceVersion
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(obj.GroupVersionKind())
+		key := client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+		if err := r.Get(ctx, key, existing); err != nil {
+			return fmt.Errorf("failed to get existing %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+
+		// Cluster-scoped resources can't have namespace-scoped owners, so skip updates
+		// to avoid conflicts with resources managed by other Ingestor instances.
+		if obj.GetNamespace() == "" {
+			logger.Debugf("Skipping update of cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
+			return nil
+		}
+
+		// Verify ownership before updating to avoid overwriting resources we don't own.
+		if !metav1.IsControlledBy(existing, owner) {
+			logger.Warnf("Skipping update of %s %s/%s: not owned by Ingestor %s/%s",
+				obj.GetKind(), obj.GetNamespace(), obj.GetName(), owner.Namespace, owner.Name)
+			return nil
+		}
+
+		// Update the owned resource with the new desired state
+		obj.SetResourceVersion(existing.GetResourceVersion())
+		if err := r.Update(ctx, obj); err != nil {
+			return fmt.Errorf("failed to update %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+		logger.Infof("Updated existing %s %s/%s", obj.GetKind(), obj.GetNamespace(), obj.GetName())
+	}
+	return nil
 }
 
 func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
