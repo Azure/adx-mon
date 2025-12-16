@@ -126,6 +126,30 @@ spec:
                   defaults to 1 if omitted.
                 format: int32
                 type: integer
+              tls:
+                description: |-
+                  TLS configures TLS certificates for the ingestor server.
+                  If not specified, the ingestor will generate self-signed certificates.
+                properties:
+                  hostPath:
+                    description: |-
+                      HostPath specifies a directory path on the host containing TLS certificates.
+                      The directory should contain tls.crt and tls.key files.
+                      This is useful for environments where certificates are pre-provisioned on nodes.
+                    type: string
+                  secretRef:
+                    description: |-
+                      SecretRef references a Kubernetes Secret containing tls.crt and tls.key.
+                      The secret must exist in the same namespace as the Ingestor.
+                    properties:
+                      name:
+                        description: Name is the name of the secret in the same namespace
+                          as the Ingestor.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                type: object
             required:
             - adxClusterSelector
             type: object

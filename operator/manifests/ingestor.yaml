@@ -178,6 +178,10 @@ spec:
             - "--max-transfer-size=10485760"
             - "--insecure-skip-verify"
             - "--max-connections=1000"
+            {{- if or .TLSSecretName .TLSHostPath }}
+            - "--ca-cert=/etc/ssl/ingestor/tls.crt"
+            - "--key=/etc/ssl/ingestor/tls.key"
+            {{- end }}
             {{- if .Region }}
             - "--region={{ .Region }}"
             {{- end }}
@@ -199,6 +203,11 @@ spec:
             - mountPath: /etc/ssl/certs
               name: ca-certs
               readOnly: true
+            {{- if or .TLSSecretName .TLSHostPath }}
+            - name: ingestor-certs
+              mountPath: /etc/ssl/ingestor
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
@@ -232,6 +241,15 @@ spec:
         - name: metrics
           hostPath:
             path: /mnt/ingestor
+        {{- if .TLSSecretName }}
+        - name: ingestor-certs
+          secret:
+            secretName: {{ .TLSSecretName }}
+        {{- else if .TLSHostPath }}
+        - name: ingestor-certs
+          hostPath:
+            path: {{ .TLSHostPath }}
+        {{- end }}
       tolerations:
         - key: CriticalAddonsOnly
           operator: Exists

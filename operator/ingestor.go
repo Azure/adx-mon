@@ -645,6 +645,8 @@ type ingestorTemplateData struct {
 	AzureResource    string         // Endpoint from Federated cluster
 	ClusterLabels    []clusterLabel // Sorted operator cluster labels for deterministic rendering
 	Region           string         // Region from operator cluster labels
+	TLSSecretName    string         // Name of the TLS secret (if using secretRef)
+	TLSHostPath      string         // Host path for TLS certs (if using hostPath)
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
@@ -732,6 +734,17 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		clusterLabels = append(clusterLabels, clusterLabel{Key: k, Value: clusterLabelsMap[k]})
 	}
 
+	// Extract TLS configuration
+	var tlsSecretName, tlsHostPath string
+	if ingestor.Spec.TLS != nil {
+		if ingestor.Spec.TLS.SecretRef != nil {
+			tlsSecretName = ingestor.Spec.TLS.SecretRef.Name
+		}
+		if ingestor.Spec.TLS.HostPath != "" {
+			tlsHostPath = ingestor.Spec.TLS.HostPath
+		}
+	}
+
 	data = &ingestorTemplateData{
 		Name:             ingestor.Name,
 		Image:            ingestor.Spec.Image,
@@ -744,6 +757,8 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		AzureResource:    azureResource,
 		ClusterLabels:    clusterLabels,
 		Region:           region,
+		TLSSecretName:    tlsSecretName,
+		TLSHostPath:      tlsHostPath,
 	}
 	return true, data, nil
 }
