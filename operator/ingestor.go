@@ -627,6 +627,12 @@ func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
 	}
 }
 
+// clusterLabel represents a single cluster label key-value pair for deterministic template rendering.
+type clusterLabel struct {
+	Key   string
+	Value string
+}
+
 type ingestorTemplateData struct {
 	Name             string
 	Image            string
@@ -636,6 +642,9 @@ type ingestorTemplateData struct {
 	Namespace        string
 	ImagePullSecrets []string
 	AzureClientID    string
+	AzureResource    string         // Endpoint from Federated cluster
+	ClusterLabels    []clusterLabel // Sorted operator cluster labels for deterministic rendering
+	Region           string         // Region from operator cluster labels
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
@@ -658,6 +667,8 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 
 	var metricsClusters []string
 	var logsClusters []string
+	var azureResource string
+
 	for _, cluster := range adxClusterList.Items {
 		// wait for the cluster to be ready
 		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
@@ -670,15 +681,30 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 			continue // Skip this cluster entirely if no endpoint
 		}
 
-		for _, db := range cluster.Spec.Databases {
-			entry := fmt.Sprintf("%s=%s", db.DatabaseName, endpoint)
-			switch db.TelemetryType {
-			case adxmonv1.DatabaseTelemetryMetrics:
-				metricsClusters = append(metricsClusters, entry)
-			case adxmonv1.DatabaseTelemetryLogs:
-				logsClusters = append(logsClusters, entry)
-			default:
-				// Traces and other telemetry types are not currently supported by the ingestor
+		// Check cluster role
+		role := adxmonv1.ClusterRolePartition // Default to Partition if not specified
+		if cluster.Spec.Role != nil {
+			role = *cluster.Spec.Role
+		}
+
+		switch role {
+		case adxmonv1.ClusterRoleFederated:
+			// Use the Federated cluster's endpoint for AZURE_RESOURCE
+			if azureResource == "" {
+				azureResource = endpoint
+			}
+		case adxmonv1.ClusterRolePartition:
+			// Only Partition clusters contribute kusto endpoints
+			for _, db := range cluster.Spec.Databases {
+				entry := fmt.Sprintf("%s=%s", db.DatabaseName, endpoint)
+				switch db.TelemetryType {
+				case adxmonv1.DatabaseTelemetryMetrics:
+					metricsClusters = append(metricsClusters, entry)
+				case adxmonv1.DatabaseTelemetryLogs:
+					logsClusters = append(logsClusters, entry)
+				default:
+					// Traces and other telemetry types are not currently supported by the ingestor
+				}
 			}
 		}
 	}
@@ -687,6 +713,23 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))
 	for i, s := range r.ImagePullSecrets {
 		imagePullSecretNames[i] = s.Name
+	}
+
+	// Get operator cluster labels for --cluster-labels args
+	// Convert to sorted slice for deterministic template rendering
+	clusterLabelsMap := getOperatorClusterLabels()
+	region := clusterLabelsMap["region"]
+
+	// Sort keys for deterministic ordering
+	keys := make([]string, 0, len(clusterLabelsMap))
+	for k := range clusterLabelsMap {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
+	clusterLabels := make([]clusterLabel, 0, len(keys))
+	for _, k := range keys {
+		clusterLabels = append(clusterLabels, clusterLabel{Key: k, Value: clusterLabelsMap[k]})
 	}
 
 	data = &ingestorTemplateData{
@@ -698,6 +741,9 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		Namespace:        ingestor.Namespace,
 		ImagePullSecrets: imagePullSecretNames,
 		AzureClientID:    os.Getenv("AZURE_CLIENT_ID"),
+		AzureResource:    azureResource,
+		ClusterLabels:    clusterLabels,
+		Region:           region,
 	}
 	return true, data, nil
 }

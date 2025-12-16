@@ -152,11 +152,19 @@ spec:
               name: ingestor
             - containerPort: 9091
               name: metrics
+          resources:
+            requests:
+              cpu: "8"
+              memory: 3Gi
           env:
             - name: LOG_LEVEL
               value: INFO
             - name: "GODEBUG"
               value: "http2client=0"
+            {{- if .AzureResource }}
+            - name: "AZURE_RESOURCE"
+              value: "{{ .AzureResource }}"
+            {{- end }}
             {{- if .AzureClientID }}
             - name: "AZURE_CLIENT_ID"
               value: "{{ .AzureClientID }}"
@@ -166,10 +174,16 @@ spec:
           args:
             - "--storage-dir=/mnt/data"
             - "--max-segment-age=5s"
-            - "--max-disk-usage=21474836480"
+            - "--max-disk-usage=68719476736"
             - "--max-transfer-size=10485760"
-            - "--max-connections=1000"
             - "--insecure-skip-verify"
+            - "--max-connections=1000"
+            {{- if .Region }}
+            - "--region={{ .Region }}"
+            {{- end }}
+            {{- range .ClusterLabels }}
+            - "--cluster-labels={{ .Key }}={{ .Value }}"
+            {{- end }}
             {{- range .MetricsClusters }}
             - "--metrics-kusto-endpoints={{ . }}"
             {{- end }}
