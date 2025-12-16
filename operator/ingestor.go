@@ -128,8 +128,33 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return r.CreateIngestor(ctx, ingestor)
 
 	case condition.Reason == r.waitForReadyReason:
-		// Ingestor is installing, check if the ADXCluster is ready
+		// Ingestor is installing. First ensure manifests are up-to-date (handles
+		// operator upgrades with template changes), then check readiness.
+		if _, updated, err := r.ensureManifests(ctx, ingestor); err != nil {
+			return ctrl.Result{}, err
+		} else if updated {
+			// Manifests were updated, requeue to check readiness
+			return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+		}
 		return r.IsReady(ctx, ingestor)
+
+	case condition.Reason == ReasonReady:
+		// Ingestor is ready. Perform drift correction to ensure the StatefulSet
+		// matches the current operator template (e.g., after operator upgrade).
+		result, updated, err := r.ensureManifests(ctx, ingestor)
+		if err != nil {
+			return result, err
+		}
+		if updated {
+			// Manifests were updated, transition to WaitForReady
+			if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifests updating", metav1.ConditionTrue); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+		}
+		// No updates needed, stay Ready. Honor any requeue request from ensureManifests
+		// (e.g., when ADXCluster is not yet ready and we need to retry later).
+		return result, nil
 
 	case condition.Reason == ReasonNotReady:
 		// ADXCluster is not ready, retry CreateIngestor to check again
@@ -470,7 +495,7 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			logger.Infof("Skipping owner reference for cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
 		}
 
-		if err := r.createOrUpdate(ctx, obj, ingestor); err != nil {
+		if _, err := r.createOrUpdate(ctx, obj, ingestor); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -481,13 +506,82 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 	return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
 }
 
+// ensureManifests renders and applies the ingestor manifests, updating any resources that
+// have drifted from the desired state (e.g., after an operator upgrade with template changes).
+// Returns (result, updated, error) where updated is true if any resources were modified.
+func (r *IngestorReconciler) ensureManifests(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, bool, error) {
+	// Render the ingestor manifest
+	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor.yaml")
+	if err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("failed to read ingestor template: %w", err)
+	}
+	tmpl, err := template.New("ingestor").Parse(string(tmplBytes))
+	if err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("failed to parse ingestor template: %w", err)
+	}
+
+	ready, data, err := r.templateData(ctx, ingestor)
+	if err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("failed to get template data: %w", err)
+	}
+	if !ready {
+		// ADXCluster not ready, but this isn't an error for ensureManifests
+		// The caller should handle transitioning to NotReady state if needed
+		return ctrl.Result{RequeueAfter: extendedRequeueInterval}, false, nil
+	}
+
+	var rendered bytes.Buffer
+	if err := tmpl.Execute(&rendered, data); err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("failed to render ingestor template: %w", err)
+	}
+
+	var anyUpdated bool
+	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(rendered.Bytes()), 4096)
+	for {
+		if ctx.Err() != nil {
+			return ctrl.Result{}, anyUpdated, ctx.Err()
+		}
+		obj := &unstructured.Unstructured{}
+		err := decoder.Decode(obj)
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			continue
+		}
+		if obj.Object == nil || obj.GetKind() == "" {
+			continue
+		}
+
+		// Set owner reference for namespace-scoped resources
+		if obj.GetNamespace() != "" {
+			if err := controllerutil.SetControllerReference(ingestor, obj, r.Scheme); err != nil {
+				if !strings.Contains(err.Error(), "cluster-scoped resource must not have a namespace-scoped owner") {
+					return ctrl.Result{}, anyUpdated, fmt.Errorf("failed to set owner reference for %s %s: %w", obj.GetKind(), obj.GetName(), err)
+				}
+			}
+		}
+
+		updated, err := r.createOrUpdate(ctx, obj, ingestor)
+		if err != nil {
+			return ctrl.Result{}, anyUpdated, err
+		}
+		if updated {
+			anyUpdated = true
+		}
+	}
+
+	return ctrl.Result{}, anyUpdated, nil
+}
+
 // createOrUpdate attempts to create a resource. If it already exists and is owned by the
 // given Ingestor, it updates the resource. Cluster-scoped resources are only created, never
 // updated, to avoid conflicts between multiple Ingestor instances.
-func (r *IngestorReconciler) createOrUpdate(ctx context.Context, obj *unstructured.Unstructured, owner *adxmonv1.Ingestor) error {
+// Returns true if the resource was created or updated.
+func (r *IngestorReconciler) createOrUpdate(ctx context.Context, obj *unstructured.Unstructured, owner *adxmonv1.Ingestor) (bool, error) {
 	if err := r.Create(ctx, obj); err != nil {
 		if !errors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
+			return false, fmt.Errorf("failed to create %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 
 		// Resource exists - fetch it to check ownership and get resourceVersion
@@ -495,31 +589,33 @@ func (r *IngestorReconciler) createOrUpdate(ctx context.Context, obj *unstructur
 		existing.SetGroupVersionKind(obj.GroupVersionKind())
 		key := client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}
 		if err := r.Get(ctx, key, existing); err != nil {
-			return fmt.Errorf("failed to get existing %s %s: %w", obj.GetKind(), obj.GetName(), err)
+			return false, fmt.Errorf("failed to get existing %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 
 		// Cluster-scoped resources can't have namespace-scoped owners, so skip updates
 		// to avoid conflicts with resources managed by other Ingestor instances.
 		if obj.GetNamespace() == "" {
 			logger.Debugf("Skipping update of cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
-			return nil
+			return false, nil
 		}
 
 		// Verify ownership before updating to avoid overwriting resources we don't own.
 		if !metav1.IsControlledBy(existing, owner) {
 			logger.Warnf("Skipping update of %s %s/%s: not owned by Ingestor %s/%s",
 				obj.GetKind(), obj.GetNamespace(), obj.GetName(), owner.Namespace, owner.Name)
-			return nil
+			return false, nil
 		}
 
 		// Update the owned resource with the new desired state
 		obj.SetResourceVersion(existing.GetResourceVersion())
 		if err := r.Update(ctx, obj); err != nil {
-			return fmt.Errorf("failed to update %s %s: %w", obj.GetKind(), obj.GetName(), err)
+			return false, fmt.Errorf("failed to update %s %s: %w", obj.GetKind(), obj.GetName(), err)
 		}
 		logger.Infof("Updated existing %s %s/%s", obj.GetKind(), obj.GetNamespace(), obj.GetName())
+		return true, nil
 	}
-	return nil
+	// Resource was created
+	return true, nil
 }
 
 func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {

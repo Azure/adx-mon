@@ -901,15 +901,17 @@ func TestIngestorReconciler_StateMachine(t *testing.T) {
 			expectAction:  "create",
 			expectRequeue: true,
 		},
-		// WaitForReady - check if StatefulSet is ready
+		// WaitForReady - ensure manifests are up-to-date, then check if StatefulSet is ready.
+		// Since test setup doesn't include all managed resources, ensureManifests will
+		// create them and return with requeue.
 		{
 			name:          "wait_for_ready",
 			reason:        ReasonWaitForReady,
 			status:        metav1.ConditionTrue,
 			generation:    1,
 			observedGen:   1,
-			expectAction:  "ready",
-			expectRequeue: true, // requeue if not ready yet
+			expectAction:  "ensure_and_ready",
+			expectRequeue: true, // requeue after ensuring manifests or if not ready yet
 		},
 		// NotReady - ADXCluster not ready, should retry CreateIngestor
 		{
@@ -921,15 +923,17 @@ func TestIngestorReconciler_StateMachine(t *testing.T) {
 			expectAction:  "create",
 			expectRequeue: true,
 		},
-		// Ready - no action needed
+		// Ready - ensure manifests are up-to-date (drift correction).
+		// Since test setup doesn't include all managed resources, ensureManifests will
+		// create them and trigger a transition to WaitForReady.
 		{
-			name:          "ready_noop",
+			name:          "ready_drift_correction",
 			reason:        ReasonReady,
 			status:        metav1.ConditionTrue,
 			generation:    1,
 			observedGen:   1,
-			expectAction:  "noop",
-			expectRequeue: false,
+			expectAction:  "ensure",
+			expectRequeue: true, // requeue after detecting drift and creating resources
 		},
 		// Generation changed - re-render manifests
 		{
