@@ -89,6 +89,11 @@ func realMain(ctx *cli.Context) error {
 	}
 	imagePullSecrets := k8s.DiscoverImagePullSecrets(svcCtx, clientset)
 
+	// Discover nodeSelector from the operator's own pod to propagate to created workloads.
+	// This ensures created pods land on the same node pool as the operator, which typically
+	// has the required managed identities and network access configured.
+	nodeSelector := k8s.DiscoverNodeSelector(svcCtx, clientset)
+
 	// Set up controllers
 	adxr := &operator.AdxReconciler{
 		Client: mgr.GetClient(),
@@ -102,6 +107,7 @@ func realMain(ctx *cli.Context) error {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		ImagePullSecrets: imagePullSecrets,
+		NodeSelector:     nodeSelector,
 	}
 	if err = ir.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create ingestor controller: %w", err)

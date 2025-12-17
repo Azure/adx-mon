@@ -13,12 +13,12 @@ import (
 
 func TestDiscoverImagePullSecrets(t *testing.T) {
 	tests := []struct {
-		name           string
-		podNamespace   string
-		podName        string
-		pod            *corev1.Pod
-		expectedNames  []string
-		expectNil      bool
+		name          string
+		podNamespace  string
+		podName       string
+		pod           *corev1.Pod
+		expectedNames []string
+		expectNil     bool
 	}{
 		{
 			name:         "no env vars set",

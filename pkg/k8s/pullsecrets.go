@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	corev1 "k8s.io/api/core/v1"
@@ -95,4 +96,61 @@ func MustDiscoverImagePullSecrets(ctx context.Context, clientset kubernetes.Inte
 	logger.Infof("Discovered imagePullSecrets from operator pod: %v", names)
 
 	return secrets, nil
+}
+
+// DiscoverNodeSelector retrieves the nodeSelector from the current pod.
+// This allows the operator to propagate its own node selector to workloads it creates,
+// ensuring that created pods land on the same node pool as the operator (which typically
+// has the necessary managed identities and network access).
+// Returns an empty map if running outside a pod or if no nodeSelector is configured.
+//
+// Required environment variables (typically set via Kubernetes downward API):
+//
+//	env:
+//	  - name: POD_NAME
+//	    valueFrom:
+//	      fieldRef:
+//	        fieldPath: metadata.name
+//	  - name: POD_NAMESPACE
+//	    valueFrom:
+//	      fieldRef:
+//	        fieldPath: metadata.namespace
+func DiscoverNodeSelector(ctx context.Context, clientset kubernetes.Interface) map[string]string {
+	namespace := os.Getenv("POD_NAMESPACE")
+	podName := os.Getenv("POD_NAME")
+
+	if namespace == "" || podName == "" {
+		logger.Debugf("POD_NAMESPACE or POD_NAME not set, cannot discover nodeSelector")
+		return nil
+	}
+
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		logger.Warnf("Failed to get operator pod %s/%s: %v", namespace, podName, err)
+		return nil
+	}
+
+	if len(pod.Spec.NodeSelector) == 0 {
+		logger.Debugf("No nodeSelector found on operator pod")
+		return nil
+	}
+
+	nodeSelector := make(map[string]string, len(pod.Spec.NodeSelector))
+	for k, v := range pod.Spec.NodeSelector {
+		nodeSelector[k] = v
+	}
+
+	// Log the discovered nodeSelector (sorted for deterministic output)
+	keys := make([]string, 0, len(nodeSelector))
+	for k := range nodeSelector {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, nodeSelector[k]))
+	}
+	logger.Infof("Discovered nodeSelector from operator pod: %v", pairs)
+
+	return nodeSelector
 }

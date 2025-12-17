@@ -74,6 +74,11 @@ type IngestorReconciler struct {
 	// from the operator's own pod at startup.
 	ImagePullSecrets []corev1.LocalObjectReference
 
+	// NodeSelector is propagated to created workloads to ensure they land on the
+	// same node pool as the operator. This ensures pods have access to the same
+	// managed identities and network configuration as the operator.
+	NodeSelector map[string]string
+
 	waitForReadyReason string
 
 	// crdsMu protects crdsInstalled; CRD installation is attempted until it succeeds.
@@ -647,6 +652,7 @@ type ingestorTemplateData struct {
 	Region           string         // Region from operator cluster labels
 	TLSSecretName    string         // Name of the TLS secret (if using secretRef)
 	TLSHostPath      string         // Host path for TLS certs (if using hostPath)
+	NodeSelector     []clusterLabel // Sorted node selector key-value pairs from operator pod
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
@@ -745,6 +751,20 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		}
 	}
 
+	// Convert NodeSelector map to sorted slice for deterministic template rendering
+	var nodeSelector []clusterLabel
+	if len(r.NodeSelector) > 0 {
+		nsKeys := make([]string, 0, len(r.NodeSelector))
+		for k := range r.NodeSelector {
+			nsKeys = append(nsKeys, k)
+		}
+		slices.Sort(nsKeys)
+		nodeSelector = make([]clusterLabel, 0, len(nsKeys))
+		for _, k := range nsKeys {
+			nodeSelector = append(nodeSelector, clusterLabel{Key: k, Value: r.NodeSelector[k]})
+		}
+	}
+
 	data = &ingestorTemplateData{
 		Name:             ingestor.Name,
 		Image:            ingestor.Spec.Image,
@@ -759,6 +779,7 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		Region:           region,
 		TLSSecretName:    tlsSecretName,
 		TLSHostPath:      tlsHostPath,
+		NodeSelector:     nodeSelector,
 	}
 	return true, data, nil
 }

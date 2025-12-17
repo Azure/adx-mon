@@ -137,6 +137,12 @@ spec:
         - name: {{ . }}
         {{- end }}
       {{- end }}
+      {{- if .NodeSelector }}
+      nodeSelector:
+        {{- range .NodeSelector }}
+        {{ .Key }}: {{ .Value }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: ingestor
           image: {{ .Image }}
