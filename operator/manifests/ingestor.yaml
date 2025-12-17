@@ -1,20 +1,23 @@
 ---
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: {{ .Namespace }}
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ingestor
+  name: {{ .Name }}
   namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ .Namespace }}:ingestor
+  name: {{ .Namespace }}:{{ .Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
 rules:
   - apiGroups:
       - ""
@@ -58,25 +61,34 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Namespace }}:ingestor
+  name: {{ .Namespace }}:{{ .Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ .Namespace }}:ingestor
+  name: {{ .Namespace }}:{{ .Name }}
 subjects:
   - kind: ServiceAccount
-    name: ingestor
+    name: {{ .Name }}
     namespace: {{ .Namespace }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: ingestor
+  name: {{ .Name }}
   namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
 spec:
   type: ClusterIP
   selector:
-    app: ingestor
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
   ports:
     # By default and for convenience, the `targetPort` is set to the same value as the `port` field.
     - port: 443
@@ -88,20 +100,27 @@ spec:
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: ingestor
+  name: {{ .Name }}
   namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
 spec:
-  serviceName: "ingestor"
-  replicas: 1
+  serviceName: {{ .Name }}
+  replicas: {{ .Replicas }}
   updateStrategy:
     type: RollingUpdate
   selector:
     matchLabels:
-      app: ingestor
+      app.kubernetes.io/name: {{ .Name }}
+      app.kubernetes.io/component: ingestor
   template:
     metadata:
       labels:
-        app: ingestor
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: ingestor
+        app.kubernetes.io/managed-by: adx-mon-operator
       annotations:
         adx-mon/scrape: "true"
         adx-mon/port: "9091"
@@ -111,7 +130,19 @@ spec:
     spec:
       automountServiceAccountToken: true
       securityContext: {}
-      serviceAccountName: ingestor
+      serviceAccountName: {{ .Name }}
+      {{- if .ImagePullSecrets }}
+      imagePullSecrets:
+        {{- range .ImagePullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      {{- if .NodeSelector }}
+      nodeSelector:
+        {{- range .NodeSelector }}
+        {{ .Key }}: {{ .Value }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: ingestor
           image: {{ .Image }}
@@ -127,24 +158,42 @@ spec:
               name: ingestor
             - containerPort: 9091
               name: metrics
+          resources:
+            requests:
+              cpu: "8"
+              memory: 3Gi
           env:
             - name: LOG_LEVEL
               value: INFO
             - name: "GODEBUG"
               value: "http2client=0"
+            {{- if .AzureResource }}
             - name: "AZURE_RESOURCE"
-              value: "$ADX_URL"
-            - name:  "AZURE_CLIENT_ID"
-              value: "$CLIENT_ID"
+              value: "{{ .AzureResource }}"
+            {{- end }}
+            {{- if .AzureClientID }}
+            - name: "AZURE_CLIENT_ID"
+              value: "{{ .AzureClientID }}"
+            {{- end }}
           command:
             - /ingestor
           args:
             - "--storage-dir=/mnt/data"
             - "--max-segment-age=5s"
-            - "--max-disk-usage=21474836480"
+            - "--max-disk-usage=68719476736"
             - "--max-transfer-size=10485760"
-            - "--max-connections=1000"
             - "--insecure-skip-verify"
+            - "--max-connections=1000"
+            {{- if or .TLSSecretName .TLSHostPath }}
+            - "--ca-cert=/etc/ssl/ingestor/tls.crt"
+            - "--key=/etc/ssl/ingestor/tls.key"
+            {{- end }}
+            {{- if .Region }}
+            - "--region={{ .Region }}"
+            {{- end }}
+            {{- range .ClusterLabels }}
+            - "--cluster-labels={{ .Key }}={{ .Value }}"
+            {{- end }}
             {{- range .MetricsClusters }}
             - "--metrics-kusto-endpoints={{ . }}"
             {{- end }}
@@ -160,6 +209,11 @@ spec:
             - mountPath: /etc/ssl/certs
               name: ca-certs
               readOnly: true
+            {{- if or .TLSSecretName .TLSHostPath }}
+            - name: ingestor-certs
+              mountPath: /etc/ssl/ingestor
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
@@ -172,7 +226,11 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
                 matchExpressions:
-                  - key: app
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - {{ .Name }}
+                  - key: app.kubernetes.io/component
                     operator: In
                     values:
                       - ingestor
@@ -189,6 +247,15 @@ spec:
         - name: metrics
           hostPath:
             path: /mnt/ingestor
+        {{- if .TLSSecretName }}
+        - name: ingestor-certs
+          secret:
+            secretName: {{ .TLSSecretName }}
+        {{- else if .TLSHostPath }}
+        - name: ingestor-certs
+          hostPath:
+            path: {{ .TLSHostPath }}
+        {{- end }}
       tolerations:
         - key: CriticalAddonsOnly
           operator: Exists
@@ -200,3 +267,16 @@ spec:
           key: node.kubernetes.io/unreachable
           operator: Exists
           tolerationSeconds: 300
+        {{- range .ExtraTolerations }}
+        - key: {{ .Key }}
+          operator: {{ .Operator }}
+          {{- if .Value }}
+          value: {{ .Value }}
+          {{- end }}
+          {{- if .Effect }}
+          effect: {{ .Effect }}
+          {{- end }}
+          {{- if .HasTolerationSeconds }}
+          tolerationSeconds: {{ .TolerationSeconds }}
+          {{- end }}
+        {{- end }}

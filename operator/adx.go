@@ -175,6 +175,13 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		// Check the status of the cluster
 		logger.Infof("ADXCluster %s: checking cluster status", cluster.Spec.ClusterName)
 		return r.CheckStatus(ctx, &cluster)
+
+	case condition.Reason == "CriteriaExpressionError",
+		condition.Reason == "CriteriaExpressionFalse":
+		// CriteriaExpression now evaluates successfully (we passed the check above),
+		// recover from previous error state by re-running creation.
+		logger.Infof("ADXCluster %s: recovering from criteria expression state", cluster.Spec.ClusterName)
+		return r.CreateCluster(ctx, &cluster)
 	}
 
 	// Federated cluster support.
