@@ -94,6 +94,10 @@ func realMain(ctx *cli.Context) error {
 	// has the required managed identities and network access configured.
 	nodeSelector := k8s.DiscoverNodeSelector(svcCtx, clientset)
 
+	// Discover tolerations from the operator's own pod to propagate to created workloads.
+	// This ensures created pods can schedule onto the same tainted node pools as the operator.
+	tolerations := k8s.DiscoverTolerations(svcCtx, clientset)
+
 	// Set up controllers
 	adxr := &operator.AdxReconciler{
 		Client: mgr.GetClient(),
@@ -108,6 +112,7 @@ func realMain(ctx *cli.Context) error {
 		Scheme:           mgr.GetScheme(),
 		ImagePullSecrets: imagePullSecrets,
 		NodeSelector:     nodeSelector,
+		Tolerations:      tolerations,
 	}
 	if err = ir.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create ingestor controller: %w", err)

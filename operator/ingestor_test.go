@@ -46,13 +46,17 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 			Replicas: to.Ptr(int32(2)),
 		},
 		Status: appsv1.StatefulSetStatus{
-			ReadyReplicas: 2,
+			ReadyReplicas:   2,
+			UpdatedReplicas: 2,
+			CurrentRevision: "rev1",
+			UpdateRevision:  "rev1",
 		},
 	}
 
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		WithStatusSubresource(&appsv1.StatefulSet{}).
 		Build()
 	require.NoError(t, client.Create(context.Background(), ingestor))
 	require.NoError(t, client.Create(context.Background(), sts))
@@ -63,7 +67,28 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.IsZero())
 
+	// Rollout pending: ready replicas match, but updated replicas lag.
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, sts))
+	sts.Status.UpdatedReplicas = 1
+	require.NoError(t, client.Status().Update(context.Background(), sts))
+	result, err = r.IsReady(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.False(t, result.IsZero())
+
+	// Rollout pending: revisions differ.
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, sts))
+	sts.Status.UpdatedReplicas = 2
+	sts.Status.UpdateRevision = "rev2"
+	require.NoError(t, client.Status().Update(context.Background(), sts))
+	result, err = r.IsReady(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.False(t, result.IsZero())
+
 	// Not ready case
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, sts))
+	sts.Status.UpdateRevision = "rev1"
+	sts.Status.CurrentRevision = "rev1"
+	require.NoError(t, client.Status().Update(context.Background(), sts))
 	sts.Spec.Replicas = to.Ptr(int32(3))
 	require.NoError(t, client.Update(context.Background(), sts))
 
@@ -790,6 +815,82 @@ func TestIngestorReconciler_ImagePullSecrets(t *testing.T) {
 	require.Len(t, sts.Spec.Template.Spec.ImagePullSecrets, 2, "Should have two imagePullSecrets")
 	require.Equal(t, "acr-pull-secret", sts.Spec.Template.Spec.ImagePullSecrets[0].Name)
 	require.Equal(t, "another-registry-secret", sts.Spec.Template.Spec.ImagePullSecrets[1].Name)
+}
+
+func TestIngestorReconciler_TemplateData_PropagatesSchedulingConstraints(t *testing.T) {
+	SetClusterLabels(map[string]string{"region": "eastus"})
+	t.Cleanup(func() { SetClusterLabels(nil) })
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "my-registry.io/ingestor:v1",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		Build()
+
+	reconciler := &IngestorReconciler{
+		Client: client,
+		Scheme: scheme,
+		NodeSelector: map[string]string{
+			"agentpool": "infra",
+		},
+		Tolerations: []corev1.Toleration{
+			{
+				Key:      "agentpool",
+				Operator: corev1.TolerationOpEqual,
+				Value:    "infra",
+				Effect:   corev1.TaintEffectNoSchedule,
+			},
+		},
+	}
+
+	ready, data, err := reconciler.templateData(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, []clusterLabel{{Key: "agentpool", Value: "infra"}}, data.NodeSelector)
+	require.Equal(t, []toleration{{Key: "agentpool", Operator: "Equal", Value: "infra", Effect: "NoSchedule"}}, data.ExtraTolerations)
 }
 
 // TestIngestorReconciler_NoImagePullSecrets verifies that when no imagePullSecrets

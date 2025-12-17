@@ -267,3 +267,16 @@ spec:
           key: node.kubernetes.io/unreachable
           operator: Exists
           tolerationSeconds: 300
+        {{- range .ExtraTolerations }}
+        - key: {{ .Key }}
+          operator: {{ .Operator }}
+          {{- if .Value }}
+          value: {{ .Value }}
+          {{- end }}
+          {{- if .Effect }}
+          effect: {{ .Effect }}
+          {{- end }}
+          {{- if .HasTolerationSeconds }}
+          tolerationSeconds: {{ .TolerationSeconds }}
+          {{- end }}
+        {{- end }}

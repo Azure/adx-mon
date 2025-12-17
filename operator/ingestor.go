@@ -79,6 +79,10 @@ type IngestorReconciler struct {
 	// managed identities and network configuration as the operator.
 	NodeSelector map[string]string
 
+	// Tolerations are propagated to created workloads so they can schedule onto the
+	// same tainted node pools as the operator.
+	Tolerations []corev1.Toleration
+
 	waitForReadyReason string
 
 	// crdsMu protects crdsInstalled; CRD installation is attempted until it succeeds.
@@ -184,7 +188,26 @@ func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ing
 		return ctrl.Result{}, err
 	}
 
-	if sts.Status.ReadyReplicas == *sts.Spec.Replicas {
+	desiredReplicas := int32(1)
+	if sts.Spec.Replicas != nil {
+		desiredReplicas = *sts.Spec.Replicas
+	}
+
+	// Ensure the StatefulSet controller has observed our latest spec changes.
+	if sts.Status.ObservedGeneration > 0 && sts.Status.ObservedGeneration != sts.Generation {
+		return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+	}
+
+	// Don't report Ready while a rollout is still pending; otherwise template changes (like nodeSelector)
+	// may never be reflected in the running Pods.
+	if sts.Status.UpdateRevision != "" && sts.Status.CurrentRevision != "" && sts.Status.UpdateRevision != sts.Status.CurrentRevision {
+		return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+	}
+	if sts.Status.UpdatedReplicas < desiredReplicas {
+		return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+	}
+
+	if sts.Status.ReadyReplicas == desiredReplicas {
 		if err := r.setCondition(ctx, ingestor, ReasonReady, "All ingestor replicas are ready", metav1.ConditionTrue); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -638,6 +661,15 @@ type clusterLabel struct {
 	Value string
 }
 
+type toleration struct {
+	Key                  string
+	Operator             string
+	Value                string
+	Effect               string
+	TolerationSeconds    int64
+	HasTolerationSeconds bool
+}
+
 type ingestorTemplateData struct {
 	Name             string
 	Image            string
@@ -653,6 +685,7 @@ type ingestorTemplateData struct {
 	TLSSecretName    string         // Name of the TLS secret (if using secretRef)
 	TLSHostPath      string         // Host path for TLS certs (if using hostPath)
 	NodeSelector     []clusterLabel // Sorted node selector key-value pairs from operator pod
+	ExtraTolerations []toleration   // Sorted tolerations from operator pod
 }
 
 func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv1.Ingestor) (clustersReady bool, data *ingestorTemplateData, err error) {
@@ -765,6 +798,64 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		}
 	}
 
+	extraTolerations := make([]toleration, 0, len(r.Tolerations))
+	seen := make(map[string]struct{}, len(r.Tolerations))
+	for _, t := range r.Tolerations {
+		if isDefaultIngestorToleration(t) {
+			continue
+		}
+		key := tolerationKey(t)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out := toleration{
+			Key:      t.Key,
+			Operator: string(t.Operator),
+			Value:    t.Value,
+			Effect:   string(t.Effect),
+		}
+		if out.Operator == "" {
+			if out.Value == "" {
+				out.Operator = string(corev1.TolerationOpExists)
+			} else {
+				out.Operator = string(corev1.TolerationOpEqual)
+			}
+		}
+		if t.TolerationSeconds != nil {
+			out.HasTolerationSeconds = true
+			out.TolerationSeconds = *t.TolerationSeconds
+		}
+		extraTolerations = append(extraTolerations, out)
+	}
+	slices.SortFunc(extraTolerations, func(a, b toleration) int {
+		if a.Key != b.Key {
+			return strings.Compare(a.Key, b.Key)
+		}
+		if a.Effect != b.Effect {
+			return strings.Compare(a.Effect, b.Effect)
+		}
+		if a.Operator != b.Operator {
+			return strings.Compare(a.Operator, b.Operator)
+		}
+		if a.Value != b.Value {
+			return strings.Compare(a.Value, b.Value)
+		}
+		if a.HasTolerationSeconds != b.HasTolerationSeconds {
+			if !a.HasTolerationSeconds {
+				return -1
+			}
+			return 1
+		}
+		if a.TolerationSeconds != b.TolerationSeconds {
+			if a.TolerationSeconds < b.TolerationSeconds {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+
 	data = &ingestorTemplateData{
 		Name:             ingestor.Name,
 		Image:            ingestor.Spec.Image,
@@ -780,8 +871,38 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		TLSSecretName:    tlsSecretName,
 		TLSHostPath:      tlsHostPath,
 		NodeSelector:     nodeSelector,
+		ExtraTolerations: extraTolerations,
 	}
 	return true, data, nil
+}
+
+func isDefaultIngestorToleration(t corev1.Toleration) bool {
+	switch {
+	case t.Key == "CriticalAddonsOnly" && t.Operator == corev1.TolerationOpExists:
+		return true
+	case t.Key == "node.kubernetes.io/not-ready" &&
+		t.Operator == corev1.TolerationOpExists &&
+		t.Effect == corev1.TaintEffectNoExecute &&
+		t.TolerationSeconds != nil &&
+		*t.TolerationSeconds == 300:
+		return true
+	case t.Key == "node.kubernetes.io/unreachable" &&
+		t.Operator == corev1.TolerationOpExists &&
+		t.Effect == corev1.TaintEffectNoExecute &&
+		t.TolerationSeconds != nil &&
+		*t.TolerationSeconds == 300:
+		return true
+	default:
+		return false
+	}
+}
+
+func tolerationKey(t corev1.Toleration) string {
+	seconds := ""
+	if t.TolerationSeconds != nil {
+		seconds = fmt.Sprintf("%d", *t.TolerationSeconds)
+	}
+	return strings.Join([]string{t.Key, string(t.Operator), t.Value, string(t.Effect), seconds}, "\x00")
 }
 
 func (r *IngestorReconciler) setCondition(ctx context.Context, ingestor *adxmonv1.Ingestor, reason, message string, status metav1.ConditionStatus) error {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	corev1 "k8s.io/api/core/v1"
@@ -153,4 +155,116 @@ func DiscoverNodeSelector(ctx context.Context, clientset kubernetes.Interface) m
 	logger.Infof("Discovered nodeSelector from operator pod: %v", pairs)
 
 	return nodeSelector
+}
+
+// DiscoverTolerations retrieves the tolerations from the current pod.
+// This allows the operator to propagate its own scheduling tolerations to workloads it creates,
+// ensuring that created pods can schedule onto the same tainted node pools as the operator.
+// Returns an empty slice if running outside a pod or if no tolerations are configured.
+//
+// Required environment variables (typically set via Kubernetes downward API):
+//
+//	env:
+//	  - name: POD_NAME
+//	    valueFrom:
+//	      fieldRef:
+//	        fieldPath: metadata.name
+//	  - name: POD_NAMESPACE
+//	    valueFrom:
+//	      fieldRef:
+//	        fieldPath: metadata.namespace
+func DiscoverTolerations(ctx context.Context, clientset kubernetes.Interface) []corev1.Toleration {
+	namespace := os.Getenv("POD_NAMESPACE")
+	podName := os.Getenv("POD_NAME")
+
+	if namespace == "" || podName == "" {
+		logger.Debugf("POD_NAMESPACE or POD_NAME not set, cannot discover tolerations")
+		return nil
+	}
+
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		logger.Warnf("Failed to get operator pod %s/%s: %v", namespace, podName, err)
+		return nil
+	}
+
+	if len(pod.Spec.Tolerations) == 0 {
+		logger.Debugf("No tolerations found on operator pod")
+		return nil
+	}
+
+	tolerations := make([]corev1.Toleration, len(pod.Spec.Tolerations))
+	copy(tolerations, pod.Spec.Tolerations)
+
+	// Sort for deterministic template rendering and logs.
+	slices.SortFunc(tolerations, func(a, b corev1.Toleration) int {
+		if a.Key != b.Key {
+			return strings.Compare(a.Key, b.Key)
+		}
+		if a.Effect != b.Effect {
+			return strings.Compare(string(a.Effect), string(b.Effect))
+		}
+		if a.Operator != b.Operator {
+			return strings.Compare(string(a.Operator), string(b.Operator))
+		}
+		if a.Value != b.Value {
+			return strings.Compare(a.Value, b.Value)
+		}
+
+		aSeconds := int64(0)
+		bSeconds := int64(0)
+		aHasSeconds := a.TolerationSeconds != nil
+		bHasSeconds := b.TolerationSeconds != nil
+		if aHasSeconds {
+			aSeconds = *a.TolerationSeconds
+		}
+		if bHasSeconds {
+			bSeconds = *b.TolerationSeconds
+		}
+		if aHasSeconds != bHasSeconds {
+			if !aHasSeconds {
+				return -1
+			}
+			return 1
+		}
+		if aSeconds != bSeconds {
+			if aSeconds < bSeconds {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+
+	// Log the discovered tolerations (in stable order).
+	parts := make([]string, 0, len(tolerations))
+	for _, t := range tolerations {
+		parts = append(parts, formatToleration(t))
+	}
+	logger.Infof("Discovered tolerations from operator pod: %v", parts)
+
+	return tolerations
+}
+
+func formatToleration(t corev1.Toleration) string {
+	parts := make([]string, 0, 5)
+	if t.Key != "" {
+		parts = append(parts, "key="+t.Key)
+	}
+	if t.Operator != "" {
+		parts = append(parts, "op="+string(t.Operator))
+	}
+	if t.Value != "" {
+		parts = append(parts, "value="+t.Value)
+	}
+	if t.Effect != "" {
+		parts = append(parts, "effect="+string(t.Effect))
+	}
+	if t.TolerationSeconds != nil {
+		parts = append(parts, "seconds="+strconv.FormatInt(*t.TolerationSeconds, 10))
+	}
+	if len(parts) == 0 {
+		return "{}"
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
