@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-//go:embed manifests/crds/functions_crd.yaml manifests/crds/managementcommands_crd.yaml manifests/crds/summaryrules_crd.yaml manifests/ingestor.yaml
+//go:embed manifests/crds/functions_crd.yaml manifests/crds/managementcommands_crd.yaml manifests/crds/summaryrules_crd.yaml manifests/ingestor_rbac.yaml
 var ingestorCrdsFS embed.FS
 
 // Condition reason constants for Ingestor status
@@ -451,27 +451,10 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		return ctrl.Result{}, fmt.Errorf("failed to install CRDs: %w", err)
 	}
 
-	// Render the ingestor manifest
-	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor.yaml")
+	// Gather cluster data for building resources
+	ready, cfg, err := r.buildIngestorConfig(ctx, ingestor)
 	if err != nil {
-		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to read ingestor template", metav1.ConditionFalse); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil // No need to retry
-	}
-	tmpl, err := template.New("ingestor").Parse(string(tmplBytes))
-	if err != nil {
-		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to parse ingestor template", metav1.ConditionFalse); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil // No need to retry
-	}
-
-	ready, data, err := r.templateData(ctx, ingestor)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get template data: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to build ingestor config: %w", err)
 	}
 	if !ready {
 		if err := r.setCondition(ctx, ingestor, ReasonNotReady, "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
@@ -480,19 +463,74 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 		return ctrl.Result{RequeueAfter: extendedRequeueInterval}, nil
 	}
 
-	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, data); err != nil {
-		// This is a terminal condition because a retry will not help.
-		if err := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to render ingestor template", metav1.ConditionFalse); err != nil {
+	// Build and apply typed resources (ServiceAccount, Service, StatefulSet)
+	typedResources := []client.Object{
+		BuildServiceAccount(cfg),
+		BuildService(cfg),
+		BuildStatefulSet(cfg),
+	}
+
+	for _, obj := range typedResources {
+		// Set owner reference for garbage collection
+		if err := controllerutil.SetControllerReference(ingestor, obj, r.Scheme); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to set owner reference for %s %s: %w", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
+		}
+		if _, err := r.createOrUpdateTyped(ctx, obj, ingestor); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil // No need to retry
+	}
+
+	// Render and apply RBAC resources from template (ClusterRole, ClusterRoleBinding)
+	// These remain as templates because they are cluster-scoped and have minimal conditional logic.
+	if err := r.applyRBACTemplate(ctx, ingestor, cfg); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifests installing", metav1.ConditionTrue); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
+	}
+	return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+}
+
+// applyRBACTemplate renders and applies the RBAC template (ClusterRole, ClusterRoleBinding).
+func (r *IngestorReconciler) applyRBACTemplate(ctx context.Context, ingestor *adxmonv1.Ingestor, cfg *IngestorConfig) error {
+	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor_rbac.yaml")
+	if err != nil {
+		if setErr := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to read RBAC template", metav1.ConditionFalse); setErr != nil {
+			return setErr
+		}
+		return nil // Terminal condition, no retry
+	}
+
+	tmpl, err := template.New("rbac").Parse(string(tmplBytes))
+	if err != nil {
+		if setErr := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to parse RBAC template", metav1.ConditionFalse); setErr != nil {
+			return setErr
+		}
+		return nil // Terminal condition, no retry
+	}
+
+	// Template data for RBAC (only needs Name and Namespace)
+	data := struct {
+		Name      string
+		Namespace string
+	}{
+		Name:      cfg.Name,
+		Namespace: cfg.Namespace,
+	}
+
+	var rendered bytes.Buffer
+	if err := tmpl.Execute(&rendered, data); err != nil {
+		if setErr := r.setCondition(ctx, ingestor, ReasonTemplateError, "Failed to render RBAC template", metav1.ConditionFalse); setErr != nil {
+			return setErr
+		}
+		return nil // Terminal condition, no retry
 	}
 
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(rendered.Bytes()), 4096)
 	for {
 		if ctx.Err() != nil {
-			return ctrl.Result{}, ctx.Err()
+			return ctx.Err()
 		}
 		obj := &unstructured.Unstructured{}
 		err := decoder.Decode(obj)
@@ -503,54 +541,28 @@ func (r *IngestorReconciler) CreateIngestor(ctx context.Context, ingestor *adxmo
 			continue
 		}
 		if obj.Object == nil || obj.GetKind() == "" {
-			logger.Debugf("Skipping empty or invalid YAML document in ingestor manifest")
 			continue
 		}
-		// Set the owner reference, this enables garbage collection for the ingestor
-		// and ensures that the ingestor is deleted when the owner is deleted.
-		// --> Only set owner reference if the object is namespace-scoped.
-		if obj.GetNamespace() != "" {
-			if err := controllerutil.SetControllerReference(ingestor, obj, r.Scheme); err != nil {
-				// Check if the error is specifically about cluster-scoped resources having namespace-scoped owners
-				// This might happen if the object's namespace is empty but it's not truly cluster-scoped according to the scheme? Unlikely but safer check.
-				if strings.Contains(err.Error(), "cluster-scoped resource must not have a namespace-scoped owner") {
-					logger.Warnf("Skipping owner reference for potentially cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
-				} else {
-					return ctrl.Result{}, fmt.Errorf("failed to set owner reference for %s %s: %w", obj.GetKind(), obj.GetName(), err)
-				}
-			}
-		} else {
-			logger.Infof("Skipping owner reference for cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
-		}
+
+		// RBAC resources are cluster-scoped, skip owner reference
+		logger.Infof("Skipping owner reference for cluster-scoped resource %s/%s", obj.GetKind(), obj.GetName())
 
 		if _, err := r.createOrUpdate(ctx, obj, ingestor); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 	}
 
-	if err := r.setCondition(ctx, ingestor, r.waitForReadyReason, "Ingestor manifests installing", metav1.ConditionTrue); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", err)
-	}
-	return ctrl.Result{RequeueAfter: defaultRequeueInterval}, nil
+	return nil
 }
 
 // ensureManifests renders and applies the ingestor manifests, updating any resources that
 // have drifted from the desired state (e.g., after an operator upgrade with template changes).
 // Returns (result, updated, error) where updated is true if any resources were modified.
 func (r *IngestorReconciler) ensureManifests(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, bool, error) {
-	// Render the ingestor manifest
-	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor.yaml")
+	// Build configuration for resources
+	ready, cfg, err := r.buildIngestorConfig(ctx, ingestor)
 	if err != nil {
-		return ctrl.Result{}, false, fmt.Errorf("failed to read ingestor template: %w", err)
-	}
-	tmpl, err := template.New("ingestor").Parse(string(tmplBytes))
-	if err != nil {
-		return ctrl.Result{}, false, fmt.Errorf("failed to parse ingestor template: %w", err)
-	}
-
-	ready, data, err := r.templateData(ctx, ingestor)
-	if err != nil {
-		return ctrl.Result{}, false, fmt.Errorf("failed to get template data: %w", err)
+		return ctrl.Result{}, false, fmt.Errorf("failed to build ingestor config: %w", err)
 	}
 	if !ready {
 		// ADXCluster not ready, but this isn't an error for ensureManifests
@@ -558,12 +570,52 @@ func (r *IngestorReconciler) ensureManifests(ctx context.Context, ingestor *adxm
 		return ctrl.Result{RequeueAfter: extendedRequeueInterval}, false, nil
 	}
 
-	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, data); err != nil {
-		return ctrl.Result{}, false, fmt.Errorf("failed to render ingestor template: %w", err)
+	var anyUpdated bool
+
+	// Build and apply typed resources (ServiceAccount, Service, StatefulSet)
+	typedResources := []client.Object{
+		BuildServiceAccount(cfg),
+		BuildService(cfg),
+		BuildStatefulSet(cfg),
 	}
 
-	var anyUpdated bool
+	for _, obj := range typedResources {
+		// Set owner reference for garbage collection
+		if err := controllerutil.SetControllerReference(ingestor, obj, r.Scheme); err != nil {
+			return ctrl.Result{}, anyUpdated, fmt.Errorf("failed to set owner reference for %s %s: %w", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
+		}
+		updated, err := r.createOrUpdateTyped(ctx, obj, ingestor)
+		if err != nil {
+			return ctrl.Result{}, anyUpdated, err
+		}
+		if updated {
+			anyUpdated = true
+		}
+	}
+
+	// Render and apply RBAC resources from template
+	tmplBytes, err := ingestorCrdsFS.ReadFile("manifests/ingestor_rbac.yaml")
+	if err != nil {
+		return ctrl.Result{}, anyUpdated, fmt.Errorf("failed to read RBAC template: %w", err)
+	}
+	tmpl, err := template.New("rbac").Parse(string(tmplBytes))
+	if err != nil {
+		return ctrl.Result{}, anyUpdated, fmt.Errorf("failed to parse RBAC template: %w", err)
+	}
+
+	data := struct {
+		Name      string
+		Namespace string
+	}{
+		Name:      cfg.Name,
+		Namespace: cfg.Namespace,
+	}
+
+	var rendered bytes.Buffer
+	if err := tmpl.Execute(&rendered, data); err != nil {
+		return ctrl.Result{}, anyUpdated, fmt.Errorf("failed to render RBAC template: %w", err)
+	}
+
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(rendered.Bytes()), 4096)
 	for {
 		if ctx.Err() != nil {
@@ -581,14 +633,7 @@ func (r *IngestorReconciler) ensureManifests(ctx context.Context, ingestor *adxm
 			continue
 		}
 
-		// Set owner reference for namespace-scoped resources
-		if obj.GetNamespace() != "" {
-			if err := controllerutil.SetControllerReference(ingestor, obj, r.Scheme); err != nil {
-				if !strings.Contains(err.Error(), "cluster-scoped resource must not have a namespace-scoped owner") {
-					return ctrl.Result{}, anyUpdated, fmt.Errorf("failed to set owner reference for %s %s: %w", obj.GetKind(), obj.GetName(), err)
-				}
-			}
-		}
+		// RBAC resources are cluster-scoped, no owner reference needed
 
 		updated, err := r.createOrUpdate(ctx, obj, ingestor)
 		if err != nil {
@@ -643,6 +688,48 @@ func (r *IngestorReconciler) createOrUpdate(ctx context.Context, obj *unstructur
 		return true, nil
 	}
 	// Resource was created
+	return true, nil
+}
+
+// createOrUpdateTyped attempts to create a typed resource. If it already exists and is owned by the
+// given Ingestor, it updates the resource. This is the type-safe version of createOrUpdate.
+// Returns true if the resource was created or updated.
+func (r *IngestorReconciler) createOrUpdateTyped(ctx context.Context, obj client.Object, owner *adxmonv1.Ingestor) (bool, error) {
+	kind := obj.GetObjectKind().GroupVersionKind().Kind
+	if kind == "" {
+		// Fallback: infer kind from type if GVK not set
+		kind = fmt.Sprintf("%T", obj)
+	}
+
+	if err := r.Create(ctx, obj); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return false, fmt.Errorf("failed to create %s %s: %w", kind, obj.GetName(), err)
+		}
+
+		// Resource exists - fetch it to check ownership and get resourceVersion
+		key := client.ObjectKeyFromObject(obj)
+		existing := obj.DeepCopyObject().(client.Object)
+		if err := r.Get(ctx, key, existing); err != nil {
+			return false, fmt.Errorf("failed to get existing %s %s: %w", kind, obj.GetName(), err)
+		}
+
+		// Verify ownership before updating to avoid overwriting resources we don't own.
+		if !metav1.IsControlledBy(existing, owner) {
+			logger.Warnf("Skipping update of %s %s/%s: not owned by Ingestor %s/%s",
+				kind, obj.GetNamespace(), obj.GetName(), owner.Namespace, owner.Name)
+			return false, nil
+		}
+
+		// Update the owned resource with the new desired state
+		obj.SetResourceVersion(existing.GetResourceVersion())
+		if err := r.Update(ctx, obj); err != nil {
+			return false, fmt.Errorf("failed to update %s %s: %w", kind, obj.GetName(), err)
+		}
+		logger.Infof("Updated existing %s %s/%s", kind, obj.GetNamespace(), obj.GetName())
+		return true, nil
+	}
+	// Resource was created
+	logger.Infof("Created %s %s/%s", kind, obj.GetNamespace(), obj.GetName())
 	return true, nil
 }
 
@@ -874,6 +961,94 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		ExtraTolerations: extraTolerations,
 	}
 	return true, data, nil
+}
+
+// buildIngestorConfig gathers ADXCluster data and builds an IngestorConfig for programmatic resource construction.
+// Returns (ready, config, error) where ready is false if ADXClusters are not yet ready.
+func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *adxmonv1.Ingestor) (bool, *IngestorConfig, error) {
+	// ADXClusterSelector is required - nil selector means nothing is selected
+	if ingestor.Spec.ADXClusterSelector == nil {
+		return false, nil, fmt.Errorf("ADXClusterSelector is required")
+	}
+
+	// List ADXClusters matching the selector
+	selector, err := metav1.LabelSelectorAsSelector(ingestor.Spec.ADXClusterSelector)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to convert label selector: %w", err)
+	}
+
+	var adxClusterList adxmonv1.ADXClusterList
+	listOpts := []client.ListOption{client.MatchingLabelsSelector{Selector: selector}}
+	if err := r.Client.List(ctx, &adxClusterList, listOpts...); err != nil {
+		return false, nil, fmt.Errorf("failed to list ADXClusters: %w", err)
+	}
+
+	var metricsClusters []string
+	var logsClusters []string
+	var azureResource string
+
+	for _, cluster := range adxClusterList.Items {
+		// Wait for the cluster to be ready
+		if !meta.IsStatusConditionTrue(cluster.Status.Conditions, adxmonv1.ADXClusterConditionOwner) {
+			// Cluster is not ready yet, but this is not an error
+			return false, nil, nil
+		}
+
+		endpoint := resolvedClusterEndpoint(&cluster)
+		if endpoint == "" {
+			continue // Skip this cluster entirely if no endpoint
+		}
+
+		// Check cluster role
+		role := adxmonv1.ClusterRolePartition // Default to Partition if not specified
+		if cluster.Spec.Role != nil {
+			role = *cluster.Spec.Role
+		}
+
+		switch role {
+		case adxmonv1.ClusterRoleFederated:
+			// Use the Federated cluster's endpoint for AZURE_RESOURCE
+			if azureResource == "" {
+				azureResource = endpoint
+			}
+		case adxmonv1.ClusterRolePartition:
+			// Only Partition clusters contribute kusto endpoints
+			for _, db := range cluster.Spec.Databases {
+				entry := fmt.Sprintf("%s=%s", db.DatabaseName, endpoint)
+				switch db.TelemetryType {
+				case adxmonv1.DatabaseTelemetryMetrics:
+					metricsClusters = append(metricsClusters, entry)
+				case adxmonv1.DatabaseTelemetryLogs:
+					logsClusters = append(logsClusters, entry)
+				default:
+					// Traces and other telemetry types are not currently supported by the ingestor
+				}
+			}
+		}
+	}
+
+	// Convert ImagePullSecrets to string slice
+	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))
+	for i, s := range r.ImagePullSecrets {
+		imagePullSecretNames[i] = s.Name
+	}
+
+	// Get operator cluster labels
+	clusterLabels := getOperatorClusterLabels()
+
+	// Build config using the helper function
+	cfg := NewIngestorConfigFromReconciler(
+		ingestor,
+		metricsClusters,
+		logsClusters,
+		azureResource,
+		clusterLabels,
+		imagePullSecretNames,
+		r.NodeSelector,
+		r.Tolerations,
+	)
+
+	return true, cfg, nil
 }
 
 func isDefaultIngestorToleration(t corev1.Toleration) bool {

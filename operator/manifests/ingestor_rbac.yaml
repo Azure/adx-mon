@@ -1,0 +1,65 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Namespace }}:{{ .Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - functions
+      - managementcommands
+      - summaryrules
+    verbs:
+      - get
+      - list
+      - update
+      - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - functions/status
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - functions/finalizers
+      - managementcommands/finalizers
+      - summaryrules/finalizers
+    verbs:
+      - get
+      - update
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Namespace }}:{{ .Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: ingestor
+    app.kubernetes.io/managed-by: adx-mon-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Namespace }}:{{ .Name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Name }}
+    namespace: {{ .Namespace }}
