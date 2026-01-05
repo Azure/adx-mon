@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -720,6 +721,16 @@ func (r *IngestorReconciler) createOrUpdateTyped(ctx context.Context, obj client
 			return false, nil
 		}
 
+		// Check if update is needed by comparing specs for StatefulSets
+		// to avoid triggering unnecessary rolling updates.
+		if sts, ok := obj.(*appsv1.StatefulSet); ok {
+			existingSts := existing.(*appsv1.StatefulSet)
+			if !statefulSetNeedsUpdate(existingSts, sts) {
+				logger.Debugf("StatefulSet %s/%s is up-to-date, skipping update", obj.GetNamespace(), obj.GetName())
+				return false, nil
+			}
+		}
+
 		// Update the owned resource with the new desired state
 		obj.SetResourceVersion(existing.GetResourceVersion())
 		if err := r.Update(ctx, obj); err != nil {
@@ -731,6 +742,75 @@ func (r *IngestorReconciler) createOrUpdateTyped(ctx context.Context, obj client
 	// Resource was created
 	logger.Infof("Created %s %s/%s", kind, obj.GetNamespace(), obj.GetName())
 	return true, nil
+}
+
+// statefulSetNeedsUpdate compares the key fields of a StatefulSet to determine if an update is needed.
+// This avoids unnecessary rolling updates when only non-meaningful fields differ (e.g., defaults added by Kubernetes).
+func statefulSetNeedsUpdate(existing, desired *appsv1.StatefulSet) bool {
+	// Compare replicas
+	existingReplicas := int32(1)
+	if existing.Spec.Replicas != nil {
+		existingReplicas = *existing.Spec.Replicas
+	}
+	desiredReplicas := int32(1)
+	if desired.Spec.Replicas != nil {
+		desiredReplicas = *desired.Spec.Replicas
+	}
+	if existingReplicas != desiredReplicas {
+		logger.Debugf("StatefulSet replicas differ: existing=%d, desired=%d", existingReplicas, desiredReplicas)
+		return true
+	}
+
+	// Compare image
+	if len(existing.Spec.Template.Spec.Containers) > 0 && len(desired.Spec.Template.Spec.Containers) > 0 {
+		if existing.Spec.Template.Spec.Containers[0].Image != desired.Spec.Template.Spec.Containers[0].Image {
+			logger.Debugf("StatefulSet image differs: existing=%s, desired=%s",
+				existing.Spec.Template.Spec.Containers[0].Image, desired.Spec.Template.Spec.Containers[0].Image)
+			return true
+		}
+	}
+
+	// Compare container args (sorted for comparison)
+	if len(existing.Spec.Template.Spec.Containers) > 0 && len(desired.Spec.Template.Spec.Containers) > 0 {
+		existingArgs := existing.Spec.Template.Spec.Containers[0].Args
+		desiredArgs := desired.Spec.Template.Spec.Containers[0].Args
+		if !slices.Equal(existingArgs, desiredArgs) {
+			logger.Debugf("StatefulSet container args differ")
+			return true
+		}
+	}
+
+	// Compare nodeSelector
+	existingNS := existing.Spec.Template.Spec.NodeSelector
+	desiredNS := desired.Spec.Template.Spec.NodeSelector
+	if !maps.Equal(existingNS, desiredNS) {
+		logger.Debugf("StatefulSet nodeSelector differs")
+		return true
+	}
+
+	// Compare tolerations (using our helper)
+	if !TolerationsEqual(existing.Spec.Template.Spec.Tolerations, desired.Spec.Template.Spec.Tolerations) {
+		logger.Debugf("StatefulSet tolerations differ")
+		return true
+	}
+
+	// Compare imagePullSecrets
+	existingSecrets := make([]string, len(existing.Spec.Template.Spec.ImagePullSecrets))
+	for i, s := range existing.Spec.Template.Spec.ImagePullSecrets {
+		existingSecrets[i] = s.Name
+	}
+	desiredSecrets := make([]string, len(desired.Spec.Template.Spec.ImagePullSecrets))
+	for i, s := range desired.Spec.Template.Spec.ImagePullSecrets {
+		desiredSecrets[i] = s.Name
+	}
+	slices.Sort(existingSecrets)
+	slices.Sort(desiredSecrets)
+	if !slices.Equal(existingSecrets, desiredSecrets) {
+		logger.Debugf("StatefulSet imagePullSecrets differ")
+		return true
+	}
+
+	return false
 }
 
 func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
