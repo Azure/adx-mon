@@ -617,7 +617,7 @@ github.com/testcontainers/testcontainers-go/wait
 # github.com/testcontainers/testcontainers-go/modules/k3s v0.40.0
 ## explicit; go 1.24.0
 github.com/testcontainers/testcontainers-go/modules/k3s
-# github.com/tinylib/msgp v1.6.1
+# github.com/tinylib/msgp v1.6.3
 ## explicit; go 1.24
 github.com/tinylib/msgp/msgp
 # github.com/tklauser/go-sysconf v0.3.12
