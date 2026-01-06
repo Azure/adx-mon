@@ -9,6 +9,39 @@ their own metrics, logs and traces.  The ingestor aggregates these data sources 
 instead of each pod or node sending data individually.  This reduces the number of small files that ADX must later 
 merge into larger files which can impact query latency and increase resource requirements.
 
+# Deployment
+
+## Operator-Managed Deployment (Recommended)
+
+The recommended way to deploy the ingestor is via the adx-mon operator using the `Ingestor` CRD. The operator handles:
+- StatefulSet creation with proper security contexts
+- Service and RBAC configuration
+- Automatic connection to ADXCluster resources via label selectors
+- Installation of dependent CRDs (Function, SummaryRule, ManagementCommand)
+- Rolling updates when the CRD spec changes
+
+**Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Ingestor
+metadata:
+  name: prod-ingestor
+  namespace: monitoring
+spec:
+  replicas: 3
+  adxClusterSelector:
+    matchLabels:
+      env: production
+  # Optional: skip reconciliation on non-production clusters
+  criteriaExpression: "environment == 'prod'"
+```
+
+See the [Ingestor CRD Reference](crds.md#ingestor) for full field documentation and the [Operator Design](designs/operator.md#ingestor-crd) for implementation details.
+
+## Manual Deployment
+
+For advanced use cases, the ingestor can be deployed directly as a StatefulSet. See the [Configuration](config.md) page for CLI flags and environment variables.
+
 # Design
 
 The ingestor is designed to be deployed as a Kubernetes StatefulSet with multiple replicas.  It exposes several
