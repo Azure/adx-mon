@@ -873,6 +873,14 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		return false, nil, fmt.Errorf("failed to list ADXClusters: %w", err)
 	}
 
+	// Ensure stable ordering across reconciles. The API server does not guarantee List order.
+	slices.SortFunc(adxClusterList.Items, func(a, b adxmonv1.ADXCluster) int {
+		if a.Namespace != b.Namespace {
+			return strings.Compare(a.Namespace, b.Namespace)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+
 	var metricsClusters []string
 	var logsClusters []string
 	var azureResource string
@@ -898,7 +906,7 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 		switch role {
 		case adxmonv1.ClusterRoleFederated:
 			// Use the Federated cluster's endpoint for AZURE_RESOURCE
-			if azureResource == "" {
+			if azureResource == "" || strings.Compare(endpoint, azureResource) < 0 {
 				azureResource = endpoint
 			}
 		case adxmonv1.ClusterRolePartition:
@@ -916,6 +924,13 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 			}
 		}
 	}
+
+	// Stabilize endpoint argument order. Without this, a harmless List reordering can
+	// change the Pod template args and trigger an unnecessary StatefulSet rollout.
+	slices.Sort(metricsClusters)
+	metricsClusters = slices.Compact(metricsClusters)
+	slices.Sort(logsClusters)
+	logsClusters = slices.Compact(logsClusters)
 
 	// Convert ImagePullSecrets to string slice for template
 	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))
@@ -1063,6 +1078,14 @@ func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *
 		return false, nil, fmt.Errorf("failed to list ADXClusters: %w", err)
 	}
 
+	// Ensure stable ordering across reconciles. The API server does not guarantee List order.
+	slices.SortFunc(adxClusterList.Items, func(a, b adxmonv1.ADXCluster) int {
+		if a.Namespace != b.Namespace {
+			return strings.Compare(a.Namespace, b.Namespace)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+
 	var metricsClusters []string
 	var logsClusters []string
 	var azureResource string
@@ -1088,7 +1111,7 @@ func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *
 		switch role {
 		case adxmonv1.ClusterRoleFederated:
 			// Use the Federated cluster's endpoint for AZURE_RESOURCE
-			if azureResource == "" {
+			if azureResource == "" || strings.Compare(endpoint, azureResource) < 0 {
 				azureResource = endpoint
 			}
 		case adxmonv1.ClusterRolePartition:
@@ -1106,6 +1129,13 @@ func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *
 			}
 		}
 	}
+
+	// Stabilize endpoint argument order to avoid triggering StatefulSet rollouts due
+	// to nondeterministic List ordering.
+	slices.Sort(metricsClusters)
+	metricsClusters = slices.Compact(metricsClusters)
+	slices.Sort(logsClusters)
+	logsClusters = slices.Compact(logsClusters)
 
 	// Convert ImagePullSecrets to string slice
 	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))

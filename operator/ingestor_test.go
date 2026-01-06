@@ -1287,3 +1287,77 @@ func TestIngestorReconciler_NoSelfTriggeringLoop(t *testing.T) {
 	}
 	require.True(t, found, "Condition reason should be a valid waiting state, got: %s", condition.Reason)
 }
+
+func TestIngestorReconciler_BuildIngestorConfig_DeterministicEndpointOrder(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "test:latest",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	// Intentionally add clusters in reverse lexical order to ensure we sort deterministically.
+	clusterB := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://b.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue}},
+		},
+	}
+	clusterA := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "a-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://a.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue}},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(clusterB, clusterA, ingestor).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+	ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NotNil(t, cfg)
+
+	// Ensure endpoints are deterministically sorted; otherwise a harmless List reorder can change
+	// args and trigger a StatefulSet rollout.
+	require.Equal(t, []string{"Metrics=https://a.kusto.windows.net", "Metrics=https://b.kusto.windows.net"}, cfg.MetricsClusters)
+	require.Equal(t, []string{"Logs=https://a.kusto.windows.net", "Logs=https://b.kusto.windows.net"}, cfg.LogsClusters)
+}
