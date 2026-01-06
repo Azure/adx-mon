@@ -46,13 +46,17 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 			Replicas: to.Ptr(int32(2)),
 		},
 		Status: appsv1.StatefulSetStatus{
-			ReadyReplicas: 2,
+			ReadyReplicas:   2,
+			UpdatedReplicas: 2,
+			CurrentRevision: "rev1",
+			UpdateRevision:  "rev1",
 		},
 	}
 
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		WithStatusSubresource(&appsv1.StatefulSet{}).
 		Build()
 	require.NoError(t, client.Create(context.Background(), ingestor))
 	require.NoError(t, client.Create(context.Background(), sts))
@@ -63,7 +67,28 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.IsZero())
 
+	// Rollout pending: ready replicas match, but updated replicas lag.
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, sts))
+	sts.Status.UpdatedReplicas = 1
+	require.NoError(t, client.Status().Update(context.Background(), sts))
+	result, err = r.IsReady(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.False(t, result.IsZero())
+
+	// Rollout pending: revisions differ.
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, sts))
+	sts.Status.UpdatedReplicas = 2
+	sts.Status.UpdateRevision = "rev2"
+	require.NoError(t, client.Status().Update(context.Background(), sts))
+	result, err = r.IsReady(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.False(t, result.IsZero())
+
 	// Not ready case
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, sts))
+	sts.Status.UpdateRevision = "rev1"
+	sts.Status.CurrentRevision = "rev1"
+	require.NoError(t, client.Status().Update(context.Background(), sts))
 	sts.Spec.Replicas = to.Ptr(int32(3))
 	require.NoError(t, client.Update(context.Background(), sts))
 
@@ -392,6 +417,11 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 		},
 		Spec: adxmonv1.IngestorSpec{
 			Image: "test-image:v1",
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "adx-mon",
+				},
+			},
 		},
 	}
 
@@ -434,7 +464,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	// Verify that a statefulset was created
 	sts := &appsv1.StatefulSet{}
 	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
-		Name:      "ingestor",
+		Name:      "test-ingestor",
 		Namespace: "default",
 	}, sts))
 
@@ -471,9 +501,952 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	// Verify that service account has automountServiceAccountToken set to false
 	sa := &corev1.ServiceAccount{}
 	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
-		Name:      "ingestor",
+		Name:      "test-ingestor",
 		Namespace: "default",
 	}, sa))
 	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
 	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
+}
+
+// TestIngestorReconciler_UpdateExistingResources verifies that existing resources with
+// proper ownership are updated when the Ingestor CRD changes (e.g., image updates).
+// This test was added to catch a bug where existing StatefulSets were not updated.
+func TestIngestorReconciler_UpdateExistingResources(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "new-image:v2",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	// Create existing StatefulSet with OLD image and proper owner reference
+	existingSts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "test-ingestor",
+				"app.kubernetes.io/component":  "ingestor",
+				"app.kubernetes.io/managed-by": "adx-mon-operator",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         "adx-mon.azure.com/v1",
+					Kind:               "Ingestor",
+					Name:               "test-ingestor",
+					UID:                "test-uid-12345",
+					Controller:         func() *bool { b := true; return &b }(),
+					BlockOwnerDeletion: func() *bool { b := true; return &b }(),
+				},
+			},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: func() *int32 { r := int32(1); return &r }(),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "test-ingestor",
+					"app.kubernetes.io/component": "ingestor",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app.kubernetes.io/name":      "test-ingestor",
+						"app.kubernetes.io/component": "ingestor",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "ingestor",
+							Image: "old-image:v1", // OLD image that should be updated
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor, existingSts).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+	// Run CreateIngestor which should update the existing StatefulSet
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was updated with the new image
+	updatedSts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, updatedSts))
+
+	require.Len(t, updatedSts.Spec.Template.Spec.Containers, 1, "Should have exactly one container")
+	require.Equal(t, "new-image:v2", updatedSts.Spec.Template.Spec.Containers[0].Image,
+		"StatefulSet image should be updated to the new image from Ingestor spec")
+}
+
+func TestIngestorReconciler_UpdateExistingStatefulSetLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "ingestor:v1",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+	ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	existingSts := BuildStatefulSet(cfg).DeepCopy()
+	existingSts.Spec.Selector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{"app": "ingestor"},
+	}
+	existingSts.Spec.Template.Labels = map[string]string{"app": "ingestor"}
+	existingSts.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion:         "adx-mon.azure.com/v1",
+			Kind:               "Ingestor",
+			Name:               "test-ingestor",
+			UID:                "test-uid-12345",
+			Controller:         func() *bool { b := true; return &b }(),
+			BlockOwnerDeletion: func() *bool { b := true; return &b }(),
+		},
+	}
+	require.NoError(t, client.Create(context.Background(), existingSts))
+
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	updatedSts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, updatedSts))
+
+	require.Equal(t, "test-ingestor", updatedSts.Spec.Template.Labels[LabelName])
+	require.Equal(t, componentIngestor, updatedSts.Spec.Template.Labels[LabelComponent])
+	require.Equal(t, "ingestor", updatedSts.Spec.Template.Labels["app"])
+}
+
+// TestIngestorReconciler_SkipsUnownedResources verifies that the reconciler does not
+// update resources that are not owned by the Ingestor, preventing conflicts.
+func TestIngestorReconciler_SkipsUnownedResources(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "new-image:v2",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	// Create existing StatefulSet WITHOUT owner reference (simulating external creation)
+	unownedSts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app.kubernetes.io/name": "test-ingestor",
+			},
+			// No OwnerReferences - this resource is not owned by the Ingestor
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: func() *int32 { r := int32(1); return &r }(),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name": "test-ingestor",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app.kubernetes.io/name": "test-ingestor",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "ingestor",
+							Image: "external-image:v1", // Should NOT be updated
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor, unownedSts).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+	// Run CreateIngestor - should skip the unowned StatefulSet
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was NOT updated (still has old image)
+	unchangedSts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, unchangedSts))
+
+	require.Len(t, unchangedSts.Spec.Template.Spec.Containers, 1, "Should have exactly one container")
+	require.Equal(t, "external-image:v1", unchangedSts.Spec.Template.Spec.Containers[0].Image,
+		"Unowned StatefulSet should NOT be updated - image should remain unchanged")
+}
+
+// TestIngestorReconciler_ImagePullSecrets verifies that imagePullSecrets configured
+// on the reconciler are propagated to created StatefulSets.
+func TestIngestorReconciler_ImagePullSecrets(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "my-registry.io/ingestor:v1",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	// Configure reconciler with imagePullSecrets (simulating operator discovery)
+	reconciler := &IngestorReconciler{
+		Client: client,
+		Scheme: scheme,
+		ImagePullSecrets: []corev1.LocalObjectReference{
+			{Name: "acr-pull-secret"},
+			{Name: "another-registry-secret"},
+		},
+		waitForReadyReason: ReasonWaitForReady,
+	}
+
+	// Run CreateIngestor
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was created with imagePullSecrets
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, sts))
+
+	require.Len(t, sts.Spec.Template.Spec.ImagePullSecrets, 2, "Should have two imagePullSecrets")
+	require.Equal(t, "acr-pull-secret", sts.Spec.Template.Spec.ImagePullSecrets[0].Name)
+	require.Equal(t, "another-registry-secret", sts.Spec.Template.Spec.ImagePullSecrets[1].Name)
+}
+
+func TestIngestorReconciler_TemplateData_PropagatesSchedulingConstraints(t *testing.T) {
+	SetClusterLabels(map[string]string{"region": "eastus"})
+	t.Cleanup(func() { SetClusterLabels(nil) })
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "my-registry.io/ingestor:v1",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		Build()
+
+	reconciler := &IngestorReconciler{
+		Client: client,
+		Scheme: scheme,
+		NodeSelector: map[string]string{
+			"agentpool": "infra",
+		},
+		Tolerations: []corev1.Toleration{
+			{
+				Key:      "agentpool",
+				Operator: corev1.TolerationOpEqual,
+				Value:    "infra",
+				Effect:   corev1.TaintEffectNoSchedule,
+			},
+		},
+	}
+
+	ready, data, err := reconciler.templateData(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, []clusterLabel{{Key: "agentpool", Value: "infra"}}, data.NodeSelector)
+	require.Equal(t, []toleration{{Key: "agentpool", Operator: "Equal", Value: "infra", Effect: "NoSchedule"}}, data.ExtraTolerations)
+}
+
+// TestIngestorReconciler_NoImagePullSecrets verifies that when no imagePullSecrets
+// are configured, the StatefulSet is created without the imagePullSecrets field.
+func TestIngestorReconciler_NoImagePullSecrets(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "ghcr.io/azure/adx-mon/ingestor:latest",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	// Configure reconciler WITHOUT imagePullSecrets
+	reconciler := &IngestorReconciler{
+		Client:             client,
+		Scheme:             scheme,
+		ImagePullSecrets:   nil, // No pull secrets
+		waitForReadyReason: ReasonWaitForReady,
+	}
+
+	// Run CreateIngestor
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify that the StatefulSet was created without imagePullSecrets
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, sts))
+
+	require.Empty(t, sts.Spec.Template.Spec.ImagePullSecrets, "Should have no imagePullSecrets when not configured")
+}
+
+// TestIngestorReconciler_StateMachine verifies that the reconciliation state machine
+// handles all condition states correctly and doesn't create infinite loops.
+// This test exists because a bug where ConditionUnknown matched too broadly caused
+// rapid reconciliation loops in production.
+func TestIngestorReconciler_StateMachine(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	// Define the expected behavior for each state
+	// This serves as documentation and compile-time verification of the state machine
+	type stateTestCase struct {
+		name          string
+		reason        string
+		status        metav1.ConditionStatus
+		generation    int64
+		observedGen   int64
+		expectAction  string // "create", "ready", "noop"
+		expectRequeue bool
+	}
+
+	testCases := []stateTestCase{
+		// No condition - first time reconciliation
+		{
+			name:          "no_condition_first_reconcile",
+			reason:        "",
+			status:        "",
+			generation:    1,
+			observedGen:   0,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// WaitForReady - ensure manifests are up-to-date, then check if StatefulSet is ready.
+		// Since test setup doesn't include all managed resources, ensureManifests will
+		// create them and return with requeue.
+		{
+			name:          "wait_for_ready",
+			reason:        ReasonWaitForReady,
+			status:        metav1.ConditionTrue,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "ensure_and_ready",
+			expectRequeue: true, // requeue after ensuring manifests or if not ready yet
+		},
+		// NotReady - ADXCluster not ready, should retry CreateIngestor
+		{
+			name:          "not_ready_retry",
+			reason:        ReasonNotReady,
+			status:        metav1.ConditionUnknown,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// Ready - ensure manifests are up-to-date (drift correction).
+		// Since test setup doesn't include all managed resources, ensureManifests will
+		// create them and trigger a transition to WaitForReady.
+		{
+			name:          "ready_drift_correction",
+			reason:        ReasonReady,
+			status:        metav1.ConditionTrue,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "ensure",
+			expectRequeue: true, // requeue after detecting drift and creating resources
+		},
+		// Generation changed - re-render manifests
+		{
+			name:          "generation_changed",
+			reason:        ReasonReady,
+			status:        metav1.ConditionTrue,
+			generation:    2,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// CriteriaExpressionError - recover by re-creating (CEL now passes or is unset)
+		{
+			name:          "criteria_error_recovery",
+			reason:        ReasonCriteriaExpressionError,
+			status:        metav1.ConditionFalse,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+		// CriteriaExpressionFalse - recover by re-creating (CEL now passes or is unset)
+		{
+			name:          "criteria_false_recovery",
+			reason:        ReasonCriteriaExpressionFalse,
+			status:        metav1.ConditionFalse,
+			generation:    1,
+			observedGen:   1,
+			expectAction:  "create",
+			expectRequeue: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a cluster so CreateIngestor can proceed
+			cluster := &adxmonv1.ADXCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cluster",
+					Namespace: "default",
+					Labels:    map[string]string{"app": "test"},
+				},
+				Spec: adxmonv1.ADXClusterSpec{
+					ClusterName: "test-cluster",
+					Endpoint:    "https://test.kusto.windows.net",
+					Databases: []adxmonv1.ADXClusterDatabaseSpec{
+						{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+					},
+				},
+				Status: adxmonv1.ADXClusterStatus{
+					Conditions: []metav1.Condition{
+						{
+							Type:   adxmonv1.ADXClusterConditionOwner,
+							Status: metav1.ConditionTrue,
+							Reason: "Ready",
+						},
+					},
+				},
+			}
+
+			ingestor := &adxmonv1.Ingestor{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-ingestor",
+					Namespace:  "default",
+					Generation: tc.generation,
+				},
+				Spec: adxmonv1.IngestorSpec{
+					Replicas: 1,
+					Image:    "test:latest",
+					ADXClusterSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": "test"},
+					},
+				},
+			}
+
+			// Set condition if this test case has one
+			if tc.reason != "" {
+				ingestor.Status.Conditions = []metav1.Condition{
+					{
+						Type:               adxmonv1.IngestorConditionOwner,
+						Status:             tc.status,
+						Reason:             tc.reason,
+						ObservedGeneration: tc.observedGen,
+						LastTransitionTime: metav1.Now(),
+					},
+				}
+			}
+
+			// Create StatefulSet for "ready" action tests
+			sts := &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ingestor",
+					Namespace: "default",
+				},
+				Spec: appsv1.StatefulSetSpec{
+					Replicas: func() *int32 { r := int32(1); return &r }(),
+				},
+				Status: appsv1.StatefulSetStatus{
+					ReadyReplicas: 0, // Not ready yet
+				},
+			}
+
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(cluster, ingestor, sts).
+				WithStatusSubresource(&adxmonv1.Ingestor{}, &adxmonv1.ADXCluster{}).
+				Build()
+
+			reconciler := &IngestorReconciler{
+				Client:             client,
+				Scheme:             scheme,
+				waitForReadyReason: ReasonWaitForReady,
+			}
+
+			result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-ingestor",
+					Namespace: "default",
+				},
+			})
+
+			// Verify no error (we're testing state transitions, not error cases)
+			require.NoError(t, err, "Reconcile should not return error for state: %s", tc.name)
+
+			// Verify requeue behavior
+			if tc.expectRequeue {
+				require.True(t, result.RequeueAfter > 0 || result.Requeue,
+					"Expected requeue for state: %s", tc.name)
+			} else {
+				require.True(t, result.IsZero(),
+					"Expected no requeue for state: %s, got RequeueAfter=%v", tc.name, result.RequeueAfter)
+			}
+		})
+	}
+}
+
+// TestIngestorReconciler_NoSelfTriggeringLoop verifies that reconciliation with
+// ADXCluster not ready doesn't cause a rapid loop. This was a production bug where
+// status updates triggered immediate re-reconciliation.
+func TestIngestorReconciler_NoSelfTriggeringLoop(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	// ADXCluster that is NOT ready
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test-cluster",
+			Endpoint:    "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:   adxmonv1.ADXClusterConditionOwner,
+					Status: metav1.ConditionFalse, // NOT ready
+					Reason: "Provisioning",
+				},
+			},
+		},
+	}
+
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-ingestor",
+			Namespace:  "default",
+			Generation: 1,
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Replicas: 1,
+			Image:    "test:latest",
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "test"},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}, &adxmonv1.ADXCluster{}).
+		Build()
+
+	reconciler := &IngestorReconciler{
+		Client:             client,
+		Scheme:             scheme,
+		waitForReadyReason: ReasonWaitForReady,
+	}
+
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "test-ingestor",
+			Namespace: "default",
+		},
+	}
+
+	// First reconcile - should install CRDs and find cluster not ready
+	result1, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, result1.RequeueAfter > 0, "Should requeue after first reconcile")
+
+	// Get the updated ingestor to see its state
+	updated := &adxmonv1.Ingestor{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updated))
+
+	// Second reconcile with the same state - should NOT cause rapid loop
+	// It should either:
+	// 1. Return quickly with a requeue (waiting for cluster)
+	// 2. Not trigger CreateIngestor again unnecessarily
+	result2, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	// The key assertion: we should get a reasonable requeue interval, not immediate retry
+	// If the bug existed, this would either error or return a very short interval
+	if result2.RequeueAfter > 0 {
+		require.True(t, result2.RequeueAfter >= defaultRequeueInterval,
+			"Requeue interval should be at least %v, got %v (rapid loop detected)",
+			defaultRequeueInterval, result2.RequeueAfter)
+	}
+
+	// Verify the condition reason is stable (not flipping between states)
+	final := &adxmonv1.Ingestor{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, final))
+
+	var condition *metav1.Condition
+	for i := range final.Status.Conditions {
+		if final.Status.Conditions[i].Type == adxmonv1.IngestorConditionOwner {
+			condition = &final.Status.Conditions[i]
+			break
+		}
+	}
+	require.NotNil(t, condition, "Should have a status condition")
+
+	// The condition should be in a stable waiting state, not flipping
+	validWaitingReasons := []string{ReasonNotReady, ReasonWaitForReady}
+	found := false
+	for _, r := range validWaitingReasons {
+		if condition.Reason == r {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "Condition reason should be a valid waiting state, got: %s", condition.Reason)
+}
+
+func TestIngestorReconciler_BuildIngestorConfig_DeterministicEndpointOrder(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "test:latest",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	// Intentionally add clusters in reverse lexical order to ensure we sort deterministically.
+	clusterB := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "b-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://b.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue}},
+		},
+	}
+	clusterA := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "a-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://a.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Logs", TelemetryType: adxmonv1.DatabaseTelemetryLogs},
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue}},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(clusterB, clusterA, ingestor).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+	ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NotNil(t, cfg)
+
+	// Ensure endpoints are deterministically sorted; otherwise a harmless List reorder can change
+	// args and trigger a StatefulSet rollout.
+	require.Equal(t, []string{"Metrics=https://a.kusto.windows.net", "Metrics=https://b.kusto.windows.net"}, cfg.MetricsClusters)
+	require.Equal(t, []string{"Logs=https://a.kusto.windows.net", "Logs=https://b.kusto.windows.net"}, cfg.LogsClusters)
 }
