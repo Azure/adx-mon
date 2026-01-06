@@ -254,6 +254,9 @@ func (r *IngestorReconciler) ReconcileComponent(ctx context.Context, req ctrl.Re
 	// Handle ADXClusterSelector changes and update args if needed
 	changed, err := r.handleADXClusterSelectorChange(ctx, &sts, ingestor, stored)
 	if err != nil {
+		if setErr := r.setCondition(ctx, ingestor, ReasonTemplateError, fmt.Sprintf("failed to process ADXClusterSelector: %v", err), metav1.ConditionFalse); setErr != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to set status condition: %w", setErr)
+		}
 		return ctrl.Result{}, err
 	}
 	if changed {
