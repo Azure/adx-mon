@@ -11,9 +11,9 @@ merge into larger files which can impact query latency and increase resource req
 
 # Deployment
 
-## Operator-Managed Deployment (Recommended)
+## Operator-Managed Deployment
 
-The recommended way to deploy the ingestor is via the adx-mon operator using the `Ingestor` CRD. The operator handles:
+The adx-mon operator provides a declarative way to deploy the ingestor using the `Ingestor` CRD. This is the intended future path for managing ingestor deployments. The operator handles:
 - StatefulSet creation with proper security contexts
 - Service and RBAC configuration
 - Automatic connection to ADXCluster resources via label selectors
