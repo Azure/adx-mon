@@ -725,6 +725,7 @@ func (r *IngestorReconciler) createOrUpdateTyped(ctx context.Context, obj client
 		// to avoid triggering unnecessary rolling updates.
 		if sts, ok := obj.(*appsv1.StatefulSet); ok {
 			existingSts := existing.(*appsv1.StatefulSet)
+			normalizeStatefulSetForUpdate(existingSts, sts)
 			if !statefulSetNeedsUpdate(existingSts, sts) {
 				logger.Debugf("StatefulSet %s/%s is up-to-date, skipping update", obj.GetNamespace(), obj.GetName())
 				return false, nil
@@ -742,6 +743,25 @@ func (r *IngestorReconciler) createOrUpdateTyped(ctx context.Context, obj client
 	// Resource was created
 	logger.Infof("Created %s %s/%s", kind, obj.GetNamespace(), obj.GetName())
 	return true, nil
+}
+
+func normalizeStatefulSetForUpdate(existing, desired *appsv1.StatefulSet) {
+	if existing == nil || desired == nil {
+		return
+	}
+
+	var selectorLabels map[string]string
+	if existing.Spec.Selector != nil {
+		// StatefulSet selectors are immutable; preserve existing selectors and keep their labels on the pod template.
+		desired.Spec.Selector = existing.Spec.Selector.DeepCopy()
+		selectorLabels = existing.Spec.Selector.MatchLabels
+	}
+
+	desired.Spec.Template.Labels = mergeLabels(
+		existing.Spec.Template.Labels,
+		desired.Spec.Template.Labels,
+		selectorLabels,
+	)
 }
 
 // statefulSetNeedsUpdate compares the key fields of a StatefulSet to determine if an update is needed.
@@ -780,6 +800,11 @@ func statefulSetNeedsUpdate(existing, desired *appsv1.StatefulSet) bool {
 		}
 	}
 
+	if labelsNeedUpdate(existing.Spec.Template.Labels, desired.Spec.Template.Labels) {
+		logger.Debugf("StatefulSet pod template labels differ")
+		return true
+	}
+
 	// Compare nodeSelector
 	existingNS := existing.Spec.Template.Spec.NodeSelector
 	desiredNS := desired.Spec.Template.Spec.NodeSelector
@@ -810,6 +835,18 @@ func statefulSetNeedsUpdate(existing, desired *appsv1.StatefulSet) bool {
 		return true
 	}
 
+	return false
+}
+
+func labelsNeedUpdate(existing, desired map[string]string) bool {
+	if len(desired) == 0 {
+		return false
+	}
+	for key, desiredValue := range desired {
+		if existingValue, ok := existing[key]; !ok || existingValue != desiredValue {
+			return true
+		}
+	}
 	return false
 }
 

@@ -629,6 +629,95 @@ func TestIngestorReconciler_UpdateExistingResources(t *testing.T) {
 		"StatefulSet image should be updated to the new image from Ingestor spec")
 }
 
+func TestIngestorReconciler_UpdateExistingStatefulSetLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "adx-mon.azure.com/v1",
+			Kind:       "Ingestor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-ingestor",
+			Namespace: "default",
+			UID:       "test-uid-12345",
+		},
+		Spec: adxmonv1.IngestorSpec{
+			Image:    "ingestor:v1",
+			Replicas: 1,
+			ADXClusterSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "adx-mon"},
+			},
+		},
+	}
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "adx-mon"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			Endpoint: "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "MetricsDB", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, ingestor).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+	ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	existingSts := BuildStatefulSet(cfg).DeepCopy()
+	existingSts.Spec.Selector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{"app": "ingestor"},
+	}
+	existingSts.Spec.Template.Labels = map[string]string{"app": "ingestor"}
+	existingSts.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion:         "adx-mon.azure.com/v1",
+			Kind:               "Ingestor",
+			Name:               "test-ingestor",
+			UID:                "test-uid-12345",
+			Controller:         func() *bool { b := true; return &b }(),
+			BlockOwnerDeletion: func() *bool { b := true; return &b }(),
+		},
+	}
+	require.NoError(t, client.Create(context.Background(), existingSts))
+
+	result, err := reconciler.CreateIngestor(context.Background(), ingestor)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	updatedSts := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{
+		Name:      "test-ingestor",
+		Namespace: "default",
+	}, updatedSts))
+
+	require.Equal(t, "test-ingestor", updatedSts.Spec.Template.Labels[LabelName])
+	require.Equal(t, componentIngestor, updatedSts.Spec.Template.Labels[LabelComponent])
+	require.Equal(t, "ingestor", updatedSts.Spec.Template.Labels["app"])
+}
+
 // TestIngestorReconciler_SkipsUnownedResources verifies that the reconciler does not
 // update resources that are not owned by the Ingestor, preventing conflicts.
 func TestIngestorReconciler_SkipsUnownedResources(t *testing.T) {
