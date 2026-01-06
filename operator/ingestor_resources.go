@@ -60,6 +60,7 @@ type IngestorConfig struct {
 	// ADX cluster endpoints
 	MetricsClusters []string
 	LogsClusters    []string
+	LogDestination  string
 
 	// Azure identity
 	AzureClientID string
@@ -207,6 +208,16 @@ func BuildStatefulSet(cfg *IngestorConfig) *appsv1.StatefulSet {
 		podSpec.NodeSelector = nodeSelectorFromMap(cfg.NodeSelector)
 	}
 
+	annotations := map[string]string{
+		"adx-mon/scrape":      "true",
+		"adx-mon/port":        fmt.Sprintf("%d", IngestorPortMetrics),
+		"adx-mon/path":        "/metrics",
+		"adx-mon/log-parsers": "json",
+	}
+	if cfg.LogDestination != "" {
+		annotations["adx-mon/log-destination"] = cfg.LogDestination
+	}
+
 	return &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps/v1",
@@ -224,14 +235,8 @@ func BuildStatefulSet(cfg *IngestorConfig) *appsv1.StatefulSet {
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: resourceLabels(cfg.Name, componentIngestor),
-					Annotations: map[string]string{
-						"adx-mon/scrape":          "true",
-						"adx-mon/port":            fmt.Sprintf("%d", IngestorPortMetrics),
-						"adx-mon/path":            "/metrics",
-						"adx-mon/log-destination": "Logs:Ingestor",
-						"adx-mon/log-parsers":     "json",
-					},
+					Labels:      resourceLabels(cfg.Name, componentIngestor),
+					Annotations: annotations,
 				},
 				Spec: podSpec,
 			},
@@ -419,6 +424,7 @@ func NewIngestorConfigFromReconciler(
 		Replicas:         ingestor.Spec.Replicas,
 		MetricsClusters:  metricsClusters,
 		LogsClusters:     logsClusters,
+		LogDestination:   ingestor.Spec.LogDestination,
 		AzureClientID:    os.Getenv("AZURE_CLIENT_ID"),
 		AzureResource:    azureResource,
 		ClusterLabels:    clusterLabels,

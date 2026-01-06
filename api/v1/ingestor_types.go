@@ -49,6 +49,12 @@ type IngestorSpec struct {
 	ExposeExternally bool `json:"exposeExternally,omitempty"`
 
 	//+kubebuilder:validation:Optional
+	//+kubebuilder:default="Logs:Ingestor"
+	// LogDestination configures the default log destination for ingestor pod logs in the form "Database:Table".
+	// Optional; defaults to "Logs:Ingestor" if omitted.
+	LogDestination string `json:"logDestination,omitempty"`
+
+	//+kubebuilder:validation:Optional
 	// TLS configures TLS certificates for the ingestor server.
 	// If not specified, the ingestor will generate self-signed certificates.
 	TLS *TLSConfig `json:"tls,omitempty"`

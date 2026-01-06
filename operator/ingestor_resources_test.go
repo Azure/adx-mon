@@ -48,11 +48,12 @@ func TestBuildService(t *testing.T) {
 
 func TestBuildStatefulSet(t *testing.T) {
 	cfg := &IngestorConfig{
-		Name:      "test-ingestor",
-		Namespace: "adx-mon",
-		Image:     "ghcr.io/azure/adx-mon/ingestor:v1.0.0",
-		Replicas:  3,
-		Region:    "westus2",
+		Name:           "test-ingestor",
+		Namespace:      "adx-mon",
+		Image:          "ghcr.io/azure/adx-mon/ingestor:v1.0.0",
+		Replicas:       3,
+		Region:         "westus2",
+		LogDestination: "CustomLogs:Ingestor",
 		ClusterLabels: map[string]string{
 			"region":  "westus2",
 			"cluster": "test",
@@ -92,6 +93,7 @@ func TestBuildStatefulSet(t *testing.T) {
 	require.Equal(t, "true", annotations["adx-mon/scrape"])
 	require.Equal(t, "9091", annotations["adx-mon/port"])
 	require.Equal(t, "/metrics", annotations["adx-mon/path"])
+	require.Equal(t, "CustomLogs:Ingestor", annotations["adx-mon/log-destination"])
 
 	// Check security context
 	container := podSpec.Containers[0]

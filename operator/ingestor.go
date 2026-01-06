@@ -860,6 +860,9 @@ func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
 	if ingestor.Spec.Image == "" {
 		ingestor.Spec.Image = "ghcr.io/azure/adx-mon/ingestor:latest"
 	}
+	if ingestor.Spec.LogDestination == "" {
+		ingestor.Spec.LogDestination = "Logs:Ingestor"
+	}
 }
 
 // clusterLabel represents a single cluster label key-value pair for deterministic template rendering.

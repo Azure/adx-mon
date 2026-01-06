@@ -120,6 +120,12 @@ spec:
                 description: Image is the container image to use for the ingestor
                   component. Optional; if omitted, a default image will be used.
                 type: string
+              logDestination:
+                default: Logs:Ingestor
+                description: |-
+                  LogDestination configures the default log destination for ingestor pod logs in the form "Database:Table".
+                  Optional; defaults to "Logs:Ingestor" if omitted.
+                type: string
               replicas:
                 default: 1
                 description: Replicas is the number of ingestor replicas to run. Optional;

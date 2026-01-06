@@ -85,6 +85,7 @@ spec:
   replicas: 3
   endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
   exposeExternally: false
+  logDestination: "Logs:Ingestor"
   adxClusterSelector:
     matchLabels:
       app: adx-mon
@@ -95,6 +96,7 @@ spec:
 - `replicas`: Number of replicas. Default: 1.
 - `endpoint`: Service endpoint (auto-generated if omitted).
 - `exposeExternally`: Whether to expose outside the cluster. Default: false. _(Not yet implemented)_
+- `logDestination`: Destination for ingestor pod logs (`Database:Table`). Default: `Logs:Ingestor`.
 - `adxClusterSelector`: Label selector for target ADXCluster(s). **Required.**
 - `criteriaExpression`: _(Optional)_ CEL expression evaluated against operator cluster labels (region, environment, cloud, and any `--cluster-labels` key/value pairs). If the expression evaluates to false, reconciliation is skipped. Expression errors are surfaced in status conditions.
 
