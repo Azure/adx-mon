@@ -245,7 +245,7 @@ func getContents() Contents {
 			},
 			{
 				Title:       "Otel Log",
-				Description: "The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) logs from an OpenTelemetry sender. By default, this listens under the path `/v1/logs`.",
+				Description: "The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) logs from an OpenTelemetry sender. By default, this listens under the path `/v1/logs`. This endpoint expects the Attributes or Body fields to contain the key-value pairs `kusto.database` and `kusto.table` to route logs to the appropriate ADX database and table.",
 				Config: &config.Config{
 					OtelLog: &config.OtelLog{
 						AddAttributes: map[string]string{

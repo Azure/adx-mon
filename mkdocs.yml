@@ -46,7 +46,9 @@ nav:
       - 'index.md'
   - 'quick-start.md'
   - 'concepts.md'
-  - 'cookbook.md'
+  - Cookbooks:
+    - 'cookbook/cookbook.md'
+    - 'cookbook/traces.md'
   - Reference:
       - 'config.md'
       - 'ingestor.md'

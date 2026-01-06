@@ -24,4 +24,4 @@ collection and analysis of observability data.
 * [Guides](guides.md)
 * [CRD Reference](crds.md)
 * [ADXCluster Controller](adxcluster-controller.md)
-* [Cook Book](cookbook.md)
+* [Cook Book](cookbook/cookbook.md)
