@@ -7,6 +7,27 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TLSConfig defines TLS certificate configuration for the ingestor server.
+// Only one of SecretRef or HostPath should be specified.
+type TLSConfig struct {
+	//+kubebuilder:validation:Optional
+	// SecretRef references a Kubernetes Secret containing tls.crt and tls.key.
+	// The secret must exist in the same namespace as the Ingestor.
+	SecretRef *SecretReference `json:"secretRef,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// HostPath specifies a directory path on the host containing TLS certificates.
+	// The directory should contain tls.crt and tls.key files.
+	// This is useful for environments where certificates are pre-provisioned on nodes.
+	HostPath string `json:"hostPath,omitempty"`
+}
+
+// SecretReference references a Kubernetes Secret by name.
+type SecretReference struct {
+	// Name is the name of the secret in the same namespace as the Ingestor.
+	Name string `json:"name"`
+}
+
 // IngestorSpec defines the desired state of Ingestor
 type IngestorSpec struct {
 	//+kubebuilder:validation:Optional
@@ -26,6 +47,11 @@ type IngestorSpec struct {
 	//+kubebuilder:default=false
 	// ExposeExternally indicates if the ingestor should be exposed externally as reflected in the Endpoint. Optional; defaults to false.
 	ExposeExternally bool `json:"exposeExternally,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// TLS configures TLS certificates for the ingestor server.
+	// If not specified, the ingestor will generate self-signed certificates.
+	TLS *TLSConfig `json:"tls,omitempty"`
 
 	//+kubebuilder:validation:Required
 	// ADXClusterSelector is a label selector used to select the ADXCluster CRDs this ingestor should target. This field is required.
@@ -50,8 +76,13 @@ type IngestorSpec struct {
 }
 
 func (s *IngestorSpec) StoreAppliedProvisioningState() error {
-	// Store the current provisioning state as a JSON string
-	provisionState, err := json.Marshal(s)
+	// Store the current provisioning state as a JSON string.
+	// Create a copy with AppliedProvisionState cleared to avoid recursive escaping -
+	// otherwise each reconciliation would nest the previous JSON inside itself,
+	// causing exponential growth in escape characters.
+	toMarshal := *s
+	toMarshal.AppliedProvisionState = ""
+	provisionState, err := json.Marshal(toMarshal)
 	if err != nil {
 		return fmt.Errorf("failed to marshal provision state: %w", err)
 	}
