@@ -235,7 +235,7 @@ Prometheus remote write accepts metrics from [Prometheus remote write protocol](
 ```
 ## Otel Log
 
-The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) logs from an OpenTelemetry sender. By default, this listens under the path `/v1/logs`.
+The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) logs from an OpenTelemetry sender. By default, this listens under the path `/v1/logs`. This endpoint expects the Attributes or Body fields to contain the key-value pairs `kusto.database` and `kusto.table` to route logs to the appropriate ADX database and table.
 
 ```toml
 # Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP.

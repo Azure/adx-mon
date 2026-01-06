@@ -212,7 +212,7 @@ spec:
       by bin(Timestamp, 1h), Pod, Namespace
 ```
 
-For detailed examples and best practices, see the [SummaryRules Cookbook](cookbook.md#summaryrules).
+For detailed examples and best practices, see the [SummaryRules Cookbook](cookbook/cookbook.md#summaryrules).
 
 ---
 

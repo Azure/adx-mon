@@ -1,5 +1,3 @@
-# Cookbook
-
 ## SummaryRules
 
 SummaryRules automate periodic KQL aggregations in Azure Data Explorer (ADX) for data rollups, downsampling, and ETL operations. They execute on precise time intervals and track async operations until completion.
@@ -416,7 +414,7 @@ table: DailyResourceUsage     # Daily resource usage summaries
 ```
 
 #### Mitigate Latency with Views
-When using longer ingestion delays for data consistency, create views that combine historical summaries with recent data for up-to-date queries. See the [Function CRD documentation](crds.md#function) for examples of creating views that union historical summary data with recent raw data.
+When using longer ingestion delays for data consistency, create views that combine historical summaries with recent data for up-to-date queries. See the [Function CRD documentation](../crds.md#function) for examples of creating views that union historical summary data with recent raw data.
 
 This approach allows you to:
 - Use longer ingestion delays (e.g., 30 minutes) for consistent historical data
@@ -467,6 +465,3 @@ Metrics
 | where Timestamp between (_startTime .. _endTime)
 | summarize avg(Value) by bin(Timestamp, 1h)
 ```
-
-
-## Alerting
