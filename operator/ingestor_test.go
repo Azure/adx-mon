@@ -847,6 +847,12 @@ func TestIngestorReconciler_ImagePullSecrets(t *testing.T) {
 		Spec: adxmonv1.IngestorSpec{
 			Image:    "my-registry.io/ingestor:v1",
 			Replicas: 1,
+			PodPolicy: &adxmonv1.PodPolicy{
+				ImagePullSecrets: []corev1.LocalObjectReference{
+					{Name: "acr-pull-secret"},
+					{Name: "another-registry-secret"},
+				},
+			},
 			ADXClusterSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "adx-mon"},
 			},
@@ -878,14 +884,10 @@ func TestIngestorReconciler_ImagePullSecrets(t *testing.T) {
 		WithStatusSubresource(&adxmonv1.Ingestor{}).
 		Build()
 
-	// Configure reconciler with imagePullSecrets (simulating operator discovery)
+	// Reconciler should apply imagePullSecrets from the CRD's podPolicy.
 	reconciler := &IngestorReconciler{
-		Client: client,
-		Scheme: scheme,
-		ImagePullSecrets: []corev1.LocalObjectReference{
-			{Name: "acr-pull-secret"},
-			{Name: "another-registry-secret"},
-		},
+		Client:             client,
+		Scheme:             scheme,
 		waitForReadyReason: ReasonWaitForReady,
 	}
 
@@ -906,7 +908,7 @@ func TestIngestorReconciler_ImagePullSecrets(t *testing.T) {
 	require.Equal(t, "another-registry-secret", sts.Spec.Template.Spec.ImagePullSecrets[1].Name)
 }
 
-func TestIngestorReconciler_TemplateData_PropagatesSchedulingConstraints(t *testing.T) {
+func TestIngestorReconciler_TemplateData_UsesPodPolicySchedulingConstraints(t *testing.T) {
 	SetClusterLabels(map[string]string{"region": "eastus"})
 	t.Cleanup(func() { SetClusterLabels(nil) })
 
@@ -929,6 +931,19 @@ func TestIngestorReconciler_TemplateData_PropagatesSchedulingConstraints(t *test
 		Spec: adxmonv1.IngestorSpec{
 			Image:    "my-registry.io/ingestor:v1",
 			Replicas: 1,
+			PodPolicy: &adxmonv1.PodPolicy{
+				NodeSelector: map[string]string{
+					"agentpool": "infra",
+				},
+				Tolerations: []corev1.Toleration{
+					{
+						Key:      "agentpool",
+						Operator: corev1.TolerationOpEqual,
+						Value:    "infra",
+						Effect:   corev1.TaintEffectNoSchedule,
+					},
+				},
+			},
 			ADXClusterSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": "adx-mon"},
 			},
@@ -959,21 +974,7 @@ func TestIngestorReconciler_TemplateData_PropagatesSchedulingConstraints(t *test
 		WithObjects(cluster, ingestor).
 		Build()
 
-	reconciler := &IngestorReconciler{
-		Client: client,
-		Scheme: scheme,
-		NodeSelector: map[string]string{
-			"agentpool": "infra",
-		},
-		Tolerations: []corev1.Toleration{
-			{
-				Key:      "agentpool",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "infra",
-				Effect:   corev1.TaintEffectNoSchedule,
-			},
-		},
-	}
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
 
 	ready, data, err := reconciler.templateData(context.Background(), ingestor)
 	require.NoError(t, err)
@@ -1035,11 +1036,10 @@ func TestIngestorReconciler_NoImagePullSecrets(t *testing.T) {
 		WithStatusSubresource(&adxmonv1.Ingestor{}).
 		Build()
 
-	// Configure reconciler WITHOUT imagePullSecrets
+	// No podPolicy configured => no imagePullSecrets.
 	reconciler := &IngestorReconciler{
 		Client:             client,
 		Scheme:             scheme,
-		ImagePullSecrets:   nil, // No pull secrets
 		waitForReadyReason: ReasonWaitForReady,
 	}
 

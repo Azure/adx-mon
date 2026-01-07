@@ -125,7 +125,7 @@ func TestBuildStatefulSetWithImagePullSecrets(t *testing.T) {
 		Namespace:        "adx-mon",
 		Image:            "ghcr.io/azure/adx-mon/ingestor:latest",
 		Replicas:         1,
-		ImagePullSecrets: []string{"my-registry-secret", "another-secret"},
+		ImagePullSecrets: []corev1.LocalObjectReference{{Name: "my-registry-secret"}, {Name: "another-secret"}},
 	}
 
 	sts := BuildStatefulSet(cfg)

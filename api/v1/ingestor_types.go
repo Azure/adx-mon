@@ -59,6 +59,10 @@ type IngestorSpec struct {
 	// If not specified, the ingestor will generate self-signed certificates.
 	TLS *TLSConfig `json:"tls,omitempty"`
 
+	//+kubebuilder:validation:Optional
+	// PodPolicy configures pod scheduling and image pull behavior for the ingestor workload.
+	PodPolicy *PodPolicy `json:"podPolicy,omitempty"`
+
 	//+kubebuilder:validation:Required
 	// ADXClusterSelector is a label selector used to select the ADXCluster CRDs this ingestor should target. This field is required.
 	ADXClusterSelector *metav1.LabelSelector `json:"adxClusterSelector"`

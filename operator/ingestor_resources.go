@@ -75,7 +75,7 @@ type IngestorConfig struct {
 	TLSHostPath   string
 
 	// Scheduling configuration (inherited from operator)
-	ImagePullSecrets []string
+	ImagePullSecrets []corev1.LocalObjectReference
 	NodeSelector     map[string]string
 	Tolerations      []corev1.Toleration
 }
@@ -199,9 +199,7 @@ func BuildStatefulSet(cfg *IngestorConfig) *appsv1.StatefulSet {
 	}
 
 	// Add imagePullSecrets if configured
-	if len(cfg.ImagePullSecrets) > 0 {
-		podSpec.ImagePullSecrets = imagePullSecretsFromNames(cfg.ImagePullSecrets)
-	}
+	podSpec.ImagePullSecrets = normalizeLocalObjectReferences(cfg.ImagePullSecrets)
 
 	// Add nodeSelector if configured
 	if len(cfg.NodeSelector) > 0 {
@@ -393,7 +391,7 @@ func NewIngestorConfigFromReconciler(
 	metricsClusters, logsClusters []string,
 	azureResource string,
 	clusterLabels map[string]string,
-	imagePullSecrets []string,
+	imagePullSecrets []corev1.LocalObjectReference,
 	nodeSelector map[string]string,
 	tolerations []corev1.Toleration,
 ) *IngestorConfig {

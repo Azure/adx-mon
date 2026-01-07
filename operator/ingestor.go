@@ -71,19 +71,6 @@ type IngestorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// ImagePullSecrets are propagated to created workloads. Typically discovered
-	// from the operator's own pod at startup.
-	ImagePullSecrets []corev1.LocalObjectReference
-
-	// NodeSelector is propagated to created workloads to ensure they land on the
-	// same node pool as the operator. This ensures pods have access to the same
-	// managed identities and network configuration as the operator.
-	NodeSelector map[string]string
-
-	// Tolerations are propagated to created workloads so they can schedule onto the
-	// same tainted node pools as the operator.
-	Tolerations []corev1.Toleration
-
 	waitForReadyReason string
 
 	// crdsMu protects crdsInstalled; CRD installation is attempted until it succeeds.
@@ -975,11 +962,9 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 	slices.Sort(logsClusters)
 	logsClusters = slices.Compact(logsClusters)
 
-	// Convert ImagePullSecrets to string slice for template
-	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))
-	for i, s := range r.ImagePullSecrets {
-		imagePullSecretNames[i] = s.Name
-	}
+	// Extract per-workload pod policy from the CRD.
+	policySecrets, policyNodeSelector, policyTolerations := ingestorPodPolicy(ingestor.Spec.PodPolicy)
+	imagePullSecretNames := imagePullSecretsToNames(policySecrets)
 
 	// Get operator cluster labels for --cluster-labels args
 	// Convert to sorted slice for deterministic template rendering
@@ -1011,21 +996,21 @@ func (r *IngestorReconciler) templateData(ctx context.Context, ingestor *adxmonv
 
 	// Convert NodeSelector map to sorted slice for deterministic template rendering
 	var nodeSelector []clusterLabel
-	if len(r.NodeSelector) > 0 {
-		nsKeys := make([]string, 0, len(r.NodeSelector))
-		for k := range r.NodeSelector {
+	if len(policyNodeSelector) > 0 {
+		nsKeys := make([]string, 0, len(policyNodeSelector))
+		for k := range policyNodeSelector {
 			nsKeys = append(nsKeys, k)
 		}
 		slices.Sort(nsKeys)
 		nodeSelector = make([]clusterLabel, 0, len(nsKeys))
 		for _, k := range nsKeys {
-			nodeSelector = append(nodeSelector, clusterLabel{Key: k, Value: r.NodeSelector[k]})
+			nodeSelector = append(nodeSelector, clusterLabel{Key: k, Value: policyNodeSelector[k]})
 		}
 	}
 
-	extraTolerations := make([]toleration, 0, len(r.Tolerations))
-	seen := make(map[string]struct{}, len(r.Tolerations))
-	for _, t := range r.Tolerations {
+	extraTolerations := make([]toleration, 0, len(policyTolerations))
+	seen := make(map[string]struct{}, len(policyTolerations))
+	for _, t := range policyTolerations {
 		if isDefaultIngestorToleration(t) {
 			continue
 		}
@@ -1180,11 +1165,8 @@ func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *
 	slices.Sort(logsClusters)
 	logsClusters = slices.Compact(logsClusters)
 
-	// Convert ImagePullSecrets to string slice
-	imagePullSecretNames := make([]string, len(r.ImagePullSecrets))
-	for i, s := range r.ImagePullSecrets {
-		imagePullSecretNames[i] = s.Name
-	}
+	// Extract per-workload pod policy from the CRD.
+	policySecrets, policyNodeSelector, policyTolerations := ingestorPodPolicy(ingestor.Spec.PodPolicy)
 
 	// Get operator cluster labels
 	clusterLabels := getOperatorClusterLabels()
@@ -1196,9 +1178,9 @@ func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *
 		logsClusters,
 		azureResource,
 		clusterLabels,
-		imagePullSecretNames,
-		r.NodeSelector,
-		r.Tolerations,
+		policySecrets,
+		policyNodeSelector,
+		policyTolerations,
 	)
 
 	return true, cfg, nil
