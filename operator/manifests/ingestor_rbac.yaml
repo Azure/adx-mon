@@ -1,8 +1,9 @@
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ .Namespace }}:{{ .Name }}
+  namespace: {{ .Namespace }}
   labels:
     app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/component: ingestor
@@ -11,7 +12,6 @@ rules:
   - apiGroups:
       - ""
     resources:
-      - namespaces
       - pods
     verbs:
       - get
@@ -48,16 +48,17 @@ rules:
       - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: {{ .Namespace }}:{{ .Name }}
+  namespace: {{ .Namespace }}
   labels:
     app.kubernetes.io/name: {{ .Name }}
     app.kubernetes.io/component: ingestor
     app.kubernetes.io/managed-by: adx-mon-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: {{ .Namespace }}:{{ .Name }}
 subjects:
   - kind: ServiceAccount
