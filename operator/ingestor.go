@@ -93,7 +93,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: ReasonCriteriaExpressionError, Message: err.Error(), ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
 				if err := r.Status().Update(ctx, ingestor); err != nil {
-					logger.Errorf("Failed to update status for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
+					return ctrl.Result{}, err
 				}
 			}
 			return ctrl.Result{}, nil
@@ -102,7 +102,7 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: ReasonCriteriaExpressionFalse, Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
 				if err := r.Status().Update(ctx, ingestor); err != nil {
-					logger.Errorf("Failed to update status for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
+					return ctrl.Result{}, err
 				}
 			}
 			return ctrl.Result{}, nil
