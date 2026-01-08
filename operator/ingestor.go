@@ -780,11 +780,13 @@ func statefulSetNeedsUpdate(existing, desired *appsv1.StatefulSet) bool {
 		}
 	}
 
-	// Compare container args (sorted for comparison)
+	// Compare container args using set comparison. Order may vary due to map iteration
+	// or List API ordering, but semantically the args are equivalent if they contain
+	// the same values. This prevents spurious StatefulSet rollouts.
 	if len(existing.Spec.Template.Spec.Containers) > 0 && len(desired.Spec.Template.Spec.Containers) > 0 {
 		existingArgs := existing.Spec.Template.Spec.Containers[0].Args
 		desiredArgs := desired.Spec.Template.Spec.Containers[0].Args
-		if !slices.Equal(existingArgs, desiredArgs) {
+		if !argsEqual(existingArgs, desiredArgs) {
 			logger.Debugf("StatefulSet container args differ")
 			return true
 		}
@@ -838,6 +840,26 @@ func labelsNeedUpdate(existing, desired map[string]string) bool {
 		}
 	}
 	return false
+}
+
+// argsEqual compares two slices of arguments for set equality.
+// Returns true if both slices contain exactly the same values (including duplicates).
+// Order is ignored to handle non-deterministic map iteration and List API ordering.
+func argsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, v := range a {
+		counts[v]++
+	}
+	for _, v := range b {
+		counts[v]--
+		if counts[v] < 0 {
+			return false // b has more of this value than a
+		}
+	}
+	return true
 }
 
 func (s *IngestorReconciler) applyDefaults(ingestor *adxmonv1.Ingestor) {
@@ -1157,13 +1179,6 @@ func (r *IngestorReconciler) buildIngestorConfig(ctx context.Context, ingestor *
 			}
 		}
 	}
-
-	// Stabilize endpoint argument order to avoid triggering StatefulSet rollouts due
-	// to nondeterministic List ordering.
-	slices.Sort(metricsClusters)
-	metricsClusters = slices.Compact(metricsClusters)
-	slices.Sort(logsClusters)
-	logsClusters = slices.Compact(logsClusters)
 
 	// Extract per-workload pod policy from the CRD.
 	policySecrets, policyNodeSelector, policyTolerations := ingestorPodPolicy(ingestor.Spec.PodPolicy)

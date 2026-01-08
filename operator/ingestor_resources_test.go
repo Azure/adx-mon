@@ -285,7 +285,7 @@ func TestBuildIngestorArgs(t *testing.T) {
 	// Check region arg
 	require.Contains(t, args, "--region=westus2")
 
-	// Check cluster labels args (sorted order)
+	// Check cluster labels args (order may vary due to map iteration)
 	require.Contains(t, args, "--cluster-labels=cluster=prod")
 	require.Contains(t, args, "--cluster-labels=region=westus2")
 

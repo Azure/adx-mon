@@ -264,16 +264,9 @@ func buildIngestorArgs(cfg *IngestorConfig) []string {
 		args = append(args, "--region="+cfg.Region)
 	}
 
-	// Cluster labels (sorted for deterministic output)
-	if len(cfg.ClusterLabels) > 0 {
-		keys := make([]string, 0, len(cfg.ClusterLabels))
-		for k := range cfg.ClusterLabels {
-			keys = append(keys, k)
-		}
-		slices.Sort(keys)
-		for _, k := range keys {
-			args = append(args, fmt.Sprintf("--cluster-labels=%s=%s", k, cfg.ClusterLabels[k]))
-		}
+	// Cluster labels
+	for k, v := range cfg.ClusterLabels {
+		args = append(args, fmt.Sprintf("--cluster-labels=%s=%s", k, v))
 	}
 
 	// Metrics kusto endpoints

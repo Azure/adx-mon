@@ -97,6 +97,114 @@ func TestIngestorReconciler_IsReady(t *testing.T) {
 	require.False(t, result.IsZero())
 }
 
+func TestArgsEqual(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        []string
+		b        []string
+		expected bool
+	}{
+		{
+			name:     "identical slices",
+			a:        []string{"--foo=bar", "--baz=qux"},
+			b:        []string{"--foo=bar", "--baz=qux"},
+			expected: true,
+		},
+		{
+			name:     "same elements different order",
+			a:        []string{"--foo=bar", "--baz=qux"},
+			b:        []string{"--baz=qux", "--foo=bar"},
+			expected: true,
+		},
+		{
+			name:     "different lengths",
+			a:        []string{"--foo=bar"},
+			b:        []string{"--foo=bar", "--baz=qux"},
+			expected: false,
+		},
+		{
+			name:     "different values",
+			a:        []string{"--foo=bar", "--baz=qux"},
+			b:        []string{"--foo=bar", "--baz=different"},
+			expected: false,
+		},
+		{
+			name:     "duplicate in a only",
+			a:        []string{"--foo=bar", "--foo=bar"},
+			b:        []string{"--foo=bar", "--baz=qux"},
+			expected: false,
+		},
+		{
+			name:     "same duplicates",
+			a:        []string{"--foo=bar", "--foo=bar"},
+			b:        []string{"--foo=bar", "--foo=bar"},
+			expected: true,
+		},
+		{
+			name:     "empty slices",
+			a:        []string{},
+			b:        []string{},
+			expected: true,
+		},
+		{
+			name:     "nil slices",
+			a:        nil,
+			b:        nil,
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := argsEqual(tt.a, tt.b)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestStatefulSetNeedsUpdate_ArgsOrderIndependent(t *testing.T) {
+	existing := &appsv1.StatefulSet{
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr(int32(1)),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Image: "test:v1",
+							Args:  []string{"--a=1", "--b=2", "--c=3"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Same args, different order - should NOT trigger update
+	desired := &appsv1.StatefulSet{
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptr(int32(1)),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Image: "test:v1",
+							Args:  []string{"--c=3", "--a=1", "--b=2"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.False(t, statefulSetNeedsUpdate(existing, desired),
+		"Reordered args should not trigger StatefulSet update")
+
+	// Different args - should trigger update
+	desired.Spec.Template.Spec.Containers[0].Args = []string{"--a=1", "--b=2", "--d=4"}
+	require.True(t, statefulSetNeedsUpdate(existing, desired),
+		"Different args should trigger StatefulSet update")
+}
+
 func TestIngestorReconciler_ReconcileComponent(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
@@ -1445,8 +1553,8 @@ func TestIngestorReconciler_BuildIngestorConfig_DeterministicEndpointOrder(t *te
 	require.True(t, ready)
 	require.NotNil(t, cfg)
 
-	// Ensure endpoints are deterministically sorted; otherwise a harmless List reorder can change
-	// args and trigger a StatefulSet rollout.
-	require.Equal(t, []string{"Metrics=https://a.kusto.windows.net", "Metrics=https://b.kusto.windows.net"}, cfg.MetricsClusters)
-	require.Equal(t, []string{"Logs=https://a.kusto.windows.net", "Logs=https://b.kusto.windows.net"}, cfg.LogsClusters)
+	// Endpoints are returned in ADXCluster name order (sorted for iteration stability),
+	// but the set comparison in statefulSetNeedsUpdate handles any remaining non-determinism.
+	require.ElementsMatch(t, []string{"Metrics=https://a.kusto.windows.net", "Metrics=https://b.kusto.windows.net"}, cfg.MetricsClusters)
+	require.ElementsMatch(t, []string{"Logs=https://a.kusto.windows.net", "Logs=https://b.kusto.windows.net"}, cfg.LogsClusters)
 }
