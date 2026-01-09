@@ -792,7 +792,8 @@ func statefulSetNeedsUpdate(existing, desired *appsv1.StatefulSet) bool {
 		}
 	}
 
-	if labelsNeedUpdate(existing.Spec.Template.Labels, desired.Spec.Template.Labels) {
+	// Compare pod template labels
+	if !maps.Equal(existing.Spec.Template.Labels, desired.Spec.Template.Labels) {
 		logger.Debugf("StatefulSet pod template labels differ")
 		return true
 	}
@@ -827,18 +828,6 @@ func statefulSetNeedsUpdate(existing, desired *appsv1.StatefulSet) bool {
 		return true
 	}
 
-	return false
-}
-
-func labelsNeedUpdate(existing, desired map[string]string) bool {
-	if len(desired) == 0 {
-		return false
-	}
-	for key, desiredValue := range desired {
-		if existingValue, ok := existing[key]; !ok || existingValue != desiredValue {
-			return true
-		}
-	}
 	return false
 }
 
