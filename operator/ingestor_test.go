@@ -1558,3 +1558,949 @@ func TestIngestorReconciler_BuildIngestorConfig_DeterministicEndpointOrder(t *te
 	require.ElementsMatch(t, []string{"Metrics=https://a.kusto.windows.net", "Metrics=https://b.kusto.windows.net"}, cfg.MetricsClusters)
 	require.ElementsMatch(t, []string{"Logs=https://a.kusto.windows.net", "Logs=https://b.kusto.windows.net"}, cfg.LogsClusters)
 }
+
+// TestIngestorReconciler_CriteriaExpression tests CEL expression evaluation and recovery paths.
+// This covers the CriteriaExpressionError and CriteriaExpressionFalse conditions.
+func TestIngestorReconciler_CriteriaExpression(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	// Set up cluster labels for CEL evaluation
+	SetClusterLabels(map[string]string{"region": "eastus", "env": "prod"})
+	t.Cleanup(func() { SetClusterLabels(nil) })
+
+	cluster := &adxmonv1.ADXCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-cluster",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: adxmonv1.ADXClusterSpec{
+			ClusterName: "test-cluster",
+			Endpoint:    "https://test.kusto.windows.net",
+			Databases: []adxmonv1.ADXClusterDatabaseSpec{
+				{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+			},
+		},
+		Status: adxmonv1.ADXClusterStatus{
+			Conditions: []metav1.Condition{
+				{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	t.Run("expression_evaluates_to_false", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-ingestor",
+				Namespace:  "default",
+				Generation: 1,
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				CriteriaExpression: `region == "westus"`, // Will evaluate to false
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{
+			Client:             client,
+			Scheme:             scheme,
+			waitForReadyReason: ReasonWaitForReady,
+		}
+
+		result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "test-ingestor", Namespace: "default"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.IsZero(), "Should not requeue when expression is false")
+
+		// Verify condition was set to CriteriaExpressionFalse
+		updated := &adxmonv1.Ingestor{}
+		require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, updated))
+
+		condition := findCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, ReasonCriteriaExpressionFalse, condition.Reason)
+		require.Equal(t, metav1.ConditionFalse, condition.Status)
+	})
+
+	t.Run("expression_has_syntax_error", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-ingestor-err",
+				Namespace:  "default",
+				Generation: 1,
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				CriteriaExpression: `region === "eastus"`, // Invalid CEL syntax (=== instead of ==)
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{
+			Client:             client,
+			Scheme:             scheme,
+			waitForReadyReason: ReasonWaitForReady,
+		}
+
+		result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "test-ingestor-err", Namespace: "default"},
+		})
+
+		require.NoError(t, err, "Terminal errors should return nil, not error")
+		require.True(t, result.IsZero(), "Should not requeue on terminal error")
+
+		// Verify condition was set to CriteriaExpressionError
+		updated := &adxmonv1.Ingestor{}
+		require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor-err", Namespace: "default"}, updated))
+
+		condition := findCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, ReasonCriteriaExpressionError, condition.Reason)
+		require.Equal(t, metav1.ConditionFalse, condition.Status)
+	})
+
+	t.Run("expression_evaluates_to_true", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-ingestor-true",
+				Namespace:  "default",
+				Generation: 1,
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				CriteriaExpression: `region == "eastus"`, // Will evaluate to true
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{
+			Client:             client,
+			Scheme:             scheme,
+			waitForReadyReason: ReasonWaitForReady,
+		}
+
+		result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "test-ingestor-true", Namespace: "default"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.RequeueAfter > 0, "Should requeue after CreateIngestor")
+
+		// Verify condition is WaitForReady (CreateIngestor was called)
+		updated := &adxmonv1.Ingestor{}
+		require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor-true", Namespace: "default"}, updated))
+
+		condition := findCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, ReasonWaitForReady, condition.Reason)
+	})
+
+	t.Run("recovery_from_expression_false", func(t *testing.T) {
+		// Start with an ingestor that previously had CriteriaExpressionFalse
+		// but now has an expression that evaluates to true
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-ingestor-recover",
+				Namespace:  "default",
+				Generation: 2, // Updated generation
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				CriteriaExpression: `region == "eastus"`, // Now evaluates to true
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+			},
+			Status: adxmonv1.IngestorStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               adxmonv1.IngestorConditionOwner,
+						Status:             metav1.ConditionFalse,
+						Reason:             ReasonCriteriaExpressionFalse,
+						ObservedGeneration: 1, // Old generation
+						LastTransitionTime: metav1.Now(),
+					},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{
+			Client:             client,
+			Scheme:             scheme,
+			waitForReadyReason: ReasonWaitForReady,
+		}
+
+		result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "test-ingestor-recover", Namespace: "default"},
+		})
+
+		require.NoError(t, err)
+		require.True(t, result.RequeueAfter > 0, "Should requeue after recovery")
+
+		// Verify condition transitioned to WaitForReady
+		updated := &adxmonv1.Ingestor{}
+		require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor-recover", Namespace: "default"}, updated))
+
+		condition := findCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, ReasonWaitForReady, condition.Reason)
+	})
+}
+
+// TestIngestorReconciler_ADXClusterEdgeCases tests various ADXCluster configurations.
+func TestIngestorReconciler_ADXClusterEdgeCases(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	t.Run("mixed_ready_not_ready_clusters", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ingestor",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas: 1,
+				Image:    "test:latest",
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "adx-mon"},
+				},
+			},
+		}
+
+		readyCluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "ready-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "adx-mon"},
+			},
+			Spec: adxmonv1.ADXClusterSpec{
+				Endpoint: "https://ready.kusto.windows.net",
+				Databases: []adxmonv1.ADXClusterDatabaseSpec{
+					{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				},
+			},
+			Status: adxmonv1.ADXClusterStatus{
+				Conditions: []metav1.Condition{
+					{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+				},
+			},
+		}
+
+		notReadyCluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "not-ready-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "adx-mon"},
+			},
+			Spec: adxmonv1.ADXClusterSpec{
+				Endpoint: "https://notready.kusto.windows.net",
+				Databases: []adxmonv1.ADXClusterDatabaseSpec{
+					{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				},
+			},
+			Status: adxmonv1.ADXClusterStatus{
+				Conditions: []metav1.Condition{
+					{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ingestor, readyCluster, notReadyCluster).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		// buildIngestorConfig should return not ready when any cluster is not ready
+		ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+		require.NoError(t, err)
+		require.False(t, ready, "Should return not ready when any cluster is not ready")
+		require.Nil(t, cfg)
+	})
+
+	t.Run("federated_cluster_selection_lexicographic", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ingestor",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas: 1,
+				Image:    "test:latest",
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "adx-mon"},
+				},
+			},
+		}
+
+		federated := adxmonv1.ClusterRoleFederated
+
+		// Two federated clusters - should select lexicographically smallest endpoint
+		clusterZ := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "z-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "adx-mon"},
+			},
+			Spec: adxmonv1.ADXClusterSpec{
+				Endpoint: "https://z-federated.kusto.windows.net",
+				Role:     &federated,
+				Databases: []adxmonv1.ADXClusterDatabaseSpec{
+					{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				},
+			},
+			Status: adxmonv1.ADXClusterStatus{
+				Conditions: []metav1.Condition{
+					{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+				},
+			},
+		}
+
+		clusterA := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "a-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "adx-mon"},
+			},
+			Spec: adxmonv1.ADXClusterSpec{
+				Endpoint: "https://a-federated.kusto.windows.net",
+				Role:     &federated,
+				Databases: []adxmonv1.ADXClusterDatabaseSpec{
+					{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				},
+			},
+			Status: adxmonv1.ADXClusterStatus{
+				Conditions: []metav1.Condition{
+					{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ingestor, clusterZ, clusterA).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+		require.NoError(t, err)
+		require.True(t, ready)
+		require.NotNil(t, cfg)
+
+		// AzureResource should be the lexicographically smallest endpoint
+		require.Equal(t, "https://a-federated.kusto.windows.net", cfg.AzureResource)
+	})
+
+	t.Run("nil_adxcluster_selector", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ingestor",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				ADXClusterSelector: nil, // Nil selector
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ingestor).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		ready, cfg, err := reconciler.buildIngestorConfig(context.Background(), ingestor)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ADXClusterSelector is required")
+		require.False(t, ready)
+		require.Nil(t, cfg)
+	})
+}
+
+// TestIngestorReconciler_EnsureManifests tests the drift correction functionality.
+func TestIngestorReconciler_EnsureManifests(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	t.Run("no_error_when_resources_exist", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "adx-mon.azure.com/v1",
+				Kind:       "Ingestor",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ingestor",
+				Namespace: "default",
+				UID:       "test-uid-12345",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Image:    "test:v1",
+				Replicas: 1,
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "adx-mon"},
+				},
+			},
+		}
+
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "adx-mon"},
+			},
+			Spec: adxmonv1.ADXClusterSpec{
+				Endpoint: "https://test.kusto.windows.net",
+				Databases: []adxmonv1.ADXClusterDatabaseSpec{
+					{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				},
+			},
+			Status: adxmonv1.ADXClusterStatus{
+				Conditions: []metav1.Condition{
+					{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionTrue},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+		// First create the resources
+		_, err := reconciler.CreateIngestor(context.Background(), ingestor)
+		require.NoError(t, err)
+
+		// Call ensureManifests multiple times - should not error
+		for i := 0; i < 3; i++ {
+			result, _, err := reconciler.ensureManifests(context.Background(), ingestor)
+			require.NoError(t, err, "ensureManifests should not error on iteration %d", i)
+			// Result may or may not have requeue depending on drift detection, which is fine
+			_ = result
+		}
+	})
+
+	t.Run("adxcluster_becomes_not_ready", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "adx-mon.azure.com/v1",
+				Kind:       "Ingestor",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-ingestor",
+				Namespace: "default",
+				UID:       "test-uid-12345",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Image:    "test:v1",
+				Replicas: 1,
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "adx-mon"},
+				},
+			},
+		}
+
+		// Cluster is NOT ready
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"app": "adx-mon"},
+			},
+			Spec: adxmonv1.ADXClusterSpec{
+				Endpoint: "https://test.kusto.windows.net",
+				Databases: []adxmonv1.ADXClusterDatabaseSpec{
+					{DatabaseName: "Metrics", TelemetryType: adxmonv1.DatabaseTelemetryMetrics},
+				},
+			},
+			Status: adxmonv1.ADXClusterStatus{
+				Conditions: []metav1.Condition{
+					{Type: adxmonv1.ADXClusterConditionOwner, Status: metav1.ConditionFalse},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: ReasonWaitForReady}
+
+		// ensureManifests should return requeue when cluster is not ready
+		result, updated, err := reconciler.ensureManifests(context.Background(), ingestor)
+		require.NoError(t, err)
+		require.False(t, updated, "Should not report updated when cluster not ready")
+		require.True(t, result.RequeueAfter > 0, "Should requeue when cluster not ready")
+	})
+}
+
+// TestIngestorReconciler_ApplyDefaults tests the defaulting logic.
+func TestIngestorReconciler_ApplyDefaults(t *testing.T) {
+	reconciler := &IngestorReconciler{}
+
+	t.Run("applies_all_defaults", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			Spec: adxmonv1.IngestorSpec{
+				// All fields empty/zero
+			},
+		}
+
+		reconciler.applyDefaults(ingestor)
+
+		require.Equal(t, int32(1), ingestor.Spec.Replicas, "Default replicas should be 1")
+		require.Equal(t, "ghcr.io/azure/adx-mon/ingestor:latest", ingestor.Spec.Image, "Default image should be set")
+		require.Equal(t, "Logs:Ingestor", ingestor.Spec.LogDestination, "Default log destination should be set")
+	})
+
+	t.Run("preserves_existing_values", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:       3,
+				Image:          "custom:v1",
+				LogDestination: "CustomLogs:MyIngestor",
+			},
+		}
+
+		reconciler.applyDefaults(ingestor)
+
+		require.Equal(t, int32(3), ingestor.Spec.Replicas, "Custom replicas should be preserved")
+		require.Equal(t, "custom:v1", ingestor.Spec.Image, "Custom image should be preserved")
+		require.Equal(t, "CustomLogs:MyIngestor", ingestor.Spec.LogDestination, "Custom log destination should be preserved")
+	})
+}
+
+// TestIngestorReconciler_ConcurrentCRDInstallation tests the mutex protection for CRD installation.
+func TestIngestorReconciler_ConcurrentCRDInstallation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+	// Run multiple concurrent calls to ensureCRDsInstalled
+	const numGoroutines = 10
+	done := make(chan bool, numGoroutines)
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			err := reconciler.ensureCRDsInstalled(context.Background())
+			if err != nil {
+				errors <- err
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+	close(errors)
+
+	// Check for any errors
+	for err := range errors {
+		t.Errorf("Unexpected error during concurrent CRD installation: %v", err)
+	}
+
+	// Verify that crdsInstalled flag is set
+	require.True(t, reconciler.crdsInstalled, "CRDs should be marked as installed")
+}
+
+// TestIngestorReconciler_MapADXClusterToIngestors tests the ADXCluster->Ingestor mapping function.
+func TestIngestorReconciler_MapADXClusterToIngestors(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+
+	t.Run("matches_selector", func(t *testing.T) {
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"env": "prod", "region": "eastus"},
+			},
+		}
+
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "matching-ingestor",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"env": "prod"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		requests := reconciler.mapADXClusterToIngestors(context.Background(), cluster)
+		require.Len(t, requests, 1)
+		require.Equal(t, "matching-ingestor", requests[0].Name)
+		require.Equal(t, "default", requests[0].Namespace)
+	})
+
+	t.Run("does_not_match_different_labels", func(t *testing.T) {
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"env": "dev"},
+			},
+		}
+
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "non-matching-ingestor",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"env": "prod"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		requests := reconciler.mapADXClusterToIngestors(context.Background(), cluster)
+		require.Empty(t, requests)
+	})
+
+	t.Run("skips_deleted_ingestors", func(t *testing.T) {
+		now := metav1.Now()
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"env": "prod"},
+			},
+		}
+
+		deletingIngestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "deleting-ingestor",
+				Namespace:         "default",
+				DeletionTimestamp: &now,
+				Finalizers:        []string{"test-finalizer"}, // Required for deletion timestamp to be set
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"env": "prod"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, deletingIngestor).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		requests := reconciler.mapADXClusterToIngestors(context.Background(), cluster)
+		require.Empty(t, requests, "Should skip Ingestors with deletion timestamp")
+	})
+
+	t.Run("skips_nil_selector", func(t *testing.T) {
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"env": "prod"},
+			},
+		}
+
+		ingestorWithNilSelector := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "nil-selector-ingestor",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: nil, // Nil selector
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestorWithNilSelector).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		requests := reconciler.mapADXClusterToIngestors(context.Background(), cluster)
+		require.Empty(t, requests, "Should skip Ingestors with nil selector")
+	})
+
+	t.Run("namespace_scoped", func(t *testing.T) {
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "namespace-a",
+				Labels:    map[string]string{"env": "prod"},
+			},
+		}
+
+		ingestorSameNS := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "same-ns-ingestor",
+				Namespace: "namespace-a",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"env": "prod"},
+				},
+			},
+		}
+
+		ingestorDifferentNS := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "different-ns-ingestor",
+				Namespace: "namespace-b",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"env": "prod"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestorSameNS, ingestorDifferentNS).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		requests := reconciler.mapADXClusterToIngestors(context.Background(), cluster)
+		require.Len(t, requests, 1, "Should only match Ingestors in same namespace")
+		require.Equal(t, "same-ns-ingestor", requests[0].Name)
+		require.Equal(t, "namespace-a", requests[0].Namespace)
+	})
+
+	t.Run("multiple_matching_ingestors", func(t *testing.T) {
+		cluster := &adxmonv1.ADXCluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cluster",
+				Namespace: "default",
+				Labels:    map[string]string{"env": "prod", "tier": "premium"},
+			},
+		}
+
+		ingestor1 := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "ingestor-1",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"env": "prod"},
+				},
+			},
+		}
+
+		ingestor2 := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "ingestor-2",
+				Namespace: "default",
+			},
+			Spec: adxmonv1.IngestorSpec{
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"tier": "premium"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cluster, ingestor1, ingestor2).
+			Build()
+
+		reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+		requests := reconciler.mapADXClusterToIngestors(context.Background(), cluster)
+		require.Len(t, requests, 2, "Should match both Ingestors")
+
+		names := []string{requests[0].Name, requests[1].Name}
+		require.Contains(t, names, "ingestor-1")
+		require.Contains(t, names, "ingestor-2")
+	})
+}
+
+// TestIngestorReconciler_TerminalVsTransientErrors documents and verifies the error handling pattern.
+// Terminal errors (invalid config) return nil to prevent retry loops.
+// Transient errors (API failures) return error to trigger requeue.
+func TestIngestorReconciler_TerminalVsTransientErrors(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	// Set up cluster labels for CEL evaluation
+	SetClusterLabels(map[string]string{"region": "eastus"})
+	t.Cleanup(func() { SetClusterLabels(nil) })
+
+	t.Run("cel_error_is_terminal", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-ingestor",
+				Namespace:  "default",
+				Generation: 1,
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				CriteriaExpression: `invalid.syntax.here`, // Invalid CEL
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{
+			Client:             client,
+			Scheme:             scheme,
+			waitForReadyReason: ReasonWaitForReady,
+		}
+
+		result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "test-ingestor", Namespace: "default"},
+		})
+
+		// Terminal error pattern: return nil (not error) with no requeue
+		require.NoError(t, err, "Terminal errors should return nil, not error")
+		require.True(t, result.IsZero(), "Terminal errors should not requeue")
+
+		// Verify condition is set with ConditionFalse
+		updated := &adxmonv1.Ingestor{}
+		require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "test-ingestor", Namespace: "default"}, updated))
+
+		condition := findCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, metav1.ConditionFalse, condition.Status, "Terminal errors should set ConditionFalse")
+	})
+
+	t.Run("cel_false_is_terminal", func(t *testing.T) {
+		ingestor := &adxmonv1.Ingestor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "test-ingestor-false",
+				Namespace:  "default",
+				Generation: 1,
+			},
+			Spec: adxmonv1.IngestorSpec{
+				Replicas:           1,
+				Image:              "test:latest",
+				CriteriaExpression: `region == "westus"`, // Evaluates to false
+				ADXClusterSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "test"},
+				},
+			},
+		}
+
+		client := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ingestor).
+			WithStatusSubresource(&adxmonv1.Ingestor{}).
+			Build()
+
+		reconciler := &IngestorReconciler{
+			Client:             client,
+			Scheme:             scheme,
+			waitForReadyReason: ReasonWaitForReady,
+		}
+
+		result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "test-ingestor-false", Namespace: "default"},
+		})
+
+		// Terminal condition: expression is valid but false
+		require.NoError(t, err, "Expression false should return nil")
+		require.True(t, result.IsZero(), "Expression false should not requeue")
+	})
+}
+
+// findCondition is a helper to find a condition by type
+func findCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == conditionType {
+			return &conditions[i]
+		}
+	}
+	return nil
+}

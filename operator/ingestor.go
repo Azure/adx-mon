@@ -357,54 +357,55 @@ func (r *IngestorReconciler) handleADXClusterSelectorChange(ctx context.Context,
 	return true, nil
 }
 
+// mapADXClusterToIngestors maps ADXCluster changes to Ingestor reconcile requests.
+// It returns reconcile requests for all Ingestors whose selector matches the changed ADXCluster.
+func (r *IngestorReconciler) mapADXClusterToIngestors(ctx context.Context, obj client.Object) []reconcile.Request {
+	cluster, ok := obj.(*adxmonv1.ADXCluster)
+	if !ok {
+		logger.Errorf("EventHandler received non-ADXCluster object: %T", obj)
+		return nil
+	}
+
+	ingestorList := &adxmonv1.IngestorList{}
+	// List Ingestors only in the namespace of the changed ADXCluster
+	if err := r.Client.List(ctx, ingestorList, client.InNamespace(cluster.Namespace)); err != nil {
+		logger.Errorf("Failed to list Ingestors in namespace %s while handling ADXCluster %s/%s event: %v", cluster.Namespace, cluster.Namespace, cluster.Name, err)
+		return nil
+	}
+
+	requests := []reconcile.Request{}
+	for _, ingestor := range ingestorList.Items {
+		// Skip if Ingestor is being deleted
+		if !ingestor.DeletionTimestamp.IsZero() {
+			continue
+		}
+		// Check if the Ingestor's selector matches the ADXCluster's labels
+		if ingestor.Spec.ADXClusterSelector == nil {
+			// If selector is nil, it selects nothing.
+			continue
+		}
+		selector, err := metav1.LabelSelectorAsSelector(ingestor.Spec.ADXClusterSelector)
+		if err != nil {
+			logger.Errorf("Failed to parse selector for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
+			continue // Skip this ingestor if selector is invalid
+		}
+
+		if selector.Matches(labels.Set(cluster.GetLabels())) {
+			// If the selector matches, enqueue a reconcile request for this Ingestor
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      ingestor.Name,
+					Namespace: ingestor.Namespace,
+				},
+			})
+			logger.Infof("Enqueuing reconcile request for Ingestor %s/%s due to change in ADXCluster %s/%s", ingestor.Namespace, ingestor.Name, cluster.Namespace, cluster.Name)
+		}
+	}
+	return requests
+}
+
 func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.waitForReadyReason = ReasonWaitForReady
-
-	// Define the mapping function for ADXCluster changes to enqueue Ingestor reconciliations
-	mapFn := func(ctx context.Context, obj client.Object) []reconcile.Request {
-		cluster, ok := obj.(*adxmonv1.ADXCluster)
-		if !ok {
-			logger.Errorf("EventHandler received non-ADXCluster object: %T", obj)
-			return nil
-		}
-
-		ingestorList := &adxmonv1.IngestorList{}
-		// List Ingestors only in the namespace of the changed ADXCluster
-		if err := r.Client.List(ctx, ingestorList, client.InNamespace(cluster.Namespace)); err != nil {
-			logger.Errorf("Failed to list Ingestors in namespace %s while handling ADXCluster %s/%s event: %v", cluster.Namespace, cluster.Namespace, cluster.Name, err)
-			return nil
-		}
-
-		requests := []reconcile.Request{}
-		for _, ingestor := range ingestorList.Items {
-			// Skip if Ingestor is being deleted
-			if !ingestor.DeletionTimestamp.IsZero() {
-				continue
-			}
-			// Check if the Ingestor's selector matches the ADXCluster's labels
-			if ingestor.Spec.ADXClusterSelector == nil {
-				// If selector is nil, it selects nothing.
-				continue
-			}
-			selector, err := metav1.LabelSelectorAsSelector(ingestor.Spec.ADXClusterSelector)
-			if err != nil {
-				logger.Errorf("Failed to parse selector for Ingestor %s/%s: %v", ingestor.Namespace, ingestor.Name, err)
-				continue // Skip this ingestor if selector is invalid
-			}
-
-			if selector.Matches(labels.Set(cluster.GetLabels())) {
-				// If the selector matches, enqueue a reconcile request for this Ingestor
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      ingestor.Name,
-						Namespace: ingestor.Namespace,
-					},
-				})
-				logger.Infof("Enqueuing reconcile request for Ingestor %s/%s due to change in ADXCluster %s/%s", ingestor.Namespace, ingestor.Name, cluster.Namespace, cluster.Name)
-			}
-		}
-		return requests
-	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.Ingestor{}).
@@ -412,7 +413,7 @@ func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Add Watches for ADXCluster changes
 		Watches(
 			&adxmonv1.ADXCluster{},
-			handler.EnqueueRequestsFromMapFunc(mapFn),
+			handler.EnqueueRequestsFromMapFunc(r.mapADXClusterToIngestors),
 		).
 		Complete(r)
 }
