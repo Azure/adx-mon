@@ -364,7 +364,7 @@ func TestWorker_RequestInvalid(t *testing.T) {
 
 func TestWorker_UnknownDB(t *testing.T) {
 	kcli := &fakeKustoClient{
-		queryErr: &UnknownDBError{"fakedb"},
+		queryErr: &UnknownDBError{DB: "fakedb", AvailableDatabases: []string{"db1", "db2"}},
 	}
 
 	var createCalled bool

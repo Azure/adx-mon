@@ -309,3 +309,64 @@ func newRowsWithError(t *testing.T, values []string, rowError error) *kusto.Mock
 	require.NoError(t, err)
 	return rows
 }
+
+func TestFindCaseInsensitiveMatch(t *testing.T) {
+	client := multiKustoClient{
+		clients: map[string]QueryClient{
+			"Cluster_State": &fakeQueryClient{endpoint: "endpoint"},
+			"Metrics":       &fakeQueryClient{endpoint: "endpoint"},
+		},
+	}
+
+	// Different casing
+	match := client.FindCaseInsensitiveMatch("cluster_state")
+	require.Equal(t, "Cluster_State", match)
+
+	// Different casing
+	match = client.FindCaseInsensitiveMatch("CLUSTER_STATE")
+	require.Equal(t, "Cluster_State", match)
+
+	// No match
+	match = client.FindCaseInsensitiveMatch("unknown")
+	require.Empty(t, match)
+
+	// Metrics with different case
+	match = client.FindCaseInsensitiveMatch("metrics")
+	require.Equal(t, "Metrics", match)
+}
+
+func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
+	client := multiKustoClient{
+		clients: map[string]QueryClient{
+			"Cluster_State": &fakeQueryClient{endpoint: "endpoint"},
+			"Metrics":       &fakeQueryClient{endpoint: "endpoint"},
+		},
+		availableDatabases: []string{"Cluster_State", "Metrics"},
+		maxNotifications:   5,
+	}
+
+	ctx := context.Background()
+	queryContext := &engine.QueryContext{
+		Rule: &rules.Rule{
+			Database: "cluster_state", // Wrong case
+		},
+		Stmt: kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd("query"),
+	}
+
+	err, _ := client.Query(ctx, queryContext, func(context.Context, string, *engine.QueryContext, *table.Row) error {
+		return nil
+	})
+
+	require.Error(t, err)
+
+	var unknownDBErr *engine.UnknownDBError
+	require.ErrorAs(t, err, &unknownDBErr)
+	require.Equal(t, "cluster_state", unknownDBErr.DB)
+	require.Equal(t, "Cluster_State", unknownDBErr.CaseInsensitiveMatch)
+	require.Equal(t, []string{"Cluster_State", "Metrics"}, unknownDBErr.AvailableDatabases)
+
+	// Check error message contains helpful info
+	errMsg := err.Error()
+	require.Contains(t, errMsg, `did you mean "Cluster_State"?`)
+	require.Contains(t, errMsg, "--kusto-endpoint")
+}
