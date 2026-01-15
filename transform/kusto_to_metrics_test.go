@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -1915,6 +1916,315 @@ func BenchmarkExtractValues(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				_, _ = transformer.extractValues(tc.row, tc.columns)
+			}
+		})
+	}
+}
+
+func TestToWriteRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics []MetricData
+		check   func(t *testing.T, wr *prompb.WriteRequest)
+	}{
+		{
+			name:    "empty metrics",
+			metrics: []MetricData{},
+			check: func(t *testing.T, wr *prompb.WriteRequest) {
+				require.NotNil(t, wr)
+				require.Empty(t, wr.Timeseries)
+			},
+		},
+		{
+			name: "single metric without labels",
+			metrics: []MetricData{
+				{
+					Name:      "test_metric",
+					Value:     42.5,
+					Timestamp: time.Date(2023, 12, 25, 12, 0, 0, 0, time.UTC),
+					Labels:    map[string]string{},
+				},
+			},
+			check: func(t *testing.T, wr *prompb.WriteRequest) {
+				require.Len(t, wr.Timeseries, 1)
+				ts := wr.Timeseries[0]
+
+				// Should have __name__ label
+				require.Len(t, ts.Labels, 1)
+				require.Equal(t, "__name__", string(ts.Labels[0].Name))
+				require.Equal(t, "test_metric", string(ts.Labels[0].Value))
+
+				// Should have one sample
+				require.Len(t, ts.Samples, 1)
+				require.Equal(t, 42.5, ts.Samples[0].Value)
+				require.Equal(t, int64(1703505600000), ts.Samples[0].Timestamp) // UnixMilli of 2023-12-25T12:00:00Z
+			},
+		},
+		{
+			name: "single metric with labels",
+			metrics: []MetricData{
+				{
+					Name:      "cpu_usage",
+					Value:     85.5,
+					Timestamp: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+					Labels: map[string]string{
+						"host":    "server1",
+						"region":  "us-east",
+						"service": "api",
+					},
+				},
+			},
+			check: func(t *testing.T, wr *prompb.WriteRequest) {
+				require.Len(t, wr.Timeseries, 1)
+				ts := wr.Timeseries[0]
+
+				// Should have __name__ + 3 labels = 4 labels total
+				require.Len(t, ts.Labels, 4)
+
+				// Labels should be sorted (host, region, service after __name__)
+				require.Equal(t, "__name__", string(ts.Labels[0].Name))
+				require.Equal(t, "cpu_usage", string(ts.Labels[0].Value))
+				require.Equal(t, "host", string(ts.Labels[1].Name))
+				require.Equal(t, "server1", string(ts.Labels[1].Value))
+				require.Equal(t, "region", string(ts.Labels[2].Name))
+				require.Equal(t, "us-east", string(ts.Labels[2].Value))
+				require.Equal(t, "service", string(ts.Labels[3].Name))
+				require.Equal(t, "api", string(ts.Labels[3].Value))
+
+				// Should have one sample
+				require.Len(t, ts.Samples, 1)
+				require.Equal(t, 85.5, ts.Samples[0].Value)
+			},
+		},
+		{
+			name: "multiple metrics",
+			metrics: []MetricData{
+				{
+					Name:      "metric_a",
+					Value:     100.0,
+					Timestamp: time.Now(),
+					Labels:    map[string]string{"env": "prod"},
+				},
+				{
+					Name:      "metric_b",
+					Value:     200.0,
+					Timestamp: time.Now(),
+					Labels:    map[string]string{"env": "staging"},
+				},
+				{
+					Name:      "metric_c",
+					Value:     300.0,
+					Timestamp: time.Now(),
+					Labels:    map[string]string{"env": "dev"},
+				},
+			},
+			check: func(t *testing.T, wr *prompb.WriteRequest) {
+				require.Len(t, wr.Timeseries, 3)
+
+				// Each should have __name__ + env = 2 labels
+				for i, ts := range wr.Timeseries {
+					require.Len(t, ts.Labels, 2, "timeseries %d should have 2 labels", i)
+					require.Equal(t, "__name__", string(ts.Labels[0].Name))
+					require.Len(t, ts.Samples, 1)
+				}
+
+				// Check values
+				require.Equal(t, 100.0, wr.Timeseries[0].Samples[0].Value)
+				require.Equal(t, 200.0, wr.Timeseries[1].Samples[0].Value)
+				require.Equal(t, 300.0, wr.Timeseries[2].Samples[0].Value)
+			},
+		},
+		{
+			name: "high cardinality simulation",
+			metrics: func() []MetricData {
+				// Simulate high cardinality with many unique label combinations
+				var metrics []MetricData
+				for i := 0; i < 1000; i++ {
+					metrics = append(metrics, MetricData{
+						Name:      "high_cardinality_metric",
+						Value:     float64(i),
+						Timestamp: time.Now(),
+						Labels: map[string]string{
+							"instance": strings.Repeat("a", 10) + string(rune(i%26+'a')),
+							"pod":      "pod-" + string(rune(i%100+'0')),
+						},
+					})
+				}
+				return metrics
+			}(),
+			check: func(t *testing.T, wr *prompb.WriteRequest) {
+				require.Len(t, wr.Timeseries, 1000)
+				// Verify all timeseries have correct structure
+				for _, ts := range wr.Timeseries {
+					require.Len(t, ts.Labels, 3) // __name__ + instance + pod
+					require.Len(t, ts.Samples, 1)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wr := ToWriteRequest(tt.metrics)
+			defer func() {
+				wr.Reset()
+				prompb.WriteRequestPool.Put(wr)
+			}()
+
+			tt.check(t, wr)
+		})
+	}
+}
+
+func TestToWriteRequestPoolUsage(t *testing.T) {
+	// Test that pooled objects are properly returned
+	metrics := []MetricData{
+		{
+			Name:      "test_metric",
+			Value:     42.0,
+			Timestamp: time.Now(),
+			Labels:    map[string]string{"key": "value"},
+		},
+	}
+
+	// Run multiple times to exercise pool
+	for i := 0; i < 100; i++ {
+		wr := ToWriteRequest(metrics)
+		require.NotNil(t, wr)
+		require.Len(t, wr.Timeseries, 1)
+
+		// Return to pool
+		wr.Reset()
+		prompb.WriteRequestPool.Put(wr)
+	}
+}
+
+func TestToWriteRequestLabelSorting(t *testing.T) {
+	// Verify labels are sorted consistently
+	metrics := []MetricData{
+		{
+			Name:      "test_metric",
+			Value:     42.0,
+			Timestamp: time.Now(),
+			Labels: map[string]string{
+				"zebra":  "z",
+				"alpha":  "a",
+				"mango":  "m",
+				"banana": "b",
+				"orange": "o",
+				"apple":  "a2",
+				"cherry": "c",
+				"date":   "d",
+				"fig":    "f",
+				"grape":  "g",
+			},
+		},
+	}
+
+	// Run multiple times to ensure consistent ordering
+	var firstOrder []string
+	for i := 0; i < 10; i++ {
+		wr := ToWriteRequest(metrics)
+
+		var labelOrder []string
+		for _, label := range wr.Timeseries[0].Labels {
+			labelOrder = append(labelOrder, string(label.Name))
+		}
+
+		if i == 0 {
+			firstOrder = labelOrder
+			// Verify __name__ comes first
+			require.Equal(t, "__name__", labelOrder[0])
+			// Verify remaining labels are sorted
+			for j := 2; j < len(labelOrder); j++ {
+				require.True(t, labelOrder[j-1] < labelOrder[j],
+					"labels not sorted: %s should come before %s", labelOrder[j-1], labelOrder[j])
+			}
+		} else {
+			require.Equal(t, firstOrder, labelOrder, "label order should be deterministic")
+		}
+
+		wr.Reset()
+		prompb.WriteRequestPool.Put(wr)
+	}
+}
+
+func BenchmarkToWriteRequest(b *testing.B) {
+	testCases := []struct {
+		name    string
+		metrics []MetricData
+	}{
+		{
+			name: "single_metric",
+			metrics: []MetricData{
+				{
+					Name:      "test_metric",
+					Value:     42.0,
+					Timestamp: time.Now(),
+					Labels:    map[string]string{"host": "server1"},
+				},
+			},
+		},
+		{
+			name: "ten_metrics",
+			metrics: func() []MetricData {
+				var m []MetricData
+				for i := 0; i < 10; i++ {
+					m = append(m, MetricData{
+						Name:      "metric_" + string(rune('a'+i)),
+						Value:     float64(i),
+						Timestamp: time.Now(),
+						Labels:    map[string]string{"index": string(rune('0' + i))},
+					})
+				}
+				return m
+			}(),
+		},
+		{
+			name: "hundred_metrics_with_labels",
+			metrics: func() []MetricData {
+				var m []MetricData
+				for i := 0; i < 100; i++ {
+					m = append(m, MetricData{
+						Name:      "high_cardinality",
+						Value:     float64(i),
+						Timestamp: time.Now(),
+						Labels: map[string]string{
+							"host":    "server" + string(rune('0'+i%10)),
+							"region":  "region" + string(rune('0'+i%5)),
+							"service": "svc" + string(rune('0'+i%3)),
+						},
+					})
+				}
+				return m
+			}(),
+		},
+		{
+			name: "thousand_metrics",
+			metrics: func() []MetricData {
+				var m []MetricData
+				for i := 0; i < 1000; i++ {
+					m = append(m, MetricData{
+						Name:      "bulk_metric",
+						Value:     float64(i),
+						Timestamp: time.Now(),
+						Labels: map[string]string{
+							"id": string(rune('a' + i%26)),
+						},
+					})
+				}
+				return m
+			}(),
+		},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				wr := ToWriteRequest(tc.metrics)
+				wr.Reset()
+				prompb.WriteRequestPool.Put(wr)
 			}
 		})
 	}

@@ -3,17 +3,20 @@ package multikustoclient
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/azure-kusto-go/kusto"
+	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
 )
 
 type multiKustoClient struct {
-	clients          map[string]QueryClient
-	maxNotifications int
+	clients            map[string]QueryClient
+	availableDatabases []string
+	maxNotifications   int
 }
 
 func New(endpoints map[string]string, configureAuth authConfiguror, max int) (multiKustoClient, error) {
@@ -32,13 +35,28 @@ func New(endpoints map[string]string, configureAuth authConfiguror, max int) (mu
 	if len(clients) == 0 {
 		return multiKustoClient{}, fmt.Errorf("no kusto endpoints provided")
 	}
-	return multiKustoClient{clients: clients, maxNotifications: max}, nil
+
+	availableDatabases := make([]string, 0, len(clients))
+	for name := range clients {
+		availableDatabases = append(availableDatabases, name)
+	}
+	sort.Strings(availableDatabases)
+
+	return multiKustoClient{
+		clients:            clients,
+		availableDatabases: availableDatabases,
+		maxNotifications:   max,
+	}, nil
 }
 
 func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
 	client := c.clients[qc.Rule.Database]
 	if client == nil {
-		return &engine.UnknownDBError{DB: qc.Rule.Database}, 0
+		return &engine.UnknownDBError{
+			DB:                   qc.Rule.Database,
+			AvailableDatabases:   c.availableDatabases,
+			CaseInsensitiveMatch: c.FindCaseInsensitiveMatch(qc.Rule.Database),
+		}, 0
 	}
 
 	var iter *kusto.RowIterator
@@ -55,20 +73,41 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 		}
 	}
 
-	var n int
+	var rows []*table.Row
 	defer iter.Stop()
-	if err := iter.Do(func(row *table.Row) error {
-		n++
-		if n > c.maxNotifications {
+
+	// Accumulate rows and check for errors
+	if err := iter.DoOnRowOrError(func(row *table.Row, err *kerrors.Error) error {
+		if err != nil {
+			// Error encountered - don't callback any accumulated rows, just return the error
+			// This can happen in cases of internalservererrors where the returned rows can be incomplete or broken, causing incorrect alerts to fire.
+			return err
+		}
+
+		// Already have max rows, but trying to add another. Send existing rows, then return error.
+		if len(rows) >= c.maxNotifications {
+			for _, row := range rows {
+				if callbackErr := fn(ctx, client.Endpoint(), qc, row); callbackErr != nil {
+					return callbackErr
+				}
+			}
 			return fmt.Errorf("%s/%s returned more than %d icm, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, alert.ErrTooManyRequests)
 		}
 
-		return fn(ctx, client.Endpoint(), qc, row)
+		rows = append(rows, row)
+
+		return nil
 	}); err != nil {
 		return err, 0
 	}
 
-	return nil, n
+	for _, row := range rows {
+		if err := fn(ctx, client.Endpoint(), qc, row); err != nil {
+			return err, 0
+		}
+	}
+
+	return nil, len(rows)
 }
 
 func (c multiKustoClient) Endpoint(db string) string {
@@ -77,6 +116,23 @@ func (c multiKustoClient) Endpoint(db string) string {
 		return "unknown"
 	}
 	return cl.Endpoint()
+}
+
+// AvailableDatabases returns a sorted list of all configured database names.
+func (c multiKustoClient) AvailableDatabases() []string {
+	return c.availableDatabases
+}
+
+// FindCaseInsensitiveMatch returns a database name that matches the given db name
+// case-insensitively, or an empty string if no match is found.
+func (c multiKustoClient) FindCaseInsensitiveMatch(db string) string {
+	lowerDB := strings.ToLower(db)
+	for name := range c.clients {
+		if strings.ToLower(name) == lowerDB {
+			return name
+		}
+	}
+	return ""
 }
 
 type QueryClient interface {

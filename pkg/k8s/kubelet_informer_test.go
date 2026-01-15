@@ -247,9 +247,8 @@ func TestKubeletPodInformerRestart(t *testing.T) {
 }
 
 type fakePodClient struct {
-	mu              sync.RWMutex
-	pods            map[types.UID]corev1.Pod
-	resourceVersion int64
+	mu   sync.RWMutex
+	pods map[types.UID]corev1.Pod
 }
 
 func newFakePodClient() *fakePodClient {
@@ -272,10 +271,6 @@ func (f *fakePodClient) Close() error { return nil }
 func (f *fakePodClient) UpsertPod(pod corev1.Pod) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
-	// Automatically increment resourceVersion to simulate API server behavior
-	f.resourceVersion++
-	pod.ResourceVersion = fmt.Sprintf("%d", f.resourceVersion)
 
 	f.pods[pod.UID] = *pod.DeepCopy()
 }
@@ -735,6 +730,320 @@ func createBenchPod(index, version int) corev1.Pod {
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "container-1",
+					ContainerID:  fmt.Sprintf("containerd://abc%d", version),
+					Ready:        true,
+					RestartCount: int32(version / 10),
+					State: corev1.ContainerState{
+						Running: &corev1.ContainerStateRunning{
+							StartedAt: metav1.NewTime(time.Now()),
+						},
+					},
+				},
+			},
 		},
+	}
+}
+
+// BenchmarkPodChanged benchmarks the custom podChanged function vs semantic.DeepEqual
+func BenchmarkPodChanged(b *testing.B) {
+	pod1 := createBenchPod(0, 1)
+	pod2 := createBenchPod(0, 1) // Same pod, no changes
+
+	b.Run("NoChange", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = podChanged(&pod1, &pod2)
+		}
+	})
+
+	pod3 := createBenchPod(0, 1)
+	pod4 := createBenchPod(0, 2) // Different container ID (simulates restart)
+
+	b.Run("ContainerRestart", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = podChanged(&pod3, &pod4)
+		}
+	})
+
+	pod5 := createBenchPod(0, 1)
+	pod6 := createBenchPod(0, 1)
+	pod6.Labels["new-label"] = "value" // Add a label
+
+	b.Run("LabelChange", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = podChanged(&pod5, &pod6)
+		}
+	})
+}
+
+// TestPodChanged verifies the podChanged function detects all relevant changes
+func TestPodChanged(t *testing.T) {
+	basePod := func() corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pod",
+				Namespace: "default",
+				UID:       types.UID("test-uid"),
+				Labels:    map[string]string{"app": "test"},
+				Annotations: map[string]string{
+					"adx-mon/scrape": "true",
+				},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: "node-1",
+				Containers: []corev1.Container{
+					{Name: "container1", Image: "image1"},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				PodIP: "10.0.0.1",
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:         "container1",
+						ContainerID:  "containerd://abc123",
+						Ready:        true,
+						RestartCount: 0,
+						State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{},
+						},
+					},
+				},
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:         "init-container1",
+						ContainerID:  "containerd://init123",
+						Ready:        true,
+						RestartCount: 0,
+						State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{
+								ExitCode: 0,
+								Reason:   "Completed",
+							},
+						},
+					},
+				},
+				EphemeralContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:         "debugger",
+						ContainerID:  "containerd://debug123",
+						Ready:        true,
+						RestartCount: 0,
+						State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		modify   func(*corev1.Pod)
+		expected bool
+	}{
+		{
+			name:     "no change",
+			modify:   func(p *corev1.Pod) {},
+			expected: false,
+		},
+		{
+			name:     "resource version change only",
+			modify:   func(p *corev1.Pod) { p.ResourceVersion = "12345" },
+			expected: true, // ResourceVersion changes indicate the pod was updated
+		},
+		{
+			name:     "phase change",
+			modify:   func(p *corev1.Pod) { p.Status.Phase = corev1.PodFailed },
+			expected: true,
+		},
+		{
+			name:     "pod IP change",
+			modify:   func(p *corev1.Pod) { p.Status.PodIP = "10.0.0.2" },
+			expected: true,
+		},
+		{
+			name:     "node name change (rescheduling)",
+			modify:   func(p *corev1.Pod) { p.Spec.NodeName = "node-2" },
+			expected: true,
+		},
+		{
+			name:     "label added",
+			modify:   func(p *corev1.Pod) { p.Labels["new"] = "label" },
+			expected: true,
+		},
+		{
+			name:     "label removed",
+			modify:   func(p *corev1.Pod) { delete(p.Labels, "app") },
+			expected: true,
+		},
+		{
+			name:     "label value changed",
+			modify:   func(p *corev1.Pod) { p.Labels["app"] = "modified" },
+			expected: true,
+		},
+		{
+			name:     "annotation added",
+			modify:   func(p *corev1.Pod) { p.Annotations["new"] = "annotation" },
+			expected: true,
+		},
+		{
+			name:     "annotation removed",
+			modify:   func(p *corev1.Pod) { delete(p.Annotations, "adx-mon/scrape") },
+			expected: true,
+		},
+		{
+			name:     "annotation value changed",
+			modify:   func(p *corev1.Pod) { p.Annotations["adx-mon/scrape"] = "false" },
+			expected: true,
+		},
+		{
+			name: "container restart",
+			modify: func(p *corev1.Pod) {
+				p.Status.ContainerStatuses[0].RestartCount = 1
+				p.Status.ContainerStatuses[0].ContainerID = "containerd://xyz789"
+			},
+			expected: true,
+		},
+		{
+			name: "container state change",
+			modify: func(p *corev1.Pod) {
+				p.Status.ContainerStatuses[0].State = corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+				}
+			},
+			expected: true,
+		},
+		{
+			name: "init container added",
+			modify: func(p *corev1.Pod) {
+				p.Status.InitContainerStatuses = append(p.Status.InitContainerStatuses, corev1.ContainerStatus{
+					Name:         "init-container2",
+					ContainerID:  "containerd://init456",
+					Ready:        true,
+					RestartCount: 0,
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{ExitCode: 0},
+					},
+				})
+			},
+			expected: true,
+		},
+		{
+			name: "init container not changed",
+			modify: func(p *corev1.Pod) {
+				// No modification - should not detect a change
+			},
+			expected: false,
+		},
+		{
+			name: "init container restart count changed",
+			modify: func(p *corev1.Pod) {
+				p.Status.InitContainerStatuses[0].RestartCount = 1
+			},
+			expected: true,
+		},
+		{
+			name: "init container ID changed",
+			modify: func(p *corev1.Pod) {
+				p.Status.InitContainerStatuses[0].ContainerID = "containerd://init999"
+			},
+			expected: true,
+		},
+		{
+			name: "init container ready state changed",
+			modify: func(p *corev1.Pod) {
+				p.Status.InitContainerStatuses[0].Ready = false
+			},
+			expected: true,
+		},
+		{
+			name: "init container state transition",
+			modify: func(p *corev1.Pod) {
+				p.Status.InitContainerStatuses[0].State = corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"},
+				}
+			},
+			expected: true,
+		},
+		{
+			name: "ephemeral container added",
+			modify: func(p *corev1.Pod) {
+				p.Status.EphemeralContainerStatuses = append(p.Status.EphemeralContainerStatuses, corev1.ContainerStatus{
+					Name:         "debugger2",
+					ContainerID:  "containerd://debug456",
+					Ready:        true,
+					RestartCount: 0,
+					State: corev1.ContainerState{
+						Running: &corev1.ContainerStateRunning{},
+					},
+				})
+			},
+			expected: true,
+		},
+		{
+			name: "ephemeral container not changed",
+			modify: func(p *corev1.Pod) {
+				// No modification - should not detect a change
+			},
+			expected: false,
+		},
+		{
+			name: "ephemeral container restart count changed",
+			modify: func(p *corev1.Pod) {
+				p.Status.EphemeralContainerStatuses[0].RestartCount = 1
+			},
+			expected: true,
+		},
+		{
+			name: "ephemeral container ID changed (restart)",
+			modify: func(p *corev1.Pod) {
+				p.Status.EphemeralContainerStatuses[0].ContainerID = "containerd://debug999"
+			},
+			expected: true,
+		},
+		{
+			name: "ephemeral container ready state changed",
+			modify: func(p *corev1.Pod) {
+				p.Status.EphemeralContainerStatuses[0].Ready = false
+			},
+			expected: true,
+		},
+		{
+			name: "ephemeral container state transition",
+			modify: func(p *corev1.Pod) {
+				p.Status.EphemeralContainerStatuses[0].State = corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{ExitCode: 0},
+				}
+			},
+			expected: true,
+		},
+		{
+			name: "regular container added",
+			modify: func(p *corev1.Pod) {
+				p.Spec.Containers = append(p.Spec.Containers, corev1.Container{Name: "container2"})
+				p.Status.ContainerStatuses = append(p.Status.ContainerStatuses, corev1.ContainerStatus{
+					Name: "container2", ContainerID: "containerd://def456", Ready: true,
+				})
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := basePod()
+			new := basePod()
+			tt.modify(&new)
+
+			result := podChanged(&old, &new)
+			require.Equal(t, tt.expected, result, "podChanged result mismatch")
+		})
 	}
 }

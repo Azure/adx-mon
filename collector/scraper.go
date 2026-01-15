@@ -57,7 +57,7 @@ type ScraperOpts struct {
 	// DisableDiscovery disables the discovery of scrape targets.
 	DisableDiscovery bool
 
-	PodInformer *k8s.PodInformer
+	PodInformer k8s.PodInformerInterface
 
 	// Targets is a list of static scrape targets.
 	Targets []ScrapeTarget
@@ -110,7 +110,7 @@ func (t ScrapeTarget) Equals(other ScrapeTarget) bool {
 
 type Scraper struct {
 	opts                 ScraperOpts
-	podInformer          *k8s.PodInformer
+	podInformer          k8s.PodInformerInterface
 	informerRegistration cache.ResourceEventHandlerRegistration
 
 	requestTransformer *transform.RequestTransformer
@@ -168,7 +168,6 @@ func (s *Scraper) Open(ctx context.Context) error {
 	// Discover the initial targets running on the node
 	s.wg.Add(1)
 	go s.scrape(ctx)
-	go s.resync(ctx)
 
 	return nil
 }
@@ -422,60 +421,6 @@ func (s *Scraper) Targets() []ScrapeTarget {
 		return a[i].path() < a[j].path()
 	})
 	return a
-}
-
-func (s *Scraper) resync(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			pods, err := s.scrapeClient.Pods()
-			if err != nil {
-				logger.Errorf("Failed to list pods: %s", err.Error())
-				continue
-			}
-
-			podsOnNode := make(map[string]struct{})
-			s.mu.Lock()
-			for _, p := range pods.Items {
-				podsOnNode[string(p.UID)] = struct{}{}
-
-				targets := s.isScrapeable(&p)
-				if len(targets) == 0 {
-					continue
-				}
-
-				for _, target := range targets {
-					existing, ok := s.targets[string(p.UID)]
-					if ok {
-						if target.Equals(existing) {
-							continue
-						}
-						logger.Infof("Updating target %s %s", target.path(), target)
-					} else {
-						logger.Infof("Adding target %s %s", target.path(), target)
-					}
-					s.targets[string(p.UID)] = target
-				}
-			}
-
-			for k, target := range s.targets {
-				if target.Static {
-					continue
-				}
-				if _, ok := podsOnNode[k]; !ok {
-					logger.Infof("Removing target %s", k)
-					delete(s.targets, k)
-				}
-			}
-
-			s.mu.Unlock()
-		}
-	}
 }
 
 func makeTargets(p *v1.Pod) []ScrapeTarget {

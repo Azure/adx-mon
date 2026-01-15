@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"os"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -69,27 +70,6 @@ var (
 		Name:      "queue_size",
 		Help:      "Gauge indicating the size of the queue for an ingestor instance",
 	}, []string{"queue"})
-
-	IngestorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "wal_segments_count",
-		Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
-	})
-
-	IngestorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "wal_segments_size_bytes",
-		Help:      "Gauge indicating the size of WAL segments for an ingestor instance",
-	})
-
-	IngestorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
-		Namespace: Namespace,
-		Subsystem: "ingestor",
-		Name:      "wal_segments_max_age_seconds",
-		Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
-	})
 
 	MetricsDroppedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
@@ -233,3 +213,72 @@ var (
 		Help:      "Counter of samples stored for an collector instance",
 	})
 )
+
+var (
+	// Lazy-initialized segment metrics to avoid exposing them in both services
+	// When metrics do not have dimensions but are shared between services, they need to be lazily
+	// initialized to avoid multiple services exposing them.
+	ingestorSegmentsOnce      sync.Once
+	ingestorSegmentsTotal     prometheus.Gauge
+	ingestorSegmentsSizeBytes prometheus.Gauge
+	ingestorSegmentsMaxAge    prometheus.Gauge
+
+	collectorSegmentsOnce      sync.Once
+	collectorSegmentsTotal     prometheus.Gauge
+	collectorSegmentsSizeBytes prometheus.Gauge
+	collectorSegmentsMaxAge    prometheus.Gauge
+)
+
+// NewIngestorSegmentMetrics creates the ingestor-specific WAL segment metrics.
+// These are created lazily to ensure collector instances don't expose ingestor metrics.
+// This function is safe to call multiple times - metrics are only created once.
+func NewIngestorSegmentMetrics() (segmentsTotal, segmentsSizeBytes, segmentsMaxAge prometheus.Gauge) {
+	ingestorSegmentsOnce.Do(func() {
+		ingestorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "ingestor",
+			Name:      "wal_segments_count",
+			Help:      "Gauge indicating the number of WAL segments for an ingestor instance",
+		})
+		ingestorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "ingestor",
+			Name:      "wal_segments_size_bytes",
+			Help:      "Gauge indicating the size of WAL segments for an ingestor instance",
+		})
+		ingestorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "ingestor",
+			Name:      "wal_segments_max_age_seconds",
+			Help:      "Gauge indicating the max age of WAL segments for an ingestor instance",
+		})
+	})
+	return ingestorSegmentsTotal, ingestorSegmentsSizeBytes, ingestorSegmentsMaxAge
+}
+
+// NewCollectorSegmentMetrics creates the collector-specific WAL segment metrics.
+// These are created lazily to ensure ingestor instances don't expose collector metrics.
+// This function is safe to call multiple times - metrics are only created once.
+func NewCollectorSegmentMetrics() (segmentsTotal, segmentsSizeBytes, segmentsMaxAge prometheus.Gauge) {
+	collectorSegmentsOnce.Do(func() {
+		collectorSegmentsTotal = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "collector",
+			Name:      "wal_segments_count",
+			Help:      "Gauge indicating the number of WAL segments for a collector instance",
+		})
+		collectorSegmentsSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "collector",
+			Name:      "wal_segments_size_bytes",
+			Help:      "Gauge indicating the size of WAL segments for a collector instance",
+		})
+		collectorSegmentsMaxAge = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Subsystem: "collector",
+			Name:      "wal_segments_max_age_seconds",
+			Help:      "Gauge indicating the max age of WAL segments for a collector instance",
+		})
+	})
+	return collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge
+}

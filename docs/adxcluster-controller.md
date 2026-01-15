@@ -113,7 +113,7 @@ Hub tables: OTLP schema `Timestamp:datetime, ObservedTimestamp:datetime, TraceId
 
 Hub tables inherit ADX defaults for retention; set custom policies post-creation if required (the controller does not mutate them).
 
-Federation functions: `.create-or-alter function <table>() { macro-expand entity_group [cluster(...).database(...), ...] as X { X.<table> } }` — generated only for base tables (views excluded). Scripts split at 1MB. The `entity_group` macro fans a single logical function across all remote databases discovered in heartbeats, so callers can query the hub without enumerating partitions.
+Federation functions: `.create-or-alter function <table>() { macro-expand entity_group [cluster(...).database(...), ...] as X { X.<table> } }` — generated for both tables and views discovered on partition clusters. Scripts split at 1MB. The `entity_group` macro fans a single logical function across all remote databases discovered in heartbeats, so callers can query the hub without enumerating partitions.
 
 Hubs auto-create databases discovered in heartbeats without mutating the CRD.
 

@@ -78,7 +78,7 @@ func (s *Store) Rules() []*Rule {
 
 func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	rule := &Rule{
-		Version:            r.ResourceVersion,
+		Version:            fmt.Sprintf("%d", r.Generation),
 		Database:           r.Spec.Database,
 		Namespace:          r.Namespace,
 		Name:               r.Name,

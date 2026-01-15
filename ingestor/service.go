@@ -190,19 +190,28 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		return nil, err
 	}
 
-	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      opts.MaxSegmentAge,
-		MaxTransferSize:    opts.MaxTransferSize,
-		MaxTransferAge:     opts.MaxTransferAge,
-		MaxBatchSegments:   opts.MaxBatchSegments,
-		Partitioner:        coord,
-		Segmenter:          store.Index(),
-		UploadQueue:        opts.Uploader.UploadQueue(),
-		TransferQueue:      repl.TransferQueue(),
-		PeerHealthReporter: health,
-		TransfersDisabled:  opts.DisablePeerTransfer,
+	// Create ingestor-specific WAL segment metrics lazily to avoid exposing collector metrics
+	ingestorSegmentsTotal, ingestorSegmentsSizeBytes, ingestorSegmentsMaxAge := metrics.NewIngestorSegmentMetrics()
+
+	batcher, err := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:              opts.StorageDir,
+		MaxSegmentAge:           opts.MaxSegmentAge,
+		MaxTransferSize:         opts.MaxTransferSize,
+		MaxTransferAge:          opts.MaxTransferAge,
+		MaxBatchSegments:        opts.MaxBatchSegments,
+		Partitioner:             coord,
+		Segmenter:               store.Index(),
+		UploadQueue:             opts.Uploader.UploadQueue(),
+		TransferQueue:           repl.TransferQueue(),
+		PeerHealthReporter:      health,
+		TransfersDisabled:       opts.DisablePeerTransfer,
+		SegmentsCountMetric:     ingestorSegmentsTotal,
+		SegmentsSizeBytesMetric: ingestorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    ingestorSegmentsMaxAge,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create batcher: %w", err)
+	}
 
 	health.QueueSizer = &queueSizerAdapter{
 		store:   store,

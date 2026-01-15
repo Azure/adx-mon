@@ -243,25 +243,16 @@ func (t *tailer) backoff() {
 }
 
 func (t *tailer) waitForNewJournalEntries(ctx context.Context, reader journalReader) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-
-		status := reader.Wait(waittime)
-		switch status {
-		case sdjournal.SD_JOURNAL_NOP:
-			continue
-		case sdjournal.SD_JOURNAL_APPEND, sdjournal.SD_JOURNAL_INVALIDATE:
-			return nil
-		default:
-			if status < 0 {
-				return fmt.Errorf("waitForNewJournalEntries error status: %v", status)
-			}
+	status := reader.Wait(waittime)
+	switch status {
+	case sdjournal.SD_JOURNAL_NOP, sdjournal.SD_JOURNAL_APPEND, sdjournal.SD_JOURNAL_INVALIDATE:
+		return nil
+	default:
+		if status < 0 {
+			return fmt.Errorf("waitForNewJournalEntries error status: %v", status)
 		}
 	}
+	return nil
 }
 
 // combinePartialMessages combines partial log messages that have been split by journald due to the line-max configuration.

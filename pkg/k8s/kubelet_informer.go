@@ -91,12 +91,12 @@ func NewKubeletPodInformer(opts KubeletInformerOptions) (*KubeletPodInformer, er
 
 	pollInterval := opts.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = 15 * time.Second
+		pollInterval = 10 * time.Second
 	}
 
 	requestTimeout := opts.RequestTimeout
 	if requestTimeout <= 0 {
-		requestTimeout = 10 * time.Second
+		requestTimeout = 9 * time.Second
 	}
 
 	dialTimeout := opts.DialTimeout
@@ -261,6 +261,7 @@ func (k *KubeletPodInformer) run(ctx context.Context, initialSync chan struct{})
 
 	if err := k.syncOnce(ctx); err != nil {
 		logger.Errorf("kubelet pod informer: initial sync failed: %v", err)
+		// Do not block startup on initial sync failure - just log the error and allow next sync attempts to retry.
 	}
 	close(initialSync)
 
@@ -303,10 +304,9 @@ func (k *KubeletPodInformer) applyPodList(pods []corev1.Pod) {
 
 		if existing, ok := currentPods[uid]; ok {
 			// Pod exists - check if it changed
-			// Fast path: compare resourceVersion instead of expensive deep equality check.
-			// ResourceVersion changes whenever the pod is updated on the API server,
-			// including container restarts, status changes, etc.
-			if existing.ResourceVersion != pods[i].ResourceVersion {
+			// ResourceVersion changes are an insufficient check when talking to the kubelet.
+			// In many cases it does not increment in the response from the kubelet api even when it has incremented many times in the apiserver.
+			if podChanged(existing, &pods[i]) {
 				// Pod was updated - take pointer and update map
 				pod := pods[i].DeepCopy()
 				currentPods[uid] = pod
@@ -346,6 +346,108 @@ func (k *KubeletPodInformer) applyPodList(pods []corev1.Pod) {
 type podUpdate struct {
 	old *corev1.Pod
 	new *corev1.Pod
+}
+
+// podChanged performs a targeted comparison of pod fields that matter for update detection.
+// This avoids the allocation overhead of semantic.DeepEqual while still catching:
+// - Container status changes (restarts, state transitions, IDs)
+// - Metadata changes (labels, annotations)
+// - Spec changes (container additions/removals, node reassignment)
+// - Network changes (pod IP changes)
+//
+// This is significantly faster than DeepEqual and produces zero allocations in the common
+// case where nothing changed.
+func podChanged(old, new *corev1.Pod) bool {
+	// Quick checks first - these are fast pointer/length comparisons
+	if old.ResourceVersion != new.ResourceVersion {
+		return true
+	}
+
+	if old.Status.Phase != new.Status.Phase {
+		return true
+	}
+
+	// Check for pod rescheduling or IP changes
+	if old.Spec.NodeName != new.Spec.NodeName ||
+		old.Status.PodIP != new.Status.PodIP {
+		return true
+	}
+
+	// Check container count changes (containers added/removed)
+	if len(old.Spec.Containers) != len(new.Spec.Containers) ||
+		len(old.Status.ContainerStatuses) != len(new.Status.ContainerStatuses) ||
+		len(old.Status.InitContainerStatuses) != len(new.Status.InitContainerStatuses) ||
+		len(old.Status.EphemeralContainerStatuses) != len(new.Status.EphemeralContainerStatuses) {
+		return true
+	}
+
+	// Check metadata changes
+	if len(old.Labels) != len(new.Labels) || len(old.Annotations) != len(new.Annotations) {
+		return true
+	}
+
+	// Compare labels
+	for k, v := range old.Labels {
+		if new.Labels[k] != v {
+			return true
+		}
+	}
+
+	// Compare annotations
+	for k, v := range old.Annotations {
+		if new.Annotations[k] != v {
+			return true
+		}
+	}
+
+	// Compare container statuses - this is what catches restarts and state changes
+	for i := range old.Status.ContainerStatuses {
+		if containerStatusChanged(&old.Status.ContainerStatuses[i], &new.Status.ContainerStatuses[i]) {
+			return true
+		}
+	}
+
+	// Compare init container statuses
+	for i := range old.Status.InitContainerStatuses {
+		if containerStatusChanged(&old.Status.InitContainerStatuses[i], &new.Status.InitContainerStatuses[i]) {
+			return true
+		}
+	}
+
+	// Compare ephemeral container statuses (debug containers)
+	for i := range old.Status.EphemeralContainerStatuses {
+		if containerStatusChanged(&old.Status.EphemeralContainerStatuses[i], &new.Status.EphemeralContainerStatuses[i]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// containerStatusChanged checks if a container status has changed in any meaningful way.
+// This includes name, container ID, restart count, ready state, or state transitions.
+func containerStatusChanged(old, new *corev1.ContainerStatus) bool {
+	if old.Name != new.Name ||
+		old.ContainerID != new.ContainerID ||
+		old.RestartCount != new.RestartCount ||
+		old.Ready != new.Ready {
+		return true
+	}
+
+	return containerStateChanged(old.State, new.State)
+}
+
+// containerStateChanged checks if the container state transitioned between waiting/running/terminated.
+// Returns true if the state type changed, false otherwise.
+func containerStateChanged(old, new corev1.ContainerState) bool {
+	oldRunning := old.Running != nil
+	newRunning := new.Running != nil
+	oldWaiting := old.Waiting != nil
+	newWaiting := new.Waiting != nil
+	oldTerminated := old.Terminated != nil
+	newTerminated := new.Terminated != nil
+
+	return oldRunning != newRunning || oldWaiting != newWaiting || oldTerminated != newTerminated
 }
 
 type kubeletClientOptions struct {

@@ -18,6 +18,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/debug"
 	"github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
@@ -36,6 +37,9 @@ type Service struct {
 
 	// metricsSvc is the internal metrics component for collector specific metrics.
 	metricsSvc metrics.Service
+
+	// podInformer is the pod informer for pod discovery.
+	podInformer k8s.PodInformerInterface
 
 	// workerSvcs are the collection services that can be opened and closed.
 	workerSvcs []service.Component
@@ -69,6 +73,9 @@ type ServiceOpts struct {
 	StorageBackend storage.Backend
 
 	KubeNode *metadata.KubeNode
+
+	// PodInformer is the pod informer used for discovery (optional)
+	PodInformer k8s.PodInformerInterface
 
 	// LogCollectionHandlers is the list of log collection handlers
 	LogCollectionHandlers []LogCollectorOpts
@@ -319,17 +326,26 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		replicator = r
 	}
 
-	batcher := cluster.NewBatcher(cluster.BatcherOpts{
-		StorageDir:         opts.StorageDir,
-		MaxSegmentAge:      time.Minute,
-		Partitioner:        partitioner,
-		Segmenter:          store.Index(),
-		MinUploadSize:      4 * 1024 * 1024,
-		MaxBatchSegments:   opts.MaxBatchSegments,
-		UploadQueue:        transferQueue,
-		TransferQueue:      transferQueue,
-		PeerHealthReporter: health,
+	// Create collector-specific WAL segment metrics lazily to avoid exposing ingestor metrics
+	collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge := metrics.NewCollectorSegmentMetrics()
+
+	batcher, err := cluster.NewBatcher(cluster.BatcherOpts{
+		StorageDir:              opts.StorageDir,
+		MaxSegmentAge:           time.Minute,
+		Partitioner:             partitioner,
+		Segmenter:               store.Index(),
+		MinUploadSize:           4 * 1024 * 1024,
+		MaxBatchSegments:        opts.MaxBatchSegments,
+		UploadQueue:             transferQueue,
+		TransferQueue:           transferQueue,
+		PeerHealthReporter:      health,
+		SegmentsCountMetric:     collectorSegmentsTotal,
+		SegmentsSizeBytesMetric: collectorSegmentsSizeBytes,
+		SegmentsMaxAgeMetric:    collectorSegmentsMaxAge,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create batcher: %w", err)
+	}
 
 	health.QueueSizer = batcher
 
@@ -341,6 +357,9 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 		scraper = NewScraper(opts.Scraper)
 	}
+
+	// Store the informer reference for cleanup during Close()
+	podInformer := opts.PodInformer
 
 	for _, handlerOpts := range opts.LogCollectionHandlers {
 		svc, err := handlerOpts.Create(store)
@@ -369,6 +388,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}),
 		store:        store,
 		scraper:      scraper,
+		podInformer:  podInformer,
 		workerSvcs:   workerSvcs,
 		httpHandlers: httpHandlers,
 		grpcHandlers: grpcHandlers,
@@ -504,6 +524,9 @@ func (s *Service) Close() error {
 	s.batcher.Close()
 	s.replicator.Close()
 	s.store.Close()
+	if closer, ok := s.podInformer.(service.Component); ok {
+		closer.Close()
+	}
 	return nil
 }
 
