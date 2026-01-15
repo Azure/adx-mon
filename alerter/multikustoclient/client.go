@@ -3,6 +3,7 @@ package multikustoclient
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Azure/adx-mon/alerter/alert"
@@ -13,8 +14,9 @@ import (
 )
 
 type multiKustoClient struct {
-	clients          map[string]QueryClient
-	maxNotifications int
+	clients            map[string]QueryClient
+	availableDatabases []string
+	maxNotifications   int
 }
 
 func New(endpoints map[string]string, configureAuth authConfiguror, max int) (multiKustoClient, error) {
@@ -33,13 +35,28 @@ func New(endpoints map[string]string, configureAuth authConfiguror, max int) (mu
 	if len(clients) == 0 {
 		return multiKustoClient{}, fmt.Errorf("no kusto endpoints provided")
 	}
-	return multiKustoClient{clients: clients, maxNotifications: max}, nil
+
+	availableDatabases := make([]string, 0, len(clients))
+	for name := range clients {
+		availableDatabases = append(availableDatabases, name)
+	}
+	sort.Strings(availableDatabases)
+
+	return multiKustoClient{
+		clients:            clients,
+		availableDatabases: availableDatabases,
+		maxNotifications:   max,
+	}, nil
 }
 
 func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
 	client := c.clients[qc.Rule.Database]
 	if client == nil {
-		return &engine.UnknownDBError{DB: qc.Rule.Database}, 0
+		return &engine.UnknownDBError{
+			DB:                   qc.Rule.Database,
+			AvailableDatabases:   c.availableDatabases,
+			CaseInsensitiveMatch: c.FindCaseInsensitiveMatch(qc.Rule.Database),
+		}, 0
 	}
 
 	var iter *kusto.RowIterator
@@ -99,6 +116,23 @@ func (c multiKustoClient) Endpoint(db string) string {
 		return "unknown"
 	}
 	return cl.Endpoint()
+}
+
+// AvailableDatabases returns a sorted list of all configured database names.
+func (c multiKustoClient) AvailableDatabases() []string {
+	return c.availableDatabases
+}
+
+// FindCaseInsensitiveMatch returns a database name that matches the given db name
+// case-insensitively, or an empty string if no match is found.
+func (c multiKustoClient) FindCaseInsensitiveMatch(db string) string {
+	lowerDB := strings.ToLower(db)
+	for name := range c.clients {
+		if strings.ToLower(name) == lowerDB {
+			return name
+		}
+	}
+	return ""
 }
 
 type QueryClient interface {
