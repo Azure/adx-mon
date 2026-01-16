@@ -35,6 +35,14 @@ func (m *fakeKustoClient) Query(ctx context.Context, qc *QueryContext, fn func(c
 	return nil, 1
 }
 
+func (m *fakeKustoClient) AvailableDatabases() []string {
+	return []string{"fakedb"}
+}
+
+func (m *fakeKustoClient) FindCaseInsensitiveMatch(db string) string {
+	return ""
+}
+
 type fakeAlerter struct {
 	createFn func(ctx context.Context, endpoint string, alert alert.Alert) error
 }
