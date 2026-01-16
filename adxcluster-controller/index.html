@@ -1,0 +1,1474 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../ingestor/">
+      
+      
+        <link rel="next" href="../designs/log-integration-with-kubernetes/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>ADXCluster Controller - ADX-Mon Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#adxcluster-controller" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="ADX-Mon Documentation" class="md-header__button md-logo" aria-label="ADX-Mon Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ADX-Mon Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ADXCluster Controller
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href=".." class="md-tabs__link">
+          
+  
+  
+  Docs Home
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quick-start/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quick Start
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../cookbook/cookbook/" class="md-tabs__link">
+          
+  
+  
+  Cookbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../config/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../designs/log-integration-with-kubernetes/" class="md-tabs__link">
+          
+  
+  
+  Designs
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="ADX-Mon Documentation" class="md-nav__button md-logo" aria-label="ADX-Mon Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ADX-Mon Documentation
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docs Home
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Docs Home
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cookbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cookbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cookbook/cookbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cookbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cookbook/traces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sending Traces With Logs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collector Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ingestor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestor Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADXCluster Controller
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADXCluster Controller
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Purpose
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Capabilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prerequisites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#azure-identity-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Identity &amp; Permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#networking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Networking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reconciliation-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reconciliation Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#spec-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spec Fields
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Spec Fields">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clustername-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        clusterName (required)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        endpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#databases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        databases
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        provision
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#role" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        role
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#federation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        federation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#criteriaexpression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        criteriaExpression
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#federation_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Federation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Federation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#partition-clusters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partition Clusters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#federated-hubs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Federated Hubs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#provision-new-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provision New Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connect-existing-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connect Existing Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#partition-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Partition Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#federated-hub" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Federated Hub
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gate-reconciliation-with-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate Reconciliation with Criteria
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operational-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operational Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Designs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Designs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../designs/log-integration-with-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Log Integration with Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../designs/schema-etl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Schema ETL
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="adxcluster-controller">ADXCluster Controller</h1>
+<h2 id="purpose">Purpose</h2>
+<p>Reconciles <code>ADXCluster</code> CRDs to provision or connect Azure Data Explorer clusters, configure federation between them, and expose stable endpoints for other adx-mon components (ingestor, collector, alerter). The controller ships inside the operator deployment, so every reconciliation shares lifecycle, logging, and configuration with the rest of the control-plane services.</p>
+<h2 id="core-capabilities">Core Capabilities</h2>
+<ul>
+<li><strong>Dual mode</strong>: Bring-your-own clusters (<code>spec.endpoint</code> only) or full Azure provisioning (<code>spec.provision</code> block). Presence of <code>spec.provision</code> is the only trigger for provisioning; omitting it keeps the cluster in BYO mode.</li>
+<li><strong>Explicit configuration</strong>: Validates all required fields up front; never injects defaults or mutates the spec</li>
+<li><strong>Federation</strong>: Partition clusters heartbeat schema to federated hubs; hubs generate cross-cluster query functions so downstream services can issue single logical queries against multi-cluster fleets.</li>
+<li><strong>Status tracking</strong>: Records resolved endpoint and applied provisioning state for change detection and downstream consumption</li>
+<li><strong>Conditional execution</strong>: <code>spec.criteriaExpression</code> gates reconciliation based on operator cluster labels</li>
+</ul>
+<h2 id="prerequisites">Prerequisites</h2>
+<h3 id="azure-identity-permissions">Azure Identity &amp; Permissions</h3>
+<p>Authenticates via <code>azidentity.NewDefaultAzureCredential</code>. When both system-assigned and user-assigned identities exist on the operator pod, the controller prefers explicit identity IDs from the CRD (e.g., <code>spec.provision.userAssignedIdentities</code>) and falls back to the pod-managed identity. Required permissions:
+- <strong>Subscription</strong>: <code>Microsoft.Resources/subscriptions/providers/read</code> (Kusto provider registration)
+- <strong>Resource Group</strong>: read/write (<code>Microsoft.Resources/subscriptions/resourcegroups/*</code>)
+- <strong>ADX Cluster/Database</strong>: read/write (<code>Microsoft.Kusto/clusters/*</code>, <code>Microsoft.Kusto/clusters/databases/*</code>)
+- <strong>Kusto Data Plane</strong>: Execute management commands (<code>.show</code>, <code>.create table</code>, <code>.execute database script</code>, <code>.ingest inline</code>)</p>
+<p>For partition clusters, the managed identity specified in <code>federatedTargets[].managedIdentityClientId</code> needs ingest permissions on the hub's heartbeat database.</p>
+<h3 id="networking">Networking</h3>
+<p>All <code>endpoint</code> values must be resolvable and reachable (HTTPS) from the operator pod. Ensure outbound egress rules (Calico, NSGs, firewalls, Private Link) allow connections from the operator namespace to ADX endpoints.</p>
+<h2 id="reconciliation-flow">Reconciliation Flow</h2>
+<p>With prerequisites satisfied, the controller walks through the following reconciliation flow:
+1. <strong>Criteria evaluation</strong>: If <code>spec.criteriaExpression</code> is present, evaluate against operator cluster labels supplied via the operator's <code>--cluster-label</code> flag. False/error → update status and stop.
+2. <strong>Deletion</strong>: CRD deletion does not touch Azure resources.
+3. <strong>Mode selection</strong>:
+    - No <code>spec.provision</code> → expect existing cluster at <code>spec.endpoint</code> (condition: <code>ProvisioningSkipped</code> or <code>ProvisioningDisabled</code>, where <em>Skipped</em> means BYO mode and <em>Disabled</em> means the criteria expression stopped reconciliation)
+    - <code>spec.provision</code> present → validate all required fields (subscriptionId, resourceGroup, location, skuName, tier). Missing → <code>ProvisioningInvalid</code>
+4. <strong>Provisioning</strong> (when <code>spec.provision</code> is valid):
+    - Register <code>Microsoft.Kusto</code> provider (requeue 5min if pending)
+    - Ensure resource group exists
+    - Create/update cluster with system-assigned identity (unless <code>userAssignedIdentities</code> specified) and optional autoscale (<code>cluster.Properties.OptimizedAutoscale</code> in ARM)
+    - Create databases from <code>spec.databases</code> + heartbeat database (if federation enabled)
+    - Condition: <code>Creating</code> → <code>Waiting</code> (requeue 1min)
+5. <strong>Status polling</strong>: Check Azure cluster state. When <code>StateRunning</code> → record endpoint/settings in status, condition: <code>ClusterReady</code>
+    - HTTP 403 during polling → <code>PermissionRestricted</code> (status <code>True</code>), federation proceeds. Most often this indicates the managed identity lacks Kusto data-plane rights; grant the <code>Kusto Data Reader</code> role on the target database and requeue.
+6. <strong>Updates</strong>: Compare desired SKU/tier/identities vs <code>status.appliedProvisionState</code>. Only apply spec changes; ignore Azure drift to avoid reconciliation loops—manually reconcile Azure-side edits that diverge from the CRD. Identity type switching not supported.
+7. <strong>Federation loops</strong> (when <code>ClusterReady</code>):
+   - <strong>Partition</strong> (<code>HeartbeatFederatedClusters</code>): Every 10min, enumerate schema → ingest to hub heartbeat table
+   - <strong>Federated</strong> (<code>FederateClusters</code>): Every 10min, read heartbeats → ensure hub tables/functions for cross-cluster queries</p>
+<p>Status conditions use type <code>adxcluster.adx-mon.azure.com</code> with reasons: <code>ProvisioningDisabled</code>, <code>ProvisioningSkipped</code>, <code>ProvisioningInvalid</code>, <code>Creating</code>, <code>Waiting</code>, <code>ClusterReady</code>, <code>PermissionRestricted</code>, <code>CriteriaExpressionError</code>, <code>CriteriaExpressionFalse</code>, or Azure failure states. All include <code>ObservedGeneration</code>.</p>
+<h2 id="spec-fields">Spec Fields</h2>
+<h3 id="clustername-required"><code>clusterName</code> (required)</h3>
+<p>Azure resource name. Regex: <code>^[a-zA-Z0-9-]+$</code>, max 100 chars.</p>
+<h3 id="endpoint"><code>endpoint</code></h3>
+<p>HTTPS URI of existing ADX cluster. When set, provisioning is skipped and value is mirrored to <code>status.endpoint</code>.</p>
+<h3 id="databases"><code>databases</code></h3>
+<p>List of databases to create (only when <code>spec.provision</code> is populated). Each needs <code>databaseName</code> (<code>^[a-zA-Z0-9_]+$</code>) and <code>telemetryType</code> (Metrics/Logs/Traces). Retention fields are accepted for forward compatibility but currently ignored by the controller. Plus heartbeat database when federation enabled. For BYO clusters, create databases manually in Azure and configure retention there.</p>
+<h3 id="provision"><code>provision</code></h3>
+<p>Azure provisioning details. All required when present: <code>subscriptionId</code>, <code>resourceGroup</code>, <code>location</code>, <code>skuName</code>, <code>tier</code>. Optional: <code>userAssignedIdentities</code>, <code>autoScale</code>, <code>autoScaleMin</code>, <code>autoScaleMax</code>. 
+- Autoscale only applied at creation; changes require manual Azure updates
+- Identity type switching not supported
+- <code>appliedProvisionState</code> in status tracks last reconciled SKU/tier/identities</p>
+<h3 id="role"><code>role</code></h3>
+<p>Federation mode: <code>Partition</code> (local storage + heartbeat to hub) or <code>Federated</code> (aggregate partitions). Omit for standalone.</p>
+<h3 id="federation"><code>federation</code></h3>
+<p><strong>Partition clusters</strong> need:
+- <code>federatedTargets[]</code>: each with <code>endpoint</code>, <code>heartbeatDatabase</code>, <code>heartbeatTable</code>, <code>managedIdentityClientId</code>
+- <code>partitioning</code>: free-form map (e.g., <code>{geo: EU, tenant: acme}</code>) sent in heartbeats. Common keys mirror operator labels such as <code>geo</code>, <code>tenant</code>, or <code>environment</code> so hubs can route traffic predictably.</p>
+<p><strong>Federated clusters</strong> need:
+- <code>heartbeatDatabase</code>, <code>heartbeatTable</code>: where partitions write
+- <code>heartbeatTTL</code>: freshness window (default <code>1h</code>)</p>
+<h3 id="criteriaexpression"><code>criteriaExpression</code></h3>
+<p>Optional CEL expression against operator cluster labels. Empty/missing = <code>true</code>. Errors/false → reconciliation blocked. Example: <code>labels["geo"] == "eu" &amp;&amp; labels.has("tier")</code> keeps the object scoped to European, tiered operators. See the <a href="https://opensource.google/projects/cel">CEL language spec</a> for expression syntax.</p>
+<h2 id="federation_1">Federation</h2>
+<h3 id="partition-clusters">Partition Clusters</h3>
+<p>Every 10min: enumerate local databases/tables/views → serialize with <code>partitioning</code> map → ingest CSV row to each hub's heartbeat table.</p>
+<p>Heartbeat row (CSV): <code>Timestamp</code> (RFC3339), <code>ClusterEndpoint</code>, <code>Schema</code> (JSON array of <code>{database, tables[], views[]}</code>), <code>PartitionMetadata</code> (JSON of partitioning map).</p>
+<p>Authentication: <code>DefaultAzureCredential</code> for local cluster; switches to <code>managedIdentityClientId</code> for hub ingestion when both endpoint is HTTPS and identity specified.
+Failures to push heartbeats surface in the operator logs (<code>adxcluster-controller</code> logger) alongside the CRD name; reconcile once connectivity or permissions are restored.</p>
+<h3 id="federated-hubs">Federated Hubs</h3>
+<p>Every 10min: query heartbeat table (<code>WHERE Timestamp &gt; ago(heartbeatTTL)</code>) → extract partition schemas → ensure OTLP hub tables exist → generate cross-cluster functions.</p>
+<p>Heartbeat table schema: <code>Timestamp:datetime, ClusterEndpoint:string, Schema:dynamic, PartitionMetadata:dynamic</code></p>
+<p>Hub tables: OTLP schema <code>Timestamp:datetime, ObservedTimestamp:datetime, TraceId:string, SpanId:string, SeverityText:string, SeverityNumber:int, Body:dynamic, Resource:dynamic, Attributes:dynamic</code></p>
+<p>Hub tables inherit ADX defaults for retention; set custom policies post-creation if required (the controller does not mutate them).</p>
+<p>Federation functions: <code>.create-or-alter function &lt;table&gt;() { macro-expand entity_group [cluster(...).database(...), ...] as X { X.&lt;table&gt; } }</code> — generated for both tables and views discovered on partition clusters. Scripts split at 1MB. The <code>entity_group</code> macro fans a single logical function across all remote databases discovered in heartbeats, so callers can query the hub without enumerating partitions.</p>
+<p>Hubs auto-create databases discovered in heartbeats without mutating the CRD.</p>
+<h2 id="examples">Examples</h2>
+<p>The following snippets highlight common configurations and can be pasted directly into a manifest for quick starts.</p>
+<h3 id="provision-new-cluster">Provision New Cluster</h3>
+<p>Provision an entire ADX environment, including databases, through <code>spec.provision</code>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ADXCluster</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">observability-eastus2</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">clusterName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">observability-eastus2</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">provision</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">subscriptionId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;00000000-0000-0000-0000-000000000000&quot;</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">resourceGroup</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;observability-eastus2&quot;</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">location</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;eastus2&quot;</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">skuName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Standard_L8as_v3&quot;</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">tier</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Standard&quot;</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">autoScale</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">autoScaleMin</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">autoScaleMax</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="nt">databases</span><span class="p">:</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">databaseName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Metrics&quot;</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">      </span><span class="nt">telemetryType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Metrics</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">databaseName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Logs&quot;</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">      </span><span class="nt">telemetryType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Logs</span>
+</code></pre></div></p>
+<h3 id="connect-existing-cluster">Connect Existing Cluster</h3>
+<p>Reference a pre-existing ADX cluster and skip provisioning logic.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ADXCluster</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shared-adx</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">clusterName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shared-adx</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://shared-adx.kusto.windows.net&quot;</span>
+</code></pre></div></p>
+<h3 id="partition-cluster">Partition Cluster</h3>
+<p>Advertise a regional partition that emits heartbeats to one or more hubs.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ADXCluster</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eu-partition</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">clusterName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eu-partition</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://eu-partition.kusto.windows.net&quot;</span><span class="w">  </span><span class="c1"># or use provision block</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">databases</span><span class="p">:</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">databaseName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Metrics&quot;</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="nt">telemetryType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Metrics</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Partition</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span><span class="nt">federation</span><span class="p">:</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span><span class="nt">federatedTargets</span><span class="p">:</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://hub.kusto.windows.net&quot;</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">        </span><span class="nt">heartbeatDatabase</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;FleetDiscovery&quot;</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">        </span><span class="nt">heartbeatTable</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Heartbeats&quot;</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">        </span><span class="nt">managedIdentityClientId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;22222222-2222-2222-2222-222222222222&quot;</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">    </span><span class="nt">partitioning</span><span class="p">:</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">      </span><span class="nt">geo</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;EU&quot;</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">      </span><span class="nt">tenant</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;contoso&quot;</span>
+</code></pre></div></p>
+<h3 id="federated-hub">Federated Hub</h3>
+<p>Assemble schemas emitted by partitions and expose macro functions for fleet-wide queries.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ADXCluster</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">global-hub</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">clusterName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">global-hub</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://global-hub.kusto.windows.net&quot;</span><span class="w">  </span><span class="c1"># or use provision block</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Federated</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">federation</span><span class="p">:</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nt">heartbeatDatabase</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;FleetDiscovery&quot;</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="nt">heartbeatTable</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Heartbeats&quot;</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="nt">heartbeatTTL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;2h&quot;</span>
+</code></pre></div></p>
+<h3 id="gate-reconciliation-with-criteria">Gate Reconciliation with Criteria</h3>
+<p>Restrict reconciliation to operators that carry matching labels.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ADXCluster</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shared-eu</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">clusterName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shared-eu</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://shared-eu.kusto.windows.net&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">criteriaExpression</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;labels[&quot;geo&quot;]</span><span class="nv"> </span><span class="s">==</span><span class="nv"> </span><span class="s">&quot;eu&quot;</span><span class="nv"> </span><span class="s">&amp;&amp;</span><span class="nv"> </span><span class="s">labels.has(&quot;tier&quot;)&#39;</span>
+</code></pre></div></p>
+<h2 id="operational-notes">Operational Notes</h2>
+<ul>
+<li><strong>No deletion</strong>: Removing CRD never deletes Azure resources (clusters, databases, identities)</li>
+<li><strong>Database management</strong>: Only created when <code>spec.provision</code> populated; BYO clusters require manual database setup</li>
+<li><strong>Retention policies</strong>: <code>retentionInDays</code>/<code>retentionPolicy</code> fields accepted but not applied; set in Azure directly</li>
+<li><strong>Autoscale updates</strong>: Only applied at creation; later changes require manual Azure edits</li>
+<li><strong>Identity switching</strong>: System ↔ user-assigned not supported; Azure must already be in target mode</li>
+<li><strong>Change detection</strong>: Only spec edits trigger updates; Azure drift ignored to prevent thrashing—audit Azure activity logs and reconcile by hand if out-of-band edits are necessary.</li>
+<li><strong>HTTP 403 handling</strong>: Status polling sets <code>PermissionRestricted</code> (federation continues); provisioning APIs fail immediately. Grant the managed identity (from <code>spec.provision</code> or <code>federation</code>) the <code>Kusto Data Reader</code> or richer role on the affected database.</li>
+<li><strong>Logs</strong>: Controller logs are emitted by the operator deployment (<code>adxcluster-controller</code> logger). Use <code>kubectl logs</code> against the operator pod to trace reconciliation IDs or heartbeat failures.</li>
+</ul>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<ul>
+<li><strong>Check status</strong>: <code>kubectl describe adxcluster &lt;name&gt;</code> shows conditions, <code>ObservedGeneration</code>, error messages. <code>ProvisioningDisabled</code>, <code>ProvisioningSkipped</code>, and <code>ClusterReady</code> correspond to the states outlined in the reconciliation flow.</li>
+<li><strong>Provisioning failures</strong>: Look for <code>ProvisioningInvalid</code> or Azure state (e.g., <code>Failed</code>) in conditions. Azure Activity Logs (Portal → Monitor → Activity Log) reveal authoritative ARM failures.</li>
+<li><strong>Database issues</strong>: Check operator logs; no dedicated condition for database creation failures. Most errors surface as reconciliation warnings with the database name.</li>
+<li><strong>Federation debugging</strong>: Query heartbeat table: <code>&lt;heartbeatTable&gt; | where Timestamp &gt; ago(2h)</code> to confirm heartbeat freshness and partition metadata.</li>
+<li><strong>Force requeue</strong>: Update or annotate the CRD (<code>kubectl annotate --overwrite adxcluster/&lt;name&gt; adx-mon.azure.com/requeue=$(date +%s)</code>) to nudge a new reconciliation once prerequisites are fixed.</li>
+<li><strong>Kusto errors</strong>: Verify network connectivity, authentication, and required permissions, especially data-plane roles for managed identities listed in the CRD.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "toc.integrate", "navigation.top", "search.suggest", "search.highlight", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
