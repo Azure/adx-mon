@@ -320,27 +320,6 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
 			| project-away prevVal, diff, h
 		)}`},
-		{
-
-			name: "CountCardinality",
-			body: `.create-or-alter function CountCardinality () {
-				union withsource=table *
-				| where Timestamp >= ago(1h) and Timestamp < ago(5m)
-				| summarize Value=toreal(dcount(SeriesId)) by table
-				| extend SeriesId=hash_xxhash64(table)
-				| extend Timestamp=bin(now(), 1m)
-				| extend Labels=bag_pack_columns(table)
-				| project Timestamp, SeriesId, Labels, Value
-		}`},
-	}
-
-	// This table is used to store the cardinality of all series in the database.  It's updated by the CountCardinality function
-	// but we can't create the function unless a table exists.
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
-		".create table AdxmonIngestorTableCardinalityCount (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real)")
-	_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
-	if err != nil {
-		return err
 	}
 
 	for _, fn := range functions {
