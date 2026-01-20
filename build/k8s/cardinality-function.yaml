@@ -1,0 +1,17 @@
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: count-cardinality
+  namespace: adx-mon
+spec:
+  database: "*"
+  body: |
+    .create-or-alter function CountCardinality () {
+      union withsource=table *
+      | where Timestamp >= ago(1h) and Timestamp < ago(5m)
+      | summarize Value=toreal(dcount(SeriesId)) by table
+      | extend SeriesId=hash_xxhash64(table)
+      | extend Timestamp=bin(now(), 1m)
+      | extend Labels=bag_pack_columns(table)
+      | project Timestamp, SeriesId, Labels, Value
+    }
