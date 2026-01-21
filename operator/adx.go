@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
+	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/Azure/azure-kusto-go/kusto/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -49,6 +50,10 @@ const (
 	requeueLong      = 10 * time.Minute // Used for heartbeat/federation cycles
 	maxKustoScriptSz = 1 << 20          // 1MB max size for Kusto script batches
 )
+
+type kustoQueryClient interface {
+	Query(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+}
 
 // resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
 // preferring the reconciled status endpoint and falling back to the spec when
@@ -1247,6 +1252,16 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	schemaByEndpoint, _ := parseHeartbeatRows(rows)
 	logger.Infof("ADXCluster %s: processed heartbeat data from %d partition clusters", cluster.Spec.ClusterName, len(schemaByEndpoint))
 
+	blockedEndpoints, err := resolveBlockedClusterEndpoints(ctx, client, cluster)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to resolve blocked cluster endpoints: %w", err)
+	}
+	if len(blockedEndpoints) > 0 {
+		removed, matched := filterSchemaByBlockedEndpoints(schemaByEndpoint, blockedEndpoints)
+		unmatched := len(blockedEndpoints) - matched
+		logger.Infof("ADXCluster %s: block list entries=%d, filtered partitions=%d, matched=%d, unmatched=%d", cluster.Spec.ClusterName, len(blockedEndpoints), removed, matched, unmatched)
+	}
+
 	// Step 5: Unique list of databases
 	dbSet := extractDatabasesFromSchemas(schemaByEndpoint)
 	var dbSpecs []adxmonv1.ADXClusterDatabaseSpec
@@ -1712,14 +1727,187 @@ func splitKustoScripts(funcs []string, maxSize int) [][]string {
 // Helper: Execute Kusto scripts in a database, using the .execute database script preamble
 func executeKustoScripts(ctx context.Context, client *kusto.Client, database string, scripts [][]string) error {
 	const scriptPreamble = ".execute database script with (ContinueOnErrors=true)\n<|\n"
-	for _, script := range scripts {
+	var errs []error
+	for idx, script := range scripts {
 		fullScript := scriptPreamble + strings.Join(script, "")
-		_, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript))
-		if err != nil {
-			return fmt.Errorf("failed to execute Kusto script: %w", err)
+		if _, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript)); err != nil {
+			logger.Errorf("ADXCluster: failed to execute Kusto script chunk %d/%d for database %s: %v", idx+1, len(scripts), database, err)
+			errs = append(errs, fmt.Errorf("chunk %d: %w", idx+1, err))
 		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("one or more Kusto scripts failed")
+	}
 	return nil
+}
+
+type blockedClusterRow struct {
+	ClusterEndpoint string `kusto:"ClusterEndpoint"`
+	Endpoint        string `kusto:"Endpoint"`
+}
+
+// resolveBlockedClusterEndpoints returns a map keyed by normalized endpoint URLs with the
+// original endpoint string as the value. This preserves logging fidelity while allowing
+// quick membership checks against canonicalized keys.
+func resolveBlockedClusterEndpoints(ctx context.Context, client kustoQueryClient, cluster *adxmonv1.ADXCluster) (map[string]string, error) {
+	blocked := make(map[string]string)
+	federation := cluster.Spec.Federation
+	if federation == nil || federation.BlockedClusters == nil {
+		return blocked, nil
+	}
+
+	config := federation.BlockedClusters
+	for _, entry := range config.Static {
+		if normalized := normalizeEndpoint(entry); normalized != "" {
+			blocked[normalized] = strings.TrimSpace(entry)
+		}
+	}
+
+	fnSpec := config.KustoFunction
+	if fnSpec == nil {
+		return blocked, nil
+	}
+
+	database := strings.TrimSpace(fnSpec.Database)
+	functionName := strings.TrimSpace(fnSpec.Name)
+	if database == "" || functionName == "" {
+		return blocked, nil
+	}
+	if client == nil {
+		return nil, fmt.Errorf("kusto client is required to execute blocked cluster function %s.%s", database, functionName)
+	}
+
+	endpoints, err := fetchBlockedEndpointsFromFunction(ctx, client, database, functionName)
+	if err != nil {
+		if isBlockedFunctionNotFoundError(err) {
+			logger.Warnf("ADXCluster %s: blocked cluster function %s.%s not found, skipping", cluster.Spec.ClusterName, database, functionName)
+			return blocked, nil
+		}
+		return nil, fmt.Errorf("failed to execute blocked cluster function %s.%s: %w", database, functionName, err)
+	}
+
+	for _, endpoint := range endpoints {
+		trimmed := strings.TrimSpace(endpoint)
+		if normalized := normalizeEndpoint(trimmed); normalized != "" {
+			blocked[normalized] = trimmed
+		}
+	}
+
+	return blocked, nil
+}
+
+func fetchBlockedEndpointsFromFunction(ctx context.Context, client kustoQueryClient, database, functionName string) ([]string, error) {
+	// NOTE: The function name is provided via ADXCluster CRD and validated by the pattern ^[A-Za-z_][A-Za-z0-9_]*$ at the CRD level.
+	// This ensures only valid KQL function names are allowed, mitigating injection risks.
+	// AddUnsafe is required here because the Kusto SDK does not provide a safe way to interpolate function names.
+	stmt := kql.New("").AddUnsafe(functionName).AddUnsafe("()")
+	iter, err := client.Query(ctx, database, stmt)
+	if err != nil {
+		return nil, err
+	}
+	if iter == nil {
+		return nil, fmt.Errorf("blocked cluster function %s returned no iterator; verify the function definition and permissions allow queries", functionName)
+	}
+	defer iter.Stop()
+
+	var endpoints []string
+	for {
+		row, inlineErr, err := iter.NextRowOrError()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if inlineErr != nil {
+			logger.Warnf("Blocked cluster function %s returned inline error: %v", functionName, inlineErr)
+			continue
+		}
+		if row == nil {
+			continue
+		}
+		var rec blockedClusterRow
+		if err := row.ToStruct(&rec); err != nil {
+			logger.Warnf("Failed to decode blocked cluster row for function %s: %v", functionName, err)
+			continue
+		}
+		endpoint := strings.TrimSpace(rec.ClusterEndpoint)
+		if endpoint == "" {
+			endpoint = strings.TrimSpace(rec.Endpoint)
+		}
+		if endpoint == "" {
+			continue
+		}
+		endpoints = append(endpoints, endpoint)
+	}
+
+	return endpoints, nil
+}
+
+func isBlockedFunctionNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if kerr, ok := kustoerrors.GetKustoError(err); ok {
+		if restErrorIndicatesNotFound(kerr) {
+			return true
+		}
+		if containsNotFoundText(kerr.Error()) {
+			return true
+		}
+	}
+	return containsNotFoundText(err.Error())
+}
+
+func restErrorIndicatesNotFound(kerr *kustoerrors.Error) bool {
+	decoded := kerr.UnmarshalREST()
+	if decoded == nil {
+		return false
+	}
+	root, _ := decoded["error"].(map[string]interface{})
+	if root == nil {
+		return false
+	}
+	if code, _ := root["code"].(string); code != "" && strings.EqualFold(code, "NotFound") {
+		return true
+	}
+	if message, _ := root["message"].(string); message != "" && containsNotFoundText(message) {
+		return true
+	}
+	return false
+}
+
+func containsNotFoundText(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "does not refer to any known entity") ||
+		strings.Contains(lower, "does not exist") ||
+		strings.Contains(lower, "not found")
+}
+
+func normalizeEndpoint(endpoint string) string {
+	trimmed := strings.TrimSpace(endpoint)
+	trimmed = strings.TrimRight(trimmed, "/")
+	if trimmed == "" {
+		return ""
+	}
+	return strings.ToLower(trimmed)
+}
+
+func filterSchemaByBlockedEndpoints(schema map[string][]ADXClusterSchema, blocked map[string]string) (int, int) {
+	if len(blocked) == 0 {
+		return 0, 0
+	}
+	removed := 0
+	matched := make(map[string]struct{})
+	for endpoint := range schema {
+		norm := normalizeEndpoint(endpoint)
+		if _, ok := blocked[norm]; ok {
+			delete(schema, endpoint)
+			removed++
+			matched[norm] = struct{}{}
+		}
+	}
+	return removed, len(matched)
 }
 
 type FunctionRec struct {

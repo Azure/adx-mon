@@ -51,6 +51,33 @@ spec:
       geo: "EU"
       location: "westeurope"
 ```
+
+**Federated hub example with blocked clusters (static + dynamic):**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: global-hub
+spec:
+  clusterName: global-hub
+  endpoint: "https://global-hub.kusto.windows.net"
+  role: Federated
+  federation:
+    heartbeatDatabase: "FleetDiscovery"
+    heartbeatTable: "Heartbeats"
+    heartbeatTTL: "2h"
+    blockedClusters:
+      static:
+        - "https://legacy-partition.kusto.windows.net"
+        - "https://quarantined-partition.kusto.windows.net/"  # trailing slashes ignored
+      kustoFunction:
+        database: FleetDiscovery
+        name: GetBlockedPartitions
+```
+The controller normalizes each endpoint (lower case and no trailing slash) and merges the static list with the results of
+`GetBlockedPartitions()` before generating macros. Any partition whose heartbeat endpoint matches the merged list is
+excluded from schema fan-out.
+
 **Key Fields:**
 - `clusterName`: Name for the ADX cluster.
 - `endpoint`: Existing ADX cluster URI (omit to provision new). When set, the controller mirrors this value into status
@@ -61,7 +88,34 @@ spec:
   `resourceGroup`, `location`, `skuName`, and `tier` explicitly—the controller no longer auto-detects or mutates these
   values.
 - `role`: `Partition` (default) or `Federated` for multi-cluster.
-- `federation`: Federation/partitioning config for multi-cluster.
+- `federation`: Federation/partitioning config for multi-cluster. Federated hubs can optionally specify
+  `federation.blockedClusters` to exclude rogue or quarantined partitions from macro generation. The block list accepts a
+  static array of endpoints as well as a break-glass Kusto function (returning `ClusterEndpoint` or `Endpoint` columns)
+  whose results are normalized (trimmed, case-insensitive, trailing slashes removed) before filtering the partition
+  schema set.
+
+### Creating a blocked cluster function in Kusto
+The optional `blockedClusters.kustoFunction` expects a function that returns a table containing either a
+`ClusterEndpoint` or `Endpoint` string column. You can create one in the heartbeat database with a command like:
+
+```kusto
+.create-or-alter function with (docstring="Return partitions blocked from federation", folder="FleetSafety") GetBlockedPartitions()
+{
+  let manualOverrides = datatable(ClusterEndpoint:string)
+  [
+    "https://legacy-partition.kusto.windows.net",
+    "https://maintenance-partition.kusto.windows.net"
+  ];
+  FleetSafetyBlockedPartitions
+  | project ClusterEndpoint = tostring(ClusterEndpoint)
+  | union manualOverrides
+  | distinct ClusterEndpoint
+}
+```
+
+- `FleetSafetyBlockedPartitions` can be any table you manage (for example, populated via Azure Monitor alerts or manual entries).
+- The function may also emit an `Endpoint` column; the controller checks both and trims whitespace before use.
+- Missing functions are logged as warnings, while other Kusto errors block reconciliation so operators can investigate.
 
 **Status highlights:**
 - `status.endpoint`: Observed Kusto endpoint used by dependent components (mirrors `spec.endpoint` in BYO mode).
