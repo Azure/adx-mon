@@ -18,7 +18,6 @@ package v1
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -164,48 +163,6 @@ func (f *Function) SetReconcileCondition(status metav1.ConditionStatus, reason, 
 // SetCriteriaMatchCondition records the outcome of CriteriaExpression evaluation. An optional clusterLabels map may be
 // provided to enrich messages for debugging. Passing nil is permitted and treated as "no labels".
 func (f *Function) SetCriteriaMatchCondition(matched bool, expression string, err error, clusterLabels map[string]string) {
-	labelSummary := FormatClusterLabels(clusterLabels)
-	reason := ReasonCriteriaMatched
-	status := metav1.ConditionTrue
-	message := fmt.Sprintf("Criteria expression %q matched cluster labels: %s", expression, labelSummary)
-	if expression == "" {
-		reason = ReasonCriteriaMatched
-		message = "No criteria expression configured; defaulting to match"
-	}
-	if err != nil {
-		reason = ReasonCriteriaExpressionError
-		status = metav1.ConditionFalse
-		message = fmt.Sprintf("Criteria expression %q failed: %v (cluster labels: %s)", expression, err, labelSummary)
-	} else if !matched {
-		reason = ReasonCriteriaNotMatched
-		status = metav1.ConditionFalse
-		message = fmt.Sprintf("Criteria expression %q evaluated to false for cluster labels: %s", expression, labelSummary)
-	}
-	condition := metav1.Condition{
-		Type:               FunctionCriteriaMatch,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: f.GetGeneration(),
-		LastTransitionTime: metav1.Now(),
-	}
+	condition := NewCriteriaCondition(FunctionCriteriaMatch, f.GetGeneration(), matched, expression, err, clusterLabels)
 	meta.SetStatusCondition(&f.Status.Conditions, condition)
-}
-
-// FormatClusterLabels returns a stable, human-readable summary of cluster labels for status messages.
-// Keys are sorted to make comparisons deterministic.
-func FormatClusterLabels(labels map[string]string) string {
-	if len(labels) == 0 {
-		return "(none)"
-	}
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, labels[k]))
-	}
-	return strings.Join(parts, ", ")
 }
