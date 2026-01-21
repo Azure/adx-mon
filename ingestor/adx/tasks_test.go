@@ -734,6 +734,250 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 	require.Equal(t, v1.Success, fn.Status.Status)
 }
 
+func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("allDatabases true applies to any database", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						AllDatabases: true,
+						Body:         ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "prod", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.NotEmpty(t, exec.stmts)
+
+		fn := store.funcs[0]
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionTrue, recCond.Status)
+		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
+	})
+
+	t.Run("allDatabases true with specific database errors", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database:     "mydb",
+						AllDatabases: true,
+						Body:         ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "mydb", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "should not execute when validation fails")
+
+		fn := store.funcs[0]
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "ValidationFailed", recCond.Reason)
+		require.Contains(t, recCond.Message, "mutually exclusive")
+		require.Equal(t, v1.PermanentFailure, fn.Status.Status)
+	})
+
+	t.Run("allDatabases false with specific database targets only that database", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						Database:     "prod",
+						AllDatabases: false,
+						Body:         ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "dev", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "should not execute for non-matching database")
+	})
+
+	t.Run("neither database nor allDatabases set errors", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						// Neither Database nor AllDatabases is set
+						Body: ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		exec := &TestStatementExecutor{database: "mydb", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "should not execute when validation fails")
+
+		fn := store.funcs[0]
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "ValidationFailed", recCond.Reason)
+		require.Contains(t, recCond.Message, "neither database nor allDatabases is set")
+		require.Equal(t, v1.PermanentFailure, fn.Status.Status)
+	})
+}
+
+func TestManagementCommandTaskScope(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("scope Database with database field executes database script", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:     ".clear database cache query_results",
+						Database: "mydb",
+						Scope:    v1.ScopeDatabase,
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "mydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+		require.Contains(t, exec.stmts[0], ".execute database script")
+	})
+
+	t.Run("scope AllDatabases executes for all databases", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:  ".create table MyTable (col:string)",
+						Scope: v1.ScopeAllDatabases,
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "anydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+		require.Contains(t, exec.stmts[0], ".execute database script")
+	})
+
+	t.Run("scope Cluster executes cluster script", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:  `.alter cluster policy request_classification '{"IsEnabled":true}'`,
+						Scope: v1.ScopeCluster,
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "anydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+		require.Contains(t, exec.stmts[0], ".execute cluster script")
+	})
+
+	t.Run("scope Database without database field errors", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:  ".clear database cache query_results",
+						Scope: v1.ScopeDatabase,
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "mydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "should not execute when scope is Database but database is empty")
+		require.Len(t, handler.updatedObjects, 1)
+		cmd := handler.updatedObjects[0].(*v1.ManagementCommand)
+		condition := apimeta.FindStatusCondition(cmd.Status.Conditions, adxmonv1.ManagementCommandConditionOwner)
+		require.NotNil(t, condition)
+		require.Equal(t, metav1.ConditionFalse, condition.Status)
+		require.Contains(t, condition.Message, "database is required")
+	})
+
+	t.Run("database field takes precedence over scope", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:     ".clear database cache query_results",
+						Database: "mydb",
+						Scope:    v1.ScopeCluster, // Should be ignored because database is set
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "mydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+		// Should use database script because database field takes precedence
+		require.Contains(t, exec.stmts[0], ".execute database script")
+	})
+
+	t.Run("legacy empty database defaults to cluster scope with deprecation", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body: `.alter cluster policy request_classification '{"IsEnabled":true}'`,
+						// No database, no scope - legacy cluster-scoped behavior
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "anydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+		require.Contains(t, exec.stmts[0], ".execute cluster script")
+	})
+
+	t.Run("database mismatch skips execution", func(t *testing.T) {
+		handler := &mockCRDHandler{
+			listResponse: &v1.ManagementCommandList{Items: []v1.ManagementCommand{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "cmd", Namespace: "default"},
+					Spec: v1.ManagementCommandSpec{
+						Body:     ".clear database cache query_results",
+						Database: "otherdb",
+					},
+				},
+			}},
+		}
+		exec := &TestStatementExecutor{database: "mydb"}
+		task := NewManagementCommandsTask(handler, exec, nil)
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts, "should skip when database doesn't match")
+	})
+}
+
 func TestFunctions(t *testing.T) {
 	testutils.IntegrationTest(t)
 

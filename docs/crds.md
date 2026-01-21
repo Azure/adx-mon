@@ -394,13 +394,28 @@ spec:
   database: Logs
 ```
 
+**Targeting All Databases:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: global-utility-function
+spec:
+  body: |
+    .create-or-alter function GlobalUtility() { print "hello" }
+  allDatabases: true  # Applies to all databases
+```
+
 **Key Fields:**
 - `name`: Name of the function/view in ADX.
 - `body`: KQL body of the function.
-- `database`: Target database.
+- `database`: Target database. Mutually exclusive with `allDatabases: true`.
+- `allDatabases`: When `true`, the function is applied to all databases. Mutually exclusive with a specific `database` value.
 - `table`: (Optional) Table the function is associated with (required for views).
 - `isView`: If true, creates a view.
 - `parameters`: List of parameters for the function.
+
+**Deprecated:** Using `database: "*"` as a wildcard is deprecated. Use `allDatabases: true` instead.
 
 **Intended Use:** Encapsulate reusable KQL logic or present custom schemas for easier querying.
 
@@ -439,27 +454,59 @@ Controllers always set `observedGeneration` to the processed spec generation, ma
 ## ManagementCommand
 **Purpose:** Declaratively run management operations (e.g., optimize, update policy) on ADX clusters.
 
-**Example:**
+**Database-Scoped Example:**
 ```yaml
 apiVersion: adx-mon.azure.com/v1
 kind: ManagementCommand
 metadata:
-  name: optimize-table
+  name: clear-cache
 spec:
-  command: .optimize
-  args:
-    - Logs
-    - kind=moveextents
-  target: Logs
-  schedule: "0 2 * * *"  # Run daily at 2am
+  database: Logs
+  scope: Database
+  body: .clear database cache query_results
 ```
-**Key Fields:**
-- `command`: The Kusto management command to run.
-- `args`: Arguments for the command.
-- `target`: Target table or database.
-- `schedule`: Cron schedule for execution.
 
-**Intended Use:** Automate cluster/table management tasks on a schedule.
+**Cluster-Scoped Example:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: request-classification
+spec:
+  scope: Cluster
+  body: |
+    .alter cluster policy request_classification '{"IsEnabled":true}' <|
+        iff(request_properties.current_application == "Kusto.Explorer", "Ad-hoc", "default")
+```
+
+**All Databases Example (e.g., table creation):**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: create-audit-table
+spec:
+  scope: AllDatabases
+  body: .create table AuditLog (Timestamp:datetime, Action:string, User:string)
+```
+
+**Key Fields:**
+- `database`: Target database name. When non-empty, takes precedence over `scope` for backwards compatibility.
+- `scope`: Execution scope for the command:
+  - `Database`: Command targets the database specified in the `database` field (requires `database` to be set).
+  - `AllDatabases`: Command is applied to each database that the ingestor serves. This is useful for commands like table creation that need to run on every database.
+  - `Cluster`: Command is cluster-scoped (e.g., cluster policies).
+- `body`: The Kusto management command to execute.
+- `criteriaExpression`: (Optional) CEL expression for criteria-based execution.
+
+**Scope Resolution:**
+1. If `database` field is non-empty, the command is database-scoped (regardless of `scope` value).
+2. If `database` is empty and `scope` is set, the command uses that scope.
+3. If both `database` and `scope` are empty, defaults to cluster-scoped (legacy behavior, deprecated).
+
+**Deprecated:** Leaving both `database` and `scope` empty for cluster-scoped commands is deprecated. Use `scope: Cluster` explicitly instead.
+
+**Intended Use:** Automate cluster/table management tasks such as policies, table creation, or cache management.
 
 ---
 

@@ -9,15 +9,37 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 const ManagementCommandConditionOwner = "managementcommand.adx-mon.azure.com"
 
+// ManagementCommandScope defines the scope at which a management command operates
+type ManagementCommandScope string
+
+const (
+	// ScopeDatabase indicates the command targets a specific database (requires Database field)
+	ScopeDatabase ManagementCommandScope = "Database"
+	// ScopeAllDatabases indicates the command should be applied to all databases
+	ScopeAllDatabases ManagementCommandScope = "AllDatabases"
+	// ScopeCluster indicates the command is cluster-scoped
+	ScopeCluster ManagementCommandScope = "Cluster"
+)
+
 // ManagementCommandSpec defines the desired state of ManagementCommand
 type ManagementCommandSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Database is the target database for a management command. Not all management commands
-	// are database specific.
+	// are database specific. When non-empty, this field takes precedence over Scope.
+	// Deprecated: For cluster-scoped commands, use Scope: Cluster instead of leaving empty.
 	// +kubebuilder:validation:Optional
 	Database string `json:"database,omitempty"`
+
+	// Scope defines the execution scope of the management command.
+	// - "Database": Command targets the database specified in the Database field (requires Database)
+	// - "AllDatabases": Command is applied to all databases in the cluster
+	// - "Cluster": Command is cluster-scoped (e.g., cluster policies)
+	// When Database field is non-empty, it takes precedence over this field for backwards compatibility.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=Database;AllDatabases;Cluster
+	Scope ManagementCommandScope `json:"scope,omitempty"`
 
 	// Body is the management command to execute
 	Body string `json:"body"`
