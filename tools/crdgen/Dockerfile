@@ -11,14 +11,11 @@ RUN tdnf install -y ca-certificates && update-ca-trust
 # compiler + headers
 RUN tdnf install -y \
   gcc make binutils glibc-devel kernel-headers pkg-config \
-  systemd-devel tar gzip \
+  systemd-devel \
  && tdnf clean all
 
-# Install Go 1.25.3 manually to match go.mod requirements
-RUN curl -LO https://go.dev/dl/go1.25.3.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.25.3.linux-amd64.tar.gz && \
-    rm go1.25.3.linux-amd64.tar.gz
-ENV PATH="/usr/local/go/bin:${PATH}"
+# Install Go 1.25.3 to match go.mod requirements
+RUN tdnf install -y golang-1.25.3
 
 
 # Install controller-gen
