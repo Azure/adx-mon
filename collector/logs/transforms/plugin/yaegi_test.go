@@ -12,6 +12,7 @@ func TestYaegi(t *testing.T) {
 	transform, err := NewTransform(TransformConfig{
 		GoPath:     "test-plugin",
 		ImportName: "github.com/Azure/testplugin/pkg/transforms",
+		Config:     map[string]any{},
 	})
 	require.NoError(t, err)
 

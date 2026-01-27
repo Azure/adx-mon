@@ -26,6 +26,10 @@ func IsValidTransformType(transformType string) bool {
 }
 
 func NewTransform(transformType string, config map[string]any) (types.Transformer, error) {
+	if config == nil {
+		config = map[string]any{}
+	}
+
 	creator, ok := transformCreators[transformType]
 	if !ok {
 		return nil, fmt.Errorf("unknown transform type: %s", transformType)
