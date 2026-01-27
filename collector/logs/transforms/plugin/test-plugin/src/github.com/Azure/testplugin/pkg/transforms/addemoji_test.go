@@ -8,7 +8,9 @@ import (
 )
 
 func TestAddEmoji(t *testing.T) {
-	transformer := New()
+	transformer := New(map[string]any{
+		"Suffix": " ✅",
+	})
 	if transformer.Name() != "AddEmoji" {
 		t.Errorf("Expected name to be AddEmoji, got %s", transformer.Name())
 	}
@@ -36,7 +38,7 @@ func TestAddEmoji(t *testing.T) {
 		t.Errorf("Expected 3 log, got %d", len(transformedBatch.Logs))
 	}
 	message := types.StringOrEmpty(transformedBatch.Logs[0].GetBodyValue("message"))
-	if message != "Hello World 😃" {
-		t.Errorf("Expected message to be Hello World 😃, got %s", message)
+	if message != "Hello World 😃 ✅" {
+		t.Errorf("Expected message to be Hello World 😃 ✅, got %s", message)
 	}
 }

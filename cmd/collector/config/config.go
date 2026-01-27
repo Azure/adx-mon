@@ -297,6 +297,9 @@ func (w *OtelLog) Validate() error {
 	}
 
 	for _, v := range w.Transforms {
+		if v == nil {
+			return errors.New("otel-log.transforms entry must not be nil")
+		}
 		if !transforms.IsValidTransformType(v.Name) {
 			return fmt.Errorf("otel-log.transforms %s is not a valid transform", v.Name)
 		}
@@ -435,6 +438,9 @@ func (w *HostLog) Validate() error {
 	}
 
 	for _, v := range w.Transforms {
+		if v == nil {
+			return errors.New("host-log.transforms entry must not be nil")
+		}
 		if !transforms.IsValidTransformType(v.Name) {
 			return fmt.Errorf("host-log.transforms %s is not a valid transform", v.Name)
 		}
