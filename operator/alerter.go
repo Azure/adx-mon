@@ -82,6 +82,11 @@ func (r *AlerterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.IsReady(ctx, alerter)
 	case condition.Status == metav1.ConditionUnknown:
 		return r.CreateAlerter(ctx, alerter)
+	case condition.Reason == "CriteriaExpressionError",
+		condition.Reason == "CriteriaExpressionFalse":
+		// CriteriaExpression now evaluates successfully (we passed the check above),
+		// recover from previous error state by re-running creation.
+		return r.CreateAlerter(ctx, alerter)
 	case condition.ObservedGeneration != alerter.GetGeneration():
 		return r.CreateAlerter(ctx, alerter)
 	}
