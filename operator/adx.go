@@ -1435,7 +1435,7 @@ type HeartbeatRow struct {
 
 // Helper: Query the heartbeat table for recent entries
 func queryHeartbeatTable(ctx context.Context, client *kusto.Client, database, table, ttl string) ([]HeartbeatRow, error) {
-	query := fmt.Sprintf("%s | where Timestamp > ago(%s)", table, ttl)
+	query := fmt.Sprintf("%s | where Timestamp > ago(%s) | summarize arg_max(Timestamp, Schema), take_any(PartitionMetadata) by ClusterEndpoint", table, ttl)
 	result, err := client.Query(ctx, database, kql.New("").AddUnsafe(query))
 	if err != nil {
 		return nil, fmt.Errorf("failed to query heartbeat table: %w", err)
