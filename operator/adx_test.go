@@ -717,80 +717,85 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 	require.NotZero(t, result)
 }
 
-func TestParseHeartbeatRows(t *testing.T) {
-	rawSchema := `[{"database":"db1","tables":["t1","t2"]}]`
-	rawMeta := map[string]string{"geo": "us"}
-	rows := []HeartbeatRow{
-		{
-			Timestamp:         time.Now(),
-			ClusterEndpoint:   "ep1",
-			Schema:            json.RawMessage(rawSchema),
-			PartitionMetadata: rawMeta,
-		},
+func TestProcessHeartbeatRow(t *testing.T) {
+	state := NewFederationState()
+	rawSchema := `[{"database":"db1","tables":["t1","t2"],"views":["v1"]}]`
+	row := HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep1",
+		Schema:          json.RawMessage(rawSchema),
 	}
-	schemaByEndpoint, metaByEndpoint := parseHeartbeatRows(rows)
-	require.Contains(t, schemaByEndpoint, "ep1")
-	require.Equal(t, "db1", schemaByEndpoint["ep1"][0].Database)
-	require.Equal(t, rawMeta, metaByEndpoint["ep1"])
+	state.processHeartbeatRow(row)
+
+	require.Equal(t, 1, state.EndpointCount)
+	require.Contains(t, state.DBSet, "db1")
+	require.Contains(t, state.SpokeDBEndpoints, "db1")
+	require.Contains(t, state.SpokeDBEndpoints["db1"], "ep1")
+	require.Contains(t, state.DBTableEndpoints, "db1")
+	require.Contains(t, state.DBTableEndpoints["db1"]["t1"], "ep1")
+	require.Contains(t, state.DBTableEndpoints["db1"]["t2"], "ep1")
+	require.Contains(t, state.DBTableEndpoints["db1"]["v1"], "ep1")
+	require.Empty(t, state.ParseErrors)
 }
 
-func TestExtractDatabasesFromSchemas(t *testing.T) {
-	schemas := map[string][]ADXClusterSchema{
-		"ep1": {{Database: "db1"}},
-		"ep2": {{Database: "db2"}},
+func TestProcessHeartbeatRowInvalidSchema(t *testing.T) {
+	state := NewFederationState()
+	row := HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep1",
+		Schema:          json.RawMessage(`invalid json`),
 	}
-	dbs := extractDatabasesFromSchemas(schemas)
-	require.Contains(t, dbs, "db1")
-	require.Contains(t, dbs, "db2")
+	state.processHeartbeatRow(row)
+
+	require.Equal(t, 0, state.EndpointCount)
+	require.Len(t, state.ParseErrors, 1)
+	require.Contains(t, state.ParseErrors[0], "ep1")
 }
 
-func TestMapTablesToEndpoints(t *testing.T) {
-	schemas := map[string][]ADXClusterSchema{
-		"ep1": {{Database: "db1", Tables: []string{"t1", "t2"}}},
-		"ep2": {{Database: "db1", Tables: []string{"t2"}}},
-	}
-	m := mapTablesToEndpoints(schemas)
-	require.ElementsMatch(t, m["db1"]["t1"], []string{"ep1"})
-	require.ElementsMatch(t, m["db1"]["t2"], []string{"ep1", "ep2"})
+func TestFederationStateMultipleEndpoints(t *testing.T) {
+	state := NewFederationState()
+
+	// First endpoint with db1
+	state.processHeartbeatRow(HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep1",
+		Schema:          json.RawMessage(`[{"database":"db1","tables":["t1","t2"]}]`),
+	})
+
+	// Second endpoint with db1 and db2
+	state.processHeartbeatRow(HeartbeatRow{
+		Timestamp:       time.Now(),
+		ClusterEndpoint: "ep2",
+		Schema:          json.RawMessage(`[{"database":"db1","tables":["t2"]},{"database":"db2","tables":["t3"]}]`),
+	})
+
+	require.Equal(t, 2, state.EndpointCount)
+	require.Len(t, state.DBSet, 2)
+	require.Contains(t, state.DBSet, "db1")
+	require.Contains(t, state.DBSet, "db2")
+
+	// t1 only on ep1
+	require.ElementsMatch(t, state.DBTableEndpoints["db1"]["t1"], []string{"ep1"})
+	// t2 on both ep1 and ep2
+	require.ElementsMatch(t, state.DBTableEndpoints["db1"]["t2"], []string{"ep1", "ep2"})
+	// t3 only on ep2
+	require.ElementsMatch(t, state.DBTableEndpoints["db2"]["t3"], []string{"ep2"})
+
+	// SpokeDBEndpoints
+	require.ElementsMatch(t, state.SpokeDBEndpoints["db1"], []string{"ep1", "ep2"})
+	require.ElementsMatch(t, state.SpokeDBEndpoints["db2"], []string{"ep2"})
 }
 
-func TestMapTablesToEndpointsIncludesViews(t *testing.T) {
-	schemas := map[string][]ADXClusterSchema{
-		"ep1": {{Database: "db1", Tables: []string{"t1"}, Views: []string{"v1", "v2"}}},
-		"ep2": {{Database: "db1", Tables: []string{"t1"}, Views: []string{"v2"}}},
-		"ep3": {{Database: "db2", Views: []string{"v3"}}},
+// schemaToSpokeDBEndpoints is a helper for tests that converts the old schemaByEndpoint format
+// to the new spokeDBEndpoints format used by generateEntityGroupDefinitions
+func schemaToSpokeDBEndpoints(schemaByEndpoint map[string][]ADXClusterSchema) map[string][]string {
+	spokeDBEndpoints := make(map[string][]string)
+	for endpoint, schemas := range schemaByEndpoint {
+		for _, schema := range schemas {
+			spokeDBEndpoints[schema.Database] = append(spokeDBEndpoints[schema.Database], endpoint)
+		}
 	}
-	m := mapTablesToEndpoints(schemas)
-
-	// Tables should be mapped
-	require.ElementsMatch(t, m["db1"]["t1"], []string{"ep1", "ep2"})
-
-	// Views should also be mapped
-	require.ElementsMatch(t, m["db1"]["v1"], []string{"ep1"})
-	require.ElementsMatch(t, m["db1"]["v2"], []string{"ep1", "ep2"})
-	require.ElementsMatch(t, m["db2"]["v3"], []string{"ep3"})
-}
-
-func TestMapSpokeDatabases(t *testing.T) {
-	schemas := map[string][]ADXClusterSchema{
-		"https://cluster1.kusto.net": {
-			{Database: "Metrics", Tables: []string{"t1"}},
-			{Database: "Logs", Tables: []string{"l1"}},
-		},
-		"https://cluster2.kusto.net": {
-			{Database: "Metrics", Tables: []string{"t1", "t2"}},
-		},
-		"https://cluster3.kusto.net": {
-			{Database: "Logs", Tables: []string{"l2"}},
-		},
-	}
-	m := mapSpokeDatabases(schemas)
-
-	// Metrics should have cluster1 and cluster2
-	require.ElementsMatch(t, m["Metrics"], []string{"https://cluster1.kusto.net", "https://cluster2.kusto.net"})
-
-	// Logs should have cluster1 and cluster3
-	require.ElementsMatch(t, m["Logs"], []string{"https://cluster1.kusto.net", "https://cluster3.kusto.net"})
+	return spokeDBEndpoints
 }
 
 func TestGenerateEntityGroupDefinitions(t *testing.T) {
@@ -859,7 +864,8 @@ func TestGenerateEntityGroupDefinitions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := generateEntityGroupDefinitions(tt.schemaByEndpoint, tt.hubDatabases)
+			spokeDBEndpoints := schemaToSpokeDBEndpoints(tt.schemaByEndpoint)
+			result := generateEntityGroupDefinitions(spokeDBEndpoints, tt.hubDatabases)
 
 			// Check replication count
 			require.Len(t, result, tt.wantReplication)
@@ -879,7 +885,8 @@ func TestGenerateEntityGroupDefinitions_Naming(t *testing.T) {
 	}
 	hubDatabases := []string{"HubDB"}
 
-	result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
+	result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
 	require.Contains(t, result, "HubDB")
 
 	entityGroups := result["HubDB"]
@@ -924,7 +931,8 @@ func TestGenerateEntityGroupDefinitions_MultipleEndpoints(t *testing.T) {
 	}
 	hubDatabases := []string{"HubDB"}
 
-	result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
+	result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
 	require.Contains(t, result, "HubDB")
 	// 1 entity group x 2 statements (drop + create) = 2 statements
 	require.Len(t, result["HubDB"], 2)
@@ -948,9 +956,10 @@ func TestGenerateEntityGroupDefinitions_DeterministicOrdering(t *testing.T) {
 	}
 	hubDatabases := []string{"Hub3", "Hub1", "Hub2"}
 
+	spokeDBEndpoints := schemaToSpokeDBEndpoints(schemaByEndpoint)
 	var previousResult map[string][]string
 	for i := 0; i < 5; i++ {
-		result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+		result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
 		if previousResult != nil {
 			require.Equal(t, previousResult, result, "results should be deterministic across runs")
 		}
@@ -959,7 +968,7 @@ func TestGenerateEntityGroupDefinitions_DeterministicOrdering(t *testing.T) {
 
 	// Also verify that entity groups within each hub are sorted by spoke database name
 	// Each entity group generates 2 statements (drop + create), so 3 groups = 6 statements
-	result := generateEntityGroupDefinitions(schemaByEndpoint, hubDatabases)
+	result := generateEntityGroupDefinitions(spokeDBEndpoints, hubDatabases)
 	for _, entityGroups := range result {
 		require.Len(t, entityGroups, 6) // 3 entity groups x 2 statements each
 		// Should be sorted: DBASpoke, DBMSpoke, DBZSpoke (with drop then create for each)
