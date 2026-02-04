@@ -73,6 +73,12 @@ func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) err
 		}
 	}
 
+	// Also update ObservedGeneration for PermanentFailure to prevent re-processing the same generation.
+	// The function will be re-processed when the user updates the CRD (new generation).
+	if fn.Status.Status == adxmonv1.PermanentFailure {
+		fn.Status.ObservedGeneration = fn.GetGeneration()
+	}
+
 	fn.Status.LastTimeReconciled = metav1.Now()
 	if logger.IsDebug() {
 		for _, condition := range fn.Status.Conditions {

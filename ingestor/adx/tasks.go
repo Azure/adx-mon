@@ -135,8 +135,42 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 	}
 	for _, function := range functions {
 		availableDB := t.kustoCli.Database()
+
+		// Determine if this function targets all databases or a specific one.
+		// AllDatabases field (new) takes precedence; legacy wildcard "*" still supported but deprecated.
+		targetsAllDBs := function.Spec.AllDatabases
 		configuredDB := function.Spec.Database
-		if configuredDB != v1.AllDatabases && !strings.EqualFold(configuredDB, availableDB) {
+
+		// Handle deprecated wildcard pattern
+		if configuredDB == v1.AllDatabases {
+			logger.Warnf("Function %s/%s uses deprecated database wildcard '*'; use allDatabases: true instead", function.Namespace, function.Name)
+			targetsAllDBs = true
+		}
+
+		// Validation: allDatabases: true with a specific database name is invalid
+		if function.Spec.AllDatabases && configuredDB != "" && configuredDB != v1.AllDatabases {
+			err := fmt.Errorf("invalid Function spec: allDatabases is true but database %q is also specified; these fields are mutually exclusive", configuredDB)
+			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
+			function.SetReconcileCondition(metav1.ConditionFalse, "ValidationFailed", err.Error())
+			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
+				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
+			}
+			continue
+		}
+
+		// Validation: at least one of Database or AllDatabases must be set
+		if !targetsAllDBs && configuredDB == "" {
+			err := fmt.Errorf("invalid Function spec: neither database nor allDatabases is set; one must be specified")
+			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
+			function.SetReconcileCondition(metav1.ConditionFalse, "ValidationFailed", err.Error())
+			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
+				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
+			}
+			continue
+		}
+
+		// Skip if this function doesn't target this database
+		if !targetsAllDBs && !strings.EqualFold(configuredDB, availableDB) {
 			continue
 		}
 
@@ -271,8 +305,18 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to list management commands: %w", err)
 	}
 	for _, command := range managementCommands.Items {
-		// ManagementCommands database is optional as not all commands are scoped at the database level
-		if command.Spec.Database != "" && command.Spec.Database != t.kustoCli.Database() {
+		// Determine effective scope: Database field takes precedence for backwards compatibility
+		effectiveScope, targetDB, err := t.resolveCommandScope(&command)
+		if err != nil {
+			logger.Errorf("ManagementCommand %s/%s validation error: %v", command.Namespace, command.Name, err)
+			if updErr := t.store.UpdateStatus(ctx, &command, err); updErr != nil {
+				logger.Errorf("Failed to update management command status for %s/%s: %v", command.Namespace, command.Name, updErr)
+			}
+			continue
+		}
+
+		// For database-scoped commands, skip if the database doesn't match this ingestor's database
+		if effectiveScope == v1.ScopeDatabase && targetDB != t.kustoCli.Database() {
 			continue
 		}
 
@@ -295,9 +339,11 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		}
 
 		var stmt *kql.Builder
-		if command.Spec.Database == "" {
+		switch effectiveScope {
+		case v1.ScopeCluster:
 			stmt = kql.New(".execute cluster script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
-		} else {
+		case v1.ScopeAllDatabases, v1.ScopeDatabase:
+			// Both AllDatabases and Database scope use database script execution
 			stmt = kql.New(".execute database script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
 		}
 		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
@@ -314,6 +360,37 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// resolveCommandScope determines the effective scope and target database for a ManagementCommand.
+// Database field takes precedence over Scope field for backwards compatibility.
+// Returns (effectiveScope, targetDatabase, error).
+func (t *ManagementCommandTask) resolveCommandScope(cmd *v1.ManagementCommand) (v1.ManagementCommandScope, string, error) {
+	db := cmd.Spec.Database
+	scope := cmd.Spec.Scope
+
+	// Database field takes precedence for backwards compatibility
+	if db != "" {
+		// Explicit database specified - this is database-scoped
+		return v1.ScopeDatabase, db, nil
+	}
+
+	// No database specified - check Scope field
+	switch scope {
+	case v1.ScopeDatabase:
+		// Scope requires a database but none provided
+		return "", "", fmt.Errorf("scope is %q but database field is empty; database is required for this scope", scope)
+	case v1.ScopeAllDatabases:
+		return v1.ScopeAllDatabases, "", nil
+	case v1.ScopeCluster:
+		return v1.ScopeCluster, "", nil
+	case "":
+		// Legacy behavior: empty database + empty scope = cluster-scoped
+		logger.Warnf("ManagementCommand %s/%s uses deprecated empty database for cluster scope; use scope: Cluster instead", cmd.Namespace, cmd.Name)
+		return v1.ScopeCluster, "", nil
+	default:
+		return "", "", fmt.Errorf("unknown scope value: %q", scope)
+	}
 }
 
 type SummaryRuleTask struct {

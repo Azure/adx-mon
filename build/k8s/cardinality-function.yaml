@@ -4,7 +4,7 @@ metadata:
   name: count-cardinality
   namespace: adx-mon
 spec:
-  database: "*"
+  allDatabases: true
   body: |
     .create-or-alter function CountCardinality () {
       union withsource=table *

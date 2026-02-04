@@ -25,6 +25,8 @@ Main binaries follow the pattern: CLI parsing → service creation → graceful 
 - **Critical**: After modifying `./api/v1/*.go`, run `make generate-crd CMD=update` to regenerate manifests
 - CRD definitions live in both `./kustomize/bases/` and `./operator/manifests/crds/`
 - The `tools/crdgen/` Docker-based system handles cross-platform CRD generation
+- **Do NOT manually edit CRD YAML files** - always regenerate via `make generate-crd CMD=update`
+- The generated files use naming convention `*_crd.yaml` (e.g., `functions_crd.yaml`)
 
 ### Data Flow Patterns
 1. **Metrics**: Collector → Ingestor → ADX (via WAL segments for reliability)

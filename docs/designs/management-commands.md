@@ -20,13 +20,14 @@ We will define a new CRD, `ManagementCommands`, to support the execution of arbi
 
 ### CRD
 
+**Cluster-Scoped Command:**
 ```yaml
 apiVersion: adx-mon.azure.com/v1
 kind: ManagementCommand
 metadata:
   name: some-request-classification
 spec:
-  database: OptionalDatabase
+  scope: Cluster
   body: |
     .alter cluster policy request_classification '{"IsEnabled":true}' <|
         case(current_principal_is_member_of('aadgroup=somesecuritygroup@contoso.com'), "First workload group",
@@ -38,6 +39,46 @@ spec:
             "default")
 ```
 
-To support management commands scoped to a database, we will provide an optional `database` parameter.
+**Database-Scoped Command:**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: clear-database-cache
+spec:
+  database: MyDatabase
+  scope: Database
+  body: .clear database cache query_results
+```
+
+**All Databases Command (e.g., table creation across all databases):**
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: ManagementCommand
+metadata:
+  name: create-audit-table-all-dbs
+spec:
+  scope: AllDatabases
+  body: .create table AuditLog (Timestamp:datetime, Action:string, User:string)
+```
+
+### Scope Field
+
+The `scope` field explicitly defines the execution scope of the management command:
+
+| Scope Value | Description |
+|-------------|-------------|
+| `Database` | Command targets the specific database in the `database` field. Requires `database` to be set. |
+| `AllDatabases` | Command is executed against each database that the ingestor serves. Useful for table creation, policy application, etc. |
+| `Cluster` | Command is cluster-scoped (e.g., cluster policies, workload groups). |
+
+### Backwards Compatibility
+
+For backwards compatibility:
+- If `database` is non-empty, it takes precedence over `scope` (command is database-scoped).
+- If both `database` and `scope` are empty, the command defaults to cluster-scoped (deprecated behavior).
+
+**Deprecated patterns:**
+- Leaving `database` empty without setting `scope` for cluster-scoped commands. Use `scope: Cluster` instead.
 
 > **See also:** [CRD Reference](../crds.md) for a summary of all CRDs and links to advanced usage.
