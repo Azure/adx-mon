@@ -40,6 +40,17 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 
 ---
 
+## Diagnostics
+
+- Pprof endpoints are disabled by default. Enable them by starting the operator with `--pprof-bind-address=:6060`.
+- The operator serves pprof under `/debug/pprof/` on the bind address. Example access using port-forward:
+  ```bash
+  kubectl port-forward deploy/<operator-deployment> 6060:6060
+  ```
+  Then open `http://localhost:6060/debug/pprof/`.
+
+---
+
 ## Multi-Cluster and Federation Support
 
 - The operator supports deploying components separately for federated scenarios:
