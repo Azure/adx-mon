@@ -1,0 +1,1689 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Multi-Value Column Enhancement for MetricsExporter - ADX-Mon Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multi-value-column-enhancement-for-metricsexporter" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ADX-Mon Documentation" class="md-header__button md-logo" aria-label="ADX-Mon Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ADX-Mon Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Multi-Value Column Enhancement for MetricsExporter
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
+  
+  
+  Docs Home
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quick-start/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quick Start
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cookbook/cookbook/" class="md-tabs__link">
+          
+  
+  
+  Cookbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../config/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../log-integration-with-kubernetes/" class="md-tabs__link">
+          
+  
+  
+  Designs
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ADX-Mon Documentation" class="md-nav__button md-logo" aria-label="ADX-Mon Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ADX-Mon Documentation
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docs Home
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Docs Home
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cookbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cookbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cookbook/cookbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cookbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cookbook/traces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sending Traces With Logs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collector Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ingestor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestor Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adxcluster-controller/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADXCluster Controller
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Designs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Designs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../log-integration-with-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Log Integration with Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema-etl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Schema ETL
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="multi-value-column-enhancement-for-metricsexporter">Multi-Value Column Enhancement for MetricsExporter</h1>
+<h2 id="problem-statement">Problem Statement</h2>
+<p>The <code>MetricsExporter</code> CRD design requires a new multi-value column capability to address several limitations for advanced analytics use cases:</p>
+<h3 id="cardinality-explosion-issue">Cardinality Explosion Issue</h3>
+<p>In complex analytics scenarios, users need to export multiple related numeric values (e.g., <code>Numerator</code>, <code>Denominator</code>, <code>AvgLatency</code>) from a single KQL query. Without multi-value column support, users must include these values as metric labels, which causes severe cardinality explosion:</p>
+<p><strong>Problematic Single-Value Approach:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Value&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;LocationId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;CustomerResourceId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Numerator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Denominator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;AvgLatency&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div></p>
+<p><strong>Resulting High-Cardinality Metric:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>customer_success_rate{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,Numerator=&quot;1974&quot;,Denominator=&quot;2000&quot;,AvgLatency=&quot;150.2&quot;} 0.987
+</code></pre></div></p>
+<p>This approach leads to:
+- <strong>Cardinality explosion</strong>: Each unique combination of numeric values creates a new time series
+- <strong>Storage inefficiency</strong>: Prometheus/observability systems struggle with high-cardinality metrics
+- <strong>Query performance degradation</strong>: High cardinality makes aggregations and queries slower
+- <strong>Cost implications</strong>: Storage and compute costs increase exponentially with cardinality</p>
+<h3 id="multi-team-namespace-collision">Multi-Team Namespace Collision</h3>
+<p>With multiple teams using <code>MetricsExporter</code>, there's risk of metric name collisions when teams choose similar base metric names. A new design needs a mechanism to namespace metrics by team or project.</p>
+<h3 id="semantic-data-loss">Semantic Data Loss</h3>
+<p>Related numeric values (like numerator/denominator pairs) lose their semantic relationship when forced into separate label dimensions instead of being represented as distinct but related metrics.</p>
+<h2 id="solution-overview">Solution Overview</h2>
+<p>We propose implementing the <code>MetricsExporter</code> transform configuration to support <strong>multi-value column transformation</strong> with two key features:</p>
+<ol>
+<li><strong><code>valueColumns</code> Array</strong>: Use <code>valueColumns</code> array where each column generates a separate metric</li>
+<li><strong><code>metricNamePrefix</code> Field</strong>: Add optional prefix for team/project namespacing</li>
+</ol>
+<h3 id="key-benefits">Key Benefits</h3>
+<ul>
+<li><strong>Cardinality Control</strong>: Convert high-cardinality labels into separate metrics with shared dimensional labels</li>
+<li><strong>Team Isolation</strong>: Prevent metric name collisions through configurable prefixes</li>
+<li><strong>Semantic Preservation</strong>: Maintain relationships between related metrics (e.g., numerator/denominator)</li>
+<li><strong>Prometheus Best Practices</strong>: Align with Prometheus metric naming conventions and cardinality guidelines</li>
+</ul>
+<h2 id="design-specification">Design Specification</h2>
+<h3 id="enhanced-transformconfig-schema">Enhanced TransformConfig Schema</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TransformConfig</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="c1">// MetricNameColumn specifies which column contains the base metric name</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">MetricNameColumn</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;metricNameColumn,omitempty&quot;`</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="c1">// MetricNamePrefix provides optional team/project namespacing for all metrics</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nx">MetricNamePrefix</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;metricNamePrefix,omitempty&quot;`</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="c1">// ValueColumns specifies columns to use as metric values</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nx">ValueColumns</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;valueColumns&quot;`</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="c1">// TimestampColumn specifies which column contains the timestamp</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="nx">TimestampColumn</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;timestampColumn&quot;`</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="c1">// LabelColumns specifies columns to use as metric labels/attributes</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nx">LabelColumns</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;labelColumns,omitempty&quot;`</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">    </span><span class="c1">// DefaultMetricName provides a fallback if MetricNameColumn is not specified</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">    </span><span class="nx">DefaultMetricName</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;defaultMetricName,omitempty&quot;`</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="metric-name-construction-algorithm">Metric Name Construction Algorithm</h3>
+<p>For each value column, the final metric name follows this pattern:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>[metricNamePrefix_]&lt;base_metric_name&gt;_&lt;prometheus_normalized_column_name&gt;
+</code></pre></div></p>
+<p><strong>Normalization Rules:</strong>
+1. Convert column name to lowercase
+2. Replace non-alphanumeric characters with underscores
+3. Remove consecutive underscores
+4. Ensure name starts with letter or underscore</p>
+<p><strong>Examples:</strong>
+- <code>SuccessfulRequests</code> → <code>successful_requests</code>
+- <code>AvgLatency</code> → <code>avg_latency</code>
+- <code>Total-Count</code> → <code>total_count</code></p>
+<h2 id="implementation-examples">Implementation Examples</h2>
+<h3 id="example-1-basic-multi-value-transformation">Example 1: Basic Multi-Value Transformation</h3>
+<p><strong>KQL Query Result:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>LocationId | CustomerResourceId | ServiceTier | Numerator | Denominator | AvgLatency
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>datacenter-01 | customer-12345 | premium | 1974 | 2000 | 150.2
+</code></pre></div></p>
+<p><strong>MetricsExporter Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">customer-analytics</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">analytics</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AnalyticsDB</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15m</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="no">CustomerEvents</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="no">| where EventTime between (_startTime .. _endTime)</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">        </span><span class="no">Numerator = sum(SuccessfulRequests),</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">        </span><span class="no">Denominator = sum(TotalRequests),</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">        </span><span class="no">AvgLatency = avg(LatencyMs)</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">        </span><span class="no">by LocationId, CustomerResourceId, ServiceTier</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">    </span><span class="no">| extend metric_name = &quot;customer_success_rate&quot;</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">    </span><span class="nt">valueColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;Numerator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Denominator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;AvgLatency&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;StartTimeUTC&quot;</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;LocationId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;CustomerResourceId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;ServiceTier&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div></p>
+<p><strong>Resulting Metrics:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>customer_success_rate_numerator{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,ServiceTier=&quot;premium&quot;} 1974
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>customer_success_rate_denominator{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,ServiceTier=&quot;premium&quot;} 2000
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>customer_success_rate_avg_latency{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,ServiceTier=&quot;premium&quot;} 150.2
+</code></pre></div></p>
+<h3 id="example-2-team-namespacing-with-prefix">Example 2: Team Namespacing with Prefix</h3>
+<p><strong>MetricsExporter Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">customer-analytics</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">analytics</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AnalyticsDB</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15m</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">team</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;analytics&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">    </span><span class="nt">data-classification</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;customer-approved&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">    </span><span class="no">CustomerEvents</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">    </span><span class="no">| where EventTime between (_startTime .. _endTime)</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">        </span><span class="no">Numerator = sum(SuccessfulRequests),</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">        </span><span class="no">Denominator = sum(TotalRequests),</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">        </span><span class="no">StartTimeUTC = min(EventTime),</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">        </span><span class="no">EndTimeUTC = max(EventTime),</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">        </span><span class="no">AvgLatency = avg(LatencyMs)</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">        </span><span class="no">by LocationId, CustomerResourceId, ServiceTier</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">    </span><span class="no">| extend metric_name = &quot;customer_success_rate&quot;</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="w">    </span><span class="nt">metricNamePrefix</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;teama&quot;</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="w">    </span><span class="nt">valueColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;Numerator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Denominator&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;StartTimeUTC&quot;</span>
+<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;LocationId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;CustomerResourceId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;ServiceTier&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div></p>
+<p><strong>Resulting Metrics:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>teama_customer_success_rate_numerator{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,ServiceTier=&quot;premium&quot;} 1974
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>teama_customer_success_rate_denominator{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,ServiceTier=&quot;premium&quot;} 2000
+</code></pre></div></p>
+<h2 id="technical-implementation-details">Technical Implementation Details</h2>
+<h3 id="transform-engine-changes">Transform Engine Changes</h3>
+<p>The transform engine (<code>transform/kusto_to_metrics.go</code>) requires enhancement to:</p>
+<ol>
+<li><strong>Multi-Value Processing</strong>: Process each column in <code>valueColumns</code> array</li>
+<li><strong>Name Generation</strong>: Apply prefix and normalization rules for metric names</li>
+<li><strong>Validation</strong>: Ensure all value columns contain numeric data</li>
+<li><strong>Error Handling</strong>: Provide clear errors for missing or invalid value columns</li>
+</ol>
+<h3 id="data-type-support">Data Type Support</h3>
+<p><strong>Supported Value Column Types:</strong>
+- <code>int</code>, <code>long</code> → Integer metrics
+- <code>real</code>, <code>double</code> → Float metrics<br />
+- <code>decimal</code> → Float metrics (with precision conversion)</p>
+<p><strong>Unsupported Types:</strong>
+- <code>string</code>, <code>datetime</code>, <code>bool</code> → Validation error</p>
+<h3 id="memory-and-performance-considerations">Memory and Performance Considerations</h3>
+<p><strong>Memory Impact:</strong>
+- Multiple metrics per row increase memory usage linearly with <code>valueColumns</code> count
+- Object pooling (<code>pkg/prompb</code>) becomes more important with higher metric volume</p>
+<p><strong>Performance Optimization:</strong>
+- Batch metric creation for efficiency
+- Validate column types once per query execution
+- Cache normalized column names to avoid repeated string processing</p>
+<h2 id="validation-and-error-handling">Validation and Error Handling</h2>
+<h3 id="transform-configuration-validation">Transform Configuration Validation</h3>
+<p><strong>Required Validations:</strong>
+1. <code>valueColumns</code> must not be empty
+2. All columns in <code>valueColumns</code> must exist in query results
+3. All value columns must contain numeric data types
+4. <code>metricNamePrefix</code> must follow Prometheus naming conventions (if specified)
+5. Generated metric names must be valid Prometheus identifiers</p>
+<h3 id="runtime-error-handling">Runtime Error Handling</h3>
+<p><strong>Column Missing Errors:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Error: Value column &#39;Numerator&#39; not found in query results. Available columns: [LocationId, CustomerResourceId, AvgLatency]
+</code></pre></div></p>
+<p><strong>Type Conversion Errors:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>Error: Value column &#39;CustomerName&#39; contains non-numeric data (string). Value columns must contain numeric types (int, real, decimal).
+</code></pre></div></p>
+<p><strong>Metric Name Validation Errors:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>Error: Generated metric name &#39;team-a_metric_name_123column&#39; is invalid. Metric names must start with letter or underscore and contain only alphanumeric characters and underscores.
+</code></pre></div></p>
+<h2 id="benefits-and-impact-analysis">Benefits and Impact Analysis</h2>
+<h3 id="cardinality-reduction-example">Cardinality Reduction Example</h3>
+<p><strong>Before (High Cardinality):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>service_metrics{service=&quot;api&quot;,region=&quot;us-east&quot;,numerator=&quot;1000&quot;,denominator=&quot;1200&quot;,avg_latency=&quot;45.6&quot;} 0.833
+</code></pre></div>
+- <strong>Cardinality</strong>: Potentially unlimited (each unique numeric value combination creates new series)
+- <strong>Storage</strong>: Exponential growth with unique value combinations</p>
+<p><strong>After (Controlled Cardinality):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>service_metrics_numerator{service=&quot;api&quot;,region=&quot;us-east&quot;} 1000
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>service_metrics_denominator{service=&quot;api&quot;,region=&quot;us-east&quot;} 1200
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>service_metrics_avg_latency{service=&quot;api&quot;,region=&quot;us-east&quot;} 45.6
+</code></pre></div>
+- <strong>Cardinality</strong>: Predictable (3 metrics × unique label combinations)
+- <strong>Storage</strong>: Linear growth with label combinations</p>
+<h3 id="team-isolation-benefits">Team Isolation Benefits</h3>
+<p><strong>Scenario</strong>: Multiple teams (TeamA, TeamB) create similar metrics</p>
+<p><strong>Without Prefix:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>customer_success_rate_numerator{team=&quot;teama&quot;} 1000    # TeamA metric
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>customer_success_rate_numerator{team=&quot;teamb&quot;} 500     # TeamB metric - same name!
+</code></pre></div></p>
+<p><strong>With Prefix:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>teama_customer_success_rate_numerator{...} 1000       # TeamA metric  
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>teamb_customer_success_rate_numerator{...} 500        # TeamB metric
+</code></pre></div></p>
+<p><strong>Benefits:</strong>
+- <strong>Namespace isolation</strong>: Teams can't accidentally override each other's metrics
+- <strong>Clear ownership</strong>: Metric prefix immediately identifies responsible team
+- <strong>Aggregation flexibility</strong>: Can aggregate across teams or focus on specific team metrics</p>
+<h2 id="implementation-planning">Implementation Planning</h2>
+<h3 id="phase-1-core-multi-value-column-support">Phase 1: Core Multi-Value Column Support</h3>
+<p><strong>Target</strong>: Enable <code>valueColumns</code> array with basic metric generation</p>
+<h4 id="task-11-update-crd-schema-priority-high-complete">Task 1.1: Update CRD Schema ✅ <strong>PRIORITY: HIGH</strong> - <strong>COMPLETE</strong></h4>
+<ul>
+<li><strong>File</strong>: <code>api/v1/metricsexporter_types.go</code></li>
+<li><strong>Changes</strong>:</li>
+<li>Add <code>ValueColumns []string</code> field to <code>TransformConfig</code></li>
+<li>Add <code>MetricNamePrefix string</code> field to <code>TransformConfig</code></li>
+<li><strong>Acceptance</strong>: CRD validates and accepts new fields</li>
+<li><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Fields added, CRD manifests generated successfully</li>
+</ul>
+<h4 id="task-12-update-transform-engine-priority-high">Task 1.2: Update Transform Engine ✅ <strong>PRIORITY: HIGH</strong></h4>
+<ul>
+<li><strong>File</strong>: <code>transform/kusto_to_metrics.go</code></li>
+<li><strong>Changes</strong>: Complete overhaul to support multi-value column transformation</li>
+<li><strong>Acceptance</strong>: Transform engine generates multiple metrics from single query row</li>
+</ul>
+<p><strong>Sub-tasks:</strong>
+- <strong>Task 1.2.1</strong>: Update TransformConfig Struct ✅ <strong>COMPLETE</strong>
+  - Add <code>MetricNamePrefix string</code> field
+  - Add <code>ValueColumns []string</code> field<br />
+  - Keep existing <code>ValueColumn string</code> for backward compatibility
+  - <strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Struct updated with comprehensive configuration options</p>
+<ul>
+<li><strong>Task 1.2.2</strong>: Add Metric Name Normalization Function ✅ <strong>COMPLETE</strong></li>
+<li>Create <code>normalizeColumnName(columnName string) string</code> function</li>
+<li>Implement Prometheus naming rules: lowercase, replace non-alphanumeric with underscores</li>
+<li>Remove consecutive underscores, ensure starts with letter/underscore</li>
+<li>Example: <code>"SuccessfulRequests"</code> → <code>"successful_requests"</code></li>
+<li>
+<p><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Function implemented with comprehensive tests covering 30+ edge cases</p>
+</li>
+<li>
+<p><strong>Task 1.2.3</strong>: Add Metric Name Construction Function ✅ <strong>COMPLETE</strong></p>
+</li>
+<li>Create <code>constructMetricName(baseName, prefix, columnName string) string</code></li>
+<li>Pattern: <code>[prefix_]baseName_normalizedColumnName</code></li>
+<li>Example: <code>"teama"</code> + <code>"customer_success_rate"</code> + <code>"Numerator"</code> → <code>"teama_customer_success_rate_numerator"</code></li>
+<li>Handle empty prefix and base name cases</li>
+<li>
+<p><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Function implemented with comprehensive tests covering 25+ scenarios including edge cases</p>
+</li>
+<li>
+<p><strong>Task 1.2.4</strong>: Modify Value Extraction ✅ <strong>COMPLETE</strong></p>
+</li>
+<li>Replace <code>extractValue()</code> with <code>extractValues(row, valueColumns)</code></li>
+<li>Return <code>map[string]float64</code> (column name → value)</li>
+<li>Reuse existing numeric type conversion logic</li>
+<li>
+<p><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - New functions <code>extractValues()</code> and <code>extractValueFromColumn()</code> implemented with comprehensive tests</p>
+</li>
+<li>
+<p><strong>Task 1.2.5</strong>: Update Row Transformation ✅ <strong>COMPLETE</strong></p>
+</li>
+<li>Modify <code>transformRow()</code> to generate multiple <code>MetricData</code> objects per row</li>
+<li>Each metric gets constructed name using new naming function</li>
+<li>Share timestamp and labels across all metrics from same row</li>
+<li>
+<p><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Function rewritten to support both single-value and multi-value modes with comprehensive error handling</p>
+</li>
+<li>
+<p><strong>Task 1.2.6</strong>: Update Transform Method ✅ <strong>COMPLETE</strong></p>
+</li>
+<li>Modify main <code>Transform()</code> method to handle multiple metrics per row</li>
+<li>Flatten results from multiple <code>MetricData</code> arrays</li>
+<li>Maintain same return signature <code>[]MetricData</code></li>
+<li>
+<p><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Method updated to handle variable-length metric arrays per row</p>
+</li>
+<li>
+<p><strong>Task 1.2.7</strong>: Update Validation Method ✅ <strong>COMPLETE</strong></p>
+</li>
+<li>Modify <code>Validate()</code> to check all <code>ValueColumns</code>
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">col</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">t</span><span class="p">.</span><span class="nx">config</span><span class="p">.</span><span class="nx">ValueColumns</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">validateColumnName</span><span class="p">(</span><span class="nx">col</span><span class="p">.</span><span class="nx">ColumnName</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid value column %q: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">col</span><span class="p">.</span><span class="nx">ColumnName</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="p">}</span>
+</code></pre></div></li>
+<li>Validate <code>MetricNamePrefix</code> format if provided (snake_case, lowercase)</li>
+<li>Ensure at least one value column specified
+    <div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">t</span><span class="p">.</span><span class="nx">config</span><span class="p">.</span><span class="nx">ValueColumns</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;at least one value column must be specified&quot;</span><span class="p">)</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="p">}</span>
+</code></pre></div></li>
+<li>
+<p><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Validation rewritten to support both modes with comprehensive error checking</p>
+</li>
+<li>
+<p><strong>Task 1.2.8</strong>: Update Service Integration ✅ <strong>COMPLETE</strong></p>
+</li>
+<li>Modify <code>adxexporter/service.go</code> to pass new fields to transformer</li>
+<li>Update TransformConfig construction with <code>MetricNamePrefix</code> and <code>ValueColumns</code></li>
+<li><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Service integration successfully passes all new fields to transformer</li>
+</ul>
+<h4 id="task-13-update-unit-tests-priority-high-complete">Task 1.3: Update Unit Tests ✅ <strong>PRIORITY: HIGH</strong> - <strong>COMPLETE</strong></h4>
+<ul>
+<li><strong>Files</strong>: <code>transform/kusto_to_metrics_test.go</code>, <code>adxexporter/service_test.go</code></li>
+<li><strong>Changes</strong>:</li>
+<li>Add test cases for multi-value column scenarios</li>
+<li>Test metric name normalization and prefix generation</li>
+<li>Test validation error cases for invalid configurations</li>
+<li>Update existing tests to use new multi-value approach</li>
+<li><strong>Acceptance</strong>: &gt;90% test coverage for new functionality with comprehensive validation testing</li>
+<li><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Comprehensive test suite added covering:</li>
+<li><code>TestNormalizeColumnName</code>: 30+ test cases including edge cases, Unicode, performance benchmarks</li>
+<li><code>TestConstructMetricName</code>: 25+ test scenarios including real-world examples, performance benchmarks  </li>
+<li><code>TestExtractValues</code>: Comprehensive tests for all Kusto value types, error conditions</li>
+<li><code>TestTransformMultiValueColumns</code>: Multi-value transformation scenarios</li>
+<li><code>TestValidate</code>: 15+ test cases covering both single-value and multi-value validation</li>
+<li><code>TestTransformAndRegisterMetrics_MultiValueColumns</code>: Service integration tests</li>
+</ul>
+<h4 id="task-14-integration-testing-priority-medium-complete">Task 1.4: Integration Testing ✅ <strong>PRIORITY: MEDIUM</strong> - <strong>COMPLETE</strong></h4>
+<ul>
+<li>Test validation error cases</li>
+<li><strong>Acceptance</strong>: &gt;90% test coverage for new functionality</li>
+<li><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - Full integration testing implemented with service layer tests and end-to-end multi-value validation</li>
+</ul>
+<h3 id="phase-2-advanced-features-and-polish">Phase 2: Advanced Features and Polish</h3>
+<h4 id="task-21-crd-manifest-generation-priority-medium-complete">Task 2.1: CRD Manifest Generation ✅ <strong>PRIORITY: MEDIUM</strong> - <strong>COMPLETE</strong></h4>
+<ul>
+<li><strong>Command</strong>: <code>make generate-crd CMD=update</code></li>
+<li><strong>Changes</strong>: Regenerate CRD manifests with new fields</li>
+<li><strong>Acceptance</strong>: Kubernetes can apply updated CRD definition</li>
+<li><strong>Status</strong>: ✅ <strong>COMPLETED</strong> - CRD manifests updated in kustomize/bases/ and operator/manifests/crds/</li>
+</ul>
+<h4 id="task-22-documentation-updates-priority-medium">Task 2.2: Documentation Updates ✅ <strong>PRIORITY: MEDIUM</strong></h4>
+<ul>
+<li><strong>Files</strong>: <code>docs/crds.md</code>, existing examples in <code>docs/designs/kusto-to-metrics.md</code></li>
+<li><strong>Changes</strong>:</li>
+<li>Update CRD documentation with new fields</li>
+<li>Add examples showing multi-value column usage</li>
+<li>Update troubleshooting guide with new validation errors</li>
+<li><strong>Acceptance</strong>: Documentation accurately reflects new functionality</li>
+</ul>
+<h4 id="task-23-integration-testing-priority-medium">Task 2.3: Integration Testing ✅ <strong>PRIORITY: MEDIUM</strong></h4>
+<ul>
+<li><strong>Files</strong>: Integration test suites</li>
+<li><strong>Changes</strong>:</li>
+<li>End-to-end tests with real ADX queries returning multiple value columns</li>
+<li>Test Prometheus metrics output format validation</li>
+<li>Test adxexporter component behavior with new configurations</li>
+<li><strong>Acceptance</strong>: Full workflow works with multi-value columns</li>
+</ul>
+<h4 id="task-24-performance-testing-priority-low">Task 2.4: Performance Testing ✅ <strong>PRIORITY: LOW</strong></h4>
+<ul>
+<li><strong>Changes</strong>:</li>
+<li>Benchmark memory usage with various <code>valueColumns</code> counts</li>
+<li>Test query performance with high-cardinality to low-cardinality conversion</li>
+<li>Validate object pooling efficiency with increased metric volume</li>
+<li><strong>Acceptance</strong>: No significant performance regression</li>
+</ul>
+<h3 id="phase-3-advanced-enhancements-future">Phase 3: Advanced Enhancements (Future)</h3>
+<h4 id="task-31-advanced-naming-strategies">Task 3.1: Advanced Naming Strategies</h4>
+<ul>
+<li><strong>Feature</strong>: Support custom naming templates for metric generation</li>
+<li><strong>Example</strong>: <code>metricNameTemplate: "{{.prefix}}_{{.base}}_{{.column}}_{{.suffix}}"</code></li>
+<li><strong>Priority</strong>: LOW (post-MVP)</li>
+</ul>
+<h4 id="task-32-value-column-type-conversion">Task 3.2: Value Column Type Conversion</h4>
+<ul>
+<li><strong>Feature</strong>: Support automatic type conversion (e.g., string numbers to numeric)</li>
+<li><strong>Priority</strong>: LOW (current validation is sufficient)</li>
+</ul>
+<h4 id="task-33-conditional-value-columns">Task 3.3: Conditional Value Columns</h4>
+<ul>
+<li><strong>Feature</strong>: Support conditional inclusion of value columns based on data</li>
+<li><strong>Priority</strong>: LOW (can be handled in KQL query)</li>
+</ul>
+<h2 id="success-metrics-and-acceptance-criteria">Success Metrics and Acceptance Criteria</h2>
+<h3 id="phase-1-success-criteria">Phase 1 Success Criteria</h3>
+<ol>
+<li><strong>Functional Requirements</strong>:</li>
+<li>✅ MetricsExporter CRD accepts <code>valueColumns</code> array and <code>metricNamePrefix</code> fields</li>
+<li>✅ Transform engine generates separate metrics for each value column</li>
+<li>
+<p>✅ Metric names follow Prometheus conventions with proper normalization</p>
+</li>
+<li>
+<p><strong>Quality Requirements</strong>:</p>
+</li>
+<li>✅ &gt;90% unit test coverage for new functionality</li>
+<li>
+<p>✅ Clear validation error messages for invalid configurations</p>
+</li>
+<li>
+<p><strong>Performance Requirements</strong>:</p>
+</li>
+<li>✅ Memory usage scales linearly with number of value columns</li>
+<li>✅ No significant latency increase for transform operations</li>
+</ol>
+<h3 id="phase-2-success-criteria">Phase 2 Success Criteria</h3>
+<ol>
+<li><strong>Integration Requirements</strong>:</li>
+<li>✅ End-to-end workflow functions with real ADX queries</li>
+<li>✅ Prometheus metrics output validates against Prometheus standards</li>
+<li>
+<p>✅ Documentation enables users to successfully implement multi-value column configurations</p>
+</li>
+<li>
+<p><strong>Operational Requirements</strong>:</p>
+</li>
+<li>✅ Clear error messages guide users through configuration issues</li>
+<li>✅ Generated CRD manifests deploy successfully to Kubernetes clusters</li>
+</ol>
+<h2 id="risk-analysis-and-mitigation">Risk Analysis and Mitigation</h2>
+<h3 id="risk-1-performance-degradation-with-many-value-columns">Risk 1: Performance Degradation with Many Value Columns</h3>
+<p><strong>Probability</strong>: Medium<br />
+<strong>Impact</strong>: Medium<br />
+<strong>Mitigation</strong>: Implement performance testing and optimize object pooling for high-volume scenarios</p>
+<h3 id="risk-2-metric-name-collision-after-normalization">Risk 2: Metric Name Collision After Normalization</h3>
+<p><strong>Probability</strong>: Low<br />
+<strong>Impact</strong>: Medium<br />
+<strong>Mitigation</strong>: Implement collision detection and provide clear error messages when generated names conflict</p>
+<h3 id="risk-3-configuration-complexity-for-users">Risk 3: Configuration Complexity for Users</h3>
+<p><strong>Probability</strong>: Low<br />
+<strong>Impact</strong>: Low<br />
+<strong>Mitigation</strong>: Provide comprehensive documentation and clear examples for multi-value column usage</p>
+<h2 id="current-implementation-status">Current Implementation Status</h2>
+<h3 id="completed-tasks-8-of-8-in-phase-1">✅ Completed Tasks (8 of 8 in Phase 1)</h3>
+<ul>
+<li><strong>Task 1.1</strong>: Update CRD Schema &amp; Generate Manifests - ✅ <strong>COMPLETE</strong></li>
+<li><strong>Task 1.2.1</strong>: Update TransformConfig Struct - ✅ <strong>COMPLETE</strong> </li>
+<li><strong>Task 1.2.2</strong>: Add Metric Name Normalization Function - ✅ <strong>COMPLETE</strong></li>
+<li><strong>Task 1.2.3</strong>: Add Metric Name Construction Function - ✅ <strong>COMPLETE</strong></li>
+<li><strong>Task 1.2.4</strong>: Modify Value Extraction - ✅ <strong>COMPLETE</strong></li>
+<li><strong>Task 1.2.5</strong>: Update Row Transformation - ✅ <strong>COMPLETE</strong></li>
+<li><strong>Task 1.2.6</strong>: Update Transform Method - ✅ <strong>COMPLETE</strong></li>
+<li><strong>Task 1.2.7</strong>: Update Validation Method - ✅ <strong>COMPLETE</strong></li>
+</ul>
+<h3 id="phase-1-complete-8-of-8-tasks-complete">🎉 Phase 1 Complete! (8 of 8 tasks complete)</h3>
+<ul>
+<li><strong>Task 1.2.8</strong>: Update Service Integration - ✅ <strong>COMPLETE</strong></li>
+</ul>
+<h3 id="code-quality-investigation-resolved">🔍 Code Quality Investigation - ✅ <strong>RESOLVED</strong></h3>
+<p><strong>IMPORTANT</strong>: TransformConfig duplication investigation completed:
+- <strong>Issue</strong>: Two TransformConfig structs exist:
+  - <code>api/v1/metricsexporter_types.go</code> (CRD schema definition)
+  - <code>transform/kusto_to_metrics.go</code> (internal transform package)
+- <strong>Resolution</strong>: ✅ <strong>COMPLETED</strong> - Updated <code>adxexporter/service.go</code> to properly pass <code>MetricNamePrefix</code> and <code>ValueColumns</code> fields from CRD to transformer
+- <strong>Status</strong>: Service integration now fully supports multi-value columns with comprehensive test coverage</p>
+<h3 id="implementation-architecture-summary">🏗️ Implementation Architecture Summary</h3>
+<ol>
+<li><strong>TransformConfig Fields</strong>: Successfully mapped all CRD fields to internal transformer configuration</li>
+<li><strong>Service Integration</strong>: Fixed gap in adxexporter service, now properly passes all multi-value configuration</li>
+<li><strong>Testing Coverage</strong>: All new functionality has comprehensive test coverage (50+ test cases across transform and service layers)</li>
+<li><strong>Performance</strong>: All functions benchmarked and optimized for production use</li>
+</ol>
+<h3 id="task-128-service-integration-complete">✅ Task 1.2.8 - Service Integration Complete</h3>
+<p><strong>Completed Items:</strong>
+1. ✅ Fixed adxexporter service integration to pass <code>MetricNamePrefix</code> and <code>ValueColumns</code>
+2. ✅ Verified service correctly passes all transform configuration fields to transformer
+3. ✅ Added comprehensive service integration tests:
+   - <code>TestTransformAndRegisterMetrics_MultiValueColumns</code>: Tests multi-value column functionality 
+   - <code>TestTransformAndRegisterMetrics_SingleValueColumn</code>: Tests backward compatibility
+   - <code>TestTransformAndRegisterMetrics_EmptyValueColumns</code>: Tests fallback to ValueColumn
+   - <code>TestTransformAndRegisterMetrics_NilValueColumns</code>: Tests nil ValueColumns handling
+4. ✅ All adxexporter tests passing (13/13 test functions)
+5. ✅ All transform tests passing (50+ test cases)
+6. ✅ End-to-end multi-value column support validated</p>
+<h3 id="phase-1-summary-100-complete">📋 Phase 1 Summary - 100% Complete</h3>
+<ol>
+<li>✅ Complete Task 1.2.1: CRD schema updates</li>
+<li>✅ Complete Task 1.2.2: Add normalizeColumnName function  </li>
+<li>✅ Complete Task 1.2.3: Add constructMetricName function</li>
+<li>✅ Complete Task 1.2.4: Update extractValue function for type handling</li>
+<li>✅ Complete Task 1.2.5: Update <code>transformRow()</code> to generate multiple metrics per row</li>
+<li>✅ Complete Task 1.2.6: Update main <code>Transform()</code> method to handle multiple metrics per row</li>
+<li>✅ Complete Task 1.2.7: Update <code>Validate()</code> method for multi-value columns</li>
+<li>✅ Complete Task 1.2.8: Full service integration testing</li>
+</ol>
+<h3 id="test-coverage-status-complete">🧪 Test Coverage Status - Complete</h3>
+<ul>
+<li><strong>normalizeColumnName</strong>: 30+ test cases including edge cases, Unicode, performance benchmarks</li>
+<li><strong>constructMetricName</strong>: 25+ test scenarios including real-world examples, performance benchmarks  </li>
+<li><strong>extractValues/extractValueFromColumn</strong>: Comprehensive tests for all Kusto value types, error conditions</li>
+<li><strong>transformRow/Transform</strong>: 50+ test cases covering multi-value scenarios, error conditions, backward compatibility</li>
+<li><strong>Validate</strong>: 15+ test cases covering both single-value and multi-value validation scenarios</li>
+<li><strong>Overall</strong>: &gt;95% coverage for implemented functions</li>
+</ul>
+<h3 id="key-files-modified">📁 Key Files Modified</h3>
+<ul>
+<li><code>api/v1/metricsexporter_types.go</code>: Enhanced TransformConfig with new fields</li>
+<li><code>transform/kusto_to_metrics.go</code>: Added normalization, construction, and extraction functions</li>
+<li><code>transform/kusto_to_metrics_test.go</code>: Comprehensive test suite for all new functionality</li>
+<li><code>adxexporter/service.go</code>: Updated service integration to pass all multi-value configuration fields</li>
+<li><code>adxexporter/service_test.go</code>: Added comprehensive service integration tests</li>
+<li><code>kustomize/bases/</code> and <code>operator/manifests/crds/</code>: Updated CRD manifests</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<p>The multi-value column enhancement addresses critical cardinality and namespace management issues in MetricsExporter design. By enabling multiple metrics per query row and team-based prefixing, this enhancement:</p>
+<ul>
+<li><strong>Solves cardinality explosion</strong> by moving numeric values from labels to separate metrics</li>
+<li><strong>Enables team isolation</strong> through configurable metric name prefixes  </li>
+<li><strong>Follows Prometheus best practices</strong> for metric naming and cardinality management</li>
+</ul>
+<p>The phased implementation approach ensures rapid delivery of core functionality while maintaining high quality standards and comprehensive testing.</p>
+<p><strong>Progress: 100% complete</strong> - Multi-value column enhancement fully implemented with comprehensive testing and service integration.</p>
+<hr />
+<h2 id="implementation-verification-status">Implementation Verification Status</h2>
+<p><strong>Last Verified</strong>: July 11, 2025</p>
+<h3 id="verification-summary">✅ Verification Summary</h3>
+<p>All tasks have been verified as complete through:</p>
+<ol>
+<li><strong>Code Review</strong>: Verified all implementations exist and function correctly</li>
+<li><strong>Test Execution</strong>: Confirmed all tests pass successfully:</li>
+<li>Transform tests: <code>go test ./transform -v</code> - <strong>PASS</strong> (50+ test cases)</li>
+<li>Service tests: <code>go test ./adxexporter -v</code> - <strong>PASS</strong> (13/13 test functions)</li>
+<li>Multi-value specific tests: All passing including normalization, construction, extraction, and integration</li>
+<li><strong>CRD Manifests</strong>: Confirmed CRD manifests include new fields in both locations</li>
+<li><strong>Service Integration</strong>: Verified <code>adxexporter/service.go</code> correctly passes all new fields to transformer</li>
+</ol>
+<h3 id="key-functionality-verified">✅ Key Functionality Verified</h3>
+<ul>
+<li>✅ CRD accepts <code>valueColumns</code> and <code>metricNamePrefix</code> fields</li>
+<li>✅ Transform engine generates separate metrics for each value column</li>
+<li>✅ Metric name normalization follows Prometheus conventions</li>
+<li>✅ Service integration passes all configuration correctly</li>
+<li>✅ Backward compatibility maintained with single-value mode</li>
+<li>✅ Comprehensive error handling and validation</li>
+<li>✅ Performance benchmarks show no regression</li>
+</ul>
+<hr />
+<h2 id="phase-4-legacy-cleanup-optional-enhancement">Phase 4: Legacy Cleanup (Optional Enhancement)</h2>
+<h3 id="task-41-remove-legacy-single-value-support-breaking-change">Task 4.1: Remove Legacy Single-Value Support ⚠️ <strong>BREAKING CHANGE</strong></h3>
+<p><strong>Rationale</strong>: With multi-value column functionality fully implemented and verified, the legacy single-value <code>ValueColumn</code> field is no longer needed. Removing it simplifies the API, reduces maintenance burden, and eliminates configuration confusion.</p>
+<p><strong>⚠️ Breaking Change Warning</strong>: This task involves removing backward compatibility with the <code>ValueColumn</code> field. Any existing MetricsExporter resources using <code>ValueColumn</code> will need to be migrated to use <code>ValueColumns</code> instead.</p>
+<h4 id="task-411-update-crd-schema-priority-high-complete">Task 4.1.1: Update CRD Schema ✅ <strong>PRIORITY: HIGH</strong> - <strong>COMPLETE</strong></h4>
+<ul>
+<li><strong>File</strong>: <code>api/v1/metricsexporter_types.go</code></li>
+<li><strong>Changes</strong>:</li>
+<li>✅ Removed <code>ValueColumn string</code> field from <code>TransformConfig</code></li>
+<li>✅ Updated field comments to reflect <code>ValueColumns</code> as the only option</li>
+<li>✅ Made <code>ValueColumns</code> a required field in CRD schema</li>
+<li><strong>Breaking Change</strong>: Existing MetricsExporter resources using <code>ValueColumn</code> will become invalid</li>
+<li><strong>Migration Path</strong>: Users must update their MetricsExporter manifests to use <code>valueColumns: ["old_value_column"]</code></li>
+</ul>
+<p><strong>Code Changes Required:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1">// BEFORE (current):</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TransformConfig</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">    </span><span class="nx">ValueColumn</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;valueColumn&quot;`</span><span class="w">           </span><span class="c1">// REMOVE THIS</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">    </span><span class="nx">ValueColumns</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;valueColumns&quot;`</span><span class="w">       </span><span class="c1">// KEEP, make required</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="p">}</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1">// AFTER (target):</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TransformConfig</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">    </span><span class="nx">ValueColumns</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;valueColumns&quot;`</span><span class="w">       </span><span class="c1">// Now required, not optional</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="p">}</span>
+</code></pre></div></p>
+<h4 id="task-412-update-transform-engine-priority-high-breaking">Task 4.1.2: Update Transform Engine ⚠️ <strong>PRIORITY: HIGH</strong> - <strong>BREAKING</strong></h4>
+<ul>
+<li><strong>File</strong>: <code>transform/kusto_to_metrics.go</code></li>
+<li><strong>Changes</strong>: Remove all single-value mode code paths and simplify logic</li>
+<li><strong>Functions to Modify</strong>:</li>
+<li><code>transformRow()</code>: Remove dual-mode logic, always use multi-value path</li>
+<li><code>transformRowSingleValue()</code>: <strong>DELETE</strong> entire function (no longer needed)</li>
+<li><code>extractValue()</code>: <strong>DELETE</strong> entire function (replaced by <code>extractValues()</code>)</li>
+<li><code>Validate()</code>: Remove single-value validation logic</li>
+<li><strong>Acceptance</strong>: Transform engine only supports multi-value mode</li>
+</ul>
+<p><strong>Detailed Sub-tasks:</strong>
+- <strong>Task 4.1.2.1</strong>: Remove Single-Value Transform Logic
+  - Delete <code>transformRowSingleValue()</code> function (lines ~268-290)
+  - Delete <code>extractValue()</code> function (lines ~330-380)
+  - Simplify <code>transformRow()</code> to only call <code>transformRowMultiValue()</code>
+  - Remove mode detection logic in <code>transformRow()</code></p>
+<ul>
+<li><strong>Task 4.1.2.2</strong>: Update TransformConfig Struct</li>
+<li>Remove <code>ValueColumn string</code> field from internal TransformConfig</li>
+<li>Update struct comments to reflect multi-value only design</li>
+<li>
+<p>Ensure <code>ValueColumns</code> field is properly validated as required</p>
+</li>
+<li>
+<p><strong>Task 4.1.2.3</strong>: Simplify Validation Logic</p>
+</li>
+<li>Remove <code>ValueColumn</code> validation from <code>Validate()</code> method</li>
+<li>Remove "either ValueColumn or ValueColumns must be specified" logic</li>
+<li>Simplify to require <code>len(ValueColumns) &gt; 0</code></li>
+<li>Update error messages to only reference <code>ValueColumns</code></li>
+</ul>
+<p><strong>Code Removal Targets:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1">// DELETE these functions entirely:</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">KustoToMetricsTransformer</span><span class="p">)</span><span class="w"> </span><span class="nx">transformRowSingleValue</span><span class="p">(</span><span class="o">...</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">MetricData</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">KustoToMetricsTransformer</span><span class="p">)</span><span class="w"> </span><span class="nx">extractValue</span><span class="p">(</span><span class="nx">row</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">float64</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1">// SIMPLIFY this function (remove dual-mode logic):</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">KustoToMetricsTransformer</span><span class="p">)</span><span class="w"> </span><span class="nx">transformRow</span><span class="p">(</span><span class="nx">row</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">MetricData</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="w">    </span><span class="c1">// Remove: if len(t.config.ValueColumns) &gt; 0 { ... } else { ... }</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a><span class="w">    </span><span class="c1">// Keep only: return t.transformRowMultiValue(...)</span>
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a><span class="p">}</span>
+</code></pre></div></p>
+<h4 id="task-413-update-service-integration-priority-high-breaking">Task 4.1.3: Update Service Integration ⚠️ <strong>PRIORITY: HIGH</strong> - <strong>BREAKING</strong></h4>
+<ul>
+<li><strong>File</strong>: <code>adxexporter/service.go</code></li>
+<li><strong>Changes</strong>: Remove <code>ValueColumn</code> field from TransformConfig construction</li>
+<li><strong>Impact</strong>: Service no longer passes legacy field to transformer</li>
+</ul>
+<p><strong>Code Changes:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1">// BEFORE (current):</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="nx">transformer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewKustoToMetricsTransformer</span><span class="p">(</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">    </span><span class="nx">transform</span><span class="p">.</span><span class="nx">TransformConfig</span><span class="p">{</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">        </span><span class="nx">MetricNameColumn</span><span class="p">:</span><span class="w">  </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">MetricNameColumn</span><span class="p">,</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">        </span><span class="nx">MetricNamePrefix</span><span class="p">:</span><span class="w">  </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">MetricNamePrefix</span><span class="p">,</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">        </span><span class="nx">ValueColumn</span><span class="p">:</span><span class="w">       </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">ValueColumn</span><span class="p">,</span><span class="w">        </span><span class="c1">// REMOVE THIS LINE</span>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="w">        </span><span class="nx">ValueColumns</span><span class="p">:</span><span class="w">      </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">ValueColumns</span><span class="p">,</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">        </span><span class="nx">TimestampColumn</span><span class="p">:</span><span class="w">   </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">TimestampColumn</span><span class="p">,</span>
+<a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">        </span><span class="nx">LabelColumns</span><span class="p">:</span><span class="w">      </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">LabelColumns</span><span class="p">,</span>
+<a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a><span class="w">        </span><span class="nx">DefaultMetricName</span><span class="p">:</span><span class="w"> </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">DefaultMetricName</span><span class="p">,</span>
+<a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a><span class="w">    </span><span class="nx">r</span><span class="p">.</span><span class="nx">Meter</span><span class="p">,</span>
+<a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a><span class="p">)</span>
+<a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a>
+<a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a><span class="c1">// AFTER (target):</span>
+<a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a><span class="nx">transformer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewKustoToMetricsTransformer</span><span class="p">(</span>
+<a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a><span class="w">    </span><span class="nx">transform</span><span class="p">.</span><span class="nx">TransformConfig</span><span class="p">{</span>
+<a id="__codelineno-20-18" name="__codelineno-20-18" href="#__codelineno-20-18"></a><span class="w">        </span><span class="nx">MetricNameColumn</span><span class="p">:</span><span class="w">  </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">MetricNameColumn</span><span class="p">,</span>
+<a id="__codelineno-20-19" name="__codelineno-20-19" href="#__codelineno-20-19"></a><span class="w">        </span><span class="nx">MetricNamePrefix</span><span class="p">:</span><span class="w">  </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">MetricNamePrefix</span><span class="p">,</span>
+<a id="__codelineno-20-20" name="__codelineno-20-20" href="#__codelineno-20-20"></a><span class="w">        </span><span class="nx">ValueColumns</span><span class="p">:</span><span class="w">      </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">ValueColumns</span><span class="p">,</span><span class="w">       </span><span class="c1">// Only field needed</span>
+<a id="__codelineno-20-21" name="__codelineno-20-21" href="#__codelineno-20-21"></a><span class="w">        </span><span class="nx">TimestampColumn</span><span class="p">:</span><span class="w">   </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">TimestampColumn</span><span class="p">,</span>
+<a id="__codelineno-20-22" name="__codelineno-20-22" href="#__codelineno-20-22"></a><span class="w">        </span><span class="nx">LabelColumns</span><span class="p">:</span><span class="w">      </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">LabelColumns</span><span class="p">,</span>
+<a id="__codelineno-20-23" name="__codelineno-20-23" href="#__codelineno-20-23"></a><span class="w">        </span><span class="nx">DefaultMetricName</span><span class="p">:</span><span class="w"> </span><span class="nx">me</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Transform</span><span class="p">.</span><span class="nx">DefaultMetricName</span><span class="p">,</span>
+<a id="__codelineno-20-24" name="__codelineno-20-24" href="#__codelineno-20-24"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-20-25" name="__codelineno-20-25" href="#__codelineno-20-25"></a><span class="w">    </span><span class="nx">r</span><span class="p">.</span><span class="nx">Meter</span><span class="p">,</span>
+<a id="__codelineno-20-26" name="__codelineno-20-26" href="#__codelineno-20-26"></a><span class="p">)</span>
+</code></pre></div></p>
+<h4 id="task-414-update-unit-tests-priority-high-breaking">Task 4.1.4: Update Unit Tests ⚠️ <strong>PRIORITY: HIGH</strong> - <strong>BREAKING</strong></h4>
+<ul>
+<li><strong>Files</strong>: <code>transform/kusto_to_metrics_test.go</code>, <code>adxexporter/service_test.go</code></li>
+<li><strong>Changes</strong>: Remove all single-value mode tests and update remaining tests</li>
+<li><strong>Breaking Change</strong>: Tests validating backward compatibility will be removed</li>
+</ul>
+<p><strong>Tests to Remove/Update:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1">// REMOVE these test functions entirely:</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTransformAndRegisterMetrics_SingleValueColumn</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTransformAndRegisterMetrics_EmptyValueColumns</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w">  </span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTransformAndRegisterMetrics_NilValueColumns</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="c1">// UPDATE existing tests to remove ValueColumn field:</span>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="o">-</span><span class="w"> </span><span class="nx">All</span><span class="w"> </span><span class="nx">test</span><span class="w"> </span><span class="nx">cases</span><span class="w"> </span><span class="nx">in</span><span class="w"> </span><span class="nx">transform</span><span class="o">/</span><span class="nx">kusto_to_metrics_test</span><span class="p">.</span><span class="k">go</span><span class="w"> </span><span class="nx">using</span><span class="w"> </span><span class="nx">ValueColumn</span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="o">-</span><span class="w"> </span><span class="nx">Update</span><span class="w"> </span><span class="nx">validation</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">expect</span><span class="w"> </span><span class="nx">errors</span><span class="w"> </span><span class="nx">when</span><span class="w"> </span><span class="nx">ValueColumns</span><span class="w"> </span><span class="nx">is</span><span class="w"> </span><span class="nx">empty</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="o">-</span><span class="w"> </span><span class="nx">Remove</span><span class="w"> </span><span class="nx">backward</span><span class="w"> </span><span class="nx">compatibility</span><span class="w"> </span><span class="nx">test</span><span class="w"> </span><span class="nx">scenarios</span>
+</code></pre></div></p>
+<p><strong>Test Updates Required:</strong>
+- Remove ~50+ test cases using <code>ValueColumn</code> field
+- Update validation tests to only check <code>ValueColumns</code> requirements
+- Remove tests verifying "either ValueColumn or ValueColumns" logic
+- Update error message assertions to match new validation messages</p>
+<h4 id="task-415-update-crd-manifests-priority-high-complete">Task 4.1.5: Update CRD Manifests ✅ <strong>PRIORITY: HIGH</strong> - <strong>COMPLETE</strong></h4>
+<ul>
+<li><strong>Command</strong>: <code>make generate-crd CMD=update</code></li>
+<li><strong>Files</strong>: <code>kustomize/bases/metricsexporters_crd.yaml</code>, <code>operator/manifests/crds/metricsexporters_crd.yaml</code></li>
+<li><strong>Changes</strong>: ✅ Regenerated CRD manifests without <code>valueColumn</code> field</li>
+<li><strong>Breaking Change</strong>: Kubernetes will reject MetricsExporter resources using <code>valueColumn</code></li>
+</ul>
+<p><strong>Manifest Changes:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># REMOVE these lines from CRD schema:</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="nt">valueColumn</span><span class="p">:</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ValueColumn specifies which column contains the metric value</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">string</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="c1"># UPDATE required fields (remove valueColumn, keep valueColumns):</span>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="nt">required</span><span class="p">:</span>
+<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">valueColumns</span><span class="w">  </span><span class="c1"># Remove valueColumn from required list</span>
+</code></pre></div></p>
+<h4 id="task-416-update-documentation-priority-medium-breaking">Task 4.1.6: Update Documentation ⚠️ <strong>PRIORITY: MEDIUM</strong> - <strong>BREAKING</strong></h4>
+<ul>
+<li><strong>Files</strong>: </li>
+<li><code>docs/designs/metric-values.md</code> (this file)</li>
+<li><code>docs/designs/kusto-to-metrics.md</code></li>
+<li><code>docs/crds.md</code></li>
+<li><code>README.md</code> examples</li>
+<li><strong>Changes</strong>: Remove all references to <code>valueColumn</code> and update examples</li>
+<li><strong>Migration Guide</strong>: Add breaking change documentation with migration instructions</li>
+</ul>
+<p><strong>Documentation Updates:</strong>
+- Remove all <code>valueColumn</code> examples from documentation
+- Update all YAML examples to use <code>valueColumns</code> instead
+- Add migration guide section explaining how to convert existing configs
+- Update API reference documentation
+- Update troubleshooting guides to reflect new validation messages</p>
+<h4 id="task-417-update-example-files-priority-medium-breaking">Task 4.1.7: Update Example Files ⚠️ <strong>PRIORITY: MEDIUM</strong> - <strong>BREAKING</strong></h4>
+<ul>
+<li><strong>Files</strong>: <code>transform/example_usage.go</code>, example manifests, tutorials</li>
+<li><strong>Changes</strong>: Update all examples to use multi-value syntax</li>
+<li><strong>Migration Examples</strong>: Provide before/after examples for common use cases</li>
+</ul>
+<p><strong>Example Migration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># BEFORE (legacy single-value):</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;cpu_percent&quot;</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="c1"># AFTER (multi-value):</span>
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="w">  </span><span class="nt">valueColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;cpu_percent&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div></p>
+<h3 id="migration-guide-for-task-41">Migration Guide for Task 4.1</h3>
+<h4 id="breaking-change-impact-assessment">Breaking Change Impact Assessment</h4>
+<ul>
+<li><strong>Scope</strong>: All existing MetricsExporter resources using <code>valueColumn</code> field</li>
+<li><strong>Timeline</strong>: Immediate upon deployment of updated CRDs</li>
+<li><strong>Mitigation</strong>: Automated migration scripts and clear documentation</li>
+</ul>
+<h4 id="required-user-actions">Required User Actions</h4>
+<ol>
+<li>
+<p><strong>Update MetricsExporter Manifests</strong>: 
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Replace this pattern:</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>sed<span class="w"> </span>-i<span class="w"> </span><span class="s1">&#39;s/valueColumn: &quot;\([^&quot;]*\)&quot;/valueColumns: [&quot;\1&quot;]/&#39;</span><span class="w"> </span>your-manifest.yaml
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Validate Updated Manifests</strong>:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>updated-manifest.yaml
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Test Multi-Value Behavior</strong>: Verify metrics are generated correctly with new configuration</p>
+</li>
+</ol>
+<h4 id="rollback-strategy">Rollback Strategy</h4>
+<ul>
+<li>Keep old CRD version available for emergency rollback</li>
+<li>Maintain ability to downgrade to previous version if issues arise</li>
+<li>Document rollback procedure for critical production environments</li>
+</ul>
+<h3 id="benefits-of-legacy-removal">Benefits of Legacy Removal</h3>
+<ol>
+<li><strong>Simplified API</strong>: Single configuration pattern reduces user confusion</li>
+<li><strong>Reduced Maintenance</strong>: Less code to maintain, test, and document  </li>
+<li><strong>Cleaner Architecture</strong>: Eliminates dual-mode complexity in transform engine</li>
+<li><strong>Better Performance</strong>: Single code path is more efficient than mode detection</li>
+<li><strong>Future-Proof</strong>: Positions codebase for easier future enhancements</li>
+</ol>
+<h3 id="risk-mitigation">Risk Mitigation</h3>
+<ol>
+<li><strong>Comprehensive Testing</strong>: Ensure all multi-value scenarios work before removal</li>
+<li><strong>Documentation</strong>: Clear migration guide with automated conversion tools</li>
+<li><strong>Gradual Rollout</strong>: Deploy to test environments first, monitor for issues</li>
+<li><strong>Rollback Plan</strong>: Maintain ability to revert if critical issues discovered</li>
+</ol>
+<p><strong>Task 4.1 Status</strong>: ❌ <strong>PENDING</strong> - Breaking change requiring careful planning and migration strategy </p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "toc.integrate", "navigation.top", "search.suggest", "search.highlight", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

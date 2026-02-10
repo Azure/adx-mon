@@ -1,0 +1,2073 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+    
+    
+      
+        <title>Kusto-to-Metrics Integration - ADX-Mon Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#kusto-to-metrics-integration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ADX-Mon Documentation" class="md-header__button md-logo" aria-label="ADX-Mon Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ADX-Mon Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Kusto-to-Metrics Integration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="cyan"  aria-hidden="true"  type="radio" name="__palette" id="__palette_0">
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
+  
+  
+  Docs Home
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quick-start/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quick Start
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../concepts/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Concepts
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../cookbook/cookbook/" class="md-tabs__link">
+          
+  
+  
+  Cookbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../config/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../log-integration-with-kubernetes/" class="md-tabs__link">
+          
+  
+  
+  Designs
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ADX-Mon Documentation" class="md-nav__button md-logo" aria-label="ADX-Mon Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ADX-Mon Documentation
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docs Home
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Docs Home
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cookbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cookbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cookbook/cookbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cookbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cookbook/traces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sending Traces With Logs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Collector Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ingestor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingestor Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adxcluster-controller/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADXCluster Controller
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Designs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Designs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../log-integration-with-kubernetes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Log Integration with Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema-etl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Schema ETL
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="kusto-to-metrics-integration">Kusto-to-Metrics Integration</h1>
+<h2 id="problem-statement">Problem Statement</h2>
+<p>ADX-Mon currently provides two distinct capabilities:
+1. <strong>SummaryRules</strong> - Execute KQL queries on a schedule and ingest results into ADX tables (<a href="https://github.com/Azure/adx-mon/blob/main/api/v1/summaryrule_types.go"><code>api/v1/summaryrule_types.go</code></a>)
+2. <strong>OTLP Metrics Exporters</strong> - Export metrics to external observability systems (<a href="https://github.com/Azure/adx-mon/blob/main/collector/export/metric_otlp.go"><code>collector/export/metric_otlp.go</code></a>)</p>
+<p>However, there's no direct mechanism to execute KQL queries and export the results as metrics to observability platforms. Organizations often need to:
+- Execute KQL queries on ADX data and export results as standardized metrics
+- Export these metrics to external systems (Prometheus, DataDog, etc.) at regular intervals
+- Create derived metrics from complex KQL aggregations for dashboards and alerting</p>
+<p>Currently, users must either:
+- Use SummaryRules to materialize data in ADX tables, then build custom exporters to transform and export
+- Implement entirely separate infrastructure outside of ADX-Mon</p>
+<p>This leads to:
+- Duplicated infrastructure for metric transformation and export
+- Inconsistent metric schemas across different teams
+- Additional storage costs for intermediate table materialization
+- Complex multi-step pipelines that are difficult to maintain</p>
+<h2 id="solution-overview">Solution Overview</h2>
+<p>We propose implementing a new <code>adxexporter</code> component that processes <code>MetricsExporter</code> CRDs to execute KQL queries and export results as metrics. This provides a streamlined, declarative way to create KQL-to-metrics pipelines with two complementary output modes:</p>
+<ol>
+<li><strong>Prometheus Scraping Mode</strong> (Phase 1): Execute queries and expose results as Prometheus metrics on <code>/metrics</code> endpoint for Collector to scrape</li>
+<li><strong>Direct OTLP Push Mode</strong> (Phase 2): Execute queries and push results directly to OTLP endpoints with backlog/retry capabilities</li>
+</ol>
+<h3 id="key-requirements">Key Requirements</h3>
+<ol>
+<li><strong>Direct KQL Execution</strong>: Execute KQL queries directly without requiring intermediate table storage</li>
+<li><strong>SummaryRule-like Behavior</strong>: Share time management, scheduling, and criteria-based execution patterns</li>
+<li><strong>Criteria-Based Deployment</strong>: Support cluster-label based filtering for secure, distributed execution</li>
+<li><strong>Resilient Operation</strong>: Provide backlog and retry capabilities for reliable metric delivery</li>
+</ol>
+<h2 id="architecture-overview">Architecture Overview</h2>
+<p>The solution introduces a new <code>adxexporter</code> component that operates as a Kubernetes controller, watching <code>MetricsExporter</code> CRDs and executing their configured KQL queries on schedule.</p>
+<h3 id="core-components">Core Components</h3>
+<ol>
+<li><strong><code>adxexporter</code></strong> - New standalone component (<code>cmd/adxexporter</code>) that:</li>
+<li>Watches <code>MetricsExporter</code> CRDs via Kubernetes API</li>
+<li>Executes KQL queries against ADX on specified intervals</li>
+<li>Transforms results to metrics format</li>
+<li>
+<p>Outputs metrics via Prometheus scraping or direct OTLP push</p>
+</li>
+<li>
+<p><strong><code>MetricsExporter</code> CRD</strong> - Kubernetes custom resource defining:</p>
+</li>
+<li>KQL query to execute</li>
+<li>Transform configuration for metric conversion</li>
+<li>Execution criteria and scheduling</li>
+<li>
+<p>Output mode configuration</p>
+</li>
+<li>
+<p><strong>Integration with Existing Components</strong>:</p>
+</li>
+<li><strong>Collector</strong> discovers and scrapes <code>adxexporter</code> instances via pod annotations</li>
+<li><strong>Operator</strong> manages <code>MetricsExporter</code> CRD lifecycle (optional integration)</li>
+</ol>
+<h3 id="deployment-architecture">Deployment Architecture</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│   Collector     │    │   adxexporter   │    │      ADX        │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│                 │    │                 │    │   Clusters      │
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>│ ┌─────────────┐ │    │ ┌─────────────┐ │    │                 │
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>│ │Pod Discovery│◄├────┤ │/metrics     │ │    │                 │
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│ │&amp; Scraping   │ │    │ │endpoint     │ │    │                 │
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>│ └─────────────┘ │    │ └─────────────┘ │    │                 │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│ ┌─────────────┐ │    │ ┌─────────────┐ │    │                 │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>│ │OTLP Export  │ │    │ │KQL Query    │◄├────┤                 │
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>│ │Targets      │ │    │ │Execution    │ │    │                 │
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>│ └─────────────┘ │    │ └─────────────┘ │    │                 │
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>└─────────────────┘    │ ┌─────────────┐ │    └─────────────────┘
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                       │ │CRD Watch &amp;  │ │
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>       ┌───────────────┤ │Reconciliation│ │
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>       │               │ └─────────────┘ │
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>       │               └─────────────────┘
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>       │
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>       ▼
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>┌─────────────────┐
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>│  Kubernetes     │
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>│   API Server    │
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>│                 │
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>│ MetricsExporter │
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>│     CRDs        │
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>└─────────────────┘
+</code></pre></div>
+<h3 id="output-modes">Output Modes</h3>
+<h4 id="primary-direct-otlp-push-mode-implemented">Primary: Direct OTLP Push Mode (Implemented)</h4>
+<ul>
+<li><code>adxexporter</code> pushes metrics directly to OTLP endpoints using <code>PromToOtlpExporter</code></li>
+<li>Leverages <code>pkg/prompb</code> for memory-efficient metric serialization with object pooling</li>
+<li>Preserves actual timestamps from KQL query results</li>
+<li>Requires <code>--otlp-endpoint</code> CLI flag</li>
+<li>Reuses battle-tested OTLP export infrastructure from the Collector</li>
+</ul>
+<h4 id="alternative-prometheus-scraping-mode-future-enhancement">Alternative: Prometheus Scraping Mode (Future Enhancement)</h4>
+<ul>
+<li><code>adxexporter</code> could expose <code>/metrics</code> endpoint with OpenTelemetry metrics library</li>
+<li>Collector discovers via pod annotations: <code>adx-mon/scrape: "true"</code></li>
+<li>Deprioritized in favor of direct OTLP push for better timestamp fidelity</li>
+</ul>
+<h2 id="design-approach">Design Approach</h2>
+<h3 id="adxexporter-component">adxexporter Component</h3>
+<p>The <code>adxexporter</code> is a new standalone Kubernetes component with its own binary at <code>cmd/adxexporter</code>. It functions as a Kubernetes controller that watches <code>MetricsExporter</code> CRDs and executes their KQL queries on schedule.</p>
+<h4 id="command-line-interface">Command Line Interface</h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;region=eastus,environment=production,team=platform&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;MetricsDB=https://cluster.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://otel-collector:4318/v1/metrics&quot;</span>
+</code></pre></div>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li>
+<p><strong><code>--cluster-labels</code></strong>: Comma-separated key=value pairs defining this instance's cluster identity. Used for criteria-based filtering of MetricsExporter CRDs. This follows the same pattern as the Ingestor component documented in <a href="../../config/">ADX-Mon Configuration</a>.</p>
+</li>
+<li>
+<p><strong><code>--kusto-endpoint</code></strong>: ADX endpoint in format <code>&lt;database&gt;=&lt;endpoint&gt;</code>. Multiple endpoints can be specified for multi-database support.</p>
+</li>
+<li>
+<p><strong><code>--otlp-endpoint</code></strong>: (Required) OTLP HTTP endpoint URL for pushing metrics. The adxexporter converts KQL results to <code>prompb.WriteRequest</code> format and pushes them to this endpoint.</p>
+</li>
+<li>
+<p><strong><code>--health-probe-port</code></strong>: Port for health probe endpoints (default: 8081). Exposes <code>/healthz</code> and <code>/readyz</code> endpoints.</p>
+</li>
+</ul>
+<h4 id="criteria-based-execution">Criteria-Based Execution</h4>
+<p>Similar to the Ingestor component, <code>adxexporter</code> uses cluster labels to determine which <code>MetricsExporter</code> CRDs it should process. This enables:</p>
+<ul>
+<li><strong>Security Boundaries</strong>: Only process MetricsExporters appropriate for this cluster's data classification</li>
+<li><strong>Geographic Distribution</strong>: Deploy region-specific adxexporter instances</li>
+<li><strong>Team Isolation</strong>: Separate processing by team ownership</li>
+<li><strong>Resource Optimization</strong>: Distribute load across appropriate instances</li>
+</ul>
+<p><strong>Example Criteria Matching:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># MetricsExporter CRD</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">region</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;eastus&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;westus&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;production&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># adxexporter instance</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="l l-Scalar l-Scalar-Plain">--cluster-labels=&quot;region=eastus,environment=production,team=sre&quot;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># ✅ Matches: region=eastus AND environment=production</span>
+</code></pre></div></p>
+<h3 id="metricsexporter-crd">MetricsExporter CRD</h3>
+<p>The <code>MetricsExporter</code> CRD defines KQL queries and their transformation to metrics format. It shares core patterns with <code>SummaryRule</code> but targets metrics output instead of ADX table ingestion.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// MetricsExporterSpec defines the desired state of MetricsExporter</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MetricsExporterSpec</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="c1">// Database is the name of the database to query</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nx">Database</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;database&quot;`</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="c1">// Body is the KQL query to execute</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nx">Body</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;body&quot;`</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="c1">// Interval defines how often to execute the query and refresh metrics</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nx">Interval</span><span class="w"> </span><span class="nx">metav1</span><span class="p">.</span><span class="nx">Duration</span><span class="w"> </span><span class="s">`json:&quot;interval&quot;`</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="c1">// Transform defines how to convert query results to metrics</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="nx">Transform</span><span class="w"> </span><span class="nx">TransformConfig</span><span class="w"> </span><span class="s">`json:&quot;transform&quot;`</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">    </span><span class="c1">// Criteria for cluster-based execution selection (same pattern as SummaryRule)</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">    </span><span class="nx">Criteria</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;criteria,omitempty&quot;`</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="p">}</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TransformConfig</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">    </span><span class="c1">// MetricNameColumn specifies which column contains the metric name</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">    </span><span class="nx">MetricNameColumn</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;metricNameColumn,omitempty&quot;`</span>
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="w">    </span><span class="c1">// ValueColumn specifies which column contains the metric value  </span>
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="w">    </span><span class="nx">ValueColumn</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;valueColumn&quot;`</span>
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a>
+<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a><span class="w">    </span><span class="c1">// TimestampColumn specifies which column contains the timestamp</span>
+<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a><span class="w">    </span><span class="nx">TimestampColumn</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;timestampColumn&quot;`</span>
+<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>
+<a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a><span class="w">    </span><span class="c1">// LabelColumns specifies columns to use as metric labels</span>
+<a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a><span class="w">    </span><span class="nx">LabelColumns</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;labelColumns,omitempty&quot;`</span>
+<a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>
+<a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a><span class="w">    </span><span class="c1">// DefaultMetricName provides a fallback if MetricNameColumn is not specified</span>
+<a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a><span class="w">    </span><span class="nx">DefaultMetricName</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;defaultMetricName,omitempty&quot;`</span>
+<a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="key-design-principles">Key Design Principles</h3>
+<ol>
+<li>
+<p><strong>Standalone Operation</strong>: <code>adxexporter</code> operates independently from existing ingestor/operator infrastructure, providing clear separation of concerns and deployment flexibility.</p>
+</li>
+<li>
+<p><strong>Dual Output Strategy</strong>: </p>
+</li>
+<li><strong>Phase 1 (Prometheus)</strong>: Fast implementation using existing Collector scraping capabilities</li>
+<li>
+<p><strong>Phase 2 (Direct OTLP)</strong>: Enhanced resilience with backlog and retry mechanisms</p>
+</li>
+<li>
+<p><strong>Criteria-Based Filtering</strong>: Leverages the same cluster-label approach as Ingestor for secure, distributed execution across different environments and teams.</p>
+</li>
+<li>
+<p><strong>SummaryRule Consistency</strong>: Shares core behavioral patterns including time management, scheduling logic, and KQL query execution patterns.</p>
+</li>
+<li>
+<p><strong>Cloud-Native Integration</strong>: Seamless discovery via Kubernetes pod annotations and integration with existing Collector infrastructure.</p>
+</li>
+</ol>
+<h2 id="detailed-implementation">Detailed Implementation</h2>
+<h3 id="phase-1-prometheus-scraping-mode">Phase 1: Prometheus Scraping Mode</h3>
+<p>In the initial implementation, <code>adxexporter</code> exposes transformed KQL query results as Prometheus metrics on a <code>/metrics</code> endpoint.</p>
+<h4 id="metrics-exposure-workflow">Metrics Exposure Workflow</h4>
+<ol>
+<li><strong>CRD Discovery</strong>: <code>adxexporter</code> watches Kubernetes API for <code>MetricsExporter</code> CRDs matching its cluster labels</li>
+<li><strong>Query Execution</strong>: Execute KQL queries on specified intervals using <code>_startTime</code> and <code>_endTime</code> parameters</li>
+<li><strong>Metrics Transformation</strong>: Convert query results to Prometheus metrics using OpenTelemetry metrics library</li>
+<li><strong>Metrics Registration</strong>: Register/update metrics in the OpenTelemetry metrics registry</li>
+<li><strong>HTTP Exposure</strong>: Serve metrics via HTTP endpoint for Collector scraping</li>
+</ol>
+<h4 id="collector-integration">Collector Integration</h4>
+<p>The existing Collector component discovers <code>adxexporter</code> instances via Kubernetes pod annotations:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># adxexporter Deployment/Pod</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">adx-mon/scrape</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">adx-mon/port</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;8080&quot;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">adx-mon/path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/metrics&quot;</span>
+</code></pre></div>
+<p>The Collector's pod discovery mechanism automatically detects these annotations and adds the <code>adxexporter</code> instances to its scraping targets.</p>
+<h4 id="limitations-of-phase-1">Limitations of Phase 1</h4>
+<ul>
+<li><strong>Point-in-Time Metrics</strong>: Prometheus metrics represent current state; no historical backfill capability</li>
+<li><strong>Scraping Dependency</strong>: Relies on Collector's scraping schedule, not direct control over export timing</li>
+<li><strong>No Retry Logic</strong>: Failed queries result in stale metrics until next successful execution</li>
+</ul>
+<h3 id="phase-2-direct-otlp-push-mode">Phase 2: Direct OTLP Push Mode</h3>
+<p>In the enhanced implementation, <code>adxexporter</code> can push metrics directly to OTLP endpoints with full backlog and retry capabilities.</p>
+<h4 id="enhanced-workflow">Enhanced Workflow</h4>
+<ol>
+<li><strong>CRD Discovery</strong>: Same as Phase 1</li>
+<li><strong>Query Execution</strong>: Same as Phase 1</li>
+<li><strong>OTLP Transformation</strong>: Convert query results directly to OTLP metrics format</li>
+<li><strong>Direct Push</strong>: Send metrics to configured OTLP endpoint</li>
+<li><strong>Backlog Management</strong>: Queue failed exports in CRD status for retry</li>
+<li><strong>Historical Backfill</strong>: Process backlogged time windows on successful reconnection</li>
+</ol>
+<h4 id="backlog-strategy">Backlog Strategy</h4>
+<p>Unlike Prometheus scraping, direct OTLP push enables sophisticated backlog management:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MetricsExporterStatus</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span><span class="nx">Conditions</span><span class="w"> </span><span class="p">[]</span><span class="nx">metav1</span><span class="p">.</span><span class="nx">Condition</span><span class="w"> </span><span class="s">`json:&quot;conditions,omitempty&quot;`</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="c1">// LastSuccessfulExecution tracks the last successfully exported time window</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nx">LastSuccessfulExecution</span><span class="w"> </span><span class="o">*</span><span class="nx">metav1</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;lastSuccessfulExecution,omitempty&quot;`</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="c1">// Backlog contains failed export attempts pending retry</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nx">Backlog</span><span class="w"> </span><span class="p">[]</span><span class="nx">BacklogEntry</span><span class="w"> </span><span class="s">`json:&quot;backlog,omitempty&quot;`</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="p">}</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BacklogEntry</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="nx">StartTime</span><span class="w"> </span><span class="nx">metav1</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;startTime&quot;`</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">    </span><span class="nx">EndTime</span><span class="w">   </span><span class="nx">metav1</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;endTime&quot;`</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">    </span><span class="nx">Attempts</span><span class="w">  </span><span class="kt">int</span><span class="w">         </span><span class="s">`json:&quot;attempts&quot;`</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">    </span><span class="nx">LastAttempt</span><span class="w"> </span><span class="nx">metav1</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;lastAttempt&quot;`</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">    </span><span class="nx">Error</span><span class="w">     </span><span class="kt">string</span><span class="w">      </span><span class="s">`json:&quot;error,omitempty&quot;`</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="shared-infrastructure-patterns">Shared Infrastructure Patterns</h3>
+<p><code>adxexporter</code> leverages proven patterns from SummaryRule implementation while operating as an independent component:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>SummaryRule</th>
+<th>adxexporter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Time Management</strong></td>
+<td><code>NextExecutionWindow()</code>, interval-based scheduling</td>
+<td>Same patterns, independent implementation</td>
+</tr>
+<tr>
+<td><strong>Criteria Matching</strong></td>
+<td>Cluster label filtering</td>
+<td>Same logic, different component</td>
+</tr>
+<tr>
+<td><strong>KQL Execution</strong></td>
+<td>ADX query with time parameters</td>
+<td>Same patterns for query execution</td>
+</tr>
+<tr>
+<td><strong>Status Tracking</strong></td>
+<td>CRD conditions and backlog</td>
+<td>Similar condition management</td>
+</tr>
+<tr>
+<td><strong>Backlog Handling</strong></td>
+<td>Async operation queues</td>
+<td>Export retry queues (Phase 2)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="component-independence">Component Independence</h3>
+<p>Unlike the original design that integrated with ingestor infrastructure, <code>adxexporter</code> operates independently:</p>
+<ul>
+<li><strong>Separate Binary</strong>: Own entrypoint at <code>cmd/adxexporter</code></li>
+<li><strong>Independent Deployment</strong>: Deployed as separate Kubernetes workload</li>
+<li><strong>Dedicated Configuration</strong>: Own command-line parameters and configuration</li>
+<li><strong>Isolated Dependencies</strong>: Direct ADX connectivity without shared connection pools</li>
+</ul>
+<h3 id="standard-schema-requirements">Standard Schema Requirements</h3>
+<p>For <code>MetricsExporter</code> KQL queries to produce valid metrics, the result table must contain columns that can be mapped to the metrics format. The transformation is highly flexible and supports both simple and complex schemas.</p>
+<h4 id="core-metrics-mapping">Core Metrics Mapping</h4>
+<p>The <code>adxexporter</code> transforms KQL query results to metrics using this mapping:</p>
+<table>
+<thead>
+<tr>
+<th>KQL Column</th>
+<th>Prometheus/OTLP Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Configured via <code>valueColumn</code></td>
+<td>Metric value</td>
+<td>The numeric metric value</td>
+</tr>
+<tr>
+<td>Configured via <code>timestampColumn</code></td>
+<td>Metric timestamp</td>
+<td>Temporal alignment (OTLP mode)</td>
+</tr>
+<tr>
+<td>Configured via <code>metricNameColumn</code></td>
+<td>Metric name</td>
+<td>Metric name identifier</td>
+</tr>
+<tr>
+<td>Any columns in <code>labelColumns</code></td>
+<td>Metric labels/attributes</td>
+<td>Dimensional metadata</td>
+</tr>
+</tbody>
+</table>
+<h4 id="required-columns">Required Columns</h4>
+<ul>
+<li><strong>Value Column</strong>: Must contain numeric data (real/double/int)</li>
+<li><strong>Timestamp Column</strong>: Must contain datetime data (used in OTLP mode for temporal accuracy)</li>
+</ul>
+<h4 id="optional-columns">Optional Columns</h4>
+<ul>
+<li><strong>Metric Name Column</strong>: If not specified, uses <code>Transform.DefaultMetricName</code></li>
+<li><strong>Label Columns</strong>: Any additional columns become metric labels/attributes</li>
+</ul>
+<h4 id="simple-example-generic-use-case">Simple Example - Generic Use Case</h4>
+<p><strong>KQL Query:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">MyTelemetryTable</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="p">|</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">Timestamp</span><span class="w"> </span><span class="k">between</span><span class="w"> </span><span class="p">(</span><span class="n">_startTime</span><span class="w"> </span><span class="err">..</span><span class="w"> </span><span class="n">_endTime</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="p">|</span><span class="w"> </span><span class="k">summarize</span><span class="w"> </span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="n">metric_value</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">avg</span><span class="p">(</span><span class="n">ResponseTime</span><span class="p">),</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="n">timestamp</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">bin</span><span class="p">(</span><span class="n">Timestamp</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="n">m</span><span class="p">)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="k">by</span><span class="w"> </span><span class="n">ServiceName</span><span class="p">,</span><span class="w"> </span><span class="n">Region</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="p">|</span><span class="w"> </span><span class="k">extend</span><span class="w"> </span><span class="n">metric_name</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;service_response_time_avg&quot;</span>
+</code></pre></div></p>
+<p><strong>Transform Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_value&quot;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;timestamp&quot;</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;ServiceName&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Region&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div></p>
+<p><strong>Resulting Prometheus Metric (Phase 1):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a># HELP service_response_time_avg Average response time by service and region
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a># TYPE service_response_time_avg gauge
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>service_response_time_avg{ServiceName=&quot;api-gateway&quot;,Region=&quot;us-east-1&quot;} 245.7
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a># HELP service_response_time_avg Average response time by service and region  
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a># TYPE service_response_time_avg gauge
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>service_response_time_avg{ServiceName=&quot;user-service&quot;,Region=&quot;us-west-2&quot;} 189.3
+</code></pre></div></p>
+<p><strong>Resulting OTLP Metric (Phase 2):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;service_response_time_avg&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;gauge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">&quot;dataPoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">245.7</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">      </span><span class="nt">&quot;timeUnixNano&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1640995200000000000&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">      </span><span class="nt">&quot;attributes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ServiceName&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;api-gateway&quot;</span><span class="p">},</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Region&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;us-east-1&quot;</span><span class="p">}</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="p">]</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">    </span><span class="p">}]</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="p">}</span>
+</code></pre></div></p>
+<h4 id="complex-example-advanced-analytics-use-case">Complex Example - Advanced Analytics Use Case</h4>
+<p>For more complex schemas with additional metadata and calculated metrics:</p>
+<p><strong>KQL Query:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">AnalyticsData</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="p">|</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">EventTime</span><span class="w"> </span><span class="k">between</span><span class="w"> </span><span class="p">(</span><span class="n">_startTime</span><span class="w"> </span><span class="err">..</span><span class="w"> </span><span class="n">_endTime</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p">|</span><span class="w"> </span><span class="k">summarize</span><span class="w"> </span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="n">Value</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">avg</span><span class="p">(</span><span class="n">SuccessRate</span><span class="p">),</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="n">Numerator</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">sum</span><span class="p">(</span><span class="n">SuccessCount</span><span class="p">),</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="n">Denominator</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">sum</span><span class="p">(</span><span class="n">TotalCount</span><span class="p">),</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span><span class="n">StartTimeUTC</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">min</span><span class="p">(</span><span class="n">EventTime</span><span class="p">),</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="n">EndTimeUTC</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="n">max</span><span class="p">(</span><span class="n">EventTime</span><span class="p">)</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="k">by</span><span class="w"> </span><span class="n">LocationId</span><span class="p">,</span><span class="w"> </span><span class="n">CustomerResourceId</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="p">|</span><span class="w"> </span><span class="k">extend</span><span class="w"> </span><span class="n">metric_name</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;success_rate_analytics&quot;</span>
+</code></pre></div></p>
+<p><strong>Transform Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span><span class="w"> </span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Value&quot;</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;StartTimeUTC&quot;</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;LocationId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;CustomerResourceId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Numerator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Denominator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;EndTimeUTC&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div></p>
+<p><strong>Resulting Prometheus Metrics (Phase 1):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a># HELP success_rate_analytics Success rate analytics by location and customer
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a># TYPE success_rate_analytics gauge
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>success_rate_analytics{LocationId=&quot;datacenter-01&quot;,CustomerResourceId=&quot;customer-12345&quot;,Numerator=&quot;1974&quot;,Denominator=&quot;2000&quot;,EndTimeUTC=&quot;2022-01-01T10:05:00Z&quot;} 0.987
+</code></pre></div></p>
+<p><strong>Resulting OTLP Metric (Phase 2):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p">{</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;success_rate_analytics&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;gauge&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">&quot;dataPoints&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.987</span><span class="p">,</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">      </span><span class="nt">&quot;timeUnixNano&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1640995200000000000&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">      </span><span class="nt">&quot;attributes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;LocationId&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;datacenter-01&quot;</span><span class="p">},</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;CustomerResourceId&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;customer-12345&quot;</span><span class="p">},</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Numerator&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1974&quot;</span><span class="p">},</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Denominator&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2000&quot;</span><span class="p">},</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">        </span><span class="p">{</span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;EndTimeUTC&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2022-01-01T10:05:00Z&quot;</span><span class="p">}</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="w">      </span><span class="p">]</span>
+<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="w">    </span><span class="p">}]</span>
+<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="p">}</span>
+</code></pre></div></p>
+<p>This approach allows any KQL query result to be transformed into metrics by:
+1. <strong>Selecting which column contains the primary metric value</strong>
+2. <strong>Choosing the timestamp column for temporal alignment (OTLP mode)</strong><br />
+3. <strong>Mapping all other relevant columns as dimensional labels</strong>
+4. <strong>Optionally specifying a dynamic or static metric name</strong></p>
+<h3 id="metricsexporter-crd-example">MetricsExporter CRD Example</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service-response-times</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TelemetryDB</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5m</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">    </span><span class="nt">region</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;eastus&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;westus&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;production&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="w">    </span><span class="no">ServiceTelemetry</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="w">    </span><span class="no">| where Timestamp between (_startTime .. _endTime)</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="w">        </span><span class="no">metric_value = avg(ResponseTimeMs),</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="w">        </span><span class="no">timestamp = bin(Timestamp, 1m)</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="w">        </span><span class="no">by ServiceName, Environment</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="w">    </span><span class="no">| extend metric_name = &quot;service_response_time_avg&quot;</span>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="w">    </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_value&quot;</span>
+<a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;timestamp&quot;</span>
+<a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;ServiceName&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Environment&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p>This example demonstrates:
+1. <strong>Direct KQL Execution</strong>: Query executes directly without intermediate table storage
+2. <strong>Criteria-Based Selection</strong>: Only processed by <code>adxexporter</code> instances with matching cluster labels
+3. <strong>Flexible Output</strong>: Works with both Prometheus scraping (Phase 1) and OTLP push (Phase 2) modes
+4. <strong>Time Window Parameters</strong>: KQL query uses <code>_startTime</code> and <code>_endTime</code> parameters (same as SummaryRule)</p>
+<h3 id="adxexporter-deployment-example">adxexporter Deployment Example</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adxexporter</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon-system</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adxexporter</span>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">        </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adxexporter</span>
+<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adxexporter</span>
+<a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon/adxexporter:latest</span>
+<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="w">        </span><span class="nt">args</span><span class="p">:</span>
+<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--cluster-labels=region=eastus,environment=production,team=platform</span>
+<a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--kusto-endpoint=MetricsDB=https://cluster.kusto.windows.net</span>
+<a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--otlp-endpoint=http://otel-collector:4318/v1/metrics</span>
+<a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a><span class="w">        </span><span class="nt">ports</span><span class="p">:</span>
+<a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">containerPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8081</span>
+<a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">health</span>
+<a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a><span class="w">        </span><span class="nt">livenessProbe</span><span class="p">:</span>
+<a id="__codelineno-15-27" name="__codelineno-15-27" href="#__codelineno-15-27"></a><span class="w">          </span><span class="nt">httpGet</span><span class="p">:</span>
+<a id="__codelineno-15-28" name="__codelineno-15-28" href="#__codelineno-15-28"></a><span class="w">            </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/healthz</span>
+<a id="__codelineno-15-29" name="__codelineno-15-29" href="#__codelineno-15-29"></a><span class="w">            </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8081</span>
+<a id="__codelineno-15-30" name="__codelineno-15-30" href="#__codelineno-15-30"></a><span class="w">        </span><span class="nt">readinessProbe</span><span class="p">:</span>
+<a id="__codelineno-15-31" name="__codelineno-15-31" href="#__codelineno-15-31"></a><span class="w">          </span><span class="nt">httpGet</span><span class="p">:</span>
+<a id="__codelineno-15-32" name="__codelineno-15-32" href="#__codelineno-15-32"></a><span class="w">            </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/readyz</span>
+<a id="__codelineno-15-33" name="__codelineno-15-33" href="#__codelineno-15-33"></a><span class="w">            </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8081</span>
+<a id="__codelineno-15-34" name="__codelineno-15-34" href="#__codelineno-15-34"></a><span class="w">        </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-15-35" name="__codelineno-15-35" href="#__codelineno-15-35"></a><span class="w">          </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-15-36" name="__codelineno-15-36" href="#__codelineno-15-36"></a><span class="w">            </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;256Mi&quot;</span>
+<a id="__codelineno-15-37" name="__codelineno-15-37" href="#__codelineno-15-37"></a><span class="w">            </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;100m&quot;</span>
+<a id="__codelineno-15-38" name="__codelineno-15-38" href="#__codelineno-15-38"></a><span class="w">          </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-15-39" name="__codelineno-15-39" href="#__codelineno-15-39"></a><span class="w">            </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;512Mi&quot;</span>
+<a id="__codelineno-15-40" name="__codelineno-15-40" href="#__codelineno-15-40"></a><span class="w">            </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;500m&quot;</span>
+</code></pre></div>
+<h3 id="integration-with-existing-components">Integration with Existing Components</h3>
+<p>The <code>adxexporter</code> component integrates with existing ADX-Mon infrastructure while maintaining independence:</p>
+<ol>
+<li><strong>OTLP Push Integration</strong>: </li>
+<li><code>adxexporter</code> pushes metrics directly to any OTLP-compatible endpoint</li>
+<li>Uses the same <code>PromToOtlpExporter</code> infrastructure as the Collector</li>
+<li>
+<p>No scraping configuration required</p>
+</li>
+<li>
+<p><strong>Kubernetes API Integration</strong>:</p>
+</li>
+<li><code>adxexporter</code> watches <code>MetricsExporter</code> CRDs via standard Kubernetes client-go</li>
+<li>Leverages existing RBAC and authentication mechanisms</li>
+<li>
+<p>Operates within standard Kubernetes security boundaries</p>
+</li>
+<li>
+<p><strong>ADX Connectivity</strong>:</p>
+</li>
+<li>Direct ADX connection using same authentication patterns as other components</li>
+<li>Independent connection management and pooling</li>
+<li>Reuses existing ADX client libraries and connection patterns</li>
+</ol>
+<h3 id="execution-flow">Execution Flow</h3>
+<h4 id="phase-1-prometheus-scraping-mode_1">Phase 1: Prometheus Scraping Mode</h4>
+<ol>
+<li><strong>CRD Discovery</strong>: <code>adxexporter</code> discovers <code>MetricsExporter</code> CRDs matching its cluster labels</li>
+<li><strong>Scheduling</strong>: Determines execution windows based on <code>Interval</code> and last execution time</li>
+<li><strong>Query Execution</strong>: Execute KQL query with <code>_startTime</code> and <code>_endTime</code> parameters</li>
+<li><strong>Metrics Transformation</strong>: Convert query results to Prometheus metrics format</li>
+<li><strong>Registry Update</strong>: Update OpenTelemetry metrics registry with new values</li>
+<li><strong>HTTP Exposure</strong>: Serve updated metrics on <code>/metrics</code> endpoint</li>
+<li><strong>Collector Scraping</strong>: Collector discovers and scrapes metrics endpoint</li>
+<li><strong>Status Update</strong>: Update CRD status with execution results</li>
+</ol>
+<h4 id="phase-2-direct-otlp-push-mode_1">Phase 2: Direct OTLP Push Mode</h4>
+<ol>
+<li><strong>CRD Discovery</strong>: Same as Phase 1</li>
+<li><strong>Scheduling</strong>: Same as Phase 1, plus backlog processing</li>
+<li><strong>Query Execution</strong>: Same as Phase 1</li>
+<li><strong>OTLP Transformation</strong>: Convert query results directly to OTLP format</li>
+<li><strong>Direct Push</strong>: Send metrics to configured OTLP endpoint</li>
+<li><strong>Backlog Management</strong>: Queue failed exports for retry</li>
+<li><strong>Status Update</strong>: Update CRD status with execution and backlog state</li>
+</ol>
+<h3 id="validation-and-error-handling">Validation and Error Handling</h3>
+<p>The <code>adxexporter</code> controller validates:
+- KQL query syntax and database accessibility
+- Transform configuration matches query result schema
+- Cluster label criteria for CRD processing eligibility
+- Required columns (value, timestamp) are present in query results
+- OTLP endpoint connectivity (Phase 2)</p>
+<h2 id="use-cases">Use Cases</h2>
+<h3 id="use-case-1-service-performance-metrics">Use Case 1: Service Performance Metrics</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># MetricsExporter for service response time monitoring</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service-response-times</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TelemetryDB</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1m</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;production&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">    </span><span class="nt">team</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;platform&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="w">    </span><span class="no">ServiceTelemetry</span>
+<a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="w">    </span><span class="no">| where Timestamp between (_startTime .. _endTime)</span>
+<a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a><span class="w">        </span><span class="no">metric_value = avg(ResponseTimeMs),</span>
+<a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="w">        </span><span class="no">timestamp = bin(Timestamp, 1m)</span>
+<a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a><span class="w">        </span><span class="no">by ServiceName, Environment</span>
+<a id="__codelineno-16-20" name="__codelineno-16-20" href="#__codelineno-16-20"></a><span class="w">    </span><span class="no">| extend metric_name = &quot;service_response_time_avg&quot;</span>
+<a id="__codelineno-16-21" name="__codelineno-16-21" href="#__codelineno-16-21"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-16-22" name="__codelineno-16-22" href="#__codelineno-16-22"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-16-23" name="__codelineno-16-23" href="#__codelineno-16-23"></a><span class="w">    </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_value&quot;</span>
+<a id="__codelineno-16-24" name="__codelineno-16-24" href="#__codelineno-16-24"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;timestamp&quot;</span>
+<a id="__codelineno-16-25" name="__codelineno-16-25" href="#__codelineno-16-25"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;ServiceName&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Environment&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p><strong>Deployment Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># adxexporter instance matching criteria</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;environment=production,team=platform,region=eastus&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;TelemetryDB=https://cluster.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://otel-collector:4318/v1/metrics&quot;</span>
+</code></pre></div></p>
+<p><strong>Key Benefits:</strong>
+- <strong>Direct Execution</strong>: No intermediate table storage required
+- <strong>Real-time Metrics</strong>: Fresh data pushed to OTLP endpoint on each interval
+- <strong>Timestamp Fidelity</strong>: Preserves actual KQL query timestamps
+- <strong>Environment Isolation</strong>: Only processed by <code>adxexporter</code> instances with matching criteria
+- <strong>Memory Efficient</strong>: Uses <code>pkg/prompb</code> object pooling for high cardinality metrics</p>
+<h3 id="use-case-2-advanced-analytics-with-rich-metadata">Use Case 2: Advanced Analytics with Rich Metadata</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># MetricsExporter for complex customer analytics</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">customer-analytics</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">analytics</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AnalyticsDB</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15m</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="w">    </span><span class="nt">team</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;analytics&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="w">    </span><span class="nt">data-classification</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;customer-approved&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a><span class="w">    </span><span class="no">CustomerEvents</span>
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a><span class="w">    </span><span class="no">| where EventTime between (_startTime .. _endTime)</span>
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a><span class="w">        </span><span class="no">Value = avg(SuccessRate),</span>
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a><span class="w">        </span><span class="no">Numerator = sum(SuccessfulRequests),</span>
+<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a><span class="w">        </span><span class="no">Denominator = sum(TotalRequests),</span>
+<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a><span class="w">        </span><span class="no">StartTimeUTC = min(EventTime),</span>
+<a id="__codelineno-18-21" name="__codelineno-18-21" href="#__codelineno-18-21"></a><span class="w">        </span><span class="no">EndTimeUTC = max(EventTime),</span>
+<a id="__codelineno-18-22" name="__codelineno-18-22" href="#__codelineno-18-22"></a><span class="w">        </span><span class="no">AvgLatency = avg(LatencyMs)</span>
+<a id="__codelineno-18-23" name="__codelineno-18-23" href="#__codelineno-18-23"></a><span class="w">        </span><span class="no">by LocationId, CustomerResourceId, ServiceTier</span>
+<a id="__codelineno-18-24" name="__codelineno-18-24" href="#__codelineno-18-24"></a><span class="w">    </span><span class="no">| extend metric_name = strcat(&quot;customer_success_rate_&quot;, tolower(ServiceTier))</span>
+<a id="__codelineno-18-25" name="__codelineno-18-25" href="#__codelineno-18-25"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-18-26" name="__codelineno-18-26" href="#__codelineno-18-26"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-18-27" name="__codelineno-18-27" href="#__codelineno-18-27"></a><span class="w">    </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Value&quot;</span>
+<a id="__codelineno-18-28" name="__codelineno-18-28" href="#__codelineno-18-28"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;StartTimeUTC&quot;</span>
+<a id="__codelineno-18-29" name="__codelineno-18-29" href="#__codelineno-18-29"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;LocationId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;CustomerResourceId&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;ServiceTier&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Numerator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Denominator&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;EndTimeUTC&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;AvgLatency&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p><strong>Deployment Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># adxexporter instance for analytics team</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;team=analytics,data-classification=customer-approved,region=westus&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;AnalyticsDB=https://analytics.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://analytics-otel-collector:4318/v1/metrics&quot;</span>
+</code></pre></div></p>
+<p><strong>Resulting Metrics:</strong>
+- <strong>Primary value</strong>: Success rate percentage<br />
+- <strong>Rich labels</strong>: Location, customer, service tier, raw counts, time ranges, and auxiliary metrics
+- <strong>Flexible naming</strong>: Dynamic metric names based on service tier
+- <strong>Data Governance</strong>: Only processed by appropriately classified <code>adxexporter</code> instances</p>
+<h3 id="use-case-3-multi-region-infrastructure-monitoring">Use Case 3: Multi-Region Infrastructure Monitoring</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># MetricsExporter for infrastructure metrics across regions</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">infrastructure-monitoring</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sre</span>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">InfrastructureDB</span>
+<a id="__codelineno-20-9" name="__codelineno-20-9" href="#__codelineno-20-9"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+<a id="__codelineno-20-10" name="__codelineno-20-10" href="#__codelineno-20-10"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-20-11" name="__codelineno-20-11" href="#__codelineno-20-11"></a><span class="w">    </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;infrastructure&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-20-12" name="__codelineno-20-12" href="#__codelineno-20-12"></a><span class="w">    </span><span class="nt">region</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;eastus&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;westus&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;europe&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-20-13" name="__codelineno-20-13" href="#__codelineno-20-13"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-20-14" name="__codelineno-20-14" href="#__codelineno-20-14"></a><span class="w">    </span><span class="no">SystemMetrics</span>
+<a id="__codelineno-20-15" name="__codelineno-20-15" href="#__codelineno-20-15"></a><span class="w">    </span><span class="no">| where Timestamp between (_startTime .. _endTime)</span>
+<a id="__codelineno-20-16" name="__codelineno-20-16" href="#__codelineno-20-16"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-20-17" name="__codelineno-20-17" href="#__codelineno-20-17"></a><span class="w">        </span><span class="no">metric_value = avg(CpuUtilization),</span>
+<a id="__codelineno-20-18" name="__codelineno-20-18" href="#__codelineno-20-18"></a><span class="w">        </span><span class="no">timestamp = bin(Timestamp, 30s)</span>
+<a id="__codelineno-20-19" name="__codelineno-20-19" href="#__codelineno-20-19"></a><span class="w">        </span><span class="no">by NodeName, ClusterName, Region</span>
+<a id="__codelineno-20-20" name="__codelineno-20-20" href="#__codelineno-20-20"></a><span class="w">    </span><span class="no">| extend metric_name = &quot;node_cpu_utilization&quot;</span>
+<a id="__codelineno-20-21" name="__codelineno-20-21" href="#__codelineno-20-21"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-20-22" name="__codelineno-20-22" href="#__codelineno-20-22"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-20-23" name="__codelineno-20-23" href="#__codelineno-20-23"></a><span class="w">    </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_value&quot;</span>
+<a id="__codelineno-20-24" name="__codelineno-20-24" href="#__codelineno-20-24"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;timestamp&quot;</span>
+<a id="__codelineno-20-25" name="__codelineno-20-25" href="#__codelineno-20-25"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;NodeName&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;ClusterName&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;Region&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p><strong>Multi-Region Deployment:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># East US adxexporter</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;role=infrastructure,region=eastus&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;InfrastructureDB=https://eastus.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://eastus-collector:4318/v1/metrics&quot;</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="c1"># West US adxexporter  </span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;role=infrastructure,region=westus&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-10" name="__codelineno-21-10" href="#__codelineno-21-10"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;InfrastructureDB=https://westus.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-11" name="__codelineno-21-11" href="#__codelineno-21-11"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://westus-collector:4318/v1/metrics&quot;</span>
+<a id="__codelineno-21-12" name="__codelineno-21-12" href="#__codelineno-21-12"></a>
+<a id="__codelineno-21-13" name="__codelineno-21-13" href="#__codelineno-21-13"></a><span class="c1"># Europe adxexporter</span>
+<a id="__codelineno-21-14" name="__codelineno-21-14" href="#__codelineno-21-14"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-15" name="__codelineno-21-15" href="#__codelineno-21-15"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;role=infrastructure,region=europe&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-16" name="__codelineno-21-16" href="#__codelineno-21-16"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;InfrastructureDB=https://europe.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-17" name="__codelineno-21-17" href="#__codelineno-21-17"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://europe-collector:4318/v1/metrics&quot;</span>
+</code></pre></div></p>
+<p><strong>Key Benefits:</strong>
+- <strong>High-Frequency Monitoring</strong>: 30-second metric refresh intervals
+- <strong>Geographic Distribution</strong>: Each region processes the same MetricsExporter with regional data
+- <strong>Centralized Collection</strong>: All regional <code>adxexporter</code> instances scraped by their respective Collectors
+- <strong>SRE Team Focus</strong>: Clear ownership through criteria-based filtering</p>
+<h3 id="use-case-4-cross-cluster-error-rate-monitoring-with-direct-push">Use Case 4: Cross-Cluster Error Rate Monitoring with Direct Push</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># MetricsExporter for global error rate aggregation</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">adx-mon.azure.com/v1</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MetricsExporter</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">global-error-rates</span>
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sre</span>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GlobalMetrics</span>
+<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="w">  </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2m</span>
+<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">    </span><span class="nt">scope</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;global&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="w">    </span><span class="nt">priority</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;high&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;critical&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a><span class="w">  </span><span class="nt">body</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a><span class="w">    </span><span class="no">union</span>
+<a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a><span class="w">      </span><span class="no">cluster(&#39;eastus-cluster&#39;).TelemetryDB.ErrorEvents,</span>
+<a id="__codelineno-22-16" name="__codelineno-22-16" href="#__codelineno-22-16"></a><span class="w">      </span><span class="no">cluster(&#39;westus-cluster&#39;).TelemetryDB.ErrorEvents,</span>
+<a id="__codelineno-22-17" name="__codelineno-22-17" href="#__codelineno-22-17"></a><span class="w">      </span><span class="no">cluster(&#39;europe-cluster&#39;).TelemetryDB.ErrorEvents</span>
+<a id="__codelineno-22-18" name="__codelineno-22-18" href="#__codelineno-22-18"></a><span class="w">    </span><span class="no">| where Timestamp between (_startTime .. _endTime)</span>
+<a id="__codelineno-22-19" name="__codelineno-22-19" href="#__codelineno-22-19"></a><span class="w">    </span><span class="no">| summarize </span>
+<a id="__codelineno-22-20" name="__codelineno-22-20" href="#__codelineno-22-20"></a><span class="w">        </span><span class="no">metric_value = count() * 1.0,</span>
+<a id="__codelineno-22-21" name="__codelineno-22-21" href="#__codelineno-22-21"></a><span class="w">        </span><span class="no">timestamp = bin(Timestamp, 1m),</span>
+<a id="__codelineno-22-22" name="__codelineno-22-22" href="#__codelineno-22-22"></a><span class="w">        </span><span class="no">error_rate = count() * 100.0 / countif(isnotempty(SuccessEvent))</span>
+<a id="__codelineno-22-23" name="__codelineno-22-23" href="#__codelineno-22-23"></a><span class="w">        </span><span class="no">by Region = tostring(split(ClusterName, &#39;-&#39;)[0]), ServiceName</span>
+<a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a><span class="w">    </span><span class="no">| extend metric_name = &quot;global_error_count&quot;</span>
+<a id="__codelineno-22-25" name="__codelineno-22-25" href="#__codelineno-22-25"></a><span class="w">  </span><span class="nt">transform</span><span class="p">:</span>
+<a id="__codelineno-22-26" name="__codelineno-22-26" href="#__codelineno-22-26"></a><span class="w">    </span><span class="nt">metricNameColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_name&quot;</span>
+<a id="__codelineno-22-27" name="__codelineno-22-27" href="#__codelineno-22-27"></a><span class="w">    </span><span class="nt">valueColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;metric_value&quot;</span>
+<a id="__codelineno-22-28" name="__codelineno-22-28" href="#__codelineno-22-28"></a><span class="w">    </span><span class="nt">timestampColumn</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;timestamp&quot;</span>
+<a id="__codelineno-22-29" name="__codelineno-22-29" href="#__codelineno-22-29"></a><span class="w">    </span><span class="nt">labelColumns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;Region&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;ServiceName&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;error_rate&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<p><strong>Deployment with Direct OTLP Push:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Global monitoring adxexporter with OTLP push</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;scope=global,priority=high&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;GlobalMetrics=https://global.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://central-prometheus-gateway:4318/v1/metrics&quot;</span>
+</code></pre></div></p>
+<p><strong>Global Monitoring Benefits:</strong>
+- <strong>Cross-Cluster Aggregation</strong>: Single query across multiple ADX clusters
+- <strong>Priority-Based Processing</strong>: Only runs on high/critical priority <code>adxexporter</code> instances<br />
+- <strong>Direct OTLP Push</strong>: Metrics pushed directly to central endpoint with pooled serialization
+- <strong>Rich Context</strong>: Includes both raw counts and calculated error rates in labels
+- <strong>Memory Efficient</strong>: Uses <code>pkg/prompb</code> pooling for high cardinality cross-cluster metrics</p>
+<h2 id="configuration-strategy-and-best-practices">Configuration Strategy and Best Practices</h2>
+<h3 id="adxexporter-configuration">adxexporter Configuration</h3>
+<p>The <code>adxexporter</code> component uses direct OTLP push for exporting metrics:</p>
+<h4 id="standard-otlp-push-configuration">Standard OTLP Push Configuration</h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;team=platform,environment=production,region=eastus&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;MetricsDB=https://cluster.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://otel-collector:4318/v1/metrics&quot;</span>
+</code></pre></div>
+<h4 id="multi-database-configuration">Multi-Database Configuration</h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;team=analytics,data-classification=approved&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;MetricsDB=https://metrics.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;LogsDB=https://logs.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://otel-collector:4318/v1/metrics&quot;</span>
+</code></pre></div>
+<h3 id="criteria-based-deployment-strategy">Criteria-Based Deployment Strategy</h3>
+<p>Use the <code>criteria</code> field in MetricsExporter CRDs to control which <code>adxexporter</code> instances process them. This follows the same pattern as documented in <a href="../../config/">ADX-Mon Ingestor Configuration</a>.</p>
+<h4 id="example-environment-based-processing">Example: Environment-Based Processing</h4>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">    </span><span class="nt">environment</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;production&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<strong>adxexporter Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>--cluster-labels<span class="o">=</span><span class="s2">&quot;environment=production,region=eastus&quot;</span>
+</code></pre></div>
+<strong>Result</strong>: Only <code>adxexporter</code> instances with <code>environment=production</code> cluster labels process this MetricsExporter</p>
+<h4 id="example-team-and-region-based-processing">Example: Team and Region-Based Processing</h4>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">    </span><span class="nt">team</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;analytics&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;data-science&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="w">    </span><span class="nt">region</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;eastus&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;westus&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<strong>adxexporter Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>--cluster-labels<span class="o">=</span><span class="s2">&quot;team=analytics,region=eastus,data-classification=approved&quot;</span>
+</code></pre></div>
+<strong>Result</strong>: Processes MetricsExporter because team=analytics AND region=eastus both match</p>
+<h4 id="example-data-classification-controls">Example: Data Classification Controls</h4>
+<p><div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="w">  </span><span class="nt">criteria</span><span class="p">:</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a><span class="w">    </span><span class="nt">data-classification</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;public&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;internal&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="w">    </span><span class="nt">priority</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;high&quot;</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<strong>adxexporter Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a>--cluster-labels<span class="o">=</span><span class="s2">&quot;data-classification=internal,priority=high,team=platform&quot;</span>
+</code></pre></div>
+<strong>Result</strong>: Processes MetricsExporter because data-classification=internal AND priority=high both match</p>
+<h3 id="benefits-of-criteria-based-architecture">Benefits of Criteria-Based Architecture</h3>
+<ol>
+<li><strong>Security Boundaries</strong>: Control data access based on <code>adxexporter</code> deployment classification</li>
+<li><strong>Performance Isolation</strong>: Deploy separate <code>adxexporter</code> instances for high-frequency vs. low-frequency metrics</li>
+<li><strong>Geographic Distribution</strong>: Regional <code>adxexporter</code> instances process region-appropriate MetricsExporters</li>
+<li><strong>Team Autonomy</strong>: Teams deploy their own <code>adxexporter</code> instances with appropriate cluster labels</li>
+<li><strong>Resource Optimization</strong>: Distribute MetricsExporter processing load across appropriate instances</li>
+</ol>
+<h3 id="collector-integration-optional">Collector Integration (Optional)</h3>
+<p>With the direct OTLP push implementation, Collector scraping is no longer required. The <code>adxexporter</code> pushes metrics directly to any OTLP-compatible endpoint (OpenTelemetry Collector, Prometheus with remote-write receiver, etc.).</p>
+<p>If you want to use Collector scraping as an alternative to OTLP push, you can configure pod annotations:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c1"># Pod annotations for Collector discovery (optional)</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="w">    </span><span class="nt">adx-mon/scrape</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span><span class="w">        </span><span class="c1"># Enable scraping</span>
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="w">    </span><span class="nt">adx-mon/port</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;8080&quot;</span><span class="w">          </span><span class="c1"># Metrics port</span>
+<a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a><span class="w">    </span><span class="nt">adx-mon/path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/metrics&quot;</span><span class="w">      </span><span class="c1"># Metrics path</span>
+</code></pre></div>
+<p>However, the primary recommended configuration is direct OTLP push for better timestamp fidelity and simpler deployment.</p>
+<h2 id="implementation-roadmap">Implementation Roadmap</h2>
+<p>This section provides a methodical breakdown of implementing the <code>adxexporter</code> component and <code>MetricsExporter</code> CRD across multiple PRs, with Phase 1 focusing on Prometheus scraping and Phase 2 adding direct OTLP push capabilities.</p>
+<h3 id="implementation-status-summary">📊 Implementation Status Summary</h3>
+<p><strong>Overall Progress: Phase 2 OTLP Push Mode Implemented</strong></p>
+<ul>
+<li>✅ <strong>Phase 1 Complete</strong>: Foundation, Scaffolding, Query Execution, Transform Engine</li>
+<li>✅ <strong>Phase 2 OTLP Push Mode</strong>: Direct OTLP push using existing <code>PromToOtlpExporter</code></li>
+<li>⏸️ <strong>Prometheus Scraping Mode</strong>: Deprioritized in favor of direct OTLP push</li>
+</ul>
+<p><strong>Key Achievements:</strong>
+- Complete MetricsExporter CRD with time window management and criteria matching
+- Functional adxexporter component with Kubernetes controller framework
+- Working KQL query execution with ADX integration and time window management
+- Full transform engine for KQL to metrics conversion with validation
+- <strong>Direct OTLP push using <code>collector/export/PromToOtlpExporter</code></strong> with <code>pkg/prompb</code> pooling
+- <strong>ToWriteRequest() function</strong> converts <code>[]MetricData</code> to <code>prompb.WriteRequest</code> with object pooling
+- Comprehensive unit tests and benchmarks for all core functionality</p>
+<p><strong>Architecture Decision: OTLP Push Over Prometheus Scraping</strong></p>
+<p>The implementation prioritizes Phase 2's direct OTLP push mode over Phase 1's Prometheus scraping for several reasons:
+- <strong>Timestamp Fidelity</strong>: Preserves actual KQL query timestamps instead of scrape-time timestamps
+- <strong>Memory Efficiency</strong>: Leverages <code>pkg/prompb</code> object pooling (<code>WriteRequestPool</code>, <code>TimeSeriesPool</code>)
+- <strong>Existing Infrastructure</strong>: Reuses battle-tested <code>PromToOtlpExporter</code> from the Collector
+- <strong>Simpler Deployment</strong>: No need for Collector discovery annotations or scraping configuration
+- <strong>High Cardinality Support</strong>: Optimized for high-volume metric export scenarios</p>
+<p><strong>Code Quality</strong>: 
+- ✅ Extensive unit test coverage
+- ✅ Follows ADX-Mon patterns (SummaryRule consistency)
+- ✅ Proper error handling and logging
+- ✅ Memory-efficient prompb pooling
+- ✅ Benchmarks for ToWriteRequest transformation</p>
+<h3 id="implementation-details">🔍 Implementation Details</h3>
+<p><strong>Files Implemented:</strong>
+- <code>api/v1/metricsexporter_types.go</code> - Complete CRD definition with time management methods
+- <code>cmd/adxexporter/main.go</code> - Main component with CLI parsing and OTLP exporter initialization
+- <code>adxexporter/metricsexporter.go</code> - Controller reconciler with criteria matching, query execution, and OTLP push
+- <code>adxexporter/kusto.go</code> - KQL query executor with ADX client integration
+- <code>transform/kusto_to_metrics.go</code> - Transform engine with <code>ToWriteRequest()</code> for prompb conversion
+- Generated CRD manifests in <code>kustomize/bases/</code> and <code>operator/manifests/crds/</code></p>
+<p><strong>Key Features Working:</strong>
+- ✅ MetricsExporter CRD with complete spec (Database, Body, Interval, Transform, Criteria)
+- ✅ Time window calculation (<code>ShouldExecuteQuery</code>, <code>NextExecutionWindow</code>)
+- ✅ Cluster-label based criteria matching (case-insensitive)
+- ✅ KQL query execution with <code>_startTime</code>/<code>_endTime</code> substitution
+- ✅ Transform validation and column mapping (value, labels, timestamps, metric names)
+- ✅ <code>ToWriteRequest()</code> conversion with <code>pkg/prompb</code> object pooling
+- ✅ Direct OTLP push via <code>PromToOtlpExporter</code>
+- ✅ Controller-runtime manager with graceful shutdown
+- ✅ Health checks (readyz/healthz endpoints)</p>
+<p><strong>CLI Configuration:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>adxexporter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a><span class="w">  </span>--cluster-labels<span class="o">=</span><span class="s2">&quot;region=eastus,environment=production&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a><span class="w">  </span>--kusto-endpoint<span class="o">=</span><span class="s2">&quot;MetricsDB=https://cluster.kusto.windows.net&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-33-4" name="__codelineno-33-4" href="#__codelineno-33-4"></a><span class="w">  </span>--otlp-endpoint<span class="o">=</span><span class="s2">&quot;http://otel-collector:4318/v1/metrics&quot;</span><span class="w">  </span><span class="c1"># Required</span>
+</code></pre></div></p>
+<h3 id="phase-1-prometheus-scraping-implementation">Phase 1: Prometheus Scraping Implementation</h3>
+<h4 id="1-foundation-metricsexporter-crd-definition-complete">1. Foundation: MetricsExporter CRD Definition ✅ COMPLETE</h4>
+<p><strong>Goal</strong>: Establish the core data structures and API types
+- <strong>Deliverables</strong>:
+  - ✅ Create <code>api/v1/metricsexporter_types.go</code> with complete CRD spec
+  - ✅ Define <code>MetricsExporterSpec</code>, <code>TransformConfig</code>, and status types
+  - ✅ Add deepcopy generation markers and JSON tags
+  - ✅ Update <code>api/v1/groupversion_info.go</code> to register new types
+  - ✅ Generate CRD manifests using <code>make generate-crd CMD=update</code>
+- <strong>Testing</strong>: ✅ Unit tests for struct validation and JSON marshaling/unmarshaling
+- <strong>Acceptance Criteria</strong>: ✅ CRD can be applied to cluster and kubectl can describe the schema</p>
+<h4 id="2-adxexporter-component-scaffolding-complete">2. adxexporter Component Scaffolding ✅ COMPLETE</h4>
+<p><strong>Goal</strong>: Create the standalone <code>adxexporter</code> component infrastructure
+- <strong>Deliverables</strong>:
+  - ✅ Create <code>cmd/adxexporter/main.go</code> with command-line argument parsing
+  - ✅ Implement cluster-labels parsing and criteria matching logic
+  - ✅ Add Kubernetes client-go setup for CRD watching
+  - ✅ Create basic controller framework for MetricsExporter reconciliation
+  - ✅ Add graceful shutdown and signal handling
+- <strong>Testing</strong>: ✅ Integration tests for component startup and CRD discovery
+- <strong>Acceptance Criteria</strong>: ✅ <code>adxexporter</code> starts successfully and can discover MetricsExporter CRDs</p>
+<h4 id="3-kql-query-execution-engine-complete">3. KQL Query Execution Engine ✅ COMPLETE</h4>
+<p><strong>Goal</strong>: Implement KQL query execution with time window management
+- <strong>Deliverables</strong>:
+  - ✅ Create ADX client connection management in <code>adxexporter</code>
+  - ✅ Implement time window calculation logic (adapted from SummaryRule patterns)
+  - ✅ Add KQL query execution with <code>_startTime</code>/<code>_endTime</code> parameter injection
+  - ✅ Implement scheduling logic based on <code>Interval</code> and last execution tracking
+  - ✅ Add comprehensive error handling for query failures
+- <strong>Testing</strong>: ✅ Unit tests with mock ADX responses and integration tests with real ADX
+- <strong>Acceptance Criteria</strong>: ✅ Can execute KQL queries on schedule with proper time window management</p>
+<h4 id="4-transform-engine-kql-to-prometheus-metrics-complete">4. Transform Engine: KQL to Prometheus Metrics ✅ COMPLETE</h4>
+<p><strong>Goal</strong>: Transform KQL query results to Prometheus metrics format
+- <strong>Deliverables</strong>:
+  - ✅ Create <code>transform/kusto_to_metrics.go</code> with transformation engine (Note: uses generic name, not prometheus-specific)
+  - ✅ Implement column mapping (value, metric name, labels) for Prometheus format
+  - ✅ Add data type validation and conversion (numeric values, string labels)
+  - ✅ Handle missing columns and default metric names
+  - ✅ Integrate with OpenTelemetry metrics library for Prometheus exposition
+- <strong>Testing</strong>: ✅ Extensive unit tests with various KQL result schemas and edge cases
+- <strong>Acceptance Criteria</strong>: ✅ Can transform any valid KQL result to Prometheus metrics</p>
+<h4 id="5-prometheus-metrics-server-complete">5. Prometheus Metrics Server ✅ COMPLETE</h4>
+<p><strong>Goal</strong>: Expose transformed metrics via HTTP endpoint for Collector scraping
+- <strong>Deliverables</strong>:
+  - ✅ Implement HTTP server with configurable port and path (uses controller-runtime's shared metrics server)
+  - ✅ Integrate OpenTelemetry Prometheus exporter library
+  - ✅ Add metrics registry management and lifecycle handling
+  - ✅ Implement graceful shutdown of HTTP server (handled by controller-runtime)
+  - ✅ Add health check endpoints for liveness/readiness probes
+- <strong>Testing</strong>: ✅ HTTP endpoint tests and Prometheus format validation
+- <strong>Acceptance Criteria</strong>: ✅ Serves valid Prometheus metrics on <code>/metrics</code> endpoint via controller-runtime's shared registry</p>
+<h4 id="6-collector-discovery-integration-not-complete">6. Collector Discovery Integration ❌ NOT COMPLETE</h4>
+<p><strong>Goal</strong>: Enable automatic discovery by existing Collector infrastructure
+- <strong>Deliverables</strong>:
+  - ❌ Add pod annotation configuration to <code>adxexporter</code> deployment manifests
+  - ❌ Document Collector integration patterns and discovery mechanism
+  - ❌ Create example Kubernetes manifests with proper annotations
+  - ❌ Validate end-to-end scraping workflow with Collector
+- <strong>Testing</strong>: ❌ End-to-end tests with real Collector scraping <code>adxexporter</code> metrics
+- <strong>Acceptance Criteria</strong>: ❌ Collector automatically discovers and scrapes <code>adxexporter</code> metrics</p>
+<h4 id="7-status-management-and-error-handling-partially-complete">7. Status Management and Error Handling 🔄 PARTIALLY COMPLETE</h4>
+<p><strong>Goal</strong>: Implement comprehensive status tracking and error recovery
+- <strong>Deliverables</strong>:
+  - 🔄 Add MetricsExporter CRD status updates with condition management (methods implemented, cluster updates missing)
+  - ✅ Implement retry logic for transient query failures
+  - ✅ Add structured logging with correlation IDs and trace information
+  - ✅ Create error classification (transient vs permanent failures)
+  - ❌ Add metrics for <code>adxexporter</code> operational monitoring
+- <strong>Testing</strong>: ❌ Chaos engineering tests with various failure scenarios
+- <strong>Acceptance Criteria</strong>: 🔄 Graceful error handling with proper status reporting (logic implemented, needs cluster status updates)</p>
+<h3 id="phase-2-direct-otlp-push-implementation">Phase 2: Direct OTLP Push Implementation</h3>
+<h4 id="8-otlp-client-integration-and-prometheus-remote-write-support">8. OTLP Client Integration and Prometheus Remote Write Support</h4>
+<p><strong>Goal</strong>: Add direct push capabilities with multiple protocol support
+- <strong>Deliverables</strong>:
+  - Integrate OpenTelemetry OTLP exporter client
+  - <strong>Leverage <code>pkg/prompb</code> for Prometheus remote write support</strong>
+  - Add OTLP endpoint configuration and connection management
+  - Implement OTLP metrics format transformation (separate from Prometheus)
+  - <strong>Add Prometheus remote write transformation using <code>pkg/prompb.TimeSeries</code></strong>
+  - Add connection health checking and circuit breaker patterns
+  - Support both HTTP and gRPC OTLP protocols
+  - <strong>Support Prometheus remote write protocol via <code>pkg/prompb.WriteRequest</code></strong>
+- <strong>Testing</strong>: Integration tests with mock and real OTLP endpoints and Prometheus remote write
+- <strong>Acceptance Criteria</strong>: Can push metrics directly to OTLP endpoints and Prometheus remote write endpoints</p>
+<h4 id="9-backlog-and-retry-infrastructure">9. Backlog and Retry Infrastructure</h4>
+<p><strong>Goal</strong>: Implement sophisticated backlog management for reliable delivery
+- <strong>Deliverables</strong>:
+  - Extend MetricsExporter CRD status with backlog tracking
+  - Implement failed export queuing in CRD status
+  - Add exponential backoff retry logic with configurable limits
+  - Create backlog processing scheduler for historical data
+  - <strong>Leverage <code>pkg/prompb</code> pooling mechanisms (<code>WriteRequestPool</code>, <code>TimeSeriesPool</code>) for memory efficiency</strong>
+  - Add dead letter queue for permanently failed exports
+- <strong>Testing</strong>: Reliability tests with network partitions and endpoint failures
+- <strong>Acceptance Criteria</strong>: Reliable metric delivery with historical backfill capabilities</p>
+<h4 id="91-leveraging-pkgprompb-for-enhanced-performance-and-timestamp-fidelity">9.1. Leveraging <code>pkg/prompb</code> for Enhanced Performance and Timestamp Fidelity</h4>
+<p><strong>Goal</strong>: Utilize existing high-performance protobuf implementation for Phase 2
+- <strong>Deliverables</strong>:
+  - <strong>Transform Engine Enhancement</strong>: Create <code>transform/kusto_to_prompb.go</code> to convert KQL results directly to <code>pkg/prompb.TimeSeries</code>
+  - <strong>Timestamp Preservation</strong>: Use <code>pkg/prompb.Sample</code> to preserve actual timestamps from <code>TimestampColumn</code> (unlike Phase 1 gauges)
+  - <strong>Memory Optimization</strong>: Implement object pooling using <code>pkg/prompb.WriteRequestPool</code> and <code>pkg/prompb.TimeSeriesPool</code>
+  - <strong>Historical Data Support</strong>: Enable proper temporal ordering for backfill scenarios using <code>pkg/prompb.Sample.Timestamp</code>
+  - <strong>Efficient Batching</strong>: Group multiple time series into <code>pkg/prompb.WriteRequest</code> for batch processing
+  - <strong>Label Optimization</strong>: Use <code>pkg/prompb.Sort()</code> for proper label ordering and efficient serialization
+- <strong>Key Benefits</strong>:
+  - <strong>Reduced GC Pressure</strong>: Object pooling minimizes memory allocations during high-frequency processing
+  - <strong>Timestamp Fidelity</strong>: Preserve actual query result timestamps instead of current time
+  - <strong>Prometheus Compatibility</strong>: Native support for Prometheus remote write protocol
+  - <strong>Performance</strong>: Optimized protobuf marshaling for large result sets
+  - <strong>Backfill Capability</strong>: Support historical data with proper temporal alignment
+- <strong>Testing</strong>: Performance benchmarks comparing pooled vs non-pooled implementations
+- <strong>Acceptance Criteria</strong>: Significantly reduced memory allocation and improved timestamp accuracy</p>
+<h4 id="10-hybrid-mode-operation">10. Hybrid Mode Operation</h4>
+<p><strong>Goal</strong>: Support multiple output modes simultaneously with shared query execution
+- <strong>Deliverables</strong>:
+  - Enable concurrent operation of Prometheus scraping, OTLP push, and Prometheus remote write
+  - Add configuration options for selective output mode per MetricsExporter
+  - Implement shared query execution with multiple output transformations:
+    - <strong>OpenTelemetry metrics</strong> (Phase 1) for <code>/metrics</code> endpoint scraping
+    - <strong>OTLP format</strong> for direct OTLP push<br />
+    - <strong><code>pkg/prompb.TimeSeries</code></strong> for Prometheus remote write
+  - <strong>Dual Transform Architecture</strong>: Create separate transform paths while sharing KQL execution
+  - Add performance optimization for multi-mode operation
+- <strong>Testing</strong>: Load tests with all output modes active simultaneously
+- <strong>Acceptance Criteria</strong>: Efficient operation in hybrid mode without performance degradation</p>
+<h3 id="phase-2-architecture-enhancement-pkgprompb-integration">Phase 2 Architecture Enhancement: <code>pkg/prompb</code> Integration</h3>
+<h4 id="motivation-for-pkgprompb-integration">Motivation for <code>pkg/prompb</code> Integration</h4>
+<p>The existing <code>pkg/prompb</code> package provides significant advantages for Phase 2 implementation:</p>
+<ol>
+<li><strong>Timestamp Fidelity</strong>: Unlike Phase 1 OpenTelemetry gauges (which represent current state), <code>pkg/prompb.Sample</code> preserves actual timestamps from KQL <code>TimestampColumn</code></li>
+<li><strong>Memory Efficiency</strong>: Object pooling (<code>WriteRequestPool</code>, <code>TimeSeriesPool</code>) reduces GC pressure during high-frequency processing  </li>
+<li><strong>Historical Data Support</strong>: Proper temporal ordering enables backfill scenarios with accurate timestamps</li>
+<li><strong>Prometheus Compatibility</strong>: Native support for Prometheus remote write protocol</li>
+<li><strong>Performance</strong>: Optimized protobuf marshaling for large result sets</li>
+</ol>
+<h4 id="implementation-strategy">Implementation Strategy</h4>
+<p><strong>Dual Transform Architecture:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a><span class="c1">// Phase 1: OpenTelemetry metrics (current)</span>
+<a id="__codelineno-34-2" name="__codelineno-34-2" href="#__codelineno-34-2"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">MetricsExporterReconciler</span><span class="p">)</span><span class="w"> </span><span class="nx">transformToOTelMetrics</span><span class="p">(</span><span class="nx">rows</span><span class="w"> </span><span class="p">[]</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">transform</span><span class="p">.</span><span class="nx">MetricData</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<a id="__codelineno-34-3" name="__codelineno-34-3" href="#__codelineno-34-3"></a>
+<a id="__codelineno-34-4" name="__codelineno-34-4" href="#__codelineno-34-4"></a><span class="c1">// Phase 2: Add prompb transformation</span>
+<a id="__codelineno-34-5" name="__codelineno-34-5" href="#__codelineno-34-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">MetricsExporterReconciler</span><span class="p">)</span><span class="w"> </span><span class="nx">transformToPromTimeSeries</span><span class="p">(</span><span class="nx">rows</span><span class="w"> </span><span class="p">[]</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="o">*</span><span class="nx">prompb</span><span class="p">.</span><span class="nx">TimeSeries</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div></p>
+<p><strong>Key Integration Points:</strong></p>
+<ol>
+<li><strong>Transform Engine</strong>: Create <code>transform/kusto_to_prompb.go</code> alongside existing <code>transform/kusto_to_metrics.go</code></li>
+<li><strong>Memory Management</strong>: Use <code>prompb.WriteRequestPool.Get()</code> and <code>prompb.TimeSeriesPool.Get()</code> for efficient object reuse</li>
+<li><strong>Timestamp Handling</strong>: Extract timestamps from <code>TimestampColumn</code> and convert to <code>int64</code> for <code>prompb.Sample.Timestamp</code></li>
+<li><strong>Label Processing</strong>: Use <code>prompb.Sort()</code> for proper label ordering and efficient serialization</li>
+<li><strong>Batching</strong>: Group multiple time series into <code>prompb.WriteRequest</code> for batch transmission</li>
+</ol>
+<p><strong>Configuration Extensions:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MetricsExporterReconciler</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a><span class="w">    </span><span class="c1">// ... existing fields ...</span>
+<a id="__codelineno-35-3" name="__codelineno-35-3" href="#__codelineno-35-3"></a><span class="w">    </span><span class="nx">PrometheusRemoteWriteEndpoint</span><span class="w"> </span><span class="kt">string</span>
+<a id="__codelineno-35-4" name="__codelineno-35-4" href="#__codelineno-35-4"></a><span class="w">    </span><span class="nx">EnablePrometheusRemoteWrite</span><span class="w">   </span><span class="kt">bool</span>
+<a id="__codelineno-35-5" name="__codelineno-35-5" href="#__codelineno-35-5"></a><span class="w">    </span><span class="nx">EnableOTLP</span><span class="w">                    </span><span class="kt">bool</span>
+<a id="__codelineno-35-6" name="__codelineno-35-6" href="#__codelineno-35-6"></a><span class="p">}</span>
+</code></pre></div></p>
+<p><strong>Output Mode Selection:</strong>
+- <strong>Phase 1 Only</strong>: OpenTelemetry metrics for <code>/metrics</code> scraping
+- <strong>Phase 2 Hybrid</strong>: OpenTelemetry + Prometheus remote write + OTLP push
+- <strong>Phase 2 Direct</strong>: Skip OpenTelemetry, use only push modes for better performance</p>
+<h4 id="benefits-over-current-implementation">Benefits Over Current Implementation</h4>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Phase 1 (OpenTelemetry)</th>
+<th>Phase 2 (with prompb)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Timestamp Handling</strong></td>
+<td>Current time only</td>
+<td>Preserves actual query timestamps</td>
+</tr>
+<tr>
+<td><strong>Memory Usage</strong></td>
+<td>Standard allocation</td>
+<td>Pooled objects, reduced GC pressure</td>
+</tr>
+<tr>
+<td><strong>Historical Data</strong></td>
+<td>Not supported</td>
+<td>Full backfill capability</td>
+</tr>
+<tr>
+<td><strong>Protocol Support</strong></td>
+<td>Prometheus scraping only</td>
+<td>Prometheus remote write + OTLP</td>
+</tr>
+<tr>
+<td><strong>Performance</strong></td>
+<td>Good for scraping</td>
+<td>Optimized for high-volume push</td>
+</tr>
+</tbody>
+</table>
+<h3 id="quality-and-operations">Quality and Operations</h3>
+<h4 id="11-performance-optimization-and-scalability">11. Performance Optimization and Scalability</h4>
+<p><strong>Goal</strong>: Optimize for production workloads and multi-tenancy
+- <strong>Deliverables</strong>:
+  - Add connection pooling and query optimization
+  - Implement parallel processing for multiple MetricsExporter CRDs
+  - <strong>Leverage <code>pkg/prompb</code> pooling for memory-efficient metric processing</strong>
+  - Add resource usage monitoring and throttling mechanisms
+  - Optimize memory usage for large result sets using pooled objects
+  - <strong>Implement efficient label sorting and deduplication using <code>pkg/prompb.Sort()</code></strong>
+  - Add configurable resource limits and circuit breakers
+- <strong>Testing</strong>: Load testing with high-volume data and many MetricsExporter CRDs
+- <strong>Acceptance Criteria</strong>: Handles production-scale workloads within resource constraints</p>
+<h4 id="12-comprehensive-test-suite">12. Comprehensive Test Suite</h4>
+<p><strong>Goal</strong>: Ensure complete test coverage across all scenarios
+- <strong>Deliverables</strong>:
+  - Unit tests for all packages with &gt;90% coverage
+  - Integration tests for ADX connectivity and metrics output
+  - End-to-end tests covering full workflow scenarios
+  - Performance benchmarks and scalability tests
+  - Chaos engineering tests for resilience validation
+- <strong>Testing</strong>: Automated test execution in CI/CD pipeline
+- <strong>Acceptance Criteria</strong>: All tests pass consistently in CI environment</p>
+<h4 id="13-documentation-and-examples">13. Documentation and Examples</h4>
+<p><strong>Goal</strong>: Provide comprehensive documentation for users and operators
+- <strong>Deliverables</strong>:
+  - Update CRD documentation in <code>docs/crds.md</code>
+  - Create detailed configuration guide with deployment examples
+  - Add troubleshooting guide for common issues and debugging
+  - Document best practices for criteria-based deployment
+  - Create operational runbooks for production deployment
+- <strong>Testing</strong>: Documentation review and validation of all examples
+- <strong>Acceptance Criteria</strong>: Users can successfully deploy and operate <code>adxexporter</code> using documentation</p>
+<h4 id="14-observability-and-monitoring">14. Observability and Monitoring</h4>
+<p><strong>Goal</strong>: Add comprehensive observability for operational excellence
+- <strong>Deliverables</strong>:
+  - Add Prometheus metrics for <code>adxexporter</code> operational metrics (query rates, errors, latency)
+  - Implement structured logging with correlation IDs and distributed tracing
+  - Create Grafana dashboards for <code>adxexporter</code> monitoring
+  - Add alerting rules for common failure scenarios
+  - Add health check endpoints for load balancer integration
+- <strong>Testing</strong>: Validate all metrics and observability in staging environment
+- <strong>Acceptance Criteria</strong>: Operations team can monitor and troubleshoot <code>adxexporter</code> effectively</p>
+<h3 id="dependencies-and-sequencing">Dependencies and Sequencing</h3>
+<p><strong>Phase 1 Critical Path</strong>: Steps 1-7 must be completed sequentially for basic functionality
+<strong>Phase 2 Critical Path</strong>: Steps 8-10 build on Phase 1 for enhanced capabilities<br />
+<strong>Parallel Development</strong>: Steps 11-14 can be developed in parallel with Phase 2
+<strong>Milestone Reviews</strong>: Technical review after steps 3, 7, 10, and 12</p>
+<p><strong>Key Dependencies:</strong>
+- Step 2 enables independent <code>adxexporter</code> development
+- Step 4 provides foundation for both Phase 1 and Phase 2 output modes
+- Step 7 completes Phase 1 for production readiness
+- Step 10 completes Phase 2 for enhanced reliability</p>
+<p>This roadmap ensures incremental delivery with Phase 1 providing immediate value through Prometheus integration, while Phase 2 adds sophisticated reliability features for enterprise deployments.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>The <code>adxexporter</code> component and <code>MetricsExporter</code> CRD provide a comprehensive solution for transforming ADX data into standardized metrics for observability platforms. The implementation prioritizes direct OTLP push for enterprise-grade reliability:</p>
+<p><strong>Implementation Benefits:</strong>
+- <strong>Direct OTLP Push</strong>: Push metrics directly to any OTLP-compatible endpoint
+- <strong>Timestamp Fidelity</strong>: Preserves actual KQL query result timestamps instead of export time
+- <strong>Memory Efficiency</strong>: Leverages <code>pkg/prompb</code> object pooling (<code>WriteRequestPool</code>, <code>TimeSeriesPool</code>) for high cardinality metrics
+- <strong>Existing Infrastructure</strong>: Reuses battle-tested <code>PromToOtlpExporter</code> from the Collector
+- <strong>Criteria-Based Security</strong>: Secure, distributed processing with team and environment isolation
+- <strong>No Intermediate Storage</strong>: Enables KQL-to-metrics transformation without ADX table materialization</p>
+<p><strong>Key Technical Advantage: <code>pkg/prompb</code> Integration</strong></p>
+<p>The implementation leverages the existing <code>pkg/prompb</code> package for:
+- <strong>Memory Efficiency</strong>: Object pooling reduces allocation overhead during high-frequency processing
+- <strong>Timestamp Accuracy</strong>: Preserve temporal fidelity from KQL query results for proper historical analysis
+- <strong>Protocol Compatibility</strong>: Native Prometheus remote write support via OTLP endpoints
+- <strong>Performance</strong>: Optimized protobuf serialization for large-scale deployments</p>
+<p><strong>Transform Pipeline:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>KQL Query Results → KustoToMetricsTransformer → []MetricData → ToWriteRequest() → prompb.WriteRequest → PromToOtlpExporter → OTLP Endpoint
+</code></pre></div></p>
+<p>This design provides a scalable, secure, and maintainable foundation for organizations to operationalize their ADX analytics data across their observability infrastructure.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "toc.integrate", "navigation.top", "search.suggest", "search.highlight", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
