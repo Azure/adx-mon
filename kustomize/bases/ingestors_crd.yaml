@@ -120,12 +120,115 @@ spec:
                 description: Image is the container image to use for the ingestor
                   component. Optional; if omitted, a default image will be used.
                 type: string
+              logDestination:
+                default: Logs:Ingestor
+                description: |-
+                  LogDestination configures the default log destination for ingestor pod logs in the form "Database:Table".
+                  Optional; defaults to "Logs:Ingestor" if omitted.
+                type: string
+              podPolicy:
+                description: PodPolicy configures pod scheduling and image pull behavior
+                  for the ingestor workload.
+                properties:
+                  imagePullSecrets:
+                    description: |-
+                      ImagePullSecrets is an optional list of references to secrets in the same
+                      namespace to use for pulling images.
+                    items:
+                      description: |-
+                        LocalObjectReference contains enough information to let you locate the
+                        referenced object inside the same namespace.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: NodeSelector is an optional map of node selector
+                      labels used for pod scheduling.
+                    type: object
+                  tolerations:
+                    description: Tolerations is an optional list of tolerations used
+                      for pod scheduling.
+                    items:
+                      description: |-
+                        The pod this Toleration is attached to tolerates any taint that matches
+                        the triple <key,value,effect> using the matching operator <operator>.
+                      properties:
+                        effect:
+                          description: |-
+                            Effect indicates the taint effect to match. Empty means match all taint effects.
+                            When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: |-
+                            Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                            If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                          type: string
+                        operator:
+                          description: |-
+                            Operator represents a key's relationship to the value.
+                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                            Exists is equivalent to wildcard for value, so that a pod can
+                            tolerate all taints of a particular category.
+                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                          type: string
+                        tolerationSeconds:
+                          description: |-
+                            TolerationSeconds represents the period of time the toleration (which must be
+                            of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                            it is not set, which means tolerate the taint forever (do not evict). Zero and
+                            negative values will be treated as 0 (evict immediately) by the system.
+                          format: int64
+                          type: integer
+                        value:
+                          description: |-
+                            Value is the taint value the toleration matches to.
+                            If the operator is Exists, the value should be empty, otherwise just a regular string.
+                          type: string
+                      type: object
+                    type: array
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of ingestor replicas to run. Optional;
                   defaults to 1 if omitted.
                 format: int32
                 type: integer
+              tls:
+                description: |-
+                  TLS configures TLS certificates for the ingestor server.
+                  If not specified, the ingestor will generate self-signed certificates.
+                properties:
+                  hostPath:
+                    description: |-
+                      HostPath specifies a directory path on the host containing TLS certificates.
+                      The directory should contain tls.crt and tls.key files.
+                      This is useful for environments where certificates are pre-provisioned on nodes.
+                    type: string
+                  secretRef:
+                    description: |-
+                      SecretRef references a Kubernetes Secret containing tls.crt and tls.key.
+                      The secret must exist in the same namespace as the Ingestor.
+                    properties:
+                      name:
+                        description: Name is the name of the secret in the same namespace
+                          as the Ingestor.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                type: object
             required:
             - adxClusterSelector
             type: object
