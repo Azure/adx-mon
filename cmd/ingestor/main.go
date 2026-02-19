@@ -307,6 +307,7 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentCount:        maxSegmentCount,
 		MaxDiskUsage:           maxDiskUsage,
 		MaxBatchSegments:       maxBatchSegments,
+		ConcurrentUploads:      concurrentUploads,
 		EnableWALFsync:         enableWALFsync,
 		MaxTransferConcurrency: maxTransferConcurrency,
 		InsecureSkipVerify:     insecureSkipVerify,
