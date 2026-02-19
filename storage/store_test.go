@@ -111,6 +111,69 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 2, s.WALCount())
 }
 
+func TestStore_Open_StartupOpenConcurrency(t *testing.T) {
+	b := make([]byte, 256)
+	database := "adxmetrics"
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:             dir,
+		SegmentMaxSize:         1024,
+		SegmentMaxAge:          time.Minute,
+		MaxDiskUsage:           1024 * 1024,
+		StartupOpenConcurrency: 10,
+	})
+
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+	require.Equal(t, 0, s.WALCount())
+
+	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
+	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
+	w, err := s.GetWAL(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+
+	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
+	key1, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
+	w, err = s.GetWAL(ctx, key1)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+
+	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
+	key2, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	require.NoError(t, err)
+	w, err = s.GetWAL(ctx, key2)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+
+	path := w.Path()
+
+	require.Equal(t, 2, s.WALCount())
+	require.NoError(t, s.Close())
+
+	r, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	_, err = io.ReadAll(r)
+	require.NoError(t, err)
+
+	s = storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:             dir,
+		SegmentMaxSize:         1024,
+		SegmentMaxAge:          time.Minute,
+		StartupOpenConcurrency: 10,
+	})
+
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+	require.Equal(t, 2, s.WALCount())
+}
+
 func TestStore_WriteTimeSeries(t *testing.T) {
 	tests := []struct {
 		name    string
