@@ -562,7 +562,10 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 	}
 
 	stmt := kql.New(".create table ").AddTable(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("(Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic)")
-	_, err = client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, stmt)
+	createResult, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, stmt)
+	if err == nil {
+		createResult.Stop()
+	}
 	return true, err
 }
 
@@ -1173,7 +1176,10 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	stmt := kql.New(".ingest inline into table ").
 		AddTable(target.HeartbeatTable).
 		AddLiteral(" <| ").AddUnsafe(row)
-	_, err = federatedClient.Mgmt(ctx, target.HeartbeatDatabase, stmt)
+	ingestResult, err := federatedClient.Mgmt(ctx, target.HeartbeatDatabase, stmt)
+	if err == nil {
+		ingestResult.Stop()
+	}
 	return err
 }
 
@@ -1578,9 +1584,11 @@ func ensureHubTables(ctx context.Context, client *kusto.Client, database string,
 			AddLiteral(" (").
 			AddUnsafe(schemaDef).
 			AddLiteral(")")
-		if _, err := client.Mgmt(ctx, database, stmt); err != nil {
+		result, err := client.Mgmt(ctx, database, stmt)
+		if err != nil {
 			return fmt.Errorf("failed to create table %s.%s: %w", database, table, err)
 		}
+		result.Stop()
 		logger.Infof("Created hub table %s.%s using schema: %s", database, table, schemaDef)
 	}
 	return nil
@@ -1714,10 +1722,11 @@ func executeKustoScripts(ctx context.Context, client *kusto.Client, database str
 	const scriptPreamble = ".execute database script with (ContinueOnErrors=true)\n<|\n"
 	for _, script := range scripts {
 		fullScript := scriptPreamble + strings.Join(script, "")
-		_, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript))
+		result, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript))
 		if err != nil {
 			return fmt.Errorf("failed to execute Kusto script: %w", err)
 		}
+		result.Stop()
 	}
 	return nil
 }
