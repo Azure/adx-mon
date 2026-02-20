@@ -290,7 +290,15 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		return iter, nil
 	}
 
-	return nil, nil
+	// Default: return an empty but properly initialized mock iterator
+	mockRows, err := kusto.NewMockRows(table.Columns{{Name: "Result", Type: kustotypes.String}})
+	if err != nil {
+		return nil, err
+	}
+	if err := iter.Mock(mockRows); err != nil {
+		return nil, fmt.Errorf("failed to mock iterator: %w", err)
+	}
+	return iter, nil
 }
 
 type TestFunctionStore struct {
