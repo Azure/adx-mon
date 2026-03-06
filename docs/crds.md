@@ -5,7 +5,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | CRD Kind      | Description                                 | Spec Fields Summary | Example Link |
 |---------------|---------------------------------------------|---------------------|--------------|
 | ADXCluster    | Azure Data Explorer cluster (provisioned or existing, supports federation/partitioning) | clusterName, endpoint, databases, provision, role, federation | [ADXCluster Controller](adxcluster-controller.md) |
-| Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
+| Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector, criteriaExpression | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
 | SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
@@ -72,7 +72,7 @@ spec:
 ---
 
 ## Ingestor
-**Purpose:** Deploys the Ingestor, which buffers and uploads telemetry to ADX. Supports scaling, endpoint customization, and cluster selection.
+**Purpose:** Deploys the Ingestor, which buffers and uploads telemetry to ADX. Supports scaling, endpoint customization, cluster selection, and conditional reconciliation via CEL expressions.
 
 **Example:**
 ```yaml
@@ -85,16 +85,34 @@ spec:
   replicas: 3
   endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
   exposeExternally: false
+  logDestination: "Logs:Ingestor"
   adxClusterSelector:
     matchLabels:
       app: adx-mon
+  criteriaExpression: "environment == 'prod' && region == 'eastus'"
 ```
 **Key Fields:**
-- `image`: Container image for the ingestor.
-- `replicas`: Number of replicas.
+- `image`: Container image for the ingestor. Default: `ghcr.io/azure/adx-mon/ingestor:latest`.
+- `replicas`: Number of replicas. Default: 1.
 - `endpoint`: Service endpoint (auto-generated if omitted).
-- `exposeExternally`: Whether to expose outside the cluster.
-- `adxClusterSelector`: Label selector for target ADXCluster.
+- `exposeExternally`: Whether to expose outside the cluster. Default: false. _(Not yet implemented)_
+- `logDestination`: Destination for ingestor pod logs (`Database:Table`). Default: `Logs:Ingestor`.
+- `adxClusterSelector`: Label selector for target ADXCluster(s). **Required.**
+- `criteriaExpression`: _(Optional)_ CEL expression evaluated against operator cluster labels (region, environment, cloud, and any `--cluster-labels` key/value pairs). If the expression evaluates to false, reconciliation is skipped. Expression errors are surfaced in status conditions.
+
+**Status Conditions:**
+
+The Ingestor controller tracks reconciliation progress via the `ingestor.adx-mon.azure.com` condition type:
+
+| Reason | Status | Meaning |
+|--------|--------|---------|
+| `WaitForReady` | True | Ingestor manifests are installing; waiting for StatefulSet to be ready |
+| `CRDsInstalled` | Unknown | Dependent CRDs (Function, SummaryRule, ManagementCommand) installed successfully |
+| `Ready` | True | All ingestor replicas are ready |
+| `NotReady` | Unknown | Waiting for ADXCluster to be ready |
+| `TemplateError` | False | Template rendering failed (terminal error) |
+| `CriteriaExpressionError` | False | CEL expression parse/evaluation error |
+| `CriteriaExpressionFalse` | False | CEL expression evaluated to false; reconciliation skipped |
 
 **Intended Use:** Buffer, batch, and upload telemetry from Collectors to ADX, with support for sharding and high availability.
 

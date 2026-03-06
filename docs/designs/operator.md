@@ -144,14 +144,25 @@ spec:
 ### Ingestor CRD
 
 **Spec fields:**
-- `image` (string, optional): Container image for the ingestor component.
+- `image` (string, optional): Container image for the ingestor component. Default: `ghcr.io/azure/adx-mon/ingestor:latest`.
 - `replicas` (int32, optional): Number of ingestor replicas. Default: 1.
 - `endpoint` (string, optional): Endpoint for the ingestor. If running in a cluster, this should be the service name; otherwise, the operator will generate an endpoint.
-- `exposeExternally` (bool, optional): Whether to expose the ingestor externally. Default: false.
+- `exposeExternally` (bool, optional): Whether to expose the ingestor externally. Default: false. _(Not yet implemented)_
+- `logDestination` (string, optional): Destination for ingestor pod logs (`Database:Table`). Default: `Logs:Ingestor`.
 - `adxClusterSelector` (LabelSelector, required): Label selector to target ADXCluster CRDs.
+- `criteriaExpression` (string, optional): CEL (Common Expression Language) expression evaluated against operator cluster labels (region, environment, cloud, and any `--cluster-labels` key/value pairs). All labels are exposed as string variables. If the expression evaluates to false, reconciliation is skipped. Expression errors surface in status conditions and block reconciliation until corrected.
 
 **Status fields:**
-- `conditions` (array, optional): Standard Kubernetes conditions.
+- `conditions` (array, optional): Standard Kubernetes conditions tracking reconciliation progress.
+
+**Status Condition Reasons:**
+- `WaitForReady`: Ingestor manifests installing, waiting for StatefulSet readiness
+- `CRDsInstalled`: Dependent CRDs installed successfully
+- `Ready`: All ingestor replicas are ready
+- `NotReady`: Waiting for ADXCluster to become ready
+- `TemplateError`: Template rendering failed (terminal)
+- `CriteriaExpressionError`: CEL expression parse/evaluation error
+- `CriteriaExpressionFalse`: CEL expression evaluated to false
 
 **Example:**
 ```yaml
@@ -164,9 +175,11 @@ spec:
   replicas: 3
   endpoint: "http://prod-ingestor.monitoring.svc.cluster.local:8080"
   exposeExternally: false
+  logDestination: "Logs:Ingestor"
   adxClusterSelector:
     matchLabels:
       app: adx-mon
+  criteriaExpression: "environment == 'prod' && region == 'eastus'"
 ```
 
 ### Collector CRD

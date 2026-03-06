@@ -82,6 +82,12 @@ func (r *CollectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Retry installation of collector manifests
 		return r.CreateCollector(ctx, collector)
 
+	case condition.Reason == "CriteriaExpressionError",
+		condition.Reason == "CriteriaExpressionFalse":
+		// CriteriaExpression now evaluates successfully (we passed the check above),
+		// recover from previous error state by re-running creation.
+		return r.CreateCollector(ctx, collector)
+
 	case condition.ObservedGeneration != collector.GetGeneration():
 		// CRD has been updated, re-render the collector manifests
 		return r.CreateCollector(ctx, collector)

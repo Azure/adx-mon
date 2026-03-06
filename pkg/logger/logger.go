@@ -185,27 +185,97 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 }
 
 // controllerRuntimeLogSink implements logr.LogSink
-type controllerRuntimeLogSink struct{}
+type controllerRuntimeLogSink struct {
+	name   string
+	values []any
+}
 
-func (l *controllerRuntimeLogSink) Init(info logr.RuntimeInfo)                 {}
-func (l *controllerRuntimeLogSink) Enabled(level int) bool                     { return true }
-func (l *controllerRuntimeLogSink) WithName(name string) logr.LogSink          { return l }
-func (l *controllerRuntimeLogSink) WithValues(kvs ...interface{}) logr.LogSink { return l }
+func (l *controllerRuntimeLogSink) Init(info logr.RuntimeInfo) {}
+
+func (l *controllerRuntimeLogSink) Enabled(level int) bool {
+	// controller-runtime uses logr "verbosity": Info(0, ...) is normal, Info(1+) is increasingly verbose.
+	// Treat verbosity >0 as debug so it is suppressed unless LOG_LEVEL=DEBUG/TRACE.
+	return slog.Default().Enabled(context.Background(), slogLevelForLogrVerbosity(level))
+}
+
+func (l *controllerRuntimeLogSink) WithName(name string) logr.LogSink {
+	if l.name == "" {
+		return &controllerRuntimeLogSink{name: name, values: append([]any(nil), l.values...)}
+	}
+	return &controllerRuntimeLogSink{name: l.name + "/" + name, values: append([]any(nil), l.values...)}
+}
+
+func (l *controllerRuntimeLogSink) WithValues(kvs ...interface{}) logr.LogSink {
+	// logr passes alternating key/value pairs. We keep them as-is (like the prior implementation)
+	// and attach them under a stable attribute key.
+	vals := append([]any(nil), l.values...)
+	for _, kv := range kvs {
+		vals = append(vals, kv)
+	}
+	return &controllerRuntimeLogSink{name: l.name, values: vals}
+}
 
 func (l *controllerRuntimeLogSink) Info(level int, msg string, keysAndValues ...interface{}) {
-	if len(keysAndValues) > 0 {
-		Info(msg, slog.Any("values", keysAndValues))
-	} else {
-		Info(msg)
+	ctx := context.Background()
+	sl := slogLevelForLogrVerbosity(level)
+	if !slog.Default().Enabled(ctx, sl) {
+		return
 	}
+
+	attrs := l.baseAttrs()
+	if len(keysAndValues) > 0 {
+		attrs = append(attrs, slog.Any("values", keysAndValues))
+	}
+
+	// Avoid slog.Info/slog.Debug helpers here to preserve caller/source location from controller-runtime.
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:]) // skip [Callers, Info, logr]
+	r := slog.NewRecord(time.Now(), sl, msg, pcs[0])
+	r.AddAttrs(attrs...)
+	_ = slog.Default().Handler().Handle(ctx, r)
 }
 
 func (l *controllerRuntimeLogSink) Error(err error, msg string, keysAndValues ...interface{}) {
-	attrs := []any{slog.Any("error", err)}
+	ctx := context.Background()
+	if !slog.Default().Enabled(ctx, slog.LevelError) {
+		return
+	}
+
+	attrs := l.baseAttrsAny()
+	attrs = append(attrs, slog.Any("error", err))
 	if len(keysAndValues) > 0 {
 		attrs = append(attrs, slog.Any("values", keysAndValues))
 	}
 	Error(msg, attrs...)
+}
+
+func slogLevelForLogrVerbosity(level int) slog.Level {
+	if level <= 0 {
+		return slog.LevelInfo
+	}
+	return slog.LevelDebug
+}
+
+func (l *controllerRuntimeLogSink) baseAttrs() []slog.Attr {
+	attrs := make([]slog.Attr, 0, 2)
+	if l.name != "" {
+		attrs = append(attrs, slog.String("logger", l.name))
+	}
+	if len(l.values) > 0 {
+		attrs = append(attrs, slog.Any("values", l.values))
+	}
+	return attrs
+}
+
+func (l *controllerRuntimeLogSink) baseAttrsAny() []any {
+	attrs := make([]any, 0, 2)
+	if l.name != "" {
+		attrs = append(attrs, slog.String("logger", l.name))
+	}
+	if len(l.values) > 0 {
+		attrs = append(attrs, slog.Any("values", l.values))
+	}
+	return attrs
 }
 
 // AsLogr returns a logr.Logger that uses our logger implementation
