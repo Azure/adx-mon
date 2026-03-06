@@ -1685,7 +1685,9 @@ func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]s
 			// Note: When referencing a stored entity group, do NOT use "entity_group" keyword prefix.
 			// Correct: macro-expand MyGroup as X ( X.Table )
 			// Wrong:   macro-expand entity_group MyGroup as X ( X.Table )
-			macro := fmt.Sprintf("macro-expand %s as X ( X.%s )", entityGroupName, table)
+			// isfuzzy=true best_effort=true allows the function to succeed even when some spokes
+			// are missing the table, returning partial results instead of an error.
+			macro := fmt.Sprintf("macro-expand isfuzzy=true best_effort=true %s as X ( X.%s )", entityGroupName, table)
 			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}
