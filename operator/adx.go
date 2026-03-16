@@ -1142,9 +1142,15 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 
 	federatedClusterEndpoint := target.Endpoint
 	ep = kusto.NewConnectionStringBuilder(federatedClusterEndpoint)
-	if strings.HasPrefix(federatedClusterEndpoint, "https://") && target.ManagedIdentityClientId != "" {
-		// Enables kustainer integration testing
-		ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
+	// use managed identity if specified, fallback to default Azure
+	// credentials if not; this supports for environments using a default
+	// workload identity that can access both spoke and hub clusters
+	if strings.HasPrefix(federatedClusterEndpoint, "https://") {
+		if target.ManagedIdentityClientId != "" {
+			ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
+		} else {
+			ep.WithDefaultAzureCredential()
+		}
 	}
 	federatedClient, err := kusto.New(ep)
 	if err != nil {
