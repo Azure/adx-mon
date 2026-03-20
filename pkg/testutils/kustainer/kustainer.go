@@ -290,7 +290,10 @@ func (c *KustainerContainer) connect(ctx context.Context, config *rest.Config, p
 	}
 
 	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", c.namespace, podName)
-	hostIP := strings.TrimLeft(config.Host, "htps:/")
+	hostIP := config.Host
+	if u, err := url.Parse(config.Host); err == nil && u.Host != "" {
+		hostIP = u.Host
+	}
 
 	serverURL := url.URL{Scheme: "https", Path: path, Host: hostIP}
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, &serverURL)
