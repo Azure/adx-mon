@@ -180,7 +180,8 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			}
 
 			stmt := kql.New(".drop function ").AddUnsafe(function.Name).AddLiteral(" ifexists")
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+			result, err := t.kustoCli.Mgmt(ctx, stmt)
+			if err != nil {
 				parsed := kustoutil.ParseError(err)
 				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
 				function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeletionFailed", parsed)
@@ -192,6 +193,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				continue
 			}
 
+			result.Stop()
 			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", fmt.Sprintf("Function successfully deleted from %s", availableDB))
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
 				logger.Errorf("Failed to update success status following deletion for %s.%s: %v", function.Spec.Database, function.Name, err)
@@ -201,7 +203,8 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+			result, err := t.kustoCli.Mgmt(ctx, stmt)
+			if err != nil {
 				parsed := kustoutil.ParseError(err)
 				if !errors.Retry(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
@@ -219,6 +222,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				continue
 			}
 
+			result.Stop()
 			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
 			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
 				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
@@ -300,12 +304,14 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 		} else {
 			stmt = kql.New(".execute database script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
 		}
-		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+		result, err := t.kustoCli.Mgmt(ctx, stmt)
+		if err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
 			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
 		} else {
+			result.Stop()
 			logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
 			if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
 				logger.Errorf("Failed to update success status: %v", err)

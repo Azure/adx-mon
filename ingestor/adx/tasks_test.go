@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,45 @@ import (
 	klock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var (
+	sharedK3sOnce sync.Once
+	sharedK3s     *k3s.K3sContainer
+	sharedK3sErr  error
+	sharedK3sCtx  context.Context
+	sharedK3sStop context.CancelFunc
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+
+	if sharedK3sStop != nil {
+		sharedK3sStop()
+	}
+	if sharedK3s != nil {
+		_ = sharedK3s.Terminate(context.Background())
+	}
+
+	os.Exit(code)
+}
+
+func getSharedK3sContainer(t *testing.T) *k3s.K3sContainer {
+	t.Helper()
+
+	sharedK3sOnce.Do(func() {
+		sharedK3sCtx, sharedK3sStop = context.WithCancel(context.Background())
+		sharedK3s, sharedK3sErr = k3s.Run(sharedK3sCtx, "rancher/k3s:v1.31.2-k3s1")
+		if sharedK3sErr != nil {
+			return
+		}
+		if err := testutils.InstallCrds(sharedK3sCtx, sharedK3s); err != nil {
+			sharedK3sErr = err
+		}
+	})
+
+	require.NoError(t, sharedK3sErr)
+	return sharedK3s
+}
 
 // ensureTestVFlagSet ensures the test.v flag is set for MockRows functionality
 func ensureTestVFlagSet(t *testing.T) {
@@ -290,7 +331,15 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		return iter, nil
 	}
 
-	return nil, nil
+	// Default: return an empty but properly initialized mock iterator
+	mockRows, err := kusto.NewMockRows(table.Columns{{Name: "Result", Type: kustotypes.String}})
+	if err != nil {
+		return nil, err
+	}
+	if err := iter.Mock(mockRows); err != nil {
+		return nil, fmt.Errorf("failed to mock iterator: %w", err)
+	}
+	return iter, nil
 }
 
 type TestFunctionStore struct {
@@ -742,13 +791,15 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
-	require.NoError(t, err)
+	k3sContainer := getSharedK3sContainer(t)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	testNamespace := "adx-funcs-" + runID
 
-	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
-
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	kustoContainer, err := kustainer.Run(
+		ctx,
+		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
+		kustainer.WithCluster(ctx, k3sContainer, kustainer.WithNamespace(testNamespace), kustainer.WithName("kustainer-funcs-"+runID)),
+	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
@@ -772,7 +823,7 @@ func TestFunctions(t *testing.T) {
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
 		Name:      resourceName,
-		Namespace: "default",
+		Namespace: testNamespace,
 	}
 
 	t.Run("Creates functions", func(t *testing.T) {
@@ -873,7 +924,7 @@ func TestFunctions(t *testing.T) {
 		resourceName := "invalid-function"
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNamespace,
 		}
 		fn := &adxmonv1.Function{
 			ObjectMeta: metav1.ObjectMeta{
@@ -904,13 +955,15 @@ func TestManagementCommands(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
-	require.NoError(t, err)
+	k3sContainer := getSharedK3sContainer(t)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	testNamespace := "adx-mgmt-" + runID
 
-	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
-
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	kustoContainer, err := kustainer.Run(
+		ctx,
+		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
+		kustainer.WithCluster(ctx, k3sContainer, kustainer.WithNamespace(testNamespace), kustainer.WithName("kustainer-mgmt-"+runID)),
+	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
@@ -935,7 +988,7 @@ func TestManagementCommands(t *testing.T) {
 		resourceName := "testtest"
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNamespace,
 		}
 
 		fn := &adxmonv1.ManagementCommand{
@@ -970,7 +1023,7 @@ func TestManagementCommands(t *testing.T) {
 		resourceName := "testtesttest"
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNamespace,
 		}
 
 		fn := &adxmonv1.ManagementCommand{
@@ -1454,13 +1507,15 @@ func TestSummaryRules(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
-	require.NoError(t, err)
+	k3sContainer := getSharedK3sContainer(t)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	testNamespace := "adx-summary-" + runID
 
-	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
-
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	kustoContainer, err := kustainer.Run(
+		ctx,
+		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
+		kustainer.WithCluster(ctx, k3sContainer, kustainer.WithNamespace(testNamespace), kustainer.WithName("kustainer-summary-"+runID)),
+	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
@@ -1498,7 +1553,7 @@ func TestSummaryRules(t *testing.T) {
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
 		Name:      resourceName,
-		Namespace: "default",
+		Namespace: testNamespace,
 	}
 
 	// Create a SummaryRule

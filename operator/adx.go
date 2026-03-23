@@ -562,7 +562,10 @@ func ensureHeartbeatTable(ctx context.Context, cluster *adxmonv1.ADXCluster) (bo
 	}
 
 	stmt := kql.New(".create table ").AddTable(*cluster.Spec.Federation.HeartbeatTable).AddLiteral("(Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic)")
-	_, err = client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, stmt)
+	createResult, err := client.Mgmt(ctx, *cluster.Spec.Federation.HeartbeatDatabase, stmt)
+	if err == nil {
+		createResult.Stop()
+	}
 	return true, err
 }
 
@@ -1139,9 +1142,15 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 
 	federatedClusterEndpoint := target.Endpoint
 	ep = kusto.NewConnectionStringBuilder(federatedClusterEndpoint)
-	if strings.HasPrefix(federatedClusterEndpoint, "https://") && target.ManagedIdentityClientId != "" {
-		// Enables kustainer integration testing
-		ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
+	// use managed identity if specified, fallback to default Azure
+	// credentials if not; this supports environments using a default
+	// workload identity that can access both spoke and hub clusters
+	if strings.HasPrefix(federatedClusterEndpoint, "https://") {
+		if target.ManagedIdentityClientId != "" {
+			ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
+		} else {
+			ep.WithDefaultAzureCredential()
+		}
 	}
 	federatedClient, err := kusto.New(ep)
 	if err != nil {
@@ -1173,7 +1182,10 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	stmt := kql.New(".ingest inline into table ").
 		AddTable(target.HeartbeatTable).
 		AddLiteral(" <| ").AddUnsafe(row)
-	_, err = federatedClient.Mgmt(ctx, target.HeartbeatDatabase, stmt)
+	ingestResult, err := federatedClient.Mgmt(ctx, target.HeartbeatDatabase, stmt)
+	if err == nil {
+		ingestResult.Stop()
+	}
 	return err
 }
 
@@ -1578,9 +1590,11 @@ func ensureHubTables(ctx context.Context, client *kusto.Client, database string,
 			AddLiteral(" (").
 			AddUnsafe(schemaDef).
 			AddLiteral(")")
-		if _, err := client.Mgmt(ctx, database, stmt); err != nil {
+		result, err := client.Mgmt(ctx, database, stmt)
+		if err != nil {
 			return fmt.Errorf("failed to create table %s.%s: %w", database, table, err)
 		}
+		result.Stop()
 		logger.Infof("Created hub table %s.%s using schema: %s", database, table, schemaDef)
 	}
 	return nil
@@ -1677,7 +1691,9 @@ func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]s
 			// Note: When referencing a stored entity group, do NOT use "entity_group" keyword prefix.
 			// Correct: macro-expand MyGroup as X ( X.Table )
 			// Wrong:   macro-expand entity_group MyGroup as X ( X.Table )
-			macro := fmt.Sprintf("macro-expand %s as X ( X.%s )", entityGroupName, table)
+			// isfuzzy=true best_effort=true allows the function to succeed even when some spokes
+			// are missing the table, returning partial results instead of an error.
+			macro := fmt.Sprintf("macro-expand isfuzzy=true best_effort=true %s as X ( X.%s )", entityGroupName, table)
 			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}
@@ -1714,10 +1730,11 @@ func executeKustoScripts(ctx context.Context, client *kusto.Client, database str
 	const scriptPreamble = ".execute database script with (ContinueOnErrors=true)\n<|\n"
 	for _, script := range scripts {
 		fullScript := scriptPreamble + strings.Join(script, "")
-		_, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript))
+		result, err := client.Mgmt(ctx, database, kql.New("").AddUnsafe(fullScript))
 		if err != nil {
 			return fmt.Errorf("failed to execute Kusto script: %w", err)
 		}
+		result.Stop()
 	}
 	return nil
 }

@@ -325,10 +325,11 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 	for _, fn := range functions {
 		logger.Infof("Creating function %s", fn.name)
 		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
-		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+		result, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 		if err != nil {
 			return err
 		}
+		result.Stop()
 	}
 	return nil
 }

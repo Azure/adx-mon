@@ -35,9 +35,16 @@ import (
 type KustainerContainer struct {
 	testcontainers.Container
 
-	endpoint string
-	stop     chan struct{}
+	endpoint      string
+	stop          chan struct{}
+	namespace     string
+	labelSelector string
 }
+
+const (
+	clusterNamespaceEnv = "ADXMON_KUSTAINER_NAMESPACE"
+	clusterAppEnv       = "ADXMON_KUSTAINER_APP"
+)
 
 func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustomizer) (*KustainerContainer, error) {
 	initEnabled := true
@@ -68,7 +75,19 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
 	var c *KustainerContainer
 	if container != nil {
-		c = &KustainerContainer{Container: container}
+		namespace := genericContainerReq.Env[clusterNamespaceEnv]
+		if namespace == "" {
+			namespace = "default"
+		}
+		app := genericContainerReq.Env[clusterAppEnv]
+		if app == "" {
+			app = "kustainer"
+		}
+		c = &KustainerContainer{
+			Container:     container,
+			namespace:     namespace,
+			labelSelector: "app=" + app,
+		}
 	}
 
 	if err != nil {
@@ -87,8 +106,8 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 	var podName string
 	// Wait for pod to exist and be running/ready
 	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-		pods, err := clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
-			LabelSelector: "app=kustainer",
+		pods, err := clientset.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: c.labelSelector,
 		})
 		if err != nil || len(pods.Items) == 0 {
 			return false, nil
@@ -110,7 +129,7 @@ func (c *KustainerContainer) PortForward(ctx context.Context, config *rest.Confi
 	}
 
 	err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
-		if err := c.waitForLog(ctx, clientset, podName, "Hit 'CTRL-C' or 'CTRL-BREAK' to quit"); err != nil {
+		if err := c.waitForLog(ctx, clientset, c.namespace, podName, "Hit 'CTRL-C' or 'CTRL-BREAK' to quit"); err != nil {
 			return false, nil
 		}
 		return true, nil
@@ -140,8 +159,53 @@ func (c *KustainerContainer) Close() error {
 	return nil
 }
 
-func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.CustomizeRequestOption {
+type ClusterOption func(*clusterConfig)
+
+type clusterConfig struct {
+	namespace string
+	name      string
+	app       string
+}
+
+func WithNamespace(namespace string) ClusterOption {
+	return func(cfg *clusterConfig) {
+		if namespace != "" {
+			cfg.namespace = namespace
+		}
+	}
+}
+
+func WithName(name string) ClusterOption {
+	return func(cfg *clusterConfig) {
+		if name != "" {
+			cfg.name = name
+			cfg.app = name
+		}
+	}
+}
+
+func WithCluster(ctx context.Context, k *k3s.K3sContainer, opts ...ClusterOption) testcontainers.CustomizeRequestOption {
 	return func(req *testcontainers.GenericContainerRequest) error {
+		cfg := clusterConfig{
+			namespace: "default",
+			name:      "kustainer",
+			app:       "kustainer",
+		}
+		for _, opt := range opts {
+			opt(&cfg)
+		}
+		replacer := strings.NewReplacer(
+			"{{NAMESPACE}}", cfg.namespace,
+			"{{NAME}}", cfg.name,
+			"{{APP}}", cfg.app,
+		)
+
+		if req.Env == nil {
+			req.Env = map[string]string{}
+		}
+		req.Env[clusterNamespaceEnv] = cfg.namespace
+		req.Env[clusterAppEnv] = cfg.app
+
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
@@ -152,8 +216,26 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					}
 
 					lfp := filepath.Join(rootDir, "pkg/testutils/kustainer/k8s.yaml")
-					rfp := filepath.Join(testutils.K3sManifests, "kustainer.yaml")
-					if err := k.CopyFileToContainer(ctx, lfp, rfp, 0644); err != nil {
+					manifest, err := os.ReadFile(lfp)
+					if err != nil {
+						return fmt.Errorf("failed to read kustainer manifest: %w", err)
+					}
+					rendered := replacer.Replace(string(manifest))
+					tmpFile, err := os.CreateTemp("", "kustainer-manifest-*.yaml")
+					if err != nil {
+						return fmt.Errorf("failed to create temporary manifest: %w", err)
+					}
+					defer os.Remove(tmpFile.Name())
+					if _, err := tmpFile.WriteString(rendered); err != nil {
+						tmpFile.Close()
+						return fmt.Errorf("failed to write temporary manifest: %w", err)
+					}
+					if err := tmpFile.Close(); err != nil {
+						return fmt.Errorf("failed to close temporary manifest: %w", err)
+					}
+					manifestName := fmt.Sprintf("%s-%s.yaml", cfg.name, cfg.namespace)
+					rfp := filepath.Join(testutils.K3sManifests, manifestName)
+					if err := k.CopyFileToContainer(ctx, tmpFile.Name(), rfp, 0644); err != nil {
 						return fmt.Errorf("failed to copy file to container: %w", err)
 					}
 
@@ -175,8 +257,8 @@ func WithStarted() testcontainers.CustomizeRequestOption {
 	}
 }
 
-func (c *KustainerContainer) waitForLog(ctx context.Context, client *kubernetes.Clientset, podName, logMsg string) error {
-	req := client.CoreV1().Pods("default").GetLogs(podName, &corev1.PodLogOptions{
+func (c *KustainerContainer) waitForLog(ctx context.Context, client *kubernetes.Clientset, namespace, podName, logMsg string) error {
+	req := client.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Follow: true,
 	})
 	stream, err := req.Stream(ctx)
@@ -207,8 +289,11 @@ func (c *KustainerContainer) connect(ctx context.Context, config *rest.Config, p
 		return fmt.Errorf("failed to create round tripper: %w", err)
 	}
 
-	path := fmt.Sprintf("/api/v1/namespaces/default/pods/%s/portforward", podName)
-	hostIP := strings.TrimLeft(config.Host, "htps:/")
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", c.namespace, podName)
+	hostIP := config.Host
+	if u, err := url.Parse(config.Host); err == nil && u.Host != "" {
+		hostIP = u.Host
+	}
 
 	serverURL := url.URL{Scheme: "https", Path: path, Host: hostIP}
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, &serverURL)

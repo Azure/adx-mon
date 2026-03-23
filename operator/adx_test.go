@@ -997,7 +997,7 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 			foundT1 = true
 			// Verify it references the named entity group, not an inline list
 			// Note: stored entity groups are referenced without the "entity_group" keyword
-			require.Contains(t, f, "macro-expand db1Spoke as X")
+			require.Contains(t, f, "macro-expand isfuzzy=true best_effort=true db1Spoke as X")
 			require.NotContains(t, f, "entity_group")
 			require.Contains(t, f, "X.t1")
 		}
@@ -1005,7 +1005,7 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 			foundT2 = true
 			// Verify it references the named entity group, not an inline list
 			// Note: stored entity groups are referenced without the "entity_group" keyword
-			require.Contains(t, f, "macro-expand db1Spoke as X")
+			require.Contains(t, f, "macro-expand isfuzzy=true best_effort=true db1Spoke as X")
 			require.NotContains(t, f, "entity_group")
 			require.Contains(t, f, "X.t2")
 		}
