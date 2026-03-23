@@ -156,12 +156,12 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/shared
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/version
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/managedidentity
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
-# github.com/ClickHouse/ch-go v0.69.0
-## explicit; go 1.24.0
+# github.com/ClickHouse/ch-go v0.71.0
+## explicit; go 1.24.1
 github.com/ClickHouse/ch-go/compress
 github.com/ClickHouse/ch-go/proto
-# github.com/ClickHouse/clickhouse-go/v2 v2.42.0
-## explicit; go 1.24.0
+# github.com/ClickHouse/clickhouse-go/v2 v2.43.0
+## explicit; go 1.24.1
 github.com/ClickHouse/clickhouse-go/v2
 github.com/ClickHouse/clickhouse-go/v2/contributors
 github.com/ClickHouse/clickhouse-go/v2/ext
@@ -501,8 +501,8 @@ github.com/pelletier/go-toml/v2/unstable
 # github.com/philhofer/fwd v1.2.0
 ## explicit; go 1.20
 github.com/philhofer/fwd
-# github.com/pierrec/lz4/v4 v4.1.22
-## explicit; go 1.14
+# github.com/pierrec/lz4/v4 v4.1.25
+## explicit; go 1.17
 github.com/pierrec/lz4/v4
 github.com/pierrec/lz4/v4/internal/lz4block
 github.com/pierrec/lz4/v4/internal/lz4errors
