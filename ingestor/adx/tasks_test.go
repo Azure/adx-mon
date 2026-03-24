@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -798,14 +799,14 @@ func TestFunctions(t *testing.T) {
 	kustoContainer, err := kustainer.Run(
 		ctx,
 		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
-		kustainer.WithCluster(ctx, k3sContainer, kustainer.WithNamespace(testNamespace), kustainer.WithName("kustainer-funcs-"+runID)),
+		kustainer.WithStarted(),
 	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
 	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := kusto.New(cb)
@@ -962,14 +963,14 @@ func TestManagementCommands(t *testing.T) {
 	kustoContainer, err := kustainer.Run(
 		ctx,
 		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
-		kustainer.WithCluster(ctx, k3sContainer, kustainer.WithNamespace(testNamespace), kustainer.WithName("kustainer-mgmt-"+runID)),
+		kustainer.WithStarted(),
 	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
 	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := kusto.New(cb)
@@ -1514,14 +1515,14 @@ func TestSummaryRules(t *testing.T) {
 	kustoContainer, err := kustainer.Run(
 		ctx,
 		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
-		kustainer.WithCluster(ctx, k3sContainer, kustainer.WithNamespace(testNamespace), kustainer.WithName("kustainer-summary-"+runID)),
+		kustainer.WithStarted(),
 	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
 	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := kusto.New(cb)
