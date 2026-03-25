@@ -202,8 +202,6 @@ github.com/bufbuild/connect-go/internal/gen/connectext/grpc/status/v1
 # github.com/cenkalti/backoff/v4 v4.3.0
 ## explicit; go 1.18
 github.com/cenkalti/backoff/v4
-# github.com/cenkalti/backoff/v5 v5.0.3
-## explicit; go 1.23
 # github.com/cespare/xxhash v1.1.0
 ## explicit
 github.com/cespare/xxhash
@@ -610,8 +608,8 @@ github.com/testcontainers/testcontainers-go/internal/core
 github.com/testcontainers/testcontainers-go/internal/core/network
 github.com/testcontainers/testcontainers-go/log
 github.com/testcontainers/testcontainers-go/wait
-# github.com/testcontainers/testcontainers-go/modules/k3s v0.40.0
-## explicit; go 1.24.0
+# github.com/testcontainers/testcontainers-go/modules/k3s v0.41.0
+## explicit; go 1.25.0
 github.com/testcontainers/testcontainers-go/modules/k3s
 # github.com/tinylib/msgp v1.6.3
 ## explicit; go 1.24
