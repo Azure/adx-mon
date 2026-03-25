@@ -1,5 +1,5 @@
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20251103204844-648a3e2f02e1.2 h1:Q3tK8h7/L5teFvNPH3IFngxHINuvvkBaBECk1cEcMYg=
-buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20251103204844-648a3e2f02e1.2/go.mod h1:CWZkMrukeyb/I688WNsf4ITYH8w2nDjYUJOrDW7uixc=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260310202139-5f2c7d4f7405.2 h1:90jXGK4TIfrL8jpUf9dkp70/qJXKV5TnlanRctU6kig=
+buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260310202139-5f2c7d4f7405.2/go.mod h1:hEmxQt5m4dSnR2lvg++iTfOD7VCuuyOp1nj+S4zUyiY=
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20251103204844-648a3e2f02e1.1 h1:4f9BTWV8MDKO4YBDhL3EHouOtGa6aycC7s7HRwO0gGw=
 buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20251103204844-648a3e2f02e1.1/go.mod h1:+67TRoLH3kBQ2qE0PGSvxpPnRWD7RScwWPVnC25qrMM=
 cel.dev/expr v0.24.0 h1:56OvJKSH3hDGL0ml5uSxZmz3/3Pq4tJ+fb1unVLAFcY=
