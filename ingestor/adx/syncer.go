@@ -5,15 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/schema"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"github.com/cespare/xxhash"
 )
 
@@ -29,7 +29,7 @@ type columnDef struct {
 }
 
 type mgmt interface {
-	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 type Syncer struct {
@@ -98,36 +98,32 @@ func (s *Syncer) Close() error {
 
 func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 	query := fmt.Sprintf(".show database %s ingestion mappings", s.database)
-	stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(query)
-	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	stmt := kql.New("").AddUnsafe(query)
+	ds, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return err
 	}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return fmt.Errorf("failed to load ingestion mappings: missing primary result table")
+	}
 
-	for {
-		row, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			return nil
-		} else if err1 != nil {
-			return err1
-		} else if err2 != nil {
-			return err2
-		}
-
+	for _, row := range table.Rows() {
 		var v IngestionMapping
 		if err := row.ToStruct(&v); err != nil {
-			return err
+			return fmt.Errorf("failed to load ingestion mappings: %w", err)
 		}
 
 		var sm schema.SchemaMapping
 		if err := json.Unmarshal([]byte(v.Mapping), &sm); err != nil {
-			return err
+			return fmt.Errorf("failed to load ingestion mappings: %w", err)
 		}
 
 		logger.Infof("Loaded %s ingestion mapping %s", s.database, v.Name)
-
 		s.mappings[v.Name] = sm
 	}
+
+	return nil
 }
 
 // EnsureDefaultTable creates a table with the default schema mapping if it does not exist.
@@ -170,22 +166,11 @@ func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 		logger.Debugf("Creating table %s %s", table, sb.String())
 	}
 
-	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
+	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+	_, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
 	if err != nil {
 		return err
-	}
-
-	for {
-		_, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			break
-		} else if err1 != nil {
-			return err1
-		} else if err2 != nil {
-			return err2
-		}
 	}
 
 	s.mu.Lock()
@@ -243,22 +228,11 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 
 	logger.Infof("Creating ingestion mapping for table %s %s", table, sb.String())
 
-	showStmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(sb.String())
+	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	rows, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+	_, err = s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
 	if err != nil {
 		return "", err
-	}
-
-	for {
-		_, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			break
-		} else if err1 != nil {
-			return "", err1
-		} else if err2 != nil {
-			return "", err2
-		}
 	}
 	s.mappings[name] = mapping
 	return name, nil
@@ -324,12 +298,11 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 
 	for _, fn := range functions {
 		logger.Infof("Creating function %s", fn.name)
-		stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(fn.body)
-		result, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+		stmt := kql.New("").AddUnsafe(fn.body)
+		_, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 		if err != nil {
 			return err
 		}
-		result.Stop()
 	}
 	return nil
 }
@@ -394,27 +367,24 @@ func (s *Syncer) reconcileTables(ctx context.Context) {
 }
 
 func (s *Syncer) loadTables(ctx context.Context) ([]Table, error) {
-	stmt := kusto.NewStmt(".show tables | project TableName")
-	rows, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
+	stmt := kql.New(".show tables | project TableName")
+	ds, err := s.KustoCli.Mgmt(ctx, s.database, stmt)
 	if err != nil {
 		return nil, err
 	}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return nil, fmt.Errorf("failed to load tables: missing primary result table")
+	}
 
-	var tables []Table
-	for {
-		row, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			return tables, nil
-		} else if err1 != nil {
-			return tables, err1
-		} else if err2 != nil {
-			return tables, err2
-		}
-
+	var out []Table
+	for _, row := range table.Rows() {
 		var v Table
 		if err := row.ToStruct(&v); err != nil {
-			return tables, err
+			return nil, fmt.Errorf("failed to load tables: %w", err)
 		}
-		tables = append(tables, v)
+		out = append(out, v)
 	}
+
+	return out, nil
 }

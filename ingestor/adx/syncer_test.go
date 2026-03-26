@@ -5,12 +5,11 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/schema"
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSyncer_EnsureMapping(t *testing.T) {
-	kcli := kusto.NewMockClient()
+	kcli := &fakeKustoMgmt{}
 
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
 	name, err := s.EnsureDefaultMapping("Test")

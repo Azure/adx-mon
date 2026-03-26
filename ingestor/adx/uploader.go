@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,9 +18,10 @@ import (
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/ingest"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
+	azkustoingest "github.com/Azure/azure-kusto-go/azkustoingest"
 )
 
 const ConcurrentUploads = 50
@@ -34,11 +36,11 @@ type Uploader interface {
 	UploadQueue() chan *cluster.Batch
 
 	// Mgmt executes a management query against the database.
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 type uploader struct {
-	KustoCli   *kusto.Client
+	KustoCli   *azkustodata.Client
 	storageDir string
 	database   string
 	opts       UploaderOpts
@@ -49,7 +51,7 @@ type uploader struct {
 
 	wg                  sync.WaitGroup
 	mu                  sync.RWMutex
-	ingestors           map[string]ingest.Ingestor
+	ingestor            *azkustoingest.Ingestion
 	requireDirectIngest bool
 }
 
@@ -62,7 +64,7 @@ type UploaderOpts struct {
 	SampleType        SampleType
 }
 
-func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
+func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
 
 	return &uploader{
@@ -72,7 +74,6 @@ func NewUploader(kustoCli *kusto.Client, opts UploaderOpts) *uploader {
 		database:   opts.Database,
 		opts:       opts,
 		queue:      make(chan *cluster.Batch, 10000),
-		ingestors:  make(map[string]ingest.Ingestor),
 	}
 }
 
@@ -109,11 +110,11 @@ func (n *uploader) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	for _, ing := range n.ingestors {
-		ing.Close()
+	if n.ingestor != nil {
+		n.ingestor.Close()
 	}
 
-	n.ingestors = nil
+	n.ingestor = nil
 	return n.syncer.Close()
 }
 
@@ -129,7 +130,7 @@ func (n *uploader) Endpoint() string {
 	return n.KustoCli.Endpoint()
 }
 
-func (n *uploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (n *uploader) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	return n.KustoCli.Mgmt(ctx, n.database, query, options...)
 }
 
@@ -137,6 +138,9 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	// Ensure we wait for this upload to finish.
 	n.wg.Add(1)
 	defer n.wg.Done()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 
 	if err := n.syncer.EnsureTable(table, mapping); err != nil {
 		return err
@@ -147,31 +151,36 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 		return err
 	}
 
+	if n.requireDirectIngest {
+		return n.directIngestReader(ctx, reader, table)
+	}
+
 	n.mu.RLock()
-	ingestor := n.ingestors[table]
+	ingestor := n.ingestor
 	n.mu.RUnlock()
 
 	if ingestor == nil {
-		ingestor, err = func() (ingest.Ingestor, error) {
+		ingestor, err = func() (*azkustoingest.Ingestion, error) {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 
-			ingestor = n.ingestors[table]
+			ingestor = n.ingestor
 			if ingestor != nil {
 				return ingestor, nil
 			}
 
-			if n.requireDirectIngest {
-				ingestor = newDirectIngestReader(n.KustoCli, database, table)
-				n.ingestors[table] = ingestor
-				return ingestor, nil
+			kcsb := azkustodata.NewConnectionStringBuilder(n.KustoCli.Endpoint())
+			if strings.HasPrefix(n.KustoCli.Endpoint(), "https://") {
+				kcsb.WithDefaultAzureCredential()
 			}
 
-			ingestor, err = ingest.New(n.KustoCli, n.database, table)
+			ingestor, err = azkustoingest.New(kcsb,
+				azkustoingest.WithDefaultDatabase(n.database),
+			)
 			if err != nil {
 				return nil, err
 			}
-			n.ingestors[table] = ingestor
+			n.ingestor = ingestor
 			return ingestor, nil
 		}()
 
@@ -180,13 +189,12 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 		}
 	}
 
-	// Set up a maximum time for completion to be 10 minutes.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
 	// uploadReader our file WITHOUT status reporting.
 	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, reader, ingest.IngestionMappingRef(name, ingest.CSV))
+	res, err := ingestor.FromReader(ctx, reader,
+		azkustoingest.Table(table),
+		azkustoingest.IngestionMappingRef(name, azkustoingest.CSV),
+	)
 	if err != nil {
 		return sanitizeErrorString(err)
 	}
@@ -194,6 +202,21 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	err = <-res.Wait(ctx)
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (n *uploader) directIngestReader(ctx context.Context, reader io.Reader, table string) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data: %w", err)
+	}
+
+	stmt := kql.New(".ingest inline into table ").AddTable(table).AddLiteral(" <| ").AddUnsafe(string(data))
+	_, err = n.KustoCli.Mgmt(ctx, n.database, stmt)
+	if err != nil {
+		return fmt.Errorf("failed to ingest data: %w", err)
 	}
 
 	return nil
@@ -354,24 +377,16 @@ func (n *uploader) extractSchema(path string) (string, error) {
 // https://learn.microsoft.com/en-us/azure/data-explorer/kusto-emulator-overview#limitations
 func (n *uploader) clusterRequiresDirectIngest(ctx context.Context) (bool, error) {
 	stmt := kql.New(".show cluster details")
-	rows, err := n.KustoCli.Mgmt(ctx, n.database, stmt)
+	ds, err := n.KustoCli.Mgmt(ctx, n.database, stmt)
 	if err != nil {
 		return false, fmt.Errorf("failed to query cluster details: %w", err)
 	}
-	defer rows.Stop()
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return false, fmt.Errorf("failed to query cluster details: missing primary result table")
+	}
 
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return false, fmt.Errorf("failed to retrieve cluster details: %w", errFinal)
-		}
-
+	for _, row := range table.Rows() {
 		var cs clusterDetails
 		if err := row.ToStruct(&cs); err != nil {
 			return false, fmt.Errorf("failed to convert row to struct: %w", err)

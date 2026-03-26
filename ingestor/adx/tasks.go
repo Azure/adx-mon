@@ -3,7 +3,6 @@ package adx
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,9 +18,10 @@ import (
 	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/errors"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 )
@@ -45,7 +45,7 @@ type DropUnusedTablesTask struct {
 type StatementExecutor interface {
 	Database() string
 	Endpoint() string
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 func NewDropUnusedTablesTask(kustoCli StatementExecutor) *DropUnusedTablesTask {
@@ -89,29 +89,27 @@ func (t *DropUnusedTablesTask) Run(ctx context.Context) error {
 }
 
 func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDetail, error) {
-	stmt := kusto.NewStmt(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
-	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	stmt := kql.New(".show tables details | project TableName, HotExtentSize, TotalExtentSize, TotalExtents, HotRowCount, TotalRowCount")
+	ds, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
 
-	var tables []TableDetail
-	for {
-		row, err1, err2 := rows.NextRowOrError()
-		if err2 == io.EOF {
-			return tables, nil
-		} else if err1 != nil {
-			return tables, err1
-		} else if err2 != nil {
-			return tables, err2
-		}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return nil, fmt.Errorf("failed to load table details: missing primary result table")
+	}
 
+	var details []TableDetail
+	for _, row := range table.Rows() {
 		var v TableDetail
 		if err := row.ToStruct(&v); err != nil {
-			return tables, err
+			return details, err
 		}
-		tables = append(tables, v)
+		details = append(details, v)
 	}
+
+	return details, nil
 }
 
 type SyncFunctionsTask struct {
@@ -227,7 +225,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
-			result, err := t.kustoCli.Mgmt(ctx, stmt)
+			_, err := t.kustoCli.Mgmt(ctx, stmt)
 			if err != nil {
 				parsed := kustoutil.ParseError(err)
 				if !errors.Retry(err) {
@@ -246,7 +244,6 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				continue
 			}
 
-			result.Stop()
 			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
 			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
 				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
@@ -340,14 +337,13 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 			// Both AllDatabases and Database scope use database script execution
 			stmt = kql.New(".execute database script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
 		}
-		result, err := t.kustoCli.Mgmt(ctx, stmt)
+		_, err = t.kustoCli.Mgmt(ctx, stmt)
 		if err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
 			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
 		} else {
-			result.Stop()
 			logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
 			if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
 				logger.Errorf("Failed to update success status: %v", err)
@@ -724,12 +720,12 @@ func (t *SummaryRuleTask) submitRule(ctx context.Context, rule v1.SummaryRule, s
 
 	// Execute asynchronously
 	stmt := kql.New(".set-or-append async ").AddUnsafe(rule.Spec.Table).AddLiteral(" with (extend_schema=true) <| ").AddUnsafe(body)
-	res, err := t.kustoCli.Mgmt(ctx, stmt)
+	ds, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return "", fmt.Errorf("failed to execute summary rule %s.%s: %w", rule.Spec.Database, rule.Name, err)
 	}
 
-	return operationIDFromResult(res)
+	return operationIDFromResult(ds)
 }
 
 // getOperation retrieves the status of a specific asynchronous Kusto operation by its operationId.
@@ -756,24 +752,17 @@ func (t *SummaryRuleTask) getOperation(ctx context.Context, operationId string) 
 		AddLiteral(" | summarize arg_max(LastUpdatedOn, OperationId, State, ShouldRetry, Status)").
 		AddLiteral(" | project LastUpdatedOn, OperationId = tostring(OperationId), State, ShouldRetry = todouble(ShouldRetry), Status")
 
-	rows, err := t.kustoCli.Mgmt(ctx, stmt)
+	ds, err := t.kustoCli.Mgmt(ctx, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
 	}
-	defer rows.Stop()
 
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return nil, fmt.Errorf("failed to retrieve operation %s: %v", operationId, errFinal)
-		}
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return nil, fmt.Errorf("failed to retrieve operation %s: missing primary result table", operationId)
+	}
 
+	for _, row := range table.Rows() {
 		var status AsyncOperationStatus
 		if err := row.ToStruct(&status); err != nil {
 			return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
@@ -809,29 +798,21 @@ func (t *SummaryRuleTask) logSummaryRule(rule *v1.SummaryRule, skipped bool, sub
 	logger.Logger().Info("SummaryRule", "ns", rule.Namespace, "rule", rule.Name, "db", rule.Spec.Database, "table", rule.Spec.Table, "criteria_skipped", false, "inflight_ops", inflightOps, "last_exec_end", lastExecStr, "forward_progress", forward)
 }
 
-func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
-	defer iter.Stop()
-
-	for {
-		row, errInline, errFinal := iter.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			return "", fmt.Errorf("failed to retrieve operation ID: %v", errFinal)
-		}
-
-		if len(row.Values) != 1 {
-			return "", fmt.Errorf("unexpected number of values in row: %d", len(row.Values))
-		}
-
-		return row.Values[0].String(), nil
+func operationIDFromResult(ds kustov1.Dataset) (string, error) {
+	table, ok := primaryResultTable(ds)
+	if !ok {
+		return "", fmt.Errorf("failed to parse operation id: missing primary result table")
+	}
+	if len(table.Rows()) == 0 {
+		return "", nil
 	}
 
-	return "", nil
+	vals := table.Rows()[0].Values()
+	if len(vals) != 1 {
+		return "", fmt.Errorf("unexpected number of values in row: %d", len(vals))
+	}
+
+	return vals[0].String(), nil
 }
 
 // updateSummaryRuleStatus updates the status of a SummaryRule with proper Kusto error parsing

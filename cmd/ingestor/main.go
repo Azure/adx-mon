@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -42,6 +41,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
+	"github.com/Azure/azure-kusto-go/azkustodata"
 )
 
 func main() {
@@ -458,14 +458,14 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 	return dyCli, client, ctrlCli, nil
 }
 
-func newKustoClient(endpoint string) (*kusto.Client, error) {
-	kcsb := kusto.NewConnectionStringBuilder(endpoint)
+func newKustoClient(endpoint string) (*azkustodata.Client, error) {
+	kcsb := azkustodata.NewConnectionStringBuilder(endpoint)
 
 	if strings.HasPrefix(endpoint, "https://") {
 		kcsb.WithDefaultAzureCredential()
 	}
 	// Create the SDK client first to preserve any defaults the SDK sets on its http.Client.
-	c, err := kusto.New(kcsb)
+	c, err := azkustodata.New(kcsb)
 	if err != nil {
 		return nil, err
 	}

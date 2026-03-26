@@ -2,14 +2,15 @@ package adx
 
 import (
 	"context"
-	"flag"
-	"io"
+	"errors"
 	"testing"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	kustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azkustoquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 )
 
 // fakeUploader is an Uploader that does nothing.
@@ -19,20 +20,16 @@ type fakeUploader struct {
 	db      string
 }
 
-func (f *fakeUploader) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	if !isTest() {
-		flag.String("test.v", "true", "fake")
-	}
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Name", Type: "string"},
-	})
-	if err != nil {
-		return nil, err
-	}
-	iter := &kusto.RowIterator{}
-	iter.Mock(rows)
-	return iter, nil
+func (f *fakeUploader) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
+	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{
+		{
+			TableName: "Table_0",
+			Columns: []kustov1.RawColumn{
+				{ColumnName: "Name", DataType: "String", ColumnType: "string"},
+			},
+			Rows: []kustov1.RawRow{{Row: []interface{}{"ok"}}},
+		},
+	}})
 }
 
 func NewFakeUploader(db string) Uploader {
@@ -88,27 +85,25 @@ type fakeKustoMgmt struct {
 	expectedQuery, actualQuery string
 }
 
-func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	f.actualQuery = query.String()
+	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{
+		{
+			TableName: "Table_0",
+			Columns: []kustov1.RawColumn{
+				{ColumnName: "Name", DataType: "String", ColumnType: "string"},
+			},
+			Rows: []kustov1.RawRow{{Row: []interface{}{"ok"}}},
+		},
+	}})
+}
 
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Name", Type: "string"},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	iter := &kusto.RowIterator{}
-	rows.Error(io.EOF)
-	iter.Mock(rows)
-	return iter, nil
+func (f *fakeKustoMgmt) IterativeQuery(context.Context, string, azkustodata.Statement, ...azkustodata.QueryOption) (azkustoquery.IterativeDataset, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (f *fakeKustoMgmt) Verify(t *testing.T) {
 	if f.expectedQuery != "" && f.actualQuery != f.expectedQuery {
 		t.Errorf("Expected query %s, got %s", f.expectedQuery, f.actualQuery)
 	}
-}
-func isTest() bool {
-	return flag.Lookup("test.v") != nil
 }

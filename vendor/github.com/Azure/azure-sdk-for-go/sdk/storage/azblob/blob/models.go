@@ -51,7 +51,7 @@ type Tags = generated.BlobTag
 
 // HTTPRange defines a range of bytes within an HTTP resource, starting at offset and
 // ending at offset+count. A zero-value HTTPRange indicates the entire resource. An HTTPRange
-// which has an offset but no zero value count indicates from the offset to the resource's end.
+// which has an offset and zero value count indicates from the offset to the resource's end.
 type HTTPRange = exported.HTTPRange
 
 // Request Model Declaration -------------------------------------------------------------------------------------------
@@ -458,7 +458,7 @@ type SetImmutabilityPolicyOptions struct {
 
 func (o *SetImmutabilityPolicyOptions) format() (*generated.BlobClientSetImmutabilityPolicyOptions, *ModifiedAccessConditions) {
 	if o == nil {
-		return nil, nil
+		return &generated.BlobClientSetImmutabilityPolicyOptions{}, nil
 	}
 	ac := &exported.BlobAccessConditions{
 		ModifiedAccessConditions: o.ModifiedAccessConditions,
@@ -523,6 +523,8 @@ type CopyFromURLOptions struct {
 	BlobTags map[string]string
 	// Only Bearer type is supported. Credentials should be a valid OAuth access token to copy source.
 	CopySourceAuthorization *string
+	// File request Intent. Valid value is backup.
+	FileRequestIntent *FileRequestIntentType
 	// Specifies the date time when the blobs immutability policy is set to expire.
 	ImmutabilityPolicyExpiry *time.Time
 	// Specifies the immutability policy mode to set on the blob.
@@ -544,11 +546,13 @@ type CopyFromURLOptions struct {
 	SourceModifiedAccessConditions *SourceModifiedAccessConditions
 
 	BlobAccessConditions *AccessConditions
+
+	CPKScopeInfo *CPKScopeInfo
 }
 
-func (o *CopyFromURLOptions) format() (*generated.BlobClientCopyFromURLOptions, *generated.SourceModifiedAccessConditions, *generated.ModifiedAccessConditions, *generated.LeaseAccessConditions) {
+func (o *CopyFromURLOptions) format() (*generated.BlobClientCopyFromURLOptions, *generated.SourceModifiedAccessConditions, *generated.ModifiedAccessConditions, *generated.LeaseAccessConditions, *generated.CPKScopeInfo) {
 	if o == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	options := &generated.BlobClientCopyFromURLOptions{
@@ -556,6 +560,7 @@ func (o *CopyFromURLOptions) format() (*generated.BlobClientCopyFromURLOptions, 
 		CopySourceAuthorization:  o.CopySourceAuthorization,
 		ImmutabilityPolicyExpiry: o.ImmutabilityPolicyExpiry,
 		ImmutabilityPolicyMode:   o.ImmutabilityPolicyMode,
+		FileRequestIntent:        o.FileRequestIntent,
 		LegalHold:                o.LegalHold,
 		Metadata:                 o.Metadata,
 		SourceContentMD5:         o.SourceContentMD5,
@@ -563,7 +568,7 @@ func (o *CopyFromURLOptions) format() (*generated.BlobClientCopyFromURLOptions, 
 	}
 
 	leaseAccessConditions, modifiedAccessConditions := exported.FormatBlobAccessConditions(o.BlobAccessConditions)
-	return options, o.SourceModifiedAccessConditions, modifiedAccessConditions, leaseAccessConditions
+	return options, o.SourceModifiedAccessConditions, modifiedAccessConditions, leaseAccessConditions, o.CPKScopeInfo
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

@@ -5,7 +5,8 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/azkustodata"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 )
 
 type dispatcher struct {
@@ -60,7 +61,7 @@ func (d *dispatcher) Endpoint() string {
 	return ""
 }
 
-func (d *dispatcher) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (d *dispatcher) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	// Not implemented.  Should this fanout to all uploaders?
 	return nil, nil
 }

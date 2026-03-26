@@ -3,7 +3,6 @@ package adx
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -18,12 +17,10 @@ import (
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
-	"github.com/Azure/azure-kusto-go/kusto"
-	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	kustotypes "github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	kustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -76,43 +73,41 @@ func getSharedK3sContainer(t *testing.T) *k3s.K3sContainer {
 	return sharedK3s
 }
 
-// ensureTestVFlagSet ensures the test.v flag is set for MockRows functionality
-func ensureTestVFlagSet(t *testing.T) {
-	t.Helper()
-	if flag.Lookup("test.v") == nil {
-		flag.String("test.v", "", "")
-		err := flag.CommandLine.Set("test.v", "true")
-		require.NoError(t, err, "Failed to set test.v flag")
+func newMgmtDataset(ctx context.Context, tableName string, columns []kustov1.RawColumn, rows [][]interface{}) (kustov1.Dataset, error) {
+	rawRows := make([]kustov1.RawRow, 0, len(rows))
+	for _, r := range rows {
+		rawRows = append(rawRows, kustov1.RawRow{Row: r})
 	}
+	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{
+		Tables: []kustov1.RawTable{
+			{
+				TableName: tableName,
+				Columns:   columns,
+				Rows:      rawRows,
+			},
+		},
+	})
 }
 
-// newAsyncOperationMockRows creates mock rows for AsyncOperationStatus with the specified parameters
-func newAsyncOperationMockRows(operationTime time.Time, operationId, state string, shouldRetry float64, status string, statusValid bool) (*kusto.MockRows, error) {
-	columns := table.Columns{
-		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-		{Name: "OperationId", Type: kustotypes.String},
-		{Name: "State", Type: kustotypes.String},
-		{Name: "ShouldRetry", Type: kustotypes.Real},
-		{Name: "Status", Type: kustotypes.String},
+func newAsyncOperationDataset(ctx context.Context, operationTime time.Time, operationId, state string, shouldRetry float64, status string, statusValid bool) (kustov1.Dataset, error) {
+	statusVal := interface{}(nil)
+	if statusValid {
+		statusVal = status
 	}
+	return newMgmtDataset(ctx, "Table_0", []kustov1.RawColumn{
+		{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+		{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+		{ColumnName: "State", DataType: "String", ColumnType: "string"},
+		{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+		{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+	}, [][]interface{}{{operationTime.UTC().Format(time.RFC3339Nano), operationId, state, shouldRetry, statusVal}})
+}
 
-	mockRows, err := kusto.NewMockRows(columns)
-	if err != nil {
-		return nil, err
-	}
-
-	err = mockRows.Row(value.Values{
-		value.DateTime{Value: operationTime, Valid: true},
-		value.String{Value: operationId, Valid: true},
-		value.String{Value: state, Valid: true},
-		value.Real{Value: shouldRetry, Valid: true},
-		value.String{Value: status, Valid: statusValid},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return mockRows, nil
+func mustMgmtDataset(t *testing.T, ctx context.Context, tableName string, columns []kustov1.RawColumn, rows [][]interface{}) kustov1.Dataset {
+	t.Helper()
+	ds, err := newMgmtDataset(ctx, tableName, columns, rows)
+	require.NoError(t, err)
+	return ds
 }
 
 // mockCRDHandler implements storage.CRDHandler interface for testing
@@ -214,8 +209,7 @@ type TestStatementExecutor struct {
 	endpoint          string
 	stmts             []string
 	nextMgmtErr       error
-	operationID       string
-	mockRows          *kusto.MockRows
+	mockDataset       kustov1.Dataset
 	operationMockData map[string]*AsyncOperationStatus // Map operation ID to mock data
 	queriedOperations map[string]bool                  // Track which operations have been queried
 }
@@ -233,19 +227,16 @@ func (t *TestStatementExecutor) Endpoint() string {
 	return t.endpoint
 }
 
-func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	t.stmts = append(t.stmts, query.String())
+func (t *TestStatementExecutor) Mgmt(ctx context.Context, stmt azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
+	t.stmts = append(t.stmts, stmt.String())
 	if t.nextMgmtErr != nil {
 		ret := t.nextMgmtErr
 		t.nextMgmtErr = nil
 		return nil, ret
 	}
 
-	// Create a new RowIterator
-	iter := &kusto.RowIterator{}
-
 	// Check if this is a getOperation call and we have specific mock data for operations
-	queryStr := query.String()
+	queryStr := stmt.String()
 	if strings.Contains(queryStr, "OperationId") && t.operationMockData != nil {
 		// This is a parameterized query for a specific operation
 		// Return operations in the same order they would be processed by trackAsyncOperations
@@ -262,86 +253,24 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 			if mockData, exists := t.operationMockData[operationId]; exists && !t.queriedOperations[operationId] {
 				t.queriedOperations[operationId] = true
 
-				columns := table.Columns{
-					{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-					{Name: "OperationId", Type: kustotypes.String},
-					{Name: "State", Type: kustotypes.String},
-					{Name: "ShouldRetry", Type: kustotypes.Real},
-					{Name: "Status", Type: kustotypes.String},
-				}
-
-				mockRows, err := kusto.NewMockRows(columns)
-				if err != nil {
-					return nil, err
-				}
-
-				err = mockRows.Row(value.Values{
-					value.DateTime{Value: mockData.LastUpdatedOn, Valid: true},
-					value.String{Value: mockData.OperationId, Valid: true},
-					value.String{Value: mockData.State, Valid: true},
-					value.Real{Value: mockData.ShouldRetry, Valid: true},
-					value.String{Value: mockData.Status, Valid: true},
-				})
-				if err != nil {
-					return nil, err
-				}
-
-				err = iter.Mock(mockRows)
-				if err != nil {
-					return nil, fmt.Errorf("failed to mock iterator: %w", err)
-				}
-				return iter, nil
+				return newAsyncOperationDataset(ctx, mockData.LastUpdatedOn, mockData.OperationId, mockData.State, mockData.ShouldRetry, mockData.Status, mockData.Status != "")
 			}
 		}
 
-		// If all operations have been queried or no operations match, return empty results
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-			{Name: "OperationId", Type: kustotypes.String},
-			{Name: "State", Type: kustotypes.String},
-			{Name: "ShouldRetry", Type: kustotypes.Real},
-			{Name: "Status", Type: kustotypes.String},
-		}
-
-		mockRows, err := kusto.NewMockRows(columns)
-		if err != nil {
-			return nil, err
-		}
-
-		err = iter.Mock(mockRows)
-		if err != nil {
-			return nil, fmt.Errorf("failed to mock iterator: %w", err)
-		}
-		return iter, nil
+		return newMgmtDataset(ctx, "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, nil)
 	}
 
-	// If we have mock rows, attach them to the iterator
-	if t.mockRows != nil {
-		err := iter.Mock(t.mockRows)
-		if err != nil {
-			return nil, fmt.Errorf("failed to mock iterator: %w", err)
-		}
-		return iter, nil
+	if t.mockDataset != nil {
+		return t.mockDataset, nil
 	}
 
-	// For ClusterLabels tests, we need to return a mock result that simulates an operation ID
-	// Since we're mainly testing the query transformation, we can return a mock iterator
-	// that provides an operation ID when needed
-	if t.operationID != "" {
-		// This is a simplified mock - in real usage, the RowIterator would contain
-		// the operation ID from Kusto. For our tests, we'll work around this limitation.
-		return iter, nil
-	}
-
-	// Default: return an empty but properly initialized mock iterator
-	mockRows, err := kusto.NewMockRows(table.Columns{{Name: "Result", Type: kustotypes.String}})
-	if err != nil {
-		return nil, err
-	}
-	if err := iter.Mock(mockRows); err != nil {
-		return nil, fmt.Errorf("failed to mock iterator: %w", err)
-	}
-	return iter, nil
+	return newMgmtDataset(ctx, "Table_0", []kustov1.RawColumn{{ColumnName: "Result", DataType: "String", ColumnType: "string"}}, [][]interface{}{{"ok"}})
 }
 
 type TestFunctionStore struct {
@@ -1054,8 +983,8 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
-	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
-	kustoClient, err := kusto.New(cb)
+	cb := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	kustoClient, err := azkustodata.New(cb)
 	require.NoError(t, err)
 	defer kustoClient.Close()
 
@@ -1220,8 +1149,8 @@ func TestManagementCommands(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
-	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
-	kustoClient, err := kusto.New(cb)
+	cb := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	kustoClient, err := azkustodata.New(cb)
 	require.NoError(t, err)
 	defer kustoClient.Close()
 
@@ -1357,7 +1286,7 @@ func TestManagementCommandCriteriaExpression(t *testing.T) {
 
 type KustoStatementExecutor struct {
 	database string
-	client   *kusto.Client
+	client   *azkustodata.Client
 }
 
 func (k *KustoStatementExecutor) Database() string {
@@ -1368,7 +1297,7 @@ func (k *KustoStatementExecutor) Endpoint() string {
 	return k.client.Endpoint()
 }
 
-func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (k *KustoStatementExecutor) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	return k.client.Mgmt(ctx, k.database, query, options...)
 }
 
@@ -1442,7 +1371,7 @@ func TestSummaryRuleSubmissionFailure(t *testing.T) {
 }
 
 func TestSummaryRule_IngestorOwnerGating(t *testing.T) {
-	ensureTestVFlagSet(t)
+
 	clk := klock.NewFakeClock(time.Now())
 
 	// Create four rules with different owner annotations
@@ -1453,11 +1382,14 @@ func TestSummaryRule_IngestorOwnerGating(t *testing.T) {
 
 	list := &v1.SummaryRuleList{Items: []v1.SummaryRule{*ruleIngestor, *ruleExporter, *ruleMissing, *ruleUnknown}}
 	mockStore := &mockCRDHandler{listResponse: list}
-	// Prepare an empty mock rows iterator to satisfy getOperation calls
-	emptyCols := table.Columns{{Name: "LastUpdatedOn", Type: kustotypes.DateTime}, {Name: "OperationId", Type: kustotypes.String}, {Name: "State", Type: kustotypes.String}, {Name: "ShouldRetry", Type: kustotypes.Real}, {Name: "Status", Type: kustotypes.String}}
-	mr, err := kusto.NewMockRows(emptyCols)
-	require.NoError(t, err)
-	exec := &TestStatementExecutor{database: "db", endpoint: "https://test", mockRows: mr}
+	// Prepare an empty mock dataset to satisfy getOperation calls
+	exec := &TestStatementExecutor{database: "db", endpoint: "https://test", mockDataset: mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+		{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+		{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+		{ColumnName: "State", DataType: "String", ColumnType: "string"},
+		{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+		{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+	}, nil)}
 	task := NewSummaryRuleTask(mockStore, exec, map[string]string{})
 	task.Clock = clk
 	// Stub SubmitRule to record calls
@@ -1473,17 +1405,16 @@ func TestSummaryRule_IngestorOwnerGating(t *testing.T) {
 }
 
 func TestSummaryRuleSubmissionSuccess(t *testing.T) {
-	ensureTestVFlagSet(t)
 
 	operationTime := time.Now()
-	mockRows, err := newAsyncOperationMockRows(operationTime, "operation-id-123", "InProgress", 0, "", false)
+	mockRows, err := newAsyncOperationDataset(context.Background(), operationTime, "operation-id-123", "InProgress", 0, "", false)
 	require.NoError(t, err)
 
 	// Create a mock statement executor
 	mockExecutor := &TestStatementExecutor{
-		database: "testdb",
-		endpoint: "http://test-endpoint",
-		mockRows: mockRows,
+		database:    "testdb",
+		endpoint:    "http://test-endpoint",
+		mockDataset: mockRows,
 	}
 
 	// Create a summary rule
@@ -1557,16 +1488,13 @@ func TestSummaryRuleGetOperationsFailureWithRecentOperations(t *testing.T) {
 	}
 
 	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-	columns := table.Columns{
-		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-		{Name: "OperationId", Type: kustotypes.String},
-		{Name: "State", Type: kustotypes.String},
-		{Name: "ShouldRetry", Type: kustotypes.Real},
-		{Name: "Status", Type: kustotypes.String},
-	}
-	mockRows, err := kusto.NewMockRows(columns)
-	require.NoError(t, err)
-	mockExecutor.mockRows = mockRows
+	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+		{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+		{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+		{ColumnName: "State", DataType: "String", ColumnType: "string"},
+		{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+		{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+	}, nil)
 
 	// Create a summary rule with a recent async operation that should be kept
 	ruleName := "test-rule"
@@ -1772,8 +1700,8 @@ func TestSummaryRules(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
-	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
-	kustoClient, err := kusto.New(cb)
+	cb := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	kustoClient, err := azkustodata.New(cb)
 	require.NoError(t, err)
 	defer kustoClient.Close()
 
@@ -2393,16 +2321,14 @@ func TestSummaryRuleDoubleExecutionFix(t *testing.T) {
 	}
 
 	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-	columns := table.Columns{
-		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-		{Name: "OperationId", Type: kustotypes.String},
-		{Name: "State", Type: kustotypes.String},
-		{Name: "ShouldRetry", Type: kustotypes.Real},
-		{Name: "Status", Type: kustotypes.String},
-	}
-	mockRows, err := kusto.NewMockRows(columns)
-	require.NoError(t, err)
-	mockExecutor.mockRows = mockRows
+	mockRows := mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+		{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+		{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+		{ColumnName: "State", DataType: "String", ColumnType: "string"},
+		{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+		{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+	}, nil)
+	mockExecutor.mockDataset = mockRows
 
 	task := &SummaryRuleTask{
 		store:    mockHandler,
@@ -2462,15 +2388,13 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 	mockExecutor.Reset() // Ensure clean state
 
 	// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-	columns := table.Columns{
-		{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-		{Name: "OperationId", Type: kustotypes.String},
-		{Name: "State", Type: kustotypes.String},
-		{Name: "ShouldRetry", Type: kustotypes.Real},
-		{Name: "Status", Type: kustotypes.String},
-	}
-	mockRows, err := kusto.NewMockRows(columns)
-	require.NoError(t, err)
+	mockRows := mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+		{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+		{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+		{ColumnName: "State", DataType: "String", ColumnType: "string"},
+		{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+		{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+	}, nil)
 
 	// Set up operation mock data for specific operations
 	mockExecutor.operationMockData = map[string]*AsyncOperationStatus{
@@ -2503,7 +2427,7 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 			LastUpdatedOn: time.Date(2024, 6, 23, 13, 30, 0, 0, time.UTC),
 		},
 	}
-	mockExecutor.mockRows = mockRows
+	mockExecutor.mockDataset = mockRows
 
 	// Create a summary rule that already has multiple async operations
 	ruleName := "test-rule"
@@ -2653,31 +2577,16 @@ func TestSummaryRuleHandlesMixedAsyncOperationStatesCorrectly(t *testing.T) {
 
 func TestSummaryRuleTaskGetOperation(t *testing.T) {
 	t.Run("operation found", func(t *testing.T) {
-		ensureTestVFlagSet(t)
-
-		// Create columns that match AsyncOperationStatus struct
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-			{Name: "OperationId", Type: kustotypes.String},
-			{Name: "State", Type: kustotypes.String},
-			{Name: "ShouldRetry", Type: kustotypes.Real},
-			{Name: "Status", Type: kustotypes.String},
-		}
 
 		// Create mock rows with test data
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
-
-		// Add a found operation
 		operationTime := time.Date(2024, 6, 23, 10, 0, 0, 0, time.UTC)
-		err = mockRows.Row(value.Values{
-			value.DateTime{Value: operationTime, Valid: true},
-			value.String{Value: "test-operation-123", Valid: true},
-			value.String{Value: "Completed", Valid: true},
-			value.Real{Value: 0, Valid: true},
-			value.String{Value: "Success", Valid: true},
-		})
-		require.NoError(t, err)
+		mockRows := mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, [][]interface{}{{operationTime.UTC().Format(time.RFC3339Nano), "test-operation-123", "Completed", 0.0, "Success"}})
 
 		// Create a mock executor that returns the mock data
 		mockExecutor := &TestStatementExecutor{
@@ -2686,7 +2595,7 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 		}
 
 		// Override the Mgmt method to return properly mocked RowIterator
-		mockExecutor.mockRows = mockRows
+		mockExecutor.mockDataset = mockRows
 
 		task := &SummaryRuleTask{
 			kustoCli: mockExecutor,
@@ -2712,25 +2621,21 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 	})
 
 	t.Run("operation not found", func(t *testing.T) {
-		ensureTestVFlagSet(t)
 
 		// Create empty mock rows (no data)
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-			{Name: "OperationId", Type: kustotypes.String},
-			{Name: "State", Type: kustotypes.String},
-			{Name: "ShouldRetry", Type: kustotypes.Real},
-			{Name: "Status", Type: kustotypes.String},
-		}
-
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
+		mockRows := mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, nil)
 
 		mockExecutor := &TestStatementExecutor{
 			database: "testdb",
 			endpoint: "http://test-endpoint",
 		}
-		mockExecutor.mockRows = mockRows
+		mockExecutor.mockDataset = mockRows
 
 		task := &SummaryRuleTask{
 			kustoCli: mockExecutor,
@@ -2768,36 +2673,22 @@ func TestSummaryRuleTaskGetOperation(t *testing.T) {
 	})
 
 	t.Run("operation with empty state ignored", func(t *testing.T) {
-		ensureTestVFlagSet(t)
-
-		// Create columns that match AsyncOperationStatus struct
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: kustotypes.DateTime},
-			{Name: "OperationId", Type: kustotypes.String},
-			{Name: "State", Type: kustotypes.String},
-			{Name: "ShouldRetry", Type: kustotypes.Real},
-			{Name: "Status", Type: kustotypes.String},
-		}
-
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
 
 		// Add operation with empty state (should be ignored)
 		operationTime := time.Date(2024, 6, 23, 10, 0, 0, 0, time.UTC)
-		err = mockRows.Row(value.Values{
-			value.DateTime{Value: operationTime, Valid: true},
-			value.String{Value: "test-operation-456", Valid: true},
-			value.String{Value: "", Valid: false}, // Empty state
-			value.Real{Value: 0, Valid: true},
-			value.String{Value: "", Valid: false},
-		})
-		require.NoError(t, err)
+		mockRows := mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, [][]interface{}{{operationTime.UTC().Format(time.RFC3339Nano), "test-operation-456", nil, 0.0, nil}})
 
 		mockExecutor := &TestStatementExecutor{
 			database: "testdb",
 			endpoint: "http://test-endpoint",
 		}
-		mockExecutor.mockRows = mockRows
+		mockExecutor.mockDataset = mockRows
 
 		task := &SummaryRuleTask{
 			kustoCli: mockExecutor,
@@ -2824,19 +2715,8 @@ func TestSummaryRuleBacklogTimestampUpdate(t *testing.T) {
 	mockExecutor.Reset()
 
 	// Create a mock response for the submission operation ID
-	operationIDColumns := table.Columns{
-		{Name: "OperationId", Type: kustotypes.String},
-	}
-	operationIDRows, err := kusto.NewMockRows(operationIDColumns)
-	require.NoError(t, err)
-
 	operationID := "backlog-op-success-12345"
-	err = operationIDRows.Row(value.Values{
-		value.String{Value: operationID, Valid: true},
-	})
-	require.NoError(t, err)
-
-	mockExecutor.mockRows = operationIDRows
+	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{{ColumnName: "OperationId", DataType: "String", ColumnType: "string"}}, [][]interface{}{{operationID}})
 
 	// Create storage interface
 	store := &mockCRDHandler{}
@@ -2905,19 +2785,8 @@ func TestSummaryRuleBacklogTimestampForwardProgressOnly(t *testing.T) {
 	mockExecutor.Reset()
 
 	// Create mock rows for operation ID response
-	operationIDColumns := table.Columns{
-		{Name: "OperationId", Type: kustotypes.String},
-	}
-	operationIDRows, err := kusto.NewMockRows(operationIDColumns)
-	require.NoError(t, err)
-
 	operationID := "old-backlog-op-67890"
-	err = operationIDRows.Row(value.Values{
-		value.String{Value: operationID, Valid: true},
-	})
-	require.NoError(t, err)
-
-	mockExecutor.mockRows = operationIDRows
+	mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{{ColumnName: "OperationId", DataType: "String", ColumnType: "string"}}, [][]interface{}{{operationID}})
 
 	store := &mockCRDHandler{}
 	task := NewSummaryRuleTask(store, mockExecutor, nil)

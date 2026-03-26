@@ -6,7 +6,8 @@ import (
 	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
-	"github.com/Azure/azure-kusto-go/kusto"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -17,8 +18,20 @@ type fakeStatementExecutor struct{ db string }
 
 func (f fakeStatementExecutor) Database() string { return f.db }
 func (f fakeStatementExecutor) Endpoint() string { return "https://example" }
-func (f fakeStatementExecutor) Mgmt(ctx context.Context, stmt kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	return &kusto.RowIterator{}, nil
+func (f fakeStatementExecutor) Mgmt(ctx context.Context, stmt azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
+	return kustov1.NewDataset(ctx, 0, kustov1.V1{
+		Tables: []kustov1.RawTable{
+			{
+				TableName: "Table_0",
+				Columns: []kustov1.RawColumn{
+					{ColumnName: "Result", DataType: "String", ColumnType: "string"},
+				},
+				Rows: []kustov1.RawRow{
+					{Row: []interface{}{"ok"}},
+				},
+			},
+		},
+	})
 }
 
 func TestSummaryRuleTask_shouldProcessRule_CriteriaExpression(t *testing.T) {
