@@ -6,7 +6,7 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
-	"github.com/Azure/azure-kusto-go/kusto"
+	"github.com/Azure/azure-kusto-go/azkustodata"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -19,8 +19,8 @@ func TestClusterRequiresDirectIngest(t *testing.T) {
 	testcontainers.CleanupContainer(t, k)
 	require.NoError(t, err)
 
-	cb := kusto.NewConnectionStringBuilder(k.ConnectionUrl())
-	client, err := kusto.New(cb)
+	cb := azkustodata.NewConnectionStringBuilder(k.ConnectionUrl())
+	client, err := azkustodata.New(cb)
 	require.NoError(t, err)
 	defer client.Close()
 

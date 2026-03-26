@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -121,6 +122,14 @@ func TestParseError(t *testing.T) {
 
 		result := ParseError(wrappedErr)
 		require.Equal(t, "Invalid KQL query", result)
+	})
+
+	t.Run("azkusto http error extracts @message", func(t *testing.T) {
+		body := `{"error":{"@message": "this function is invalid"}}`
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+
+		result := ParseError(kustoErr)
+		require.Equal(t, "this function is invalid", result)
 	})
 
 	t.Run("empty kusto error message", func(t *testing.T) {

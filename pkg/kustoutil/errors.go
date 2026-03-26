@@ -3,7 +3,8 @@ package kustoutil
 import (
 	"errors"
 
-	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
+	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	legacykustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 )
 
 const (
@@ -22,15 +23,17 @@ func ParseError(err error) string {
 
 	errMsg := err.Error()
 
-	var kustoerr *kustoerrors.HttpError
-	if errors.As(err, &kustoerr) {
-		// Try to extract the @message field from the Kusto error response
-		if decoded := kustoerr.UnmarshalREST(); decoded != nil {
-			if errMap, ok := decoded["error"].(map[string]interface{}); ok {
-				if errMsgVal, ok := errMap["@message"].(string); ok && errMsgVal != "" {
-					errMsg = errMsgVal
-				}
-			}
+	var azkustoErr *azkustoerrors.HttpError
+	if errors.As(err, &azkustoErr) {
+		if parsed, ok := extractRESTMessage(azkustoErr.UnmarshalREST()); ok {
+			errMsg = parsed
+		}
+	}
+
+	var legacyKustoErr *legacykustoerrors.HttpError
+	if errors.As(err, &legacyKustoErr) {
+		if parsed, ok := extractRESTMessage(legacyKustoErr.UnmarshalREST()); ok {
+			errMsg = parsed
 		}
 	}
 
@@ -40,4 +43,22 @@ func ParseError(err error) string {
 	}
 
 	return errMsg
+}
+
+func extractRESTMessage(decoded map[string]interface{}) (string, bool) {
+	if decoded == nil {
+		return "", false
+	}
+
+	errMap, ok := decoded["error"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+
+	errMsg, ok := errMap["@message"].(string)
+	if !ok || errMsg == "" {
+		return "", false
+	}
+
+	return errMsg, true
 }

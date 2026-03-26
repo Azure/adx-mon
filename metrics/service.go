@@ -8,8 +8,9 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	srv "github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	io_prometheus_client "github.com/prometheus/client_model/go"
 )
@@ -31,7 +32,7 @@ type TimeSeriesWriter interface {
 type StatementExecutor interface {
 	Database() string
 	Endpoint() string
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
 
 type Elector interface {
@@ -101,22 +102,20 @@ func (s *service) collect(ctx context.Context) {
 				// Only one node should execute the cardinality counts so see if we are the owner.
 				if s.elector.IsLeader() {
 					if len(s.metricsKustoCli) > 0 {
-						stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+						stmt := kql.New("").AddUnsafe(
 							".set-or-append async AdxmonIngestorTableCardinalityCount <| CountCardinality",
 						)
 
 						for _, cli := range s.metricsKustoCli {
-							iter, err := cli.Mgmt(ctx, stmt)
+							_, err := cli.Mgmt(ctx, stmt)
 							if err != nil {
 								logger.Errorf("Failed to execute cardinality counts: %s", err)
-							} else {
-								iter.Stop()
 							}
 						}
 					}
 
 					if len(s.allKustoClis) > 0 {
-						stmt := kusto.NewStmt("", kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd(
+						stmt := kql.New("").AddUnsafe(
 							".set-or-append async AdxmonIngestorTableDetails <| .show tables details" +
 								"| extend PreciseTimeStamp = now() " +
 								"| project PreciseTimeStamp, DatabaseName, TableName, TotalExtents, TotalExtentSize, TotalOriginalSize, TotalRowCount, HotExtents, HotExtentSize, HotOriginalSize," +
@@ -124,11 +123,9 @@ func (s *service) collect(ctx context.Context) {
 						)
 
 						for _, cli := range s.allKustoClis {
-							iter, err := cli.Mgmt(ctx, stmt)
+							_, err := cli.Mgmt(ctx, stmt)
 							if err != nil {
 								logger.Errorf("Failed to execute table sizes: %s", err)
-							} else {
-								iter.Stop()
 							}
 						}
 					}

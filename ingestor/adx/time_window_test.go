@@ -7,9 +7,7 @@ import (
 
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
+	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	klock "k8s.io/utils/clock/testing"
@@ -49,17 +47,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: types.DateTime},
-			{Name: "OperationId", Type: types.String},
-			{Name: "State", Type: types.String},
-			{Name: "ShouldRetry", Type: types.Real},
-			{Name: "Status", Type: types.String},
-		}
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
-		mockExecutor.mockRows = mockRows // Create task with fake clock
+		mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, nil)
 		task := &SummaryRuleTask{
 			store:    mockHandler,
 			kustoCli: mockExecutor,
@@ -75,8 +69,8 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Run the task
-		err = task.Run(context.Background())
-		require.NoError(t, err)
+		runErr := task.Run(context.Background())
+		require.NoError(t, runErr)
 
 		// Verify that a time window was captured
 		require.NotEmpty(t, capturedStartTime)
@@ -144,17 +138,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: types.DateTime},
-			{Name: "OperationId", Type: types.String},
-			{Name: "State", Type: types.String},
-			{Name: "ShouldRetry", Type: types.Real},
-			{Name: "Status", Type: types.String},
-		}
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
-		mockExecutor.mockRows = mockRows
+		mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, nil)
 
 		// Create task with fake clock
 		task := &SummaryRuleTask{
@@ -175,8 +165,8 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Run the task
-		err = task.Run(context.Background())
-		require.NoError(t, err)
+		runErr := task.Run(context.Background())
+		require.NoError(t, runErr)
 
 		// Verify that we got exactly one submission
 		require.Len(t, submissionCalls, 1, "Expected exactly one rule submission")
@@ -237,17 +227,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: types.DateTime},
-			{Name: "OperationId", Type: types.String},
-			{Name: "State", Type: types.String},
-			{Name: "ShouldRetry", Type: types.Real},
-			{Name: "Status", Type: types.String},
-		}
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
-		mockExecutor.mockRows = mockRows
+		mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, nil)
 
 		// Create task with fake clock
 		task := &SummaryRuleTask{
@@ -264,8 +250,8 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Run the task
-		err = task.Run(context.Background())
-		require.NoError(t, err)
+		runErr := task.Run(context.Background())
+		require.NoError(t, runErr)
 
 		// Verify that the rule was updated
 		require.Len(t, mockHandler.updatedObjects, 1)
@@ -335,17 +321,13 @@ func TestTimeWindowCalculation(t *testing.T) {
 			endpoint: "http://test-endpoint",
 		}
 
-		// Set up mock rows for getOperation calls (should return empty to simulate no operations found)
-		columns := table.Columns{
-			{Name: "LastUpdatedOn", Type: types.DateTime},
-			{Name: "OperationId", Type: types.String},
-			{Name: "State", Type: types.String},
-			{Name: "ShouldRetry", Type: types.Real},
-			{Name: "Status", Type: types.String},
-		}
-		mockRows, err := kusto.NewMockRows(columns)
-		require.NoError(t, err)
-		mockExecutor.mockRows = mockRows
+		mockExecutor.mockDataset = mustMgmtDataset(t, context.Background(), "Table_0", []kustov1.RawColumn{
+			{ColumnName: "LastUpdatedOn", DataType: "DateTime", ColumnType: "datetime"},
+			{ColumnName: "OperationId", DataType: "String", ColumnType: "string"},
+			{ColumnName: "State", DataType: "String", ColumnType: "string"},
+			{ColumnName: "ShouldRetry", DataType: "Real", ColumnType: "real"},
+			{ColumnName: "Status", DataType: "String", ColumnType: "string"},
+		}, nil)
 
 		// Create task with fake clock
 		task := &SummaryRuleTask{
@@ -366,8 +348,8 @@ func TestTimeWindowCalculation(t *testing.T) {
 		}
 
 		// Run the task multiple times to simulate multiple intervals
-		err = task.Run(context.Background())
-		require.NoError(t, err)
+		runErr := task.Run(context.Background())
+		require.NoError(t, runErr)
 
 		// Should have exactly one execution (next window)
 		require.Len(t, executions, 1)
