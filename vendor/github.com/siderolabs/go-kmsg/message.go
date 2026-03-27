@@ -40,6 +40,23 @@ const (
 	Local7
 )
 
+// CallerType is a single char byte caller type in kmsg logs with PRINTK_CALLER support.
+type CallerType byte
+
+// Types of callers a kmsg can originate from.
+//
+// ref: https://elixir.bootlin.com/linux/v6.6.22/source/kernel/printk/printk.c#L629
+const (
+	CPUCaller    = 'C'
+	ThreadCaller = 'T'
+)
+
+// Caller struct containing the type and ID from kmsg logs with PRINTK_CALLER support.
+type Caller struct {
+	Type CallerType
+	ID   uint32
+}
+
 func (f Facility) String() string {
 	return [...]string{
 		"kern", "user", "mail", "daemon",
@@ -77,6 +94,7 @@ type Message struct {
 	Priority       Priority
 	SequenceNumber int64
 	Clock          int64
+	Caller         Caller
 }
 
 // ParseMessage parses internal kernel log format.
@@ -108,12 +126,38 @@ func ParseMessage(input []byte, bootTime time.Time) (Message, error) {
 		return Message{}, fmt.Errorf("errors parsing clock from boot: %w", err)
 	}
 
+	caller := Caller{}
+
+	if len(metadata) == 5 {
+		// CONFIG_PRINTK_CALLER is enabled and kmsg has CPU or Thread caller info
+		callParts := strings.Split(metadata[4], "=")
+
+		callStr := callParts[1]
+
+		switch callStr[0] {
+		case ThreadCaller:
+			caller.Type = ThreadCaller
+		case CPUCaller:
+			caller.Type = CPUCaller
+		default:
+			return Message{}, fmt.Errorf("errors parsing caller id type")
+		}
+
+		id, err := strconv.ParseUint(callStr[1:], 10, 32)
+		if err != nil {
+			return Message{}, fmt.Errorf("errors parsing caller id value: %w", err)
+		}
+
+		caller.ID = uint32(id)
+	}
+
 	return Message{
 		Priority:       Priority(syslogPrefix & 7),
 		Facility:       Facility(syslogPrefix >> 3),
 		SequenceNumber: sequence,
 		Clock:          clock,
 		Timestamp:      bootTime.Add(time.Duration(clock) * time.Microsecond),
+		Caller:         caller,
 		Message:        unescape(message),
 	}, nil
 }

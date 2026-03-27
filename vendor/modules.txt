@@ -573,11 +573,11 @@ github.com/shirou/gopsutil/v4/process
 # github.com/shopspring/decimal v1.4.0
 ## explicit; go 1.10
 github.com/shopspring/decimal
-# github.com/siderolabs/gen v0.4.7
-## explicit; go 1.21.0
+# github.com/siderolabs/gen v0.8.6
+## explicit; go 1.24.0
 github.com/siderolabs/gen/channel
-# github.com/siderolabs/go-kmsg v0.1.4
-## explicit; go 1.21.5
+# github.com/siderolabs/go-kmsg v0.1.5
+## explicit; go 1.25.0
 github.com/siderolabs/go-kmsg
 # github.com/sirupsen/logrus v1.9.3
 ## explicit; go 1.13
