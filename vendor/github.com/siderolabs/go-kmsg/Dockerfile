@@ -1,48 +1,44 @@
-# syntax = docker/dockerfile-upstream:1.6.0-labs
+# syntax = docker/dockerfile-upstream:1.22.0-labs
 
 # THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
 #
-# Generated on 2024-01-11T18:39:51Z by kres latest.
+# Generated on 2026-03-13T17:41:07Z by kres e68c408.
 
-ARG TOOLCHAIN
+ARG TOOLCHAIN=scratch
 
 # cleaned up specs and compiled versions
 FROM scratch AS generate
 
 # runs markdownlint
-FROM docker.io/node:21.4.0-alpine3.18 AS lint-markdown
+FROM docker.io/oven/bun:1.3.10-alpine AS lint-markdown
 WORKDIR /src
-RUN npm i -g markdownlint-cli@0.37.0
-RUN npm i sentences-per-line@0.2.1
+RUN bun i markdownlint-cli@0.48.0 sentences-per-line@0.5.2
 COPY .markdownlint.json .
 COPY ./README.md ./README.md
-RUN markdownlint --ignore "CHANGELOG.md" --ignore "**/node_modules/**" --ignore '**/hack/chglog/**' --rules node_modules/sentences-per-line/index.js .
+RUN bunx markdownlint --ignore "CHANGELOG.md" --ignore "**/node_modules/**" --ignore '**/hack/chglog/**' --rules markdownlint-sentences-per-line .
 
 # base toolchain image
-FROM ${TOOLCHAIN} AS toolchain
-RUN apk --update --no-cache add bash curl build-base protoc protobuf-dev
+FROM --platform=${BUILDPLATFORM} ${TOOLCHAIN} AS toolchain
+RUN apk --update --no-cache add bash build-base curl jq protoc protobuf-dev
 
 # build tools
 FROM --platform=${BUILDPLATFORM} toolchain AS tools
-ENV GO111MODULE on
+ENV GO111MODULE=on
 ARG CGO_ENABLED
-ENV CGO_ENABLED ${CGO_ENABLED}
+ENV CGO_ENABLED=${CGO_ENABLED}
 ARG GOTOOLCHAIN
-ENV GOTOOLCHAIN ${GOTOOLCHAIN}
+ENV GOTOOLCHAIN=${GOTOOLCHAIN}
 ARG GOEXPERIMENT
-ENV GOEXPERIMENT ${GOEXPERIMENT}
-ENV GOPATH /go
+ENV GOEXPERIMENT=${GOEXPERIMENT}
+ENV GOPATH=/go
 ARG DEEPCOPY_VERSION
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg go install github.com/siderolabs/deep-copy@${DEEPCOPY_VERSION} \
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg go install github.com/siderolabs/deep-copy@${DEEPCOPY_VERSION} \
 	&& mv /go/bin/deep-copy /bin/deep-copy
 ARG GOLANGCILINT_VERSION
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg go install github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCILINT_VERSION} \
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCILINT_VERSION} \
 	&& mv /go/bin/golangci-lint /bin/golangci-lint
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg go install golang.org/x/vuln/cmd/govulncheck@latest \
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg go install golang.org/x/vuln/cmd/govulncheck@latest \
 	&& mv /go/bin/govulncheck /bin/govulncheck
-ARG GOIMPORTS_VERSION
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg go install golang.org/x/tools/cmd/goimports@${GOIMPORTS_VERSION} \
-	&& mv /go/bin/goimports /bin/goimports
 ARG GOFUMPT_VERSION
 RUN go install mvdan.cc/gofumpt@${GOFUMPT_VERSION} \
 	&& mv /go/bin/gofumpt /bin/gofumpt
@@ -53,8 +49,8 @@ WORKDIR /src
 COPY go.mod go.mod
 COPY go.sum go.sum
 RUN cd .
-RUN --mount=type=cache,target=/go/pkg go mod download
-RUN --mount=type=cache,target=/go/pkg go mod verify
+RUN --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg go mod download
+RUN --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg go mod verify
 COPY ./kmsg.go ./kmsg.go
 COPY ./message.go ./message.go
 COPY ./message_test.go ./message_test.go
@@ -64,39 +60,48 @@ COPY ./utils_bsd.go ./utils_bsd.go
 COPY ./utils_linux.go ./utils_linux.go
 COPY ./writer.go ./writer.go
 COPY ./writer_test.go ./writer_test.go
-RUN --mount=type=cache,target=/go/pkg go list -mod=readonly all >/dev/null
+RUN --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg go list -mod=readonly all >/dev/null
 
 # runs gofumpt
 FROM base AS lint-gofumpt
 RUN FILES="$(gofumpt -l .)" && test -z "${FILES}" || (echo -e "Source code is not formatted with 'gofumpt -w .':\n${FILES}"; exit 1)
 
-# runs goimports
-FROM base AS lint-goimports
-RUN FILES="$(goimports -l -local github.com/siderolabs/go-kmsg/ .)" && test -z "${FILES}" || (echo -e "Source code is not formatted with 'goimports -w -local github.com/siderolabs/go-kmsg/ .':\n${FILES}"; exit 1)
-
 # runs golangci-lint
 FROM base AS lint-golangci-lint
 WORKDIR /src
 COPY .golangci.yml .
-ENV GOGC 50
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/root/.cache/golangci-lint --mount=type=cache,target=/go/pkg golangci-lint run --config .golangci.yml
+ENV GOGC=50
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/root/.cache/golangci-lint,id=go-kmsg/root/.cache/golangci-lint,sharing=locked --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg golangci-lint run --config .golangci.yml
+
+# runs golangci-lint fmt
+FROM base AS lint-golangci-lint-fmt-run
+WORKDIR /src
+COPY .golangci.yml .
+ENV GOGC=50
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/root/.cache/golangci-lint,id=go-kmsg/root/.cache/golangci-lint,sharing=locked --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg golangci-lint fmt --config .golangci.yml
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/root/.cache/golangci-lint,id=go-kmsg/root/.cache/golangci-lint,sharing=locked --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg golangci-lint run --fix --issues-exit-code 0 --config .golangci.yml
 
 # runs govulncheck
 FROM base AS lint-govulncheck
 WORKDIR /src
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg govulncheck ./...
+COPY --chmod=0755 hack/govulncheck.sh ./hack/govulncheck.sh
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg ./hack/govulncheck.sh ./...
 
 # runs unit-tests with race detector
 FROM base AS unit-tests-race
 WORKDIR /src
 ARG TESTPKGS
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg --mount=type=cache,target=/tmp CGO_ENABLED=1 go test -v -race -count 1 ${TESTPKGS}
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg --mount=type=cache,target=/tmp,id=go-kmsg/tmp CGO_ENABLED=1 go test -race ${TESTPKGS}
 
 # runs unit-tests
 FROM base AS unit-tests-run
 WORKDIR /src
 ARG TESTPKGS
-RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg --mount=type=cache,target=/tmp go test -v -covermode=atomic -coverprofile=coverage.txt -coverpkg=${TESTPKGS} -count 1 ${TESTPKGS}
+RUN --mount=type=cache,target=/root/.cache/go-build,id=go-kmsg/root/.cache/go-build --mount=type=cache,target=/go/pkg,id=go-kmsg/go/pkg --mount=type=cache,target=/tmp,id=go-kmsg/tmp go test -covermode=atomic -coverprofile=coverage.txt -coverpkg=${TESTPKGS} ${TESTPKGS}
+
+# clean golangci-lint fmt output
+FROM scratch AS lint-golangci-lint-fmt
+COPY --from=lint-golangci-lint-fmt-run /src .
 
 FROM scratch AS unit-tests
 COPY --from=unit-tests-run /src/coverage.txt /coverage-unit-tests.txt

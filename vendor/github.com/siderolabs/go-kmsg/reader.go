@@ -68,7 +68,7 @@ func NewReader(options ...Option) (Reader, error) {
 
 	var err error
 
-	r.bootTime, err = getBootTime()
+	r.bootOffset, err = getBootTimeOffset()
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +91,9 @@ func NewReader(options ...Option) (Reader, error) {
 }
 
 type reader struct {
-	f        *os.File
-	bootTime time.Time
-	options  options
+	f          *os.File
+	bootOffset time.Duration
+	options    options
 }
 
 func (r *reader) Close() error {
@@ -148,7 +148,8 @@ func (r *reader) scanNoFollow(ctx context.Context, ch chan<- Packet) {
 		}
 
 		var packet Packet
-		packet.Message, packet.Err = ParseMessage(buf[:n], r.bootTime)
+
+		packet.Message, packet.Err = ParseMessage(buf[:n], time.Now().Add(r.bootOffset))
 
 		if !channel.SendWithContext(ctx, ch, packet) {
 			return
@@ -182,7 +183,8 @@ func (r *reader) scanFollow(ctx context.Context, ch chan<- Packet) {
 		}
 
 		var packet Packet
-		packet.Message, packet.Err = ParseMessage(buf[:n], r.bootTime)
+
+		packet.Message, packet.Err = ParseMessage(buf[:n], time.Now().Add(r.bootOffset))
 
 		if !channel.SendWithContext(ctx, ch, packet) {
 			return
