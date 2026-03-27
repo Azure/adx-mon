@@ -28,6 +28,35 @@ collection and analysis of observability data.
 
 ## Development
 
+### Build, push, and deploy images from ACR
+
+Use these helper scripts to publish ADX-Mon images to your Azure Container Registry (ACR) and update the running Kubernetes workloads to use those images.
+
+```bash
+# Build and push ingestor, collector, operator, and alerter
+tools/dev/push-all-images-to-acr.sh <acr-name-or-login-server> [tag]
+
+# Example with latest tag
+tools/dev/push-all-images-to-acr.sh myacr latest
+
+# Update adx-mon workloads to use ACR images (ingestor + collector workloads)
+tools/dev/update-adxmon-images.sh <acr-name-or-login-server> [tag]
+
+# Example
+tools/dev/update-adxmon-images.sh myacr latest
+```
+
+Notes:
+- `<acr-name-or-login-server>` accepts either `myacr` or `myacr.azurecr.io`.
+- `tag` defaults to `latest` if omitted.
+- Set `NAMESPACE` to target a non-default namespace (default: `adx-mon`).
+
+Component-specific push scripts are also available:
+- `tools/dev/push-ingestor-to-acr.sh`
+- `tools/dev/push-collector-to-acr.sh`
+- `tools/dev/push-operator-to-acr.sh`
+- `tools/dev/push-alerter-to-acr.sh`
+
 ### Collector backend verification
 
 - `/readyz` returns `status=ok backend=<value>` when healthy and 503 with the same backend annotation if max disk usage or segment thresholds trigger backpressure.
