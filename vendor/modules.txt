@@ -492,11 +492,10 @@ github.com/opencontainers/image-spec/specs-go/v1
 # github.com/paulmach/orb v0.12.0
 ## explicit; go 1.15
 github.com/paulmach/orb
-# github.com/pelletier/go-toml/v2 v2.2.4
+# github.com/pelletier/go-toml/v2 v2.3.0
 ## explicit; go 1.21.0
 github.com/pelletier/go-toml/v2
 github.com/pelletier/go-toml/v2/internal/characters
-github.com/pelletier/go-toml/v2/internal/danger
 github.com/pelletier/go-toml/v2/internal/tracker
 github.com/pelletier/go-toml/v2/unstable
 # github.com/philhofer/fwd v1.2.0
