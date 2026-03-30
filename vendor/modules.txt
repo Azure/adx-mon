@@ -628,8 +628,8 @@ github.com/traefik/yaegi/stdlib/generic
 # github.com/urfave/cli/v2 v2.27.7
 ## explicit; go 1.18
 github.com/urfave/cli/v2
-# github.com/valyala/fastjson v1.6.7
-## explicit; go 1.12
+# github.com/valyala/fastjson v1.6.10
+## explicit; go 1.24
 github.com/valyala/fastjson/fastfloat
 # github.com/x448/float16 v0.8.4
 ## explicit; go 1.11
