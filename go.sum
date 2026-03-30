@@ -1,7 +1,7 @@
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260310202139-5f2c7d4f7405.2 h1:90jXGK4TIfrL8jpUf9dkp70/qJXKV5TnlanRctU6kig=
 buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260310202139-5f2c7d4f7405.2/go.mod h1:hEmxQt5m4dSnR2lvg++iTfOD7VCuuyOp1nj+S4zUyiY=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20251103204844-648a3e2f02e1.1 h1:4f9BTWV8MDKO4YBDhL3EHouOtGa6aycC7s7HRwO0gGw=
-buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20251103204844-648a3e2f02e1.1/go.mod h1:+67TRoLH3kBQ2qE0PGSvxpPnRWD7RScwWPVnC25qrMM=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20260310202139-5f2c7d4f7405.1 h1:xudf0Mfz1EIOXfkCRQX4RHfSgwMO4pY3LI/3WoIYUJU=
+buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20260310202139-5f2c7d4f7405.1/go.mod h1:+67TRoLH3kBQ2qE0PGSvxpPnRWD7RScwWPVnC25qrMM=
 cel.dev/expr v0.25.1 h1:1KrZg61W6TWSxuNZ37Xy49ps13NUovb66QLprthtwi4=
 cel.dev/expr v0.25.1/go.mod h1:hrXvqGP6G6gyx8UAHSHJ5RGk//1Oj5nXQ2NI02Nrsg4=
 dario.cat/mergo v1.0.2 h1:85+piFYR1tMbRrLcDwR18y4UKJ3aH1Tbzi24VRW1TK8=
