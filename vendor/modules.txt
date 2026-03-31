@@ -15,7 +15,7 @@ cel.dev/expr
 # dario.cat/mergo v1.0.2
 ## explicit; go 1.13
 dario.cat/mergo
-# github.com/Azure/azure-kusto-go v0.15.2 => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
+# github.com/Azure/azure-kusto-go v0.16.1
 ## explicit; go 1.19
 github.com/Azure/azure-kusto-go/kusto
 github.com/Azure/azure-kusto-go/kusto/data/errors
@@ -1384,6 +1384,5 @@ sigs.k8s.io/structured-merge-diff/v6/value
 ## explicit; go 1.22
 sigs.k8s.io/yaml
 sigs.k8s.io/yaml/goyaml.v2
-# github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
 # github.com/redis/go-redis/v9 => github.com/redis/go-redis/v9 v9.7.3
 # github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445
