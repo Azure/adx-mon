@@ -160,7 +160,7 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
 ## explicit; go 1.24.1
 github.com/ClickHouse/ch-go/compress
 github.com/ClickHouse/ch-go/proto
-# github.com/ClickHouse/clickhouse-go/v2 v2.43.0
+# github.com/ClickHouse/clickhouse-go/v2 v2.44.0
 ## explicit; go 1.24.1
 github.com/ClickHouse/clickhouse-go/v2
 github.com/ClickHouse/clickhouse-go/v2/contributors
@@ -168,6 +168,7 @@ github.com/ClickHouse/clickhouse-go/v2/ext
 github.com/ClickHouse/clickhouse-go/v2/internal/circular
 github.com/ClickHouse/clickhouse-go/v2/lib/binary
 github.com/ClickHouse/clickhouse-go/v2/lib/chcol
+github.com/ClickHouse/clickhouse-go/v2/lib/churl
 github.com/ClickHouse/clickhouse-go/v2/lib/column
 github.com/ClickHouse/clickhouse-go/v2/lib/driver
 github.com/ClickHouse/clickhouse-go/v2/lib/proto
