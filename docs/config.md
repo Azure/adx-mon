@@ -322,8 +322,8 @@ Available transform types:
 *   **`addattributes`**: Adds static key-value pairs to the log body. Keys and values are defined in the `config` map.
 *   **`logrouter`**: Routes logs to different databases and tables based on pod annotations. This transform requires no `config` and is driven entirely by the following pod annotations:
 
-    *   **`adx-mon/log-sources`**: Routes based on the `source` field in the log body. Format: `sourceVal:Database:Table[,sourceVal:Database:Table,...]`. For example, `stdout:Logs:AppOut,stderr:Logs:AppErr` routes logs with a body field `source` equal to `stdout` to `Logs.AppOut` and `stderr` to `Logs.AppErr`.
-    *   **`adx-mon/log-keys`**: Routes based on an arbitrary key-value match in the log body. Format: `key:value:Database:Table[,key:value:Database:Table,...]`. For example, `level:error:Logs:Errors,level:warn:Logs:Warnings` routes logs where the body field `level` equals `error` to `Logs.Errors`.
+    *   **`adx-mon/log-sources`**: Routes based on the `source` field in the log body. Format: `sourceVal:Database:Table[,sourceVal:Database:Table,...]`. For example, `frontend:Logs:FrontendLogs,backend:Logs:BackendLogs` routes logs with a body field `source` equal to `frontend` to `Logs.FrontendLogs` and `backend` to `Logs.BackendLogs`.
+    *   **`adx-mon/log-keys`**: Routes based on an arbitrary key-value match in the log body. Format: `key:value:Database:Table[,key:value:Database:Table,...]`. For example, `level:error:Logs:Errors,level:info:Logs:Info` routes logs where the body field `level` equals `error` to `Logs.Errors` and `info` to `Logs.Info`.
 
     `adx-mon/log-sources` is evaluated first. If a match is found, `adx-mon/log-keys` is skipped.
 
