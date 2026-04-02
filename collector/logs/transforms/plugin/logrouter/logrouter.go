@@ -2,6 +2,7 @@ package logrouter
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
@@ -68,15 +69,16 @@ func (t *Transform) route(log *types.Log) {
 
 	// Try log-sources first: match on the "source" body field.
 	if sources := types.StringOrEmpty(log.GetResourceValue(ResourceLogSources)); sources != "" {
-		sourceBody := types.StringOrEmpty(log.GetBodyValue("source"))
+		sourceBody := bodyValueAsString(log.GetBodyValue("source"))
 		for entry := range strings.SplitSeq(sources, ",") {
+			entry = strings.TrimSpace(entry)
 			parts := strings.Split(entry, ":")
 			if len(parts) != 3 {
 				continue
 			}
-			if sourceBody == parts[0] {
-				log.SetAttributeValue(types.AttributeDatabaseName, parts[1])
-				log.SetAttributeValue(types.AttributeTableName, parts[2])
+			if sourceBody == strings.TrimSpace(parts[0]) {
+				log.SetAttributeValue(types.AttributeDatabaseName, strings.TrimSpace(parts[1]))
+				log.SetAttributeValue(types.AttributeTableName, strings.TrimSpace(parts[2]))
 				return
 			}
 		}
@@ -85,15 +87,29 @@ func (t *Transform) route(log *types.Log) {
 	// Try log-keys: match on an arbitrary body key=value pair.
 	if keys := types.StringOrEmpty(log.GetResourceValue(ResourceLogKeys)); keys != "" {
 		for entry := range strings.SplitSeq(keys, ",") {
+			entry = strings.TrimSpace(entry)
 			parts := strings.Split(entry, ":")
 			if len(parts) != 4 {
 				continue
 			}
-			if types.StringOrEmpty(log.GetBodyValue(parts[0])) == parts[1] {
-				log.SetAttributeValue(types.AttributeDatabaseName, parts[2])
-				log.SetAttributeValue(types.AttributeTableName, parts[3])
+			if bodyValueAsString(log.GetBodyValue(strings.TrimSpace(parts[0]))) == strings.TrimSpace(parts[1]) {
+				log.SetAttributeValue(types.AttributeDatabaseName, strings.TrimSpace(parts[2]))
+				log.SetAttributeValue(types.AttributeTableName, strings.TrimSpace(parts[3]))
 				return
 			}
 		}
 	}
+}
+
+// bodyValueAsString converts a body value to its string representation.
+// This handles non-string scalars (e.g., numbers, bools) that may result
+// from JSON parsing.
+func bodyValueAsString(val any, ok bool) string {
+	if !ok || val == nil {
+		return ""
+	}
+	if str, isStr := val.(string); isStr {
+		return str
+	}
+	return fmt.Sprint(val)
 }

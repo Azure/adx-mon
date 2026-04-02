@@ -223,6 +223,93 @@ func TestTransform_LogKeys(t *testing.T) {
 	}
 }
 
+func TestTransform_NonStringBodyValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		log       types.LogLiteral
+		wantDB    string
+		wantTable string
+	}{
+		{
+			name: "log-sources with bool source value",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogSources: "true:Logs:BoolTable",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"source": true},
+			},
+			wantDB:    "Logs",
+			wantTable: "BoolTable",
+		},
+		{
+			name: "log-keys with integer body value",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogKeys: "code:500:Logs:Errors",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"code": 500},
+			},
+			wantDB:    "Logs",
+			wantTable: "Errors",
+		},
+		{
+			name: "log-keys with float body value",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogKeys: "score:3.14:Logs:Scores",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"score": 3.14},
+			},
+			wantDB:    "Logs",
+			wantTable: "Scores",
+		},
+		{
+			name: "log-keys with nil body value - no match",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogKeys: "missing:val:Logs:Table",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{},
+			},
+			wantDB:    "defaultDB",
+			wantTable: "defaultTable",
+		},
+	}
+
+	transform := NewTransform()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := tt.log.ToLog()
+			batch := &types.LogBatch{Logs: []*types.Log{log}}
+
+			result, err := transform.Transform(context.Background(), batch)
+			require.NoError(t, err)
+			require.Len(t, result.Logs, 1)
+
+			gotDB := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeDatabaseName))
+			gotTable := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeTableName))
+			assert.Equal(t, tt.wantDB, gotDB)
+			assert.Equal(t, tt.wantTable, gotTable)
+		})
+	}
+}
+
 func TestTransform_LogSourcesTakesPrecedence(t *testing.T) {
 	// When both log-sources and log-keys match, log-sources wins.
 	log := types.LogLiteral{
@@ -277,6 +364,120 @@ func TestTransform_FallsThroughToLogKeys(t *testing.T) {
 	gotTable := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeTableName))
 	assert.Equal(t, "KeyDB", gotDB)
 	assert.Equal(t, "KeyTable", gotTable)
+}
+
+func TestTransform_LogSourcesWhitespaceTrimming(t *testing.T) {
+	tests := []struct {
+		name      string
+		log       types.LogLiteral
+		wantDB    string
+		wantTable string
+	}{
+		{
+			name: "spaces after commas",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogSources: "srcA:DBA:TableA, srcB:DBB:TableB",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"source": "srcB"},
+			},
+			wantDB:    "DBB",
+			wantTable: "TableB",
+		},
+		{
+			name: "spaces around colons",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogSources: " srcA : DBA : TableA ",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"source": "srcA"},
+			},
+			wantDB:    "DBA",
+			wantTable: "TableA",
+		},
+	}
+
+	transform := NewTransform()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := tt.log.ToLog()
+			batch := &types.LogBatch{Logs: []*types.Log{log}}
+
+			result, err := transform.Transform(context.Background(), batch)
+			require.NoError(t, err)
+			require.Len(t, result.Logs, 1)
+
+			gotDB := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeDatabaseName))
+			gotTable := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeTableName))
+			assert.Equal(t, tt.wantDB, gotDB)
+			assert.Equal(t, tt.wantTable, gotTable)
+		})
+	}
+}
+
+func TestTransform_LogKeysWhitespaceTrimming(t *testing.T) {
+	tests := []struct {
+		name      string
+		log       types.LogLiteral
+		wantDB    string
+		wantTable string
+	}{
+		{
+			name: "spaces after commas",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogKeys: "k1:v1:DB1:T1, k2:v2:DB2:T2",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"k2": "v2"},
+			},
+			wantDB:    "DB2",
+			wantTable: "T2",
+		},
+		{
+			name: "spaces around colons",
+			log: types.LogLiteral{
+				Resource: map[string]interface{}{
+					ResourceLogKeys: " myKey : myVal : DestDB : DestTable ",
+				},
+				Attributes: map[string]interface{}{
+					types.AttributeDatabaseName: "defaultDB",
+					types.AttributeTableName:    "defaultTable",
+				},
+				Body: map[string]any{"myKey": "myVal"},
+			},
+			wantDB:    "DestDB",
+			wantTable: "DestTable",
+		},
+	}
+
+	transform := NewTransform()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := tt.log.ToLog()
+			batch := &types.LogBatch{Logs: []*types.Log{log}}
+
+			result, err := transform.Transform(context.Background(), batch)
+			require.NoError(t, err)
+			require.Len(t, result.Logs, 1)
+
+			gotDB := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeDatabaseName))
+			gotTable := types.StringOrEmpty(result.Logs[0].GetAttributeValue(types.AttributeTableName))
+			assert.Equal(t, tt.wantDB, gotDB)
+			assert.Equal(t, tt.wantTable, gotTable)
+		})
+	}
 }
 
 func TestTransform_NilLog(t *testing.T) {
