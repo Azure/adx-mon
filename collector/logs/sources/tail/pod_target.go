@@ -127,10 +127,15 @@ func targetForContainer(pod *v1.Pod, containerStatuses []v1.ContainerStatus, par
 	}
 
 	for k, v := range pod.GetAnnotations() {
-		if !strings.HasPrefix(k, "adx-mon/") {
-			key := fmt.Sprintf("annotation.%s", k)
-			resourceValues[key] = v
+		if strings.HasPrefix(k, "adx-mon/") {
+			// Pass through routing annotations so downstream transforms can use them.
+			if k == "adx-mon/log-sources" || k == "adx-mon/log-keys" {
+				resourceValues[k] = v
+			}
+			continue
 		}
+		key := fmt.Sprintf("annotation.%s", k)
+		resourceValues[key] = v
 	}
 	for k, v := range pod.GetLabels() {
 		key := fmt.Sprintf("label.%s", k)
