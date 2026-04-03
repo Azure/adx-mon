@@ -9,6 +9,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clocktesting "k8s.io/utils/clock/testing"
 )
@@ -98,6 +99,13 @@ func failedStatus() GetOperationStatusFunc {
 	}
 }
 
+// retryableStatus returns a GetOperationStatusFunc where all ops are marked retryable.
+func retryableStatus() GetOperationStatusFunc {
+	return func(ctx context.Context, db, opID string) (string, bool, error) {
+		return "InProgress", true, nil
+	}
+}
+
 // statusByID maps operation IDs to states for selective status responses.
 func statusByID(m map[string]string) GetOperationStatusFunc {
 	return func(ctx context.Context, db, opID string) (string, bool, error) {
@@ -136,6 +144,36 @@ func TestProcess_InvalidRange(t *testing.T) {
 	require.NotNil(t, rule.Status.Backfill)
 	require.Equal(t, v1.BackfillPhaseFailed, rule.Status.Backfill.Phase)
 	require.Contains(t, rule.Status.Backfill.Message, "EndTime must be after StartTime")
+}
+
+func TestProcess_InvalidSpecFailsAndClearsStaleProgress(t *testing.T) {
+	start := baseTime()
+	end := start.Add(2 * time.Hour)
+	rule := newRule(start, end, time.Hour)
+	rule.Status.Backfill = &v1.BackfillStatus{
+		RequestID:          "old-request",
+		Phase:              v1.BackfillPhaseRunning,
+		ObservedGeneration: 1,
+		NextWindowStart:    metav1.NewTime(start.Add(time.Hour)),
+		SubmittedWindows:   3,
+		CompletedWindows:   1,
+	}
+	rule.Spec.Backfill.RequestID = ""
+
+	clk := fakeClockAt(start)
+	submit, _ := succeedSubmit()
+
+	Process(context.Background(), rule, clk, submit, completedStatus())
+
+	require.NotNil(t, rule.Status.Backfill)
+	require.Equal(t, v1.BackfillPhaseFailed, rule.Status.Backfill.Phase)
+	require.Contains(t, rule.Status.Backfill.Message, "RequestID must be set")
+	require.False(t, rule.Status.Backfill.NextWindowStart.IsZero())
+
+	cond := meta.FindStatusCondition(rule.Status.Conditions, v1.ConditionBackfill)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, string(v1.BackfillPhaseFailed), cond.Reason)
 }
 
 func TestProcess_SingleWindow(t *testing.T) {
@@ -287,6 +325,26 @@ func TestProcess_FailedOperation_RetriedNotSkipped(t *testing.T) {
 	require.Equal(t, 1, rule.Status.Backfill.RetriedWindows)
 }
 
+func TestProcess_ShouldRetryRequeuesWindow(t *testing.T) {
+	start := baseTime()
+	end := start.Add(2 * time.Hour)
+	rule := newRule(start, end, time.Hour)
+	clk := fakeClockAt(start.Add(5 * time.Hour))
+	submit, _ := succeedSubmit()
+
+	Process(context.Background(), rule, clk, submit, inProgressStatus())
+	firstOperationID := rule.Status.Backfill.ActiveOperations[0].OperationID
+	require.NotEmpty(t, firstOperationID)
+
+	Process(context.Background(), rule, clk, submit, retryableStatus())
+
+	require.Len(t, rule.Status.Backfill.ActiveOperations, 1)
+	require.Equal(t, 1, rule.Status.Backfill.RetriedWindows)
+	require.Equal(t, start.Format(time.RFC3339Nano), rule.Status.Backfill.ActiveOperations[0].StartTime)
+	require.NotEmpty(t, rule.Status.Backfill.ActiveOperations[0].OperationID)
+	require.NotEqual(t, firstOperationID, rule.Status.Backfill.ActiveOperations[0].OperationID)
+}
+
 func TestProcess_RequestIDResume(t *testing.T) {
 	start := baseTime()
 	end := start.Add(3 * time.Hour)
@@ -397,6 +455,7 @@ func TestProcess_ClearsStatusWhenSpecRemoved(t *testing.T) {
 	rule.Spec.Backfill = nil
 	Process(context.Background(), rule, clk, submit, completedStatus())
 	require.Nil(t, rule.Status.Backfill)
+	require.Nil(t, meta.FindStatusCondition(rule.Status.Conditions, v1.ConditionBackfill))
 }
 
 func TestProcess_KeepsTerminalStatusWhenSpecRemoved(t *testing.T) {
@@ -416,6 +475,9 @@ func TestProcess_KeepsTerminalStatusWhenSpecRemoved(t *testing.T) {
 	Process(context.Background(), rule, clk, submit, completedStatus())
 	require.NotNil(t, rule.Status.Backfill)
 	require.Equal(t, v1.BackfillPhaseCompleted, rule.Status.Backfill.Phase)
+	cond := meta.FindStatusCondition(rule.Status.Conditions, v1.ConditionBackfill)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
 }
 
 func TestProcess_WindowBoundaries(t *testing.T) {
@@ -495,7 +557,10 @@ func TestProcess_EmptyRequestID(t *testing.T) {
 
 	Process(context.Background(), rule, clk, submit, completedStatus())
 
-	require.Nil(t, rule.Status.Backfill) // no-op
+	require.NotNil(t, rule.Status.Backfill)
+	require.Equal(t, v1.BackfillPhaseFailed, rule.Status.Backfill.Phase)
+	require.Contains(t, rule.Status.Backfill.Message, "RequestID must be set")
+	require.False(t, rule.Status.Backfill.NextWindowStart.IsZero())
 	require.Empty(t, *calls)
 }
 
@@ -725,4 +790,26 @@ func TestProcess_NoOverlap_WithMaxInFlight(t *testing.T) {
 			"window starting at %s was submitted %d times — overlap detected", start, count)
 	}
 	require.Equal(t, 5, len(windows), "expected exactly 5 unique windows")
+}
+
+func TestProcess_BackfillConditionLifecycle(t *testing.T) {
+	start := baseTime()
+	end := start.Add(time.Hour)
+	rule := newRule(start, end, time.Hour)
+	clk := fakeClockAt(start.Add(2 * time.Hour))
+	submit, _ := succeedSubmit()
+
+	Process(context.Background(), rule, clk, submit, inProgressStatus())
+
+	cond := meta.FindStatusCondition(rule.Status.Conditions, v1.ConditionBackfill)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionUnknown, cond.Status)
+	require.Equal(t, string(v1.BackfillPhaseRunning), cond.Reason)
+
+	Process(context.Background(), rule, clk, submit, completedStatus())
+
+	cond = meta.FindStatusCondition(rule.Status.Conditions, v1.ConditionBackfill)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, string(v1.BackfillPhaseCompleted), cond.Reason)
 }

@@ -114,6 +114,7 @@ type SummaryRuleSpec struct {
 type BackfillSpec struct {
 	// RequestID is a user-chosen identifier for this backfill request. The same RequestID
 	// resumes an in-progress backfill; a new RequestID starts a fresh backfill.
+	// +kubebuilder:validation:MinLength=1
 	RequestID string `json:"requestId"`
 	// StartTime is the inclusive start of the historical range to backfill.
 	StartTime metav1.Time `json:"startTime"`
@@ -121,6 +122,9 @@ type BackfillSpec struct {
 	EndTime metav1.Time `json:"endTime"`
 	// MaxInFlight limits the number of concurrent async operations for backfill windows.
 	// Defaults to 1 if unset or zero, keeping backfill as a low-priority background task.
+	// Values greater than 20 are rejected to keep historical processing throttled.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=20
 	// +optional
 	MaxInFlight int `json:"maxInFlight,omitempty"`
 }

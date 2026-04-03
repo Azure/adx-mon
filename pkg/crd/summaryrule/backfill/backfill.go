@@ -12,6 +12,7 @@ import (
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
 )
@@ -48,13 +49,19 @@ func Process(
 	submit SubmitFunc,
 	getStatus GetOperationStatusFunc,
 ) {
-	if rule == nil || rule.Spec.Backfill == nil {
+	if rule == nil {
+		return
+	}
+	defer syncBackfillCondition(rule)
+
+	if rule.Spec.Backfill == nil {
 		clearBackfillStatus(rule)
 		return
 	}
 
 	spec := rule.Spec.Backfill
-	if spec.RequestID == "" || spec.StartTime.IsZero() || spec.EndTime.IsZero() {
+	if msg, ok := validateSpec(spec); !ok {
+		setBackfillFailed(rule, spec.RequestID, rule.GetGeneration(), msg)
 		return
 	}
 	if !spec.EndTime.Time.After(spec.StartTime.Time) {
@@ -154,10 +161,19 @@ func pollActiveOperations(ctx context.Context, rule *v1.SummaryRule, getStatus G
 			continue
 		}
 
-		state, _, err := getStatus(ctx, rule.Spec.Database, op.OperationID)
+		operationID := op.OperationID
+		state, shouldRetry, err := getStatus(ctx, rule.Spec.Database, operationID)
 		if err != nil {
-			logger.Errorf("backfill: failed to poll operation %s: %v", op.OperationID, err)
+			logger.Errorf("backfill: failed to poll operation %s: %v", operationID, err)
 			remaining = append(remaining, op)
+			continue
+		}
+		if shouldRetry {
+			status.RetriedWindows++
+			op.OperationID = ""
+			remaining = append(remaining, op)
+			logger.Warnf("backfill: operation %s marked retryable for %s [%s, %s), re-queued for retry",
+				operationID, rule.Name, op.StartTime, op.EndTime)
 			continue
 		}
 
@@ -165,7 +181,7 @@ func pollActiveOperations(ctx context.Context, rule *v1.SummaryRule, getStatus G
 		case "Completed":
 			status.CompletedWindows++
 			logger.Infof("backfill: operation %s completed for %s [%s, %s)",
-				op.OperationID, rule.Name, op.StartTime, op.EndTime)
+				operationID, rule.Name, op.StartTime, op.EndTime)
 		case "Failed":
 			// Re-queue as backlog so the window is retried — no interval is skipped.
 			status.RetriedWindows++
@@ -293,12 +309,76 @@ func checkCompletion(rule *v1.SummaryRule) {
 	}
 }
 
+func validateSpec(spec *v1.BackfillSpec) (string, bool) {
+	switch {
+	case spec == nil:
+		return "Backfill spec is missing", false
+	case spec.RequestID == "":
+		return "RequestID must be set", false
+	case spec.StartTime.IsZero():
+		return "StartTime must be set", false
+	case spec.EndTime.IsZero():
+		return "EndTime must be set", false
+	default:
+		return "", true
+	}
+}
+
+func failedNextWindowStart(rule *v1.SummaryRule) metav1.Time {
+	if rule != nil && rule.Status.Backfill != nil && !rule.Status.Backfill.NextWindowStart.IsZero() {
+		return rule.Status.Backfill.NextWindowStart
+	}
+	if rule != nil && rule.Spec.Backfill != nil && !rule.Spec.Backfill.StartTime.IsZero() {
+		return rule.Spec.Backfill.StartTime
+	}
+	return metav1.NewTime(time.Now().UTC())
+}
+
+func syncBackfillCondition(rule *v1.SummaryRule) {
+	if rule == nil {
+		return
+	}
+	if rule.Status.Backfill == nil {
+		meta.RemoveStatusCondition(&rule.Status.Conditions, v1.ConditionBackfill)
+		return
+	}
+
+	status := metav1.ConditionUnknown
+	switch rule.Status.Backfill.Phase {
+	case v1.BackfillPhaseCompleted:
+		status = metav1.ConditionTrue
+	case v1.BackfillPhaseFailed:
+		status = metav1.ConditionFalse
+	}
+
+	message := rule.Status.Backfill.Message
+	if message == "" {
+		message = fmt.Sprintf("Backfill %s", rule.Status.Backfill.Phase)
+	}
+
+	meta.SetStatusCondition(&rule.Status.Conditions, metav1.Condition{
+		Type:               v1.ConditionBackfill,
+		Status:             status,
+		Reason:             string(rule.Status.Backfill.Phase),
+		Message:            message,
+		ObservedGeneration: rule.GetGeneration(),
+		LastTransitionTime: metav1.Now(),
+	})
+}
+
 // setBackfillFailed sets the backfill status to Failed with a message.
 func setBackfillFailed(rule *v1.SummaryRule, requestID string, generation int64, message string) {
-	rule.Status.Backfill = &v1.BackfillStatus{
-		RequestID:          requestID,
-		Phase:              v1.BackfillPhaseFailed,
-		ObservedGeneration: generation,
-		Message:            message,
+	if rule == nil {
+		return
 	}
+	status := &v1.BackfillStatus{}
+	if rule.Status.Backfill != nil {
+		status = rule.Status.Backfill.DeepCopy()
+	}
+	status.RequestID = requestID
+	status.Phase = v1.BackfillPhaseFailed
+	status.ObservedGeneration = generation
+	status.NextWindowStart = failedNextWindowStart(rule)
+	status.Message = message
+	rule.Status.Backfill = status
 }

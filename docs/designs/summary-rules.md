@@ -169,7 +169,7 @@ spec:
     requestId: jan-2026        # User-chosen identifier; same ID = resume
     startTime: "2026-01-01T00:00:00Z"  # Inclusive start
     endTime: "2026-02-01T00:00:00Z"    # Exclusive end
-    maxInFlight: 1             # Max concurrent async ops (default: 1)
+    maxInFlight: 1             # Max concurrent async ops (default: 1, max: 20)
 ```
 
 ### Key Semantics
@@ -184,7 +184,8 @@ spec:
 - **Generation pinning**: If the SummaryRule spec is edited mid-backfill (changing body, interval, etc.), the
   backfill is failed and a new `requestId` must be submitted.
 - **Low priority**: Backfill is designed as a background task. With `maxInFlight: 1` (default), only one
-  window is in-flight at a time. A complete backfill may take days for large ranges — this is by design.
+  window is in-flight at a time. `maxInFlight` is capped at 20 to keep historical processing throttled.
+  A complete backfill may take days for large ranges — this is by design.
 - **Append-only**: Backfill uses the same `.set-or-append async` as normal execution. Re-running the same
   time range appends duplicate rows; use ADX extent management to deduplicate if needed.
 
@@ -207,6 +208,12 @@ status:
         startTime: "2026-01-15T00:00:00Z"
         endTime: "2026-01-15T00:59:59.9999999Z"
 ```
+
+The current phase is also mirrored into `status.conditions` as `type: Backfill`:
+
+- `True` when the backfill is complete
+- `False` when the backfill fails
+- `Unknown` while pending or running
 
 ### Completing or Cancelling
 

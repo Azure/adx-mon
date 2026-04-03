@@ -109,6 +109,7 @@ spec:
                     description: RequestID is a user-chosen identifier for this backfill
                       request. The same RequestID resumes an in-progress backfill; a
                       new RequestID starts a fresh backfill.
+                    minLength: 1
                     type: string
                   startTime:
                     description: StartTime is the inclusive start of the historical
@@ -123,6 +124,9 @@ spec:
                   maxInFlight:
                     description: MaxInFlight limits the number of concurrent async
                       operations for backfill windows. Defaults to 1 if unset or zero.
+                      Values greater than 20 are rejected to keep historical processing
+                      throttled.
+                    maximum: 20
                     type: integer
                     minimum: 0
                 required:
