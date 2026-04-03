@@ -143,4 +143,76 @@ spec:
 This is useful when the remote cluster has different retention policies, data is queried frequently or there is data collected in other system that is useful for reference.  For example, it might
 be useful to import data from a remote cluster that has a global view of all telemetry data but you only need a subset of that data.
 
+## Historical Backfill
+
+SummaryRules support explicit historical backfill via an optional `backfill` field in the spec. This lets you process
+a specific time range that was either never summarized or needs to be re-computed.
+
+### Usage
+
+Add a `backfill` block to an existing SummaryRule:
+
+```yaml
+apiVersion: adx-mon.azure.com/v1
+kind: SummaryRule
+metadata:
+  name: hourly-avg
+spec:
+  database: Metrics
+  table: MetricHourlyAvg
+  interval: 1h
+  body: |
+    RawMetric
+    | where Timestamp between (_startTime .. _endTime)
+    | summarize avg(Value) by bin(Timestamp, 1h)
+  backfill:
+    requestId: jan-2026        # User-chosen identifier; same ID = resume
+    startTime: "2026-01-01T00:00:00Z"  # Inclusive start
+    endTime: "2026-02-01T00:00:00Z"    # Exclusive end
+    maxInFlight: 1             # Max concurrent async ops (default: 1)
+```
+
+### Key Semantics
+
+- **`requestId`**: Required. The same `requestId` resumes an in-progress backfill. A new `requestId` starts fresh.
+- **Separate cursor**: Backfill uses its own progress cursor (`status.backfill.nextWindowStart`) and does not
+  modify `LastSuccessfulExecution` used by normal scheduling.
+- **No skipped intervals**: If a Kusto async operation fails, it is automatically re-queued for retry. No window
+  is ever permanently skipped.
+- **No overlapping intervals**: Windows are generated sequentially from `startTime`, advancing by exactly one
+  `interval` each time. A deduplication guard prevents double-submission.
+- **Generation pinning**: If the SummaryRule spec is edited mid-backfill (changing body, interval, etc.), the
+  backfill is failed and a new `requestId` must be submitted.
+- **Low priority**: Backfill is designed as a background task. With `maxInFlight: 1` (default), only one
+  window is in-flight at a time. A complete backfill may take days for large ranges — this is by design.
+- **Append-only**: Backfill uses the same `.set-or-append async` as normal execution. Re-running the same
+  time range appends duplicate rows; use ADX extent management to deduplicate if needed.
+
+### Status
+
+Progress is tracked in `status.backfill`:
+
+```yaml
+status:
+  backfill:
+    requestId: jan-2026
+    phase: Running             # Pending | Running | Completed | Failed
+    observedGeneration: 3
+    nextWindowStart: "2026-01-15T00:00:00Z"
+    submittedWindows: 336
+    completedWindows: 335
+    retriedWindows: 2
+    activeOperations:
+      - operationId: "abc-123"
+        startTime: "2026-01-15T00:00:00Z"
+        endTime: "2026-01-15T00:59:59.9999999Z"
+```
+
+### Completing or Cancelling
+
+- **Completion**: The backfill transitions to `Completed` automatically when all windows are processed.
+- **Cancel**: Remove the `backfill` block from the spec. The status will be cleared on the next reconcile
+  (unless it was already in a terminal state, which is preserved for observability).
+- **Restart**: Change the `requestId` to a new value with the desired time range.
+
 > **See also:** [CRD Reference](../crds.md) for a summary of all CRDs and links to advanced usage.

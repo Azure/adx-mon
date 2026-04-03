@@ -102,6 +102,27 @@ type SummaryRuleSpec struct {
 	//
 	// An invalid expression (parse or type check error) will be treated as an error and prevent the rule from executing.
 	CriteriaExpression string `json:"criteriaExpression,omitempty"`
+
+	// Backfill optionally specifies a historical time range to process. The controller will
+	// generate interval-sized windows from StartTime to EndTime and submit them as low-priority
+	// async operations, independent of the normal scheduling cursor.
+	// +optional
+	Backfill *BackfillSpec `json:"backfill,omitempty"`
+}
+
+// BackfillSpec defines a user-requested historical backfill for a SummaryRule.
+type BackfillSpec struct {
+	// RequestID is a user-chosen identifier for this backfill request. The same RequestID
+	// resumes an in-progress backfill; a new RequestID starts a fresh backfill.
+	RequestID string `json:"requestId"`
+	// StartTime is the inclusive start of the historical range to backfill.
+	StartTime metav1.Time `json:"startTime"`
+	// EndTime is the exclusive end of the historical range to backfill.
+	EndTime metav1.Time `json:"endTime"`
+	// MaxInFlight limits the number of concurrent async operations for backfill windows.
+	// Defaults to 1 if unset or zero, keeping backfill as a low-priority background task.
+	// +optional
+	MaxInFlight int `json:"maxInFlight,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -123,6 +144,52 @@ type SummaryRuleStatus struct {
 	// use shared conditions defined in conditions.go: ConditionCriteria, ConditionCompleted, ConditionFailed.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Backfill tracks the progress of a user-requested historical backfill.
+	// +optional
+	Backfill *BackfillStatus `json:"backfill,omitempty"`
+}
+
+// BackfillPhase describes the current lifecycle phase of a backfill request.
+type BackfillPhase string
+
+const (
+	BackfillPhasePending   BackfillPhase = "Pending"
+	BackfillPhaseRunning   BackfillPhase = "Running"
+	BackfillPhaseCompleted BackfillPhase = "Completed"
+	BackfillPhaseFailed    BackfillPhase = "Failed"
+)
+
+// BackfillStatus tracks the observed progress of a backfill request.
+type BackfillStatus struct {
+	// RequestID mirrors the spec.backfill.requestId that this status corresponds to.
+	RequestID string `json:"requestId"`
+	// Phase is the current lifecycle phase of the backfill.
+	Phase BackfillPhase `json:"phase"`
+	// ObservedGeneration is the spec generation when this backfill was started.
+	// If the spec generation changes, the backfill is failed.
+	ObservedGeneration int64 `json:"observedGeneration"`
+	// NextWindowStart is the start time of the next window to be submitted.
+	NextWindowStart metav1.Time `json:"nextWindowStart"`
+	// SubmittedWindows is the total number of successful submissions (including retries).
+	SubmittedWindows int `json:"submittedWindows"`
+	// CompletedWindows is the number of windows that completed successfully.
+	CompletedWindows int `json:"completedWindows"`
+	// RetriedWindows counts how many times a window operation failed and was
+	// re-queued for retry. This is an observability counter; failed windows are
+	// never permanently skipped.
+	RetriedWindows int `json:"retriedWindows"`
+	// ActiveOperations are the currently in-flight async operations for this backfill.
+	ActiveOperations []BackfillOperation `json:"activeOperations,omitempty"`
+	// Message provides human-readable detail about the current phase.
+	Message string `json:"message,omitempty"`
+}
+
+// BackfillOperation tracks a single in-flight backfill async operation.
+type BackfillOperation struct {
+	OperationID string `json:"operationId,omitempty"`
+	StartTime   string `json:"startTime"`
+	EndTime     string `json:"endTime"`
 }
 
 func (s *SummaryRule) GetCondition() *metav1.Condition {

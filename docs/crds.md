@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, criteria-based execution, and historical backfill | database, name, body, table, interval, criteria, backfill | [Summary Rules](designs/summary-rules.md#crd) |
 | MetricsExporter | Executes KQL queries and exports results as metrics to OTLP endpoints | database, body, interval, transform, criteria | [Kusto-to-Metrics](designs/kusto-to-metrics.md) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
