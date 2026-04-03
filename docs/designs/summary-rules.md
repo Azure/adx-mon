@@ -177,10 +177,12 @@ spec:
 - **`requestId`**: Required. The same `requestId` resumes an in-progress backfill. A new `requestId` starts fresh.
 - **Separate cursor**: Backfill uses its own progress cursor (`status.backfill.nextWindowStart`) and does not
   modify `LastSuccessfulExecution` used by normal scheduling.
-- **No skipped intervals**: If a Kusto async operation fails, it is automatically re-queued for retry. No window
-  is ever permanently skipped.
+- **No skipped intervals**: Retryable async failures are automatically re-queued for retry. Non-retryable
+  failures stop the backfill and mark it `Failed` rather than silently skipping a window.
 - **No overlapping intervals**: Windows are generated sequentially from `startTime`, advancing by exactly one
   `interval` each time. A deduplication guard prevents double-submission.
+- **Whole-interval ranges only**: `endTime - startTime` must cover one or more whole `interval` windows.
+  Partial trailing windows are rejected up front instead of being silently dropped.
 - **Generation pinning**: If the SummaryRule spec is edited mid-backfill (changing body, interval, etc.), the
   backfill is failed and a new `requestId` must be submitted.
 - **Low priority**: Backfill is designed as a background task. With `maxInFlight: 1` (default), only one

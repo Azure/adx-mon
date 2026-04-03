@@ -99,6 +99,12 @@ func failedStatus() GetOperationStatusFunc {
 	}
 }
 
+func retryableFailedStatus() GetOperationStatusFunc {
+	return func(ctx context.Context, db, opID string) (string, bool, error) {
+		return "Failed", true, nil
+	}
+}
+
 // retryableStatus returns a GetOperationStatusFunc where all ops are marked retryable.
 func retryableStatus() GetOperationStatusFunc {
 	return func(ctx context.Context, db, opID string) (string, bool, error) {
@@ -106,14 +112,19 @@ func retryableStatus() GetOperationStatusFunc {
 	}
 }
 
+type operationStatus struct {
+	state       string
+	shouldRetry bool
+}
+
 // statusByID maps operation IDs to states for selective status responses.
-func statusByID(m map[string]string) GetOperationStatusFunc {
+func statusByID(m map[string]operationStatus) GetOperationStatusFunc {
 	return func(ctx context.Context, db, opID string) (string, bool, error) {
-		state, ok := m[opID]
+		status, ok := m[opID]
 		if !ok {
 			return "InProgress", false, nil
 		}
-		return state, false, nil
+		return status.state, status.shouldRetry, nil
 	}
 }
 
@@ -302,7 +313,7 @@ func TestProcess_FailedOperation_RetriedNotSkipped(t *testing.T) {
 
 	// Cycle 2: window 0 fails → re-queued as backlog AND immediately retried
 	// in the same cycle (since submitNewWindows retries backlog entries).
-	Process(context.Background(), rule, clk, submit, failedStatus())
+	Process(context.Background(), rule, clk, submit, retryableFailedStatus())
 	require.Equal(t, 1, rule.Status.Backfill.RetriedWindows)
 	require.Equal(t, 0, rule.Status.Backfill.CompletedWindows)
 	require.Len(t, rule.Status.Backfill.ActiveOperations, 1)
@@ -343,6 +354,25 @@ func TestProcess_ShouldRetryRequeuesWindow(t *testing.T) {
 	require.Equal(t, start.Format(time.RFC3339Nano), rule.Status.Backfill.ActiveOperations[0].StartTime)
 	require.NotEmpty(t, rule.Status.Backfill.ActiveOperations[0].OperationID)
 	require.NotEqual(t, firstOperationID, rule.Status.Backfill.ActiveOperations[0].OperationID)
+}
+
+func TestProcess_NonRetryableFailureFailsBackfill(t *testing.T) {
+	start := baseTime()
+	end := start.Add(2 * time.Hour)
+	rule := newRule(start, end, time.Hour)
+	clk := fakeClockAt(start.Add(5 * time.Hour))
+	submit, _ := succeedSubmit()
+
+	Process(context.Background(), rule, clk, submit, inProgressStatus())
+	Process(context.Background(), rule, clk, submit, failedStatus())
+
+	require.Equal(t, v1.BackfillPhaseFailed, rule.Status.Backfill.Phase)
+	require.Contains(t, rule.Status.Backfill.Message, "failed and is not retryable")
+	require.Empty(t, rule.Status.Backfill.ActiveOperations)
+
+	cond := meta.FindStatusCondition(rule.Status.Conditions, v1.ConditionBackfill)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
 }
 
 func TestProcess_RequestIDResume(t *testing.T) {
@@ -531,11 +561,11 @@ func TestProcess_MixedOperationStates(t *testing.T) {
 	Process(context.Background(), rule, clk, submit, inProgressStatus())
 	require.Len(t, rule.Status.Backfill.ActiveOperations, 3)
 
-	// Cycle 2: op-1 completes, op-2 fails (re-queued), op-3 in progress.
-	statusMap := statusByID(map[string]string{
-		"op-1": "Completed",
-		"op-2": "Failed",
-		"op-3": "InProgress",
+	// Cycle 2: op-1 completes, op-2 is retryable, op-3 in progress.
+	statusMap := statusByID(map[string]operationStatus{
+		"op-1": {state: "Completed"},
+		"op-2": {state: "Failed", shouldRetry: true},
+		"op-3": {state: "InProgress"},
 	})
 	Process(context.Background(), rule, clk, submit, statusMap)
 
@@ -565,7 +595,7 @@ func TestProcess_EmptyRequestID(t *testing.T) {
 }
 
 func TestProcess_SubIntervalRange(t *testing.T) {
-	// EndTime is less than one full interval from StartTime — no windows fit.
+	// EndTime is less than one full interval from StartTime — this should fail validation.
 	start := baseTime()
 	end := start.Add(30 * time.Minute)
 	rule := newRule(start, end, time.Hour)
@@ -574,8 +604,23 @@ func TestProcess_SubIntervalRange(t *testing.T) {
 
 	Process(context.Background(), rule, clk, submit, completedStatus())
 
-	// No windows submitted — should immediately complete.
-	require.Equal(t, v1.BackfillPhaseCompleted, rule.Status.Backfill.Phase)
+	require.Equal(t, v1.BackfillPhaseFailed, rule.Status.Backfill.Phase)
+	require.Contains(t, rule.Status.Backfill.Message, "must cover at least one full interval")
+	require.Equal(t, 0, rule.Status.Backfill.SubmittedWindows)
+	require.Empty(t, *calls)
+}
+
+func TestProcess_PartialRangeFailsValidation(t *testing.T) {
+	start := baseTime()
+	end := start.Add(90 * time.Minute)
+	rule := newRule(start, end, time.Hour)
+	clk := fakeClockAt(start.Add(3 * time.Hour))
+	submit, calls := succeedSubmit()
+
+	Process(context.Background(), rule, clk, submit, completedStatus())
+
+	require.Equal(t, v1.BackfillPhaseFailed, rule.Status.Backfill.Phase)
+	require.Contains(t, rule.Status.Backfill.Message, "exact multiple of interval")
 	require.Equal(t, 0, rule.Status.Backfill.SubmittedWindows)
 	require.Empty(t, *calls)
 }
@@ -741,8 +786,8 @@ func TestProcess_FailedOpsBlockProgress_NoSkip(t *testing.T) {
 	Process(context.Background(), rule, clk, submit, inProgressStatus())
 	require.Len(t, rule.Status.Backfill.ActiveOperations, 1)
 
-	// Cycle 2: window 0 fails → re-queued and immediately retried in same cycle.
-	Process(context.Background(), rule, clk, submit, failedStatus())
+	// Cycle 2: window 0 fails retryably → re-queued and immediately retried in same cycle.
+	Process(context.Background(), rule, clk, submit, retryableFailedStatus())
 	require.Len(t, rule.Status.Backfill.ActiveOperations, 1)
 	require.NotEmpty(t, rule.Status.Backfill.ActiveOperations[0].OperationID)
 	// Verify window 0's start time is still the same (not skipped to window 1).

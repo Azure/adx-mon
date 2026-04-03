@@ -52,6 +52,9 @@ func Process(
 	if rule == nil {
 		return
 	}
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
 	defer syncBackfillCondition(rule)
 
 	if rule.Spec.Backfill == nil {
@@ -60,12 +63,8 @@ func Process(
 	}
 
 	spec := rule.Spec.Backfill
-	if msg, ok := validateSpec(spec); !ok {
-		setBackfillFailed(rule, spec.RequestID, rule.GetGeneration(), msg)
-		return
-	}
-	if !spec.EndTime.Time.After(spec.StartTime.Time) {
-		setBackfillFailed(rule, spec.RequestID, rule.GetGeneration(), "EndTime must be after StartTime")
+	if msg, ok := validateSpec(rule); !ok {
+		setBackfillFailed(rule, spec.RequestID, rule.GetGeneration(), msg, clk)
 		return
 	}
 
@@ -86,7 +85,7 @@ func Process(
 	if status.ObservedGeneration != rule.GetGeneration() {
 		setBackfillFailed(rule, spec.RequestID, status.ObservedGeneration,
 			fmt.Sprintf("SummaryRule spec changed during backfill (generation %d → %d); submit a new requestId to retry",
-				status.ObservedGeneration, rule.GetGeneration()))
+				status.ObservedGeneration, rule.GetGeneration()), clk)
 		return
 	}
 
@@ -96,10 +95,12 @@ func Process(
 	}
 
 	// 1. Poll active operations.
-	pollActiveOperations(ctx, rule, getStatus)
+	if !pollActiveOperations(ctx, rule, getStatus, clk) {
+		return
+	}
 
 	// 2. Submit new windows up to maxInFlight.
-	submitNewWindows(ctx, rule, clk, submit)
+	submitNewWindows(ctx, rule, submit)
 
 	// 3. Check for completion.
 	checkCompletion(rule)
@@ -115,9 +116,9 @@ func initBackfillStatus(spec *v1.BackfillSpec, generation int64) *v1.BackfillSta
 	}
 }
 
-// clearBackfillStatus clears the backfill status when the spec is removed,
-// unless the status records a completed or failed backfill (which we keep
-// for observability until the user explicitly removes the spec).
+// clearBackfillStatus clears non-terminal backfill status when the spec is
+// removed. Terminal status is retained for observability even after spec
+// removal, and will be replaced by the next backfill request.
 func clearBackfillStatus(rule *v1.SummaryRule) {
 	if rule == nil {
 		return
@@ -145,12 +146,12 @@ func effectiveMaxInFlight(spec *v1.BackfillSpec) int {
 }
 
 // pollActiveOperations checks each in-flight operation and handles completion.
-// Failed operations are re-queued as backlog entries (OperationID cleared) so
-// they will be retried — this guarantees no intervals are permanently skipped.
-func pollActiveOperations(ctx context.Context, rule *v1.SummaryRule, getStatus GetOperationStatusFunc) {
+// Retryable operations are re-queued as backlog entries. Non-retryable failures
+// fail the backfill request so the user can fix the underlying issue.
+func pollActiveOperations(ctx context.Context, rule *v1.SummaryRule, getStatus GetOperationStatusFunc, clk clock.Clock) bool {
 	status := rule.Status.Backfill
 	if status == nil || len(status.ActiveOperations) == 0 {
-		return
+		return true
 	}
 
 	remaining := make([]v1.BackfillOperation, 0, len(status.ActiveOperations))
@@ -172,7 +173,7 @@ func pollActiveOperations(ctx context.Context, rule *v1.SummaryRule, getStatus G
 			status.RetriedWindows++
 			op.OperationID = ""
 			remaining = append(remaining, op)
-			logger.Warnf("backfill: operation %s marked retryable for %s [%s, %s), re-queued for retry",
+			logger.Warnf("backfill: operation %s marked retryable for %s [%s, %s], re-queued for retry",
 				operationID, rule.Name, op.StartTime, op.EndTime)
 			continue
 		}
@@ -180,26 +181,25 @@ func pollActiveOperations(ctx context.Context, rule *v1.SummaryRule, getStatus G
 		switch state {
 		case "Completed":
 			status.CompletedWindows++
-			logger.Infof("backfill: operation %s completed for %s [%s, %s)",
+			logger.Infof("backfill: operation %s completed for %s [%s, %s]",
 				operationID, rule.Name, op.StartTime, op.EndTime)
 		case "Failed":
-			// Re-queue as backlog so the window is retried — no interval is skipped.
-			status.RetriedWindows++
-			op.OperationID = ""
-			remaining = append(remaining, op)
-			logger.Warnf("backfill: operation failed for %s [%s, %s), re-queued for retry",
-				rule.Name, op.StartTime, op.EndTime)
+			setBackfillFailed(rule, status.RequestID, status.ObservedGeneration,
+				fmt.Sprintf("Backfill window [%s, %s] failed and is not retryable (operation %s)",
+					op.StartTime, op.EndTime, operationID), clk)
+			return false
 		default:
 			// Still in progress.
 			remaining = append(remaining, op)
 		}
 	}
 	status.ActiveOperations = remaining
+	return true
 }
 
 // submitNewWindows generates and submits interval-sized windows from the
 // cursor (NextWindowStart) until we hit maxInFlight or exhaust the range.
-func submitNewWindows(ctx context.Context, rule *v1.SummaryRule, clk clock.Clock, submit SubmitFunc) {
+func submitNewWindows(ctx context.Context, rule *v1.SummaryRule, submit SubmitFunc) {
 	spec := rule.Spec.Backfill
 	status := rule.Status.Backfill
 	if spec == nil || status == nil {
@@ -217,7 +217,7 @@ func submitNewWindows(ctx context.Context, rule *v1.SummaryRule, clk clock.Clock
 		}
 		opID, err := submit(ctx, *rule, op.StartTime, op.EndTime)
 		if err != nil {
-			logger.Warnf("backfill: retry submission failed for %s [%s, %s): %v",
+			logger.Warnf("backfill: retry submission failed for %s [%s, %s]: %v",
 				rule.Name, op.StartTime, op.EndTime, err)
 			continue
 		}
@@ -254,7 +254,7 @@ func submitNewWindows(ctx context.Context, rule *v1.SummaryRule, clk clock.Clock
 
 		opID, err := submit(ctx, *rule, startStr, endStr)
 		if err != nil {
-			logger.Warnf("backfill: submission failed for %s [%s, %s): %v",
+			logger.Warnf("backfill: submission failed for %s [%s, %s]: %v",
 				rule.Name, startStr, endStr, err)
 			// Store as backlog (empty OperationID) so we can retry next cycle.
 			status.ActiveOperations = append(status.ActiveOperations, bop)
@@ -309,7 +309,8 @@ func checkCompletion(rule *v1.SummaryRule) {
 	}
 }
 
-func validateSpec(spec *v1.BackfillSpec) (string, bool) {
+func validateSpec(rule *v1.SummaryRule) (string, bool) {
+	spec := rule.Spec.Backfill
 	switch {
 	case spec == nil:
 		return "Backfill spec is missing", false
@@ -319,19 +320,27 @@ func validateSpec(spec *v1.BackfillSpec) (string, bool) {
 		return "StartTime must be set", false
 	case spec.EndTime.IsZero():
 		return "EndTime must be set", false
+	case !spec.EndTime.Time.After(spec.StartTime.Time):
+		return "EndTime must be after StartTime", false
+	case rule.Spec.Interval.Duration <= 0:
+		return "Interval must be positive", false
+	case spec.EndTime.Time.Sub(spec.StartTime.Time) < rule.Spec.Interval.Duration:
+		return fmt.Sprintf("Backfill range must cover at least one full interval of %s", rule.Spec.Interval.Duration), false
+	case spec.EndTime.Time.Sub(spec.StartTime.Time)%rule.Spec.Interval.Duration != 0:
+		return fmt.Sprintf("Backfill range duration must be an exact multiple of interval %s", rule.Spec.Interval.Duration), false
 	default:
 		return "", true
 	}
 }
 
-func failedNextWindowStart(rule *v1.SummaryRule) metav1.Time {
+func failedNextWindowStart(rule *v1.SummaryRule, clk clock.Clock) metav1.Time {
 	if rule != nil && rule.Status.Backfill != nil && !rule.Status.Backfill.NextWindowStart.IsZero() {
 		return rule.Status.Backfill.NextWindowStart
 	}
 	if rule != nil && rule.Spec.Backfill != nil && !rule.Spec.Backfill.StartTime.IsZero() {
 		return rule.Spec.Backfill.StartTime
 	}
-	return metav1.NewTime(time.Now().UTC())
+	return metav1.NewTime(clk.Now().UTC())
 }
 
 func syncBackfillCondition(rule *v1.SummaryRule) {
@@ -367,7 +376,7 @@ func syncBackfillCondition(rule *v1.SummaryRule) {
 }
 
 // setBackfillFailed sets the backfill status to Failed with a message.
-func setBackfillFailed(rule *v1.SummaryRule, requestID string, generation int64, message string) {
+func setBackfillFailed(rule *v1.SummaryRule, requestID string, generation int64, message string, clk clock.Clock) {
 	if rule == nil {
 		return
 	}
@@ -378,7 +387,8 @@ func setBackfillFailed(rule *v1.SummaryRule, requestID string, generation int64,
 	status.RequestID = requestID
 	status.Phase = v1.BackfillPhaseFailed
 	status.ObservedGeneration = generation
-	status.NextWindowStart = failedNextWindowStart(rule)
+	status.NextWindowStart = failedNextWindowStart(rule, clk)
+	status.ActiveOperations = nil
 	status.Message = message
 	rule.Status.Backfill = status
 }
