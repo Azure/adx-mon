@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,46 @@ type fakeCredential struct{}
 
 func (fakeCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
 	return azcore.AccessToken{Token: "fake", ExpiresOn: time.Now().Add(time.Hour)}, nil
+}
+
+func TestWrapHeartbeatStageError(t *testing.T) {
+	t.Parallel()
+
+	timeout := 30 * time.Second
+
+	tests := []struct {
+		name        string
+		stage       string
+		err         error
+		wantMessage string
+	}{
+		{
+			name:        "deadline exceeded",
+			stage:       "show databases",
+			err:         context.DeadlineExceeded,
+			wantMessage: "show databases timed out after 30s: context deadline exceeded",
+		},
+		{
+			name:        "canceled",
+			stage:       "show database schema for db1",
+			err:         context.Canceled,
+			wantMessage: "show database schema for db1 canceled: context canceled",
+		},
+		{
+			name:        "generic failure",
+			stage:       "ingest heartbeat into Federation.Operator",
+			err:         errors.New("boom"),
+			wantMessage: "ingest heartbeat into Federation.Operator failed: boom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := wrapHeartbeatStageError(tt.stage, timeout, tt.err)
+			require.EqualError(t, err, tt.wantMessage)
+			require.ErrorIs(t, err, tt.err)
+		})
+	}
 }
 
 func TestEnsureDatabasesHandlesNilFederation(t *testing.T) {
