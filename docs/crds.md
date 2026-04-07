@@ -411,7 +411,7 @@ spec:
 | Condition Type | Meaning | Typical Status / Reasons |
 |----------------|---------|---------------------------|
 | `function.adx-mon.azure.com/CriteriaMatch` | Result of evaluating `spec.criteriaExpression` against cluster labels. | `True` with reason `CriteriaMatched`; `False` with reason `CriteriaNotMatched` (expression evaluated to false) or `CriteriaExpressionError` (parse/evaluation failure). |
-| `function.adx-mon.azure.com/Reconciled` | Outcome of the most recent reconciliation attempt. | `True` with reason `KustoExecutionSucceeded` or `FunctionDeleted`; `False` for intermediate states such as `CriteriaNotMatched`, `CriteriaEvaluationFailed`, `KustoExecutionRetrying`, or `KustoExecutionFailed`. |
+| `function.adx-mon.azure.com/Reconciled` | Outcome of the most recent reconciliation attempt. | `True` with reason `KustoExecutionSucceeded` when the Function body is applied in Kusto. `True` with reason `FunctionDeleted` when the Function resource finalization completes; deletion currently uses a no-op path and does not drop the underlying Kusto function. `False` for intermediate states such as `CriteriaNotMatched`, `CriteriaEvaluationFailed`, `KustoExecutionRetrying`, or `KustoExecutionFailed`. |
 
 Example describe output when a criteria mismatch occurs:
 

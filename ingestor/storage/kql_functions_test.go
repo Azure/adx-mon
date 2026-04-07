@@ -70,6 +70,7 @@ func TestFunctions(t *testing.T) {
 		require.Len(t, fns, 1)
 		require.Equal(t, int64(1), fns[0].GetGeneration())
 		require.Equal(t, int64(0), fns[0].Status.ObservedGeneration)
+		require.False(t, controllerutil.ContainsFinalizer(fns[0], storage.FinalizerName))
 	})
 
 	t.Run("Does not included suspended", func(t *testing.T) {
@@ -177,7 +178,10 @@ func TestFunctions(t *testing.T) {
 		fn := &adxmonv1.Function{}
 		require.NoError(t, ctrlCli.Get(ctx, typeNamespacedName, fn))
 
-		require.True(t, controllerutil.ContainsFinalizer(fn, storage.FinalizerName))
+		require.False(t, controllerutil.ContainsFinalizer(fn, storage.FinalizerName))
+		controllerutil.AddFinalizer(fn, storage.FinalizerName)
+		require.NoError(t, ctrlCli.Update(ctx, fn))
+
 		require.NoError(t, ctrlCli.Delete(ctx, fn))
 
 		fns, err := functionStore.List(ctx)
