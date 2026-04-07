@@ -48,6 +48,35 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 	require.True(t, isUserError(err))
 }
 
+func TestNewExecutor_UsesConfiguredConcurrency(t *testing.T) {
+	e := NewExecutor(ExecutorOpts{
+		Concurrency: 12,
+	})
+
+	require.NotNil(t, e.querySlots)
+	require.Equal(t, 12, cap(e.querySlots))
+}
+
+func TestNewExecutor_DefaultsConcurrency(t *testing.T) {
+	e := NewExecutor(ExecutorOpts{})
+
+	require.NotNil(t, e.querySlots)
+	require.Equal(t, 5, cap(e.querySlots))
+}
+
+func TestExecutor_newWorker_UsesExecutorQueue(t *testing.T) {
+	slots := make(chan struct{}, 7)
+	e := &Executor{
+		region:     "eastus",
+		querySlots: slots,
+	}
+
+	w := e.newWorker(&rules.Rule{Namespace: "ns", Name: "rule"})
+
+	require.NotNil(t, w)
+	require.Equal(t, slots, w.querySlots)
+}
+
 func TestExecutor_Handler_Severity(t *testing.T) {
 
 	for _, tt := range []struct {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
+	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -39,6 +40,8 @@ type Executor struct {
 	// the map is never modified after creation.
 	tags map[string]string
 
+	querySlots chan struct{}
+
 	wg      sync.WaitGroup
 	closeFn context.CancelFunc
 
@@ -53,6 +56,7 @@ type ExecutorOpts struct {
 	RuleStore   ruleStore
 	Region      string
 	Tags        map[string]string
+	Concurrency int
 	CtrlCli     client.Client
 }
 
@@ -65,6 +69,7 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 		ruleStore:   opts.RuleStore,
 		region:      opts.Region,
 		tags:        opts.Tags,
+		querySlots:  queue.New(opts.Concurrency),
 		ctrlCli:     opts.CtrlCli,
 		workers:     make(map[string]*worker),
 	}
@@ -92,6 +97,7 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		AlertClient: e.alertCli,
 		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
 		HandlerFn:   e.HandlerFn,
+		QuerySlots:  e.querySlots,
 		CtrlClient:  e.ctrlCli,
 	})
 }

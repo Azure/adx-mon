@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
-	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/metrics"
@@ -39,6 +38,7 @@ type worker struct {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
 	handlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	querySlots      chan struct{}
 	ctrlCli         client.Client
 	alertsGenerated int // Track alerts generated in current execution
 
@@ -58,6 +58,7 @@ type WorkerConfig struct {
 	}
 	AlertAddr  string
 	HandlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	QuerySlots chan struct{}
 	CtrlClient client.Client
 }
 
@@ -73,6 +74,7 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		alertCli:    cfg.AlertClient,
 		alertAddr:   cfg.AlertAddr,
 		handlerFn:   cfg.HandlerFn,
+		querySlots:  cfg.QuerySlots,
 		ctrlCli:     cfg.CtrlClient,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
@@ -159,11 +161,13 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		return
 	}
 
-	// Try to acquire a worker slot
-	queue.Workers <- struct{}{}
+	if e.querySlots != nil {
+		// Try to acquire a worker slot.
+		e.querySlots <- struct{}{}
 
-	// Release the worker slot
-	defer func() { <-queue.Workers }()
+		// Release the worker slot.
+		defer func() { <-e.querySlots }()
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
 	defer cancel()

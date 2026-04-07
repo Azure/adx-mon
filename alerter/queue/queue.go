@@ -1,7 +1,6 @@
 package queue
 
-// TODO: Make this configurable.
-var concurrency = 5
+const DefaultConcurrency = 5
 
 // TODO: Keep track of failures for each execution so we can modify the lookback for subsequent queries.
 
@@ -9,5 +8,12 @@ var concurrency = 5
 
 // TODO: Add timeouts.
 
-// Workers is a very lame work queue.
-var Workers = make(chan struct{}, concurrency)
+// New returns a basic worker queue with the requested concurrency. Invalid or
+// unspecified values fall back to the historical default.
+func New(concurrency int) chan struct{} {
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrency
+	}
+
+	return make(chan struct{}, concurrency)
+}
