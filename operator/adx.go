@@ -47,6 +47,7 @@ const (
 	requeueShort     = time.Minute      // Used for in-progress operations
 	requeueMedium    = 5 * time.Minute  // Used for provider registration
 	requeueLong      = 10 * time.Minute // Used for heartbeat/federation cycles
+	heartbeatTimeout = 5 * time.Minute  // Per-target timeout for heartbeat Kusto calls
 	maxKustoScriptSz = 1 << 20          // 1MB max size for Kusto script batches
 )
 
@@ -1006,7 +1007,10 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 
 	logger.Infof("ADXCluster %s: sending heartbeats to %d federated clusters", cluster.Spec.ClusterName, len(cluster.Spec.Federation.FederationTargets))
 	for _, target := range cluster.Spec.Federation.FederationTargets {
-		if err := heartbeatFederatedCluster(ctx, cluster, target); err != nil {
+		hbCtx, hbCancel := context.WithTimeout(ctx, heartbeatTimeout)
+		err := heartbeatFederatedCluster(hbCtx, cluster, target)
+		hbCancel()
+		if err != nil {
 			logger.Errorf("Failed to heartbeat federated cluster %s: %v", target.Endpoint, err)
 			continue
 		}
