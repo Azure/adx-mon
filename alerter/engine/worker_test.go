@@ -101,9 +101,6 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 }
 
 func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
-	slots := make(chan struct{}, 1)
-	slots <- struct{}{}
-
 	queryCalled := false
 	kcli := &fakeKustoClient{
 		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
@@ -117,12 +114,13 @@ func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
 		Name:      "name",
 	}
 	w := NewWorker(&WorkerConfig{
-		Rule:        rule,
-		Region:      "eastus",
-		KustoClient: kcli,
-		AlertClient: &fakeAlerter{},
-		QuerySlots:  slots,
+		Rule:                 rule,
+		Region:               "eastus",
+		KustoClient:          kcli,
+		MaxConcurrentQueries: 1,
+		AlertClient:          &fakeAlerter{},
 	})
+	w.querySlots <- struct{}{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -140,7 +138,37 @@ func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
 	}
 
 	require.False(t, queryCalled)
-	require.Equal(t, 1, len(slots))
+	require.Equal(t, 1, len(w.querySlots))
+}
+
+func TestWorker_ExecuteQuery_DoesNotAcquireSlotWhenAlreadyCanceled(t *testing.T) {
+	queryCalled := false
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := NewWorker(&WorkerConfig{
+		Rule:                 rule,
+		Region:               "eastus",
+		KustoClient:          kcli,
+		MaxConcurrentQueries: 1,
+		AlertClient:          &fakeAlerter{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	w.ExecuteQuery(ctx)
+
+	require.False(t, queryCalled)
+	require.Empty(t, w.querySlots)
 }
 
 func TestWorker_TagsNoneMatch(t *testing.T) {
@@ -347,7 +375,7 @@ func TestWorker_ConnectionReset(t *testing.T) {
 
 func TestWorker_ContextTimeout(t *testing.T) {
 	kcli := &fakeKustoClient{
-		// fakeKustoClient does not evaluate if context is done, so we need to simulate the error
+		// fakeKustoClient does not evaluate context deadlines, so we simulate the timeout error directly.
 		queryErr: context.DeadlineExceeded,
 	}
 
@@ -368,10 +396,7 @@ func TestWorker_ContextTimeout(t *testing.T) {
 	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
-	defer cancel()
-
-	w.ExecuteQuery(ctx)
+	w.ExecuteQuery(context.Background())
 	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
 	require.Equal(t, QueryHealthUnhealthy, gaugeValue)
 }

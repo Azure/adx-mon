@@ -90,15 +90,16 @@ func (e *Executor) workerKey(rule *rules.Rule) string {
 
 func (e *Executor) newWorker(rule *rules.Rule) *worker {
 	return NewWorker(&WorkerConfig{
-		Rule:        rule,
-		Region:      e.region,
-		Tags:        e.tags,
-		KustoClient: e.kustoClient,
-		AlertClient: e.alertCli,
-		AlertAddr:   fmt.Sprintf("%s/alerts", e.alertAddr),
-		HandlerFn:   e.HandlerFn,
-		QuerySlots:  e.querySlots,
-		CtrlClient:  e.ctrlCli,
+		Rule:                 rule,
+		Region:               e.region,
+		Tags:                 e.tags,
+		KustoClient:          e.kustoClient,
+		MaxConcurrentQueries: cap(e.querySlots),
+		AlertClient:          e.alertCli,
+		AlertAddr:            fmt.Sprintf("%s/alerts", e.alertAddr),
+		HandlerFn:            e.HandlerFn,
+		CtrlClient:           e.ctrlCli,
+		sharedQuerySlots:     e.querySlots,
 	})
 }
 
