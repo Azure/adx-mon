@@ -175,26 +175,15 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeleting", "Function deletion in progress")
 			function.Status.Status = v1.Failed
 			function.Status.Error = ""
+			function.Status.Reason = "Function finalizing"
+			function.Status.Message = "Finalization in progress; Kusto function drop is disabled"
 			if err := t.store.UpdateStatus(ctx, function); err != nil {
 				logger.Errorf("Failed to update function status for %s.%s prior to deletion: %v", function.Spec.Database, function.Name, err)
 			}
-
-			stmt := kql.New(".drop function ").AddUnsafe(function.Name).AddLiteral(" ifexists")
-			result, err := t.kustoCli.Mgmt(ctx, stmt)
-			if err != nil {
-				parsed := kustoutil.ParseError(err)
-				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
-				function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeletionFailed", parsed)
-				function.Status.Status = v1.Failed
-				function.Status.Error = parsed
-				if err := t.store.UpdateStatus(ctx, function); err != nil {
-					logger.Errorf("Failed to persist deletion failure for %s.%s: %v", function.Spec.Database, function.Name, err)
-				}
-				continue
-			}
-
-			result.Stop()
-			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", fmt.Sprintf("Function successfully deleted from %s", availableDB))
+			noopMsg := fmt.Sprintf("Finalization no-op; skipping Kusto function drop for %s", availableDB)
+			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", noopMsg)
+			function.Status.Reason = "Function finalized (no-op)"
+			function.Status.Message = noopMsg
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
 				logger.Errorf("Failed to update success status following deletion for %s.%s: %v", function.Spec.Database, function.Name, err)
 			}

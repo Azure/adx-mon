@@ -28,6 +28,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -772,16 +773,17 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 	exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
 	task := NewSyncFunctionsTask(store, exec, nil)
 	require.NoError(t, task.Run(ctx))
-	require.Len(t, exec.stmts, 1)
-	require.Contains(t, exec.stmts[0], ".drop function")
+	require.Empty(t, exec.stmts)
 
 	fn := store.funcs[0]
 	recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
 	require.NotNil(t, recCond)
 	require.Equal(t, metav1.ConditionTrue, recCond.Status)
 	require.Equal(t, "FunctionDeleted", recCond.Reason)
-	require.Contains(t, recCond.Message, "deleted")
+	require.Contains(t, recCond.Message, "Finalization no-op")
 	require.Equal(t, v1.Success, fn.Status.Status)
+	require.Equal(t, "Function finalized (no-op)", fn.Status.Reason)
+	require.Contains(t, fn.Status.Message, "Finalization no-op")
 }
 
 func TestFunctions(t *testing.T) {
@@ -891,7 +893,9 @@ func TestFunctions(t *testing.T) {
 		require.NoError(t, task.Run(ctx))
 
 		require.Eventually(t, func() bool {
-			return !testutils.FunctionExists(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
+			obj := &adxmonv1.Function{}
+			err := ctrlCli.Get(ctx, typeNamespacedName, obj)
+			return apierrors.IsNotFound(err)
 		}, 10*time.Minute, time.Second)
 	})
 
