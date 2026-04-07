@@ -1,0 +1,174 @@
+{{- if .Values.alerter.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alerter
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:alerter
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - alertrules
+      - functions
+      - managementcommands
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - alertrules/status
+      - functions/status
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - alertrules/finalizers
+      - functions/finalizers
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:alerter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:alerter
+subjects:
+  - kind: ServiceAccount
+    name: alerter
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alerter
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: alerter
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alerter
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.alerter.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: alerter
+  template:
+    metadata:
+      labels:
+        app: alerter
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "8080"
+        adx-mon/path: "/metrics"
+        adx-mon/log-destination: "Logs:Alerter"
+        adx-mon/log-parsers: json
+    spec:
+      serviceAccountName: alerter
+      automountServiceAccountToken: true
+      priorityClassName: system-cluster-critical
+      {{- if .Values.alerter.affinity }}
+      {{- if .Values.alerter.affinity.required }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.alerter.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.alerter.affinity.value | default "system" }}
+      {{- else }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: {{ .Values.alerter.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.alerter.affinity.value | default "system" }}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: alerter
+          image: ghcr.io/azure/adx-mon/alerter:latest
+          command:
+            - /alerter
+          args:
+            - "--alerter-address=http://icmnotifier.adx-mon.svc.cluster.local:8080"
+            - "--port=8080"
+            - "--cloud={{ .Values.cloud }}"
+            - "--region={{ .Values.region }}"
+            - "--tag=environment={{ .Values.environment }}"
+            - "--auth-msi-id={{ .Values.alerter.auth_msi_id }}"
+            {{- range $key, $value := .Values.alerter.kusto_endpoints }}
+            - "--kusto-endpoint={{ $key }}={{ $value }}"
+            {{- end }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: GODEBUG
+              value: http2client=0
+          volumeMounts:
+            - mountPath: /etc/ssl/certs
+              name: ssl-certs
+              readOnly: true
+            - mountPath: /etc/pki/ca-trust/extracted
+              name: etc-pki-ca-certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: {{ .Values.alerter.resources.requests.cpu | default "100m" }}
+              memory: {{ .Values.alerter.resources.requests.memory | default "256Mi" }}
+            limits:
+              cpu: {{ .Values.alerter.resources.limits.cpu | default "500m" }}
+              memory: {{ .Values.alerter.resources.limits.memory | default "1Gi" }}
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+{{- end }}

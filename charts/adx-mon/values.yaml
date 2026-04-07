@@ -1,0 +1,47 @@
+---
+create_namespace: true
+cluster_name: aks
+region: region
+cloud: azure
+environment: environment
+global_drop_metrics: []
+global_keep_metrics: []
+singleton_drop_metrics: []
+singleton_keep_metrics: []
+adx:
+  name: adx-cluster
+  url: https://adx.region.kusto.windows.net
+hub_url: https://adxhub.region.kusto.windows.net
+collector:
+  enabled: true
+  ingestor_endpoint: https://ingestor.adx-mon.svc.cluster.local
+ingestor:
+  enabled: true
+  replicas: 1
+  affinity:
+    required: false
+    key: agentpool
+    value: system
+  client_id: client_id
+alerter:
+  enabled: false
+  replicas: 1
+  affinity:
+    required: false
+    key: agentpool
+    value: system
+  auth_msi_id: "" # to be filled with agent pool managed identity
+  kusto_endpoints: {} # key: database name, value: adx url (can be same for multiple dbs)
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+operator:
+  enabled: false
+  affinity:
+    required: false
+    key: agentpool
+    value: system
