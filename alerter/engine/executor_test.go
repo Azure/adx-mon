@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
+	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
@@ -61,7 +62,7 @@ func TestNewExecutor_DefaultsConcurrency(t *testing.T) {
 	e := NewExecutor(ExecutorOpts{})
 
 	require.NotNil(t, e.querySlots)
-	require.Equal(t, 5, cap(e.querySlots))
+	require.Equal(t, queue.DefaultConcurrency, cap(e.querySlots))
 }
 
 func TestExecutor_newWorker_UsesExecutorQueue(t *testing.T) {

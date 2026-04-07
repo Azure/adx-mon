@@ -162,8 +162,12 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	}
 
 	if e.querySlots != nil {
-		// Try to acquire a worker slot.
-		e.querySlots <- struct{}{}
+		// Try to acquire a worker slot while still honoring shutdown.
+		select {
+		case e.querySlots <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
 
 		// Release the worker slot.
 		defer func() { <-e.querySlots }()

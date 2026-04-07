@@ -100,6 +100,49 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 	require.Equal(t, true, queryCalled)
 }
 
+func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+
+	queryCalled := false
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+			queryCalled = true
+			return nil, 0
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := NewWorker(&WorkerConfig{
+		Rule:        rule,
+		Region:      "eastus",
+		KustoClient: kcli,
+		AlertClient: &fakeAlerter{},
+		QuerySlots:  slots,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.ExecuteQuery(ctx)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteQuery blocked while waiting for a query slot after cancellation")
+	}
+
+	require.False(t, queryCalled)
+	require.Equal(t, 1, len(slots))
+}
+
 func TestWorker_TagsNoneMatch(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
