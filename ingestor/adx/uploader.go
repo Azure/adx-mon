@@ -15,7 +15,6 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
-	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -163,7 +162,7 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 			}
 
 			if n.requireDirectIngest {
-				ingestor = testutils.NewUploadReader(n.KustoCli, database, table)
+				ingestor = newDirectIngestReader(n.KustoCli, database, table)
 				n.ingestors[table] = ingestor
 				return ingestor, nil
 			}
