@@ -123,13 +123,21 @@ func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
 	w.querySlots <- struct{}{}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		w.ExecuteQuery(ctx)
 	}()
+
+	select {
+	case <-done:
+		t.Fatal("ExecuteQuery returned before cancellation while waiting for a query slot")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
 
 	select {
 	case <-done:
