@@ -39,6 +39,7 @@ type worker struct {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
 	handlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	querySlots      chan struct{}
 	ctrlCli         client.Client
 	alertsGenerated int // Track alerts generated in current execution
 
@@ -49,16 +50,18 @@ type worker struct {
 
 // WorkerConfig groups parameters for constructing a worker.
 type WorkerConfig struct {
-	Rule        *rules.Rule
-	Region      string
-	Tags        map[string]string
-	KustoClient Client
-	AlertClient interface {
+	Rule                 *rules.Rule
+	Region               string
+	Tags                 map[string]string
+	KustoClient          Client
+	MaxConcurrentQueries int
+	AlertClient          interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	AlertAddr  string
-	HandlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
-	CtrlClient client.Client
+	AlertAddr        string
+	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	CtrlClient       client.Client
+	sharedQuerySlots chan struct{}
 }
 
 // NewWorker creates a worker and performs one-time match evaluation.
@@ -66,6 +69,12 @@ func NewWorker(cfg *WorkerConfig) *worker {
 	if cfg == nil || cfg.Rule == nil {
 		return nil
 	}
+
+	querySlots := cfg.sharedQuerySlots
+	if querySlots == nil {
+		querySlots = queue.New(cfg.MaxConcurrentQueries)
+	}
+
 	w := &worker{
 		rule:        cfg.Rule,
 		region:      cfg.Region,
@@ -73,6 +82,7 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		alertCli:    cfg.AlertClient,
 		alertAddr:   cfg.AlertAddr,
 		handlerFn:   cfg.HandlerFn,
+		querySlots:  querySlots,
 		ctrlCli:     cfg.CtrlClient,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
@@ -159,11 +169,19 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		return
 	}
 
-	// Try to acquire a worker slot
-	queue.Workers <- struct{}{}
+	if err := ctx.Err(); err != nil {
+		return
+	}
 
-	// Release the worker slot
-	defer func() { <-queue.Workers }()
+	// Try to acquire a worker slot while still honoring shutdown.
+	select {
+	case e.querySlots <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+
+	// Release the worker slot.
+	defer func() { <-e.querySlots }()
 
 	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
 	defer cancel()
