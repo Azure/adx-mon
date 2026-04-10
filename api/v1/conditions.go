@@ -16,6 +16,9 @@ const (
 	ConditionCompleted = "Completed"
 	// ConditionFailed indicates terminal failure (will not retry automatically without spec change or manual intervention).
 	ConditionFailed = "Failed"
+	// ConditionBackfill reflects the current phase of a user-requested historical backfill.
+	// Status=True when completed, Unknown when running/pending, False when failed.
+	ConditionBackfill = "Backfill"
 )
 
 // Standardized reasons for shared conditions (subset reused from verifier conditions file to avoid duplication).

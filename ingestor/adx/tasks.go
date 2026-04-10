@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/celutil"
 	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
+	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -426,6 +427,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 		// Process any outstanding async operations for this rule
 		t.trackAsyncOperations(timeoutCtx, &rule)
 
+		// Process user-requested historical backfill (low priority, bounded concurrency).
+		backfill.Process(timeoutCtx, &rule, t.Clock, t.backfillSubmitFunc(), t.backfillGetStatusFunc())
+
 		t.logSummaryRule(&rule, false, err)
 		// Update the rule's primary status condition
 		if err := t.updateSummaryRuleStatus(timeoutCtx, &rule, err); err != nil {
@@ -809,4 +813,27 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d", actualSize, expectedSize, actualCount, expectedCount)
 	}
 	return nil
+}
+
+// backfillSubmitFunc adapts the ingestor's SubmitRule (which already takes string
+// parameters) into the backfill.SubmitFunc signature.
+func (t *SummaryRuleTask) backfillSubmitFunc() backfill.SubmitFunc {
+	return func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return t.SubmitRule(ctx, rule, startTime, endTime)
+	}
+}
+
+// backfillGetStatusFunc adapts the ingestor's getOperation into the
+// backfill.GetOperationStatusFunc signature.
+func (t *SummaryRuleTask) backfillGetStatusFunc() backfill.GetOperationStatusFunc {
+	return func(ctx context.Context, database, operationID string) (string, bool, error) {
+		status, err := t.getOperation(ctx, operationID)
+		if err != nil {
+			return "", false, err
+		}
+		if status == nil {
+			return "InProgress", false, nil
+		}
+		return status.State, status.ShouldRetry != 0, nil
+	}
 }

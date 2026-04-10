@@ -8,6 +8,7 @@ import (
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
+	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -113,6 +114,9 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Track/advance outstanding async operations (including backlog windows)
 	r.trackAsyncOperations(ctx, &rule)
+
+	// Process user-requested historical backfill (low priority, bounded concurrency).
+	backfill.Process(ctx, &rule, r.Clock, r.backfillSubmitFunc(), r.backfillGetStatusFunc())
 
 	// Persist any changes made to async operation conditions or timestamps
 	if err := r.Status().Update(ctx, &rule); err != nil {
@@ -513,6 +517,37 @@ func (r *SummaryRuleReconciler) updateLastExecutionTimeIfForward(rule *adxmonv1.
 	current := rule.GetLastExecutionTime()
 	if current == nil || originalWindowEnd.After(*current) {
 		rule.SetLastExecutionTime(originalWindowEnd)
+	}
+}
+
+// backfillSubmitFunc adapts the exporter's submitRule (which takes time.Time) into
+// the backfill.SubmitFunc signature (which takes RFC3339Nano strings).
+func (r *SummaryRuleReconciler) backfillSubmitFunc() backfill.SubmitFunc {
+	return func(ctx context.Context, rule adxmonv1.SummaryRule, startTime, endTime string) (string, error) {
+		start, err := time.Parse(time.RFC3339Nano, startTime)
+		if err != nil {
+			return "", fmt.Errorf("backfill: invalid start time %q: %w", startTime, err)
+		}
+		end, err := time.Parse(time.RFC3339Nano, endTime)
+		if err != nil {
+			return "", fmt.Errorf("backfill: invalid end time %q: %w", endTime, err)
+		}
+		return r.submitRule(ctx, rule, start, end)
+	}
+}
+
+// backfillGetStatusFunc adapts the exporter's getOperation into the
+// backfill.GetOperationStatusFunc signature.
+func (r *SummaryRuleReconciler) backfillGetStatusFunc() backfill.GetOperationStatusFunc {
+	return func(ctx context.Context, database, operationID string) (string, bool, error) {
+		status, err := r.getOperation(ctx, database, operationID)
+		if err != nil {
+			return "", false, err
+		}
+		if status == nil {
+			return "InProgress", false, nil
+		}
+		return status.State, status.ShouldRetry != 0, nil
 	}
 }
 
