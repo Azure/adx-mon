@@ -145,6 +145,20 @@ func effectiveMaxInFlight(spec *v1.BackfillSpec) int {
 	return m
 }
 
+func inFlightCount(status *v1.BackfillStatus) int {
+	if status == nil {
+		return 0
+	}
+
+	count := 0
+	for _, op := range status.ActiveOperations {
+		if op.OperationID != "" {
+			count++
+		}
+	}
+	return count
+}
+
 // pollActiveOperations checks each in-flight operation and handles completion.
 // Retryable operations are re-queued as backlog entries. Non-retryable failures
 // fail the backfill request so the user can fix the underlying issue.
@@ -209,8 +223,11 @@ func submitNewWindows(ctx context.Context, rule *v1.SummaryRule, submit SubmitFu
 	maxInFlight := effectiveMaxInFlight(spec)
 	interval := rule.Spec.Interval.Duration
 
-	// First, retry any backlog entries (empty OperationID).
+	// First, retry any backlog entries (empty OperationID), respecting maxInFlight.
 	for i := range status.ActiveOperations {
+		if inFlightCount(status) >= maxInFlight {
+			break
+		}
 		op := &status.ActiveOperations[i]
 		if op.OperationID != "" {
 			continue
@@ -226,7 +243,7 @@ func submitNewWindows(ctx context.Context, rule *v1.SummaryRule, submit SubmitFu
 	}
 
 	// Then generate new windows from the cursor.
-	for len(status.ActiveOperations) < maxInFlight {
+	for inFlightCount(status) < maxInFlight {
 		windowStart := status.NextWindowStart.Time.UTC()
 		windowEnd := windowStart.Add(interval)
 
