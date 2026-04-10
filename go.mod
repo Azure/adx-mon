@@ -22,7 +22,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/protobuf v1.5.4
 	github.com/golang/snappy v1.0.0
-	github.com/google/cel-go v0.27.0
+	github.com/google/cel-go v0.28.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.5
 	github.com/klauspost/pgzip v1.2.6
