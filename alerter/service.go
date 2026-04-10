@@ -53,7 +53,6 @@ type ruleStore interface {
 
 type Alerter struct {
 	clients  map[string]KustoClient
-	queue    chan struct{}
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
@@ -79,7 +78,6 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 
 	l2m := &Alerter{
 		opts:      opts,
-		queue:     make(chan struct{}, opts.Concurrency),
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
 		clients:   make(map[string]KustoClient),
@@ -129,6 +127,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			AlertAddr:   opts.AlertAddr,
 			Region:      opts.Region,
 			Tags:        opts.Tags,
+			Concurrency: opts.Concurrency,
 			KustoClient: kclient,
 			RuleStore:   ruleStore,
 			CtrlCli:     opts.CtrlCli,
@@ -169,6 +168,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 	executor := engine.NewExecutor(engine.ExecutorOpts{
 		AlertCli:    lint,
 		AlertAddr:   "http://fake.microsoft.com",
+		Concurrency: opts.Concurrency,
 		KustoClient: kclient,
 		RuleStore:   ruleStore,
 		Region:      opts.Region,
