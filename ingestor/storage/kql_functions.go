@@ -141,35 +141,12 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 			default:
 				fn.Status.Reason = "Function updated"
 			}
-
-			if err := f.ensureFinalizer(ctx, &fn); err != nil {
-				logger.Errorf("Failed to ensure finalizer for function %s: %v", fn.Name, err)
-			}
 		}
 
 		fns = append(fns, &fn)
 	}
 
 	return fns, nil
-}
-
-func (f *functions) ensureFinalizer(ctx context.Context, fn *adxmonv1.Function) error {
-	if f.Client == nil {
-		return fmt.Errorf("no client provided")
-	}
-
-	// examine DeletionTimestamp to determine if object is under deletion
-	if fn.ObjectMeta.DeletionTimestamp.IsZero() {
-		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object. This is equivalent
-		// to registering our finalizer.
-		if !controllerutil.ContainsFinalizer(fn, FinalizerName) {
-			controllerutil.AddFinalizer(fn, FinalizerName)
-			return f.Client.Update(ctx, fn)
-		}
-	}
-
-	return nil
 }
 
 // logConditionStatusUpdate emits a log entry when a status condition transitions in a meaningful way.
