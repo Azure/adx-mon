@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 )
 
 type AdxReconciler struct {
@@ -48,6 +49,15 @@ const (
 	requeueMedium    = 5 * time.Minute  // Used for provider registration
 	requeueLong      = 10 * time.Minute // Used for heartbeat/federation cycles
 	maxKustoScriptSz = 1 << 20          // 1MB max size for Kusto script batches
+
+	adxClusterMaxConcurrentReconciles = 4
+
+	heartbeatTargetTimeout         = 2 * time.Minute
+	heartbeatListDatabasesTimeout  = 30 * time.Second
+	heartbeatDatabaseSchemaTimeout = 45 * time.Second
+	heartbeatListFunctionsTimeout  = 30 * time.Second
+	heartbeatFunctionSchemaTimeout = 15 * time.Second
+	heartbeatIngestTimeout         = 30 * time.Second
 )
 
 // resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
@@ -217,6 +227,9 @@ func (r *AdxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 func (r *AdxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.ADXCluster{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: adxClusterMaxConcurrentReconciles,
+		}).
 		Complete(r)
 }
 
@@ -1017,144 +1030,24 @@ func (r *AdxReconciler) HeartbeatFederatedClusters(ctx context.Context, cluster 
 }
 
 func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster, target adxmonv1.ADXClusterFederatedClusterSpec) error {
+	targetCtx, cancel := context.WithTimeout(ctx, heartbeatTargetTimeout)
+	defer cancel()
+
 	partitionClusterEndpoint := resolvedClusterEndpoint(cluster)
-	ep := kusto.NewConnectionStringBuilder(partitionClusterEndpoint)
-	if strings.HasPrefix(partitionClusterEndpoint, "https://") {
-		// Enables kustainer integration testing
-		ep.WithDefaultAzureCredential()
-	}
-	client, err := kusto.New(ep)
+	client, err := newHeartbeatKustoClient(partitionClusterEndpoint, "")
 	if err != nil {
-		return fmt.Errorf("failed to create Kusto client: %w", err)
+		return fmt.Errorf("failed to create partition cluster Kusto client: %w", err)
 	}
 	defer client.Close()
 
-	q := kql.New(".show databases")
-	result, err := client.Mgmt(ctx, target.HeartbeatDatabase, q)
+	schema, err := collectHeartbeatSchema(targetCtx, client, target.HeartbeatDatabase)
 	if err != nil {
-		return fmt.Errorf("failed to query databases: %w", err)
+		return err
 	}
 
-	var databases []string
-	for {
-		row, errInline, errFinal := result.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			continue
-		}
-		if errFinal != nil {
-			result.Stop()
-			return fmt.Errorf("failed to retrieve databases: %w", errFinal)
-		}
-
-		var dbr DatabaseRec
-		if err := row.ToStruct(&dbr); err != nil {
-			result.Stop()
-			return fmt.Errorf("failed to parse database: %w", err)
-		}
-		databases = append(databases, dbr.DatabaseName)
-	}
-	result.Stop()
-
-	var schema []ADXClusterSchema
-	for _, database := range databases {
-		s := ADXClusterSchema{
-			Database:     database,
-			TableSchemas: make(map[string]string),
-		}
-		q := kql.New(".show database schema")
-		result, err := client.Mgmt(ctx, database, q)
-		if err != nil {
-			return fmt.Errorf("failed to query database schema: %w", err)
-		}
-
-		tableColumns := make(map[string][]string)
-		for {
-			row, errInline, errFinal := result.NextRowOrError()
-			if errFinal == io.EOF {
-				break
-			}
-			if errInline != nil {
-				continue
-			}
-			if errFinal != nil {
-				result.Stop()
-				return fmt.Errorf("failed to retrieve database schema: %w", errFinal)
-			}
-
-			var rec DatabaseSchemaRec
-			if err := row.ToStruct(&rec); err != nil {
-				result.Stop()
-				return fmt.Errorf("failed to parse database schema: %w", err)
-			}
-			if rec.TableName == "" {
-				continue
-			}
-			colDef := fmt.Sprintf("['%s']:%s", rec.ColumnName, rec.ColumnType)
-			tableColumns[rec.TableName] = append(tableColumns[rec.TableName], colDef)
-		}
-		result.Stop()
-
-		for tableName, cols := range tableColumns {
-			s.Tables = append(s.Tables, tableName)
-			s.TableSchemas[tableName] = strings.Join(cols, ", ")
-		}
-		sort.Strings(s.Tables)
-
-		q = kql.New(".show functions")
-		result, err = client.Mgmt(ctx, database, q)
-		if err != nil {
-			return fmt.Errorf("failed to query functions: %w", err)
-		}
-
-		for {
-			row, errInline, errFinal := result.NextRowOrError()
-			if errFinal == io.EOF {
-				break
-			}
-			if errInline != nil {
-				continue
-			}
-			if errFinal != nil {
-				result.Stop()
-				return fmt.Errorf("failed to retrieve functions: %w", errFinal)
-			}
-
-			var fn FunctionRec
-			if err := row.ToStruct(&fn); err != nil {
-				result.Stop()
-				return fmt.Errorf("failed to parse function: %w", err)
-			}
-
-			isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
-			if err == nil && isView {
-				s.Views = append(s.Views, fn.Name)
-				s.TableSchemas[fn.Name] = viewSchema
-			}
-		}
-		result.Stop()
-		sort.Strings(s.Views)
-
-		schema = append(schema, s)
-	}
-
-	federatedClusterEndpoint := target.Endpoint
-	ep = kusto.NewConnectionStringBuilder(federatedClusterEndpoint)
-	// use managed identity if specified, fallback to default Azure
-	// credentials if not; this supports environments using a default
-	// workload identity that can access both spoke and hub clusters
-	if strings.HasPrefix(federatedClusterEndpoint, "https://") {
-		if target.ManagedIdentityClientId != "" {
-			ep.WithUserManagedIdentity(target.ManagedIdentityClientId)
-		} else {
-			ep.WithDefaultAzureCredential()
-		}
-	}
-	federatedClient, err := kusto.New(ep)
+	federatedClient, err := newHeartbeatKustoClient(target.Endpoint, target.ManagedIdentityClientId)
 	if err != nil {
-		return fmt.Errorf("failed to create Kusto client: %w", err)
+		return fmt.Errorf("failed to create federated cluster Kusto client: %w", err)
 	}
 	defer federatedClient.Close()
 
@@ -1168,25 +1061,225 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		return fmt.Errorf("failed to marshal partition metadata: %w", err)
 	}
 
+	return ingestHeartbeatRow(targetCtx, federatedClient, target, partitionClusterEndpoint, schemaData, partitionMetadata)
+}
+
+func newHeartbeatKustoClient(endpoint, managedIdentityClientID string) (*kusto.Client, error) {
+	ep := kusto.NewConnectionStringBuilder(endpoint)
+	if strings.HasPrefix(endpoint, "https://") {
+		if managedIdentityClientID != "" {
+			ep.WithUserManagedIdentity(managedIdentityClientID)
+		} else {
+			// Enables kustainer integration testing while defaulting to workload identity in production.
+			ep.WithDefaultAzureCredential()
+		}
+	}
+	return kusto.New(ep)
+}
+
+func collectHeartbeatSchema(ctx context.Context, client *kusto.Client, heartbeatDatabase string) ([]ADXClusterSchema, error) {
+	databases, err := listHeartbeatDatabases(ctx, client, heartbeatDatabase)
+	if err != nil {
+		return nil, err
+	}
+
+	schema := make([]ADXClusterSchema, 0, len(databases))
+	for _, database := range databases {
+		s, err := collectDatabaseHeartbeatSchema(ctx, client, database)
+		if err != nil {
+			return nil, err
+		}
+		schema = append(schema, s)
+	}
+	return schema, nil
+}
+
+func listHeartbeatDatabases(ctx context.Context, client *kusto.Client, heartbeatDatabase string) ([]string, error) {
+	const stage = "show databases"
+
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatListDatabasesTimeout)
+	defer cancel()
+
+	result, err := client.Mgmt(stageCtx, heartbeatDatabase, kql.New(".show databases"))
+	if err != nil {
+		return nil, wrapHeartbeatStageError(stage, heartbeatListDatabasesTimeout, err)
+	}
+	defer result.Stop()
+
+	var databases []string
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, wrapHeartbeatStageError(stage, heartbeatListDatabasesTimeout, errFinal)
+		}
+
+		var dbr DatabaseRec
+		if err := row.ToStruct(&dbr); err != nil {
+			return nil, wrapHeartbeatStageError(stage, heartbeatListDatabasesTimeout, fmt.Errorf("parse database: %w", err))
+		}
+		databases = append(databases, dbr.DatabaseName)
+	}
+	return databases, nil
+}
+
+func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, database string) (ADXClusterSchema, error) {
+	s := ADXClusterSchema{
+		Database:     database,
+		TableSchemas: make(map[string]string),
+	}
+
+	tableColumns, err := listHeartbeatDatabaseTableColumns(ctx, client, database)
+	if err != nil {
+		return ADXClusterSchema{}, err
+	}
+	for tableName, cols := range tableColumns {
+		s.Tables = append(s.Tables, tableName)
+		s.TableSchemas[tableName] = strings.Join(cols, ", ")
+	}
+	sort.Strings(s.Tables)
+
+	functions, err := listHeartbeatFunctions(ctx, client, database)
+	if err != nil {
+		return ADXClusterSchema{}, err
+	}
+	for _, fn := range functions {
+		isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
+		if err != nil {
+			logger.Warnf("Skipping heartbeat schema discovery for function %s in database %s: %v", fn.Name, database, err)
+			continue
+		}
+		if isView {
+			s.Views = append(s.Views, fn.Name)
+			s.TableSchemas[fn.Name] = viewSchema
+		}
+	}
+	sort.Strings(s.Views)
+	return s, nil
+}
+
+func listHeartbeatDatabaseTableColumns(ctx context.Context, client *kusto.Client, database string) (map[string][]string, error) {
+	stage := fmt.Sprintf("show database schema for %s", database)
+
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatDatabaseSchemaTimeout)
+	defer cancel()
+
+	result, err := client.Mgmt(stageCtx, database, kql.New(".show database schema"))
+	if err != nil {
+		return nil, wrapHeartbeatStageError(stage, heartbeatDatabaseSchemaTimeout, err)
+	}
+	defer result.Stop()
+
+	tableColumns := make(map[string][]string)
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, wrapHeartbeatStageError(stage, heartbeatDatabaseSchemaTimeout, errFinal)
+		}
+
+		var rec DatabaseSchemaRec
+		if err := row.ToStruct(&rec); err != nil {
+			return nil, wrapHeartbeatStageError(stage, heartbeatDatabaseSchemaTimeout, fmt.Errorf("parse database schema: %w", err))
+		}
+		if rec.TableName == "" {
+			continue
+		}
+		colDef := fmt.Sprintf("['%s']:%s", rec.ColumnName, rec.ColumnType)
+		tableColumns[rec.TableName] = append(tableColumns[rec.TableName], colDef)
+	}
+	return tableColumns, nil
+}
+
+func listHeartbeatFunctions(ctx context.Context, client *kusto.Client, database string) ([]FunctionRec, error) {
+	stage := fmt.Sprintf("show functions for %s", database)
+
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatListFunctionsTimeout)
+	defer cancel()
+
+	result, err := client.Mgmt(stageCtx, database, kql.New(".show functions"))
+	if err != nil {
+		return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, err)
+	}
+	defer result.Stop()
+
+	var functions []FunctionRec
+	for {
+		row, errInline, errFinal := result.NextRowOrError()
+		if errFinal == io.EOF {
+			break
+		}
+		if errInline != nil {
+			continue
+		}
+		if errFinal != nil {
+			return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, errFinal)
+		}
+
+		var fn FunctionRec
+		if err := row.ToStruct(&fn); err != nil {
+			return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, fmt.Errorf("parse function: %w", err))
+		}
+		functions = append(functions, fn)
+	}
+	return functions, nil
+}
+
+func ingestHeartbeatRow(ctx context.Context, federatedClient *kusto.Client, target adxmonv1.ADXClusterFederatedClusterSpec, partitionClusterEndpoint string, schemaData, partitionMetadata []byte) error {
 	// Use encoding/csv to properly escape CSV fields
 	var b strings.Builder
 	w := csv.NewWriter(&b)
-	w.Write([]string{
+	if err := w.Write([]string{
 		time.Now().Format(time.RFC3339),
 		partitionClusterEndpoint,
 		string(schemaData),
 		string(partitionMetadata),
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to serialize heartbeat row: %w", err)
+	}
 	w.Flush()
+	if err := w.Error(); err != nil {
+		return fmt.Errorf("failed to serialize heartbeat row: %w", err)
+	}
 	row := strings.TrimRight(b.String(), "\n") // Remove trailing newline added by csv.Writer
 	stmt := kql.New(".ingest inline into table ").
 		AddTable(target.HeartbeatTable).
 		AddLiteral(" <| ").AddUnsafe(row)
-	ingestResult, err := federatedClient.Mgmt(ctx, target.HeartbeatDatabase, stmt)
-	if err == nil {
-		ingestResult.Stop()
+
+	stage := fmt.Sprintf("ingest heartbeat into %s.%s", target.HeartbeatDatabase, target.HeartbeatTable)
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatIngestTimeout)
+	defer cancel()
+
+	ingestResult, err := federatedClient.Mgmt(stageCtx, target.HeartbeatDatabase, stmt)
+	if err != nil {
+		return wrapHeartbeatStageError(stage, heartbeatIngestTimeout, err)
 	}
-	return err
+	defer ingestResult.Stop()
+	return nil
+}
+
+func wrapHeartbeatStageError(stage string, timeout time.Duration, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%s timed out after %v: %w", stage, timeout, err)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%s canceled: %w", stage, err)
+	default:
+		return fmt.Errorf("%s failed: %w", stage, err)
+	}
 }
 
 type TableRec struct {
@@ -1762,10 +1855,14 @@ type OutputColumn struct {
 }
 
 func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, functionName string) (bool, string, error) {
+	stage := fmt.Sprintf("show function schema for %s.%s", database, functionName)
+	stageCtx, cancel := context.WithTimeout(ctx, heartbeatFunctionSchemaTimeout)
+	defer cancel()
+
 	q := kql.New(".show function ").AddUnsafe(functionName).AddLiteral(" schema as json | project FunctionKind = todynamic(Schema).FunctionKind, OutputColumns = todynamic(Schema).OutputColumns")
-	result, err := client.Mgmt(ctx, database, q)
+	result, err := client.Mgmt(stageCtx, database, q)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to query function schema: %w", err)
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, err)
 	}
 	defer result.Stop()
 
@@ -1778,12 +1875,12 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 			continue
 		}
 		if errFinal != nil {
-			return false, "", fmt.Errorf("failed to retrieve function schema: %w", errFinal)
+			return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, errFinal)
 		}
 
 		var rec FunctionSchemaRec
 		if err := row.ToStruct(&rec); err != nil {
-			return false, "", fmt.Errorf("failed to parse function schema: %w", err)
+			return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse function schema: %w", err))
 		}
 
 		if rec.Kind != "ViewFunction" {
@@ -1792,7 +1889,7 @@ func checkIfFunctionIsView(ctx context.Context, client *kusto.Client, database, 
 
 		var cols []OutputColumn
 		if err := json.Unmarshal(rec.OutputColumns, &cols); err != nil {
-			return false, "", fmt.Errorf("failed to parse output columns: %w", err)
+			return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse output columns: %w", err))
 		}
 
 		var parts []string
