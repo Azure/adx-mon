@@ -25,6 +25,7 @@ func main() {
 		Usage: "adx-mon operator",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{Name: "cluster-labels", Usage: "Labels used to identify and distinguish operator clusters. Format: <key>=<value>"},
+			&cli.StringFlag{Name: "pprof-bind-address", Usage: "Address and port to bind pprof endpoints. Omit to disable."},
 		},
 		Action:  realMain,
 		Version: version.String(),
@@ -67,6 +68,11 @@ func realMain(ctx *cli.Context) error {
 	}
 	operator.SetClusterLabels(clusterLabels)
 
+	pprofBindAddress := ""
+	if ctx.IsSet("pprof-bind-address") {
+		pprofBindAddress = ctx.String("pprof-bind-address")
+	}
+
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -74,6 +80,7 @@ func realMain(ctx *cli.Context) error {
 		Metrics: metricsserver.Options{
 			BindAddress: "0", // Disable metrics server
 		},
+		PprofBindAddress: pprofBindAddress,
 	})
 	if err != nil {
 		return fmt.Errorf("unable to create manager: %w", err)

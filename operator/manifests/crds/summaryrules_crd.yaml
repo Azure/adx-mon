@@ -100,6 +100,39 @@ spec:
               table:
                 description: Table is rule output destination
                 type: string
+              backfill:
+                description: Backfill optionally specifies a historical time range to
+                  process.
+                type: object
+                properties:
+                  requestId:
+                    description: RequestID is a user-chosen identifier for this backfill
+                      request. The same RequestID resumes an in-progress backfill; a
+                      new RequestID starts a fresh backfill.
+                    minLength: 1
+                    type: string
+                  startTime:
+                    description: StartTime is the inclusive start of the historical
+                      range to backfill.
+                    format: date-time
+                    type: string
+                  endTime:
+                    description: EndTime is the exclusive end of the historical range
+                      to backfill.
+                    format: date-time
+                    type: string
+                  maxInFlight:
+                    description: MaxInFlight limits the number of concurrent async
+                      operations for backfill windows. Defaults to 1 if unset or zero.
+                      Values greater than 20 are rejected to keep historical processing
+                      throttled.
+                    maximum: 20
+                    type: integer
+                    minimum: 0
+                required:
+                - requestId
+                - startTime
+                - endTime
             required:
             - body
             - database
@@ -169,6 +202,45 @@ spec:
                   - type
                   type: object
                 type: array
+              backfill:
+                description: Backfill tracks the progress of a user-requested historical
+                  backfill.
+                type: object
+                properties:
+                  requestId:
+                    type: string
+                  phase:
+                    type: string
+                    enum:
+                    - Pending
+                    - Running
+                    - Completed
+                    - Failed
+                  observedGeneration:
+                    type: integer
+                    format: int64
+                  nextWindowStart:
+                    type: string
+                    format: date-time
+                  submittedWindows:
+                    type: integer
+                  completedWindows:
+                    type: integer
+                  retriedWindows:
+                    type: integer
+                  activeOperations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        operationId:
+                          type: string
+                        startTime:
+                          type: string
+                        endTime:
+                          type: string
+                  message:
+                    type: string
             type: object
         type: object
     served: true

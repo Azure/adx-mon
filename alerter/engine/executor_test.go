@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
+	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/Azure/azure-kusto-go/kusto/data/table"
@@ -46,6 +47,35 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 	err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
 	require.ErrorContains(t, err, "title must be between 1 and 512 chars")
 	require.True(t, isUserError(err))
+}
+
+func TestNewExecutor_UsesConfiguredConcurrency(t *testing.T) {
+	e := NewExecutor(ExecutorOpts{
+		Concurrency: 12,
+	})
+
+	require.NotNil(t, e.querySlots)
+	require.Equal(t, 12, cap(e.querySlots))
+}
+
+func TestNewExecutor_DefaultsConcurrency(t *testing.T) {
+	e := NewExecutor(ExecutorOpts{})
+
+	require.NotNil(t, e.querySlots)
+	require.Equal(t, queue.DefaultConcurrency, cap(e.querySlots))
+}
+
+func TestExecutor_newWorker_UsesExecutorQueue(t *testing.T) {
+	slots := make(chan struct{}, 7)
+	e := &Executor{
+		region:     "eastus",
+		querySlots: slots,
+	}
+
+	w := e.newWorker(&rules.Rule{Namespace: "ns", Name: "rule"})
+
+	require.NotNil(t, w)
+	require.Equal(t, slots, w.querySlots)
 }
 
 func TestExecutor_Handler_Severity(t *testing.T) {

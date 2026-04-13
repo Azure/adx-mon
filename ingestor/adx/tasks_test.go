@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +27,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +36,45 @@ import (
 	klock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var (
+	sharedK3sOnce sync.Once
+	sharedK3s     *k3s.K3sContainer
+	sharedK3sErr  error
+	sharedK3sCtx  context.Context
+	sharedK3sStop context.CancelFunc
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+
+	if sharedK3sStop != nil {
+		sharedK3sStop()
+	}
+	if sharedK3s != nil {
+		_ = sharedK3s.Terminate(context.Background())
+	}
+
+	os.Exit(code)
+}
+
+func getSharedK3sContainer(t *testing.T) *k3s.K3sContainer {
+	t.Helper()
+
+	sharedK3sOnce.Do(func() {
+		sharedK3sCtx, sharedK3sStop = context.WithCancel(context.Background())
+		sharedK3s, sharedK3sErr = k3s.Run(sharedK3sCtx, "rancher/k3s:v1.31.2-k3s1")
+		if sharedK3sErr != nil {
+			return
+		}
+		if err := testutils.InstallCrds(sharedK3sCtx, sharedK3s); err != nil {
+			sharedK3sErr = err
+		}
+	})
+
+	require.NoError(t, sharedK3sErr)
+	return sharedK3s
+}
 
 // ensureTestVFlagSet ensures the test.v flag is set for MockRows functionality
 func ensureTestVFlagSet(t *testing.T) {
@@ -290,7 +333,15 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, query kusto.Statement,
 		return iter, nil
 	}
 
-	return nil, nil
+	// Default: return an empty but properly initialized mock iterator
+	mockRows, err := kusto.NewMockRows(table.Columns{{Name: "Result", Type: kustotypes.String}})
+	if err != nil {
+		return nil, err
+	}
+	if err := iter.Mock(mockRows); err != nil {
+		return nil, fmt.Errorf("failed to mock iterator: %w", err)
+	}
+	return iter, nil
 }
 
 type TestFunctionStore struct {
@@ -722,16 +773,17 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 	exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
 	task := NewSyncFunctionsTask(store, exec, nil)
 	require.NoError(t, task.Run(ctx))
-	require.Len(t, exec.stmts, 1)
-	require.Contains(t, exec.stmts[0], ".drop function")
+	require.Empty(t, exec.stmts)
 
 	fn := store.funcs[0]
 	recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
 	require.NotNil(t, recCond)
 	require.Equal(t, metav1.ConditionTrue, recCond.Status)
 	require.Equal(t, "FunctionDeleted", recCond.Reason)
-	require.Contains(t, recCond.Message, "deleted")
+	require.Contains(t, recCond.Message, "Finalization no-op")
 	require.Equal(t, v1.Success, fn.Status.Status)
+	require.Equal(t, "Function finalized (no-op)", fn.Status.Reason)
+	require.Contains(t, fn.Status.Message, "Finalization no-op")
 }
 
 func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
@@ -986,19 +1038,21 @@ func TestFunctions(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
-	require.NoError(t, err)
+	k3sContainer := getSharedK3sContainer(t)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	testNamespace := "adx-funcs-" + runID
 
-	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
-
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	kustoContainer, err := kustainer.Run(
+		ctx,
+		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
+		kustainer.WithStarted(),
+	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
 	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := kusto.New(cb)
@@ -1016,7 +1070,7 @@ func TestFunctions(t *testing.T) {
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
 		Name:      resourceName,
-		Namespace: "default",
+		Namespace: testNamespace,
 	}
 
 	t.Run("Creates functions", func(t *testing.T) {
@@ -1083,7 +1137,9 @@ func TestFunctions(t *testing.T) {
 		require.NoError(t, task.Run(ctx))
 
 		require.Eventually(t, func() bool {
-			return !testutils.FunctionExists(ctx, t, executor.Database(), resourceName, kustoContainer.ConnectionUrl())
+			obj := &adxmonv1.Function{}
+			err := ctrlCli.Get(ctx, typeNamespacedName, obj)
+			return apierrors.IsNotFound(err)
 		}, 10*time.Minute, time.Second)
 	})
 
@@ -1117,7 +1173,7 @@ func TestFunctions(t *testing.T) {
 		resourceName := "invalid-function"
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNamespace,
 		}
 		fn := &adxmonv1.Function{
 			ObjectMeta: metav1.ObjectMeta{
@@ -1148,19 +1204,21 @@ func TestManagementCommands(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
-	require.NoError(t, err)
+	k3sContainer := getSharedK3sContainer(t)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	testNamespace := "adx-mgmt-" + runID
 
-	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
-
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	kustoContainer, err := kustainer.Run(
+		ctx,
+		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
+		kustainer.WithStarted(),
+	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
 	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := kusto.New(cb)
@@ -1179,7 +1237,7 @@ func TestManagementCommands(t *testing.T) {
 		resourceName := "testtest"
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNamespace,
 		}
 
 		fn := &adxmonv1.ManagementCommand{
@@ -1214,7 +1272,7 @@ func TestManagementCommands(t *testing.T) {
 		resourceName := "testtesttest"
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default",
+			Namespace: testNamespace,
 		}
 
 		fn := &adxmonv1.ManagementCommand{
@@ -1698,19 +1756,21 @@ func TestSummaryRules(t *testing.T) {
 	require.NoError(t, adxmonv1.AddToScheme(scheme))
 
 	ctx := context.Background()
-	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
-	testcontainers.CleanupContainer(t, k3sContainer)
-	require.NoError(t, err)
+	k3sContainer := getSharedK3sContainer(t)
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
+	testNamespace := "adx-summary-" + runID
 
-	require.NoError(t, testutils.InstallCrds(ctx, k3sContainer))
-
-	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	kustoContainer, err := kustainer.Run(
+		ctx,
+		"mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest",
+		kustainer.WithStarted(),
+	)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	_, ctrlCli, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
-	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
+	require.NoError(t, ctrlCli.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}))
 
 	cb := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
 	kustoClient, err := kusto.New(cb)
@@ -1742,7 +1802,7 @@ func TestSummaryRules(t *testing.T) {
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
 		Name:      resourceName,
-		Namespace: "default",
+		Namespace: testNamespace,
 	}
 
 	// Create a SummaryRule

@@ -127,6 +127,9 @@ type ServiceOpts struct {
 	// MaxTransferConcurrency is the maximum number of concurrent transfers allowed in flight at the same time.
 	MaxTransferConcurrency int
 
+	// ConcurrentUploads is the maximum number of concurrent uploads.
+	ConcurrentUploads int
+
 	// EnableWALFsync enables fsync of segments before closing the segment.
 	EnableWALFsync bool
 
@@ -153,11 +156,12 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	store := storage.NewLocalStore(storage.StoreOpts{
-		StorageDir:     opts.StorageDir,
-		SegmentMaxSize: opts.MaxSegmentSize,
-		SegmentMaxAge:  opts.MaxSegmentAge,
-		EnableWALFsync: opts.EnableWALFsync,
-		MaxDiskUsage:   opts.MaxDiskUsage,
+		StorageDir:             opts.StorageDir,
+		SegmentMaxSize:         opts.MaxSegmentSize,
+		SegmentMaxAge:          opts.MaxSegmentAge,
+		EnableWALFsync:         opts.EnableWALFsync,
+		MaxDiskUsage:           opts.MaxDiskUsage,
+		StartupOpenConcurrency: opts.ConcurrentUploads,
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{

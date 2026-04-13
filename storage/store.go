@@ -67,11 +67,12 @@ type LocalStore struct {
 }
 
 type StoreOpts struct {
-	StorageDir     string
-	SegmentMaxSize int64
-	SegmentMaxAge  time.Duration
-	MaxDiskUsage   int64
-	Backend        Backend
+	StorageDir             string
+	SegmentMaxSize         int64
+	SegmentMaxAge          time.Duration
+	MaxDiskUsage           int64
+	StartupOpenConcurrency int
+	Backend                Backend
 
 	LiftedLabels     []string
 	LiftedAttributes []string
@@ -88,12 +89,13 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
 		opts: opts,
 		repository: wal.NewRepository(wal.RepositoryOpts{
-			StorageDir:       opts.StorageDir,
-			SegmentMaxSize:   opts.SegmentMaxSize,
-			SegmentMaxAge:    opts.SegmentMaxAge,
-			MaxDiskUsage:     opts.MaxDiskUsage,
-			WALFlushInterval: opts.WALFlushInterval,
-			EnableWALFsync:   opts.EnableWALFsync,
+			StorageDir:             opts.StorageDir,
+			SegmentMaxSize:         opts.SegmentMaxSize,
+			SegmentMaxAge:          opts.SegmentMaxAge,
+			MaxDiskUsage:           opts.MaxDiskUsage,
+			StartupOpenConcurrency: opts.StartupOpenConcurrency,
+			WALFlushInterval:       opts.WALFlushInterval,
+			EnableWALFsync:         opts.EnableWALFsync,
 		}),
 	}
 }

@@ -53,6 +53,7 @@ type AnyValue struct {
 	//	*AnyValue_ArrayValue
 	//	*AnyValue_KvlistValue
 	//	*AnyValue_BytesValue
+	//	*AnyValue_StringValueStrindex
 	Value         isAnyValue_Value `protobuf_oneof:"value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -153,6 +154,15 @@ func (x *AnyValue) GetBytesValue() []byte {
 	return nil
 }
 
+func (x *AnyValue) GetStringValueStrindex() int32 {
+	if x != nil {
+		if x, ok := x.Value.(*AnyValue_StringValueStrindex); ok {
+			return x.StringValueStrindex
+		}
+	}
+	return 0
+}
+
 func (x *AnyValue) SetStringValue(v string) {
 	x.Value = &AnyValue_StringValue{v}
 }
@@ -190,6 +200,10 @@ func (x *AnyValue) SetBytesValue(v []byte) {
 		v = []byte{}
 	}
 	x.Value = &AnyValue_BytesValue{v}
+}
+
+func (x *AnyValue) SetStringValueStrindex(v int32) {
+	x.Value = &AnyValue_StringValueStrindex{v}
 }
 
 func (x *AnyValue) HasValue() bool {
@@ -255,6 +269,14 @@ func (x *AnyValue) HasBytesValue() bool {
 	return ok
 }
 
+func (x *AnyValue) HasStringValueStrindex() bool {
+	if x == nil {
+		return false
+	}
+	_, ok := x.Value.(*AnyValue_StringValueStrindex)
+	return ok
+}
+
 func (x *AnyValue) ClearValue() {
 	x.Value = nil
 }
@@ -301,6 +323,12 @@ func (x *AnyValue) ClearBytesValue() {
 	}
 }
 
+func (x *AnyValue) ClearStringValueStrindex() {
+	if _, ok := x.Value.(*AnyValue_StringValueStrindex); ok {
+		x.Value = nil
+	}
+}
+
 const AnyValue_Value_not_set_case case_AnyValue_Value = 0
 const AnyValue_StringValue_case case_AnyValue_Value = 1
 const AnyValue_BoolValue_case case_AnyValue_Value = 2
@@ -309,6 +337,7 @@ const AnyValue_DoubleValue_case case_AnyValue_Value = 4
 const AnyValue_ArrayValue_case case_AnyValue_Value = 5
 const AnyValue_KvlistValue_case case_AnyValue_Value = 6
 const AnyValue_BytesValue_case case_AnyValue_Value = 7
+const AnyValue_StringValueStrindex_case case_AnyValue_Value = 8
 
 func (x *AnyValue) WhichValue() case_AnyValue_Value {
 	if x == nil {
@@ -329,6 +358,8 @@ func (x *AnyValue) WhichValue() case_AnyValue_Value {
 		return AnyValue_KvlistValue_case
 	case *AnyValue_BytesValue:
 		return AnyValue_BytesValue_case
+	case *AnyValue_StringValueStrindex:
+		return AnyValue_StringValueStrindex_case
 	default:
 		return AnyValue_Value_not_set_case
 	}
@@ -348,6 +379,17 @@ type AnyValue_builder struct {
 	ArrayValue  *ArrayValue
 	KvlistValue *KeyValueList
 	BytesValue  []byte
+	// Reference to the string value in ProfilesDictionary.string_table.
+	//
+	// Note: This is currently used exclusively in the Profiling signal.
+	// Implementers of OTLP receivers for signals other than Profiling should
+	// treat the presence of this value as a non-fatal issue.
+	// Log an error or warning indicating an unexpected field intended for the
+	// Profiling signal and process the data as if this value were absent or
+	// empty, ignoring its semantic content for the non-Profiling signal.
+	//
+	// Status: [Development]
+	StringValueStrindex *int32
 	// -- end of Value
 }
 
@@ -375,6 +417,9 @@ func (b0 AnyValue_builder) Build() *AnyValue {
 	}
 	if b.BytesValue != nil {
 		x.Value = &AnyValue_BytesValue{b.BytesValue}
+	}
+	if b.StringValueStrindex != nil {
+		x.Value = &AnyValue_StringValueStrindex{*b.StringValueStrindex}
 	}
 	return m0
 }
@@ -421,6 +466,20 @@ type AnyValue_BytesValue struct {
 	BytesValue []byte `protobuf:"bytes,7,opt,name=bytes_value,json=bytesValue,proto3,oneof"`
 }
 
+type AnyValue_StringValueStrindex struct {
+	// Reference to the string value in ProfilesDictionary.string_table.
+	//
+	// Note: This is currently used exclusively in the Profiling signal.
+	// Implementers of OTLP receivers for signals other than Profiling should
+	// treat the presence of this value as a non-fatal issue.
+	// Log an error or warning indicating an unexpected field intended for the
+	// Profiling signal and process the data as if this value were absent or
+	// empty, ignoring its semantic content for the non-Profiling signal.
+	//
+	// Status: [Development]
+	StringValueStrindex int32 `protobuf:"varint,8,opt,name=string_value_strindex,json=stringValueStrindex,proto3,oneof"`
+}
+
 func (*AnyValue_StringValue) isAnyValue_Value() {}
 
 func (*AnyValue_BoolValue) isAnyValue_Value() {}
@@ -434,6 +493,8 @@ func (*AnyValue_ArrayValue) isAnyValue_Value() {}
 func (*AnyValue_KvlistValue) isAnyValue_Value() {}
 
 func (*AnyValue_BytesValue) isAnyValue_Value() {}
+
+func (*AnyValue_StringValueStrindex) isAnyValue_Value() {}
 
 // ArrayValue is a list of AnyValue messages. We need ArrayValue as a message
 // since oneof in AnyValue does not allow repeated fields.
@@ -575,9 +636,22 @@ func (b0 KeyValueList_builder) Build() *KeyValueList {
 type KeyValue struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// The key name of the pair.
+	// key_ref MUST NOT be set if key is used.
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	// The value of the pair.
-	Value         *AnyValue `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Value *AnyValue `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	// Reference to the string key in ProfilesDictionary.string_table.
+	// key MUST NOT be set if key_strindex is used.
+	//
+	// Note: This is currently used exclusively in the Profiling signal.
+	// Implementers of OTLP receivers for signals other than Profiling should
+	// treat the presence of this key as a non-fatal issue.
+	// Log an error or warning indicating an unexpected field intended for the
+	// Profiling signal and process the data as if this value were absent or
+	// empty, ignoring its semantic content for the non-Profiling signal.
+	//
+	// Status: [Development]
+	KeyStrindex   int32 `protobuf:"varint,3,opt,name=key_strindex,json=keyStrindex,proto3" json:"key_strindex,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -621,12 +695,23 @@ func (x *KeyValue) GetValue() *AnyValue {
 	return nil
 }
 
+func (x *KeyValue) GetKeyStrindex() int32 {
+	if x != nil {
+		return x.KeyStrindex
+	}
+	return 0
+}
+
 func (x *KeyValue) SetKey(v string) {
 	x.Key = v
 }
 
 func (x *KeyValue) SetValue(v *AnyValue) {
 	x.Value = v
+}
+
+func (x *KeyValue) SetKeyStrindex(v int32) {
+	x.KeyStrindex = v
 }
 
 func (x *KeyValue) HasValue() bool {
@@ -644,9 +729,22 @@ type KeyValue_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	// The key name of the pair.
+	// key_ref MUST NOT be set if key is used.
 	Key string
 	// The value of the pair.
 	Value *AnyValue
+	// Reference to the string key in ProfilesDictionary.string_table.
+	// key MUST NOT be set if key_strindex is used.
+	//
+	// Note: This is currently used exclusively in the Profiling signal.
+	// Implementers of OTLP receivers for signals other than Profiling should
+	// treat the presence of this key as a non-fatal issue.
+	// Log an error or warning indicating an unexpected field intended for the
+	// Profiling signal and process the data as if this value were absent or
+	// empty, ignoring its semantic content for the non-Profiling signal.
+	//
+	// Status: [Development]
+	KeyStrindex int32
 }
 
 func (b0 KeyValue_builder) Build() *KeyValue {
@@ -655,6 +753,7 @@ func (b0 KeyValue_builder) Build() *KeyValue {
 	_, _ = b, x
 	x.Key = b.Key
 	x.Value = b.Value
+	x.KeyStrindex = b.KeyStrindex
 	return m0
 }
 
@@ -928,7 +1027,7 @@ var File_opentelemetry_proto_common_v1_common_proto protoreflect.FileDescriptor
 
 const file_opentelemetry_proto_common_v1_common_proto_rawDesc = "" +
 	"\n" +
-	"*opentelemetry/proto/common/v1/common.proto\x12\x1dopentelemetry.proto.common.v1\"\xe0\x02\n" +
+	"*opentelemetry/proto/common/v1/common.proto\x12\x1dopentelemetry.proto.common.v1\"\x96\x03\n" +
 	"\bAnyValue\x12#\n" +
 	"\fstring_value\x18\x01 \x01(\tH\x00R\vstringValue\x12\x1f\n" +
 	"\n" +
@@ -939,16 +1038,18 @@ const file_opentelemetry_proto_common_v1_common_proto_rawDesc = "" +
 	"arrayValue\x12P\n" +
 	"\fkvlist_value\x18\x06 \x01(\v2+.opentelemetry.proto.common.v1.KeyValueListH\x00R\vkvlistValue\x12!\n" +
 	"\vbytes_value\x18\a \x01(\fH\x00R\n" +
-	"bytesValueB\a\n" +
+	"bytesValue\x124\n" +
+	"\x15string_value_strindex\x18\b \x01(\x05H\x00R\x13stringValueStrindexB\a\n" +
 	"\x05value\"M\n" +
 	"\n" +
 	"ArrayValue\x12?\n" +
 	"\x06values\x18\x01 \x03(\v2'.opentelemetry.proto.common.v1.AnyValueR\x06values\"O\n" +
 	"\fKeyValueList\x12?\n" +
-	"\x06values\x18\x01 \x03(\v2'.opentelemetry.proto.common.v1.KeyValueR\x06values\"[\n" +
+	"\x06values\x18\x01 \x03(\v2'.opentelemetry.proto.common.v1.KeyValueR\x06values\"~\n" +
 	"\bKeyValue\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12=\n" +
-	"\x05value\x18\x02 \x01(\v2'.opentelemetry.proto.common.v1.AnyValueR\x05value\"\xc7\x01\n" +
+	"\x05value\x18\x02 \x01(\v2'.opentelemetry.proto.common.v1.AnyValueR\x05value\x12!\n" +
+	"\fkey_strindex\x18\x03 \x01(\x05R\vkeyStrindex\"\xc7\x01\n" +
 	"\x14InstrumentationScope\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12G\n" +
@@ -1000,6 +1101,7 @@ func file_opentelemetry_proto_common_v1_common_proto_init() {
 		(*AnyValue_ArrayValue)(nil),
 		(*AnyValue_KvlistValue)(nil),
 		(*AnyValue_BytesValue)(nil),
+		(*AnyValue_StringValueStrindex)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

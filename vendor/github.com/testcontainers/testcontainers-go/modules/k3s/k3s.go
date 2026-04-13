@@ -7,10 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/go-connections/nat"
-	"gopkg.in/yaml.v3"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/log"
@@ -59,7 +58,8 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 		return nil, err
 	}
 
-	moduleOpts := []testcontainers.ContainerCustomizer{
+	moduleOpts := make([]testcontainers.ContainerCustomizer, 0, 5+len(opts))
+	moduleOpts = append(moduleOpts,
 		testcontainers.WithExposedPorts(defaultKubeSecurePort, defaultRancherWebhookPort),
 		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
 			hc.Privileged = true
@@ -79,7 +79,7 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 			"K3S_KUBECONFIG_MODE": "644",
 		}),
 		testcontainers.WithWaitStrategy(wait.ForLog(".*Node controller sync successful.*").AsRegexp()),
-	}
+	)
 
 	moduleOpts = append(moduleOpts, opts...)
 
@@ -134,7 +134,7 @@ func (c *K3sContainer) GetKubeConfig(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read file from container: %w", err)
 	}
 
-	server, err := c.PortEndpoint(ctx, nat.Port(defaultKubeSecurePort), "https")
+	server, err := c.PortEndpoint(ctx, defaultKubeSecurePort, "https")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get port endpoint: %w", err)
 	}

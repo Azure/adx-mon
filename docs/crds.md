@@ -8,7 +8,7 @@ This page summarizes all Custom Resource Definitions (CRDs) managed by adx-mon, 
 | Ingestor      | Ingests telemetry from collectors, manages WAL, uploads to ADX | image, replicas, endpoint, exposeExternally, adxClusterSelector | [Operator Design](designs/operator.md#ingestor-crd) |
 | Collector     | Collects metrics/logs/traces, forwards to Ingestor | image, ingestorEndpoint | [Operator Design](designs/operator.md#collector-crd) |
 | Alerter       | Runs alert rules, sends notifications        | image, notificationEndpoint, adxClusterSelector | [Operator Design](designs/operator.md#alerter-crd) |
-| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, and criteria-based execution | database, name, body, table, interval, criteria | [Summary Rules](designs/summary-rules.md#crd) |
+| SummaryRule   | Automates periodic KQL aggregations with async operation tracking, time window management, cluster label substitutions, criteria-based execution, and historical backfill | database, name, body, table, interval, criteria, backfill | [Summary Rules](designs/summary-rules.md#crd) |
 | MetricsExporter | Executes KQL queries and exports results as metrics to OTLP endpoints | database, body, interval, transform, criteria | [Kusto-to-Metrics](designs/kusto-to-metrics.md) |
 | Function      | Defines KQL functions/views for ADX          | name, body, database, table, isView, parameters | [Schema ETL](designs/schema-etl.md#crd) |
 | ManagementCommand | Declarative cluster management commands  | command, args, target, schedule | [Management Commands](designs/management-commands.md#crd) |
@@ -426,7 +426,7 @@ spec:
 | Condition Type | Meaning | Typical Status / Reasons |
 |----------------|---------|---------------------------|
 | `function.adx-mon.azure.com/CriteriaMatch` | Result of evaluating `spec.criteriaExpression` against cluster labels. | `True` with reason `CriteriaMatched`; `False` with reason `CriteriaNotMatched` (expression evaluated to false) or `CriteriaExpressionError` (parse/evaluation failure). |
-| `function.adx-mon.azure.com/Reconciled` | Outcome of the most recent reconciliation attempt. | `True` with reason `KustoExecutionSucceeded` or `FunctionDeleted`; `False` for intermediate states such as `CriteriaNotMatched`, `CriteriaEvaluationFailed`, `KustoExecutionRetrying`, or `KustoExecutionFailed`. |
+| `function.adx-mon.azure.com/Reconciled` | Outcome of the most recent reconciliation attempt. | `True` with reason `KustoExecutionSucceeded` when the Function body is applied in Kusto. `True` with reason `FunctionDeleted` when the Function resource finalization completes; deletion currently uses a no-op path and does not drop the underlying Kusto function. `False` for intermediate states such as `CriteriaNotMatched`, `CriteriaEvaluationFailed`, `KustoExecutionRetrying`, or `KustoExecutionFailed`. |
 
 Example describe output when a criteria mismatch occurs:
 

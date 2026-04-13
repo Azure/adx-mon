@@ -5,6 +5,7 @@ import (
 
 	"github.com/Azure/adx-mon/collector/logs/transforms/plugin"
 	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/addattributes"
+	"github.com/Azure/adx-mon/collector/logs/transforms/plugin/logrouter"
 	"github.com/Azure/adx-mon/collector/logs/types"
 )
 
@@ -13,11 +14,13 @@ type TransformCreator func(config map[string]any) (types.Transformer, error)
 const (
 	TransformTypePlugin        = "plugin"
 	TransformTypeAddAttributes = "addattributes"
+	TransformTypeLogRouter     = "logrouter"
 )
 
 var transformCreators = map[string]TransformCreator{
 	TransformTypePlugin:        plugin.FromConfigMap,
 	TransformTypeAddAttributes: addattributes.FromConfigMap,
+	TransformTypeLogRouter:     logrouter.FromConfigMap,
 }
 
 func IsValidTransformType(transformType string) bool {
@@ -26,6 +29,10 @@ func IsValidTransformType(transformType string) bool {
 }
 
 func NewTransform(transformType string, config map[string]any) (types.Transformer, error) {
+	if config == nil {
+		config = map[string]any{}
+	}
+
 	creator, ok := transformCreators[transformType]
 	if !ok {
 		return nil, fmt.Errorf("unknown transform type: %s", transformType)

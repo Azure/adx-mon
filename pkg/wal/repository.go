@@ -15,6 +15,7 @@ import (
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Repository is a collection of WALs.
@@ -31,9 +32,10 @@ type Repository struct {
 }
 
 type RepositoryOpts struct {
-	StorageDir     string
-	SegmentMaxSize int64
-	SegmentMaxAge  time.Duration
+	StorageDir             string
+	SegmentMaxSize         int64
+	SegmentMaxAge          time.Duration
+	StartupOpenConcurrency int
 
 	MaxDiskUsage     int64
 	MaxSegmentCount  int
@@ -71,6 +73,7 @@ func (s *Repository) Open(ctx context.Context) error {
 	}
 	defer dir.Close()
 
+	var walPaths []string
 	for {
 		entries, err := dir.ReadDir(100)
 		if err == io.EOF {
@@ -84,85 +87,135 @@ func (s *Repository) Open(ctx context.Context) error {
 			if d.IsDir() || filepath.Ext(path) != ".wal" {
 				continue
 			}
-
-			// This block was added when we had an non-backwards compatible segment file change in the segment
-			// file format.  To simplify the migration, we just remove any segment files that are not in the
-			// expected format.  In the future, we will have a versioned segment file format to avoid this.
-			if !IsSegment(path) {
-				logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
-				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-					logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
-				}
-				continue
-			}
-
-			// Walk each segment on disk and Open it to trigger a repair if necessary.
-			var seg Segment
-			seg, err = Open(path)
-			if err != nil {
-				logger.Warnf("Failed to open segment file: %s %s", path, err.Error())
-			} else if err := seg.Close(); err != nil {
-				logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
-			}
-
-			fileName := filepath.Base(path)
-			database, table, schema, epoch, err := ParseFilename(fileName)
-			if err != nil {
-				continue
-			}
-
-			prefix := fmt.Sprintf("%s_%s", database, table)
-			if schema != "" {
-				prefix = fmt.Sprintf("%s_%s", prefix, schema)
-			}
-
-			createdAt, err := flakeutil.ParseFlakeID(epoch)
-			if err != nil {
-				logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
-				continue
-			}
-
-			fi, err := d.Info()
-			if err != nil {
-				logger.Warnf("Failed to get file info: %s %s", path, err.Error())
-				continue
-			}
-
-			// If the segment is only 8 bytes, that means only the segment magic header has been written and there
-			// is no data in the file.  We don't want to upload these to kusto so they can be removed.
-			if fi.Size() == 8 {
-				if logger.IsDebug() {
-					logger.Debugf("Removing empty segment: %s", path)
-				}
-				if err := os.Remove(path); err != nil {
-					logger.Warnf("Failed to remove empty segment: %s %s", path, err.Error())
-				}
-				continue
-			}
-
-			info := SegmentInfo{
-				Prefix:    prefix,
-				Ulid:      epoch,
-				Path:      path,
-				Size:      fi.Size(),
-				CreatedAt: createdAt,
-			}
-			s.index.Add(info)
-
-			_, ok := s.wals.Get(prefix)
-			if ok {
-				continue
-			}
-
-			wal, err := s.newWAL(ctx, prefix)
-			if err != nil {
-				return err
-			}
-			s.wals.Set(prefix, wal)
+			walPaths = append(walPaths, path)
 		}
 	}
 
+	if err := s.openStartupSegments(ctx, walPaths); err != nil {
+		return err
+	}
+
 	go s.sampleWALs(ctx)
+
+	return nil
+}
+
+func (s *Repository) openStartupSegments(ctx context.Context, walPaths []string) error {
+	if len(walPaths) == 0 {
+		return nil
+	}
+
+	workers := s.opts.StartupOpenConcurrency
+	if workers <= 1 {
+		for _, path := range walPaths {
+			if err := s.openStartupSegment(ctx, path); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if workers > len(walPaths) {
+		workers = len(walPaths)
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	jobs := make(chan string)
+
+	for i := 0; i < workers; i++ {
+		g.Go(func() error {
+			for path := range jobs {
+				if err := s.openStartupSegment(gctx, path); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+
+	g.Go(func() error {
+		defer close(jobs)
+		for _, path := range walPaths {
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			case jobs <- path:
+			}
+		}
+		return nil
+	})
+
+	return g.Wait()
+}
+
+func (s *Repository) openStartupSegment(ctx context.Context, path string) error {
+	// This block was added when we had an non-backwards compatible segment file change in the segment
+	// file format.  To simplify the migration, we just remove any segment files that are not in the
+	// expected format.  In the future, we will have a versioned segment file format to avoid this.
+	if !IsSegment(path) {
+		logger.Warnf("Segment file is not a WAL segment file: %s. Removing", path)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			logger.Warnf("Failed to remove invalid segment file: %s %s", path, err.Error())
+		}
+		return nil
+	}
+
+	// Walk each segment on disk and Open it to trigger a repair if necessary.
+	seg, err := Open(path)
+	if err != nil {
+		logger.Warnf("Failed to open segment file: %s %s", path, err.Error())
+	} else if err := seg.Close(); err != nil {
+		logger.Warnf("Failed to close segment file: %s %s", path, err.Error())
+	}
+
+	fileName := filepath.Base(path)
+	database, table, schema, epoch, err := ParseFilename(fileName)
+	if err != nil {
+		return nil
+	}
+
+	prefix := fmt.Sprintf("%s_%s", database, table)
+	if schema != "" {
+		prefix = fmt.Sprintf("%s_%s", prefix, schema)
+	}
+
+	createdAt, err := flakeutil.ParseFlakeID(epoch)
+	if err != nil {
+		logger.Warnf("Failed to parse flake id: %s %s", epoch, err.Error())
+		return nil
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		logger.Warnf("Failed to get file info: %s %s", path, err.Error())
+		return nil
+	}
+
+	// If the segment is only 8 bytes, that means only the segment magic header has been written and there
+	// is no data in the file.  We don't want to upload these to kusto so they can be removed.
+	if fi.Size() == 8 {
+		if logger.IsDebug() {
+			logger.Debugf("Removing empty segment: %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			logger.Warnf("Failed to remove empty segment: %s %s", path, err.Error())
+		}
+		return nil
+	}
+
+	info := SegmentInfo{
+		Prefix:    prefix,
+		Ulid:      epoch,
+		Path:      path,
+		Size:      fi.Size(),
+		CreatedAt: createdAt,
+	}
+	s.index.Add(info)
+
+	if _, err := s.wals.GetOrCreate(prefix, func() (*WAL, error) {
+		return s.newWAL(ctx, prefix)
+	}); err != nil {
+		return err
+	}
 
 	return nil
 }

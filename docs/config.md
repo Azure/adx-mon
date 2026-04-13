@@ -313,6 +313,20 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
 
 The host log config configures file and journald log collection. By default, Kubernetes pods with `adx-mon/log-destination` annotation will have their logs scraped and sent to the appropriate destinations.
 
+### Log Transforms
+
+Transforms are applied sequentially to log lines collected from host log sources. They are configured in the `transforms` array of a `[[host-log]]` block. Each transform has a `name` and an optional `config` map.
+
+Available transform types:
+
+*   **`addattributes`**: Adds static key-value pairs to the log body. Keys and values are defined in the `config` map.
+*   **`logrouter`**: Routes logs to different databases and tables based on pod annotations. This transform requires no `config` and is driven entirely by the following pod annotations:
+
+    *   **`adx-mon/log-sources`**: Routes based on the `source` field in the log body. Format: `sourceVal:Database:Table[,sourceVal:Database:Table,...]`. For example, `frontend:Logs:FrontendLogs,backend:Logs:BackendLogs` routes logs with a body field `source` equal to `frontend` to `Logs.FrontendLogs` and `backend` to `Logs.BackendLogs`.
+    *   **`adx-mon/log-keys`**: Routes based on an arbitrary key-value match in the log body. Format: `key:value:Database:Table[,key:value:Database:Table,...]`. For example, `level:error:Logs:Errors,level:info:Logs:Info` routes logs where the body field `level` equals `error` to `Logs.Errors` and `info` to `Logs.Info`.
+
+    `adx-mon/log-sources` is evaluated first. If a match is found, `adx-mon/log-keys` is skipped.
+
 ### Log Type
 
 The `log-type` setting defines the format of the underlying log file and determines how timestamps and log messages are extracted from structured log entries. This setting is used in `file-target` configurations to properly parse different log formats.
@@ -425,6 +439,10 @@ Available parser types:
     # The configuration for the transform.
     [host-log.transforms.config]
       environment = 'production'
+
+  [[host-log.transforms]]
+    # The name of the transform to apply to the log line.
+    name = 'logrouter'
 
 ```
 ## Kubelet Discovery

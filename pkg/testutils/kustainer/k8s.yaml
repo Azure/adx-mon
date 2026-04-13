@@ -1,20 +1,26 @@
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{NAMESPACE}}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kustainer
+  name: {{NAME}}
+  namespace: {{NAMESPACE}}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: kustainer
+      app: {{APP}}
   template:
     metadata:
       labels:
-        app: kustainer
+        app: {{APP}}
     spec:
       containers:
-        - name: kustainer
+        - name: {{NAME}}
           image: "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest"
           ports:
             - containerPort: 8080
@@ -26,11 +32,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: kustainer
-  namespace: default
+  name: {{NAME}}
+  namespace: {{NAMESPACE}}
 spec:
   selector:
-    app: kustainer
+    app: {{APP}}
   type: NodePort
   ports:
     - protocol: TCP

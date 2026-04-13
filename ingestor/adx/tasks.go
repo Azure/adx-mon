@@ -16,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/pkg/celutil"
 	crdownership "github.com/Azure/adx-mon/pkg/crd/summaryrule"
+	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/kusto"
@@ -209,24 +210,15 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeleting", "Function deletion in progress")
 			function.Status.Status = v1.Failed
 			function.Status.Error = ""
+			function.Status.Reason = "Function finalizing"
+			function.Status.Message = "Finalization in progress; Kusto function drop is disabled"
 			if err := t.store.UpdateStatus(ctx, function); err != nil {
 				logger.Errorf("Failed to update function status for %s.%s prior to deletion: %v", function.Spec.Database, function.Name, err)
 			}
-
-			stmt := kql.New(".drop function ").AddUnsafe(function.Name).AddLiteral(" ifexists")
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
-				parsed := kustoutil.ParseError(err)
-				logger.Errorf("Failed to delete function %s.%s: %v", function.Spec.Database, function.Name, err)
-				function.SetReconcileCondition(metav1.ConditionFalse, "FunctionDeletionFailed", parsed)
-				function.Status.Status = v1.Failed
-				function.Status.Error = parsed
-				if err := t.store.UpdateStatus(ctx, function); err != nil {
-					logger.Errorf("Failed to persist deletion failure for %s.%s: %v", function.Spec.Database, function.Name, err)
-				}
-				continue
-			}
-
-			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", fmt.Sprintf("Function successfully deleted from %s", availableDB))
+			noopMsg := fmt.Sprintf("Finalization no-op; skipping Kusto function drop for %s", availableDB)
+			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", noopMsg)
+			function.Status.Reason = "Function finalized (no-op)"
+			function.Status.Message = noopMsg
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
 				logger.Errorf("Failed to update success status following deletion for %s.%s: %v", function.Spec.Database, function.Name, err)
 			}
@@ -235,7 +227,8 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
-			if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+			result, err := t.kustoCli.Mgmt(ctx, stmt)
+			if err != nil {
 				parsed := kustoutil.ParseError(err)
 				if !errors.Retry(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
@@ -253,6 +246,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				continue
 			}
 
+			result.Stop()
 			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
 			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
 				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
@@ -346,12 +340,14 @@ func (t *ManagementCommandTask) Run(ctx context.Context) error {
 			// Both AllDatabases and Database scope use database script execution
 			stmt = kql.New(".execute database script with (ThrowOnErrors = true) <|").AddUnsafe(command.Spec.Body)
 		}
-		if _, err := t.kustoCli.Mgmt(ctx, stmt); err != nil {
+		result, err := t.kustoCli.Mgmt(ctx, stmt)
+		if err != nil {
 			logger.Errorf("Failed to execute management command %s.%s: %v", command.Spec.Database, command.Name, err)
 			if err = t.store.UpdateStatus(ctx, &command, err); err != nil {
 				logger.Errorf("Failed to update management command status: %v", err)
 			}
 		} else {
+			result.Stop()
 			logger.Infof("Successfully executed management command %s.%s", command.Spec.Database, command.Name)
 			if err := t.store.UpdateStatus(ctx, &command, nil); err != nil {
 				logger.Errorf("Failed to update success status: %v", err)
@@ -507,6 +503,9 @@ func (t *SummaryRuleTask) Run(ctx context.Context) error {
 
 		// Process any outstanding async operations for this rule
 		t.trackAsyncOperations(timeoutCtx, &rule)
+
+		// Process user-requested historical backfill (low priority, bounded concurrency).
+		backfill.Process(timeoutCtx, &rule, t.Clock, t.backfillSubmitFunc(), t.backfillGetStatusFunc())
 
 		t.logSummaryRule(&rule, false, err)
 		// Update the rule's primary status condition
@@ -891,4 +890,27 @@ func (t *AuditDiskSpaceTask) Run(ctx context.Context) error {
 		logger.Warnf("AuditDiskSpaceTask: WAL segment disk usage mismatch: size actual=%d expected=%d, segments actual=%d expected=%d", actualSize, expectedSize, actualCount, expectedCount)
 	}
 	return nil
+}
+
+// backfillSubmitFunc adapts the ingestor's SubmitRule (which already takes string
+// parameters) into the backfill.SubmitFunc signature.
+func (t *SummaryRuleTask) backfillSubmitFunc() backfill.SubmitFunc {
+	return func(ctx context.Context, rule v1.SummaryRule, startTime, endTime string) (string, error) {
+		return t.SubmitRule(ctx, rule, startTime, endTime)
+	}
+}
+
+// backfillGetStatusFunc adapts the ingestor's getOperation into the
+// backfill.GetOperationStatusFunc signature.
+func (t *SummaryRuleTask) backfillGetStatusFunc() backfill.GetOperationStatusFunc {
+	return func(ctx context.Context, database, operationID string) (string, bool, error) {
+		status, err := t.getOperation(ctx, operationID)
+		if err != nil {
+			return "", false, err
+		}
+		if status == nil {
+			return "InProgress", false, nil
+		}
+		return status.State, status.ShouldRetry != 0, nil
+	}
 }

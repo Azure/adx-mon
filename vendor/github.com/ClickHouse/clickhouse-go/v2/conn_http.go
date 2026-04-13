@@ -10,12 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,40 +137,36 @@ func applyOptionsToRequest(ctx context.Context, req *http.Request, opt *Options)
 	req.Header.Set("User-Agent", opt.ClientInfo.Append(queryOpt.clientInfo).String())
 
 	for k, v := range opt.HttpHeaders {
-		req.Header.Set(k, v)
+		if strings.EqualFold(k, "Host") {
+			req.Host = v
+		} else {
+			req.Header.Set(k, v)
+		}
 	}
 
 	return nil
 }
 
 func dialHttp(ctx context.Context, addr string, num int, opt *Options) (*httpConnect, error) {
-	debugf := func(format string, v ...any) {}
-	if opt.Debug {
-		if opt.Debugf != nil {
-			debugf = func(format string, v ...any) {
-				opt.Debugf(
-					"[clickhouse-http][%s][id=%d] "+format,
-					append([]interface{}{addr, num}, v...)...,
-				)
-			}
-		} else {
-			debugf = log.New(os.Stdout, fmt.Sprintf("[clickhouse-http][%s][id=%d]", addr, num), 0).Printf
-		}
-	}
+	// Get base logger and enrich with connection-specific context
+	baseLogger := opt.logger()
+	logger := prepareConnLogger(baseLogger, num, addr, "http")
+	scheme := opt.scheme
+	compression := opt.Compression
 
-	if opt.scheme == "" {
+	if scheme == "" {
 		switch opt.Protocol {
 		case HTTP:
-			opt.scheme = opt.Protocol.String()
+			scheme = opt.Protocol.String()
 			if opt.TLS != nil {
-				opt.scheme = fmt.Sprintf("%ss", opt.scheme)
+				scheme = fmt.Sprintf("%ss", scheme)
 			}
 		default:
 			return nil, errors.New("invalid interface type for http")
 		}
 	}
 	u := &url.URL{
-		Scheme: opt.scheme,
+		Scheme: scheme,
 		Host:   addr,
 		Path:   opt.HttpUrlPath,
 	}
@@ -181,13 +176,13 @@ func dialHttp(ctx context.Context, addr string, num int, opt *Options) (*httpCon
 		query.Set("database", opt.Auth.Database)
 	}
 
-	if opt.Compression == nil {
-		opt.Compression = &Compression{
+	if compression == nil {
+		compression = &Compression{
 			Method: CompressionNone,
 		}
 	}
 
-	compressionPool, err := createCompressionPool(opt.Compression)
+	compressionPool, err := createCompressionPool(compression)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +208,7 @@ func dialHttp(ctx context.Context, addr string, num int, opt *Options) (*httpCon
 		id:          num,
 		connectedAt: time.Now(),
 		released:    false,
-		debugfFunc:  debugf,
+		logger:      logger,
 		opt:         opt,
 		client: &http.Client{
 			Transport: rt,
@@ -222,8 +217,8 @@ func dialHttp(ctx context.Context, addr string, num int, opt *Options) (*httpCon
 		revision:        ClientTCPProtocolVersion, // Preflight uses hardcoded revision, may break older versions.
 		encodeRevision:  0,                        // Encoding data over HTTP must use 0. client_protocol_version does not apply to inserts.
 		buffer:          new(chproto.Buffer),
-		compression:     opt.Compression.Method,
-		blockCompressor: compress.NewWriter(compress.Level(opt.Compression.Level), compress.Method(opt.Compression.Method)),
+		compression:     compression.Method,
+		blockCompressor: compress.NewWriter(compress.Level(compression.Level), compress.Method(compression.Method)),
 		compressionPool: compressionPool,
 		blockBufferSize: opt.BlockBufferSize,
 	}
@@ -274,7 +269,7 @@ type httpConnect struct {
 	id              int
 	connectedAt     time.Time
 	released        bool
-	debugfFunc      func(format string, v ...any)
+	logger          *slog.Logger
 	opt             *Options
 	revision        uint64
 	encodeRevision  uint64
@@ -300,16 +295,16 @@ func (h *httpConnect) connectedAtTime() time.Time {
 	return h.connectedAt
 }
 
+func (h *httpConnect) getLogger() *slog.Logger {
+	return h.logger
+}
+
 func (h *httpConnect) isReleased() bool {
 	return h.released
 }
 
 func (h *httpConnect) setReleased(released bool) {
 	h.released = released
-}
-
-func (h *httpConnect) debugf(format string, v ...any) {
-	h.debugfFunc(format, v...)
 }
 
 func (h *httpConnect) freeBuffer() {
@@ -320,7 +315,7 @@ func (h *httpConnect) isBad() bool {
 }
 
 func (h *httpConnect) queryHello(ctx context.Context, release nativeTransportRelease) (proto.ServerHandshake, error) {
-	h.debugf("[query hello]")
+	h.logger.Debug("querying server info via HTTP")
 	ctx = Context(ctx, ignoreExternalTables())
 	query := "SELECT displayName(), version(), revision(), timezone()"
 	rows, err := h.query(ctx, release, query)
@@ -457,7 +452,7 @@ func (h *httpConnect) readData(reader *chproto.Reader, timezone *time.Location, 
 			captureBuffer.Write(buf[:n])
 		}
 		if readErr != nil {
-			h.debugf("[readData]: decoding block failed when parsing exception block: %w", err)
+			h.logger.Error("HTTP read data: decode error while parsing exception block", slog.Any("error", err))
 		}
 
 		// Check if the captured data contains the exception marker

@@ -540,6 +540,13 @@ func TestConfig_ValidateOtelLog_Transforms(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "Failure_nil_transform",
+			otelLog: &OtelLog{
+				Transforms: []*LogTransform{nil},
+			},
+			wantErr: true,
+		},
+		{
 			name: "Failure_invalid_transform",
 			otelLog: &OtelLog{
 				Transforms: []*LogTransform{
@@ -1438,6 +1445,13 @@ func TestConfig_Validate_HostLog(t *testing.T) {
 				},
 			},
 			wantErr: false,
+		},
+		{
+			name: "Failure_nil_transform",
+			config: &HostLog{
+				Transforms: []*LogTransform{nil},
+			},
+			wantErr: true,
 		},
 		{
 			name: "Failure_invalid_transform",
