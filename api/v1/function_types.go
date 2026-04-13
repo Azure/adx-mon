@@ -44,9 +44,17 @@ type FunctionSpec struct {
 	// not apply to already started executions.  Defaults to false.
 	Suspend *bool `json:"suspend,omitempty"`
 
-	//+kubebuilder:validation:Required
-	// Database is the name of the database in which the function will be created
-	Database string `json:"database"`
+	//+kubebuilder:validation:Optional
+	// Database is the name of the database in which the function will be created.
+	// Deprecated: Use of wildcard "*" is deprecated; use AllDatabases field instead.
+	// Mutually exclusive with AllDatabases when a specific database name is provided.
+	Database string `json:"database,omitempty"`
+
+	//+kubebuilder:validation:Optional
+	// AllDatabases indicates whether the function should be applied to all databases.
+	// When true, the Database field should be empty. Mutually exclusive with a specific
+	// database name in the Database field.
+	AllDatabases bool `json:"allDatabases,omitempty"`
 
 	//+kubebuilder:validation:Required
 	// Body is the KQL body of the function
