@@ -436,6 +436,10 @@ func newKubeClient(cCtx *cli.Context) (dynamic.Interface, kubernetes.Interface, 
 		return nil, nil, nil, fmt.Errorf("unable to find kube config [%s]: %v", kubeconfig, err)
 	}
 
+	if config.UserAgent == "" {
+		config.UserAgent = fmt.Sprintf("adx-mon-ingestor/%s", version.String())
+	}
+
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("unable to build kube config: %v", err)

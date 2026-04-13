@@ -15,6 +15,7 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/version"
 	prom_model "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -29,6 +30,7 @@ type MetricsClient struct {
 	opts      ClientOpts
 	transport *http.Transport
 	client    *http.Client
+	userAgent string
 
 	closing chan struct{}
 
@@ -118,6 +120,7 @@ func NewMetricsClient(opts ClientOpts) (*MetricsClient, error) {
 		NodeName:  opts.NodeName,
 		transport: transport,
 		client:    httpClient,
+		userAgent: fmt.Sprintf("adx-mon-collector/%s", version.String()),
 		token:     token,
 		closing:   make(chan struct{}),
 	}
@@ -140,6 +143,7 @@ func (c *MetricsClient) FetchMetrics(target string) (map[string]*prom_model.Metr
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
 	}
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	c.mu.RLock()
 	token := c.token
@@ -181,6 +185,7 @@ func (c *MetricsClient) FetchMetricsIterator(target string) (*prompb.Iterator, e
 		return nil, fmt.Errorf("create request for %s: %w", target, err)
 	}
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	c.mu.RLock()
 	token := c.token

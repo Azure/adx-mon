@@ -1,28 +1,35 @@
 .DEFAULT_GOAL := default
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+BUILD_TIME ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+LDFLAGS := -X 'github.com/Azure/adx-mon/pkg/version.Version=$(VERSION)' \
+	-X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(GIT_COMMIT)' \
+	-X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(BUILD_TIME)'
+
 build-alerter:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/alerter ./cmd/alerter/...
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/alerter ./cmd/alerter/...
 .PHONY: build
 
 build-ingestor:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/ingestor ./cmd/ingestor/...
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/ingestor ./cmd/ingestor/...
 .PHONY: build
 
 build-collector:
 	mkdir -p bin
-	CGO_ENABLED=1 go build -o bin/collector ./cmd/collector/
+	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o bin/collector ./cmd/collector/
 .PHONY: build
 
 build-operator:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/operator ./cmd/operator/...
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/operator ./cmd/operator/...
 .PHONY: build
 
 build-adxexporter:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/adxexporter ./cmd/adxexporter/...
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/adxexporter ./cmd/adxexporter/...
 .PHONY: build
 
 build: build-alerter build-ingestor build-collector build-operator build-adxexporter
@@ -32,16 +39,16 @@ image: image-ingestor image-alerter image-collector image-operator
 .PHONY: image
 
 image-ingestor:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
 
 image-alerter:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
 
 image-collector:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
 
 image-operator:
-	docker build --no-cache -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
 
 image-operator-dev:
 
