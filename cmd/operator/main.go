@@ -75,6 +75,9 @@ func realMain(ctx *cli.Context) error {
 
 	// Get config and create manager
 	cfg := ctrl.GetConfigOrDie()
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = fmt.Sprintf("adx-mon-operator/%s", version.String())
+	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
