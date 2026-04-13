@@ -10,27 +10,27 @@ LDFLAGS := -X 'github.com/Azure/adx-mon/pkg/version.Version=$(VERSION)' \
 build-alerter:
 	mkdir -p bin
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/alerter ./cmd/alerter/...
-.PHONY: build
+.PHONY: build-alerter
 
 build-ingestor:
 	mkdir -p bin
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/ingestor ./cmd/ingestor/...
-.PHONY: build
+.PHONY: build-ingestor
 
 build-collector:
 	mkdir -p bin
 	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o bin/collector ./cmd/collector/
-.PHONY: build
+.PHONY: build-collector
 
 build-operator:
 	mkdir -p bin
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/operator ./cmd/operator/...
-.PHONY: build
+.PHONY: build-operator
 
 build-adxexporter:
 	mkdir -p bin
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/adxexporter ./cmd/adxexporter/...
-.PHONY: build
+.PHONY: build-adxexporter
 
 build: build-alerter build-ingestor build-collector build-operator build-adxexporter
 .PHONY: build
@@ -40,23 +40,29 @@ image: image-ingestor image-alerter image-collector image-operator
 
 image-ingestor:
 	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/ingestor:latest -f build/images/Dockerfile.ingestor .
+.PHONY: image-ingestor
 
 image-alerter:
 	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/alerter:latest -f build/images/Dockerfile.alerter .
+.PHONY: image-alerter
 
 image-collector:
 	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/collector:latest -f build/images/Dockerfile.collector .
+.PHONY: image-collector
 
 image-operator:
 	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
+.PHONY: image-operator
 
 image-operator-dev:
+.PHONY: image-operator-dev
 
 push:
 	docker push ghcr.io/azure/adx-mon/alerter:latest
 	docker push ghcr.io/azure/adx-mon/ingestor:latest
 	docker push ghcr.io/azure/adx-mon/collector:latest
 	docker push ghcr.io/azure/adx-mon/operator:latest
+.PHONY: push
 
 clean:
 	rm bin/*
@@ -101,3 +107,4 @@ k8s-bundle:
 default:
 	@$(MAKE) test
 	@$(MAKE) build
+.PHONY: default
