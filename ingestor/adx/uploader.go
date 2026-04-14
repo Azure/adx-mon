@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
@@ -22,6 +23,8 @@ import (
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	azkustoingest "github.com/Azure/azure-kusto-go/azkustoingest"
+	azkustoingestopts "github.com/Azure/azure-kusto-go/azkustoingest/ingestoptions"
+	kgzip "github.com/klauspost/compress/gzip"
 )
 
 const ConcurrentUploads = 50
@@ -53,6 +56,7 @@ type uploader struct {
 	mu                  sync.RWMutex
 	ingestor            *azkustoingest.Ingestion
 	requireDirectIngest bool
+	gzipWriterPool      *pool.Generic
 }
 
 type UploaderOpts struct {
@@ -66,6 +70,10 @@ type UploaderOpts struct {
 
 func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
+	poolSize := opts.ConcurrentUploads
+	if poolSize <= 0 {
+		poolSize = 1
+	}
 
 	return &uploader{
 		KustoCli:   kustoCli,
@@ -74,6 +82,9 @@ func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 		database:   opts.Database,
 		opts:       opts,
 		queue:      make(chan *cluster.Batch, 10000),
+		gzipWriterPool: pool.NewGeneric(poolSize, func(int) interface{} {
+			return kgzip.NewWriter(nil)
+		}),
 	}
 }
 
@@ -189,14 +200,20 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 		}
 	}
 
+	gzipReader := n.newGzipReader(reader)
+	defer gzipReader.Close()
+
 	// uploadReader our file WITHOUT status reporting.
-	// When completed, delete the file on local storage we are uploading.
-	res, err := ingestor.FromReader(ctx, reader,
+	res, err := ingestor.FromReader(ctx, gzipReader,
 		azkustoingest.Table(table),
 		azkustoingest.IngestionMappingRef(name, azkustoingest.CSV),
+		azkustoingest.DontCompress(),
+		azkustoingest.CompressionType(azkustoingestopts.GZIP),
 	)
 	if err != nil {
-		return sanitizeErrorString(err)
+		sanitizedErr := sanitizeErrorString(err)
+		logger.Errorf("Queued ingestion submission failed db=%s table=%s mapping=%s queue_len=%d err=%s", database, table, name, len(n.queue), sanitizedErr.Error())
+		return sanitizedErr
 	}
 
 	err = <-res.Wait(ctx)
@@ -205,6 +222,32 @@ func (n *uploader) uploadReader(reader io.Reader, database, table string, mappin
 	}
 
 	return nil
+}
+
+func (n *uploader) newGzipReader(reader io.Reader) *io.PipeReader {
+	pr, pw := io.Pipe()
+
+	go func() {
+		zw := n.gzipWriterPool.Get(0).(*kgzip.Writer)
+		defer n.gzipWriterPool.Put(zw)
+		zw.Reset(pw)
+
+		_, err := io.Copy(zw, reader)
+		closeErr := zw.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			if !errors.Is(err, io.ErrClosedPipe) {
+				logger.Errorf("Failed to gzip upload payload: %v", err)
+			}
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.Close()
+	}()
+
+	return pr
 }
 
 func (n *uploader) directIngestReader(ctx context.Context, reader io.Reader, table string) error {
@@ -331,7 +374,7 @@ func (n *uploader) upload(ctx context.Context) error {
 
 				now := time.Now()
 				if err := n.uploadReader(mr, database, table, mapping); err != nil {
-					logger.Errorf("Failed to upload file: %s", err.Error())
+					logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
 					return
 				}
 
