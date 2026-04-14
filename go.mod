@@ -186,6 +186,7 @@ require (
 
 replace (
 	github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
+	github.com/Azure/azure-kusto-go/azkustoingest => github.com/mkeesey/azure-kusto-go/azkustoingest v0.0.0-20260409225124-9d78ed1a0d21
 	github.com/redis/go-redis/v9 => github.com/redis/go-redis/v9 v9.7.3
 	github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445
 )

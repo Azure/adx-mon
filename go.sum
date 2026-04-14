@@ -10,8 +10,6 @@ github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 h1:He8af
 github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6/go.mod h1:8o94RPi1/7XTJvwPpRSzSUedZrtlirdB3r9Z20bi2f8=
 github.com/Azure/azure-kusto-go/azkustodata v1.2.1 h1:De25JIENJVLYUMB4Z9LfAFzbgjGz1ozYJiL2zprs1KA=
 github.com/Azure/azure-kusto-go/azkustodata v1.2.1/go.mod h1:pYbM6A7z4XDU+3S0+OgoyUOuCOWPUe/hyEfnOCT6Gok=
-github.com/Azure/azure-kusto-go/azkustoingest v1.2.0 h1:Uh7+Uwr68UYHaT7s2wWVkpBnFB2VUXHDt4QCpJ7c56M=
-github.com/Azure/azure-kusto-go/azkustoingest v1.2.0/go.mod h1:H/X11uEZ8DrGdptziibEKajFgwCuq/nutBndUU5z5Qw=
 github.com/Azure/azure-pipeline-go v0.1.8/go.mod h1:XA1kFWRVhSK+KNFiOhfv83Fv8L9achrP7OxIzeTn1Yg=
 github.com/Azure/azure-pipeline-go v0.2.3 h1:7U9HBg1JFK3jHl5qmo4CTZKFTVgMwdFHMVtCdfBE21U=
 github.com/Azure/azure-pipeline-go v0.2.3/go.mod h1:x841ezTBIMG6O3lAcl8ATHnsOPVl2bqk7S3ta6S6u4k=
@@ -235,6 +233,8 @@ github.com/mattn/go-ieproxy v0.0.11 h1:MQ/5BuGSgDAHZOJe6YY80IF2UVCfGkwfo6AeD7HtH
 github.com/mattn/go-ieproxy v0.0.11/go.mod h1:/NsJd+kxZBmjMc5hrJCKMbP57B84rvq9BiDRbtO9AS0=
 github.com/mattn/go-isatty v0.0.21 h1:xYae+lCNBP7QuW4PUnNG61ffM4hVIfm+zUzDuSzYLGs=
 github.com/mattn/go-isatty v0.0.21/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
+github.com/mkeesey/azure-kusto-go/azkustoingest v0.0.0-20260409225124-9d78ed1a0d21 h1:NyRYfVZ4OGtfEKUlFWJsJUddTfz06cLUIpiS73AO6C0=
+github.com/mkeesey/azure-kusto-go/azkustoingest v0.0.0-20260409225124-9d78ed1a0d21/go.mod h1:rQO8D24q/a/2OMgtsiIo2HcBC6Ub3f+6WF2ttK7aN3I=
 github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445 h1:kAwHCQ2tUrUb7+TMRfZL2P19ubFQoPbYAapUVd/bA0s=
 github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445/go.mod h1:m0u5w2Jq02XaCeiUYJk+u4Pa3DDY9kK4jNcyrsBGMOs=
 github.com/moby/docker-image-spec v1.3.1 h1:jMKff3w6PgbfSa69GfNg+zN/XLhfXJGnEx3Nl2EsFP0=
