@@ -24,9 +24,19 @@ fi
 INGESTOR_IMAGE="${LOGIN_SERVER}/adx-mon/ingestor:${TAG}"
 COLLECTOR_IMAGE="${LOGIN_SERVER}/adx-mon/collector:${TAG}"
 
+set_pull_policy_always() {
+  local resource="$1"
+  local container="$2"
+  kubectl -n "${NAMESPACE}" patch "${resource}" --type='strategic' -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${container}\",\"imagePullPolicy\":\"Always\"}]}}}}"
+}
+
 kubectl -n "${NAMESPACE}" set image statefulset/ingestor ingestor="${INGESTOR_IMAGE}"
 kubectl -n "${NAMESPACE}" set image daemonset/collector collector="${COLLECTOR_IMAGE}"
 kubectl -n "${NAMESPACE}" set image deployment/collector-singleton collector="${COLLECTOR_IMAGE}"
+
+set_pull_policy_always statefulset/ingestor ingestor
+set_pull_policy_always daemonset/collector collector
+set_pull_policy_always deployment/collector-singleton collector
 
 kubectl -n "${NAMESPACE}" rollout status statefulset/ingestor
 kubectl -n "${NAMESPACE}" rollout status daemonset/collector
