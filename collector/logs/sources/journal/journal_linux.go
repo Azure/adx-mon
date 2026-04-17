@@ -21,6 +21,7 @@ const (
 // journalReader is an interface for reading journal entries.
 type journalReader interface {
 	AddMatch(match string) error
+	AddDisjunction() error
 	Next() (uint64, error)
 	GetEntry() (*sdjournal.JournalEntry, error)
 	NextSkip(skip uint64) (uint64, error)
