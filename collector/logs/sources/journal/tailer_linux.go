@@ -165,17 +165,9 @@ func (t *tailer) openJournal(mode openmode) (*sdjournal.Journal, error) {
 		return nil, fmt.Errorf("failed to open journal: %w", err)
 	}
 
-	for _, match := range t.matches {
-		if match == "+" {
-			err := reader.AddDisjunction()
-			if err != nil {
-				return nil, fmt.Errorf("failed to create journal disjunction: %w", err)
-			}
-		}
-
-		if err := reader.AddMatch(match); err != nil {
-			return nil, fmt.Errorf("failed to add journal match %s: %w", match, err)
-		}
+	if err := applyMatches(reader, t.matches); err != nil {
+		reader.Close()
+		return nil, err
 	}
 
 	if mode == journalOpenModeStartup {
@@ -187,6 +179,24 @@ func (t *tailer) openJournal(mode openmode) (*sdjournal.Journal, error) {
 	}
 
 	return reader, nil
+}
+
+func applyMatches(reader journalReader, matches []string) error {
+	for _, match := range matches {
+		if match == "+" {
+			if err := reader.AddDisjunction(); err != nil {
+				return fmt.Errorf("failed to create journal disjunction: %w", err)
+			}
+
+			continue
+		}
+
+		if err := reader.AddMatch(match); err != nil {
+			return fmt.Errorf("failed to add journal match %s: %w", match, err)
+		}
+	}
+
+	return nil
 }
 
 // recoverJournal closes the current journal reader and opens a new one in an attempt to recover from a syscall error.

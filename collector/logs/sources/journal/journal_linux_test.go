@@ -194,6 +194,62 @@ func TestJournalMulipleSources(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 }
 
+func TestJournalDisjunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+	if !journal.Enabled() {
+		t.Skip("journal is not available - skipping")
+	}
+
+	logger.SetLevel(slog.LevelDebug)
+
+	cursorDir := t.TempDir()
+	testValue := fmt.Sprintf("testValue-%d", rand.Int())
+	branchATag := "COLLECTORE2E_OR_A"
+	branchBTag := "COLLECTORE2E_OR_B"
+	controlTag := "COLLECTORE2E_OR_CONTROL"
+	matchA := fmt.Sprintf("%s=%s", branchATag, testValue)
+	matchB := fmt.Sprintf("%s=%s", branchBTag, testValue)
+
+	const numLogs = 50
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("a-%d", i), journal.PriInfo, map[string]string{branchATag: testValue})
+		require.NoError(t, err)
+	}
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("b-%d", i), journal.PriInfo, map[string]string{branchBTag: testValue})
+		require.NoError(t, err)
+	}
+	for i := 0; i < numLogs; i++ {
+		err := journal.Send(fmt.Sprintf("control-%d", i), journal.PriInfo, map[string]string{controlTag: testValue})
+		require.NoError(t, err)
+	}
+
+	sink := sinks.NewCountingSink(int64(numLogs * 2))
+	allSinks := []types.Sink{sink}
+	source := New(SourceConfig{
+		Targets: []JournalTargetConfig{{
+			Matches:  []string{matchA, "+", matchB},
+			Database: "testdb",
+			Table:    "testtable",
+		}},
+		CursorDirectory: cursorDir,
+		WorkerCreator:   engine.WorkerCreator(nil, allSinks),
+	})
+
+	service := &logs.Service{
+		Source: source,
+		Sinks:  allSinks,
+	}
+	err := service.Open(context.Background())
+	require.NoError(t, err)
+	defer service.Close()
+
+	count := <-sink.DoneChan()
+	require.EqualValues(t, numLogs*2, count)
+}
+
 func TestJournalInvalidCursor(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
