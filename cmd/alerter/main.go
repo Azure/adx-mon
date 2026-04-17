@@ -36,6 +36,7 @@ func main() {
 			&cli.StringFlag{Name: "alerter-address", Usage: "Address of the alert notification service"},
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
 			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
+			&cli.StringSliceFlag{Name: "label-selector", Usage: "Label selector in the format of <key>=<value> to filter AlertRules"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "Tag in the format of <key>=<value> that applies to execution context"},
 		},
 		Action: realMain,
@@ -61,6 +62,16 @@ func realMain(ctx *cli.Context) error {
 			return cli.Exit("Invalid kusto-endpoint format, expected <name>=<endpoint>", 1)
 		}
 		endpoints[parts[0]] = parts[1]
+	}
+
+	labelSelector := make(map[string]string)
+	labelSelectorArg := ctx.StringSlice("label-selector")
+	for _, v := range labelSelectorArg {
+		parts := strings.Split(v, "=")
+		if len(parts) != 2 {
+			return cli.Exit("Invalid label-selector format, expected <key>=<value>", 1)
+		}
+		labelSelector[parts[0]] = parts[1]
 	}
 
 	tags := make(map[string]string)
@@ -102,6 +113,7 @@ func realMain(ctx *cli.Context) error {
 		AlertAddr:        ctx.String("alerter-address"),
 		Concurrency:      ctx.Int("concurrency"),
 		MaxNotifications: ctx.Int("max-notifications"),
+		LabelSelector:    labelSelector,
 		MSIID:            ctx.String("auth-msi-id"),
 		KustoToken:       ctx.String("auth-token"),
 		Tags:             tags,

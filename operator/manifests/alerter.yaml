@@ -107,6 +107,9 @@ spec:
         {{- range .KustoEndpoints }}
         - --kusto-endpoint={{ . }}
         {{- end }}
+        {{- range .AlertRuleSelectors }}
+        - --label-selector={{ . }}
+        {{- end }}
         command:
         - /usr/local/bin/alerter
         env:

@@ -26,6 +26,11 @@ type AlerterSpec struct {
 	// as last applied by the operator. This is set by the operator and is read-only for users.
 	AppliedProvisionState string `json:"appliedProvisionState,omitempty"`
 
+	//+kubebuilder:validation:Optional
+	// AlertRuleSelector is an optional label selector used to filter which AlertRules the alerter watches.
+	// When set, the alerter will only load AlertRules whose labels match this selector.
+	AlertRuleSelector *metav1.LabelSelector `json:"alertRuleSelector,omitempty"`
+
 	// CriteriaExpression is an optional CEL (Common Expression Language) expression evaluated against
 	// operator cluster labels (region, environment, cloud, and any --cluster-labels key/value pairs).
 	// All labels are exposed as string variables that can be referenced directly. Example:

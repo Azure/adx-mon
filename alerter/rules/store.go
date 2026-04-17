@@ -21,6 +21,9 @@ import (
 type StoreOpts struct {
 	Region  string
 	CtrlCli client.Client
+
+	// LabelSelector is an optional label selector to filter which AlertRules are listed.
+	LabelSelector map[string]string
 }
 
 type Store struct {
@@ -108,7 +111,11 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 	defer cancel()
 
 	ruleList := &alertrulev1.AlertRuleList{}
-	if err := s.ctrlCli.List(ctx, ruleList); err != nil {
+	var listOpts []client.ListOption
+	if len(s.opts.LabelSelector) > 0 {
+		listOpts = append(listOpts, client.MatchingLabels(s.opts.LabelSelector))
+	}
+	if err := s.ctrlCli.List(ctx, ruleList, listOpts...); err != nil {
 		return nil, fmt.Errorf("failed to list alert rules: %w", err)
 	}
 

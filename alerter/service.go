@@ -34,6 +34,10 @@ type AlerterOpts struct {
 	// MaxNotifications is the maximum number of notifications to send per rule.
 	MaxNotifications int
 
+	// LabelSelector is an optional label selector to filter which AlertRules are watched.
+	// When set, only AlertRules matching this selector will be loaded.
+	LabelSelector map[string]string
+
 	// Managed Identity options
 	MSIID       string
 	MSIResource string
@@ -72,8 +76,9 @@ type KustoClient interface {
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
 	ruleStore := rules.NewStore(rules.StoreOpts{
-		Region:  opts.Region,
-		CtrlCli: opts.CtrlCli,
+		Region:        opts.Region,
+		CtrlCli:       opts.CtrlCli,
+		LabelSelector: opts.LabelSelector,
 	})
 
 	l2m := &Alerter{

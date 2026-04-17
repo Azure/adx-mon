@@ -322,11 +322,12 @@ func (r *AlerterReconciler) applyDefaults(alerter *adxmonv1.Alerter) {
 }
 
 type alerterTemplateData struct {
-	Image           string
-	AlerterEndpoint string
-	KustoEndpoints  []string
-	MSIID           string
-	Namespace       string
+	Image              string
+	AlerterEndpoint    string
+	KustoEndpoints     []string
+	MSIID              string
+	Namespace          string
+	AlertRuleSelectors []string
 }
 
 func (r *AlerterReconciler) templateData(ctx context.Context, alerter *adxmonv1.Alerter) (clustersReady bool, data *alerterTemplateData, err error) {
@@ -351,11 +352,19 @@ func (r *AlerterReconciler) templateData(ctx context.Context, alerter *adxmonv1.
 			kustoEndpoints = append(kustoEndpoints, endpoint)
 		}
 	}
+	var alertRuleSelectors []string
+	if alerter.Spec.AlertRuleSelector != nil {
+		for k, v := range alerter.Spec.AlertRuleSelector.MatchLabels {
+			alertRuleSelectors = append(alertRuleSelectors, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+
 	data = &alerterTemplateData{
-		Image:           alerter.Spec.Image,
-		AlerterEndpoint: alerter.Spec.NotificationEndpoint,
-		KustoEndpoints:  kustoEndpoints,
-		Namespace:       alerter.Namespace,
+		Image:              alerter.Spec.Image,
+		AlerterEndpoint:    alerter.Spec.NotificationEndpoint,
+		KustoEndpoints:     kustoEndpoints,
+		Namespace:          alerter.Namespace,
+		AlertRuleSelectors: alertRuleSelectors,
 	}
 	return true, data, nil
 }
