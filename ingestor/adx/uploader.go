@@ -15,7 +15,6 @@ import (
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
@@ -56,7 +55,7 @@ type uploader struct {
 	mu                  sync.RWMutex
 	ingestor            *azkustoingest.Ingestion
 	requireDirectIngest bool
-	gzipWriterPool      *pool.Generic
+	gzipWriterPool      sync.Pool
 }
 
 type UploaderOpts struct {
@@ -70,10 +69,6 @@ type UploaderOpts struct {
 
 func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
-	poolSize := opts.ConcurrentUploads
-	if poolSize <= 0 {
-		poolSize = 1
-	}
 
 	return &uploader{
 		KustoCli:   kustoCli,
@@ -82,9 +77,11 @@ func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 		database:   opts.Database,
 		opts:       opts,
 		queue:      make(chan *cluster.Batch, 10000),
-		gzipWriterPool: pool.NewGeneric(poolSize, func(int) interface{} {
-			return kgzip.NewWriter(nil)
-		}),
+		gzipWriterPool: sync.Pool{
+			New: func() any {
+				return kgzip.NewWriter(nil)
+			},
+		},
 	}
 }
 
@@ -228,7 +225,7 @@ func (n *uploader) newGzipReader(reader io.Reader) *io.PipeReader {
 	pr, pw := io.Pipe()
 
 	go func() {
-		zw := n.gzipWriterPool.Get(0).(*kgzip.Writer)
+		zw := n.gzipWriterPool.Get().(*kgzip.Writer)
 		defer n.gzipWriterPool.Put(zw)
 		zw.Reset(pw)
 
