@@ -15,6 +15,7 @@ import (
 
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -22,6 +23,7 @@ import (
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/davecgh/go-spew/spew"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -376,6 +378,57 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 	}
 }
 
+func TestStore_WriteNativeLogs_HostLogAccounting(t *testing.T) {
+	metrics.CollectorLogsCommitted.Reset()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
+	})
+
+	require.NoError(t, s.Open(ctx))
+
+	valid := types.NewLog()
+	valid.SetBodyValue(types.BodyKeyMessage, "hello")
+	valid.SetAttributeValue(types.AttributeDatabaseName, "Logs")
+	valid.SetAttributeValue(types.AttributeTableName, "HostLogs")
+
+	missingDestination := types.NewLog()
+	missingDestination.SetBodyValue(types.BodyKeyMessage, "ignored")
+	missingDestination.SetAttributeValue(types.AttributeDatabaseName, "Logs")
+
+	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{
+		Logs:       []*types.Log{valid, missingDestination},
+		SampleType: wal.HostLogSampleType,
+	}))
+
+	key := fmt.Appendf(make([]byte, 0, 64), "%s_%s_%s", "Logs", "HostLogs", strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36))
+	w, err := s.GetWAL(ctx, key)
+	require.NoError(t, err)
+	path := w.Path()
+
+	require.NoError(t, s.Close())
+
+	r, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	defer r.Close()
+
+	_, err = io.Copy(io.Discard, r)
+	require.NoError(t, err)
+
+	st, sc := r.SampleMetadata()
+	require.Equal(t, wal.HostLogSampleType, st)
+	require.Equal(t, uint32(1), sc)
+
+	var m dto.Metric
+	require.NoError(t, metrics.CollectorLogsCommitted.WithLabelValues("Logs", "HostLogs").Write(&m))
+	require.Equal(t, float64(1), m.GetCounter().GetValue())
+}
+
 func TestStore_SkipNonCSV(t *testing.T) {
 	dir := t.TempDir()
 	s := storage.NewLocalStore(storage.StoreOpts{
@@ -421,7 +474,8 @@ func TestStore_Import_Append(t *testing.T) {
 
 	seg1, err := wal.NewSegment(dir, "Database_Metric")
 	require.NoError(t, err)
-	seg1.Write(context.Background(), []byte("foo\n"))
+	_, err = seg1.Write(context.Background(), []byte("foo\n"), wal.WithSampleMetadata(wal.HostLogSampleType, 1))
+	require.NoError(t, err)
 	seg1Path := seg1.Path()
 	require.NoError(t, seg1.Close())
 	seg1Bytes, err := os.ReadFile(seg1Path)
@@ -429,7 +483,8 @@ func TestStore_Import_Append(t *testing.T) {
 
 	seg2, err := wal.NewSegment(dir, "Database_Metric")
 	require.NoError(t, err)
-	seg2.Write(context.Background(), []byte("bar\n"))
+	_, err = seg2.Write(context.Background(), []byte("bar\n"), wal.WithSampleMetadata(wal.HostLogSampleType, 2))
+	require.NoError(t, err)
 	seg2Path := seg2.Path()
 	require.NoError(t, seg2.Close())
 	seg2Bytes, err := os.ReadFile(seg2Path)
@@ -463,9 +518,13 @@ func TestStore_Import_Append(t *testing.T) {
 
 	r, err := wal.NewSegmentReader(activeSegPath)
 	require.NoError(t, err)
+	defer r.Close()
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, "foo\nbar\n", string(data))
+	st, sc := r.SampleMetadata()
+	require.Equal(t, wal.HostLogSampleType, st)
+	require.Equal(t, uint32(3), sc)
 
 }
 

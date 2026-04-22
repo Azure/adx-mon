@@ -269,6 +269,25 @@ func sanitizeErrorString(err error) error {
 	return errors.New(errString)
 }
 
+func countSegmentSamplesByType(segmentReaders []*wal.SegmentReader, sampleType wal.SampleType) uint32 {
+	var total uint32
+	for _, sr := range segmentReaders {
+		st, sc := sr.SampleMetadata()
+		if st == sampleType {
+			total += sc
+		}
+	}
+	return total
+}
+
+func observeUploadedHostLogs(database, table string, segmentReaders []*wal.SegmentReader) {
+	hostLogCount := countSegmentSamplesByType(segmentReaders, wal.HostLogSampleType)
+	if hostLogCount == 0 {
+		return
+	}
+	metrics.IngestorLogsUploaded.WithLabelValues(database, table).Add(float64(hostLogCount))
+}
+
 func (n *uploader) upload(ctx context.Context) error {
 	for {
 		select {
@@ -383,6 +402,7 @@ func (n *uploader) upload(ctx context.Context) error {
 					logger.Errorf("Failed to remove batch: %s", err.Error())
 				}
 
+				observeUploadedHostLogs(database, table, segmentReaders)
 				metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
 			}()
 

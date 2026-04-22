@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -180,6 +181,50 @@ func TestWAL_MaxSegmentCount(t *testing.T) {
 			require.NoError(t, w.Close())
 		})
 	}
+}
+
+func TestWAL_Write_PreservesSampleMetadataAfterRotation(t *testing.T) {
+	dir := t.TempDir()
+	const maxSegmentSize = 2048
+
+	w, err := wal.NewWAL(wal.WALOpts{
+		Prefix:         "Foo",
+		StorageDir:     dir,
+		SegmentMaxSize: maxSegmentSize,
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+
+	filler := make([]byte, 128)
+	_, err = rand.Read(filler)
+	require.NoError(t, err)
+
+	finalPayload := make([]byte, 512)
+	_, err = rand.Read(finalPayload)
+	require.NoError(t, err)
+
+	for w.Size()+len(filler) < maxSegmentSize && w.Size()+len(finalPayload) < maxSegmentSize {
+		require.NoError(t, w.Write(context.Background(), filler))
+	}
+
+	require.GreaterOrEqual(t, w.Size()+len(finalPayload), maxSegmentSize)
+
+	require.NoError(t, w.Write(context.Background(), finalPayload, wal.WithSampleMetadata(wal.HostLogSampleType, 1)))
+	require.NoError(t, w.Flush())
+
+	path := w.Path()
+	require.NoError(t, w.Close())
+
+	r, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	defer r.Close()
+
+	_, err = io.Copy(io.Discard, r)
+	require.NoError(t, err)
+
+	st, sc := r.SampleMetadata()
+	require.Equal(t, wal.HostLogSampleType, st)
+	require.Equal(t, uint32(1), sc)
 }
 
 func TestWAL_ActiveSegmentDiskUsageLeak(t *testing.T) {

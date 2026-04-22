@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/pkg/wal"
 )
 
 type BatchConfig struct {
@@ -13,6 +14,7 @@ type BatchConfig struct {
 	InputQueue   <-chan *types.Log
 	OutputQueue  chan<- *types.LogBatch
 	AckGenerator func(log *types.Log) func()
+	SampleType   wal.SampleType
 }
 
 func BatchLogs(ctx context.Context, config BatchConfig) {
@@ -21,6 +23,7 @@ func BatchLogs(ctx context.Context, config BatchConfig) {
 
 	currentBatch := types.LogBatchPool.Get(1024).(*types.LogBatch)
 	currentBatch.Reset()
+	currentBatch.SampleType = config.SampleType
 	for {
 		select {
 		case <-ctx.Done():
@@ -34,6 +37,7 @@ func BatchLogs(ctx context.Context, config BatchConfig) {
 				flush(config, currentBatch)
 				currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
 				currentBatch.Reset()
+				currentBatch.SampleType = config.SampleType
 			}
 		case msg := <-config.InputQueue:
 			currentBatch.Logs = append(currentBatch.Logs, msg)
@@ -41,6 +45,7 @@ func BatchLogs(ctx context.Context, config BatchConfig) {
 				flush(config, currentBatch)
 				currentBatch = types.LogBatchPool.Get(1024).(*types.LogBatch)
 				currentBatch.Reset()
+				currentBatch.SampleType = config.SampleType
 				ticker.Reset(config.MaxBatchWait)
 			}
 		}

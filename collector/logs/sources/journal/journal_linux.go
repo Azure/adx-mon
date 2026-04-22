@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/coreos/go-systemd/sdjournal"
 )
 
@@ -102,6 +103,7 @@ func (s *Source) Open(ctx context.Context) error {
 			InputQueue:   batchQueue,
 			OutputQueue:  outputQueue,
 			AckGenerator: ackGenerator,
+			SampleType:   wal.HostLogSampleType,
 		}
 		s.wg.Add(1)
 		go func() {

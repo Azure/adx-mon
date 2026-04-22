@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 )
 
 var assertionsEnabledValue bool = false
@@ -243,8 +244,9 @@ func (l *Log) GetResource() map[string]any {
 
 // LogBatch represents a batch of logs
 type LogBatch struct {
-	Logs []*Log
-	Ack  func()
+	Logs       []*Log
+	Ack        func()
+	SampleType wal.SampleType
 }
 
 func (l *LogBatch) AddLiterals(literals []*LogLiteral) {
@@ -260,6 +262,7 @@ func (l *LogBatch) Reset() {
 	}
 	l.Logs = l.Logs[:0]
 	l.Ack = noop
+	l.SampleType = wal.UnknownSampleType
 }
 
 func noop() {}
