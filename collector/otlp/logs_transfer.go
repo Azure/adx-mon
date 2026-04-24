@@ -119,7 +119,7 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		if convertedLogs == 0 {
 			var status *status.Status
 			if droppedLogMissingMetadata > 0 {
-				metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+				metrics.InvalidLogsDropped.WithLabelValues("missing_metadata").Add(float64(droppedLogMissingMetadata))
 				status = newErrorStatus("All logs dropped. Required kusto.database and kusto.table attributes or body fields are missing.")
 			} else {
 				status = newErrorStatus("No logs to process.")
@@ -138,7 +138,7 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 				RejectedLogRecords: droppedLogMissingMetadata,
 				ErrorMessage:       "Logs lacking kube.database and kube.table attributes or body fields",
 			})
-			metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+			metrics.InvalidLogsDropped.WithLabelValues("missing_metadata").Add(float64(droppedLogMissingMetadata))
 		}
 
 		respBodyBytes, err := proto.Marshal(resp)

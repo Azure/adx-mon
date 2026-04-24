@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/siderolabs/go-kmsg"
 )
 
@@ -117,6 +118,7 @@ func (s *KernelSource) Open(ctx context.Context) error {
 		InputQueue:   batchQueue,
 		OutputQueue:  outputQueue,
 		AckGenerator: s.ackGenerator,
+		SampleType:   wal.HostLogSampleType,
 	}
 
 	s.wg.Add(1)

@@ -91,6 +91,34 @@ AdxmonCollectorLogsSent
 | summarize TotalSent=sum(Value) by Host=tostring(Labels.host), Source=tostring(Labels.source)
 ```
 
+```kql
+// Estimate settled host-log loss by allowing uploads a grace period to arrive.
+let grace = 30m;
+let bucket = 1h;
+let start = ago(2d);
+let end = ago(grace);
+let collected =
+AdxmonCollectorLogsCommittedTotal
+| where Timestamp between (start .. end)
+| where Container == "collector"
+| invoke prom_delta()
+| extend Database=tostring(Labels.database), Table=tostring(Labels.table)
+| summarize Collected=sum(Value) by Bucket=bin(Timestamp, bucket), Database, Table;
+let uploaded =
+AdxmonIngestorLogsUploadedTotal
+| where Timestamp between (start + grace .. now())
+| where Container == "ingestor"
+| invoke prom_delta()
+| extend Database=tostring(Labels.database), Table=tostring(Labels.table)
+| summarize Uploaded=sum(Value) by Bucket=bin(Timestamp - grace, bucket), Database, Table;
+collected
+| join kind=fullouter uploaded on Bucket, Database, Table
+| extend Collected=coalesce(Collected, 0.0), Uploaded=coalesce(Uploaded, 0.0)
+| extend SettledLoss=iff(Collected > Uploaded, Collected - Uploaded, 0.0)
+| extend LossPct=iff(Collected > 0.0, 100.0 * SettledLoss / Collected, 0.0)
+| order by Bucket asc, Database asc, Table asc
+```
+
 ### Log Examples
 
 ```kql

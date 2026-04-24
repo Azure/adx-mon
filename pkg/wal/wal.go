@@ -113,6 +113,7 @@ const (
 	MetricSampleType
 	TraceSampleType
 	LogSampleType
+	HostLogSampleType
 )
 
 type WriteOptions func([]byte)
@@ -175,7 +176,7 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 	n, err := w.tryWrite(ctx, buf, opts...)
 	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
 		w.rotateSegmentIfNecessary()
-		n, err = w.tryWrite(ctx, buf)
+		n, err = w.tryWrite(ctx, buf, opts...)
 		atomic.AddInt64(&w.segmentSize, int64(n))
 		return err
 	} else if errors.Is(err, ErrSegmentClosed) {

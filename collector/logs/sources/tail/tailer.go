@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/tenebris-tech/tail"
 )
 
@@ -91,6 +92,7 @@ func StartTailing(config TailerConfig) (*Tailer, error) {
 		InputQueue:   batchQueue,
 		OutputQueue:  outputQueue,
 		AckGenerator: config.AckGenerator,
+		SampleType:   wal.HostLogSampleType,
 	}
 
 	tailer.wg.Add(1)

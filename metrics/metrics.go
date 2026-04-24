@@ -85,12 +85,19 @@ var (
 		Help:      "Counter of the number of segments uploaded to Kusto",
 	}, []string{"metric"})
 
+	IngestorLogsUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "logs_uploaded_total",
+		Help:      "Counter of host log records successfully uploaded to Kusto",
+	}, []string{"database", "table"})
+
 	InvalidLogsDropped = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
 		Name:      "invalid_logs_dropped",
 		Help:      "Counter of the number of invalid logs dropped",
-	}, []string{})
+	}, []string{"reason"})
 
 	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
@@ -184,6 +191,13 @@ var (
 		Name:      "logs_dropped",
 		Help:      "Counter of the number of logs dropped due to errors",
 	}, []string{"source", "stage"})
+
+	CollectorLogsCommitted = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "collector",
+		Name:      "logs_committed_total",
+		Help:      "Counter of host log records durably committed to the collector WAL",
+	}, []string{"database", "table"})
 
 	MetricsRequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,

@@ -266,9 +266,18 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 			return wal.ErrMaxDiskUsageExceeded
 		}
 
-		if err := w.Write(ctx, enc.Bytes()); err != nil {
+		var writeOpts []wal.WriteOptions
+		if logs.SampleType != wal.UnknownSampleType {
+			writeOpts = append(writeOpts, wal.WithSampleMetadata(logs.SampleType, 1))
+		}
+
+		if err := w.Write(ctx, enc.Bytes(), writeOpts...); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			return err
+		}
+
+		if logs.SampleType == wal.HostLogSampleType {
+			metrics.CollectorLogsCommitted.WithLabelValues(sanitizedDB, sanitizedTable).Inc()
 		}
 
 		// Decrement the inflight write bytes after writing to avoid double counting.

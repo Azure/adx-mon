@@ -7,10 +7,13 @@ import (
 	"io"
 	"testing"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/azure-kusto-go/azkustodata"
 	kgzip "github.com/klauspost/compress/gzip"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -71,4 +74,38 @@ func TestUploader_newGzipReader_PropagatesSourceError(t *testing.T) {
 	_, err := io.ReadAll(gzipReader)
 	require.Error(t, err)
 	require.ErrorIs(t, err, expectedErr)
+}
+
+func TestObserveUploadedHostLogs(t *testing.T) {
+	metrics.IngestorLogsUploaded.Reset()
+
+	dir := t.TempDir()
+	hostReader := newSegmentReaderWithMetadata(t, dir, wal.HostLogSampleType, 2)
+	defer hostReader.Close()
+	otherReader := newSegmentReaderWithMetadata(t, dir, wal.LogSampleType, 5)
+	defer otherReader.Close()
+
+	observeUploadedHostLogs("Logs", "HostLogs", []*wal.SegmentReader{hostReader, otherReader})
+
+	var m dto.Metric
+	require.NoError(t, metrics.IngestorLogsUploaded.WithLabelValues("Logs", "HostLogs").Write(&m))
+	require.Equal(t, float64(2), m.GetCounter().GetValue())
+}
+
+func newSegmentReaderWithMetadata(t *testing.T, dir string, sampleType wal.SampleType, count uint32) *wal.SegmentReader {
+	t.Helper()
+
+	seg, err := wal.NewSegment(dir, "Logs_HostLogs")
+	require.NoError(t, err)
+
+	_, err = seg.Write(context.Background(), []byte("value\n"), wal.WithSampleMetadata(sampleType, count))
+	require.NoError(t, err)
+	path := seg.Path()
+	require.NoError(t, seg.Close())
+
+	reader, err := wal.NewSegmentReader(path)
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, reader)
+	require.NoError(t, err)
+	return reader
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,6 +150,7 @@ func TestLogBatch(t *testing.T) {
 		Ack: func() {
 			ackCalled = true
 		},
+		SampleType: wal.HostLogSampleType,
 	}
 
 	require.Equal(t, 2, len(batch.Logs))
@@ -159,6 +161,7 @@ func TestLogBatch(t *testing.T) {
 	// Test Reset
 	batch.Reset()
 	require.Empty(t, batch.Logs)
+	require.Equal(t, wal.UnknownSampleType, batch.SampleType)
 }
 
 func BenchmarkLogWrites(b *testing.B) {
