@@ -19,6 +19,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -332,7 +333,10 @@ type multiNamespaceInformer struct {
 
 type handlerRegistration struct {
 	handles map[string]toolscache.ResourceEventHandlerRegistration
+	synced  toolscache.DoneChecker
 }
+
+var _ toolscache.ResourceEventHandlerRegistration = handlerRegistration{}
 
 // HasSynced asserts that the handler has been called for the full initial state of the informer.
 func (h handlerRegistration) HasSynced() bool {
@@ -342,6 +346,43 @@ func (h handlerRegistration) HasSynced() bool {
 		}
 	}
 	return true
+}
+
+func (h handlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
+	return h.synced
+}
+
+type handlerRegistrationDoneChecker struct {
+	checkers []toolscache.DoneChecker
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newHandlerRegistrationDoneChecker(handles map[string]toolscache.ResourceEventHandlerRegistration) *handlerRegistrationDoneChecker {
+	checkers := make([]toolscache.DoneChecker, 0, len(handles))
+	for _, handle := range handles {
+		checkers = append(checkers, handle.HasSyncedChecker())
+	}
+	return &handlerRegistrationDoneChecker{
+		checkers: checkers,
+		done:     make(chan struct{}),
+	}
+}
+
+func (h *handlerRegistrationDoneChecker) Name() string {
+	return "multi namespace handler registration"
+}
+
+func (h *handlerRegistrationDoneChecker) Done() <-chan struct{} {
+	h.once.Do(func() {
+		go func() {
+			defer close(h.done)
+			for _, checker := range h.checkers {
+				<-checker.Done()
+			}
+		}()
+	})
+	return h.done
 }
 
 var _ Informer = &multiNamespaceInformer{}
@@ -359,6 +400,7 @@ func (i *multiNamespaceInformer) AddEventHandler(handler toolscache.ResourceEven
 		}
 		handles.handles[ns] = registration
 	}
+	handles.synced = newHandlerRegistrationDoneChecker(handles.handles)
 
 	return handles, nil
 }
@@ -376,6 +418,7 @@ func (i *multiNamespaceInformer) AddEventHandlerWithResyncPeriod(handler toolsca
 		}
 		handles.handles[ns] = registration
 	}
+	handles.synced = newHandlerRegistrationDoneChecker(handles.handles)
 
 	return handles, nil
 }
@@ -393,6 +436,7 @@ func (i *multiNamespaceInformer) AddEventHandlerWithOptions(handler toolscache.R
 		}
 		handles.handles[ns] = registration
 	}
+	handles.synced = newHandlerRegistrationDoneChecker(handles.handles)
 
 	return handles, nil
 }
