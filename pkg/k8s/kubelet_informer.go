@@ -77,10 +77,29 @@ type kubeletRegistration struct {
 	informer *KubeletPodInformer
 	handler  cache.ResourceEventHandler
 	synced   atomic.Bool
+	syncedCh chan struct{}
 }
+
+var _ cache.ResourceEventHandlerRegistration = (*kubeletRegistration)(nil)
 
 func (r *kubeletRegistration) HasSynced() bool {
 	return r.synced.Load()
+}
+
+func (r *kubeletRegistration) HasSyncedChecker() cache.DoneChecker {
+	return kubeletRegistrationDoneChecker{registration: r}
+}
+
+type kubeletRegistrationDoneChecker struct {
+	registration *kubeletRegistration
+}
+
+func (c kubeletRegistrationDoneChecker) Name() string {
+	return "kubelet pod handler"
+}
+
+func (c kubeletRegistrationDoneChecker) Done() <-chan struct{} {
+	return c.registration.syncedCh
 }
 
 // NewKubeletPodInformer creates a new informer that sources pod events from the local kubelet.
@@ -228,9 +247,10 @@ func (k *KubeletPodInformer) Add(ctx context.Context, handler cache.ResourceEven
 	for _, pod := range k.currentPods {
 		handler.OnAdd(pod, true)
 	}
-	reg := &kubeletRegistration{informer: k, handler: handler}
+	reg := &kubeletRegistration{informer: k, handler: handler, syncedCh: make(chan struct{})}
 	k.handlers[reg] = struct{}{}
 	reg.synced.Store(true)
+	close(reg.syncedCh)
 
 	k.processingMut.Unlock()
 
