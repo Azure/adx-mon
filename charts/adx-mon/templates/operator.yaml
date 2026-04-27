@@ -1,0 +1,230 @@
+{{- if .Values.operator.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    azure.workload.identity/client-id: {{ .Values.operator.client_id }}
+  name: operator
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:operator
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - endpoints
+      - events
+      - namespaces
+      - pods
+      - secrets
+      - serviceaccounts
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - daemonsets
+      - replicasets
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - adxclusters
+      - alerters
+      - alertrules
+      - collectors
+      - functions
+      - ingestors
+      - managementcommands
+      - metricsexporters
+      - summaryrules
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - adxclusters/status
+      - alerters/status
+      - alertrules/status
+      - collectors/status
+      - functions/status
+      - ingestors/status
+      - managementcommands/status
+      - metricsexporters/status
+      - summaryrules/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - adxclusters/finalizers
+      - alerters/finalizers
+      - alertrules/finalizers
+      - collectors/finalizers
+      - functions/finalizers
+      - ingestors/finalizers
+      - managementcommands/finalizers
+      - metricsexporters/finalizers
+      - summaryrules/finalizers
+    verbs:
+      - get
+      - update
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:operator
+subjects:
+  - kind: ServiceAccount
+    name: operator
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: operator
+  template:
+    metadata:
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/log-destination: "Logs:Operator"
+        adx-mon/log-parsers: json
+      labels:
+        app: operator
+        azure.workload.identity/use: "true"
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 65534
+      containers:
+        - name: operator
+          image: ghcr.io/azure/adx-mon/operator:latest
+          imagePullPolicy: Always
+          args:
+            - --pprof-bind-address=:6060
+          ports:
+            - containerPort: 6060
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+      {{- if .Values.operator.affinity }}
+      {{- if .Values.operator.affinity.required }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.operator.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.operator.affinity.value | default "system" }}
+      {{- else }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: {{ .Values.operator.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.operator.affinity.value | default "system" }}
+      {{- end }}
+      {{- end }}
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - effect: NoExecute
+          key: node.kubernetes.io/not-ready
+          operator: Exists
+          tolerationSeconds: 300
+        - effect: NoExecute
+          key: node.kubernetes.io/unreachable
+          operator: Exists
+          tolerationSeconds: 300
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: {{ .Values.adx.name }}
+spec:
+  clusterName: {{ .Values.adx.name }}
+  databases:
+  - databaseName: Logs
+    telemetryType: Logs
+  - databaseName: Metrics
+    telemetryType: Metrics
+  endpoint: {{ .Values.adx.url }}
+  federation:
+    # Hub clusters
+    federatedTargets:
+    - endpoint: {{ .Values.hub_url }}
+      heartbeatDatabase: Federation
+      heartbeatTable: Heartbeats
+      managedIdentityClientId: ""
+    heartbeatTTL: 1h
+    partitioning:
+      region: {{ .Values.region }}
+  role: Partition
+{{- end }}
