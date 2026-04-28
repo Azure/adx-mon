@@ -59,6 +59,7 @@ const (
 	heartbeatListFunctionsTimeout  = 30 * time.Second
 	heartbeatFunctionSchemaTimeout = 15 * time.Second
 	heartbeatIngestTimeout         = 30 * time.Second
+	heartbeatSkippedFunctionLimit  = 10
 )
 
 // resolvedClusterEndpoint returns the effective endpoint to use for a cluster,
@@ -1046,7 +1047,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		return err
 	}
 	if stats.SkippedFunctions > 0 {
-		logger.Warnf("ADXCluster %s: collected heartbeat schema for federated target %s: databases=%d tables=%d functions=%d views=%d skippedFunctions=%d skippedFunctionNames=%s firstSkippedFunctionError=%q", cluster.Spec.ClusterName, target.Endpoint, stats.Databases, stats.Tables, stats.Functions, stats.Views, stats.SkippedFunctions, formatNameList(stats.SkippedFunctionNames, 10), stats.FirstSkippedFunctionError)
+		logger.Warnf("ADXCluster %s: collected heartbeat schema for federated target %s: databases=%d tables=%d functions=%d views=%d skippedFunctions=%d sampleSkippedFunctionNames=%s firstSkippedFunctionError=%q", cluster.Spec.ClusterName, target.Endpoint, stats.Databases, stats.Tables, stats.Functions, stats.Views, stats.SkippedFunctions, formatNameList(stats.SampleSkippedFunctionNames, heartbeatSkippedFunctionLimit), stats.FirstSkippedFunctionError)
 	} else {
 		logger.Infof("ADXCluster %s: collected heartbeat schema for federated target %s: databases=%d tables=%d functions=%d views=%d skippedFunctions=0", cluster.Spec.ClusterName, target.Endpoint, stats.Databases, stats.Tables, stats.Functions, stats.Views)
 	}
@@ -1085,13 +1086,13 @@ func newHeartbeatKustoClient(endpoint, managedIdentityClientID string) (*kusto.C
 }
 
 type heartbeatSchemaCollectionStats struct {
-	Databases                 int
-	Tables                    int
-	Functions                 int
-	Views                     int
-	SkippedFunctions          int
-	SkippedFunctionNames      []string
-	FirstSkippedFunctionError string
+	Databases                  int
+	Tables                     int
+	Functions                  int
+	Views                      int
+	SkippedFunctions           int
+	SampleSkippedFunctionNames []string
+	FirstSkippedFunctionError  string
 }
 
 func collectHeartbeatSchema(ctx context.Context, client *kusto.Client, heartbeatDatabase string) ([]ADXClusterSchema, heartbeatSchemaCollectionStats, error) {
@@ -1113,12 +1114,11 @@ func collectHeartbeatSchema(ctx context.Context, client *kusto.Client, heartbeat
 		stats.Functions += dbStats.Functions
 		stats.Views += len(s.Views)
 		stats.SkippedFunctions += dbStats.SkippedFunctions
-		stats.SkippedFunctionNames = append(stats.SkippedFunctionNames, dbStats.SkippedFunctionNames...)
+		stats.SampleSkippedFunctionNames = appendBoundedNames(stats.SampleSkippedFunctionNames, dbStats.SampleSkippedFunctionNames, heartbeatSkippedFunctionLimit)
 		if stats.FirstSkippedFunctionError == "" {
 			stats.FirstSkippedFunctionError = dbStats.FirstSkippedFunctionError
 		}
 	}
-	sort.Strings(stats.SkippedFunctionNames)
 	return schema, stats, nil
 }
 
@@ -1157,10 +1157,10 @@ func listHeartbeatDatabases(ctx context.Context, client *kusto.Client, heartbeat
 }
 
 type heartbeatDatabaseSchemaStats struct {
-	Functions                 int
-	SkippedFunctions          int
-	SkippedFunctionNames      []string
-	FirstSkippedFunctionError string
+	Functions                  int
+	SkippedFunctions           int
+	SampleSkippedFunctionNames []string
+	FirstSkippedFunctionError  string
 }
 
 func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, database string) (ADXClusterSchema, heartbeatDatabaseSchemaStats, error) {
@@ -1189,7 +1189,7 @@ func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, d
 		isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
 		if err != nil {
 			stats.SkippedFunctions++
-			stats.SkippedFunctionNames = append(stats.SkippedFunctionNames, fmt.Sprintf("%s.%s", database, fn.Name))
+			stats.SampleSkippedFunctionNames = appendBoundedNames(stats.SampleSkippedFunctionNames, []string{fmt.Sprintf("%s.%s", database, fn.Name)}, heartbeatSkippedFunctionLimit)
 			if stats.FirstSkippedFunctionError == "" {
 				stats.FirstSkippedFunctionError = fmt.Sprintf("%s.%s: %s", database, fn.Name, kustoutil.ParseError(err))
 			}
@@ -1201,7 +1201,6 @@ func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, d
 		}
 	}
 	sort.Strings(s.Views)
-	sort.Strings(stats.SkippedFunctionNames)
 	return s, stats, nil
 }
 
@@ -1357,6 +1356,17 @@ func formatNameList(names []string, limit int) string {
 		return strings.Join(names, ",")
 	}
 	return fmt.Sprintf("%s,+%d more", strings.Join(names[:limit], ","), len(names)-limit)
+}
+
+func appendBoundedNames(dst, src []string, limit int) []string {
+	if limit <= 0 || len(dst) >= limit {
+		return dst
+	}
+	remaining := limit - len(dst)
+	if len(src) > remaining {
+		src = src[:remaining]
+	}
+	return append(dst, src...)
 }
 
 func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
