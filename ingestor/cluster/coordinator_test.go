@@ -17,7 +17,6 @@ import (
 	v12 "k8s.io/client-go/listers/core/v1"
 
 	"github.com/Azure/adx-mon/pkg/k8s"
-	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/testutils"
 )
 
@@ -85,7 +84,6 @@ func TestCoordinator_NewPeer(t *testing.T) {
 	kcli := fakek8s.NewSimpleClientset(&v1.PodList{Items: []v1.Pod{*self}})
 
 	c, err := NewCoordinator(&CoordinatorOpts{
-		WriteTimeSeriesFn:  nil,
 		K8sCli:             kcli,
 		Namespace:          "adx-mon",
 		Hostname:           "ingestor-0",
@@ -182,7 +180,6 @@ func TestCoordinator_LostPeer(t *testing.T) {
 	kcli := fakek8s.NewSimpleClientset(&v1.PodList{Items: []v1.Pod{*self, *newPeer}})
 
 	c, err := NewCoordinator(&CoordinatorOpts{
-		WriteTimeSeriesFn:  nil,
 		K8sCli:             kcli,
 		Namespace:          "adx-mon",
 		Hostname:           "ingestor-0",
@@ -263,11 +260,6 @@ func (l *fakePodLister) Pods(namespace string) v12.PodNamespaceLister {
 func TestCoordinatorInK8s(t *testing.T) {
 	testutils.IntegrationTest(t)
 
-	timeSeriesWriter := func(ctx context.Context, ts []*prompb.TimeSeries) error {
-		t.Helper()
-		return nil
-	}
-
 	ctx := context.Background()
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
 	testcontainers.CleanupContainer(t, k3sContainer)
@@ -283,7 +275,6 @@ func TestCoordinatorInK8s(t *testing.T) {
 	require.NoError(t, err)
 
 	opts := &CoordinatorOpts{
-		WriteTimeSeriesFn:  timeSeriesWriter,
 		K8sCli:             client,
 		Namespace:          "test-namespace",
 		Hostname:           "ingestor-0",

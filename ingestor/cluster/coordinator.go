@@ -10,7 +10,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
 	v1 "k8s.io/api/core/v1"
@@ -20,8 +19,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	v12 "k8s.io/client-go/listers/core/v1"
 )
-
-type TimeSeriesWriter func(ctx context.Context, ts []*prompb.TimeSeries) error
 
 type OTLPLogsWriter func(ctx context.Context, database, table string, logs *otlp.Logs) error
 
@@ -45,7 +42,6 @@ type coordinator struct {
 
 	factory informers.SharedInformerFactory
 
-	tsw          TimeSeriesWriter
 	kcli         kubernetes.Interface
 	pl           v12.PodLister
 	hostEntpoint string
@@ -57,8 +53,7 @@ type coordinator struct {
 }
 
 type CoordinatorOpts struct {
-	WriteTimeSeriesFn TimeSeriesWriter
-	K8sCli            kubernetes.Interface
+	K8sCli kubernetes.Interface
 
 	// Namespace is the namespace used to discover peers.  If not specified, the coordinator will
 	// try to use the namespace of the current pod.
@@ -166,8 +161,6 @@ func (c *coordinator) Open(ctx context.Context) error {
 	pl := factory.Core().V1().Pods().Lister()
 	c.pl = pl
 
-	c.tsw = c.opts.WriteTimeSeriesFn
-
 	myIP, err := GetOutboundIP()
 	if err != nil {
 		return fmt.Errorf("failed to determin ip: %w", err)
@@ -218,10 +211,6 @@ func (c *coordinator) Close() error {
 	c.wg.Wait()
 	c.factory.Shutdown()
 	return nil
-}
-
-func (c *coordinator) Write(ctx context.Context, wr *prompb.WriteRequest) error {
-	return c.tsw(ctx, wr.Timeseries)
 }
 
 // syncPeers determines the active set of ingestors and reconfigures the partitioner.
