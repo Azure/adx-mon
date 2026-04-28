@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,7 @@ func TestKubeletPodInformerEmitsEvents(t *testing.T) {
 	reg, err := informer.Add(ctx, handler)
 	require.NoError(t, err)
 	require.True(t, reg.HasSynced())
+	require.True(t, cache.IsDone(reg.HasSyncedChecker()))
 
 	addEvent := handler.waitAdd(t)
 	require.True(t, addEvent.Initial)
