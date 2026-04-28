@@ -1055,6 +1055,58 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	require.True(t, foundT2)
 }
 
+func TestFormatNameList(t *testing.T) {
+	tests := []struct {
+		name  string
+		names []string
+		limit int
+		want  string
+	}{
+		{
+			name:  "empty",
+			names: nil,
+			limit: 10,
+			want:  "none",
+		},
+		{
+			name:  "under limit",
+			names: []string{"a", "b"},
+			limit: 10,
+			want:  "a,b",
+		},
+		{
+			name:  "at limit",
+			names: []string{"a", "b"},
+			limit: 2,
+			want:  "a,b",
+		},
+		{
+			name:  "over limit",
+			names: []string{"a", "b", "c"},
+			limit: 2,
+			want:  "a,b,+1 more",
+		},
+		{
+			name:  "zero limit returns all names",
+			names: []string{"a", "b", "c"},
+			limit: 0,
+			want:  "a,b,c",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, formatNameList(tt.names, tt.limit))
+		})
+	}
+}
+
+func TestAppendBoundedNames(t *testing.T) {
+	require.Equal(t, []string{"a", "b", "c"}, appendBoundedNames([]string{"a"}, []string{"b", "c", "d"}, 3))
+	require.Equal(t, []string{"a"}, appendBoundedNames([]string{"a"}, []string{"b"}, 1))
+	require.Equal(t, []string{"a"}, appendBoundedNames([]string{"a"}, []string{"b"}, 0))
+}
+
 func TestSplitKustoScripts(t *testing.T) {
 	funcs := []string{"a", "b", "c"}
 	preamble := ".execute database script with (ContinueOnErrors=true)\n<|\n"
