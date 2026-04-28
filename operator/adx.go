@@ -1040,10 +1040,13 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 	}
 	defer client.Close()
 
+	logger.Infof("ADXCluster %s: discovering heartbeat schema from partition endpoint %s for federated target %s", cluster.Spec.ClusterName, partitionClusterEndpoint, target.Endpoint)
 	schema, err := collectHeartbeatSchema(targetCtx, client, target.HeartbeatDatabase)
 	if err != nil {
 		return err
 	}
+	dbCount, tableCount, viewCount := heartbeatSchemaStats(schema)
+	logger.Infof("ADXCluster %s: collected heartbeat schema for federated target %s: databases=%d tables=%d views=%d", cluster.Spec.ClusterName, target.Endpoint, dbCount, tableCount, viewCount)
 
 	federatedClient, err := newHeartbeatKustoClient(target.Endpoint, target.ManagedIdentityClientId)
 	if err != nil {
@@ -1061,6 +1064,7 @@ func heartbeatFederatedCluster(ctx context.Context, cluster *adxmonv1.ADXCluster
 		return fmt.Errorf("failed to marshal partition metadata: %w", err)
 	}
 
+	logger.Infof("ADXCluster %s: ingesting heartbeat row into %s.%s on %s (schemaBytes=%d)", cluster.Spec.ClusterName, target.HeartbeatDatabase, target.HeartbeatTable, target.Endpoint, len(schemaData))
 	return ingestHeartbeatRow(targetCtx, federatedClient, target, partitionClusterEndpoint, schemaData, partitionMetadata)
 }
 
@@ -1082,14 +1086,16 @@ func collectHeartbeatSchema(ctx context.Context, client *kusto.Client, heartbeat
 	if err != nil {
 		return nil, err
 	}
+	logger.Infof("Discovered %d databases for heartbeat schema collection using heartbeat database %s", len(databases), heartbeatDatabase)
 
 	schema := make([]ADXClusterSchema, 0, len(databases))
 	for _, database := range databases {
-		s, err := collectDatabaseHeartbeatSchema(ctx, client, database)
+		s, stats, err := collectDatabaseHeartbeatSchema(ctx, client, database)
 		if err != nil {
 			return nil, err
 		}
 		schema = append(schema, s)
+		logger.Infof("Collected heartbeat schema for database %s: tables=%d functions=%d views=%d skippedFunctions=%d skippedFunctionNames=%s", database, len(s.Tables), stats.Functions, len(s.Views), stats.SkippedFunctions, formatNameList(stats.SkippedFunctionNames, 10))
 	}
 	return schema, nil
 }
@@ -1128,15 +1134,22 @@ func listHeartbeatDatabases(ctx context.Context, client *kusto.Client, heartbeat
 	return databases, nil
 }
 
-func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, database string) (ADXClusterSchema, error) {
+type heartbeatDatabaseSchemaStats struct {
+	Functions            int
+	SkippedFunctions     int
+	SkippedFunctionNames []string
+}
+
+func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, database string) (ADXClusterSchema, heartbeatDatabaseSchemaStats, error) {
 	s := ADXClusterSchema{
 		Database:     database,
 		TableSchemas: make(map[string]string),
 	}
+	var stats heartbeatDatabaseSchemaStats
 
 	tableColumns, err := listHeartbeatDatabaseTableColumns(ctx, client, database)
 	if err != nil {
-		return ADXClusterSchema{}, err
+		return ADXClusterSchema{}, stats, err
 	}
 	for tableName, cols := range tableColumns {
 		s.Tables = append(s.Tables, tableName)
@@ -1146,11 +1159,14 @@ func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, d
 
 	functions, err := listHeartbeatFunctions(ctx, client, database)
 	if err != nil {
-		return ADXClusterSchema{}, err
+		return ADXClusterSchema{}, stats, err
 	}
+	stats.Functions = len(functions)
 	for _, fn := range functions {
 		isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
 		if err != nil {
+			stats.SkippedFunctions++
+			stats.SkippedFunctionNames = append(stats.SkippedFunctionNames, fn.Name)
 			logger.Warnf("Skipping heartbeat schema discovery for function %s in database %s: %v", fn.Name, database, err)
 			continue
 		}
@@ -1160,7 +1176,8 @@ func collectDatabaseHeartbeatSchema(ctx context.Context, client *kusto.Client, d
 		}
 	}
 	sort.Strings(s.Views)
-	return s, nil
+	sort.Strings(stats.SkippedFunctionNames)
+	return s, stats, nil
 }
 
 func listHeartbeatDatabaseTableColumns(ctx context.Context, client *kusto.Client, database string) (map[string][]string, error) {
@@ -1307,6 +1324,24 @@ type ADXClusterSchema struct {
 	Views        []string          `json:"views"`
 }
 
+func heartbeatSchemaStats(schema []ADXClusterSchema) (databases, tables, views int) {
+	for _, s := range schema {
+		tables += len(s.Tables)
+		views += len(s.Views)
+	}
+	return len(schema), tables, views
+}
+
+func formatNameList(names []string, limit int) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	if limit <= 0 || len(names) <= limit {
+		return strings.Join(names, ",")
+	}
+	return fmt.Sprintf("%s,+%d more", strings.Join(names[:limit], ","), len(names)-limit)
+}
+
 func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
 	if cluster.Spec.Role == nil ||
 		*cluster.Spec.Role != adxmonv1.ClusterRoleFederated ||
@@ -1347,7 +1382,16 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to query heartbeat table: %w", err)
 	}
-	logger.Infof("ADXCluster %s: processed heartbeat data from %d partition clusters", cluster.Spec.ClusterName, state.EndpointCount)
+	dbCount := len(state.DBSet)
+	entityCount := federationEntityCount(state)
+	logger.Infof("ADXCluster %s: processed heartbeat data from %d partition clusters: databases=%d logicalEntities=%d parseErrors=%d", cluster.Spec.ClusterName, state.EndpointCount, dbCount, entityCount, len(state.ParseErrors))
+	if state.EndpointCount == 0 {
+		logger.Warnf("ADXCluster %s: no fresh heartbeat rows found in %s.%s within TTL %s; federation will not discover new partition tables or views this cycle", cluster.Spec.ClusterName, *cluster.Spec.Federation.HeartbeatDatabase, *cluster.Spec.Federation.HeartbeatTable, *cluster.Spec.Federation.HeartbeatTTL)
+	}
+	if entityCount == 0 && state.EndpointCount > 0 {
+		logger.Warnf("ADXCluster %s: fresh heartbeat rows were found, but no tables or views were discovered; hub tables and functions will not be updated this cycle", cluster.Spec.ClusterName)
+	}
+	logFederationStateSummary(cluster.Spec.ClusterName, state)
 
 	// Step 4: Build database specs from discovered databases
 	var dbSpecs []adxmonv1.ADXClusterDatabaseSpec
@@ -1387,6 +1431,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	// Step 7: Ensure hub tables exist for all tables and views
 	logger.Infof("ADXCluster %s: ensuring hub tables exist for alias functions", cluster.Spec.ClusterName)
 	for db, tableMap := range state.DBTableEndpoints {
+		logger.Infof("ADXCluster %s: ensuring %d hub tables for database %s", cluster.Spec.ClusterName, len(tableMap), db)
 		// Build a map with empty schemas to use OTLP default for all tables
 		tables := make(map[string]string)
 		for table := range tableMap {
@@ -1555,6 +1600,26 @@ func NewFederationState() *FederationState {
 		DBSet:            make(map[string]struct{}),
 		DBTableEndpoints: make(map[string]map[string][]string),
 		SpokeDBEndpoints: make(map[string][]string),
+	}
+}
+
+func federationEntityCount(state *FederationState) int {
+	count := 0
+	for _, tableMap := range state.DBTableEndpoints {
+		count += len(tableMap)
+	}
+	return count
+}
+
+func logFederationStateSummary(clusterName string, state *FederationState) {
+	databases := make([]string, 0, len(state.DBSet))
+	for db := range state.DBSet {
+		databases = append(databases, db)
+	}
+	sort.Strings(databases)
+
+	for _, db := range databases {
+		logger.Infof("ADXCluster %s: federation heartbeat summary for database %s: endpoints=%d logicalEntities=%d", clusterName, db, len(state.SpokeDBEndpoints[db]), len(state.DBTableEndpoints[db]))
 	}
 }
 
