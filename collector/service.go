@@ -36,7 +36,7 @@ type Service struct {
 	cancel context.CancelFunc
 
 	// metricsSvc is the internal metrics component for collector specific metrics.
-	metricsSvc metrics.Service
+	metricsSvc metricsHandler.Service
 
 	// podInformer is the pod informer for pod discovery.
 	podInformer k8s.PodInformerInterface
@@ -383,7 +383,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		opts:           opts,
 		storageBackend: backend,
 		health:         health,
-		metricsSvc: metrics.NewService(metrics.ServiceOpts{
+		metricsSvc: metricsHandler.NewService(metricsHandler.ServiceOpts{
 			PeerHealthReport: health,
 		}),
 		store:        store,

@@ -30,8 +30,8 @@ import (
 	"github.com/Azure/adx-mon/ingestor"
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/clickhouse"
+	ingestormetrics "github.com/Azure/adx-mon/ingestor/metrics"
 	runner "github.com/Azure/adx-mon/ingestor/runner/shutdown"
-	"github.com/Azure/adx-mon/metrics"
 	monhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/limiter"
@@ -217,8 +217,8 @@ func realMain(ctx *cli.Context) error {
 	var (
 		metricsDatabases []string
 		logsDatabases    []string
-		metricsKustoCli  []metrics.StatementExecutor
-		logsKustoCli     []metrics.StatementExecutor
+		metricsKustoCli  []ingestormetrics.StatementExecutor
+		logsKustoCli     []ingestormetrics.StatementExecutor
 		uploader         ingestor.Uploader
 	)
 

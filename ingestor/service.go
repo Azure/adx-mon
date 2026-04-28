@@ -14,6 +14,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/adx"
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	ingestormetrics "github.com/Azure/adx-mon/ingestor/metrics"
 	ingestorstorage "github.com/Azure/adx-mon/ingestor/storage"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/debug"
@@ -58,7 +59,7 @@ type Service struct {
 	closeFn     context.CancelFunc
 
 	store   storage.Store
-	metrics metrics.Service
+	metrics ingestormetrics.Service
 
 	scheduler *scheduler.Periodic
 
@@ -76,10 +77,10 @@ type ServiceOpts struct {
 	K8sCtrlCli client.Client
 
 	// MetricsKustoCli is the Kusto client connected to the metrics kusto cluster.
-	MetricsKustoCli []metrics.StatementExecutor
+	MetricsKustoCli []ingestormetrics.StatementExecutor
 
 	// LogsKustoCli is the Kusto client connected to the logs kusto cluster.
-	LogsKustoCli []metrics.StatementExecutor
+	LogsKustoCli []ingestormetrics.StatementExecutor
 
 	// InsecureSkipVerify disables TLS certificate verification.
 	InsecureSkipVerify bool
@@ -165,11 +166,10 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
-		WriteTimeSeriesFn: store.WriteTimeSeries,
-		K8sCli:            opts.K8sCli,
-		Hostname:          opts.Hostname,
-		Namespace:         opts.Namespace,
-		PartitionSize:     opts.PartitionSize,
+		K8sCli:        opts.K8sCli,
+		Hostname:      opts.Hostname,
+		Namespace:     opts.Namespace,
+		PartitionSize: opts.PartitionSize,
 	})
 	if err != nil {
 		return nil, err
@@ -222,12 +222,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		batcher: batcher,
 	}
 
-	allKustoCli := make([]metrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
+	allKustoCli := make([]ingestormetrics.StatementExecutor, 0, len(opts.MetricsKustoCli)+len(opts.LogsKustoCli))
 	allKustoCli = append(allKustoCli, opts.MetricsKustoCli...)
 	allKustoCli = append(allKustoCli, opts.LogsKustoCli...)
 
-	metricsSvc := metrics.NewService(metrics.ServiceOpts{
-		Hostname:         opts.Hostname,
+	metricsSvc := ingestormetrics.NewService(ingestormetrics.ServiceOpts{
 		Elector:          coord,
 		MetricsKustoCli:  opts.MetricsKustoCli,
 		KustoCli:         allKustoCli,
