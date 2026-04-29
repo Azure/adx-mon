@@ -10,7 +10,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
-	"github.com/Azure/adx-mon/pkg/promremote"
 	"github.com/Azure/adx-mon/pkg/service"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,7 +37,6 @@ type coordinator struct {
 	mu    sync.RWMutex
 	peers map[string]string
 	part  *Partitioner
-	pcli  *promremote.Client
 
 	factory informers.SharedInformerFactory
 
