@@ -143,13 +143,6 @@ var (
 		Help:      "Counter of the number of logs received by the proxy",
 	}, []string{"database", "table"})
 
-	LogsProxyUploaded = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: Namespace,
-		Subsystem: "collector",
-		Name:      "logs_uploaded_total",
-		Help:      "Counter of the number of logs uploaded",
-	}, []string{"database", "table"})
-
 	LogKeys = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "collector",

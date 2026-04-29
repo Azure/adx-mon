@@ -89,12 +89,11 @@ func (s *service) collect(ctx context.Context) {
 			}
 
 			logger.Infof("Status IngestionSamplesPerSecond=%0.2f SamplesIngested=%d IsHealthy=%v "+
-				"UploadQueueSize=%d TransferQueueSize=%d SegmentsTotal=%d SegmentsSize=%d UnhealthyReason=%s "+
+				"UploadQueueSize=%d SegmentsTotal=%d SegmentsSize=%d UnhealthyReason=%s "+
 				"ActiveConnections=%d DroppedConnections=%d MaxSegmentAgeSeconds=%0.2f",
 				(currentTotal-lastCount)/60, uint64(currentTotal),
 				s.health.IsHealthy(),
 				s.health.UploadQueueSize(),
-				s.health.TransferQueueSize(),
 				s.health.SegmentsTotal(),
 				s.health.SegmentsSize(),
 				s.health.UnhealthyReason(),
@@ -103,9 +102,6 @@ func (s *service) collect(ctx context.Context) {
 				s.health.MaxSegmentAge().Seconds())
 
 			lastCount = currentTotal
-
-			// Clear the gauges to prune old metrics that may not be collected anymore.
-			adxmetrics.LogsProxyUploaded.Reset()
 		}
 	}
 }
