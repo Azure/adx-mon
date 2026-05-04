@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 
+	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/klauspost/compress/s2"
 )
 
@@ -57,13 +58,32 @@ func NewSegmentIterator(r io.ReadCloser) (Iterator, error) {
 		value:     nil,
 	}, nil
 }
+
+// Next reads the next block from the segment.  It returns true if a valid block was read and false if the
+// iterator has reached the end of the segment or encounters a block that is corrupt. This matches the behavior
+// of Repair() that drops any trailing corrupt blocks at the end of a segment.
+//
+// If a block read will never succeed (no header, corruption, etc) we return false with no error to send whatever
+// valid blocks we can, then retire the segment so we don't keep retrying.
+//
+// If the read fails for other reasons (disk error, underlying reader failure, etc) then we return the error so
+// the segment read can be retried with the segment being returned to the queue with Release().
 func (b *segmentIterator) Next() (bool, error) {
 	// Read the block length and CRC
-	n, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
-	if err == io.EOF {
+	_, err := io.ReadFull(b.br, b.lenCrcBuf[:8])
+	if err != nil {
+		if err == io.EOF {
+			return false, nil // No more blocks to read
+		}
+
+		// ErrUnexpectedEOF is returned if we are not able to read blockLen bytes
+		if err == io.ErrUnexpectedEOF {
+			logger.Warnf("Truncating segment %s during read, short block", b.sourceName())
+			return false, nil
+		}
+
+		// Preserve non-truncation read failures instead of treating them as virtual repair.
 		return false, err
-	} else if err != nil || n != 8 {
-		return false, nil
 	}
 
 	// Extract the block length and expand the read buffer if it is too small.
@@ -82,25 +102,31 @@ func (b *segmentIterator) Next() (bool, error) {
 	// Extract the CRC value for the block
 	crc := binary.BigEndian.Uint32(b.lenCrcBuf[4:8])
 
-	// Read the expected block length bytes
-	n, err = io.ReadFull(b.br, b.buf[:blockLen])
+	// Read the expected block length bytes. If blockLen bytes cannot be read from the underlying
+	// reader, treat this block and the rest as corrupt and stop iteration.
+	_, err = io.ReadFull(b.br, b.buf[:blockLen])
 	if err != nil {
+		// ErrUnexpectedEOF is returned if we are not able to read blockLen bytes
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			logger.Warnf("Truncating segment %s during read, short block", b.sourceName())
+			return false, nil
+		}
+
+		// Preserve non-truncation read failures instead of treating them as virtual repair.
 		return false, err
 	}
 
-	// Make sure we actually read the number of bytes we were expecting.
-	if uint32(n) != blockLen {
-		return false, fmt.Errorf("short block read: expected %d, got %d", blockLen, n)
-	}
-
-	// Validate the block checksum matches still
+	// Validate the block checksum matches still. If the checksum does not match, treat this block
+	// and the rest of the segment as corrupt and stop iteration.
 	if crc32.ChecksumIEEE(b.buf[:blockLen]) != crc {
-		return false, fmt.Errorf("block checksum verification failed")
+		logger.Warnf("Truncating segment %s during read, checksum failed", b.sourceName())
+		return false, nil
 	}
 
 	b.decodeBuf, err = s2.Decode(b.decodeBuf[:0], b.buf[:blockLen])
 	if err != nil {
-		return false, err
+		logger.Warnf("Truncating segment %s during read, decode failed: %v", b.sourceName(), err)
+		return false, nil
 	}
 
 	if HasSampleMetadata(b.decodeBuf) {
@@ -117,6 +143,19 @@ func (b *segmentIterator) Next() (bool, error) {
 
 func (b *segmentIterator) Value() []byte {
 	return b.value
+}
+
+func (b *segmentIterator) sourceName() string {
+	// Includes the stdlib File type we back our normal WALs with
+	type namedReader interface {
+		Name() string
+	}
+
+	if named, ok := b.f.(namedReader); ok {
+		return named.Name()
+	}
+
+	return "<stream>"
 }
 
 func (b *segmentIterator) Close() error {

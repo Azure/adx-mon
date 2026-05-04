@@ -233,7 +233,7 @@ func TestSegment_Iterator(t *testing.T) {
 			require.Equal(t, []byte("test2"), iter.Value())
 
 			next, err = iter.Next()
-			require.ErrorIs(t, err, io.EOF)
+			require.NoError(t, err)
 			require.False(t, next)
 		})
 	}
@@ -430,7 +430,7 @@ func TestSegment_Append(t *testing.T) {
 			require.Equal(t, []byte("test1"), iter.Value())
 
 			next, err = iter.Next()
-			require.ErrorIs(t, err, io.EOF)
+			require.NoError(t, err)
 			require.False(t, next)
 		})
 	}
@@ -497,7 +497,7 @@ func TestSegment_Write(t *testing.T) {
 			require.Equal(t, []byte("test1"), iter.Value())
 
 			next, err = iter.Next()
-			require.ErrorIs(t, err, io.EOF)
+			require.NoError(t, err)
 			require.False(t, next)
 		})
 	}
