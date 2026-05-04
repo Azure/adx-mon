@@ -19,7 +19,7 @@ package cache
 import (
 	"context"
 	"fmt"
-	"sync"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -91,11 +91,9 @@ func (c *multiNamespaceCache) GetInformer(ctx context.Context, obj client.Object
 			return nil, err
 		}
 
-		return &multiNamespaceInformer{
-			namespaceToInformer: map[string]Informer{
-				globalCache: clusterCacheInformer,
-			},
-		}, nil
+		return newMultiNamespaceInformer(map[string]Informer{
+			globalCache: clusterCacheInformer,
+		}), nil
 	}
 
 	namespaceToInformer := map[string]Informer{}
@@ -107,7 +105,7 @@ func (c *multiNamespaceCache) GetInformer(ctx context.Context, obj client.Object
 		namespaceToInformer[ns] = informer
 	}
 
-	return &multiNamespaceInformer{namespaceToInformer: namespaceToInformer}, nil
+	return newMultiNamespaceInformer(namespaceToInformer), nil
 }
 
 func (c *multiNamespaceCache) RemoveInformer(ctx context.Context, obj client.Object) error {
@@ -144,11 +142,9 @@ func (c *multiNamespaceCache) GetInformerForKind(ctx context.Context, gvk schema
 			return nil, err
 		}
 
-		return &multiNamespaceInformer{
-			namespaceToInformer: map[string]Informer{
-				globalCache: clusterCacheInformer,
-			},
-		}, nil
+		return newMultiNamespaceInformer(map[string]Informer{
+			globalCache: clusterCacheInformer,
+		}), nil
 	}
 
 	namespaceToInformer := map[string]Informer{}
@@ -160,7 +156,7 @@ func (c *multiNamespaceCache) GetInformerForKind(ctx context.Context, gvk schema
 		namespaceToInformer[ns] = informer
 	}
 
-	return &multiNamespaceInformer{namespaceToInformer: namespaceToInformer}, nil
+	return newMultiNamespaceInformer(namespaceToInformer), nil
 }
 
 func (c *multiNamespaceCache) Start(ctx context.Context) error {
@@ -326,20 +322,47 @@ func (c *multiNamespaceCache) List(ctx context.Context, list client.ObjectList, 
 	return nil
 }
 
+func newMultiNamespaceInformer(namespaceToInformer map[string]Informer) Informer {
+	mni := &multiNamespaceInformer{
+		synced:              make(chan struct{}),
+		namespaceToInformer: namespaceToInformer,
+	}
+	go func() {
+		for _, informer := range mni.namespaceToInformer {
+			<-informer.HasSyncedChecker().Done()
+		}
+		close(mni.synced)
+	}()
+	return mni
+}
+
 // multiNamespaceInformer knows how to handle interacting with the underlying informer across multiple namespaces.
 type multiNamespaceInformer struct {
+	synced              chan struct{}
 	namespaceToInformer map[string]Informer
 }
 
-type handlerRegistration struct {
-	handles map[string]toolscache.ResourceEventHandlerRegistration
-	synced  toolscache.DoneChecker
+func newMultiNamespaceInformerHandlerRegistration(handles map[string]toolscache.ResourceEventHandlerRegistration) toolscache.ResourceEventHandlerRegistration {
+	hr := &multiNamespaceInformerHandlerRegistration{
+		synced:  make(chan struct{}),
+		handles: handles,
+	}
+	go func() {
+		for _, handle := range hr.handles {
+			<-handle.HasSyncedChecker().Done()
+		}
+		close(hr.synced)
+	}()
+	return hr
 }
 
-var _ toolscache.ResourceEventHandlerRegistration = handlerRegistration{}
+type multiNamespaceInformerHandlerRegistration struct {
+	synced  chan struct{}
+	handles map[string]toolscache.ResourceEventHandlerRegistration
+}
 
 // HasSynced asserts that the handler has been called for the full initial state of the informer.
-func (h handlerRegistration) HasSynced() bool {
+func (h *multiNamespaceInformerHandlerRegistration) HasSynced() bool {
 	for _, h := range h.handles {
 		if !h.HasSynced() {
 			return false
@@ -348,102 +371,72 @@ func (h handlerRegistration) HasSynced() bool {
 	return true
 }
 
-func (h handlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
+func (h *multiNamespaceInformerHandlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
+	return h
+}
+
+func (h *multiNamespaceInformerHandlerRegistration) Name() string {
+	names := make([]string, 0, len(h.handles))
+	for ns, handle := range h.handles {
+		names = append(names, fmt.Sprintf("%s: %s", ns, handle.HasSyncedChecker().Name()))
+	}
+	return strings.Join(names, ", ")
+}
+
+func (h *multiNamespaceInformerHandlerRegistration) Done() <-chan struct{} {
 	return h.synced
-}
-
-type handlerRegistrationDoneChecker struct {
-	checkers []toolscache.DoneChecker
-	done     chan struct{}
-	once     sync.Once
-}
-
-func newHandlerRegistrationDoneChecker(handles map[string]toolscache.ResourceEventHandlerRegistration) *handlerRegistrationDoneChecker {
-	checkers := make([]toolscache.DoneChecker, 0, len(handles))
-	for _, handle := range handles {
-		checkers = append(checkers, handle.HasSyncedChecker())
-	}
-	return &handlerRegistrationDoneChecker{
-		checkers: checkers,
-		done:     make(chan struct{}),
-	}
-}
-
-func (h *handlerRegistrationDoneChecker) Name() string {
-	return "multi namespace handler registration"
-}
-
-func (h *handlerRegistrationDoneChecker) Done() <-chan struct{} {
-	h.once.Do(func() {
-		go func() {
-			defer close(h.done)
-			for _, checker := range h.checkers {
-				<-checker.Done()
-			}
-		}()
-	})
-	return h.done
 }
 
 var _ Informer = &multiNamespaceInformer{}
 
 // AddEventHandler adds the handler to each informer.
 func (i *multiNamespaceInformer) AddEventHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
-	handles := handlerRegistration{
-		handles: make(map[string]toolscache.ResourceEventHandlerRegistration, len(i.namespaceToInformer)),
-	}
+	handles := make(map[string]toolscache.ResourceEventHandlerRegistration, len(i.namespaceToInformer))
 
 	for ns, informer := range i.namespaceToInformer {
 		registration, err := informer.AddEventHandler(handler)
 		if err != nil {
 			return nil, err
 		}
-		handles.handles[ns] = registration
+		handles[ns] = registration
 	}
-	handles.synced = newHandlerRegistrationDoneChecker(handles.handles)
 
-	return handles, nil
+	return newMultiNamespaceInformerHandlerRegistration(handles), nil
 }
 
 // AddEventHandlerWithResyncPeriod adds the handler with a resync period to each namespaced informer.
 func (i *multiNamespaceInformer) AddEventHandlerWithResyncPeriod(handler toolscache.ResourceEventHandler, resyncPeriod time.Duration) (toolscache.ResourceEventHandlerRegistration, error) {
-	handles := handlerRegistration{
-		handles: make(map[string]toolscache.ResourceEventHandlerRegistration, len(i.namespaceToInformer)),
-	}
+	handles := make(map[string]toolscache.ResourceEventHandlerRegistration, len(i.namespaceToInformer))
 
 	for ns, informer := range i.namespaceToInformer {
 		registration, err := informer.AddEventHandlerWithResyncPeriod(handler, resyncPeriod)
 		if err != nil {
 			return nil, err
 		}
-		handles.handles[ns] = registration
+		handles[ns] = registration
 	}
-	handles.synced = newHandlerRegistrationDoneChecker(handles.handles)
 
-	return handles, nil
+	return newMultiNamespaceInformerHandlerRegistration(handles), nil
 }
 
 // AddEventHandlerWithOptions adds the handler with options to each namespaced informer.
 func (i *multiNamespaceInformer) AddEventHandlerWithOptions(handler toolscache.ResourceEventHandler, options toolscache.HandlerOptions) (toolscache.ResourceEventHandlerRegistration, error) {
-	handles := handlerRegistration{
-		handles: make(map[string]toolscache.ResourceEventHandlerRegistration, len(i.namespaceToInformer)),
-	}
+	handles := make(map[string]toolscache.ResourceEventHandlerRegistration, len(i.namespaceToInformer))
 
 	for ns, informer := range i.namespaceToInformer {
 		registration, err := informer.AddEventHandlerWithOptions(handler, options)
 		if err != nil {
 			return nil, err
 		}
-		handles.handles[ns] = registration
+		handles[ns] = registration
 	}
-	handles.synced = newHandlerRegistrationDoneChecker(handles.handles)
 
-	return handles, nil
+	return newMultiNamespaceInformerHandlerRegistration(handles), nil
 }
 
 // RemoveEventHandler removes a previously added event handler given by its registration handle.
 func (i *multiNamespaceInformer) RemoveEventHandler(h toolscache.ResourceEventHandlerRegistration) error {
-	handles, ok := h.(handlerRegistration)
+	handles, ok := h.(*multiNamespaceInformerHandlerRegistration)
 	if !ok {
 		return fmt.Errorf("registration is not a registration returned by multiNamespaceInformer")
 	}
@@ -478,6 +471,23 @@ func (i *multiNamespaceInformer) HasSynced() bool {
 		}
 	}
 	return true
+}
+
+// HasSyncedChecker completes if each informer has synced.
+func (i *multiNamespaceInformer) HasSyncedChecker() toolscache.DoneChecker {
+	return i
+}
+
+func (i *multiNamespaceInformer) Name() string {
+	names := make([]string, 0, len(i.namespaceToInformer))
+	for ns, informer := range i.namespaceToInformer {
+		names = append(names, fmt.Sprintf("%s: %s", ns, informer.HasSyncedChecker().Name()))
+	}
+	return strings.Join(names, ", ")
+}
+
+func (i *multiNamespaceInformer) Done() <-chan struct{} {
+	return i.synced
 }
 
 // IsStopped checks if each namespaced informer has stopped, returns false if any are still running.
