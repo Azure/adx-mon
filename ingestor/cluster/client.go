@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
@@ -14,6 +15,14 @@ import (
 	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/gzip"
 )
+
+// gzipWriterPool reuses *gzip.Writer instances across Client.Write invocations.
+// gzip.NewWriter allocates the underlying flate encoder state (~256KiB of hash
+// tables) on every call, which is one of the largest allocators in the
+// collector. Reset(w) is the documented reuse contract for gzip.Writer.
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(io.Discard) },
+}
 
 // PeerOverloadedError represents a peer overloaded error with optional requestId.
 type PeerOverloadedError struct {
@@ -220,8 +229,14 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 		gzipReader, gzipWriter := io.Pipe()
 		go func() {
 			defer gzipWriter.Close()
-			gzipCompressor := gzip.NewWriter(gzipWriter)
-			defer gzipCompressor.Close()
+			gzipCompressor := gzipWriterPool.Get().(*gzip.Writer)
+			gzipCompressor.Reset(gzipWriter)
+			defer func() {
+				// Close flushes the trailer; Reset on the next Get re-initializes
+				// header state, so it is safe to return the writer to the pool here.
+				gzipCompressor.Close()
+				gzipWriterPool.Put(gzipCompressor)
+			}()
 			if _, err := io.Copy(gzipCompressor, body); err != nil {
 				if err := gzipWriter.CloseWithError(err); err != nil {
 					logger.Errorf("failed to close gzip writer: %s requestId=%s", err, requestId)
