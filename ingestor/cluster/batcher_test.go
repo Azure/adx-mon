@@ -122,28 +122,37 @@ func TestBatcher_NodeOwned(t *testing.T) {
 func TestBatcher_NewestFirst(t *testing.T) {
 	dir := t.TempDir()
 
-	created, err := flakeutil.ParseFlakeID("2359cdac7d6f0001")
+	idgen, err := flake.New()
+	require.NoError(t, err)
+
+	// Disk is created first so it sorts as the oldest prefix; processSegments
+	// then processes the newer Cpu prefix first.
+	diskFlake := idgen.NextId()
+	diskID := diskFlake.String()
+	diskCreated, err := flakeutil.ParseFlakeID(diskID)
+	require.NoError(t, err)
+
+	cpuFlake := idgen.NextId()
+	cpuID := cpuFlake.String()
+	cpuCreated, err := flakeutil.ParseFlakeID(cpuID)
 	require.NoError(t, err)
 
 	idx := wal.NewIndex()
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac7d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac7d6f0001")),
+		Ulid:      cpuID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpuID)),
 		Size:      100,
-		CreatedAt: created,
+		CreatedAt: cpuCreated,
 	}
 	idx.Add(f1)
 
-	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
-	require.NoError(t, err)
-
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
-		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
+		Ulid:      diskID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", diskID)),
 		Size:      100,
-		CreatedAt: created,
+		CreatedAt: diskCreated,
 	}
 	idx.Add(f2)
 
@@ -164,10 +173,10 @@ func TestBatcher_NewestFirst(t *testing.T) {
 	require.Equal(t, 2, len(owner))
 	require.Equal(t, 0, len(notOwned))
 
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac7d6f0001"))}, owner[0].Paths())
+	require.Equal(t, []string{f1.Path}, owner[0].Paths())
 	require.Equal(t, "db", owner[0].Database)
 	require.Equal(t, "Cpu", owner[0].Table)
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owner[1].Paths())
+	require.Equal(t, []string{f2.Path}, owner[1].Paths())
 	require.Equal(t, "db", owner[1].Database)
 	require.Equal(t, "Disk", owner[1].Table)
 
@@ -178,40 +187,51 @@ func TestBatcher_NewestFirst(t *testing.T) {
 func TestBatcher_BigFileBatch(t *testing.T) {
 	dir := t.TempDir()
 
-	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
+	idgen, err := flake.New()
+	require.NoError(t, err)
+
+	// Disk is created first so it sorts as the oldest prefix; processSegments
+	// then processes the newer Cpu prefix first.
+	diskFlake := idgen.NextId()
+	diskID := diskFlake.String()
+	diskCreated, err := flakeutil.ParseFlakeID(diskID)
+	require.NoError(t, err)
+
+	cpu1Flake := idgen.NextId()
+	cpu1ID := cpu1Flake.String()
+	cpu1Created, err := flakeutil.ParseFlakeID(cpu1ID)
+	require.NoError(t, err)
+
+	cpu2Flake := idgen.NextId()
+	cpu2ID := cpu2Flake.String()
+	cpu2Created, err := flakeutil.ParseFlakeID(cpu2ID)
 	require.NoError(t, err)
 
 	idx := wal.NewIndex()
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
+		Ulid:      cpu1ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu1ID)),
 		Size:      100 * 1024, // Meets min transfer size, separate batch
-		CreatedAt: created,
+		CreatedAt: cpu1Created,
 	}
 	idx.Add(f1)
 
-	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
-	require.NoError(t, err)
-
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
+		Ulid:      cpu2ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu2ID)),
 		Size:      100, // This should be in a new batch
-		CreatedAt: created,
+		CreatedAt: cpu2Created,
 	}
 	idx.Add(f2)
 
-	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
-	require.NoError(t, err)
-
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
-		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
+		Ulid:      diskID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", diskID)),
 		Size:      100,
-		CreatedAt: created,
+		CreatedAt: diskCreated,
 	}
 	idx.Add(f3)
 
@@ -238,7 +258,7 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 
 	require.Equal(t, []string{f1.Path}, owned[0].Paths())
 	require.Equal(t, []string{f2.Path}, owned[1].Paths())
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owned[2].Paths())
+	require.Equal(t, []string{f3.Path}, owned[2].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)
@@ -247,52 +267,65 @@ func TestBatcher_BigFileBatch(t *testing.T) {
 func TestBatcher_BigBatch(t *testing.T) {
 	dir := t.TempDir()
 
-	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
+	idgen, err := flake.New()
+	require.NoError(t, err)
+
+	// Disk is created first so it sorts as the oldest prefix; processSegments
+	// then processes the newer Cpu prefix first.
+	diskFlake := idgen.NextId()
+	diskID := diskFlake.String()
+	diskCreated, err := flakeutil.ParseFlakeID(diskID)
+	require.NoError(t, err)
+
+	cpu1Flake := idgen.NextId()
+	cpu1ID := cpu1Flake.String()
+	cpu1Created, err := flakeutil.ParseFlakeID(cpu1ID)
+	require.NoError(t, err)
+
+	cpu2Flake := idgen.NextId()
+	cpu2ID := cpu2Flake.String()
+	cpu2Created, err := flakeutil.ParseFlakeID(cpu2ID)
+	require.NoError(t, err)
+
+	cpu3Flake := idgen.NextId()
+	cpu3ID := cpu3Flake.String()
+	cpu3Created, err := flakeutil.ParseFlakeID(cpu3ID)
 	require.NoError(t, err)
 
 	idx := wal.NewIndex()
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
+		Ulid:      cpu1ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu1ID)),
 		Size:      50 * 1024,
-		CreatedAt: created,
+		CreatedAt: cpu1Created,
 	}
 	idx.Add(f1)
 
-	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
-	require.NoError(t, err)
-
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
+		Ulid:      cpu2ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu2ID)),
 		Size:      50 * 1024,
-		CreatedAt: created,
+		CreatedAt: cpu2Created,
 	}
 	idx.Add(f2)
 
-	created, err = flakeutil.ParseFlakeID("2359cdacad6f0001")
-	require.NoError(t, err)
-
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdacad6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdacad6f0001")),
+		Ulid:      cpu3ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu3ID)),
 		Size:      1024,
-		CreatedAt: created,
+		CreatedAt: cpu3Created,
 	}
 	idx.Add(f3)
 
-	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
-	require.NoError(t, err)
-
 	f4 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
-		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
+		Ulid:      diskID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", diskID)),
 		Size:      100,
-		CreatedAt: created,
+		CreatedAt: diskCreated,
 	}
 	idx.Add(f4)
 
@@ -320,7 +353,7 @@ func TestBatcher_BigBatch(t *testing.T) {
 
 	require.Equal(t, []string{f1.Path, f2.Path}, owned[0].Paths())
 	require.Equal(t, []string{f3.Path}, owned[1].Paths())
-	require.Equal(t, []string{filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001"))}, owned[2].Paths())
+	require.Equal(t, []string{f4.Path}, owned[2].Paths())
 
 	requireValidBatch(t, owned)
 	requireValidBatch(t, notOwned)
@@ -329,52 +362,65 @@ func TestBatcher_BigBatch(t *testing.T) {
 func TestBatcher_MaxSegmentCount(t *testing.T) {
 	dir := t.TempDir()
 
-	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
+	idgen, err := flake.New()
+	require.NoError(t, err)
+
+	// Disk is created first so it sorts as the oldest prefix; processSegments
+	// then processes the newer Cpu prefix first.
+	diskFlake := idgen.NextId()
+	diskID := diskFlake.String()
+	diskCreated, err := flakeutil.ParseFlakeID(diskID)
+	require.NoError(t, err)
+
+	cpu1Flake := idgen.NextId()
+	cpu1ID := cpu1Flake.String()
+	cpu1Created, err := flakeutil.ParseFlakeID(cpu1ID)
+	require.NoError(t, err)
+
+	cpu2Flake := idgen.NextId()
+	cpu2ID := cpu2Flake.String()
+	cpu2Created, err := flakeutil.ParseFlakeID(cpu2ID)
+	require.NoError(t, err)
+
+	cpu3Flake := idgen.NextId()
+	cpu3ID := cpu3Flake.String()
+	cpu3Created, err := flakeutil.ParseFlakeID(cpu3ID)
 	require.NoError(t, err)
 
 	idx := wal.NewIndex()
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
+		Ulid:      cpu1ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu1ID)),
 		Size:      50 * 1024,
-		CreatedAt: created,
+		CreatedAt: cpu1Created,
 	}
 	idx.Add(f1)
 
-	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
-	require.NoError(t, err)
-
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
+		Ulid:      cpu2ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu2ID)),
 		Size:      50 * 1024,
-		CreatedAt: created,
+		CreatedAt: cpu2Created,
 	}
 	idx.Add(f2)
 
-	created, err = flakeutil.ParseFlakeID("2359cdacad6f0001")
-	require.NoError(t, err)
-
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdacad6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdacad6f0001")),
+		Ulid:      cpu3ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu3ID)),
 		Size:      1024,
-		CreatedAt: created,
+		CreatedAt: cpu3Created,
 	}
 	idx.Add(f3)
 
-	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
-	require.NoError(t, err)
-
 	f4 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
-		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
+		Ulid:      diskID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", diskID)),
 		Size:      100,
-		CreatedAt: created,
+		CreatedAt: diskCreated,
 	}
 	idx.Add(f4)
 
@@ -384,7 +430,6 @@ func TestBatcher_MaxSegmentCount(t *testing.T) {
 		storageDir:              dir,
 		maxTransferSize:         100 * 1024,
 		minUploadSize:           100 * 1024,
-		maxTransferAge:          1000 * 24 * time.Hour,
 		maxBatchSegments:        1,
 		Partitioner:             &fakePartitioner{owner: "node1"},
 		Segmenter:               idx,
@@ -412,7 +457,27 @@ func TestBatcher_MaxSegmentCount(t *testing.T) {
 func TestBatcher_Stats(t *testing.T) {
 	dir := t.TempDir()
 
-	created, err := flakeutil.ParseFlakeID("2359cdac8d6f0001")
+	idgen, err := flake.New()
+	require.NoError(t, err)
+
+	diskFlake := idgen.NextId()
+	diskID := diskFlake.String()
+	diskCreated, err := flakeutil.ParseFlakeID(diskID)
+	require.NoError(t, err)
+
+	cpu1Flake := idgen.NextId()
+	cpu1ID := cpu1Flake.String()
+	cpu1Created, err := flakeutil.ParseFlakeID(cpu1ID)
+	require.NoError(t, err)
+
+	cpu2Flake := idgen.NextId()
+	cpu2ID := cpu2Flake.String()
+	cpu2Created, err := flakeutil.ParseFlakeID(cpu2ID)
+	require.NoError(t, err)
+
+	cpu3Flake := idgen.NextId()
+	cpu3ID := cpu3Flake.String()
+	cpu3Created, err := flakeutil.ParseFlakeID(cpu3ID)
 	require.NoError(t, err)
 
 	var segments []wal.SegmentInfo
@@ -420,49 +485,40 @@ func TestBatcher_Stats(t *testing.T) {
 	idx := wal.NewIndex()
 	f1 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac8d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac8d6f0001")),
+		Ulid:      cpu1ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu1ID)),
 		Size:      50 * 1024,
-		CreatedAt: created,
+		CreatedAt: cpu1Created,
 	}
 	idx.Add(f1)
 	segments = append(segments, f1)
 
-	created, err = flakeutil.ParseFlakeID("2359cdac9d6f0001")
-	require.NoError(t, err)
-
 	f2 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdac9d6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdac9d6f0001")),
+		Ulid:      cpu2ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu2ID)),
 		Size:      50 * 1024,
-		CreatedAt: created,
+		CreatedAt: cpu2Created,
 	}
 	idx.Add(f2)
 	segments = append(segments, f2)
 
-	created, err = flakeutil.ParseFlakeID("2359cdacad6f0001")
-	require.NoError(t, err)
-
 	f3 := wal.SegmentInfo{
 		Prefix:    "db_Cpu",
-		Ulid:      "2359cdacad6f0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", "2359cdacad6f0001")),
+		Ulid:      cpu3ID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Cpu", "", cpu3ID)),
 		Size:      1024,
-		CreatedAt: created,
+		CreatedAt: cpu3Created,
 	}
 	idx.Add(f3)
 	segments = append(segments, f3)
 
-	created, err = flakeutil.ParseFlakeID("2359cd7e3aef0001")
-	require.NoError(t, err)
-
 	f4 := wal.SegmentInfo{
 		Prefix:    "db_Disk",
-		Ulid:      "2359cd7e3aef0001",
-		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", "2359cd7e3aef0001")),
+		Ulid:      diskID,
+		Path:      filepath.Join(dir, wal.Filename("db", "Disk", "", diskID)),
 		Size:      100,
-		CreatedAt: created,
+		CreatedAt: diskCreated,
 	}
 	idx.Add(f4)
 	segments = append(segments, f4)
