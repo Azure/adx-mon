@@ -3,7 +3,9 @@ package alerter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
+	"html"
 	"io"
 	"net/http"
 	"strings"
@@ -85,6 +87,7 @@ func fakeAlertHandler() http.Handler {
 type lintAlertHandler struct {
 	alertCount       map[string]int
 	hasFailedQueries bool
+	failures         []string
 }
 
 func NewLinter() *lintAlertHandler {
@@ -100,16 +103,53 @@ func (lh *lintAlertHandler) Create(ctx context.Context, endpoint string, alert a
 	if len(alert.Title) > icmTitleMaxLength {
 		logger.Errorf("Title Exceeded Max Length: %s", alert.Title)
 		lh.hasFailedQueries = true
+		lh.failures = append(lh.failures, "title exceeded max length: "+alert.Title)
 	}
 
 	if strings.HasPrefix(alert.CorrelationID, "alert-failure") {
 		lh.hasFailedQueries = true
+		lh.failures = append(lh.failures, lintFailureMessage(alert))
 	}
 	return nil
 }
 
 func (lh *lintAlertHandler) HasFailedQueries() bool {
 	return lh.hasFailedQueries
+}
+
+func (lh *lintAlertHandler) Err() error {
+	msg := "failed to lint rules"
+	if len(lh.failures) > 0 {
+		msg += ": " + strings.Join(lh.failures, "; ")
+	}
+	return errors.New(msg)
+}
+
+func lintFailureMessage(alert alert.Alert) string {
+	if alert.Description != "" {
+		return alert.Description
+	}
+	if alert.Summary != "" {
+		return firstPreBlock(alert.Summary)
+	}
+	if alert.Title != "" {
+		return alert.Title
+	}
+	return alert.CorrelationID
+}
+
+func firstPreBlock(s string) string {
+	start := strings.Index(s, "<pre>")
+	if start == -1 {
+		return s
+	}
+	start += len("<pre>")
+
+	end := strings.Index(s[start:], "</pre>")
+	if end == -1 {
+		return html.UnescapeString(s[start:])
+	}
+	return html.UnescapeString(s[start : start+end])
 }
 
 func (lh *lintAlertHandler) Log() {

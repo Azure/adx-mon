@@ -187,6 +187,56 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 	}
 }
 
+func TestExecutor_Handler_DuplicateReservedColumnsDifferentCase(t *testing.T) {
+	iter := &kusto.RowIterator{}
+
+	rows, err := kusto.NewMockRows(table.Columns{
+		{Name: "Title", Type: types.String},
+		{Name: "Severity", Type: types.Long},
+		{Name: "severity", Type: types.Long},
+	})
+	require.NoError(t, err)
+
+	rows.Row(value.Values{
+		value.String{Value: "Title", Valid: true},
+		value.Long{Value: 1, Valid: true},
+		value.Long{Value: 2, Valid: true},
+	})
+	require.NoError(t, iter.Mock(rows))
+
+	row, _, _ := iter.NextRowOrError()
+	err = (&Executor{alertCli: &fakeAlertClient{}}).HandlerFn(context.Background(), "http://endpoint", &QueryContext{Rule: &rules.Rule{}}, row)
+	require.ErrorContains(t, err, `query results include multiple columns for reserved alert field "Severity": Severity, severity`)
+	require.True(t, isUserError(err))
+}
+
+func TestExecutor_Handler_DuplicateCustomColumnsDifferentCase(t *testing.T) {
+	iter := &kusto.RowIterator{}
+
+	rows, err := kusto.NewMockRows(table.Columns{
+		{Name: "Title", Type: types.String},
+		{Name: "Severity", Type: types.Long},
+		{Name: "CustomField", Type: types.String},
+		{Name: "customfield", Type: types.String},
+	})
+	require.NoError(t, err)
+
+	rows.Row(value.Values{
+		value.String{Value: "Title", Valid: true},
+		value.Long{Value: 1, Valid: true},
+		value.String{Value: "upper", Valid: true},
+		value.String{Value: "lower", Valid: true},
+	})
+	require.NoError(t, iter.Mock(rows))
+
+	client := &fakeAlertClient{}
+	row, _, _ := iter.NextRowOrError()
+	err = (&Executor{alertCli: client}).HandlerFn(context.Background(), "http://endpoint", &QueryContext{Rule: &rules.Rule{Destination: "destination"}}, row)
+	require.NoError(t, err)
+	require.Equal(t, "upper", client.alert.CustomFields["CustomField"])
+	require.Equal(t, "lower", client.alert.CustomFields["customfield"])
+}
+
 func TestExecutor_Handler_CorrelationId(t *testing.T) {
 	ruleNamespace := "rulesns"
 	ruleName := "rulename"

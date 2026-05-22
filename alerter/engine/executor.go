@@ -60,6 +60,18 @@ type ExecutorOpts struct {
 	CtrlCli     client.Client
 }
 
+// reservedNotificationColumns is the lowercase set of query result columns that
+// adx-mon consumes as alert fields. Duplicate casings of these columns are rejected
+// before row conversion so lint and execution do not silently pick one value.
+var reservedNotificationColumns = map[string]struct{}{
+	"title":         {},
+	"description":   {},
+	"severity":      {},
+	"recipient":     {},
+	"summary":       {},
+	"correlationid": {},
+}
+
 // TODO make AlertAddr string part of alertcli
 func NewExecutor(opts ExecutorOpts) *Executor {
 	return &Executor{
@@ -116,6 +128,10 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	}
 
 	columns := row.ColumnNames()
+	if err := validateNotificationColumns(columns); err != nil {
+		return err
+	}
+
 	for i, value := range row.Values {
 		switch strings.ToLower(columns[i]) {
 		case "title":
@@ -186,6 +202,24 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		return nil
 	}
 	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
+
+	return nil
+}
+
+func validateNotificationColumns(columns []string) error {
+	seen := make(map[string]string)
+	for _, column := range columns {
+		key := strings.ToLower(column)
+		_, ok := reservedNotificationColumns[key]
+		if !ok {
+			continue
+		}
+
+		if previous, ok := seen[key]; ok {
+			return &NotificationValidationError{fmt.Sprintf("query results include multiple columns for reserved alert field %q: %s, %s", previous, previous, column)}
+		}
+		seen[key] = column
+	}
 
 	return nil
 }
