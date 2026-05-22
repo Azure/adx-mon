@@ -70,6 +70,8 @@ type KustoClient interface {
 	Endpoint() string
 }
 
+type lintClientFactory func(opts *AlerterOpts) (engine.Client, error)
+
 func NewService(opts *AlerterOpts) (*Alerter, error) {
 	ruleStore := rules.NewStore(rules.StoreOpts{
 		Region:  opts.Region,
@@ -138,6 +140,23 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 }
 
 func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
+	return runLint(ctx, opts, path, newLintKustoClient)
+}
+
+func newLintKustoClient(opts *AlerterOpts) (engine.Client, error) {
+	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get auth: %w", err)
+	}
+
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
+	if err != nil {
+		return nil, err
+	}
+	return kclient, nil
+}
+
+func runLint(ctx context.Context, opts *AlerterOpts, path string, newClient lintClientFactory) error {
 	ruleStore, err := rules.FromPath(path, opts.Region)
 	if err != nil {
 		return err
@@ -156,12 +175,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 		}
 	}
 
-	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
-	if err != nil {
-		return fmt.Errorf("failed to get auth: %w", err)
-	}
-
-	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
+	kclient, err := newClient(opts)
 	if err != nil {
 		return err
 	}
@@ -178,7 +192,7 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 
 	executor.RunOnce(ctx)
 	if lint.HasFailedQueries() || failedCriteriaCount > 0 {
-		return fmt.Errorf("failed to lint rules")
+		return lint.Err()
 	}
 	lint.Log()
 	return nil
