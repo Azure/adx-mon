@@ -60,18 +60,19 @@ func FromTail() Option {
 
 // NewReader initializes new /dev/kmsg reader.
 func NewReader(options ...Option) (Reader, error) {
-	r := &reader{}
+	r := &reader{
+		bootTime: bootTimeNow,
+	}
 
 	for _, o := range options {
 		o(&r.options)
 	}
 
-	var err error
-
-	r.bootOffset, err = getBootTimeOffset()
-	if err != nil {
+	if _, err := getBootTimeOffset(); err != nil {
 		return nil, err
 	}
+
+	var err error
 
 	r.f, err = os.OpenFile("/dev/kmsg", os.O_RDONLY, 0)
 	if err != nil {
@@ -91,9 +92,28 @@ func NewReader(options ...Option) (Reader, error) {
 }
 
 type reader struct {
-	f          *os.File
-	bootOffset time.Duration
-	options    options
+	f *os.File
+
+	// bootTime returns the wall-clock time at which the system booted.
+	//
+	// It is invoked freshly for every kmsg message: a fixed offset captured
+	// at NewReader, added to time.Now() per message, drifts forward by the
+	// elapsed wall time over long-running streams. Re-evaluating per message
+	// also lets timestamps recover when the wall clock jumps (e.g. NTP
+	// catches up after boot on a system without an RTC).
+	bootTime func() time.Time
+
+	options options
+}
+
+// bootTimeNow returns the current best-estimate wall-clock time of system boot.
+func bootTimeNow() time.Time {
+	offset, err := getBootTimeOffset()
+	if err != nil {
+		return time.Now()
+	}
+
+	return time.Now().Add(offset)
 }
 
 func (r *reader) Close() error {
@@ -149,7 +169,7 @@ func (r *reader) scanNoFollow(ctx context.Context, ch chan<- Packet) {
 
 		var packet Packet
 
-		packet.Message, packet.Err = ParseMessage(buf[:n], time.Now().Add(r.bootOffset))
+		packet.Message, packet.Err = ParseMessage(buf[:n], r.bootTime())
 
 		if !channel.SendWithContext(ctx, ch, packet) {
 			return
@@ -184,7 +204,7 @@ func (r *reader) scanFollow(ctx context.Context, ch chan<- Packet) {
 
 		var packet Packet
 
-		packet.Message, packet.Err = ParseMessage(buf[:n], time.Now().Add(r.bootOffset))
+		packet.Message, packet.Err = ParseMessage(buf[:n], r.bootTime())
 
 		if !channel.SendWithContext(ctx, ch, packet) {
 			return
