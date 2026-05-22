@@ -37,7 +37,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.67.5
-	github.com/siderolabs/go-kmsg v0.1.5
+	github.com/siderolabs/go-kmsg v0.1.6
 	github.com/stretchr/testify v1.11.1
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/testcontainers/testcontainers-go v0.42.0

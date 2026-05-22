@@ -1,12 +1,13 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED, PLEASE DO NOT EDIT.
 #
-# Generated on 2026-03-13T17:41:07Z by kres e68c408.
+# Generated on 2026-04-29T10:33:35Z by kres 980313d.
 
 *
 !kmsg.go
 !message.go
 !message_test.go
 !reader.go
+!reader_internal_test.go
 !reader_test.go
 !utils_bsd.go
 !utils_linux.go
@@ -18,3 +19,4 @@
 !README.md
 !.markdownlint.json
 !hack/govulncheck.sh
+!.disvulncheck.yaml
