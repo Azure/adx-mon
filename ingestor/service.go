@@ -64,7 +64,10 @@ type Service struct {
 	scheduler *scheduler.Periodic
 
 	dropFilePrefixes []string
-	health           interface{ IsHealthy() bool }
+	health           interface {
+		IsHealthy() bool
+		UnhealthyReason() string
+	}
 }
 
 type ServiceOpts struct {
@@ -388,13 +391,22 @@ func (s *Service) HandleDebugStore(w http.ResponseWriter, r *http.Request) {
 
 // HandleReady handles the readiness probe.
 func (s *Service) HandleReady(w http.ResponseWriter, r *http.Request) {
-	if s.health.IsHealthy() {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	backend := s.opts.StorageBackend
+	if backend == "" {
+		backend = storage.BackendADX
+	}
+
+	unhealthyReason := s.health.UnhealthyReason()
+	if unhealthyReason == "" {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		fmt.Fprintf(w, "status=ok backend=%s\n", backend)
 		return
 	}
+
 	w.WriteHeader(http.StatusServiceUnavailable)
-	w.Write([]byte("not ready"))
+	fmt.Fprintf(w, "status=not_ready reason=%s backend=%s\n", unhealthyReason, backend)
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.

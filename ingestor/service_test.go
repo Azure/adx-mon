@@ -11,17 +11,60 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeHealthChecker struct {
-	healthy bool
+	healthy         bool
+	unhealthyReason string
 }
 
 func (f *fakeHealthChecker) IsHealthy() bool {
+	if f.unhealthyReason != "" {
+		return false
+	}
 	return f.healthy
+}
+
+func (f *fakeHealthChecker) UnhealthyReason() string {
+	return f.unhealthyReason
+}
+
+func TestService_HandleReady_Healthy(t *testing.T) {
+	s := &Service{
+		opts:   ServiceOpts{StorageBackend: storage.BackendClickHouse},
+		health: &fakeHealthChecker{healthy: true},
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://localhost:8080/readyz", nil)
+	require.NoError(t, err)
+
+	resp := httptest.NewRecorder()
+	s.HandleReady(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.Equal(t, "text/plain; charset=utf-8", resp.Header().Get("Content-Type"))
+	require.Equal(t, "status=ok backend=clickhouse\n", resp.Body.String())
+}
+
+func TestService_HandleReady_Unhealthy(t *testing.T) {
+	s := &Service{
+		health: &fakeHealthChecker{unhealthyReason: cluster.ReasonMaxDiskUsageExceeded},
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://localhost:8080/readyz", nil)
+	require.NoError(t, err)
+
+	resp := httptest.NewRecorder()
+	s.HandleReady(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	require.Equal(t, "text/plain; charset=utf-8", resp.Header().Get("Content-Type"))
+	require.Equal(t, "status=not_ready reason=MaxDiskUsageExceeded backend=adx\n", resp.Body.String())
 }
 
 func TestService_HandleTransfer_DroppedPrefix(t *testing.T) {
