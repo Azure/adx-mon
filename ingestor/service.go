@@ -64,10 +64,7 @@ type Service struct {
 	scheduler *scheduler.Periodic
 
 	dropFilePrefixes []string
-	health           interface {
-		IsHealthy() bool
-		UnhealthyReason() string
-	}
+	health           interface{ IsHealthy() bool }
 }
 
 type ServiceOpts struct {
@@ -234,6 +231,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MetricsKustoCli:  opts.MetricsKustoCli,
 		KustoCli:         allKustoCli,
 		PeerHealthReport: health,
+		Region:           opts.Region,
 	})
 
 	dbs := make(map[string]struct{}, len(opts.AllowedDatabase))
@@ -293,11 +291,6 @@ func (s *Service) Open(ctx context.Context) error {
 	if err := s.scheduler.Open(svcCtx); err != nil {
 		return err
 	}
-
-	s.scheduler.ScheduleEvery(time.Minute, "ingestor-health-check", func(ctx context.Context) error {
-		metrics.IngestorHealthCheck.WithLabelValues(s.opts.Region).Set(1)
-		return nil
-	})
 
 	if s.opts.StorageBackend == storage.BackendADX {
 		fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
@@ -391,22 +384,13 @@ func (s *Service) HandleDebugStore(w http.ResponseWriter, r *http.Request) {
 
 // HandleReady handles the readiness probe.
 func (s *Service) HandleReady(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-
-	backend := s.opts.StorageBackend
-	if backend == "" {
-		backend = storage.BackendADX
-	}
-
-	unhealthyReason := s.health.UnhealthyReason()
-	if unhealthyReason == "" {
+	if s.health.IsHealthy() {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "status=ok backend=%s\n", backend)
+		w.Write([]byte("ok"))
 		return
 	}
-
 	w.WriteHeader(http.StatusServiceUnavailable)
-	fmt.Fprintf(w, "status=not_ready reason=%s backend=%s\n", unhealthyReason, backend)
+	w.Write([]byte("not ready"))
 }
 
 // HandleTransfer handles the transfer WAL segments from other nodes in the cluster.

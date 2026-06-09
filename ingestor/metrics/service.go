@@ -38,6 +38,7 @@ type ServiceOpts struct {
 	// KustoCli is the Kusto clients for all clusters.
 	KustoCli         []StatementExecutor
 	PeerHealthReport adxmetrics.HealthReporter
+	Region           string
 }
 
 // service manages the collection of metrics for ingestors.
@@ -48,6 +49,7 @@ type service struct {
 	metricsKustoCli []StatementExecutor
 	allKustoClis    []StatementExecutor
 	health          adxmetrics.HealthReporter
+	region          string
 }
 
 func NewService(opts ServiceOpts) Service {
@@ -56,6 +58,7 @@ func NewService(opts ServiceOpts) Service {
 		metricsKustoCli: opts.MetricsKustoCli,
 		allKustoClis:    opts.KustoCli,
 		health:          opts.PeerHealthReport,
+		region:          opts.Region,
 	}
 }
 
@@ -145,18 +148,31 @@ func (s *service) collect(ctx context.Context) {
 				}
 			}
 
+			healthy, unhealthyReason := s.reportHealth()
+
 			logger.Infof("Status IsHealthy=%v "+
 				"UploadQueueSize=%d TransferQueueSize=%d SegmentsTotal=%d SegmentsSize=%d UnhealthyReason=%s "+
 				"ActiveConnections=%d DroppedConnections=%d MaxSegmentAgeSeconds=%0.2f",
-				s.health.IsHealthy(),
+				healthy,
 				s.health.UploadQueueSize(),
 				s.health.TransferQueueSize(),
 				s.health.SegmentsTotal(),
 				s.health.SegmentsSize(),
-				s.health.UnhealthyReason(),
+				unhealthyReason,
 				int(activeConns),
 				int(droppedConns),
 				s.health.MaxSegmentAge().Seconds())
 		}
 	}
+}
+
+func (s *service) reportHealth() (bool, string) {
+	unhealthyReason := s.health.UnhealthyReason()
+	if unhealthyReason == "" {
+		adxmetrics.IngestorHealthCheck.WithLabelValues(s.region).Set(1)
+		return true, ""
+	}
+
+	adxmetrics.IngestorHealthCheck.WithLabelValues(s.region).Set(0)
+	return false, unhealthyReason
 }
