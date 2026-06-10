@@ -15,6 +15,8 @@ import (
 	io_prometheus_client "github.com/prometheus/client_model/go"
 )
 
+const healthyReason = "None"
+
 type StatementExecutor interface {
 	Database() string
 	Endpoint() string
@@ -32,6 +34,8 @@ type Service interface {
 type ServiceOpts struct {
 	Elector Elector
 
+	Region string
+
 	// MetricsKustoCli is the Kusto clients for metrics clusters.
 	MetricsKustoCli []StatementExecutor
 
@@ -48,6 +52,9 @@ type service struct {
 	metricsKustoCli []StatementExecutor
 	allKustoClis    []StatementExecutor
 	health          adxmetrics.HealthReporter
+	region          string
+
+	lastHealthStatusReason string
 }
 
 func NewService(opts ServiceOpts) Service {
@@ -56,6 +63,7 @@ func NewService(opts ServiceOpts) Service {
 		metricsKustoCli: opts.MetricsKustoCli,
 		allKustoClis:    opts.KustoCli,
 		health:          opts.PeerHealthReport,
+		region:          opts.Region,
 	}
 }
 
@@ -145,18 +153,44 @@ func (s *service) collect(ctx context.Context) {
 				}
 			}
 
+			isHealthy := s.health.IsHealthy()
+			unhealthyReason := s.health.UnhealthyReason()
+			s.recordHealthStatus(isHealthy, unhealthyReason)
+
 			logger.Infof("Status IsHealthy=%v "+
 				"UploadQueueSize=%d TransferQueueSize=%d SegmentsTotal=%d SegmentsSize=%d UnhealthyReason=%s "+
 				"ActiveConnections=%d DroppedConnections=%d MaxSegmentAgeSeconds=%0.2f",
-				s.health.IsHealthy(),
+				isHealthy,
 				s.health.UploadQueueSize(),
 				s.health.TransferQueueSize(),
 				s.health.SegmentsTotal(),
 				s.health.SegmentsSize(),
-				s.health.UnhealthyReason(),
+				unhealthyReason,
 				int(activeConns),
 				int(droppedConns),
 				s.health.MaxSegmentAge().Seconds())
 		}
 	}
+}
+
+func (s *service) recordHealthStatus(isHealthy bool, unhealthyReason string) {
+	reason := normalizeUnhealthyReason(unhealthyReason)
+	if s.lastHealthStatusReason != "" && s.lastHealthStatusReason != reason {
+		adxmetrics.IngestorHealthStatus.DeleteLabelValues(s.region, s.lastHealthStatusReason)
+	}
+
+	value := 0.0
+	if isHealthy {
+		value = 1
+	}
+	adxmetrics.IngestorHealthStatus.WithLabelValues(s.region, reason).Set(value)
+
+	s.lastHealthStatusReason = reason
+}
+
+func normalizeUnhealthyReason(reason string) string {
+	if reason == "" {
+		return healthyReason
+	}
+	return reason
 }
