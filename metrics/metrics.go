@@ -29,6 +29,13 @@ var (
 		Help:      "Gauge indicating if Ingestor is healthy or not",
 	}, []string{"region"})
 
+	IngestorHealthStatus = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "health_status",
+		Help:      "Gauge indicating current Ingestor health status by unhealthy reason. Value is 1 when healthy and 0 when unhealthy.",
+	}, []string{"region", "unhealthy_reason"})
+
 	RequestsReceived = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
