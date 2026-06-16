@@ -1,6 +1,7 @@
 package adx
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -25,6 +26,26 @@ func TestSyncer_EnsureTable(t *testing.T) {
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
 	require.NoError(t, s.EnsureDefaultTable("Test"))
 	kcli.Verify(t)
+}
+
+func TestSyncer_EnsurePromMetricsFunctionsCreatesPromRate(t *testing.T) {
+	kcli := &fakeKustoMgmt{}
+
+	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
+	require.NoError(t, s.ensurePromMetricsFunctions(context.Background()))
+	require.Len(t, kcli.queries, 3)
+	require.Equal(t, `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
+		T
+		| where isnan(Value) == false
+		| partition hint.strategy=shuffle by SeriesId (
+			order by Timestamp asc
+			| extend prevVal=prev(Value), prevTs=prev(Timestamp)
+			| extend sampleGap=(Timestamp-prevTs)/1s
+			| extend inc=case(isnull(prevVal), real(null), Value-prevVal < 0, next(Value)-Value, Value-prevVal)
+			| extend Value=iff(sampleGap > 0, inc/sampleGap, real(null))
+			| project Timestamp, SeriesId, Labels, Value
+		)
+		| where isfinite(Value)}`, kcli.queries[1])
 }
 
 func TestSanitizerErrorString(t *testing.T) {

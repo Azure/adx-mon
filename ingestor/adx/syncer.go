@@ -278,11 +278,12 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 		| partition hint.strategy=shuffle by SeriesId (
 			order by Timestamp asc
 			| extend prevVal=prev(Value), prevTs=prev(Timestamp)
+			| extend sampleGap=(Timestamp-prevTs)/1s
 			| extend inc=case(isnull(prevVal), real(null), Value-prevVal < 0, next(Value)-Value, Value-prevVal)
-			| extend Value=inc/((Timestamp-prevTs)/1s)
+			| extend Value=iff(sampleGap > 0, inc/sampleGap, real(null))
 			| project Timestamp, SeriesId, Labels, Value
 		)
-		| where isnotnull(Value) and isnan(Value) == false}`},
+		| where isfinite(Value)}`},
 
 		{
 
