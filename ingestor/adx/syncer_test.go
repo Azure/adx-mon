@@ -1,7 +1,9 @@
 package adx
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Azure/adx-mon/schema"
@@ -25,6 +27,27 @@ func TestSyncer_EnsureTable(t *testing.T) {
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
 	require.NoError(t, s.EnsureDefaultTable("Test"))
 	kcli.Verify(t)
+}
+
+func TestSyncer_EnsurePromMetricsFunctionsCreatesPromRate(t *testing.T) {
+	kcli := &fakeKustoMgmt{}
+
+	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
+	require.NoError(t, s.ensurePromMetricsFunctions(context.Background()))
+	require.Len(t, kcli.queries, 3)
+
+	require.Contains(t, kcli.queries[0], ".create-or-alter function prom_increase")
+	require.Contains(t, kcli.queries[1], ".create-or-alter function prom_rate")
+	require.Contains(t, kcli.queries[2], ".create-or-alter function prom_delta")
+
+	promRate := kcli.queries[1]
+	require.True(t, strings.HasPrefix(promRate, ".create-or-alter function prom_rate "), promRate)
+	require.Contains(t, promRate, "| partition hint.strategy=shuffle by SeriesId (")
+	require.Contains(t, promRate, "| extend sampleGap=(Timestamp-prevTs)/1s")
+	require.Contains(t, promRate, "| extend Value=iff(sampleGap > 0, inc/sampleGap, real(null))")
+	require.Contains(t, promRate, "| where isfinite(Value)")
+	require.NotContains(t, promRate, "| invoke prom_increase")
+	require.NotContains(t, promRate, "Value=inc/((Timestamp-prevTs)/1s)")
 }
 
 func TestSanitizerErrorString(t *testing.T) {
