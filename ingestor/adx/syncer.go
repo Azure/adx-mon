@@ -271,11 +271,6 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 		)}`},
 
 		{
-			// prom_rate fuses the counter-increase and rate division into a single
-			// per-series partition pass. prev/next require a serialized (single-threaded)
-			// row set, so the per-series time-ordered scan is the dominant cost; doing it
-			// once (instead of prom_increase plus a second serialized prev pass over every
-			// row) roughly halves peak memory with identical results.
 			name: "prom_rate",
 			body: `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
 		T
