@@ -600,3 +600,283 @@ func TestSummaryRule_getOperation_Parsing(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, st)
 }
+
+func TestSummaryRule_SuspendSkipsSubmission(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-suspend", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "T",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "Body",
+		},
+	}
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+	r.AutoSuspendEvaluator = func(*adxmonv1.SummaryRule) bool { return true }
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	require.Len(t, updated.GetAsyncOperations(), 0)
+	cond := updated.GetCondition()
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, "Suspended", cond.Reason)
+	require.Equal(t, "SummaryRule execution is suspended", cond.Message)
+
+	require.Empty(t, mock.GetQueries())
+}
+
+func TestSummaryRule_SuspendKeepsBacklogIdle(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-suspend-backlog", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "T",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "Body",
+		},
+	}
+	start := now.Add(-time.Hour)
+	endInclusive := start.Add(time.Hour).Add(-kustoutil.OneTick)
+	rule.SetAsyncOperation(adxmonv1.AsyncOperation{OperationId: "", StartTime: start.Format(time.RFC3339Nano), EndTime: endInclusive.Format(time.RFC3339Nano)})
+
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+	r.AutoSuspendEvaluator = func(*adxmonv1.SummaryRule) bool { return true }
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	ops := updated.GetAsyncOperations()
+	require.Len(t, ops, 1)
+	require.Equal(t, "", ops[0].OperationId)
+
+	require.Empty(t, mock.GetQueries())
+}
+
+func TestSummaryRule_SuspendTracksInflightOperations(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-suspend-track", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "T",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "Body",
+		},
+	}
+	rule.SetAsyncOperation(adxmonv1.AsyncOperation{OperationId: "op-1", StartTime: now.Add(-time.Hour).Format(time.RFC3339Nano), EndTime: now.Format(time.RFC3339Nano)})
+
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	cols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
+	rows := []value.Values{{
+		value.DateTime{Value: now, Valid: true},
+		value.String{Value: "op-1", Valid: true},
+		value.String{Value: "Completed", Valid: true},
+		value.Real{Value: 0, Valid: true},
+		value.String{Value: "", Valid: true},
+	}}
+	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rows))
+	r := newBaseReconciler(t, c, mock, now)
+	r.AutoSuspendEvaluator = func(*adxmonv1.SummaryRule) bool { return true }
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	require.Len(t, updated.GetAsyncOperations(), 0)
+
+	queries := mock.GetQueries()
+	require.NotEmpty(t, queries)
+	require.Contains(t, queries[0], ".show operations")
+}
+
+func TestSummaryRule_SuspendSkipsRetryResubmission(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-suspend-retry", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "T",
+			Interval: metav1.Duration{Duration: time.Hour},
+			Body:     "Body",
+		},
+	}
+	rule.SetAsyncOperation(adxmonv1.AsyncOperation{OperationId: "op-1", StartTime: now.Add(-time.Hour).Format(time.RFC3339Nano), EndTime: now.Format(time.RFC3339Nano)})
+
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	cols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
+	rows := []value.Values{{
+		value.DateTime{Value: now, Valid: true},
+		value.String{Value: "op-1", Valid: true},
+		value.String{Value: "InProgress", Valid: true},
+		value.Real{Value: 1, Valid: true},
+		value.String{Value: "retry advised", Valid: true},
+	}}
+	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rows))
+
+	r := newBaseReconciler(t, c, mock, now)
+	r.AutoSuspendEvaluator = func(*adxmonv1.SummaryRule) bool { return true }
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+
+	queries := mock.GetQueries()
+	require.Len(t, queries, 1)
+	require.Contains(t, queries[0], ".show operations")
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	ops := updated.GetAsyncOperations()
+	require.Len(t, ops, 1)
+	require.Equal(t, "op-1", ops[0].OperationId)
+}
+
+func TestSummaryRule_ShouldAutoSuspend(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	gen := int64(3)
+	reconciler := &SummaryRuleReconciler{Clock: klock.NewFakeClock(now)}
+
+	makeRule := func(interval time.Duration, failureAge time.Duration, message string, observed int64, completed *metav1.Condition) *adxmonv1.SummaryRule {
+		condFailed := metav1.Condition{
+			Type:               adxmonv1.ConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ExecutionFailed",
+			Message:            message,
+			ObservedGeneration: observed,
+			LastTransitionTime: metav1.NewTime(now.Add(-failureAge)),
+		}
+		rule := &adxmonv1.SummaryRule{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-auto", Generation: gen},
+			Spec: adxmonv1.SummaryRuleSpec{
+				Database: "testdb",
+				Table:    "T",
+				Interval: metav1.Duration{Duration: interval},
+				Body:     "Body",
+			},
+			Status: adxmonv1.SummaryRuleStatus{Conditions: []metav1.Condition{condFailed}},
+		}
+		if completed != nil {
+			completed.ObservedGeneration = observed
+			rule.Status.Conditions = append(rule.Status.Conditions, *completed)
+		}
+		return rule
+	}
+
+	cases := []struct {
+		name   string
+		rule   *adxmonv1.SummaryRule
+		expect bool
+	}{
+		{
+			name:   "sustained throttling triggers suspension",
+			rule:   makeRule(time.Minute, 30*time.Minute, "Partial query failure: Query throttled (E_QUERY_THROTTLED)", gen, nil),
+			expect: true,
+		},
+		{
+			name:   "below threshold does not suspend",
+			rule:   makeRule(time.Minute, 5*time.Minute, "Partial query failure: Query throttled (E_QUERY_THROTTLED)", gen, nil),
+			expect: false,
+		},
+		{
+			name:   "non throttle failure ignored",
+			rule:   makeRule(time.Minute, 30*time.Minute, "Partial query failure: Query timeout", gen, nil),
+			expect: false,
+		},
+		{
+			name:   "stale generation ignored",
+			rule:   makeRule(time.Minute, 30*time.Minute, "Partial query failure: Query throttled (E_QUERY_THROTTLED)", gen-1, nil),
+			expect: false,
+		},
+		{
+			name: "recent completion resets",
+			rule: makeRule(time.Minute, 30*time.Minute, "Partial query failure: Query throttled (E_QUERY_THROTTLED)", gen, &metav1.Condition{
+				Type:               adxmonv1.ConditionCompleted,
+				Status:             metav1.ConditionTrue,
+				Reason:             "ExecutionSuccessful",
+				Message:            "Most recent submission succeeded",
+				LastTransitionTime: metav1.NewTime(now.Add(-10 * time.Minute)),
+			}),
+			expect: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			suspend, _ := reconciler.shouldAutoSuspend(tc.rule)
+			require.Equal(t, tc.expect, suspend)
+		})
+	}
+}
+
+func TestSummaryRule_AutoSuspendUpdatesCondition(t *testing.T) {
+	ensureTestVFlagSetT(t)
+	now := time.Now().UTC()
+	gen := int64(4)
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "default",
+			Name:        "sr-auto-condition",
+			Generation:  gen,
+			Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter},
+		},
+		Spec: adxmonv1.SummaryRuleSpec{
+			Database: "testdb",
+			Table:    "T",
+			Interval: metav1.Duration{Duration: time.Minute},
+			Body:     "Body",
+		},
+		Status: adxmonv1.SummaryRuleStatus{Conditions: []metav1.Condition{
+			{
+				Type:               adxmonv1.ConditionFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "ExecutionFailed",
+				Message:            "Partial query failure: Query throttled (E_QUERY_THROTTLED)",
+				ObservedGeneration: gen,
+				LastTransitionTime: metav1.NewTime(now.Add(-30 * time.Minute)),
+			},
+			{
+				Type:               adxmonv1.ConditionCompleted,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ExecutionFailed",
+				Message:            "Partial query failure: Query throttled (E_QUERY_THROTTLED)",
+				ObservedGeneration: gen,
+				LastTransitionTime: metav1.NewTime(now.Add(-30 * time.Minute)),
+			},
+		}},
+	}
+	c := newFakeClientWithRule(t, rule)
+	mock := NewMockKustoExecutor(t, "testdb", "https://test")
+	r := newBaseReconciler(t, c, mock, now)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.NoError(t, err)
+
+	var updated adxmonv1.SummaryRule
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(rule), &updated))
+	ownerCond := updated.GetCondition()
+	require.NotNil(t, ownerCond)
+	require.Equal(t, metav1.ConditionFalse, ownerCond.Status)
+	require.Equal(t, "Suspended", ownerCond.Reason)
+	require.Contains(t, ownerCond.Message, "sustained throttling")
+	require.Empty(t, mock.GetQueries())
+}
