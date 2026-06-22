@@ -40,8 +40,8 @@ require (
 	github.com/siderolabs/go-kmsg v0.1.6
 	github.com/stretchr/testify v1.11.1
 	github.com/tenebris-tech/tail v1.0.5
-	github.com/testcontainers/testcontainers-go v0.42.0
-	github.com/testcontainers/testcontainers-go/modules/k3s v0.42.0
+	github.com/testcontainers/testcontainers-go v0.43.0
+	github.com/testcontainers/testcontainers-go/modules/k3s v0.43.0
 	github.com/tinylib/msgp v1.6.4
 	github.com/traefik/yaegi v0.16.1
 	github.com/urfave/cli/v2 v2.27.7
@@ -145,7 +145,7 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/samber/lo v1.52.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
-	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.5 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/siderolabs/gen v0.8.6 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
