@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"sync"
 	"time"
@@ -214,6 +215,11 @@ func (l *Alerter) Open(ctx context.Context) error {
 	go func() {
 		logger.Infof("Listening at :%d", l.opts.Port)
 		http.Handle("/metrics", promhttp.Handler())
+		http.HandleFunc("/debug/pprof/", pprof.Index)
+		http.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		http.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		http.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		http.HandleFunc("/debug/pprof/trace", pprof.Trace)
 		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
