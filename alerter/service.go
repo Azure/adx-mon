@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"sync"
 	"time"
@@ -62,6 +63,8 @@ type Alerter struct {
 	closeFn   context.CancelFunc
 	CtrlCli   client.Client
 	ruleStore ruleStore
+
+	alertHandler http.Handler
 }
 
 type KustoClient interface {
@@ -113,7 +116,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 
 	if opts.AlertAddr == "" {
 		logger.Warnf("No alert address provided, using fake alert handler")
-		http.Handle("/alerts", fakeAlertHandler())
+		l2m.alertHandler = fakeAlertHandler()
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
 
@@ -213,8 +216,7 @@ func (l *Alerter) Open(ctx context.Context) error {
 
 	go func() {
 		logger.Infof("Listening at :%d", l.opts.Port)
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), l.httpMux()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -234,6 +236,20 @@ func (l *Alerter) Open(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (l *Alerter) httpMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	if l.alertHandler != nil {
+		mux.Handle("/alerts", l.alertHandler)
+	}
+	return mux
 }
 
 func (l *Alerter) Close() error {
