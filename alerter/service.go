@@ -81,7 +81,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		CtrlCli: opts.CtrlCli,
 	})
 
-	l2m := &Alerter{
+	l := &Alerter{
 		opts:      opts,
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
@@ -110,13 +110,13 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Interval:  time.Minute,
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
 		}
-		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
+		l.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
 		ruleStore.Register(fakeRule)
 	}
 
 	if opts.AlertAddr == "" {
 		logger.Warnf("No alert address provided, using fake alert handler")
-		l2m.alertHandler = fakeAlertHandler()
+		l.alertHandler = fakeAlertHandler()
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
 
@@ -124,7 +124,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert client: %w", err)
 	}
-	l2m.alertCli = alertCli
+	l.alertCli = alertCli
 
 	executor := engine.NewExecutor(
 		engine.ExecutorOpts{
@@ -138,8 +138,8 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			CtrlCli:     opts.CtrlCli,
 		})
 
-	l2m.executor = executor
-	return l2m, nil
+	l.executor = executor
+	return l, nil
 }
 
 func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
