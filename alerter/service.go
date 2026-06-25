@@ -29,6 +29,7 @@ type AlerterOpts struct {
 	Cloud          string
 	Port           int
 	Concurrency    int
+	EnablePprof    bool
 
 	Tags map[string]string
 
@@ -241,11 +242,13 @@ func (l *Alerter) Open(ctx context.Context) error {
 func (l *Alerter) httpMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	if l.opts.EnablePprof {
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	}
 	if l.alertHandler != nil {
 		mux.Handle("/alerts", l.alertHandler)
 	}
