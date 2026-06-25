@@ -3,16 +3,18 @@ package engine
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
+	azerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,25 +28,19 @@ func TestExecutor_Handler_MissingTitle(t *testing.T) {
 		Rule: rule,
 	}
 
-	iter := &kusto.RowIterator{}
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Severity", Type: types.Long},
-		{Name: "Summary", Type: types.String},
-		{Name: "CorrelationId", Type: types.String},
-	})
-	require.NoError(t, err)
-
-	rows.Row(value.Values{
-		value.Long{Value: 1, Valid: true},
-		value.String{Value: "Fake Alert Summary", Valid: true},
-		value.String{Value: "Fake CorrelationId", Valid: true},
-	})
-
-	require.NoError(t, iter.Mock(rows))
-
-	row, _, _ := iter.NextRowOrError()
-	err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "Severity", aztypes.Long),
+			testColumn(1, "Summary", aztypes.String),
+			testColumn(2, "CorrelationId", aztypes.String),
+		},
+		azvalue.Values{
+			azvalue.NewLong(1),
+			azvalue.NewString("Fake Alert Summary"),
+			azvalue.NewString("Fake CorrelationId"),
+		},
+	)
+	err := e.HandlerFn(context.Background(), "http://endpoint", qc, row)
 	require.ErrorContains(t, err, "title must be between 1 and 512 chars")
 	require.True(t, isUserError(err))
 }
@@ -82,88 +78,61 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 
 	for _, tt := range []struct {
 		desc     string
-		columns  []table.Column
-		rows     value.Values
+		columns  azquery.Columns
+		values   azvalue.Values
 		err      string
 		severity int
 	}{
 		{
 			desc:    "missing severity",
-			columns: table.Columns{{Name: "Title", Type: types.String}},
-			rows:    value.Values{value.String{Value: "Title", Valid: true}},
+			columns: azquery.Columns{testColumn(0, "Title", aztypes.String)},
+			values:  azvalue.Values{azvalue.NewString("Title")},
 			err:     "severity must be specified",
 		},
 		{
-			desc: "severity not convertable to a number",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.String}},
-			rows: value.Values{
-				value.String{Value: "Title", Valid: true},
-				value.String{Value: "not a number", Valid: false}},
-			err: "failed to convert severity to int",
+			desc:    "severity not convertable to a number",
+			columns: azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.String)},
+			values:  azvalue.Values{azvalue.NewString("Title"), azvalue.NewString("not a number")},
+			err:     "failed to convert severity to int",
 		},
 		{
-			desc: "severity as long",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Long}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Long{Value: 1, Valid: false}},
+			desc:     "severity as long",
+			columns:  azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long)},
+			values:   azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1)},
 			err:      "",
 			severity: 1,
 		},
 		{
-			desc: "severity as string",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.String}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.String{Value: "10", Valid: false}},
+			desc:     "severity as string",
+			columns:  azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.String)},
+			values:   azvalue.Values{azvalue.NewString("Title"), azvalue.NewString("10")},
 			err:      "",
 			severity: 10,
 		},
 		{
-			desc: "severity as real",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Real}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Real{Value: 10.1, Valid: false}},
+			desc:     "severity as real",
+			columns:  azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Real)},
+			values:   azvalue.Values{azvalue.NewString("Title"), azvalue.NewReal(10.1)},
 			err:      "",
 			severity: 10,
 		},
 		{
-			desc: "severity as int",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Int}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Int{Value: 10, Valid: false}},
+			desc:     "severity as int",
+			columns:  azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Int)},
+			values:   azvalue.Values{azvalue.NewString("Title"), azvalue.NewInt(10)},
 			err:      "",
 			severity: 10,
 		},
 		{
-			desc: "severity as decimal",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Decimal}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Decimal{Value: "10.1", Valid: false}},
+			desc:     "severity as decimal",
+			columns:  azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Decimal)},
+			values:   azvalue.Values{azvalue.NewString("Title"), azvalue.NewDecimal(decimal.RequireFromString("10.1"))},
 			err:      "",
 			severity: 10,
 		},
 	} {
 		t.Run(tt.desc, func(t *testing.T) {
-			iter := &kusto.RowIterator{}
-
-			rows, err := kusto.NewMockRows(tt.columns)
-			require.NoError(t, err)
-
-			rows.Row(tt.rows)
-			require.NoError(t, iter.Mock(rows))
-
-			row, _, _ := iter.NextRowOrError()
+			row := testRow(tt.columns, tt.values)
 
 			client := &fakeAlertClient{}
 			e := Executor{
@@ -175,7 +144,7 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 				Rule: rule,
 			}
 
-			err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
+			err := e.HandlerFn(context.Background(), "http://endpoint", qc, row)
 			if tt.err == "" {
 				require.NoError(t, err)
 				require.Equal(t, tt.severity, client.alert.Severity)
@@ -187,51 +156,83 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 	}
 }
 
+func TestExecutor_asInt64_Errors(t *testing.T) {
+	e := &Executor{}
+
+	for _, tt := range []struct {
+		desc  string
+		value azvalue.Kusto
+		err   string
+	}{
+		{
+			desc:  "nil value",
+			value: nil,
+			err:   "failed to convert severity to int: <nil>",
+		},
+		{
+			desc:  "invalid string",
+			value: azvalue.NewString("not a number"),
+			err:   "failed to convert severity to int: strconv.ParseInt",
+		},
+		{
+			desc:  "null long",
+			value: azvalue.NewNullLong(),
+			err:   "failed to convert severity to int:",
+		},
+		{
+			desc:  "null real",
+			value: azvalue.NewNullReal(),
+			err:   "failed to convert severity to int:",
+		},
+		{
+			desc:  "null int",
+			value: azvalue.NewNullInt(),
+			err:   "failed to convert severity to int:",
+		},
+		{
+			desc:  "null decimal",
+			value: azvalue.NewNullDecimal(),
+			err:   "failed to convert severity to int:",
+		},
+		{
+			desc:  "unsupported type",
+			value: unsupportedKustoValue{},
+			err:   "failed to convert severity to int:",
+		},
+	} {
+		t.Run(tt.desc, func(t *testing.T) {
+			_, err := e.asInt64(tt.value)
+			require.ErrorContains(t, err, tt.err)
+		})
+	}
+}
+
 func TestExecutor_Handler_DuplicateReservedColumnsDifferentCase(t *testing.T) {
-	iter := &kusto.RowIterator{}
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Title", Type: types.String},
-		{Name: "Severity", Type: types.Long},
-		{Name: "severity", Type: types.Long},
-	})
-	require.NoError(t, err)
-
-	rows.Row(value.Values{
-		value.String{Value: "Title", Valid: true},
-		value.Long{Value: 1, Valid: true},
-		value.Long{Value: 2, Valid: true},
-	})
-	require.NoError(t, iter.Mock(rows))
-
-	row, _, _ := iter.NextRowOrError()
-	err = (&Executor{alertCli: &fakeAlertClient{}}).HandlerFn(context.Background(), "http://endpoint", &QueryContext{Rule: &rules.Rule{}}, row)
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "Title", aztypes.String),
+			testColumn(1, "Severity", aztypes.Long),
+			testColumn(2, "severity", aztypes.Long),
+		},
+		azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewLong(2)},
+	)
+	err := (&Executor{alertCli: &fakeAlertClient{}}).HandlerFn(context.Background(), "http://endpoint", &QueryContext{Rule: &rules.Rule{}}, row)
 	require.ErrorContains(t, err, `query results include multiple columns for reserved alert field "Severity": Severity, severity`)
 	require.True(t, isUserError(err))
 }
 
 func TestExecutor_Handler_DuplicateCustomColumnsDifferentCase(t *testing.T) {
-	iter := &kusto.RowIterator{}
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Title", Type: types.String},
-		{Name: "Severity", Type: types.Long},
-		{Name: "CustomField", Type: types.String},
-		{Name: "customfield", Type: types.String},
-	})
-	require.NoError(t, err)
-
-	rows.Row(value.Values{
-		value.String{Value: "Title", Valid: true},
-		value.Long{Value: 1, Valid: true},
-		value.String{Value: "upper", Valid: true},
-		value.String{Value: "lower", Valid: true},
-	})
-	require.NoError(t, iter.Mock(rows))
-
 	client := &fakeAlertClient{}
-	row, _, _ := iter.NextRowOrError()
-	err = (&Executor{alertCli: client}).HandlerFn(context.Background(), "http://endpoint", &QueryContext{Rule: &rules.Rule{Destination: "destination"}}, row)
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "Title", aztypes.String),
+			testColumn(1, "Severity", aztypes.Long),
+			testColumn(2, "CustomField", aztypes.String),
+			testColumn(3, "customfield", aztypes.String),
+		},
+		azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewString("upper"), azvalue.NewString("lower")},
+	)
+	err := (&Executor{alertCli: client}).HandlerFn(context.Background(), "http://endpoint", &QueryContext{Rule: &rules.Rule{Destination: "destination"}}, row)
 	require.NoError(t, err)
 	require.Equal(t, "upper", client.alert.CustomFields["CustomField"])
 	require.Equal(t, "lower", client.alert.CustomFields["customfield"])
@@ -246,66 +247,38 @@ func TestExecutor_Handler_CorrelationId(t *testing.T) {
 
 	testcases := []struct {
 		desc          string
-		columns       []table.Column
-		rows          value.Values
+		columns       azquery.Columns
+		values        azvalue.Values
 		correlationId string
 	}{
 		{
-			desc: "normal correlation id",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Long},
-				{Name: "CorrelationId", Type: types.String}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Long{Value: 1, Valid: false},
-				value.String{Value: "Fake CorrelationId", Valid: true}},
+			desc:          "normal correlation id",
+			columns:       azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long), testColumn(2, "CorrelationId", aztypes.String)},
+			values:        azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewString("Fake CorrelationId")},
 			correlationId: fmt.Sprintf("%s%s", prefix, "Fake CorrelationId"),
 		},
 		{
-			desc: "correlation id already has prefix",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Long},
-				{Name: "CorrelationId", Type: types.String}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Long{Value: 1, Valid: false},
-				value.String{Value: "rulesns/rulename://Fake Correlation Id", Valid: true}},
+			desc:          "correlation id already has prefix",
+			columns:       azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long), testColumn(2, "CorrelationId", aztypes.String)},
+			values:        azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewString("rulesns/rulename://Fake Correlation Id")},
 			correlationId: fmt.Sprintf("%s%s", prefix, "Fake Correlation Id"),
 		},
 		{
-			desc: "empty correlation id",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Long},
-				{Name: "CorrelationId", Type: types.String}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Long{Value: 1, Valid: false},
-				value.String{Value: "", Valid: true}},
+			desc:          "empty correlation id",
+			columns:       azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long), testColumn(2, "CorrelationId", aztypes.String)},
+			values:        azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewString("")},
 			correlationId: "",
 		},
 		{
-			desc: "no correlation id",
-			columns: table.Columns{
-				{Name: "Title", Type: types.String},
-				{Name: "Severity", Type: types.Long}},
-			rows: value.Values{value.String{Value: "Title", Valid: true},
-				value.Long{Value: 1, Valid: false}},
+			desc:          "no correlation id",
+			columns:       azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long)},
+			values:        azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1)},
 			correlationId: "",
 		},
 	}
 
 	for _, tt := range testcases {
 		t.Run(tt.desc, func(t *testing.T) {
-			iter := &kusto.RowIterator{}
-
-			rows, err := kusto.NewMockRows(tt.columns)
-			require.NoError(t, err)
-
-			rows.Row(tt.rows)
-			require.NoError(t, iter.Mock(rows))
-
-			row, _, _ := iter.NextRowOrError()
-
 			client := &fakeAlertClient{}
 			e := Executor{
 				alertCli: client,
@@ -319,11 +292,43 @@ func TestExecutor_Handler_CorrelationId(t *testing.T) {
 				Rule: rule,
 			}
 
-			err = e.HandlerFn(context.Background(), "http://endpoint", qc, row)
+			err := e.HandlerFn(context.Background(), "http://endpoint", qc, testRow(tt.columns, tt.values))
 			require.NoError(t, err)
 			require.Equal(t, tt.correlationId, client.alert.CorrelationID)
 		})
 	}
+}
+
+func testRow(columns azquery.Columns, values azvalue.Values) azquery.Row {
+	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
+	table := azquery.NewBaseTable(base, 0, "", "QueryResult", "QueryResult", columns)
+	return azquery.NewRow(table, 0, values)
+}
+
+func testColumn(index int, name string, columnType aztypes.Column) azquery.Column {
+	return azquery.NewColumn(index, name, columnType)
+}
+
+type unsupportedKustoValue struct{}
+
+func (unsupportedKustoValue) String() string {
+	panic("String should not be called")
+}
+
+func (unsupportedKustoValue) Convert(reflect.Value) error {
+	return nil
+}
+
+func (unsupportedKustoValue) GetValue() interface{} {
+	return nil
+}
+
+func (unsupportedKustoValue) GetType() aztypes.Column {
+	return aztypes.Bool
+}
+
+func (unsupportedKustoValue) Unmarshal(interface{}) error {
+	return nil
 }
 
 func TestExecutor_RunOnce(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
-	"github.com/Azure/azure-kusto-go/kusto"
-	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	azqueryv1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 )
 
 type multiKustoClient struct {
@@ -22,11 +22,11 @@ type multiKustoClient struct {
 func New(endpoints map[string]string, configureAuth authConfiguror, max int) (multiKustoClient, error) {
 	clients := make(map[string]QueryClient)
 	for name, endpoint := range endpoints {
-		kcsb := kusto.NewConnectionStringBuilder(endpoint)
+		kcsb := azkustodata.NewConnectionStringBuilder(endpoint)
 		if strings.HasPrefix(endpoint, "https://") {
 			kcsb = configureAuth(kcsb.WithAzCli())
 		}
-		client, err := kusto.New(kcsb)
+		client, err := azkustodata.New(kcsb)
 		if err != nil {
 			return multiKustoClient{}, fmt.Errorf("kusto client=%s: %w", endpoint, err)
 		}
@@ -49,7 +49,7 @@ func New(endpoints map[string]string, configureAuth authConfiguror, max int) (mu
 	}, nil
 }
 
-func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
+func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	client := c.clients[qc.Rule.Database]
 	if client == nil {
 		return &engine.UnknownDBError{
@@ -59,52 +59,93 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 		}, 0
 	}
 
-	var iter *kusto.RowIterator
-	var err error
 	if qc.Rule.IsMgmtQuery {
-		iter, err = client.Mgmt(ctx, qc.Rule.Database, qc.Stmt)
+		ds, err := client.Mgmt(ctx, qc.Rule.Database, qc.Stmt, queryOptions(qc)...)
 		if err != nil {
 			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err), 0
 		}
-	} else {
-		iter, err = client.Query(ctx, qc.Rule.Database, qc.Stmt)
-		if err != nil {
-			return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt), 0
-		}
+		return c.handleDatasetRows(ctx, client.Endpoint(), qc, ds, fn)
 	}
 
-	var rows []*table.Row
-	defer iter.Stop()
+	ds, err := client.IterativeQuery(ctx, qc.Rule.Database, qc.Stmt, queryOptions(qc)...)
+	if err != nil {
+		return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt), 0
+	}
+	defer ds.Close()
 
-	// Accumulate rows and check for errors
-	if err := iter.DoOnRowOrError(func(row *table.Row, err *kerrors.Error) error {
-		if err != nil {
-			// Error encountered - don't callback any accumulated rows, just return the error
-			// This can happen in cases of internalservererrors where the returned rows can be incomplete or broken, causing incorrect alerts to fire.
-			return err
-		}
+	return c.handleIterativeRows(ctx, client.Endpoint(), qc, ds, fn)
+}
 
-		// Already have max rows, but trying to add another. Send existing rows, then return error.
-		if len(rows) >= c.maxNotifications {
-			for _, row := range rows {
-				if callbackErr := fn(ctx, client.Endpoint(), qc, row); callbackErr != nil {
-					return callbackErr
-				}
-			}
-			return fmt.Errorf("%s/%s returned more than %d icm, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, alert.ErrTooManyRequests)
-		}
-
-		rows = append(rows, row)
-
+func queryOptions(qc *engine.QueryContext) []azkustodata.QueryOption {
+	if qc.Params == nil {
 		return nil
-	}); err != nil {
-		return err, 0
+	}
+	return []azkustodata.QueryOption{azkustodata.QueryParameters(qc.Params)}
+}
+
+// handleIterativeRows processes the rows from an iterative dataset and calls the provided function for each row.
+// If we get an error, we return prior to emitting any rows to avoid invalid alerts being emitted.
+// In some cases, Kusto will return some rows along with InternalServerError which are cases when incomplete rows have been processed, so some rows may be returned to us incorrectly.
+func (c multiKustoClient) handleIterativeRows(ctx context.Context, endpoint string, qc *engine.QueryContext, ds azquery.IterativeDataset, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
+	var rows []azquery.Row
+	tooManyRows := false
+
+	for tableResult := range ds.Tables() {
+		if tableResult.Err() != nil {
+			return tableResult.Err(), 0
+		}
+
+		table := tableResult.Table()
+		if !table.IsPrimaryResult() {
+			continue
+		}
+
+		for rowResult := range table.Rows() {
+			if rowResult.Err() != nil {
+				return rowResult.Err(), 0
+			}
+
+			if len(rows) >= c.maxNotifications {
+				tooManyRows = true
+				continue // consume the rest of the rows to consume the rest of the body
+			}
+			rows = append(rows, rowResult.Row())
+		}
 	}
 
+	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, fn)
+}
+
+func (c multiKustoClient) handleDatasetRows(ctx context.Context, endpoint string, qc *engine.QueryContext, ds azquery.Dataset, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
+	var rows []azquery.Row
+	tooManyRows := false
+
+	for _, table := range ds.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+
+		for _, row := range table.Rows() {
+			if len(rows) >= c.maxNotifications {
+				tooManyRows = true
+				continue
+			}
+			rows = append(rows, row)
+		}
+	}
+
+	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, fn)
+}
+
+func (c multiKustoClient) emitRows(ctx context.Context, endpoint string, qc *engine.QueryContext, rows []azquery.Row, tooManyRows bool, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	for _, row := range rows {
-		if err := fn(ctx, client.Endpoint(), qc, row); err != nil {
+		if err := fn(ctx, endpoint, qc, row); err != nil {
 			return err, 0
 		}
+	}
+
+	if tooManyRows {
+		return fmt.Errorf("%s/%s returned more than %d icm, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, alert.ErrTooManyRequests), 0
 	}
 
 	return nil, len(rows)
@@ -136,7 +177,7 @@ func (c multiKustoClient) FindCaseInsensitiveMatch(db string) string {
 }
 
 type QueryClient interface {
-	Query(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
-	Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	IterativeQuery(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error)
+	Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (azqueryv1.Dataset, error)
 	Endpoint() string
 }

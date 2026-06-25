@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/alerter/engine"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
+	azerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,34 +51,22 @@ func (f fakeLintKustoClient) Endpoint(db string) string {
 	return "https://fake.kusto.windows.net"
 }
 
-func (f fakeLintKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, *table.Row) error) (error, int) {
-	iter := &kusto.RowIterator{}
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "Title", Type: types.String},
-		{Name: "Severity", Type: types.Long},
-		{Name: "severity", Type: types.Long},
-	})
-	if err != nil {
-		return err, 0
-	}
-
-	if err := rows.Row(value.Values{
-		value.String{Value: "Title", Valid: true},
-		value.Long{Value: 1, Valid: true},
-		value.Long{Value: 2, Valid: true},
-	}); err != nil {
-		return err, 0
-	}
-
-	if err := iter.Mock(rows); err != nil {
-		return err, 0
-	}
-
-	row, _, _ := iter.NextRowOrError()
+func (f fakeLintKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
+	row := lintTestRow()
 	if err := fn(ctx, f.Endpoint(qc.Rule.Database), qc, row); err != nil {
 		return err, 0
 	}
 	return nil, 1
+}
+
+func lintTestRow() azquery.Row {
+	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
+	table := azquery.NewBaseTable(base, 0, "", "QueryResult", "QueryResult", []azquery.Column{
+		azquery.NewColumn(0, "Title", aztypes.String),
+		azquery.NewColumn(1, "Severity", aztypes.Long),
+		azquery.NewColumn(2, "severity", aztypes.Long),
+	})
+	return azquery.NewRow(table, 0, azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewLong(2)})
 }
 
 func (f fakeLintKustoClient) AvailableDatabases() []string {

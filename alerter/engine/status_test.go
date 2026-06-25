@@ -6,16 +6,16 @@ import (
 	"testing"
 
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWorker_StatusUpdate_NoKubernetesClient(t *testing.T) {
 	// Test that status updates are gracefully skipped when no Kubernetes client is available
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			// Simulate 1 row being processed
-			fn(ctx, "fake.endpoint", qc, &table.Row{})
+			fn(ctx, "fake.endpoint", qc, testRow(nil, nil))
 			return nil, 1
 		},
 	}
@@ -26,7 +26,7 @@ func TestWorker_StatusUpdate_NoKubernetesClient(t *testing.T) {
 		Database:  "TestDB",
 	}
 
-	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}, AlertAddr: "http://fake.alert.addr", HandlerFn: func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}, AlertAddr: "http://fake.alert.addr", HandlerFn: func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
 		return nil
 	}})
 
@@ -68,9 +68,9 @@ func TestWorker_AlertCounting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			kcli := &fakeKustoClient{
-				queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+				queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 					for i := 0; i < tt.numRows; i++ {
-						fn(ctx, "fake.endpoint", qc, &table.Row{})
+						fn(ctx, "fake.endpoint", qc, testRow(nil, nil))
 					}
 					return nil, tt.numRows
 				},
@@ -82,7 +82,7 @@ func TestWorker_AlertCounting(t *testing.T) {
 				Database:  "TestDB",
 			}
 
-			w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}, AlertAddr: "http://fake.alert.addr", HandlerFn: func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+			w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}, AlertAddr: "http://fake.alert.addr", HandlerFn: func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
 				if tt.handlerSuccess {
 					return nil // Success - alert generated
 				}

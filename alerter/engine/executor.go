@@ -15,8 +15,10 @@ import (
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	kustovalues "github.com/Azure/azure-kusto-go/kusto/data/value"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
+	"github.com/shopspring/decimal"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -121,19 +123,23 @@ func (e *Executor) Close() error {
 }
 
 // HandlerFn converts rows of a query to Alerts.
-func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
 	res := Notification{
 		Severity:     math.MinInt64,
 		CustomFields: map[string]string{},
 	}
 
-	columns := row.ColumnNames()
-	if err := validateNotificationColumns(columns); err != nil {
+	columns := row.Columns()
+	columnNames := make([]string, 0, len(columns))
+	for _, column := range columns {
+		columnNames = append(columnNames, column.Name())
+	}
+	if err := validateNotificationColumns(columnNames); err != nil {
 		return err
 	}
 
-	for i, value := range row.Values {
-		switch strings.ToLower(columns[i]) {
+	for i, value := range row.Values() {
+		switch strings.ToLower(columnNames[i]) {
 		case "title":
 			res.Title = value.String()
 		case "description":
@@ -151,7 +157,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		case "correlationid":
 			res.CorrelationID = value.String()
 		default:
-			res.CustomFields[columns[i]] = value.String()
+			res.CustomFields[columnNames[i]] = value.String()
 		}
 	}
 
@@ -224,29 +230,43 @@ func validateNotificationColumns(columns []string) error {
 	return nil
 }
 
-func (e *Executor) asInt64(value kustovalues.Kusto) (int64, error) {
-	switch t := value.(type) {
-	case kustovalues.Long:
-		return t.Value, nil
-	case kustovalues.Real:
-		return int64(t.Value), nil
-	case kustovalues.String:
-		v, err := strconv.ParseInt(t.Value, 10, 64)
+func (e *Executor) asInt64(value azvalue.Kusto) (int64, error) {
+	if value == nil {
+		return 0, fmt.Errorf("failed to convert severity to int: <nil>")
+	}
+	switch value.GetType() {
+	case aztypes.Long:
+		v, ok := value.GetValue().(*int64)
+		if !ok || v == nil {
+			break
+		}
+		return *v, nil
+	case aztypes.Real:
+		v, ok := value.GetValue().(*float64)
+		if !ok || v == nil {
+			break
+		}
+		return int64(*v), nil
+	case aztypes.String:
+		v, err := strconv.ParseInt(value.String(), 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("failed to convert severity to int: %w", err)
 		}
 		return v, nil
-	case kustovalues.Int:
-		return int64(t.Value), nil
-	case kustovalues.Decimal:
-		v, err := strconv.ParseFloat(t.Value, 64)
-		if err != nil {
-			return 0, fmt.Errorf("failed to convert severity to int: %w", err)
+	case aztypes.Int:
+		v, ok := value.GetValue().(*int32)
+		if !ok || v == nil {
+			break
 		}
-		return int64(v), nil
-	default:
-		return 0, fmt.Errorf("failed to convert severity to int: %s", value.String())
+		return int64(*v), nil
+	case aztypes.Decimal:
+		v, ok := value.GetValue().(*decimal.Decimal)
+		if !ok || v == nil {
+			break
+		}
+		return v.IntPart(), nil
 	}
+	return 0, fmt.Errorf("failed to convert severity to int: %v", value.GetValue())
 }
 
 func (e *Executor) RunOnce(ctx context.Context) {
