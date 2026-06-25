@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/adx-mon/alerter/multikustoclient"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -68,11 +67,7 @@ type Alerter struct {
 	alertHandler http.Handler
 }
 
-type KustoClient interface {
-	Mgmt(ctx context.Context, db string, query kusto.Stmt, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
-	Query(ctx context.Context, db string, query kusto.Stmt, options ...kusto.QueryOption) (*kusto.RowIterator, error)
-	Endpoint() string
-}
+type KustoClient interface{ Endpoint() string }
 
 type lintClientFactory func(opts *AlerterOpts) (engine.Client, error)
 

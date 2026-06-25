@@ -14,8 +14,8 @@ import (
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
-	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	kerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,7 +38,7 @@ type worker struct {
 	alertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	handlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	handlerFn       func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
 	querySlots      chan struct{}
 	ctrlCli         client.Client
 	alertsGenerated int // Track alerts generated in current execution
@@ -59,7 +59,7 @@ type WorkerConfig struct {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
 	AlertAddr        string
-	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error
+	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
 	CtrlClient       client.Client
 	sharedQuerySlots chan struct{}
 }
@@ -201,7 +201,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 
 	// Create a wrapper handler that tracks alerts generated
-	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row *table.Row) error {
+	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
 		err := e.handlerFn(ctx, endpoint, qc, row)
 		if err == nil {
 			// If HandlerFn succeeded, it means an alert was generated
