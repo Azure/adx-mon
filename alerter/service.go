@@ -57,11 +57,11 @@ type Alerter struct {
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
-	wg       sync.WaitGroup
-	executor *engine.Executor
-	ctx      context.Context
-	closeFn  context.CancelFunc
-	CtrlCli  client.Client
+	wg        sync.WaitGroup
+	executor  *engine.Executor
+	ctx       context.Context
+	closeFn   context.CancelFunc
+	CtrlCli   client.Client
 	ruleStore ruleStore
 }
 
