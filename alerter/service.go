@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/pprof"
 	"os"
 	"sync"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Azure/adx-mon/alerter/rules"
+	_ "net/http/pprof"
 )
 
 type AlerterOpts struct {
@@ -57,13 +57,12 @@ type Alerter struct {
 	alertCli *alert.Client
 	opts     *AlerterOpts
 
-	wg                     sync.WaitGroup
-	executor               *engine.Executor
-	ctx                    context.Context
-	closeFn                context.CancelFunc
-	CtrlCli                client.Client
-	ruleStore              ruleStore
-	useFakeAlertHTTPServer bool
+	wg       sync.WaitGroup
+	executor *engine.Executor
+	ctx      context.Context
+	closeFn  context.CancelFunc
+	CtrlCli  client.Client
+	ruleStore ruleStore
 }
 
 type KustoClient interface {
@@ -115,7 +114,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 
 	if opts.AlertAddr == "" {
 		logger.Warnf("No alert address provided, using fake alert handler")
-		l2m.useFakeAlertHTTPServer = true
+		http.Handle("/alerts", fakeAlertHandler())
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
 
@@ -215,17 +214,8 @@ func (l *Alerter) Open(ctx context.Context) error {
 
 	go func() {
 		logger.Infof("Listening at :%d", l.opts.Port)
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		mux.HandleFunc("/debug/pprof/", pprof.Index)
-		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-		if l.useFakeAlertHTTPServer {
-			mux.Handle("/alerts", fakeAlertHandler())
-		}
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), mux); err != nil {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
