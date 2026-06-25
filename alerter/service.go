@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ type AlerterOpts struct {
 	Cloud          string
 	Port           int
 	Concurrency    int
+	EnablePprof    bool
 
 	Tags map[string]string
 
@@ -62,6 +64,8 @@ type Alerter struct {
 	closeFn   context.CancelFunc
 	CtrlCli   client.Client
 	ruleStore ruleStore
+
+	alertHandler http.Handler
 }
 
 type KustoClient interface {
@@ -78,7 +82,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		CtrlCli: opts.CtrlCli,
 	})
 
-	l2m := &Alerter{
+	l := &Alerter{
 		opts:      opts,
 		CtrlCli:   opts.CtrlCli,
 		ruleStore: ruleStore,
@@ -107,13 +111,13 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			Interval:  time.Minute,
 			Query:     `UnderlayNodeInfo | where Region == ParamRegion | limit 1 | project Title="test"`,
 		}
-		l2m.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
+		l.clients[fakeRule.Database] = fakeKustoClient{endpoint: "http://fake.endpoint"}
 		ruleStore.Register(fakeRule)
 	}
 
 	if opts.AlertAddr == "" {
 		logger.Warnf("No alert address provided, using fake alert handler")
-		http.Handle("/alerts", fakeAlertHandler())
+		l.alertHandler = fakeAlertHandler()
 		opts.AlertAddr = fmt.Sprintf("http://localhost:%d", opts.Port)
 	}
 
@@ -121,7 +125,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create alert client: %w", err)
 	}
-	l2m.alertCli = alertCli
+	l.alertCli = alertCli
 
 	executor := engine.NewExecutor(
 		engine.ExecutorOpts{
@@ -135,8 +139,8 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 			CtrlCli:     opts.CtrlCli,
 		})
 
-	l2m.executor = executor
-	return l2m, nil
+	l.executor = executor
+	return l, nil
 }
 
 func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
@@ -213,8 +217,7 @@ func (l *Alerter) Open(ctx context.Context) error {
 
 	go func() {
 		logger.Infof("Listening at :%d", l.opts.Port)
-		http.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), nil); err != nil {
+		if err := http.ListenAndServe(fmt.Sprintf(":%d", l.opts.Port), l.httpMux()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -234,6 +237,22 @@ func (l *Alerter) Open(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (l *Alerter) httpMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	if l.opts.EnablePprof {
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	}
+	if l.alertHandler != nil {
+		mux.Handle("/alerts", l.alertHandler)
+	}
+	return mux
 }
 
 func (l *Alerter) Close() error {
