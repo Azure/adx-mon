@@ -15,6 +15,7 @@ import (
 
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -22,6 +23,7 @@ import (
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/davecgh/go-spew/spew"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -374,6 +376,39 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 			spew.Dump(data)
 		})
 	}
+}
+
+func TestStore_WriteNativeLogs_DropsLogsWithoutDestination(t *testing.T) {
+	metrics.InvalidLogsDropped.Reset()
+	t.Cleanup(metrics.InvalidLogsDropped.Reset)
+
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024,
+		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   1024 * 1024,
+	})
+
+	require.NoError(t, s.Open(context.Background()))
+	t.Cleanup(func() {
+		s.Close()
+	})
+
+	missingDatabase := types.NewLog()
+	missingDatabase.SetAttributeValue(types.AttributeTableName, "foo")
+
+	missingTable := types.NewLog()
+	missingTable.SetAttributeValue(types.AttributeDatabaseName, "adxlogs")
+
+	require.NoError(t, s.WriteNativeLogs(context.Background(), &types.LogBatch{
+		Logs: []*types.Log{missingDatabase, missingTable},
+	}))
+	require.Equal(t, 0, s.WALCount())
+
+	var m dto.Metric
+	require.NoError(t, metrics.InvalidLogsDropped.WithLabelValues().Write(&m))
+	require.Equal(t, float64(2), m.Counter.GetValue())
 }
 
 func TestStore_SkipNonCSV(t *testing.T) {
