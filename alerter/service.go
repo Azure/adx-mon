@@ -36,6 +36,10 @@ type AlerterOpts struct {
 	// MaxNotifications is the maximum number of notifications to send per rule.
 	MaxNotifications int
 
+	// Namespace is the Kubernetes namespace to watch for AlertRules.
+	// If empty, all namespaces are watched.
+	Namespace string
+
 	// Managed Identity options
 	MSIID       string
 	MSIResource string
@@ -78,8 +82,9 @@ type lintClientFactory func(opts *AlerterOpts) (engine.Client, error)
 
 func NewService(opts *AlerterOpts) (*Alerter, error) {
 	ruleStore := rules.NewStore(rules.StoreOpts{
-		Region:  opts.Region,
-		CtrlCli: opts.CtrlCli,
+		Region:    opts.Region,
+		Namespace: opts.Namespace,
+		CtrlCli:   opts.CtrlCli,
 	})
 
 	l := &Alerter{

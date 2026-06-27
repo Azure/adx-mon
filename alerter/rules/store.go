@@ -19,8 +19,9 @@ import (
 )
 
 type StoreOpts struct {
-	Region  string
-	CtrlCli client.Client
+	Region    string
+	Namespace string
+	CtrlCli   client.Client
 }
 
 type Store struct {
@@ -108,7 +109,11 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 	defer cancel()
 
 	ruleList := &alertrulev1.AlertRuleList{}
-	if err := s.ctrlCli.List(ctx, ruleList); err != nil {
+	var listOpts []client.ListOption
+	if s.opts.Namespace != "" {
+		listOpts = append(listOpts, client.InNamespace(s.opts.Namespace))
+	}
+	if err := s.ctrlCli.List(ctx, ruleList, listOpts...); err != nil {
 		return nil, fmt.Errorf("failed to list alert rules: %w", err)
 	}
 
