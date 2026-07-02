@@ -187,7 +187,7 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 		Title:         res.Title,
 		Summary:       summary,
 		Description:   res.Description,
-		Severity:      int(res.Severity),
+		Severity:      clampInt64ToInt(res.Severity),
 		Source:        fmt.Sprintf("%s/%s", qc.Rule.Namespace, qc.Rule.Name),
 		CorrelationID: res.CorrelationID,
 		CustomFields:  res.CustomFields,
@@ -210,6 +210,16 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name).Set(0)
 
 	return nil
+}
+
+func clampInt64ToInt(v int64) int {
+	if v > int64(math.MaxInt) {
+		return math.MaxInt
+	}
+	if v < int64(math.MinInt) {
+		return math.MinInt
+	}
+	return int(v)
 }
 
 func validateNotificationColumns(columns []string) error {
