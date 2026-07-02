@@ -6,7 +6,7 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 )
 
 func NewFakeKustoClient() Client {
@@ -15,14 +15,14 @@ func NewFakeKustoClient() Client {
 
 type fakeKustoClient struct {
 	queryErr error
-	queryFn  func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int)
+	queryFn  func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int)
 }
 
 func (m *fakeKustoClient) Endpoint(db string) string {
 	return fmt.Sprintf("%s.mockcluster.kusto.windows.net", db)
 }
 
-func (m *fakeKustoClient) Query(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+func (m *fakeKustoClient) Query(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 	if m.queryErr != nil {
 		return m.queryErr, 0
 	}
