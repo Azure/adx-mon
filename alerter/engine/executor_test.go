@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -203,6 +204,44 @@ func TestExecutor_asInt64_Errors(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			_, err := e.asInt64(tt.value)
 			require.ErrorContains(t, err, tt.err)
+		})
+	}
+}
+
+func TestClampInt64ToInt(t *testing.T) {
+	for _, tt := range []struct {
+		desc string
+		in   int64
+		want int
+	}{
+		{
+			desc: "within range",
+			in:   10,
+			want: 10,
+		},
+		{
+			desc: "max int",
+			in:   int64(math.MaxInt),
+			want: math.MaxInt,
+		},
+		{
+			desc: "min int",
+			in:   int64(math.MinInt),
+			want: math.MinInt,
+		},
+		{
+			desc: "max int64",
+			in:   math.MaxInt64,
+			want: math.MaxInt,
+		},
+		{
+			desc: "min int64",
+			in:   math.MinInt64,
+			want: math.MinInt,
+		},
+	} {
+		t.Run(tt.desc, func(t *testing.T) {
+			require.Equal(t, tt.want, clampInt64ToInt(tt.in))
 		})
 	}
 }
