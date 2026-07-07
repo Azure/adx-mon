@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/rules"
 	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
 	azerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
-	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	azqueryv1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
 	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
@@ -21,18 +21,26 @@ import (
 type fakeQueryClient struct {
 	nextQueryDataset azquery.IterativeDataset
 	nextQueryErr     error
+	lastQuery        azkustodata.Statement
+	lastQueryOptions []azkustodata.QueryOption
 
 	nextMgmtDataset azqueryv1.Dataset
 	nextMgmtErr     error
+	lastMgmt        azkustodata.Statement
+	lastMgmtOptions []azkustodata.QueryOption
 
 	endpoint string
 }
 
 func (f *fakeQueryClient) IterativeQuery(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error) {
+	f.lastQuery = query
+	f.lastQueryOptions = options
 	return f.nextQueryDataset, f.nextQueryErr
 }
 
 func (f *fakeQueryClient) Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (azqueryv1.Dataset, error) {
+	f.lastMgmt = query
+	f.lastMgmtOptions = options
 	return f.nextMgmtDataset, f.nextMgmtErr
 }
 
@@ -173,10 +181,8 @@ func TestQuery(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			queryContext := &engine.QueryContext{
-				Rule: tc.rule,
-				Stmt: kql.New("").AddUnsafe("query"),
-			}
+			queryContext, err := engine.NewQueryContext(tc.rule, time.Date(2023, 04, 10, 0, 0, 0, 0, time.UTC), "eastus")
+			require.NoError(t, err)
 
 			callbackCounter := 0
 			callback := func(context.Context, string, *engine.QueryContext, azquery.Row) error {
@@ -184,7 +190,7 @@ func TestQuery(t *testing.T) {
 				return tc.callbackErr
 			}
 
-			err, _ := multiKustoClient.Query(ctx, queryContext, callback)
+			err, _ = multiKustoClient.Query(ctx, queryContext, callback)
 
 			require.Equal(t, tc.expectedSent, callbackCounter)
 			if tc.rule.IsMgmtQuery {
@@ -226,6 +232,28 @@ func TestFindCaseInsensitiveMatch(t *testing.T) {
 	require.Equal(t, "Metrics", match)
 }
 
+func TestQuery_UsesConstructedWrappedQuery(t *testing.T) {
+	client := &fakeQueryClient{endpoint: "endpoint", nextQueryDataset: newFakeIterativeDataset(nil, nil)}
+	multiKustoClient := multiKustoClient{
+		clients:          map[string]QueryClient{"dbOne": client},
+		maxNotifications: 5,
+	}
+	queryContext, err := engine.NewQueryContext(&rules.Rule{
+		Database: "dbOne",
+		Interval: time.Hour,
+		Query:    "Table | where Region == _region",
+	}, time.Date(2023, 04, 10, 0, 0, 0, 0, time.UTC), "eastus")
+	require.NoError(t, err)
+
+	err, _ = multiKustoClient.Query(context.Background(), queryContext, func(context.Context, string, *engine.QueryContext, azquery.Row) error {
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "\nlet _startTime = _adxmonStartTime;\nlet _endTime = _adxmonEndTime;\nlet _region = _adxmonRegion;\nTable | where Region == _region\n", client.lastQuery.String())
+	require.Len(t, client.lastQueryOptions, 1)
+}
+
 func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
 	client := multiKustoClient{
 		clients: map[string]QueryClient{
@@ -237,14 +265,10 @@ func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	queryContext := &engine.QueryContext{
-		Rule: &rules.Rule{
-			Database: "cluster_state",
-		},
-		Stmt: kql.New("").AddUnsafe("query"),
-	}
+	queryContext, err := engine.NewQueryContext(&rules.Rule{Database: "cluster_state"}, time.Now(), "eastus")
+	require.NoError(t, err)
 
-	err, _ := client.Query(ctx, queryContext, func(context.Context, string, *engine.QueryContext, azquery.Row) error {
+	err, _ = client.Query(ctx, queryContext, func(context.Context, string, *engine.QueryContext, azquery.Row) error {
 		return nil
 	})
 

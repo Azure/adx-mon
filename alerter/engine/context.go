@@ -14,7 +14,7 @@ type QueryContext struct {
 	Rule      *rules.Rule
 	Query     string
 	Stmt      azkustodata.Statement
-	Params    *kql.Parameters
+	Options   []azkustodata.QueryOption
 	Region    string
 	StartTime time.Time
 	EndTime   time.Time
@@ -38,19 +38,31 @@ func NewQueryContext(rule *rules.Rule, endTime time.Time, region string) (*Query
 
 func (q *QueryContext) wrapStmt() error {
 	q.Query = q.Rule.Query
-	q.Stmt = q.Rule.Stmt
+	q.Stmt = kql.New("").AddUnsafe(q.Rule.Query)
 
 	if q.Rule.IsMgmtQuery {
 		return nil
 	}
 
+	stmt, params, inlinedQuery, err := q.wrapQuery()
+	if err != nil {
+		return err
+	}
+
+	q.Query = inlinedQuery
+	q.Stmt = stmt
+	q.Options = []azkustodata.QueryOption{azkustodata.QueryParameters(params)}
+
+	return nil
+}
+
+func (q *QueryContext) wrapQuery() (azkustodata.Statement, *kql.Parameters, string, error) {
 	query := fmt.Sprintf(`
 let _startTime = _adxmonStartTime;
 let _endTime = _adxmonEndTime;
 let _region = _adxmonRegion;
 %s
 `, strings.TrimSpace(q.Rule.Query))
-
 	stmt := kql.New("").AddUnsafe(query)
 	queryParams := []queryParam{
 		{name: "_adxmonStartTime", value: q.StartTime},
@@ -69,14 +81,10 @@ let _region = _adxmonRegion;
 			params.AddDateTime(param.name, v)
 			literal = fmt.Sprintf("datetime(%s)", v.Format("2006-01-02T15:04:05.999999Z"))
 		default:
-			return fmt.Errorf("unsupported query parameter %s type %T", param.name, v)
+			return nil, nil, "", fmt.Errorf("unsupported query parameter %s type %T", param.name, v)
 		}
 		query = strings.ReplaceAll(query, param.name, literal)
 	}
 
-	q.Query = query
-	q.Params = params
-	q.Stmt = stmt
-
-	return nil
+	return stmt, params, query, nil
 }
