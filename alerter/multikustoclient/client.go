@@ -60,27 +60,20 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 	}
 
 	if qc.Rule.IsMgmtQuery {
-		ds, err := client.Mgmt(ctx, qc.Rule.Database, qc.Stmt, queryOptions(qc)...)
+		ds, err := client.Mgmt(ctx, qc.Rule.Database, qc.Stmt, qc.Options...)
 		if err != nil {
 			return fmt.Errorf("failed to execute management kusto query=%s/%s: %w", qc.Rule.Namespace, qc.Rule.Name, err), 0
 		}
 		return c.handleDatasetRows(ctx, client.Endpoint(), qc, ds, fn)
 	}
 
-	ds, err := client.IterativeQuery(ctx, qc.Rule.Database, qc.Stmt, queryOptions(qc)...)
+	ds, err := client.IterativeQuery(ctx, qc.Rule.Database, qc.Stmt, qc.Options...)
 	if err != nil {
 		return fmt.Errorf("failed to execute kusto query=%s/%s: %w, %s", qc.Rule.Namespace, qc.Rule.Name, err, qc.Stmt), 0
 	}
 	defer ds.Close()
 
 	return c.handleIterativeRows(ctx, client.Endpoint(), qc, ds, fn)
-}
-
-func queryOptions(qc *engine.QueryContext) []azkustodata.QueryOption {
-	if qc.Params == nil {
-		return nil
-	}
-	return []azkustodata.QueryOption{azkustodata.QueryParameters(qc.Params)}
 }
 
 // handleIterativeRows processes the rows from an iterative dataset and calls the provided function for each row.
