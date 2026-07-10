@@ -271,6 +271,8 @@ SummaryRules are managed by the Ingestor's `SummaryRuleTask`, which runs periodi
 
 5. **Resilience**: Handles ADX cluster restarts, network issues, and operation retries. Operations older than 25 hours are automatically cleaned up if they fall out of ADX's 24-hour operations window.
 
+6. **Auto-Suspension Guardrails**: The ADX Exporter automatically suspends a SummaryRule when it sees sustained throttling from ADX. The guardrail triggers once the failure condition shows throttling for at least `max(3 * spec.interval, 15m)` without a successful completion. Suspended rules surface a `SummaryRuleOwner` condition with reason `Suspended` and a message that includes the elapsed throttling duration and the threshold. The controller does not automatically resume execution; clearing suspension requires operator intervention (for example, editing the rule to produce a new generation or manually updating the status condition after addressing the underlying throttling).
+
 **Execution Triggers**: Rules are submitted when:
 - Rule is being deleted
 - Rule was updated (new generation)
