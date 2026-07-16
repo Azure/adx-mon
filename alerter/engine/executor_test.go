@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -158,8 +159,6 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 }
 
 func TestExecutor_asInt64_Errors(t *testing.T) {
-	e := &Executor{}
-
 	for _, tt := range []struct {
 		desc  string
 		value azvalue.Kusto
@@ -202,10 +201,212 @@ func TestExecutor_asInt64_Errors(t *testing.T) {
 		},
 	} {
 		t.Run(tt.desc, func(t *testing.T) {
-			_, err := e.asInt64(tt.value)
+			_, err := asInt64(tt.value)
 			require.ErrorContains(t, err, tt.err)
 		})
 	}
+}
+
+func TestParseAlertResult(t *testing.T) {
+	qc := &QueryContext{
+		Rule: &rules.Rule{
+			Namespace: "rulesns",
+			Name:      "rulename",
+			Database:  "database",
+			Query:     "source | where Secret == true",
+		},
+		Query: "rendered query that must remain delivery-only",
+	}
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "TITLE", aztypes.String),
+			testColumn(1, "description", aztypes.String),
+			testColumn(2, "SeVeRiTy", aztypes.String),
+			testColumn(3, "RECIPIENT", aztypes.String),
+			testColumn(4, "Summary", aztypes.String),
+			testColumn(5, "correlationID", aztypes.String),
+			testColumn(6, "CustomField", aztypes.String),
+		},
+		azvalue.Values{
+			azvalue.NewString("Alert title"),
+			azvalue.NewString("Alert description"),
+			azvalue.NewString("3"),
+			azvalue.NewString("fallback destination"),
+			azvalue.NewString("Original summary"),
+			azvalue.NewString("entity"),
+			azvalue.NewString("custom value"),
+		},
+	)
+
+	got, err := ParseAlertResult(qc, row)
+	require.NoError(t, err)
+	require.Equal(t, AlertResult{
+		Destination:   "fallback destination",
+		Title:         "Alert title",
+		Summary:       "Original summary",
+		Description:   "Alert description",
+		Severity:      3,
+		Source:        "rulesns/rulename",
+		CorrelationID: "rulesns/rulename://entity",
+		CustomFields:  map[string]string{"CustomField": "custom value"},
+	}, got)
+
+	encoded, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), qc.Query)
+	require.NotContains(t, string(encoded), "query=")
+}
+
+func TestParseAlertResult_RuleDestinationTakesPrecedence(t *testing.T) {
+	qc := &QueryContext{Rule: &rules.Rule{Destination: "rule destination"}}
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "Title", aztypes.String),
+			testColumn(1, "Severity", aztypes.Long),
+			testColumn(2, "Recipient", aztypes.String),
+		},
+		azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewString("recipient")},
+	)
+
+	got, err := ParseAlertResult(qc, row)
+	require.NoError(t, err)
+	require.Equal(t, "rule destination", got.Destination)
+}
+
+func TestParseAlertResult_Validation(t *testing.T) {
+	tests := []struct {
+		name    string
+		columns azquery.Columns
+		values  azvalue.Values
+		wantErr string
+	}{
+		{
+			name:    "missing title",
+			columns: azquery.Columns{testColumn(0, "Severity", aztypes.Long)},
+			values:  azvalue.Values{azvalue.NewLong(1)},
+			wantErr: "title must be between 1 and 512 chars",
+		},
+		{
+			name:    "missing severity",
+			columns: azquery.Columns{testColumn(0, "Title", aztypes.String)},
+			values:  azvalue.Values{azvalue.NewString("Title")},
+			wantErr: "severity must be specified",
+		},
+		{
+			name: "duplicate reserved field",
+			columns: azquery.Columns{
+				testColumn(0, "Title", aztypes.String),
+				testColumn(1, "Severity", aztypes.Long),
+				testColumn(2, "severity", aztypes.Long),
+			},
+			values:  azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewLong(2)},
+			wantErr: `query results include multiple columns for reserved alert field "Severity": Severity, severity`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAlertResult(&QueryContext{Rule: &rules.Rule{}}, testRow(tt.columns, tt.values))
+			require.ErrorContains(t, err, tt.wantErr)
+			require.True(t, isUserError(err))
+		})
+	}
+}
+
+func TestParseAlertResult_MalformedRow(t *testing.T) {
+	tests := []struct {
+		name    string
+		columns azquery.Columns
+		values  azvalue.Values
+		wantErr string
+	}{
+		{
+			name: "extra value",
+			columns: azquery.Columns{
+				testColumn(0, "Title", aztypes.String),
+				testColumn(1, "Severity", aztypes.Long),
+			},
+			values:  azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), azvalue.NewString("extra")},
+			wantErr: "query result row has 2 columns and 3 values",
+		},
+		{
+			name: "missing value",
+			columns: azquery.Columns{
+				testColumn(0, "Title", aztypes.String),
+				testColumn(1, "Severity", aztypes.Long),
+			},
+			values:  azvalue.Values{azvalue.NewString("Title")},
+			wantErr: "query result row has 2 columns and 1 values",
+		},
+		{
+			name: "nil non-severity value",
+			columns: azquery.Columns{
+				testColumn(0, "Title", aztypes.String),
+				testColumn(1, "Severity", aztypes.Long),
+				testColumn(2, "Summary", aztypes.String),
+			},
+			values:  azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1), nil},
+			wantErr: `query result column "Summary" has nil value`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAlertResult(&QueryContext{Rule: &rules.Rule{}}, testRow(tt.columns, tt.values))
+			require.ErrorContains(t, err, tt.wantErr)
+			require.True(t, isUserError(err))
+		})
+	}
+}
+
+func TestExecutor_Handler_DeliversEnrichedAlert(t *testing.T) {
+	client := &fakeAlertClient{}
+	executor := &Executor{alertCli: client, alertAddr: "http://alert-service"}
+	qc := &QueryContext{
+		Rule: &rules.Rule{
+			Namespace:   "rulesns",
+			Name:        "rulename",
+			Database:    "database",
+			Destination: "rule destination",
+		},
+		Query: "Table | take 1",
+	}
+	row := testRow(
+		azquery.Columns{
+			testColumn(0, "Title", aztypes.String),
+			testColumn(1, "Summary", aztypes.String),
+			testColumn(2, "Description", aztypes.String),
+			testColumn(3, "Severity", aztypes.Long),
+			testColumn(4, "CorrelationId", aztypes.String),
+			testColumn(5, "Custom", aztypes.String),
+		},
+		azvalue.Values{
+			azvalue.NewString("Title"),
+			azvalue.NewString("Original summary"),
+			azvalue.NewString("Description"),
+			azvalue.NewLong(2),
+			azvalue.NewString("entity"),
+			azvalue.NewString("value"),
+		},
+	)
+
+	err := executor.HandlerFn(context.Background(), "https://cluster.kusto.windows.net", qc, row)
+	require.NoError(t, err)
+	wantSummary, err := KustoQueryLinks("Original summary", qc.Query, "https://cluster.kusto.windows.net", "database")
+	require.NoError(t, err)
+	require.Equal(t, "http://alert-service/alerts", client.endpoint)
+	require.Equal(t, alert.Alert{
+		Destination:   "rule destination",
+		Title:         "Title",
+		Summary:       wantSummary,
+		Description:   "Description",
+		Severity:      2,
+		Source:        "rulesns/rulename",
+		CorrelationID: "rulesns/rulename://entity",
+		CustomFields:  map[string]string{"Custom": "value"},
+	}, client.alert)
+	require.Contains(t, client.alert.Summary, qc.Query)
+	require.Contains(t, client.alert.Summary, "https://cluster.kusto.windows.net/database?query=")
 }
 
 func TestClampInt64ToInt(t *testing.T) {
@@ -475,10 +676,12 @@ func TestExecutor_syncWorkers_Changed(t *testing.T) {
 }
 
 type fakeAlertClient struct {
-	alert alert.Alert
+	endpoint string
+	alert    alert.Alert
 }
 
 func (f *fakeAlertClient) Create(ctx context.Context, endpoint string, alert alert.Alert) error {
+	f.endpoint = endpoint
 	f.alert = alert
 	return nil
 }
