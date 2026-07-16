@@ -143,12 +143,16 @@ func Lint(ctx context.Context, opts *AlerterOpts, path string) error {
 }
 
 func newLintKustoClient(opts *AlerterOpts) (engine.Client, error) {
+	return newKustoClient(opts, opts.MaxNotifications)
+}
+
+func newKustoClient(opts *AlerterOpts, maxResults int) (engine.Client, error) {
 	authConfigure, err := multikustoclient.GetAuth(multikustoclient.MsiAuth(opts.MSIID), multikustoclient.TokenAuth("https://kusto.kusto.windows.net", opts.KustoToken), multikustoclient.DefaultAuth())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auth: %w", err)
 	}
 
-	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, opts.MaxNotifications)
+	kclient, err := multikustoclient.New(opts.KustoEndpoints, authConfigure, maxResults)
 	if err != nil {
 		return nil, err
 	}

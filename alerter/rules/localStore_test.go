@@ -363,3 +363,49 @@ func TestFromPath(t *testing.T) {
 		})
 	}
 }
+
+func TestFromPath_OmittedDestination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rule.yaml")
+	contents := `apiVersion: adx-mon.azure.com/v1
+kind: AlertRule
+metadata:
+  name: recipient-fallback
+  namespace: namespace
+spec:
+  database: DB
+  interval: 5m
+  query: Events
+  autoMitigateAfter: 1h
+`
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+
+	store, err := FromPath(path, "eastus")
+	require.NoError(t, err)
+	require.Len(t, store.Rules(), 1)
+	require.Empty(t, store.Rules()[0].Destination)
+}
+
+func TestFromPath_MalformedAlertRuleSpec(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		spec string
+		err  string
+	}{
+		{name: "malformed database", spec: "  database: [DB]\n  query: Events\n", err: `field "database" must be a string`},
+		{name: "malformed query", spec: "  database: DB\n  query: [Events]\n", err: `field "query" must be a string`},
+		{name: "criteria is list", spec: "  database: DB\n  query: Events\n  criteria: [cloud]\n", err: `field "criteria" must be an object`},
+		{name: "criteria invalid value", spec: "  database: DB\n  query: Events\n  criteria:\n    cloud: 42\n", err: `field "criteria.cloud" must be a string or list of strings`},
+		{name: "criteria invalid list member", spec: "  database: DB\n  query: Events\n  criteria:\n    cloud: [AzureCloud, 42]\n", err: `field "criteria.cloud" list values must be strings`},
+		{name: "criteria expression invalid", spec: "  database: DB\n  query: Events\n  criteriaExpression: [true]\n", err: `field "criteriaExpression" must be a string`},
+		{name: "unknown spec field", spec: "  database: DB\n  query: Events\n  unexpected: value\n", err: `unknown field "unexpected"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rule.yaml")
+			contents := "apiVersion: adx-mon.azure.com/v1\nkind: AlertRule\nmetadata:\n  name: malformed\n  namespace: namespace\nspec:\n" + tt.spec
+			require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+
+			_, err := FromPath(path, "eastus")
+			require.ErrorContains(t, err, tt.err)
+		})
+	}
+}

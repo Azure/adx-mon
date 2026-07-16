@@ -2,11 +2,11 @@ package multikustoclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
@@ -16,10 +16,10 @@ import (
 type multiKustoClient struct {
 	clients            map[string]QueryClient
 	availableDatabases []string
-	maxNotifications   int
+	resultLimit        int
 }
 
-func New(endpoints map[string]string, configureAuth authConfiguror, max int) (multiKustoClient, error) {
+func New(endpoints map[string]string, configureAuth authConfiguror, resultLimit int) (multiKustoClient, error) {
 	clients := make(map[string]QueryClient)
 	for name, endpoint := range endpoints {
 		kcsb := azkustodata.NewConnectionStringBuilder(endpoint)
@@ -45,7 +45,7 @@ func New(endpoints map[string]string, configureAuth authConfiguror, max int) (mu
 	return multiKustoClient{
 		clients:            clients,
 		availableDatabases: availableDatabases,
-		maxNotifications:   max,
+		resultLimit:        resultLimit,
 	}, nil
 }
 
@@ -81,7 +81,7 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 // In some cases, Kusto will return some rows along with InternalServerError which are cases when incomplete rows have been processed, so some rows may be returned to us incorrectly.
 func (c multiKustoClient) handleIterativeRows(ctx context.Context, endpoint string, qc *engine.QueryContext, ds azquery.IterativeDataset, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	var rows []azquery.Row
-	tooManyRows := false
+	rowsProcessed := 0
 
 	for tableResult := range ds.Tables() {
 		if tableResult.Err() != nil {
@@ -98,20 +98,20 @@ func (c multiKustoClient) handleIterativeRows(ctx context.Context, endpoint stri
 				return rowResult.Err(), 0
 			}
 
-			if len(rows) >= c.maxNotifications {
-				tooManyRows = true
+			rowsProcessed++
+			if len(rows) >= c.resultLimit {
 				continue // consume the rest of the rows to consume the rest of the body
 			}
 			rows = append(rows, rowResult.Row())
 		}
 	}
 
-	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, fn)
+	return c.emitRows(ctx, endpoint, qc, rows, rowsProcessed, fn)
 }
 
 func (c multiKustoClient) handleDatasetRows(ctx context.Context, endpoint string, qc *engine.QueryContext, ds azquery.Dataset, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	var rows []azquery.Row
-	tooManyRows := false
+	rowsProcessed := 0
 
 	for _, table := range ds.Tables() {
 		if !table.IsPrimaryResult() {
@@ -119,26 +119,37 @@ func (c multiKustoClient) handleDatasetRows(ctx context.Context, endpoint string
 		}
 
 		for _, row := range table.Rows() {
-			if len(rows) >= c.maxNotifications {
-				tooManyRows = true
+			rowsProcessed++
+			if len(rows) >= c.resultLimit {
 				continue
 			}
 			rows = append(rows, row)
 		}
 	}
 
-	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, fn)
+	return c.emitRows(ctx, endpoint, qc, rows, rowsProcessed, fn)
 }
 
-func (c multiKustoClient) emitRows(ctx context.Context, endpoint string, qc *engine.QueryContext, rows []azquery.Row, tooManyRows bool, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
+func (c multiKustoClient) emitRows(ctx context.Context, endpoint string, qc *engine.QueryContext, rows []azquery.Row, rowsProcessed int, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
+	var limitErr error
+	if rowsProcessed > c.resultLimit {
+		limitErr = &engine.ResultLimitExceededError{
+			Limit:         c.resultLimit,
+			RowsProcessed: rowsProcessed,
+		}
+	}
+
 	for _, row := range rows {
 		if err := fn(ctx, endpoint, qc, row); err != nil {
+			if limitErr != nil {
+				return errors.Join(err, limitErr), 0
+			}
 			return err, 0
 		}
 	}
 
-	if tooManyRows {
-		return fmt.Errorf("%s/%s returned more than %d icm, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, alert.ErrTooManyRequests), 0
+	if limitErr != nil {
+		return limitErr, 0
 	}
 
 	return nil, len(rows)

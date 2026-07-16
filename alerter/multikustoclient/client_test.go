@@ -49,51 +49,58 @@ func (f *fakeQueryClient) Endpoint() string {
 }
 
 func TestQuery(t *testing.T) {
-	maxNotifications := 5
+	resultLimit := 5
 
 	type testcase struct {
-		name             string
-		rows             []string
-		rowErr           error
-		rule             *rules.Rule
-		queryErr         error
-		callbackErr      error
-		expectedSent     int
-		expectedConsumed int
-		expectError      bool
-		expectThrottle   bool
+		name              string
+		rows              []string
+		rowErr            error
+		rule              *rules.Rule
+		queryErr          error
+		callbackErr       error
+		callbackErrorAt   int
+		expectedCallbacks int
+		expectedConsumed  int
+		expectedReturned  int
+		expectError       bool
+		expectLimit       bool
+		expectedRows      int
+		expectCallbackErr bool
 	}
 
 	testcases := []testcase{
 		{
-			name:             "Query with no rows",
-			rows:             []string{},
-			rule:             &rules.Rule{Database: "dbOne"},
-			expectedSent:     0,
-			expectedConsumed: 0,
+			name:              "Query with no rows",
+			rows:              []string{},
+			rule:              &rules.Rule{Database: "dbOne"},
+			expectedCallbacks: 0,
+			expectedConsumed:  0,
 		},
 		{
-			name:             "Two rows",
-			rows:             []string{"rowOne", "rowTwo"},
-			rule:             &rules.Rule{Database: "dbOne"},
-			expectedSent:     2,
-			expectedConsumed: 2,
+			name:              "Two rows",
+			rows:              []string{"rowOne", "rowTwo"},
+			rule:              &rules.Rule{Database: "dbOne"},
+			expectedCallbacks: 2,
+			expectedConsumed:  2,
+			expectedReturned:  2,
 		},
 		{
-			name:             "Max notifications",
-			rows:             []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive"},
-			rule:             &rules.Rule{Database: "dbOne"},
-			expectedSent:     5,
-			expectedConsumed: 5,
+			name:              "Exact result limit",
+			rows:              []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive"},
+			rule:              &rules.Rule{Database: "dbOne"},
+			expectedCallbacks: 5,
+			expectedConsumed:  5,
+			expectedReturned:  5,
 		},
 		{
-			name:             "Over max notifications sends first batch then throttles",
-			rows:             []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive", "rowSix"},
-			rule:             &rules.Rule{Database: "dbOne"},
-			expectedSent:     5,
-			expectedConsumed: 6,
-			expectError:      true,
-			expectThrottle:   true,
+			name:              "Over result limit sends retained rows after fully draining",
+			rows:              []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive", "rowSix"},
+			rule:              &rules.Rule{Database: "dbOne"},
+			expectedCallbacks: 5,
+			expectedConsumed:  6,
+			expectError:       true,
+			expectLimit:       true,
+			expectedRows:      6,
 		},
 		{
 			name:        "Unknown db",
@@ -109,12 +116,35 @@ func TestQuery(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:             "Callback error",
-			rows:             []string{"rowOne", "rowTwo"},
+			name:              "Callback error",
+			rows:              []string{"rowOne", "rowTwo"},
+			rule:              &rules.Rule{Database: "dbOne"},
+			callbackErr:       errors.New("callback error"),
+			callbackErrorAt:   1,
+			expectedCallbacks: 1,
+			expectedConsumed:  2,
+			expectError:       true,
+			expectCallbackErr: true,
+		},
+		{
+			name:              "Callback error preserves exceeded result limit",
+			rows:              []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive", "rowSix", "rowSeven"},
+			rule:              &rules.Rule{Database: "dbOne"},
+			callbackErr:       errors.New("callback error"),
+			callbackErrorAt:   3,
+			expectedCallbacks: 3,
+			expectedConsumed:  7,
+			expectError:       true,
+			expectLimit:       true,
+			expectedRows:      7,
+			expectCallbackErr: true,
+		},
+		{
+			name:             "Iterator error after exceeding result limit takes precedence",
+			rows:             []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive", "rowSix"},
+			rowErr:           errors.New("iterator error after result limit"),
 			rule:             &rules.Rule{Database: "dbOne"},
-			callbackErr:      errors.New("callback error"),
-			expectedSent:     1,
-			expectedConsumed: 2,
+			expectedConsumed: 6,
 			expectError:      true,
 		},
 		{
@@ -131,11 +161,22 @@ func TestQuery(t *testing.T) {
 			expectedConsumed: 0,
 		},
 		{
-			name:             "Two rows mgmt query",
-			rows:             []string{"rowOne", "rowTwo"},
-			rule:             &rules.Rule{Database: "dbOne", IsMgmtQuery: true},
-			expectedSent:     2,
-			expectedConsumed: 0,
+			name:              "Two rows mgmt query",
+			rows:              []string{"rowOne", "rowTwo"},
+			rule:              &rules.Rule{Database: "dbOne", IsMgmtQuery: true},
+			expectedCallbacks: 2,
+			expectedConsumed:  0,
+			expectedReturned:  2,
+		},
+		{
+			name:              "Over result limit management query sends retained rows",
+			rows:              []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive", "rowSix", "rowSeven"},
+			rule:              &rules.Rule{Database: "dbOne", IsMgmtQuery: true},
+			expectedCallbacks: 5,
+			expectedConsumed:  0,
+			expectError:       true,
+			expectLimit:       true,
+			expectedRows:      7,
 		},
 		{
 			name:             "Error after first row - no rows should be sent",
@@ -177,7 +218,7 @@ func TestQuery(t *testing.T) {
 				clients: map[string]QueryClient{
 					"dbOne": client,
 				},
-				maxNotifications: maxNotifications,
+				resultLimit: resultLimit,
 			}
 
 			ctx := context.Background()
@@ -185,22 +226,41 @@ func TestQuery(t *testing.T) {
 			require.NoError(t, err)
 
 			callbackCounter := 0
+			successfulCallbacks := 0
 			callback := func(context.Context, string, *engine.QueryContext, azquery.Row) error {
 				callbackCounter++
-				return tc.callbackErr
+				if callbackCounter == tc.callbackErrorAt {
+					return tc.callbackErr
+				}
+				successfulCallbacks++
+				return nil
 			}
 
-			err, _ = multiKustoClient.Query(ctx, queryContext, callback)
+			err, rowsReturned := multiKustoClient.Query(ctx, queryContext, callback)
 
-			require.Equal(t, tc.expectedSent, callbackCounter)
+			require.Equal(t, tc.expectedCallbacks, callbackCounter)
+			require.Equal(t, tc.expectedReturned, rowsReturned)
 			if tc.rule.IsMgmtQuery {
 				require.False(t, iterative.closed)
 			} else if tc.queryErr == nil && tc.rule.Database == "dbOne" {
 				require.True(t, iterative.closed)
 				require.Equal(t, tc.expectedConsumed, iterative.table.consumed)
 			}
-			if tc.expectThrottle {
-				require.ErrorIs(t, err, alert.ErrTooManyRequests)
+			if tc.expectLimit {
+				var limitErr *engine.ResultLimitExceededError
+				require.ErrorAs(t, err, &limitErr)
+				require.Equal(t, resultLimit, limitErr.Limit)
+				require.Equal(t, tc.expectedRows, limitErr.RowsProcessed)
+				require.NotErrorIs(t, err, alert.ErrTooManyRequests)
+			}
+			if tc.expectCallbackErr {
+				require.ErrorIs(t, err, tc.callbackErr)
+				require.Equal(t, tc.expectedCallbacks-1, successfulCallbacks)
+			}
+			if tc.rowErr != nil {
+				require.ErrorIs(t, err, tc.rowErr)
+				var limitErr *engine.ResultLimitExceededError
+				require.False(t, errors.As(err, &limitErr))
 			}
 			if tc.expectError {
 				require.Error(t, err)
@@ -235,8 +295,8 @@ func TestFindCaseInsensitiveMatch(t *testing.T) {
 func TestQuery_UsesConstructedWrappedQuery(t *testing.T) {
 	client := &fakeQueryClient{endpoint: "endpoint", nextQueryDataset: newFakeIterativeDataset(nil, nil)}
 	multiKustoClient := multiKustoClient{
-		clients:          map[string]QueryClient{"dbOne": client},
-		maxNotifications: 5,
+		clients:     map[string]QueryClient{"dbOne": client},
+		resultLimit: 5,
 	}
 	queryContext, err := engine.NewQueryContext(&rules.Rule{
 		Database: "dbOne",
@@ -261,7 +321,7 @@ func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
 			"Metrics":       &fakeQueryClient{endpoint: "endpoint"},
 		},
 		availableDatabases: []string{"Cluster_State", "Metrics"},
-		maxNotifications:   5,
+		resultLimit:        5,
 	}
 
 	ctx := context.Background()

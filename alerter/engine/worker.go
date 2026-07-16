@@ -213,7 +213,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	err, rows := e.kustoClient.Query(ctx, queryContext, wrappedHandler)
 	if err != nil {
 		// This failed because we sent too many notifications.
-		if errors.Is(err, alert.ErrTooManyRequests) {
+		if errors.Is(err, alert.ErrTooManyRequests) || isOnlyResultLimitError(err) {
 			err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
 				Destination:   e.rule.Destination,
 				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
@@ -378,6 +378,28 @@ func (e *worker) Close() {
 	}
 
 	e.wg.Wait()
+}
+
+func isOnlyResultLimitError(err error) bool {
+	switch err := err.(type) {
+	case *ResultLimitExceededError:
+		return true
+	case interface{ Unwrap() []error }:
+		causes := err.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isOnlyResultLimitError(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return isOnlyResultLimitError(err.Unwrap())
+	default:
+		return false
+	}
 }
 
 func isUserError(err error) bool {

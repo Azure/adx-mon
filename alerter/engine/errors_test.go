@@ -4,8 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResultLimitExceededError(t *testing.T) {
+	err := &ResultLimitExceededError{Limit: 5, RowsProcessed: 8}
+
+	require.Equal(t, "result limit of 5 exceeded after processing 8 primary result rows", err.Error())
+	require.NotErrorIs(t, err, alert.ErrTooManyRequests)
+}
 
 func TestUnknownDBError_Basic(t *testing.T) {
 	err := &UnknownDBError{

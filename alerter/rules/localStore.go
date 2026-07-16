@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
@@ -78,6 +79,9 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 			logger.Warn("found non-rule yaml, skipping")
 			continue
 		}
+		if err := validateLocalSpecFields(genericStructure); err != nil {
+			return fmt.Errorf("fromStream failed to unmarshal yaml: %w", err)
+		}
 
 		// create new spec here
 		rule := alertrulev1.AlertRule{}
@@ -101,6 +105,32 @@ func (s *fileStore) fromStream(file io.Reader, region string) error {
 		s.rules = append(s.rules, r)
 	}
 	return nil
+}
+
+func validateLocalSpecFields(document map[string]interface{}) error {
+	rawSpec, ok := document["spec"]
+	if !ok || rawSpec == nil {
+		return nil
+	}
+	spec, ok := rawSpec.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	known := map[string]struct{}{
+		"database": {}, "interval": {}, "query": {}, "autoMitigateAfter": {},
+		"destination": {}, "criteria": {}, "criteriaExpression": {},
+	}
+	unknown := make([]string, 0)
+	for field := range spec {
+		if _, ok := known[field]; !ok {
+			unknown = append(unknown, field)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("unknown field %q in AlertRule spec", unknown[0])
 }
 
 func (s *fileStore) Rules() []*Rule {

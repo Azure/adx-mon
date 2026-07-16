@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -497,35 +498,78 @@ func TestWorker_MissingColumnsFromResults(t *testing.T) {
 }
 
 func TestWorker_AlertsThrottled(t *testing.T) {
-	kcli := &fakeKustoClient{
-		queryErr: alert.ErrTooManyRequests,
-	}
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{name: "downstream notification limit", err: alert.ErrTooManyRequests},
+		{name: "query result limit", err: &ResultLimitExceededError{Limit: 5, RowsProcessed: 7}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			kcli := &fakeKustoClient{queryErr: tt.err}
 
+			var createdAlert alert.Alert
+			alertCli := &fakeAlerter{
+				createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+					createdAlert = alert
+					return nil
+				},
+			}
+
+			rule := &rules.Rule{
+				Namespace:   "namespace",
+				Name:        "name",
+				Destination: "destination/queue",
+			}
+			w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
+
+			// default healthy
+			metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+			w.ExecuteQuery(context.Background())
+			gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
+			// query should be healthy - notification was throttled.
+			require.Equal(t, QueryHealthHealthy, gaugeValue)
+
+			require.Equal(t, createdAlert.Destination, rule.Destination)
+			require.Contains(t, createdAlert.Title, "has too many notifications in eastus")
+		})
+	}
+}
+
+func TestWorker_CallbackValidationTakesPrecedenceOverResultLimit(t *testing.T) {
+	kcli := &fakeKustoClient{queryErr: errors.Join(&NotificationValidationError{"invalid result"}, &ResultLimitExceededError{Limit: 5, RowsProcessed: 7})}
 	var createdAlert alert.Alert
-	alertCli := &fakeAlerter{
-		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
-			createdAlert = alert
-			return nil
-		},
-	}
-
-	rule := &rules.Rule{
-		Namespace:   "namespace",
-		Name:        "name",
-		Destination: "destination/queue",
-	}
+	alertCli := &fakeAlerter{createFn: func(_ context.Context, _ string, value alert.Alert) error {
+		createdAlert = value
+		return nil
+	}}
+	rule := &rules.Rule{Namespace: "namespace", Name: "name", Destination: "destination/queue"}
 	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
 
-	// default healthy
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
-
 	w.ExecuteQuery(context.Background())
-	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
-	// query should be healthy - notification was throttled.
-	require.Equal(t, QueryHealthHealthy, gaugeValue)
 
-	require.Equal(t, createdAlert.Destination, rule.Destination)
-	require.Contains(t, createdAlert.Title, "has too many notifications in eastus")
+	require.Equal(t, QueryHealthHealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+	require.Contains(t, createdAlert.Title, "has query errors")
+	require.NotContains(t, createdAlert.Title, "too many notifications")
+}
+
+func TestWorker_GenericCallbackErrorTakesPrecedenceOverResultLimit(t *testing.T) {
+	kcli := &fakeKustoClient{queryErr: errors.Join(errors.New("callback failed"), &ResultLimitExceededError{Limit: 5, RowsProcessed: 7})}
+	createCalls := 0
+	alertCli := &fakeAlerter{createFn: func(context.Context, string, alert.Alert) error {
+		createCalls++
+		return nil
+	}}
+	rule := &rules.Rule{Namespace: "namespace", Name: "name", Destination: "destination/queue"}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
+
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, QueryHealthUnhealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+	require.Zero(t, createCalls)
 }
 
 func TestWorker_NotificationHealth(t *testing.T) {

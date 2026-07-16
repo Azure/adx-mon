@@ -18,6 +18,7 @@ package v1
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,36 +71,54 @@ func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &rule); err != nil {
 		return err
 	}
-	a.Database = rule["database"].(string)
-	if rule["interval"] != nil {
-		dur := rule["interval"].(string)
-		if dur != "" {
-			d, err := time.ParseDuration(dur)
-			if err != nil {
-				return err
-			}
-			a.Interval = metav1.Duration{Duration: d}
-		}
+	*a = AlertRuleSpec{}
+
+	var err error
+	a.Database, err = optionalString(rule, "database")
+	if err != nil {
+		return err
+	}
+	a.Query, err = optionalString(rule, "query")
+	if err != nil {
+		return err
 	}
 
-	a.Query = rule["query"].(string)
-
-	if rule["autoMitigateAfter"] != nil {
-		mit := rule["autoMitigateAfter"].(string)
-		if mit != "" {
-			d, err := time.ParseDuration(mit)
-			if err != nil {
-				return err
-			}
-			a.AutoMitigateAfter = metav1.Duration{Duration: d}
-		}
+	interval, err := optionalString(rule, "interval")
+	if err != nil {
+		return err
 	}
-	a.Destination = rule["destination"].(string)
+	if interval != "" {
+		d, err := time.ParseDuration(interval)
+		if err != nil {
+			return err
+		}
+		a.Interval = metav1.Duration{Duration: d}
+	}
+
+	mit, err := optionalString(rule, "autoMitigateAfter")
+	if err != nil {
+		return err
+	}
+	if mit != "" {
+		d, err := time.ParseDuration(mit)
+		if err != nil {
+			return err
+		}
+		a.AutoMitigateAfter = metav1.Duration{Duration: d}
+	}
+	a.Destination, err = optionalString(rule, "destination")
+	if err != nil {
+		return err
+	}
 
 	// The type for Criteria has changed to map[string][]string.  This handles backwards compatibility where
 	// some existing alerts may have a string value instead of a list of strings.
-	criteria := rule["criteria"]
-	if s, ok := criteria.(map[string]interface{}); ok && s != nil {
+	criteria, hasCriteria := rule["criteria"]
+	if hasCriteria {
+		s, ok := criteria.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("field %q must be an object", "criteria")
+		}
 		a.Criteria = make(map[string][]string)
 		for k, raw := range s {
 			switch val := raw.(type) {
@@ -107,20 +126,39 @@ func (a *AlertRuleSpec) UnmarshalJSON(data []byte) error {
 				a.Criteria[k] = []string{val}
 			case []interface{}:
 				for _, v := range val {
-					if str, ok := v.(string); ok {
-						a.Criteria[k] = append(a.Criteria[k], str)
+					str, ok := v.(string)
+					if !ok {
+						return fmt.Errorf("field %q list values must be strings", "criteria."+k)
 					}
+					a.Criteria[k] = append(a.Criteria[k], str)
 				}
+			default:
+				return fmt.Errorf("field %q must be a string or list of strings", "criteria."+k)
 			}
 		}
 	}
 
-	// Optional criteriaExpression (string). If absent or wrong type, leave zero value.
-	if expr, ok := rule["criteriaExpression"].(string); ok {
-		a.CriteriaExpression = expr
+	if expression, ok := rule["criteriaExpression"]; ok {
+		value, ok := expression.(string)
+		if !ok {
+			return fmt.Errorf("field %q must be a string", "criteriaExpression")
+		}
+		a.CriteriaExpression = value
 	}
 
 	return nil
+}
+
+func optionalString(values map[string]interface{}, field string) (string, error) {
+	value, ok := values[field]
+	if !ok || value == nil {
+		return "", nil
+	}
+	result, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("field %q must be a string", field)
+	}
+	return result, nil
 }
 
 // AlertRuleStatus defines the observed state of AlertRule

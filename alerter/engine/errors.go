@@ -7,6 +7,17 @@ import (
 
 const maxDisplayedDatabases = 10
 
+// ResultLimitExceededError reports that a query produced more primary result
+// rows than the client was configured to retain and process through callbacks.
+type ResultLimitExceededError struct {
+	Limit         int // configured number of result rows retained
+	RowsProcessed int // total primary result rows observed
+}
+
+func (e *ResultLimitExceededError) Error() string {
+	return fmt.Sprintf("result limit of %d exceeded after processing %d primary result rows", e.Limit, e.RowsProcessed)
+}
+
 type UnknownDBError struct {
 	DB                   string
 	AvailableDatabases   []string
