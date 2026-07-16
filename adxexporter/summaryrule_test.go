@@ -2,7 +2,6 @@ package adxexporter
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -11,11 +10,7 @@ import (
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
-	"github.com/Azure/azure-kusto-go/kusto"
-	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
+	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,43 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
-
-// ensureTestVFlagSetT sets the -test.v flag required for Azure Kusto SDK mock diagnostics.
-func ensureTestVFlagSetT(t *testing.T) {
-	t.Helper()
-	if flag.Lookup("test.v") == nil {
-		flag.String("test.v", "", "")
-		err := flag.CommandLine.Set("test.v", "true")
-		require.NoError(t, err)
-	}
-}
-
-// buildMockRows constructs a kusto.MockRows and populates it with provided rows.
-func buildMockRows(t *testing.T, cols table.Columns, rows []value.Values) *kusto.MockRows {
-	t.Helper()
-	mockRows, err := kusto.NewMockRows(cols)
-	require.NoError(t, err)
-	for _, r := range rows {
-		require.NoError(t, mockRows.Row(r))
-	}
-	return mockRows
-}
-
-// buildIteratorFromMockRows creates a RowIterator from pre-built mock rows.
-func buildIteratorFromMockRows(t *testing.T, mockRows *kusto.MockRows) *kusto.RowIterator {
-	t.Helper()
-	ensureTestVFlagSetT(t)
-	iter := &kusto.RowIterator{}
-	require.NoError(t, iter.Mock(mockRows))
-	return iter
-}
-
-// createRowIteratorFromMockRows is a convenience wrapper combining buildMockRows + buildIteratorFromMockRows.
-// Kept for backwards compatibility with existing tests while providing finer-grained helpers for new cases.
-func createRowIteratorFromMockRows(t *testing.T, cols table.Columns, rows []value.Values) *kusto.RowIterator {
-	t.Helper()
-	return buildIteratorFromMockRows(t, buildMockRows(t, cols, rows))
-}
 
 func newFakeClientWithRule(t *testing.T, rule *adxmonv1.SummaryRule) client.Client {
 	t.Helper()
@@ -84,8 +42,6 @@ func newBaseReconciler(t *testing.T, c client.Client, mock *MockKustoExecutor, c
 }
 
 func TestSummaryRule_SubmissionSuccess(t *testing.T) {
-	ensureTestVFlagSetT(t)
-
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
 		Spec: adxmonv1.SummaryRuleSpec{
@@ -99,25 +55,12 @@ func TestSummaryRule_SubmissionSuccess(t *testing.T) {
 
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// First Mgmt: submission returns operation id as a single-cell row
-	opCols := table.Columns{{Name: "OperationId", Type: types.String}}
-	opRows := []value.Values{{value.String{Value: "operation-id-123", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, opCols, opRows))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"operation-id-123"}}))
 	// Second Mgmt (getOperation): return InProgress, ShouldRetry=0
-	cols := table.Columns{
-		{Name: "LastUpdatedOn", Type: types.DateTime},
-		{Name: "OperationId", Type: types.String},
-		{Name: "State", Type: types.String},
-		{Name: "ShouldRetry", Type: types.Real},
-		{Name: "Status", Type: types.String},
-	}
-	rows := []value.Values{{
-		value.DateTime{Value: time.Now(), Valid: true},
-		value.String{Value: "operation-id-123", Valid: true},
-		value.String{Value: "InProgress", Valid: true},
-		value.Real{Value: 0, Valid: true},
-		value.String{Value: "", Valid: true},
-	}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rows))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{time.Now(), "operation-id-123", "InProgress", float64(0), ""}},
+	))
 
 	r := newBaseReconciler(t, c, mock, time.Now())
 
@@ -138,8 +81,6 @@ func TestSummaryRule_SubmissionSuccess(t *testing.T) {
 }
 
 func TestSummaryRule_SubmissionFailure(t *testing.T) {
-	ensureTestVFlagSetT(t)
-
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-fail", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
 		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"},
@@ -169,8 +110,6 @@ func TestSummaryRule_SubmissionFailure(t *testing.T) {
 }
 
 func TestSummaryRule_CompletedFailedRemovesAndSetsStatus(t *testing.T) {
-	ensureTestVFlagSetT(t)
-
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-failed-op", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
@@ -186,15 +125,10 @@ func TestSummaryRule_CompletedFailedRemovesAndSetsStatus(t *testing.T) {
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 
 	// getOperation returns Failed
-	cols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
-	rows := []value.Values{{
-		value.DateTime{Value: now, Valid: true},
-		value.String{Value: "failed-op-1", Valid: true},
-		value.String{Value: "Failed", Valid: true},
-		value.Real{Value: 0, Valid: true},
-		value.String{Value: "boom", Valid: true},
-	}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rows))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{now, "failed-op-1", "Failed", float64(0), "boom"}},
+	))
 
 	r := newBaseReconciler(t, c, mock, now)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
@@ -209,8 +143,6 @@ func TestSummaryRule_CompletedFailedRemovesAndSetsStatus(t *testing.T) {
 }
 
 func TestSummaryRule_RetryOperation(t *testing.T) {
-	ensureTestVFlagSetT(t)
-
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-retry", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}},
@@ -228,19 +160,12 @@ func TestSummaryRule_RetryOperation(t *testing.T) {
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 
 	// First Mgmt: getOperation -> ShouldRetry=1
-	cols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
-	rows := []value.Values{{
-		value.DateTime{Value: now, Valid: true},
-		value.String{Value: "retry-op-1", Valid: true},
-		value.String{Value: "InProgress", Valid: true},
-		value.Real{Value: 1, Valid: true},
-		value.String{Value: "", Valid: true},
-	}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rows))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{now, "retry-op-1", "InProgress", float64(1), ""}},
+	))
 	// Second Mgmt: resubmission returns new operation id (single-cell)
-	op2Cols := table.Columns{{Name: "OperationId", Type: types.String}}
-	op2Rows := []value.Values{{value.String{Value: "new-op-2", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, op2Cols, op2Rows))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"new-op-2"}}))
 
 	r := newBaseReconciler(t, c, mock, now)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
@@ -254,7 +179,6 @@ func TestSummaryRule_RetryOperation(t *testing.T) {
 }
 
 func TestSummaryRule_CriteriaAndDatabaseGating(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now()
 	// Rule for other DB should be skipped
 	ruleOtherDB := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-skip-db"}, Spec: adxmonv1.SummaryRuleSpec{Database: "otherdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
@@ -273,7 +197,6 @@ func TestSummaryRule_CriteriaAndDatabaseGating(t *testing.T) {
 }
 
 func TestSummaryRule_NoImmediateRetryAfterFailure(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now()
 	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-no-retry", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	c := newFakeClientWithRule(t, rule)
@@ -301,7 +224,6 @@ func TestSummaryRule_NoImmediateRetryAfterFailure(t *testing.T) {
 }
 
 func TestSummaryRule_BacklogTimestampForwardProgressOnly(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC().Truncate(time.Hour)
 	// Prepare a rule with last exec at now and a backlog op that would not be forward progress
 	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-forward", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
@@ -313,9 +235,7 @@ func TestSummaryRule_BacklogTimestampForwardProgressOnly(t *testing.T) {
 	c := newFakeClientWithRule(t, rule)
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// Simulate successful submit of backlog
-	opCols := table.Columns{{Name: "OperationId", Type: types.String}}
-	opRows := []value.Values{{value.String{Value: "backlog-op-1", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, opCols, opRows))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"backlog-op-1"}}))
 	r := newBaseReconciler(t, c, mock, now)
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
@@ -330,7 +250,6 @@ func TestSummaryRule_BacklogTimestampForwardProgressOnly(t *testing.T) {
 }
 
 func TestSummaryRule_MixedAsyncStates(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-mixed", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	// Seed multiple ops
@@ -340,16 +259,17 @@ func TestSummaryRule_MixedAsyncStates(t *testing.T) {
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 
 	// getOperation for completed-op
-	cols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
-	rowsCompleted := []value.Values{{value.DateTime{Value: now, Valid: true}, value.String{Value: "completed-op", Valid: true}, value.String{Value: "Completed", Valid: true}, value.Real{Value: 0, Valid: true}, value.String{Value: "", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rowsCompleted))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{now, "completed-op", "Completed", float64(0), ""}},
+	))
 	// getOperation for retry-op (ShouldRetry=1)
-	rowsRetry := []value.Values{{value.DateTime{Value: now, Valid: true}, value.String{Value: "retry-op", Valid: true}, value.String{Value: "InProgress", Valid: true}, value.Real{Value: 1, Valid: true}, value.String{Value: "", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rowsRetry))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{now, "retry-op", "InProgress", float64(1), ""}},
+	))
 	// resubmission new id
-	opCols := table.Columns{{Name: "OperationId", Type: types.String}}
-	opRows := []value.Values{{value.String{Value: "retry-op-new", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, opCols, opRows))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"retry-op-new"}}))
 
 	r := newBaseReconciler(t, c, mock, now)
 	// Prevent fresh submission by persisting LastExecutionTime in status
@@ -368,7 +288,6 @@ func TestSummaryRule_MixedAsyncStates(t *testing.T) {
 }
 
 func TestSummaryRule_GetOperationFailureRetainsRecentOps(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-retain", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	// Seed with one recent op id
@@ -390,17 +309,16 @@ func TestSummaryRule_GetOperationFailureRetainsRecentOps(t *testing.T) {
 }
 
 func TestSummaryRule_KustoErrorParsingOnFailure(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-err-msg", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	c := newFakeClientWithRule(t, rule)
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// Create a Kusto HttpError with an @message payload and wrap it
 	body := `{"error":{"@message": "function is invalid"}}`
-	kerr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+	kerr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 	wrapped := fmt.Errorf("exec failed: %w", kerr)
 	mock.errors = append(mock.errors, wrapped)
-	// Also fail backlog resubmission during same reconcile to avoid unintended empty iterator path
+	// Also fail backlog resubmission during same reconcile to avoid an extra dataset path
 	mock.errors = append(mock.errors, wrapped)
 	r := newBaseReconciler(t, c, mock, now)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
@@ -414,7 +332,6 @@ func TestSummaryRule_KustoErrorParsingOnFailure(t *testing.T) {
 }
 
 func TestSummaryRule_ExporterSkipsWhenOwnerIngestorOrMissing(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now()
 
 	// Case 1: owner=ingestor -> exporter should skip
@@ -452,7 +369,6 @@ func TestSummaryRule_ExporterSkipsWhenOwnerIngestorOrMissing(t *testing.T) {
 }
 
 func TestSummaryRule_ExporterAdoptsWhenDesiredAndSafe(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{
@@ -482,7 +398,6 @@ func TestSummaryRule_ExporterAdoptsWhenDesiredAndSafe(t *testing.T) {
 }
 
 func TestSummaryRule_ExporterDoesNotAdoptWhenInsideWindow(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{
@@ -513,7 +428,6 @@ func TestSummaryRule_ExporterDoesNotAdoptWhenInsideWindow(t *testing.T) {
 }
 
 func TestSummaryRule_ExporterAutoAdoptsMissingAnnotation(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	rule := &adxmonv1.SummaryRule{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-auto-adopt"}, // no annotations -> implicit ingestor owner
@@ -537,31 +451,33 @@ func TestSummaryRule_ExporterAutoAdoptsMissingAnnotation(t *testing.T) {
 }
 
 func TestSummaryRule_OneTickBoundary_NoDoubleProcessing(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	// Window boundaries should subtract OneTick for inclusive end, preventing overlap with next window
 	start := time.Date(2025, 8, 13, 10, 0, 0, 0, time.UTC)
 	rule := &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr-onetick", Annotations: map[string]string{adxmonv1.SummaryRuleOwnerAnnotation: adxmonv1.SummaryRuleOwnerADXExporter}}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb", Table: "T", Interval: metav1.Duration{Duration: time.Hour}, Body: "Body"}}
 	c := newFakeClientWithRule(t, rule)
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	// First submission returns op id and then getOperation for that id
-	opCols := table.Columns{{Name: "OperationId", Type: types.String}}
-	op1 := []value.Values{{value.String{Value: "op-1", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, opCols, op1))
-	statusCols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
-	inprog := []value.Values{{value.DateTime{Value: start, Valid: true}, value.String{Value: "op-1", Valid: true}, value.String{Value: "InProgress", Valid: true}, value.Real{Value: 0, Valid: true}, value.String{Value: "", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, statusCols, inprog))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"op-1"}}))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{start, "op-1", "InProgress", float64(0), ""}},
+	))
 	r := newBaseReconciler(t, c, mock, start)
 	// Run reconcile to submit first window [10:00, 11:00-1tick]
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
 	require.NoError(t, err)
 	// Advance clock by exactly one interval and submit next window; provide results for submission and both getOperation calls
-	op2 := []value.Values{{value.String{Value: "op-2", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, opCols, op2))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"op-2"}}))
 	// getOperation for op-1 again
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, statusCols, inprog))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{start, "op-1", "InProgress", float64(0), ""}},
+	))
 	// getOperation for op-2
-	inprog2 := []value.Values{{value.DateTime{Value: start.Add(time.Hour), Valid: true}, value.String{Value: "op-2", Valid: true}, value.String{Value: "InProgress", Valid: true}, value.Real{Value: 0, Valid: true}, value.String{Value: "", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, statusCols, inprog2))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{start.Add(time.Hour), "op-2", "InProgress", float64(0), ""}},
+	))
 	r.Clock.(*klock.FakeClock).SetTime(start.Add(time.Hour))
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
 	require.NoError(t, err)
@@ -577,16 +493,16 @@ func TestSummaryRule_OneTickBoundary_NoDoubleProcessing(t *testing.T) {
 }
 
 func TestSummaryRule_getOperation_Parsing(t *testing.T) {
-	ensureTestVFlagSetT(t)
 	now := time.Now().UTC()
 	c := newFakeClientWithRule(t, &adxmonv1.SummaryRule{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "dummy"}, Spec: adxmonv1.SummaryRuleSpec{Database: "testdb"}})
 	mock := NewMockKustoExecutor(t, "testdb", "https://test")
 	r := newBaseReconciler(t, c, mock, now)
 
 	// Configure a valid status row
-	cols := table.Columns{{Name: "LastUpdatedOn", Type: types.DateTime}, {Name: "OperationId", Type: types.String}, {Name: "State", Type: types.String}, {Name: "ShouldRetry", Type: types.Real}, {Name: "Status", Type: types.String}}
-	rows := []value.Values{{value.DateTime{Value: now, Valid: true}, value.String{Value: "op-x", Valid: true}, value.String{Value: "Completed", Valid: true}, value.Real{Value: 0, Valid: true}, value.String{Value: "", Valid: true}}}
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, rows))
+	mock.results = append(mock.results, createDatasetWithColumns(
+		[]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"},
+		[][]interface{}{{now, "op-x", "Completed", float64(0), ""}},
+	))
 	st, err := r.getOperation(context.Background(), "testdb", "op-x")
 	require.NoError(t, err)
 	require.NotNil(t, st)
@@ -595,7 +511,7 @@ func TestSummaryRule_getOperation_Parsing(t *testing.T) {
 	require.Equal(t, float64(0), st.ShouldRetry)
 
 	// Now configure empty result and expect nil
-	mock.results = append(mock.results, createRowIteratorFromMockRows(t, cols, nil))
+	mock.results = append(mock.results, createDatasetWithColumns([]string{"LastUpdatedOn", "OperationId", "State", "ShouldRetry", "Status"}, nil))
 	st, err = r.getOperation(context.Background(), "testdb", "not-found")
 	require.NoError(t, err)
 	require.Nil(t, st)
