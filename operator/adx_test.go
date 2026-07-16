@@ -732,6 +732,7 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 	ep := azkustodata.NewConnectionStringBuilder(kustainerPartitionedCluster.ConnectionUrl())
 	client, err := azkustodata.New(ep)
 	require.NoError(t, err)
+	defer client.Close()
 
 	for _, tableName := range []string{"Table1", "Table2"} {
 		stmt := kql.New("").AddUnsafe(fmt.Sprintf(".create table %s (x: int)", tableName))
