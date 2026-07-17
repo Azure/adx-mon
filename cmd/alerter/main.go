@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/urfave/cli/v2" // imports as package "cli"
@@ -22,7 +23,26 @@ import (
 )
 
 func main() {
-	app := &cli.App{
+	os.Exit(runAlerter(os.Args, os.Stderr))
+}
+
+func runAlerter(args []string, stderr io.Writer) int {
+	app := newAlerterApp()
+	app.ErrWriter = stderr
+	app.ExitErrHandler = func(*cli.Context, error) {}
+	if err := app.Run(args); err != nil {
+		_, _ = fmt.Fprintln(stderr, err.Error())
+		var exitCoder cli.ExitCoder
+		if errors.As(err, &exitCoder) {
+			return exitCoder.ExitCode()
+		}
+		return 1
+	}
+	return 0
+}
+
+func newAlerterApp() *cli.App {
+	return &cli.App{
 		Name:  "alerter",
 		Usage: "adx-mon alerting engine for ADX",
 		Flags: []cli.Flag{
@@ -42,41 +62,27 @@ func main() {
 		Action: realMain,
 		Commands: []*cli.Command{
 			NewLintCommand(),
+			NewBacktestCommand(),
 		},
 		Version: version.String(),
-	}
-
-	if err := app.Run(os.Args); err != nil {
-		logger.Fatal(err.Error())
 	}
 }
 
 func realMain(ctx *cli.Context) error {
 	logger.Infof("%s version:%s", os.Args[0], version.String())
 
-	endpoints := make(map[string]string)
-	endpointsArg := ctx.StringSlice("kusto-endpoint")
-	for _, v := range endpointsArg {
-		parts := strings.Split(v, "=")
-		if len(parts) != 2 {
-			return cli.Exit("Invalid kusto-endpoint format, expected <name>=<endpoint>", 1)
-		}
-		endpoints[parts[0]] = parts[1]
+	endpoints, err := parseKustoEndpoints(ctx.StringSlice("kusto-endpoint"))
+	if err != nil {
+		return err
 	}
 
-	tags := make(map[string]string)
-	tagsArg := ctx.StringSlice("tag")
-	for _, v := range tagsArg {
-		parts := strings.Split(v, "=")
-		if len(parts) != 2 {
-			return cli.Exit("Invalid tag format, expected <key>=<value>", 1)
-		}
-		tags[parts[0]] = parts[1]
+	tags, err := parseTags(ctx.StringSlice("tag"))
+	if err != nil {
+		return err
 	}
 
 	// Always add region and cloud tags which are required params for alerter currently.
-	tags["region"] = ctx.String("region")
-	tags["cloud"] = ctx.String("cloud")
+	addExecutionTags(tags, ctx.String("region"), ctx.String("cloud"))
 
 	for k, v := range tags {
 		logger.Infof("Using tag %s=%s", k, v)

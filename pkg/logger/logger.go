@@ -26,10 +26,10 @@ var (
 func init() {
 	var logger *slog.Logger
 
-	if !isatty.IsTerminal(os.Stdout.Fd()) {
-		logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: levelVar, ReplaceAttr: replaceAttr}))
+	if !isatty.IsTerminal(os.Stderr.Fd()) {
+		logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: levelVar, ReplaceAttr: replaceAttr}))
 	} else {
-		logger = slog.New(tint.NewHandler(os.Stdout, &tint.Options{Level: levelVar, TimeFormat: timeFormat}))
+		logger = slog.New(tint.NewHandler(os.Stderr, &tint.Options{Level: levelVar, TimeFormat: timeFormat}))
 	}
 	slog.SetDefault(logger)
 
@@ -50,7 +50,7 @@ func init() {
 	case "TRACE":
 		levelVar.Set(slog.LevelDebug)
 	default:
-		fmt.Printf("Unknown log level: %s != [ERROR,WARN,INFO,DEBUG,TRACE]\n", level)
+		slog.Warn("Unknown log level", "value", level, "valid", "ERROR,WARN,INFO,DEBUG,TRACE")
 	}
 }
 

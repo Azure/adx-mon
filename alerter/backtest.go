@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -373,12 +374,29 @@ func newBacktestReport(opts *AlerterOpts, rulePath string, backtestOpts Backtest
 		return report
 	}
 
-	report.Context.KustoEndpoints = cloneStringMap(opts.KustoEndpoints)
+	report.Context.KustoEndpoints = sanitizeBacktestEndpoints(opts.KustoEndpoints)
 	report.Context.Region = opts.Region
 	report.Context.Cloud = opts.Cloud
 	report.Context.Tags = cloneStringMap(opts.Tags)
 	report.Context.Authentication = backtestAuthenticationMode(opts)
 	return report
+}
+
+// SanitizeBacktestEndpoint returns only the URL origin for safe reporting.
+func SanitizeBacktestEndpoint(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Hostname() == "" {
+		return "(non-URL endpoint)"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func sanitizeBacktestEndpoints(endpoints map[string]string) map[string]string {
+	sanitized := make(map[string]string, len(endpoints))
+	for name, endpoint := range endpoints {
+		sanitized[name] = SanitizeBacktestEndpoint(endpoint)
+	}
+	return sanitized
 }
 
 func backtestAuthenticationMode(opts *AlerterOpts) BacktestAuthenticationMode {

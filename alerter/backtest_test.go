@@ -792,6 +792,59 @@ func TestRunBacktest_ReportContextIsCopiedForAllOutcomes(t *testing.T) {
 	}
 }
 
+func TestRunBacktest_SanitizesReportEndpointsWithoutChangingClientOptions(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	endpoints := map[string]string{
+		"UserInfo": "https://client-id:client-secret@cluster.example.test/path-secret",
+		"Query":    "https://cluster.example.test/path-token?token=token-secret&sig=signature-secret#fragment-secret",
+		"Port":     "https://cluster.example.test:8443/port-path-secret",
+		"Opaque":   "cluster-alias token-secret",
+	}
+	opts := backtestAlerterOptions()
+	opts.KustoEndpoints = endpoints
+	var received map[string]string
+
+	report, err := runBacktest(context.Background(), opts, writeBacktestRule(t, backtestRuleYAML("5m", "Events", "", "")), validBacktestOptions(start, start.Add(5*time.Minute)), func(got *AlerterOpts, _ int) (engine.Client, error) {
+		received = cloneStringMap(got.KustoEndpoints)
+		return &fakeBacktestClient{}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, endpoints, received)
+	require.Equal(t, map[string]string{
+		"UserInfo": "https://cluster.example.test",
+		"Query":    "https://cluster.example.test",
+		"Port":     "https://cluster.example.test:8443",
+		"Opaque":   "(non-URL endpoint)",
+	}, report.Context.KustoEndpoints)
+	assertBacktestReportExcludes(t, report, "client-id", "client-secret", "path-secret", "path-token", "port-path-secret", "token-secret", "signature-secret", "fragment-secret", "selected.invalid")
+
+	opts.KustoEndpoints["UserInfo"] = "mutated"
+	require.Equal(t, "https://cluster.example.test", report.Context.KustoEndpoints["UserInfo"])
+}
+
+func TestSanitizeBacktestEndpointRejectsMalformedValues(t *testing.T) {
+	for _, endpoint := range []string{"", "cluster.example.test/path-token", "://cluster.example.test/path-token", "https:///path-token", "https://"} {
+		require.Equal(t, "(non-URL endpoint)", SanitizeBacktestEndpoint(endpoint), endpoint)
+	}
+}
+
+func TestRunBacktest_EndpointCredentialsStayOutOfReportAndReturnedError(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	opts := backtestAlerterOptions()
+	opts.KustoEndpoints = map[string]string{
+		"DB": "https://user:userinfo-secret@cluster.example.test?token=query-secret&sig=sig-secret#fragment-secret",
+	}
+
+	report, err := runBacktest(context.Background(), opts, writeBacktestRule(t, backtestRuleYAML("5m", "Events", "", "")), validBacktestOptions(start, start.Add(5*time.Minute)), func(got *AlerterOpts, _ int) (engine.Client, error) {
+		require.Equal(t, opts.KustoEndpoints, got.KustoEndpoints)
+		return nil, errors.New("client construction failed")
+	})
+	require.ErrorIs(t, err, ErrBacktestFailed)
+	require.Equal(t, "https://cluster.example.test", report.Context.KustoEndpoints["DB"])
+	assertBacktestReportExcludes(t, report, "userinfo-secret", "query-secret", "sig-secret", "fragment-secret")
+	assertBacktestErrorExcludes(t, err, "userinfo-secret", "query-secret", "sig-secret", "fragment-secret")
+}
+
 type engineRowFn func(context.Context, string, *engine.QueryContext, azquery.Row) error
 
 type fakeBacktestClient struct {

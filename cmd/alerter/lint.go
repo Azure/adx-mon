@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"strings"
 
 	"github.com/Azure/adx-mon/alerter"
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
@@ -31,14 +30,9 @@ func NewLintCommand() *cli.Command {
 }
 
 func lintMain(ctx *cli.Context) error {
-	endpoints := make(map[string]string)
-	endpointsArg := ctx.StringSlice("kusto-endpoint")
-	for _, v := range endpointsArg {
-		parts := strings.Split(v, "=")
-		if len(parts) != 2 {
-			return cli.Exit("Invalid kusto-endpoint format, expected <name>=<endpoint>", 1)
-		}
-		endpoints[parts[0]] = parts[1]
+	endpoints, err := parseKustoEndpoints(ctx.StringSlice("kusto-endpoint"))
+	if err != nil {
+		return err
 	}
 
 	scheme := clientgoscheme.Scheme
@@ -49,19 +43,13 @@ func lintMain(ctx *cli.Context) error {
 		return err
 	}
 
-	tags := make(map[string]string)
-	tagsArg := ctx.StringSlice("tag")
-	for _, v := range tagsArg {
-		parts := strings.Split(v, "=")
-		if len(parts) != 2 {
-			return cli.Exit("Invalid tag format, expected <key>=<value>", 1)
-		}
-		tags[parts[0]] = parts[1]
+	tags, err := parseTags(ctx.StringSlice("tag"))
+	if err != nil {
+		return err
 	}
 
 	// Always add region and cloud tags which are required params for alerter currently.
-	tags["region"] = ctx.String("region")
-	tags["cloud"] = ctx.String("cloud")
+	addExecutionTags(tags, ctx.String("region"), ctx.String("cloud"))
 
 	for k, v := range tags {
 		logger.Infof("Using tag %s=%s", k, v)
