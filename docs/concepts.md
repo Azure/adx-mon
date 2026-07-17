@@ -367,6 +367,94 @@ spec:
 ```
 Behavior formula: `(criteria empty OR any match) AND (criteriaExpression empty OR expression true)`.
 
+#### Backtest Historical Alert Rules
+
+`alerter backtest` evaluates one local file containing exactly one `AlertRule` over historical data. It is read-only: it runs query APIs and records alerts that would have fired, but does not send notifications, update Kubernetes objects, or write to the datasource. Queries beginning with `.` are rejected as management queries.
+
+The range is explicitly `[start, end)`, divided into windows anchored at `start` using the rule's configured `interval`. A final partial window is included. For example, a five-minute rule over `[00:00, 00:12)` evaluates `[00:00, 00:05)`, `[00:05, 00:10)`, and `[00:10, 00:12)`. Backtest supplies those exact boundaries to the rule; the rule's own KQL determines boundary inclusion.
+
+Each rule database must have an explicit, repeatable `--kusto-endpoint <database>=<endpoint>` mapping; backtest does not discover or select infrastructure. Criteria use repeatable `--tag <key>=<value>` values. `--region` and `--cloud` are also added as the `region` and `cloud` criteria tags, and region is supplied to the rule's query parameters.
+
+Authentication follows the existing alerter modes: `--auth-msi-id` selects managed identity, `--auth-token` selects token authentication, and omitting both uses the default credential chain. If both flags are supplied, managed identity wins. Reports identify only the mode (`managed-identity`, `token`, or `default-credential`), never the configured flag values. The examples intentionally contain no credential values.
+
+Key optional defaults are `--concurrency 4`, `--max-results-per-window 25`, `--query-timeout 5m`, `--max-windows 1000`, and `--format text`. Output is written to stdout unless `--output <path>` is set.
+
+```sh
+alerter backtest \
+  --rule ./alerts/high-error-rate.yaml \
+  --start 2026-07-01T00:00:00Z \
+  --end 2026-07-01T01:00:00Z \
+  --kusto-endpoint Telemetry=https://example.kusto.windows.net \
+  --region eastus \
+  --cloud public \
+  --tag environment=production
+```
+
+Text output summarizes `clear`, `firing`, `error`, `limit-exceeded`, and `cancelled` windows and prints details for non-clear windows. An abbreviated example is:
+
+```text
+Rule: monitoring/high-error-rate
+Outcome: completed
+Rule file: ./alerts/high-error-rate.yaml
+Database: Telemetry
+Endpoints: Telemetry=https://example.kusto.windows.net
+Region: eastus
+Cloud: public
+Tags: cloud=public, environment=production, region=eastus
+Auth: default-credential
+Execution: concurrency=4, query-timeout=5m0s, max-results-per-window=25, max-windows=1000
+Range: 2026-07-01T00:00:00Z to 2026-07-01T01:00:00Z
+Summary: windows=12, clear=10, firing=2, limit-exceeded=0, error=0, cancelled=0, alerts=3
+```
+
+Use JSON and an output file for automation:
+
+```sh
+alerter backtest \
+  --rule ./alerts/high-error-rate.yaml \
+  --start 2026-07-01T00:00:00Z \
+  --end 2026-07-01T01:00:00Z \
+  --kusto-endpoint Telemetry=https://example.kusto.windows.net \
+  --format json \
+  --output backtest.json
+```
+
+Representative fields from the versioned JSON report are:
+
+```json
+{
+  "version": 1,
+  "range": {
+    "start": "2026-07-01T00:00:00Z",
+    "end": "2026-07-01T01:00:00Z"
+  },
+  "context": {
+    "database": "Telemetry",
+    "kustoEndpoints": {
+      "Telemetry": "https://example.kusto.windows.net"
+    },
+    "authentication": "default-credential"
+  },
+  "summary": {
+    "totalWindows": 12,
+    "clearWindows": 10,
+    "firingWindows": 2,
+    "alerts": 3
+  },
+  "rule": {
+    "namespace": "monitoring",
+    "name": "high-error-rate",
+    "outcome": "completed"
+  }
+}
+```
+
+Clear and firing-only runs exit successfully; firing is an expected result, not a command failure. A criteria mismatch is reported as skipped and also succeeds. Invalid rules, criteria evaluation errors, query and alert-row errors, result-limit exceedance, and cancellation exit nonzero. Independent windows continue after a query error, so a failed run can still produce a partial report.
+
+Report secrecy is deliberately limited. Text and JSON reports exclude configured authentication flag values; endpoint URL userinfo, path, query, and fragment components; rendered queries and query links; a selected or resolved endpoint field; and raw internal or authentication diagnostics. Endpoint mappings are reduced to URL origins, and reported errors use sanitized diagnostics.
+
+User-supplied tags and alert fields produced by query results, including custom fields, are report data and are not automatically redacted. Do not put secrets in them.
+
 #### Example CLI Usage
 ```sh
 cd cmd/alerter
