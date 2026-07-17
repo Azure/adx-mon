@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,10 +16,14 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/rules"
+	"github.com/Azure/adx-mon/pkg/kustoutil"
+	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 )
 
 const BacktestReportVersion = 1
+
+var backtestDNSLookupError = regexp.MustCompile(`lookup ([A-Za-z0-9._-]+)(?: on [^\s]+)?: (no such host|server misbehaving|i/o timeout)`)
 
 // ErrBacktestFailed identifies invalid, partial, and cancelled backtests.
 var ErrBacktestFailed = errors.New("backtest failed")
@@ -77,6 +83,9 @@ type BacktestOptions struct {
 	MaxResultsPerWindow int
 	QueryTimeout        time.Duration
 	MaxWindows          int
+	// OnWindowComplete is called initially with zero completed windows, then once for
+	// every window after it reaches a terminal status.
+	OnWindowComplete func(result BacktestWindowResult, completed, total int)
 }
 
 type BacktestReport struct {
@@ -318,17 +327,20 @@ func runBacktest(ctx context.Context, opts *AlerterOpts, rulePath string, backte
 	report.Rule.Windows = makeBacktestWindowResults(windows, backtestOpts.MaxResultsPerWindow)
 
 	if err := ctx.Err(); err != nil {
-		causes := markUnexecutedBacktestWindows(report.Rule.Windows, err)
+		progress := newBacktestProgressCallback(backtestOpts.OnWindowComplete, len(report.Rule.Windows))
+		causes := markUnexecutedBacktestWindows(report.Rule.Windows, err, progress)
 		return completeBacktestReport(report, causes)
 	}
 
 	client, err := newClient(opts, backtestOpts.MaxResultsPerWindow)
+	progress := newBacktestProgressCallback(backtestOpts.OnWindowComplete, len(report.Rule.Windows))
 	if err != nil {
 		causes := make([]error, len(report.Rule.Windows))
 		for i := range report.Rule.Windows {
 			report.Rule.Windows[i].Status = BacktestWindowStatusError
 			report.Rule.Windows[i].Error = safeBacktestReportError(err, "failed to construct query client")
 			causes[i] = err
+			progress(report.Rule.Windows[i])
 		}
 		return completeBacktestReport(report, causes)
 	}
@@ -339,11 +351,12 @@ func runBacktest(ctx context.Context, opts *AlerterOpts, rulePath string, backte
 			report.Rule.Windows[i].Status = BacktestWindowStatusError
 			report.Rule.Windows[i].Error = safeBacktestReportError(err, "failed to construct query client")
 			causes[i] = err
+			progress(report.Rule.Windows[i])
 		}
 		return completeBacktestReport(report, causes)
 	}
 
-	causes := executeBacktestWindows(ctx, client, rule, opts.Region, backtestOpts, report.Rule.Windows)
+	causes := executeBacktestWindows(ctx, client, rule, opts.Region, backtestOpts, report.Rule.Windows, progress)
 	return completeBacktestReport(report, causes)
 }
 
@@ -433,7 +446,23 @@ func makeBacktestWindowResults(windows []BacktestWindow, resultLimit int) []Back
 	return results
 }
 
-func executeBacktestWindows(ctx context.Context, client engine.Client, rule *rules.Rule, region string, opts BacktestOptions, results []BacktestWindowResult) []error {
+func newBacktestProgressCallback(callback func(BacktestWindowResult, int, int), total int) func(BacktestWindowResult) {
+	if callback == nil {
+		return func(BacktestWindowResult) {}
+	}
+	callback(BacktestWindowResult{}, 0, total)
+
+	var mu sync.Mutex
+	completed := 0
+	return func(result BacktestWindowResult) {
+		mu.Lock()
+		defer mu.Unlock()
+		completed++
+		callback(result, completed, total)
+	}
+}
+
+func executeBacktestWindows(ctx context.Context, client engine.Client, rule *rules.Rule, region string, opts BacktestOptions, results []BacktestWindowResult, progress func(BacktestWindowResult)) []error {
 	causes := make([]error, len(results))
 	next := 0
 	var nextMu sync.Mutex
@@ -455,6 +484,7 @@ func executeBacktestWindows(ctx context.Context, client engine.Client, rule *rul
 				nextMu.Unlock()
 
 				results[index], causes[index] = executeBacktestWindow(ctx, client, rule, region, opts, results[index])
+				progress(results[index])
 			}
 		}()
 	}
@@ -469,6 +499,7 @@ func executeBacktestWindows(ctx context.Context, client engine.Client, rule *rul
 			results[i].Status = BacktestWindowStatusCancelled
 			results[i].Error = safeBacktestReportError(cancelErr, "query cancelled")
 			causes[i] = cancelErr
+			progress(results[i])
 		}
 	}
 	return causes
@@ -561,12 +592,13 @@ func backtestAlertFromResult(result engine.AlertResult) BacktestAlert {
 	}
 }
 
-func markUnexecutedBacktestWindows(results []BacktestWindowResult, err error) []error {
+func markUnexecutedBacktestWindows(results []BacktestWindowResult, err error, progress func(BacktestWindowResult)) []error {
 	causes := make([]error, len(results))
 	for i := range results {
 		results[i].Status = BacktestWindowStatusCancelled
 		results[i].Error = safeBacktestReportError(err, "query cancelled")
 		causes[i] = err
+		progress(results[i])
 	}
 	return causes
 }
@@ -595,6 +627,17 @@ func safeBacktestReportError(err error, fallback string) string {
 	var limitErr *engine.ResultLimitExceededError
 	if errors.As(err, &limitErr) {
 		return limitErr.Error()
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return fmt.Sprintf("DNS lookup failed for %q: %s", dnsErr.Name, dnsErr.Err)
+	}
+	if match := backtestDNSLookupError.FindStringSubmatch(err.Error()); match != nil {
+		return fmt.Sprintf("DNS lookup failed for %q: %s", match[1], match[2])
+	}
+	var kustoErr *azkustoerrors.HttpError
+	if errors.As(err, &kustoErr) {
+		return "Kusto query failed: " + kustoutil.ParseError(kustoErr)
 	}
 	return fallback
 }

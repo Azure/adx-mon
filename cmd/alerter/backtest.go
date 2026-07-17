@@ -7,11 +7,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Azure/adx-mon/alerter"
+	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
 )
 
@@ -135,6 +138,7 @@ func backtestMain(ctx *cli.Context, deps backtestCommandDeps) error {
 		MaxResultsPerWindow: ctx.Int("max-results-per-window"),
 		QueryTimeout:        ctx.Duration("query-timeout"),
 		MaxWindows:          ctx.Int("max-windows"),
+		OnWindowComplete:    backtestProgressWriter(ctx.App.ErrWriter),
 	}
 	if err := alerter.ValidateBacktestOptions(backtestOpts); err != nil {
 		return cli.Exit(err.Error(), 1)
@@ -178,6 +182,65 @@ func backtestMain(ctx *cli.Context, deps backtestCommandDeps) error {
 		return newBacktestCommandError("backtest failed", causes...)
 	}
 	return nil
+}
+
+func newBacktestProgressWriter(w io.Writer) func(alerter.BacktestWindowResult, int, int) {
+	return newBacktestProgressOutput(w).Progress
+}
+
+func backtestProgressWriter(w io.Writer) func(alerter.BacktestWindowResult, int, int) {
+	if output, ok := w.(*backtestProgressOutput); ok {
+		return output.Progress
+	}
+	return newBacktestProgressWriter(w)
+}
+
+type backtestProgressOutput struct {
+	w        io.Writer
+	terminal bool
+	mu       sync.Mutex
+	active   bool
+}
+
+func newBacktestProgressOutput(w io.Writer) *backtestProgressOutput {
+	terminal := false
+	if file, ok := w.(interface{ Fd() uintptr }); ok {
+		terminal = isatty.IsTerminal(file.Fd()) || isatty.IsCygwinTerminal(file.Fd())
+	}
+	return &backtestProgressOutput{w: w, terminal: terminal}
+}
+
+func (w *backtestProgressOutput) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.active {
+		if _, err := io.WriteString(w.w, "\n"); err != nil {
+			return 0, err
+		}
+		w.active = false
+	}
+	return w.w.Write(data)
+}
+
+func (w *backtestProgressOutput) Progress(_ alerter.BacktestWindowResult, completed, total int) {
+	if w.w == nil || !w.terminal || total <= 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	const width = 20
+	filled := completed * width / total
+	if filled > width {
+		filled = width
+	}
+	line := "Backtest progress: [" + strings.Repeat("=", filled) + strings.Repeat(" ", width-filled) + "] " + strconv.Itoa(completed) + "/" + strconv.Itoa(total)
+	ending := ""
+	if completed >= total {
+		ending = "\n"
+	}
+	_, _ = io.WriteString(w.w, "\r\033[2K"+line+ending)
+	w.active = completed < total
 }
 
 func validateBacktestDependencies(deps backtestCommandDeps) error {

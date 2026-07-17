@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -117,6 +118,10 @@ func TestBacktestCommandTranslatesOptions(t *testing.T) {
 		QueryTimeout:        17 * time.Second,
 		MaxWindows:          23,
 	}
+	if gotBacktestOpts.OnWindowComplete == nil {
+		t.Fatal("OnWindowComplete is nil")
+	}
+	gotBacktestOpts.OnWindowComplete = nil
 	if !reflect.DeepEqual(gotBacktestOpts, wantBacktestOpts) {
 		t.Fatalf("BacktestOptions = %#v, want %#v", gotBacktestOpts, wantBacktestOpts)
 	}
@@ -317,6 +322,113 @@ func TestBacktestCommandInjectedRunnerWritesPureJSON(t *testing.T) {
 	}
 	if document["version"] != float64(alerter.BacktestReportVersion) {
 		t.Fatalf("version = %#v", document["version"])
+	}
+}
+
+func TestBacktestCommandOmitsProgressForNonInteractiveOutput(t *testing.T) {
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	report := completedBacktestReport()
+	report.Rule.Windows = []alerter.BacktestWindowResult{
+		{Status: alerter.BacktestWindowStatusClear},
+		{Status: alerter.BacktestWindowStatusFiring},
+		{Status: alerter.BacktestWindowStatusError},
+		{Status: alerter.BacktestWindowStatusLimitExceeded},
+		{Status: alerter.BacktestWindowStatusCancelled},
+	}
+	deps := testBacktestDeps(func(_ context.Context, _ *alerter.AlerterOpts, _ string, opts alerter.BacktestOptions) (*alerter.BacktestReport, error) {
+		if opts.OnWindowComplete == nil {
+			t.Fatal("backtest progress callback is nil")
+		}
+		for i, result := range report.Rule.Windows {
+			opts.OnWindowComplete(result, i+1, len(report.Rule.Windows))
+		}
+		return report, nil
+	})
+	deps.render = renderBacktestReport
+
+	if err := runBacktestCommandWithWriters(deps, stdout, stderr, append(validBacktestArgs(), "--format", "json")...); err != nil {
+		t.Fatalf("backtest command error = %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatalf("stdout is not one JSON document: %v\n%s", err, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "Backtest progress:") {
+		t.Fatalf("stdout contains progress: %s", stdout.String())
+	}
+	if got := stderr.String(); strings.Contains(got, "Backtest progress:") {
+		t.Fatalf("non-interactive stderr contains progress: %q", got)
+	}
+}
+
+func TestBacktestProgressWriterRedrawsInteractiveTerminal(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	progressOutput := newBacktestProgressOutput(stderr)
+	progressOutput.terminal = true
+
+	progressOutput.Progress(alerter.BacktestWindowResult{}, 0, 2)
+	progressOutput.Progress(alerter.BacktestWindowResult{}, 1, 2)
+	progressOutput.Progress(alerter.BacktestWindowResult{}, 2, 2)
+
+	got := stderr.String()
+	if !strings.HasPrefix(got, "\r\033[2KBacktest progress:") {
+		t.Fatalf("interactive progress does not redraw: %q", got)
+	}
+	if !strings.Contains(got, "0/2") {
+		t.Fatalf("interactive progress does not render initial state: %q", got)
+	}
+	if !strings.HasSuffix(got, "\r\033[2KBacktest progress: [====================] 2/2\n") {
+		t.Fatalf("interactive progress does not finish with a newline: %q", got)
+	}
+}
+
+func TestBacktestProgressWriterSerializesConcurrentUpdates(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	output := newBacktestProgressOutput(stderr)
+	output.terminal = true
+	progress := output.Progress
+	const updates = 100
+
+	var wg sync.WaitGroup
+	wg.Add(updates)
+	for i := 1; i <= updates; i++ {
+		go func(completed int) {
+			defer wg.Done()
+			progress(alerter.BacktestWindowResult{}, completed, updates)
+		}(i)
+	}
+	wg.Wait()
+
+	if got := strings.Count(stderr.String(), "\r\033[2KBacktest progress: ["); got != updates {
+		t.Fatalf("progress updates = %d, want %d: %q", got, updates, stderr.String())
+	}
+}
+
+func TestBacktestProgressWriterOmitsNonInteractiveOutput(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	output := newBacktestProgressOutput(stderr)
+
+	output.Progress(alerter.BacktestWindowResult{}, 1, 2)
+
+	if stderr.Len() != 0 {
+		t.Fatalf("non-interactive progress output = %q", stderr.String())
+	}
+}
+
+func TestBacktestProgressOutputWritesLogsOnANewLine(t *testing.T) {
+	stderr := new(bytes.Buffer)
+	output := newBacktestProgressOutput(stderr)
+	output.terminal = true
+
+	output.Progress(alerter.BacktestWindowResult{}, 1, 2)
+	if _, err := output.Write([]byte("operational log\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	output.Progress(alerter.BacktestWindowResult{}, 2, 2)
+
+	if got := stderr.String(); !strings.Contains(got, "1/2\noperational log\n\r\033[2KBacktest progress:") {
+		t.Fatalf("log was not separated from progress: %q", got)
 	}
 }
 

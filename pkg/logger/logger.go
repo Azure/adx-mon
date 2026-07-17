@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -24,14 +25,7 @@ var (
 )
 
 func init() {
-	var logger *slog.Logger
-
-	if !isatty.IsTerminal(os.Stderr.Fd()) {
-		logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: levelVar, ReplaceAttr: replaceAttr}))
-	} else {
-		logger = slog.New(tint.NewHandler(os.Stderr, &tint.Options{Level: levelVar, TimeFormat: timeFormat}))
-	}
-	slog.SetDefault(logger)
+	SetOutput(os.Stderr)
 
 	level := os.Getenv("LOG_LEVEL")
 	if level == "" {
@@ -52,6 +46,19 @@ func init() {
 	default:
 		slog.Warn("Unknown log level", "value", level, "valid", "ERROR,WARN,INFO,DEBUG,TRACE")
 	}
+}
+
+// SetOutput directs the default logger to w.
+func SetOutput(w io.Writer) {
+	terminal := false
+	if file, ok := w.(interface{ Fd() uintptr }); ok {
+		terminal = isatty.IsTerminal(file.Fd()) || isatty.IsCygwinTerminal(file.Fd())
+	}
+	if terminal {
+		slog.SetDefault(slog.New(tint.NewHandler(w, &tint.Options{Level: levelVar, TimeFormat: timeFormat})))
+		return
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: levelVar, ReplaceAttr: replaceAttr})))
 }
 
 func SetLevel(level slog.Level) {

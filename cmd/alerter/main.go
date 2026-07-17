@@ -27,6 +27,8 @@ func main() {
 }
 
 func runAlerter(args []string, stderr io.Writer) int {
+	stderr = newBacktestProgressOutput(stderr)
+	logger.SetOutput(stderr)
 	app := newAlerterApp()
 	app.ErrWriter = stderr
 	app.ExitErrHandler = func(*cli.Context, error) {}

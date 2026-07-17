@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -247,6 +251,12 @@ func TestRunBacktest_ClearAndFiringWithExactWindows(t *testing.T) {
 	}}
 	opts := backtestAlerterOptions()
 	backtestOpts := validBacktestOptions(start, start.Add(12*time.Minute))
+	var progress []int
+	var progressTotals []int
+	backtestOpts.OnWindowComplete = func(_ BacktestWindowResult, completed, total int) {
+		progress = append(progress, completed)
+		progressTotals = append(progressTotals, total)
+	}
 
 	report, err := runBacktest(context.Background(), opts, rulePath, backtestOpts, fakeBacktestFactory(client))
 	require.NoError(t, err)
@@ -268,6 +278,8 @@ func TestRunBacktest_ClearAndFiringWithExactWindows(t *testing.T) {
 		{Start: start.Add(5 * time.Minute), End: start.Add(10 * time.Minute)},
 		{Start: start.Add(10 * time.Minute), End: start.Add(12 * time.Minute)},
 	}, windows)
+	require.Equal(t, []int{0, 1, 2, 3}, progress)
+	require.Equal(t, []int{3, 3, 3, 3}, progressTotals)
 }
 
 func TestRunBacktest_QueryAndConversionErrorsAreIsolated(t *testing.T) {
@@ -313,6 +325,51 @@ func TestRunBacktest_QueryErrorsAreSafeInReport(t *testing.T) {
 	assertBacktestReportExcludes(t, report, "rendered-query-secret", "token-secret", "msi-secret", "Authorization", "DefaultAzureCredential", "selected.invalid", "secret-link")
 }
 
+func TestRunBacktest_QueryErrorsIncludeSafeDiagnostics(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	rulePath := writeBacktestRule(t, backtestRuleYAML("5m", "Events", "", ""))
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "DNS error",
+			err:  fmt.Errorf("request failed: %w", &net.DNSError{Name: "misspelled.example.test", Err: "no such host", IsNotFound: true}),
+			want: `DNS lookup failed for "misspelled.example.test": no such host`,
+		},
+		{
+			name: "DNS error with discarded chain",
+			err:  errors.New("DefaultAzureCredential secret diagnostics: dial tcp: lookup misspelled.example.test on 10.0.0.10:53: no such host"),
+			want: `DNS lookup failed for "misspelled.example.test": no such host`,
+		},
+		{
+			name: "Kusto error",
+			err: azerrors.HTTP(
+				azerrors.OpQuery,
+				"Bad Request",
+				http.StatusBadRequest,
+				io.NopCloser(strings.NewReader(`{"error":{"@message":"Semantic error: unknown column"}}`)),
+				"request failed",
+			),
+			want: "Kusto query failed: Semantic error: unknown column",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeBacktestClient{queryFn: func(context.Context, *engine.QueryContext, engineRowFn) (error, int) {
+				return tt.err, 0
+			}}
+
+			report, err := runBacktest(context.Background(), backtestAlerterOptions(), rulePath, validBacktestOptions(start, start.Add(5*time.Minute)), fakeBacktestFactory(client))
+			require.Error(t, err)
+			require.Equal(t, tt.want, report.Rule.Windows[0].Error)
+		})
+	}
+}
+
 func TestRunBacktest_ClientConstructionErrorsAreSafeInReport(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	rulePath := writeBacktestRule(t, backtestRuleYAML("5m", "Events", "", ""))
@@ -326,6 +383,23 @@ func TestRunBacktest_ClientConstructionErrorsAreSafeInReport(t *testing.T) {
 	assertBacktestErrorExcludes(t, err, "token-secret", "msi-secret", "Authorization", "DefaultAzureCredential")
 	require.Equal(t, "failed to construct query client", report.Rule.Windows[0].Error)
 	assertBacktestReportExcludes(t, report, "token-secret", "msi-secret", "Authorization", "DefaultAzureCredential")
+}
+
+func TestRunBacktest_StartsProgressAfterClientConstruction(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	rulePath := writeBacktestRule(t, backtestRuleYAML("5m", "Events", "", ""))
+	backtestOpts := validBacktestOptions(start, start.Add(5*time.Minute))
+	var events []string
+	backtestOpts.OnWindowComplete = func(_ BacktestWindowResult, completed, _ int) {
+		events = append(events, fmt.Sprintf("progress:%d", completed))
+	}
+
+	_, err := runBacktest(context.Background(), backtestAlerterOptions(), rulePath, backtestOpts, func(*AlerterOpts, int) (engine.Client, error) {
+		events = append(events, "client")
+		return &fakeBacktestClient{}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"client", "progress:0", "progress:1"}, events)
 }
 
 func TestRunBacktest_ResultLimitExceededRetainsAlerts(t *testing.T) {
