@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/azkustodata"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -551,28 +552,41 @@ func ensureHeartbeatTableWithClient(ctx context.Context, client *azkustodata.Cli
 		return false, fmt.Errorf("failed to query Kusto tables: %w", err)
 	}
 
-	for _, resultTable := range result.Tables() {
-		if !resultTable.IsPrimaryResult() {
-			continue
-		}
-		for _, row := range resultTable.Rows() {
-			var t TableExists
-			if err := row.ToStruct(&t); err != nil {
-				return false, fmt.Errorf("failed to parse table count: %w", err)
-			}
-			if t.Count > 0 {
-				return false, nil
-			}
-		}
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, err
+	}
+	var tableCount TableExists
+	if err := row.ToStruct(&tableCount); err != nil {
+		return false, fmt.Errorf("failed to parse table count: %w", err)
+	}
+	if tableCount.Count > 0 {
+		return false, nil
 	}
 
 	stmt := kql.New(".create table ").AddTable(table).AddLiteral("(Timestamp: datetime, ClusterEndpoint: string, Schema: dynamic, PartitionMetadata: dynamic)")
-	_, err = client.Mgmt(ctx, database, stmt)
-	return true, err
+	if _, err := client.Mgmt(ctx, database, stmt); err != nil {
+		return false, fmt.Errorf("failed to create heartbeat table: %w", err)
+	}
+	return true, nil
 }
 
 type TableExists struct {
 	Count int64 `kusto:"Count"`
+}
+
+func getSinglePrimaryRow(result query.Dataset) (query.Row, error) {
+	for _, table := range result.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+		rows := table.Rows()
+		if len(rows) != 1 {
+			return nil, fmt.Errorf("expected one primary result row, got %d", len(rows))
+		}
+		return rows[0], nil
+	}
+	return nil, fmt.Errorf("query returned no primary result")
 }
 
 func (r *AdxReconciler) UpdateCluster(ctx context.Context, cluster *adxmonv1.ADXCluster) (ctrl.Result, error) {
@@ -1767,20 +1781,15 @@ func tableExists(ctx context.Context, client *azkustodata.Client, database, tabl
 		return false, fmt.Errorf("failed to query table existence: %w", err)
 	}
 
-	for _, tbl := range result.Tables() {
-		if !tbl.IsPrimaryResult() {
-			continue
-		}
-		for _, row := range tbl.Rows() {
-			var rec DatabaseExistsRec
-			if err := row.ToStruct(&rec); err != nil {
-				return false, fmt.Errorf("failed to parse table existence: %w", err)
-			}
-			return rec.Count > 0, nil
-		}
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, err
 	}
-
-	return false, nil
+	var rec DatabaseExistsRec
+	if err := row.ToStruct(&rec); err != nil {
+		return false, fmt.Errorf("failed to parse table existence: %w", err)
+	}
+	return rec.Count > 0, nil
 }
 
 // generateEntityGroupDefinitions generates entity group definitions for spoke databases, replicated across all hub databases.
@@ -1925,32 +1934,27 @@ func checkIfFunctionIsView(ctx context.Context, client *azkustodata.Client, data
 		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, err)
 	}
 
-	for _, table := range result.Tables() {
-		if !table.IsPrimaryResult() {
-			continue
-		}
-		for _, row := range table.Rows() {
-			var rec FunctionSchemaRec
-			if err := row.ToStruct(&rec); err != nil {
-				return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse function schema: %w", err))
-			}
-
-			if rec.Kind != "ViewFunction" {
-				return false, "", nil
-			}
-
-			var cols []OutputColumn
-			if err := json.Unmarshal(rec.OutputColumns, &cols); err != nil {
-				return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse output columns: %w", err))
-			}
-
-			var parts []string
-			for _, col := range cols {
-				parts = append(parts, fmt.Sprintf("['%s']:%s", col.Name, col.CslType))
-			}
-			return true, strings.Join(parts, ", "), nil
-		}
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, err)
+	}
+	var rec FunctionSchemaRec
+	if err := row.ToStruct(&rec); err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse function schema: %w", err))
 	}
 
-	return false, "", nil
+	if rec.Kind != "ViewFunction" {
+		return false, "", nil
+	}
+
+	var cols []OutputColumn
+	if err := json.Unmarshal(rec.OutputColumns, &cols); err != nil {
+		return false, "", wrapHeartbeatStageError(stage, heartbeatFunctionSchemaTimeout, fmt.Errorf("parse output columns: %w", err))
+	}
+
+	var parts []string
+	for _, col := range cols {
+		parts = append(parts, fmt.Sprintf("['%s']:%s", col.Name, col.CslType))
+	}
+	return true, strings.Join(parts, ", "), nil
 }

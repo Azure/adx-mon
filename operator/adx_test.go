@@ -83,9 +83,9 @@ func TestWrapHeartbeatStageError(t *testing.T) {
 func TestBuildHeartbeatQuery(t *testing.T) {
 	t.Parallel()
 
-	query, err := buildHeartbeatQuery("Heartbeat Table", "1h30m")
+	query, err := buildHeartbeatQuery("HeartbeatTable", "1h30m")
 	require.NoError(t, err)
-	require.Equal(t, `["Heartbeat Table"] | where Timestamp > ago(timespan(01:30:00.0000000)) | summarize arg_max(Timestamp, Schema) by ClusterEndpoint`, query.String())
+	require.Equal(t, `HeartbeatTable | where Timestamp > ago(timespan(01:30:00.0000000)) | summarize arg_max(Timestamp, Schema) by ClusterEndpoint`, query.String())
 
 	_, err = buildHeartbeatQuery("Heartbeat", "not-a-duration")
 	require.EqualError(t, err, `invalid heartbeat TTL "not-a-duration": time: invalid duration "not-a-duration"`)
