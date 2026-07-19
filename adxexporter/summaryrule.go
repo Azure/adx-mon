@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,7 +40,7 @@ type SummaryRuleReconciler struct {
 	ClusterLabels map[string]string
 	KustoClusters map[string]string // database name -> endpoint URL
 
-	KustoExecutors map[string]KustoExecutor // per-database Kusto clients supporting Query and Mgmt
+	KustoExecutors map[string]KustoExecutor // per-database Kusto clients supporting iterative queries and management commands
 	Clock          clock.Clock
 }
 
@@ -237,7 +238,7 @@ func (r *SummaryRuleReconciler) adoptIfDesired(ctx context.Context, rule *adxmon
 // initializeQueryExecutors creates per-database executors for SummaryRule processing.
 func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
 	for database, endpoint := range r.KustoClusters {
-		// Reuse the shared Kusto client capable of both Query and Mgmt
+		// Reuse the shared Kusto client for iterative queries and management commands.
 		kustoClient, err := NewKustoClient(endpoint, database)
 		if err != nil {
 			return err
@@ -336,24 +337,39 @@ func operationIDFromResult(ds azquery.Dataset) (string, error) {
 		if !table.IsPrimaryResult() {
 			continue
 		}
-		for _, row := range table.Rows() {
-			if opID, err := row.StringByName("OperationId"); err == nil {
-				return opID, nil
-			}
-
-			values := row.Values()
-			if len(values) == 0 {
-				return "", fmt.Errorf("operation result row has no values")
-			}
-			if len(values) > 1 {
-				return "", fmt.Errorf("unexpected number of values in row without OperationId column: %d", len(values))
-			}
-
-			return values[0].String(), nil
+		rows := table.Rows()
+		if len(rows) != 1 {
+			return "", fmt.Errorf("expected one operation result row, got %d", len(rows))
 		}
-		break
+		row := rows[0]
+		if column := table.ColumnByName("OperationId"); column != nil {
+			if column.Type() != aztypes.String && column.Type() != aztypes.GUID {
+				return "", fmt.Errorf("operation id has unsupported type %s", column.Type())
+			}
+
+			value, err := row.ValueByColumn(column)
+			if err != nil {
+				return "", fmt.Errorf("failed to read operation id: %w", err)
+			}
+			opID := value.String()
+			if opID == "" {
+				return "", fmt.Errorf("operation id is empty")
+			}
+			return opID, nil
+		}
+
+		values := row.Values()
+		if len(values) != 1 {
+			return "", fmt.Errorf("expected one value in row without OperationId column, got %d", len(values))
+		}
+
+		opID := values[0].String()
+		if opID == "" {
+			return "", fmt.Errorf("operation id is empty")
+		}
+		return opID, nil
 	}
-	return "", nil
+	return "", fmt.Errorf("operation id not found in result set")
 }
 
 // AsyncOperationStatus mirrors the schema returned by .show operations

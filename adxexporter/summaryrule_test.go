@@ -11,6 +11,7 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -515,4 +516,39 @@ func TestSummaryRule_getOperation_Parsing(t *testing.T) {
 	st, err = r.getOperation(context.Background(), "testdb", "not-found")
 	require.NoError(t, err)
 	require.Nil(t, st)
+}
+
+func TestOperationIDFromResult_RequiresOperationID(t *testing.T) {
+	t.Run("missing row", func(t *testing.T) {
+		_, err := operationIDFromResult(createDatasetWithColumns([]string{"OperationId"}, nil))
+		require.EqualError(t, err, "expected one operation result row, got 0")
+	})
+
+	t.Run("multiple rows", func(t *testing.T) {
+		_, err := operationIDFromResult(createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{"op-1"}, {"op-2"}}))
+		require.EqualError(t, err, "expected one operation result row, got 2")
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		_, err := operationIDFromResult(createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{""}}))
+		require.EqualError(t, err, "operation id is empty")
+	})
+
+	t.Run("named GUID", func(t *testing.T) {
+		id := uuid.MustParse("eeab2025-9cc6-411f-8ef5-9e5c6b720f22")
+		opID, err := operationIDFromResult(createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{id}}))
+		require.NoError(t, err)
+		require.Equal(t, id.String(), opID)
+	})
+
+	t.Run("unnamed single cell", func(t *testing.T) {
+		opID, err := operationIDFromResult(createDatasetWithColumns([]string{"Result"}, [][]interface{}{{"op-1"}}))
+		require.NoError(t, err)
+		require.Equal(t, "op-1", opID)
+	})
+
+	t.Run("named unsupported type", func(t *testing.T) {
+		_, err := operationIDFromResult(createDatasetWithColumns([]string{"OperationId"}, [][]interface{}{{1.5}}))
+		require.EqualError(t, err, "operation id has unsupported type real")
+	})
 }

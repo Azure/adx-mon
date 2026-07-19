@@ -12,6 +12,8 @@ import (
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
 	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
@@ -59,12 +61,13 @@ func (f *FakeClock) Tick(d time.Duration) <-chan time.Time {
 
 // MockKustoExecutor implements KustoExecutor for testing
 type MockKustoExecutor struct {
-	database string
-	endpoint string
-	queries  []string
-	results  []azquery.Dataset
-	errors   []error
-	callIdx  int
+	database      string
+	endpoint      string
+	queries       []string
+	results       []azquery.Dataset
+	errors        []error
+	callIdx       int
+	lastIterative *mockIterativeDataset
 }
 
 func NewMockKustoExecutor(t *testing.T, database, endpoint string) *MockKustoExecutor {
@@ -86,32 +89,25 @@ func (m *MockKustoExecutor) Endpoint() string {
 	return m.endpoint
 }
 
-func (m *MockKustoExecutor) Query(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.Dataset, error) {
+func (m *MockKustoExecutor) IterativeQuery(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error) {
 	m.queries = append(m.queries, query.String())
 
-	if m.callIdx < len(m.errors) && m.errors[m.callIdx] != nil {
-		err := m.errors[m.callIdx]
-		m.callIdx++
+	result, err := m.nextResult()
+	if err != nil {
 		return nil, err
 	}
-
-	if m.callIdx < len(m.results) {
-		result := m.results[m.callIdx]
-		m.callIdx++
-		return result, nil
-	}
-
-	// Return empty dataset if no specific result configured.
-	return createMockDataset(nil), nil
+	m.lastIterative = newMockIterativeDataset(result)
+	return m.lastIterative, nil
 }
 
 // Mgmt implements the management command execution for the mock executor.
-// For current tests, no behavior changes are needed, so it mirrors Query by
-// recording the statement and returning configured results or an empty dataset.
+// It records the statement and returns configured results or an empty dataset.
 func (m *MockKustoExecutor) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.Dataset, error) {
-	// Reuse Query behavior to avoid duplicating test plumbing
 	m.queries = append(m.queries, query.String())
+	return m.nextResult()
+}
 
+func (m *MockKustoExecutor) nextResult() (azquery.Dataset, error) {
 	if m.callIdx < len(m.errors) && m.errors[m.callIdx] != nil {
 		err := m.errors[m.callIdx]
 		m.callIdx++
@@ -145,6 +141,7 @@ func (m *MockKustoExecutor) Reset() {
 	m.results = make([]azquery.Dataset, 0)
 	m.errors = make([]error, 0)
 	m.callIdx = 0
+	m.lastIterative = nil
 }
 
 func createMockDataset(rows [][]interface{}) azquery.Dataset {
@@ -166,6 +163,8 @@ func createDatasetWithColumns(columnNames []string, rows [][]interface{}) azquer
 			switch v := col.(type) {
 			case string:
 				vals = append(vals, azvalue.NewString(v))
+			case uuid.UUID:
+				vals = append(vals, azvalue.NewGUID(v))
 			case float64:
 				vals = append(vals, azvalue.NewReal(v))
 			case time.Time:
@@ -190,6 +189,8 @@ func inferColumnType(rows [][]interface{}, idx int) aztypes.Column {
 		switch row[idx].(type) {
 		case string:
 			return aztypes.String
+		case uuid.UUID:
+			return aztypes.GUID
 		case float64:
 			return aztypes.Real
 		case time.Time:
@@ -220,6 +221,63 @@ func (d *mockDataset) PrimaryResultKind() string {
 func (d *mockDataset) Tables() []azquery.Table {
 	return d.tables
 }
+
+type mockIterativeDataset struct {
+	base   azquery.Dataset
+	closed bool
+}
+
+func newMockIterativeDataset(dataset azquery.Dataset) *mockIterativeDataset {
+	return &mockIterativeDataset{base: dataset}
+}
+
+func (d *mockIterativeDataset) Context() context.Context  { return d.base.Context() }
+func (d *mockIterativeDataset) Op() azerrors.Op           { return d.base.Op() }
+func (d *mockIterativeDataset) PrimaryResultKind() string { return d.base.PrimaryResultKind() }
+
+func (d *mockIterativeDataset) Tables() <-chan azquery.TableResult {
+	tables := d.base.Tables()
+	results := make(chan azquery.TableResult, len(tables))
+	for _, table := range tables {
+		results <- azquery.TableResultSuccess(&mockIterativeTable{base: table})
+	}
+	close(results)
+	return results
+}
+
+func (d *mockIterativeDataset) ToDataset() (azquery.Dataset, error) { return d.base, nil }
+
+func (d *mockIterativeDataset) Close() error {
+	d.closed = true
+	return nil
+}
+
+type mockIterativeTable struct {
+	base azquery.Table
+}
+
+func (t *mockIterativeTable) Id() string                { return t.base.Id() }
+func (t *mockIterativeTable) Index() int64              { return t.base.Index() }
+func (t *mockIterativeTable) Name() string              { return t.base.Name() }
+func (t *mockIterativeTable) Columns() []azquery.Column { return t.base.Columns() }
+func (t *mockIterativeTable) Kind() string              { return t.base.Kind() }
+func (t *mockIterativeTable) ColumnByName(name string) azquery.Column {
+	return t.base.ColumnByName(name)
+}
+func (t *mockIterativeTable) Op() azerrors.Op       { return t.base.Op() }
+func (t *mockIterativeTable) IsPrimaryResult() bool { return t.base.IsPrimaryResult() }
+
+func (t *mockIterativeTable) Rows() <-chan azquery.RowResult {
+	rows := t.base.Rows()
+	results := make(chan azquery.RowResult, len(rows))
+	for _, row := range rows {
+		results <- azquery.RowResultSuccess(row)
+	}
+	close(results)
+	return results
+}
+
+func (t *mockIterativeTable) ToTable() (azquery.Table, error) { return t.base, nil }
 
 func TestQueryExecutor_ExecuteQuery(t *testing.T) {
 	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
@@ -293,6 +351,57 @@ func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
 	require.Error(t, result.Error)
 	require.Contains(t, result.Error.Error(), "maximum row limit")
 	require.Len(t, result.Rows, 1)
+	require.True(t, mockClient.lastIterative.closed)
+}
+
+func TestQueryExecutor_ExecuteQuery_MaterializesNativeValues(t *testing.T) {
+	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
+	executor := NewQueryExecutor(mockClient)
+	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
+	mockClient.SetNextResult(t, [][]interface{}{{"metric_one", 1.5, now}})
+
+	result, err := executor.ExecuteQuery(context.Background(), "MyTable", now.Add(-time.Hour), now, nil)
+
+	require.NoError(t, err)
+	require.NoError(t, result.Error)
+	require.Equal(t, "metric_one", result.Rows[0]["metric_name"])
+	require.Equal(t, 1.5, result.Rows[0]["value"])
+	require.Equal(t, now, result.Rows[0]["timestamp"])
+}
+
+func TestMaterializeKustoValue(t *testing.T) {
+	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
+	duration := 5 * time.Minute
+	id := uuid.MustParse("eeab2025-9cc6-411f-8ef5-9e5c6b720f22")
+	decimalValue := decimal.RequireFromString("123.45")
+	dynamicValue := []byte(`{"region":"west"}`)
+	var typedNilReal *azvalue.Real
+
+	tests := []struct {
+		name  string
+		value azvalue.Kusto
+		want  interface{}
+	}{
+		{name: "string", value: azvalue.NewString("metric_one"), want: "metric_one"},
+		{name: "bool", value: azvalue.NewBool(true), want: true},
+		{name: "int", value: azvalue.NewInt(42), want: int32(42)},
+		{name: "long", value: azvalue.NewLong(42), want: int64(42)},
+		{name: "real", value: azvalue.NewReal(1.5), want: 1.5},
+		{name: "datetime", value: azvalue.NewDateTime(now), want: now},
+		{name: "timespan", value: azvalue.NewTimespan(duration), want: duration},
+		{name: "decimal", value: azvalue.NewDecimal(decimalValue), want: decimalValue},
+		{name: "guid", value: azvalue.NewGUID(id), want: id},
+		{name: "dynamic", value: azvalue.NewDynamic(dynamicValue), want: dynamicValue},
+		{name: "null pointer value", value: azvalue.NewNullReal(), want: nil},
+		{name: "null slice value", value: azvalue.NewNullDynamic(), want: nil},
+		{name: "typed nil wrapper", value: typedNilReal, want: nil},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, materializeKustoValue(test.value))
+		})
+	}
 }
 
 func TestNewKustoClient(t *testing.T) {
