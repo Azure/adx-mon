@@ -409,7 +409,7 @@ func (r *SummaryRuleReconciler) getOperation(ctx context.Context, database strin
 		for _, row := range table.Rows() {
 			var status AsyncOperationStatus
 			if err := row.ToStruct(&status); err != nil {
-				return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
+				return nil, fmt.Errorf("failed to parse operation %s: %w", operationId, err)
 			}
 			if status.State != "" {
 				return &status, nil
