@@ -11,7 +11,6 @@ import (
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -178,8 +177,8 @@ func constructMetricName(baseName, prefix, columnName string) (string, error) {
 	return result, nil
 }
 
-// Transform converts KQL query results to Prometheus metrics
-// Supports both single-value and multi-value column modes
+// Transform converts materialized KQL rows to Prometheus metrics.
+// Callers must convert Kusto SDK values and nulls to native Go values first.
 func (t *KustoToMetricsTransformer) Transform(results []map[string]any) ([]MetricData, error) {
 	if len(results) == 0 {
 		return []MetricData{}, nil
@@ -267,6 +266,9 @@ func (t *KustoToMetricsTransformer) extractMetricName(row map[string]any) (strin
 		if !exists {
 			return "", fmt.Errorf("metric name column '%s' not found in row", t.config.MetricNameColumn)
 		}
+		if rawValue == nil {
+			return "", fmt.Errorf("metric name column '%s' contains null value", t.config.MetricNameColumn)
+		}
 
 		switch v := rawValue.(type) {
 		case string:
@@ -274,14 +276,6 @@ func (t *KustoToMetricsTransformer) extractMetricName(row map[string]any) (strin
 				return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
 			}
 			return v, nil
-		case value.String:
-			if !v.Valid {
-				return "", fmt.Errorf("metric name column '%s' contains null value", t.config.MetricNameColumn)
-			}
-			if v.Value == "" {
-				return "", fmt.Errorf("metric name column '%s' contains empty string", t.config.MetricNameColumn)
-			}
-			return v.Value, nil
 		default:
 			return "", fmt.Errorf("metric name column '%s' contains non-string value: %T", t.config.MetricNameColumn, rawValue)
 		}
@@ -336,21 +330,6 @@ func (t *KustoToMetricsTransformer) extractValueFromColumn(row map[string]any, c
 		return float64(v), nil
 	case int64:
 		return float64(v), nil
-	case value.Long:
-		if !v.Valid {
-			return 0, fmt.Errorf("value column '%s' contains null value", columnName)
-		}
-		return float64(v.Value), nil
-	case value.Real:
-		if !v.Valid {
-			return 0, fmt.Errorf("value column '%s' contains null value", columnName)
-		}
-		return v.Value, nil
-	case value.Int:
-		if !v.Valid {
-			return 0, fmt.Errorf("value column '%s' contains null value", columnName)
-		}
-		return float64(v.Value), nil
 	case string:
 		// Try to parse string as float
 		parsed, err := strconv.ParseFloat(v, 64)
@@ -401,11 +380,6 @@ func (t *KustoToMetricsTransformer) extractTimestamp(row map[string]any) (time.T
 			return time.Time{}, fmt.Errorf("timestamp column '%s' contains unparseable string value '%s': %w", t.config.TimestampColumn, v, err)
 		}
 		return parsed, nil
-	case value.DateTime:
-		if !v.Valid {
-			return time.Time{}, fmt.Errorf("timestamp column '%s' contains null value", t.config.TimestampColumn)
-		}
-		return v.Value, nil
 	default:
 		return time.Time{}, fmt.Errorf("timestamp column '%s' contains unsupported type %T", t.config.TimestampColumn, rawValue)
 	}
@@ -421,15 +395,13 @@ func (t *KustoToMetricsTransformer) extractLabels(row map[string]any) (map[strin
 			// Skip missing label columns instead of failing
 			continue
 		}
+		if rawValue == nil {
+			return nil, fmt.Errorf("label column '%s' contains null value", labelColumn)
+		}
 
 		switch v := rawValue.(type) {
 		case string:
 			labels[labelColumn] = v
-		case value.String:
-			if !v.Valid {
-				return nil, fmt.Errorf("label column '%s' contains invalid value: %T", labelColumn, rawValue)
-			}
-			labels[labelColumn] = v.Value
 		default:
 			// Lables must be string key:value pairs.
 			return nil, fmt.Errorf("label column '%s' contains unsupported type %T", labelColumn, rawValue)
@@ -545,21 +517,9 @@ func (t *KustoToMetricsTransformer) validateValueColumn(row map[string]any, colu
 	}
 
 	// Check if value is numeric type
-	switch v := rawValue.(type) {
+	switch rawValue.(type) {
 	case float64, float32, int, int32, int64, string:
 		// Valid numeric types (string will be validated during parsing)
-	case value.Long:
-		if !v.Valid {
-			return fmt.Errorf("value column '%s' contains null value", columnName)
-		}
-	case value.Real:
-		if !v.Valid {
-			return fmt.Errorf("value column '%s' contains null value", columnName)
-		}
-	case value.Int:
-		if !v.Valid {
-			return fmt.Errorf("value column '%s' contains null value", columnName)
-		}
 	case nil:
 		return fmt.Errorf("value column '%s' contains null value", columnName)
 	default:
