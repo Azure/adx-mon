@@ -554,7 +554,7 @@ func ensureHeartbeatTableWithClient(ctx context.Context, client *azkustodata.Cli
 
 	row, err := getSinglePrimaryRow(result)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read heartbeat table existence result: %w", err)
 	}
 	var tableCount TableExists
 	if err := row.ToStruct(&tableCount); err != nil {
@@ -1656,11 +1656,11 @@ func (s *FederationState) processHeartbeatRow(row HeartbeatRow) {
 // streamHeartbeatData queries the heartbeat table and processes rows in a streaming fashion,
 // returning the accumulated federation state without holding all schemas in memory.
 func streamHeartbeatData(ctx context.Context, client *azkustodata.Client, database, table, ttl string) (*FederationState, error) {
-	query, err := buildHeartbeatQuery(table, ttl)
+	stmt, err := buildHeartbeatQuery(table, ttl)
 	if err != nil {
 		return nil, err
 	}
-	result, err := client.IterativeQuery(ctx, database, query)
+	result, err := client.IterativeQuery(ctx, database, stmt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query heartbeat table: %w", err)
 	}
@@ -1775,15 +1775,15 @@ func ensureHubTables(ctx context.Context, client *azkustodata.Client, database s
 }
 
 func tableExists(ctx context.Context, client *azkustodata.Client, database, table string) (bool, error) {
-	query := kql.New(".show tables | where TableName == ").AddString(table).AddLiteral(" | count")
-	result, err := client.Mgmt(ctx, database, query)
+	stmt := kql.New(".show tables | where TableName == ").AddString(table).AddLiteral(" | count")
+	result, err := client.Mgmt(ctx, database, stmt)
 	if err != nil {
 		return false, fmt.Errorf("failed to query table existence: %w", err)
 	}
 
 	row, err := getSinglePrimaryRow(result)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read table existence result: %w", err)
 	}
 	var rec DatabaseExistsRec
 	if err := row.ToStruct(&rec); err != nil {
