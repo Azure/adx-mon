@@ -17,8 +17,8 @@ import (
 	"github.com/Azure/adx-mon/pkg/testutils/collector"
 	"github.com/Azure/adx-mon/pkg/testutils/ingestor"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -172,42 +172,46 @@ func VerifyAlerts(ctx context.Context, t *testing.T, kustainerUrl string, k3sCon
 	})
 
 	t.Run("Verify alert rule triggers", func(t *testing.T) {
-		cb := kusto.NewConnectionStringBuilder(kustainerUrl)
-		client, err := kusto.New(cb)
+		client, err := azkustodata.New(azkustodata.NewConnectionStringBuilder(kustainerUrl))
 		require.NoError(t, err)
 		defer client.Close()
 
 		stmt := kql.New("AdxmonAlerterQueryHealth | where Labels['name'] == 'testalert' | where Value == 1 | count")
 		require.Eventually(t, func() bool {
-			rows, err := client.Query(ctx, "Metrics", stmt)
+			hasRows, err := queryHasRows(ctx, client, "Metrics", stmt)
 			if err != nil {
+				t.Logf("Failed to retrieve alert health: %v", err)
 				return false
 			}
-
-			for {
-				row, errInline, errFinal := rows.NextRowOrError()
-				if errFinal == io.EOF {
-					break
-				}
-				if errInline != nil {
-					t.Logf("Partial failure to retrieve tables: %v", errInline)
-					continue
-				}
-				if errFinal != nil {
-					t.Logf("Failed to retrieve tables: %v", errFinal)
-				}
-
-				var res KustoCountResult
-				if err := row.ToStruct(&res); err != nil {
-					t.Logf("Failed to convert row to struct: %v", err)
-					continue
-				}
-				return res.Count > 0
-			}
-
-			return false
+			return hasRows
 		}, 10*time.Minute, time.Second)
 	})
+}
+
+func queryHasRows(ctx context.Context, client *azkustodata.Client, database string, stmt azkustodata.Statement) (bool, error) {
+	dataset, err := client.Query(ctx, database, stmt)
+	if err != nil {
+		return false, err
+	}
+
+	for _, table := range dataset.Tables() {
+		if !table.IsPrimaryResult() {
+			continue
+		}
+
+		rows := table.Rows()
+		if len(rows) != 1 {
+			return false, fmt.Errorf("expected one count result row, got %d", len(rows))
+		}
+
+		var result KustoCountResult
+		if err := rows[0].ToStruct(&result); err != nil {
+			return false, fmt.Errorf("convert row count to struct: %w", err)
+		}
+		return result.Count > 0, nil
+	}
+
+	return false, fmt.Errorf("count result not found")
 }
 
 func TestDiskFull(t *testing.T) {
