@@ -158,7 +158,7 @@ func TestExecutor_Handler_Severity(t *testing.T) {
 	}
 }
 
-func TestExecutor_asInt64_Errors(t *testing.T) {
+func TestAsInt64_Errors(t *testing.T) {
 	for _, tt := range []struct {
 		desc  string
 		value azvalue.Kusto
@@ -271,6 +271,24 @@ func TestParseAlertResult_RuleDestinationTakesPrecedence(t *testing.T) {
 	got, err := ParseAlertResult(qc, row)
 	require.NoError(t, err)
 	require.Equal(t, "rule destination", got.Destination)
+}
+
+func TestParseAlertResult_InvalidQueryContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		qc      *QueryContext
+		wantErr string
+	}{
+		{name: "nil context", wantErr: "query context must not be nil"},
+		{name: "nil rule", qc: &QueryContext{}, wantErr: "query context rule must not be nil"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAlertResult(tt.qc, testRow(nil, nil))
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
 }
 
 func TestParseAlertResult_Validation(t *testing.T) {

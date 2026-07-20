@@ -167,6 +167,13 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 
 // ParseAlertResult converts and validates a query row without performing delivery enrichment or I/O.
 func ParseAlertResult(qc *QueryContext, row azquery.Row) (AlertResult, error) {
+	if qc == nil {
+		return AlertResult{}, fmt.Errorf("query context must not be nil")
+	}
+	if qc.Rule == nil {
+		return AlertResult{}, fmt.Errorf("query context rule must not be nil")
+	}
+
 	notification := Notification{
 		Severity:     math.MinInt64,
 		CustomFields: map[string]string{},
