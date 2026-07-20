@@ -403,7 +403,7 @@ func (t *KustoToMetricsTransformer) extractLabels(row map[string]any) (map[strin
 		case string:
 			labels[labelColumn] = v
 		default:
-			// Lables must be string key:value pairs.
+			// Labels must be string key:value pairs.
 			return nil, fmt.Errorf("label column '%s' contains unsupported type %T", labelColumn, rawValue)
 		}
 	}
