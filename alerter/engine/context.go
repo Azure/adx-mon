@@ -26,10 +26,17 @@ type queryParam struct {
 }
 
 func NewQueryContext(rule *rules.Rule, endTime time.Time, region string) (*QueryContext, error) {
+	if rule == nil {
+		return nil, fmt.Errorf("rule must not be nil")
+	}
 	return NewQueryContextForWindow(rule, endTime.Add(-rule.Interval), endTime, region)
 }
 
 func NewQueryContextForWindow(rule *rules.Rule, startTime, endTime time.Time, region string) (*QueryContext, error) {
+	if rule == nil {
+		return nil, fmt.Errorf("rule must not be nil")
+	}
+
 	qc := &QueryContext{
 		Rule:      rule,
 		Region:    region,
