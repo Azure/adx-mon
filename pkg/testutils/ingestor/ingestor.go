@@ -5,6 +5,7 @@ package ingestor
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,7 +74,14 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 		}
 	}
 
+	operation := "pull"
+	if img == "" {
+		operation = "build"
+	}
+	started := time.Now()
+	log.Printf("Generic container started: component=ingestor mode=%s image=%s started=%s", operation, imageName(req), started.Format(time.RFC3339Nano))
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	log.Printf("Generic container completed: component=ingestor mode=%s image=%s duration=%s success=%t error=%v", operation, imageName(req), time.Since(started), err == nil, err)
 	var c *IngestorContainer
 	if container != nil {
 		c = &IngestorContainer{Container: container}
@@ -128,12 +136,12 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
-
-					if err := k.LoadImages(ctx, img); err != nil {
-						return fmt.Errorf("failed to load image: %w", err)
-					}
+					started := time.Now()
+					log.Printf("K3s image load started: component=ingestor image=%s started=%s", img, started.Format(time.RFC3339Nano))
+					err := k.LoadImages(ctx, img)
+					log.Printf("K3s image load completed: component=ingestor image=%s duration=%s success=%t error=%v", img, time.Since(started), err == nil, err)
 					if err != nil {
-						return fmt.Errorf("failed to create temp dir: %w", err)
+						return fmt.Errorf("failed to load image: %w", err)
 					}
 
 					// Our quick-start builds the necessary manifests to install ingestor. We need
@@ -288,7 +296,10 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					// If it exists, delete it first
 					if err == nil {
 						// StatefulSet exists, delete it
+						started := time.Now()
+						log.Printf("Ingestor StatefulSet termination started: namespace=%s name=%s started=%s", existingStatefulSet.Namespace, existingStatefulSet.Name, started.Format(time.RFC3339Nano))
 						if err := ctrlCli.Delete(ctx, existingStatefulSet); err != nil {
+							log.Printf("Ingestor StatefulSet termination completed: namespace=%s name=%s duration=%s success=false error=%v", existingStatefulSet.Namespace, existingStatefulSet.Name, time.Since(started), err)
 							return fmt.Errorf("failed to delete existing statefulset: %w", err)
 						}
 
@@ -301,23 +312,33 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 							return apimacherrors.IsNotFound(err), nil
 						})
 						if err != nil {
+							log.Printf("Ingestor StatefulSet termination completed: namespace=%s name=%s duration=%s success=false error=%v", existingStatefulSet.Namespace, existingStatefulSet.Name, time.Since(started), err)
 							return fmt.Errorf("failed to wait for statefulset deletion: %w", err)
 						}
+						log.Printf("Ingestor StatefulSet termination completed: namespace=%s name=%s duration=%s success=true", existingStatefulSet.Namespace, existingStatefulSet.Name, time.Since(started))
 					}
 
 					// Create the new StatefulSet
+					statefulSetStarted := time.Now()
+					log.Printf("Ingestor StatefulSet creation started: namespace=%s name=%s image=%s started=%s", statefulSet.Namespace, statefulSet.Name, img, statefulSetStarted.Format(time.RFC3339Nano))
 					if err := ctrlCli.Create(ctx, &statefulSet); err != nil {
+						log.Printf("Ingestor StatefulSet creation completed: namespace=%s name=%s image=%s duration=%s success=false error=%v", statefulSet.Namespace, statefulSet.Name, img, time.Since(statefulSetStarted), err)
 						return fmt.Errorf("failed to create statefulset: %w", err)
 					}
+					log.Printf("Ingestor StatefulSet creation completed: namespace=%s name=%s image=%s duration=%s success=true", statefulSet.Namespace, statefulSet.Name, img, time.Since(statefulSetStarted))
 
 					// create new function instance since Create will modify the passed-in object
 					ingestorFunction := makeIngestorFunction()
 					// Continue with Function creation...
 					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: ingestorFunction.Namespace, Name: ingestorFunction.Name}, ingestorFunction); err != nil {
 						if apimacherrors.IsNotFound(err) {
+							started := time.Now()
+							log.Printf("Function resource creation started: component=ingestor function=%s/%s generation=%d started=%s", ingestorFunction.Namespace, ingestorFunction.Name, ingestorFunction.Generation, started.Format(time.RFC3339Nano))
 							if err := ctrlCli.Create(ctx, ingestorFunction); err != nil {
+								log.Printf("Function resource creation completed: component=ingestor function=%s/%s duration=%s success=false error=%v", ingestorFunction.Namespace, ingestorFunction.Name, time.Since(started), err)
 								return fmt.Errorf("failed to create function: %w", err)
 							}
+							log.Printf("Function resource creation completed: component=ingestor function=%s/%s generation=%d duration=%s success=true", ingestorFunction.Namespace, ingestorFunction.Name, ingestorFunction.Generation, time.Since(started))
 						} else {
 							return fmt.Errorf("failed to get function: %w", err)
 						}
@@ -330,6 +351,13 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 
 		return nil
 	}
+}
+
+func imageName(req testcontainers.ContainerRequest) string {
+	if req.FromDockerfile.Context != "" {
+		return req.FromDockerfile.Repo + ":" + req.FromDockerfile.Tag
+	}
+	return req.Image
 }
 
 // IngestorStatus contains details about the ingestor pods

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,7 +72,14 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 		}
 	}
 
+	operation := "pull"
+	if img == "" {
+		operation = "build"
+	}
+	started := time.Now()
+	log.Printf("Generic container started: component=collector mode=%s image=%s started=%s", operation, imageName(req), started.Format(time.RFC3339Nano))
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	log.Printf("Generic container completed: component=collector mode=%s image=%s duration=%s success=%t error=%v", operation, imageName(req), time.Since(started), err == nil, err)
 	var c *CollectorContainer
 	if container != nil {
 		c = &CollectorContainer{Container: container}
@@ -112,8 +120,11 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
-
-					if err := k.LoadImages(ctx, img); err != nil {
+					started := time.Now()
+					log.Printf("K3s image load started: component=collector image=%s started=%s", img, started.Format(time.RFC3339Nano))
+					err := k.LoadImages(ctx, img)
+					log.Printf("K3s image load completed: component=collector image=%s duration=%s success=%t error=%v", img, time.Since(started), err == nil, err)
+					if err != nil {
 						return fmt.Errorf("failed to load image: %w", err)
 					}
 
@@ -204,9 +215,13 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					// create new function instance since Create will modify the passed-in object
 					collectorFunction := makeCollectorFunction()
 					if err := ctrlCli.Get(ctx, types.NamespacedName{Namespace: collectorFunction.Namespace, Name: collectorFunction.Name}, collectorFunction); err != nil {
+						started := time.Now()
+						log.Printf("Function resource creation started: component=collector function=%s/%s generation=%d started=%s", collectorFunction.Namespace, collectorFunction.Name, collectorFunction.Generation, started.Format(time.RFC3339Nano))
 						if err := ctrlCli.Create(ctx, collectorFunction); err != nil {
+							log.Printf("Function resource creation completed: component=collector function=%s/%s duration=%s success=false error=%v", collectorFunction.Namespace, collectorFunction.Name, time.Since(started), err)
 							return fmt.Errorf("failed to create function: %w", err)
 						}
+						log.Printf("Function resource creation completed: component=collector function=%s/%s generation=%d duration=%s success=true", collectorFunction.Namespace, collectorFunction.Name, collectorFunction.Generation, time.Since(started))
 					}
 
 					return nil
@@ -216,6 +231,13 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 
 		return nil
 	}
+}
+
+func imageName(req testcontainers.ContainerRequest) string {
+	if req.FromDockerfile.Context != "" {
+		return req.FromDockerfile.Repo + ":" + req.FromDockerfile.Tag
+	}
+	return req.Image
 }
 
 type KustoTableSchema struct{}

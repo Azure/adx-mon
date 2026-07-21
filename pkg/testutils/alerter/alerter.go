@@ -3,9 +3,11 @@ package alerter
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/testcontainers/testcontainers-go"
@@ -51,7 +53,10 @@ func Run(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (*Aler
 		}
 	}
 
+	started := time.Now()
+	log.Printf("Generic container started: component=alerter mode=build image=%s:%s started=%s", DefaultImage, DefaultTag, started.Format(time.RFC3339Nano))
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	log.Printf("Generic container completed: component=alerter mode=build image=%s:%s duration=%s success=%t error=%v", DefaultImage, DefaultTag, time.Since(started), err == nil, err)
 	var c *AlerterContainer
 	if container != nil {
 		c = &AlerterContainer{Container: container}
@@ -82,8 +87,12 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 		req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
 			PreCreates: []testcontainers.ContainerRequestHook{
 				func(ctx context.Context, req testcontainers.ContainerRequest) error {
-
-					if err := k.LoadImages(ctx, DefaultImage+":"+DefaultTag); err != nil {
+					img := DefaultImage + ":" + DefaultTag
+					started := time.Now()
+					log.Printf("K3s image load started: component=alerter image=%s started=%s", img, started.Format(time.RFC3339Nano))
+					err := k.LoadImages(ctx, img)
+					log.Printf("K3s image load completed: component=alerter image=%s duration=%s success=%t error=%v", img, time.Since(started), err == nil, err)
+					if err != nil {
 						return fmt.Errorf("failed to load image: %w", err)
 					}
 

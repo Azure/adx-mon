@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -52,7 +53,21 @@ func (f *functions) Update(ctx context.Context, fn *adxmonv1.Function) error {
 	return nil
 }
 
-func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error {
+func (f *functions) UpdateStatus(ctx context.Context, fn *adxmonv1.Function) (err error) {
+	if fn == nil {
+		return errors.New("function cannot be nil")
+	}
+
+	started := time.Now()
+	logger.Infof("Function status update started: function=%s/%s database=%s status=%s started=%s", fn.Namespace, fn.Name, fn.Spec.Database, fn.Status.Status, started.Format(time.RFC3339Nano))
+	defer func() {
+		if err != nil {
+			logger.Errorf("Function status update completed: function=%s/%s database=%s status=%s duration=%s success=false error=%v", fn.Namespace, fn.Name, fn.Spec.Database, fn.Status.Status, time.Since(started), err)
+		} else {
+			logger.Infof("Function status update completed: function=%s/%s database=%s status=%s duration=%s success=true", fn.Namespace, fn.Name, fn.Spec.Database, fn.Status.Status, time.Since(started))
+		}
+	}()
+
 	if f.Client == nil {
 		return errors.New("no client provided")
 	}
@@ -113,6 +128,7 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 	}
 
 	if f.Elector != nil && !f.Elector.IsLeader() {
+		logger.Infof("Function synchronization skipped: reason=not-leader")
 		return nil, nil
 	}
 

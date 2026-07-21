@@ -3,8 +3,10 @@ package testutils
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	v1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -58,7 +60,13 @@ func GetKubeConfig(ctx context.Context, k *k3s.K3sContainer) (*rest.Config, ctrl
 	return restCfg, ctrlCli, err
 }
 
-func InstallCrds(ctx context.Context, k *k3s.K3sContainer) error {
+func InstallCrds(ctx context.Context, k *k3s.K3sContainer) (err error) {
+	started := time.Now()
+	log.Printf("CRD installation started: started=%s", started.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("CRD installation completed: duration=%s success=%t error=%v", time.Since(started), err == nil, err)
+	}()
+
 	restCfg, _, err := GetKubeConfig(ctx, k)
 	if err != nil {
 		return fmt.Errorf("failed to get kubeconfig: %w", err)

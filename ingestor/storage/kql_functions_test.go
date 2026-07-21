@@ -197,6 +197,11 @@ func TestFunctions(t *testing.T) {
 	})
 }
 
+func TestFunctionsUpdateStatusRejectsNil(t *testing.T) {
+	functionStore := storage.NewFunctions(nil, nil)
+	require.EqualError(t, functionStore.UpdateStatus(context.Background(), nil), "function cannot be nil")
+}
+
 type elector struct {
 	isLeader bool
 }

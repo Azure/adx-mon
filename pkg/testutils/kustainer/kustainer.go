@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -72,7 +73,10 @@ func Run(ctx context.Context, img string, opts ...testcontainers.ContainerCustom
 		}
 	}
 
+	started := time.Now()
+	log.Printf("Generic container started: component=kustainer mode=pull image=%s started=%s", img, started.Format(time.RFC3339Nano))
 	container, err := testcontainers.GenericContainer(ctx, genericContainerReq)
+	log.Printf("Generic container completed: component=kustainer mode=pull image=%s duration=%s success=%t error=%v", img, time.Since(started), err == nil, err)
 	var c *KustainerContainer
 	if container != nil {
 		namespace := genericContainerReq.Env[clusterNamespaceEnv]

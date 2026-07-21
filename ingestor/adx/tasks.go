@@ -127,7 +127,25 @@ func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor, c
 	}
 }
 
-func (t *SyncFunctionsTask) Run(ctx context.Context) error {
+func (t *SyncFunctionsTask) Run(ctx context.Context) (err error) {
+	started := time.Now()
+	var reconciliationErr error
+	recordFailure := func(err error) {
+		if reconciliationErr == nil {
+			reconciliationErr = err
+		}
+	}
+	logger.Infof("Function synchronization cycle started: database=%s endpoint=%s started=%s", t.kustoCli.Database(), t.kustoCli.Endpoint(), started.Format(time.RFC3339Nano))
+	defer func() {
+		if err != nil {
+			logger.Errorf("Function synchronization cycle completed: database=%s endpoint=%s duration=%s success=false error=%v", t.kustoCli.Database(), t.kustoCli.Endpoint(), time.Since(started), err)
+		} else if reconciliationErr != nil {
+			logger.Errorf("Function synchronization cycle completed: database=%s endpoint=%s duration=%s success=false error=%v", t.kustoCli.Database(), t.kustoCli.Endpoint(), time.Since(started), reconciliationErr)
+		} else {
+			logger.Infof("Function synchronization cycle completed: database=%s endpoint=%s duration=%s success=true", t.kustoCli.Database(), t.kustoCli.Endpoint(), time.Since(started))
+		}
+	}()
+
 	functions, err := t.store.List(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list functions: %w", err)
@@ -149,9 +167,11 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		// Validation: allDatabases: true with a specific database name is invalid
 		if function.Spec.AllDatabases && configuredDB != "" && configuredDB != v1.AllDatabases {
 			err := fmt.Errorf("invalid Function spec: allDatabases is true but database %q is also specified; these fields are mutually exclusive", configuredDB)
+			recordFailure(err)
 			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
 			function.SetReconcileCondition(metav1.ConditionFalse, "ValidationFailed", err.Error())
 			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
+				recordFailure(updErr)
 				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 			}
 			continue
@@ -160,9 +180,11 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 		// Validation: at least one of Database or AllDatabases must be set
 		if !targetsAllDBs && configuredDB == "" {
 			err := fmt.Errorf("invalid Function spec: neither database nor allDatabases is set; one must be specified")
+			recordFailure(err)
 			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
 			function.SetReconcileCondition(metav1.ConditionFalse, "ValidationFailed", err.Error())
 			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
+				recordFailure(updErr)
 				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 			}
 			continue
@@ -180,10 +202,12 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			ok, err := celutil.EvaluateCriteriaExpression(t.ClusterLabels, expr)
 			if err != nil {
 				err = fmt.Errorf("criteriaExpression evaluation failed: %w", err)
+				recordFailure(err)
 				logger.Errorf("Function %s/%s criteriaExpression error: %v", function.Namespace, function.Name, err)
 				function.SetCriteriaMatchCondition(false, expr, err, t.ClusterLabels)
 				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaEvaluationFailed", err.Error())
 				if updErr := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); updErr != nil {
+					recordFailure(updErr)
 					logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 				}
 				continue
@@ -197,6 +221,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				function.Status.Reason = "CriteriaNotMatched"
 				function.Status.Message = message
 				if err := t.store.UpdateStatus(ctx, function); err != nil {
+					recordFailure(err)
 					logger.Errorf("Failed to update function status for %s.%s after criteria mismatch: %v", function.Spec.Database, function.Name, err)
 				}
 				continue
@@ -211,6 +236,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			function.Status.Reason = "Function finalizing"
 			function.Status.Message = "Finalization in progress; Kusto function drop is disabled"
 			if err := t.store.UpdateStatus(ctx, function); err != nil {
+				recordFailure(err)
 				logger.Errorf("Failed to update function status for %s.%s prior to deletion: %v", function.Spec.Database, function.Name, err)
 			}
 			noopMsg := fmt.Sprintf("Finalization no-op; skipping Kusto function drop for %s", availableDB)
@@ -218,6 +244,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			function.Status.Reason = "Function finalized (no-op)"
 			function.Status.Message = noopMsg
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
+				recordFailure(err)
 				logger.Errorf("Failed to update success status following deletion for %s.%s: %v", function.Spec.Database, function.Name, err)
 			}
 			continue
@@ -225,35 +252,44 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 
 		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
 			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
+			executionStarted := time.Now()
+			logger.Infof("Kusto function execution started: function=%s/%s database=%s endpoint=%s started=%s", function.Namespace, function.Name, availableDB, t.kustoCli.Endpoint(), executionStarted.Format(time.RFC3339Nano))
 			_, err := t.kustoCli.Mgmt(ctx, stmt)
 			if err != nil {
+				recordFailure(err)
+				logger.Errorf("Kusto function execution completed: function=%s/%s database=%s endpoint=%s duration=%s success=false error=%v", function.Namespace, function.Name, availableDB, t.kustoCli.Endpoint(), time.Since(executionStarted), err)
 				parsed := kustoutil.ParseError(err)
 				if !errors.Retry(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 					function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", parsed)
 					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
+						recordFailure(err)
 						logger.Errorf("Failed to update permanent failure status: %v", err)
 					}
 					continue
 				}
 				function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionRetrying", parsed)
 				if err := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); err != nil {
+					recordFailure(err)
 					logger.Errorf("Failed to persist transient failure for %s.%s: %v", function.Spec.Database, function.Name, err)
 				}
 				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 				continue
 			}
 
+			logger.Infof("Kusto function execution completed: function=%s/%s database=%s endpoint=%s duration=%s success=true", function.Namespace, function.Name, availableDB, t.kustoCli.Endpoint(), time.Since(executionStarted))
 			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
 			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
 				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
 				if err := t.store.Update(ctx, function); err != nil {
+					recordFailure(err)
 					logger.Errorf("Failed to update function %s.%s: %v", function.Spec.Database, function.Name, err)
 				}
 			}
 
 			function.SetReconcileCondition(metav1.ConditionTrue, "KustoExecutionSucceeded", fmt.Sprintf("Function created at %s", t.kustoCli.Endpoint()))
 			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
+				recordFailure(err)
 				logger.Errorf("Failed to update success status: %v", err)
 			}
 		}
@@ -269,8 +305,8 @@ func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.
 	} else if fn.Status.Error != "" {
 		fn.Status.Error = ""
 	}
-	if err := t.store.UpdateStatus(ctx, fn); err != nil {
-		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, err)
+	if updateErr := t.store.UpdateStatus(ctx, fn); updateErr != nil {
+		return fmt.Errorf("failed to update status for function %s.%s: %w", fn.Spec.Database, fn.Name, updateErr)
 	}
 	return nil
 }

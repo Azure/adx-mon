@@ -39,6 +39,14 @@ func TestIntegration(t *testing.T) {
 	t.Cleanup(cancel)
 
 	kustainerUrl, k3sContainer := StartCluster(ctx, t)
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		diagnosticCtx, diagnosticCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer diagnosticCancel()
+		testutils.DumpIntegrationDiagnostics(diagnosticCtx, t, k3sContainer, kustainerUrl)
+	})
 
 	wg.Add(1)
 	go func() {
@@ -64,11 +72,32 @@ func TestIntegration(t *testing.T) {
 func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContainer *k3s.K3sContainer) {
 	t.Helper()
 
+	setupStarted := time.Now()
+	t.Logf("Integration setup started: started=%s", setupStarted.Format(time.RFC3339Nano))
+	defer func() {
+		t.Logf("Integration setup completed: duration=%s success=%t", time.Since(setupStarted), !t.Failed())
+	}()
+
+	k3sStarted := time.Now()
+	t.Logf("Integration setup phase started: phase=k3s started=%s", k3sStarted.Format(time.RFC3339Nano))
 	k3sContainer, err := k3s.Run(ctx, "rancher/k3s:v1.31.2-k3s1")
+	t.Logf("Integration setup phase completed: phase=k3s duration=%s success=%t error=%v", time.Since(k3sStarted), err == nil, err)
 	testcontainers.CleanupContainer(t, k3sContainer)
+	setupComplete := false
+	defer func() {
+		if setupComplete || !t.Failed() {
+			return
+		}
+		diagnosticCtx, diagnosticCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer diagnosticCancel()
+		testutils.DumpIntegrationDiagnostics(diagnosticCtx, t, k3sContainer, kustoUrl)
+	}()
 	require.NoError(t, err)
 
+	kustainerStarted := time.Now()
+	t.Logf("Integration setup phase started: phase=kustainer started=%s", kustainerStarted.Format(time.RFC3339Nano))
 	kustoContainer, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithCluster(ctx, k3sContainer))
+	t.Logf("Integration setup phase completed: phase=kustainer duration=%s success=%t error=%v", time.Since(kustainerStarted), err == nil, err)
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
@@ -101,6 +130,11 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	t.Logf("Kustainer: %s", kustoUrl)
 
 	t.Run("Configure Kusto", func(t *testing.T) {
+		started := time.Now()
+		t.Logf("Integration setup phase started: phase=configure-kusto started=%s", started.Format(time.RFC3339Nano))
+		defer func() {
+			t.Logf("Integration setup phase completed: phase=configure-kusto duration=%s success=%t", time.Since(started), !t.Failed())
+		}()
 		opts := kustainer.IngestionBatchingPolicy{
 			MaximumBatchingTimeSpan: 30 * time.Second,
 		}
@@ -111,6 +145,11 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	})
 
 	t.Run("Install Ingestor and Collector", func(tt *testing.T) {
+		started := time.Now()
+		t.Logf("Integration setup phase started: phase=install-released-components started=%s", started.Format(time.RFC3339Nano))
+		defer func() {
+			t.Logf("Integration setup phase completed: phase=install-released-components duration=%s success=%t", time.Since(started), !tt.Failed())
+		}()
 		ingestorContainer, err := ingestor.Run(ctx, "ghcr.io/azure/adx-mon/ingestor:latest", ingestor.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, ingestorContainer)
 		require.NoError(tt, err)
@@ -121,6 +160,11 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	})
 
 	t.Run("Build and upgrade Ingestor and Collector", func(tt *testing.T) {
+		started := time.Now()
+		t.Logf("Integration setup phase started: phase=build-upgrade-components started=%s", started.Format(time.RFC3339Nano))
+		defer func() {
+			t.Logf("Integration setup phase completed: phase=build-upgrade-components duration=%s success=%t", time.Since(started), !tt.Failed())
+		}()
 		// Ensure we can build the current version of the ingestor and collector and
 		// upgrade the previous version to the new.
 		ingestorContainer, err := ingestor.Run(ctx, "", ingestor.WithCluster(ctx, k3sContainer))
@@ -133,6 +177,11 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	})
 
 	t.Run("Build and install Alerter", func(tt *testing.T) {
+		started := time.Now()
+		t.Logf("Integration setup phase started: phase=build-install-alerter started=%s", started.Format(time.RFC3339Nano))
+		defer func() {
+			t.Logf("Integration setup phase completed: phase=build-install-alerter duration=%s success=%t", time.Since(started), !tt.Failed())
+		}()
 		crdPath := filepath.Join(t.TempDir(), "crd.yaml")
 		require.NoError(t, testutils.CopyFile("../../kustomize/bases/alertrules_crd.yaml", crdPath))
 		require.NoError(t, k3sContainer.CopyFileToContainer(ctx, crdPath, filepath.Join(testutils.K3sManifests, "crd.yaml"), 0644))
@@ -142,6 +191,7 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		require.NoError(tt, err)
 	})
 
+	setupComplete = true
 	return kustoUrl, k3sContainer
 }
 

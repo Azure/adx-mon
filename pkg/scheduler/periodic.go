@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -67,6 +68,9 @@ func (s *Periodic) ScheduleEvery(interval time.Duration, name string, fn func(ct
 				return
 			case <-t.C:
 				if s.elector != nil && !s.elector.IsLeader() {
+					if strings.Contains(name, "functions") {
+						logger.Infof("Function synchronization cycle skipped: task=%s reason=not-leader", name)
+					}
 					continue
 				}
 
