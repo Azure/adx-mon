@@ -38,7 +38,6 @@ func TestBacktestCommandRequiredFlags(t *testing.T) {
 	}{
 		{name: "rule", args: []string{"--start", "2026-07-01T00:00:00Z", "--end", "2026-07-01T01:00:00Z", "--kusto-endpoint", "Events=https://example.test"}, want: "rule"},
 		{name: "start", args: []string{"--rule", "rule.yaml", "--end", "2026-07-01T01:00:00Z", "--kusto-endpoint", "Events=https://example.test"}, want: "start"},
-		{name: "end", args: []string{"--rule", "rule.yaml", "--start", "2026-07-01T00:00:00Z", "--kusto-endpoint", "Events=https://example.test"}, want: "end"},
 		{name: "endpoint", args: []string{"--rule", "rule.yaml", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-01T01:00:00Z"}, want: "kusto-endpoint"},
 	}
 
@@ -55,6 +54,41 @@ func TestBacktestCommandRequiredFlags(t *testing.T) {
 			}
 			if called {
 				t.Fatal("runner called for missing required flag")
+			}
+		})
+	}
+}
+
+func TestParseBacktestTime(t *testing.T) {
+	now := time.Date(2026, 7, 21, 15, 30, 0, 0, time.FixedZone("test", 2*60*60))
+	tests := []struct {
+		name    string
+		value   string
+		want    time.Time
+		wantErr bool
+	}{
+		{name: "RFC3339", value: "2026-07-01T01:30:00+01:30", want: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "now", value: "now", want: now.UTC()},
+		{name: "duration ago", value: "12h", want: now.Add(-12 * time.Hour).UTC()},
+		{name: "compound duration ago", value: "1h30m", want: now.Add(-90 * time.Minute).UTC()},
+		{name: "surrounding whitespace", value: " 12h ", want: now.Add(-12 * time.Hour).UTC()},
+		{name: "empty", wantErr: true},
+		{name: "invalid", value: "yesterday", wantErr: true},
+		{name: "zero duration", value: "0s", wantErr: true},
+		{name: "negative duration", value: "-12h", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseBacktestTime(tt.value, now)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseBacktestTime() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && !got.Equal(tt.want) {
+				t.Fatalf("parseBacktestTime() = %v, want %v", got, tt.want)
+			}
+			if !tt.wantErr && got.Location() != time.UTC {
+				t.Fatalf("parseBacktestTime() location = %v, want UTC", got.Location())
 			}
 		})
 	}
@@ -130,6 +164,38 @@ func TestBacktestCommandTranslatesOptions(t *testing.T) {
 	}
 }
 
+func TestBacktestCommandRelativeTimesAndDefaultEnd(t *testing.T) {
+	now := time.Date(2026, 7, 21, 15, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		timeArgs  []string
+		wantStart time.Time
+		wantEnd   time.Time
+	}{
+		{name: "default end", timeArgs: []string{"--start", "12h"}, wantStart: now.Add(-12 * time.Hour), wantEnd: now},
+		{name: "relative end", timeArgs: []string{"--start", "12h", "--end", "1h"}, wantStart: now.Add(-12 * time.Hour), wantEnd: now.Add(-time.Hour)},
+		{name: "explicit now", timeArgs: []string{"--start", "12h", "--end", "now"}, wantStart: now.Add(-12 * time.Hour), wantEnd: now},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got alerter.BacktestOptions
+			deps := testBacktestDeps(func(_ context.Context, _ *alerter.AlerterOpts, _ string, opts alerter.BacktestOptions) (*alerter.BacktestReport, error) {
+				got = opts
+				return completedBacktestReport(), nil
+			})
+			deps.now = func() time.Time { return now }
+			args := append([]string{"--rule", "rule.yaml", "--kusto-endpoint", "Events=https://events.test"}, tt.timeArgs...)
+			if err := runBacktestCommand(t, deps, args...); err != nil {
+				t.Fatalf("runBacktestCommand() error = %v", err)
+			}
+			if !got.Start.Equal(tt.wantStart) || !got.End.Equal(tt.wantEnd) {
+				t.Fatalf("range = %v..%v, want %v..%v", got.Start, got.End, tt.wantStart, tt.wantEnd)
+			}
+		})
+	}
+}
+
 func TestBacktestCommandRejectsInvalidFlagsBeforeRunner(t *testing.T) {
 	valid := []string{
 		"--rule", "rule.yaml",
@@ -168,6 +234,9 @@ func TestBacktestCommandRejectsInvalidFlagsBeforeRunner(t *testing.T) {
 		{name: "reversed range", replace: []string{"--end", "2026-06-30T23:00:00Z"}},
 		{name: "invalid start", replace: []string{"--start", "yesterday"}},
 		{name: "empty start", replace: []string{"--start", ""}},
+		{name: "negative relative start", replace: []string{"--start", "-1h"}},
+		{name: "invalid end", replace: []string{"--end", "tomorrow"}},
+		{name: "empty end", replace: []string{"--end", ""}},
 	}
 
 	for _, tt := range tests {
@@ -724,6 +793,7 @@ func testBacktestDeps(run backtestRunner) backtestCommandDeps {
 		openOutput: func(string) (io.WriteCloser, error) {
 			return nil, errors.New("unexpected output file")
 		},
+		now: time.Now,
 	}
 }
 

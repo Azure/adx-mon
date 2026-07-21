@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -29,12 +30,14 @@ type backtestRunner func(context.Context, *alerter.AlerterOpts, string, alerter.
 type notifyContextFunc func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
 type backtestRenderer func(io.Writer, string, *alerter.BacktestReport) error
 type outputOpener func(string) (io.WriteCloser, error)
+type nowFunc func() time.Time
 
 type backtestCommandDeps struct {
 	run           backtestRunner
 	notifyContext notifyContextFunc
 	render        backtestRenderer
 	openOutput    outputOpener
+	now           nowFunc
 }
 
 func defaultBacktestCommandDeps() backtestCommandDeps {
@@ -42,6 +45,7 @@ func defaultBacktestCommandDeps() backtestCommandDeps {
 		run:           alerter.Backtest,
 		notifyContext: signal.NotifyContext,
 		render:        renderBacktestReport,
+		now:           time.Now,
 		openOutput: func(path string) (io.WriteCloser, error) {
 			return os.Create(path)
 		},
@@ -58,8 +62,8 @@ func newBacktestCommand(deps backtestCommandDeps) *cli.Command {
 		Usage: "evaluate one local alert rule over a historical time range",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "rule", Usage: "Local AlertRule file", Required: true},
-			&cli.TimestampFlag{Name: "start", Usage: "Inclusive range start in RFC3339 format", Layout: time.RFC3339, Required: true},
-			&cli.TimestampFlag{Name: "end", Usage: "Exclusive range end in RFC3339 format", Layout: time.RFC3339, Required: true},
+			&cli.StringFlag{Name: "start", Usage: "Inclusive range start as RFC3339, now, or a duration ago", Required: true},
+			&cli.StringFlag{Name: "end", Usage: "Exclusive range end as RFC3339, now, or a duration ago (default: now)"},
 			&cli.StringSliceFlag{Name: "kusto-endpoint", Usage: "Kusto endpoint in the format of <name>=<endpoint>", Required: true},
 			&cli.StringFlag{Name: "auth-msi-id", Usage: "MSI client ID for authentication to Kusto"},
 			&cli.StringFlag{Name: "auth-token", Usage: "Application token for authentication to Kusto"},
@@ -126,14 +130,21 @@ func backtestMain(ctx *cli.Context, deps backtestCommandDeps) error {
 		return cli.Exit("format must be text or json", 1)
 	}
 
-	start := ctx.Timestamp("start")
-	end := ctx.Timestamp("end")
-	if start == nil || end == nil {
-		return cli.Exit("start and end must be specified in RFC3339 format", 1)
+	now := deps.now().UTC()
+	start, err := parseBacktestTime(ctx.String("start"), now)
+	if err != nil {
+		return cli.Exit(fmt.Sprintf("invalid start: %v", err), 1)
+	}
+	end := now
+	if ctx.IsSet("end") {
+		end, err = parseBacktestTime(ctx.String("end"), now)
+		if err != nil {
+			return cli.Exit(fmt.Sprintf("invalid end: %v", err), 1)
+		}
 	}
 	backtestOpts := alerter.BacktestOptions{
-		Start:               start.UTC(),
-		End:                 end.UTC(),
+		Start:               start,
+		End:                 end,
 		Concurrency:         ctx.Int("concurrency"),
 		MaxResultsPerWindow: ctx.Int("max-results-per-window"),
 		QueryTimeout:        ctx.Duration("query-timeout"),
@@ -182,6 +193,27 @@ func backtestMain(ctx *cli.Context, deps backtestCommandDeps) error {
 		return newBacktestCommandError("backtest failed", causes...)
 	}
 	return nil
+}
+
+func parseBacktestTime(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, errors.New("must not be empty")
+	}
+	if value == "now" {
+		return now.UTC(), nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC(), nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return time.Time{}, errors.New("must be RFC3339, now, or a Go duration such as 12h")
+	}
+	if duration <= 0 {
+		return time.Time{}, errors.New("duration must be greater than zero")
+	}
+	return now.Add(-duration).UTC(), nil
 }
 
 func newBacktestProgressWriter(w io.Writer) func(alerter.BacktestWindowResult, int, int) {
@@ -244,7 +276,7 @@ func (w *backtestProgressOutput) Progress(_ alerter.BacktestWindowResult, comple
 }
 
 func validateBacktestDependencies(deps backtestCommandDeps) error {
-	if deps.run == nil || deps.notifyContext == nil || deps.render == nil || deps.openOutput == nil {
+	if deps.run == nil || deps.notifyContext == nil || deps.render == nil || deps.openOutput == nil || deps.now == nil {
 		return errors.New("backtest command dependency is nil")
 	}
 	return nil

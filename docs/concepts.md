@@ -371,7 +371,7 @@ Behavior formula: `(criteria empty OR any match) AND (criteriaExpression empty O
 
 `alerter backtest` evaluates one local file containing exactly one `AlertRule` over historical data. It is read-only: it runs query APIs and records alerts that would have fired, but does not send notifications, update Kubernetes objects, or write to the datasource. Queries beginning with `.` are rejected as management queries.
 
-The range is explicitly `[start, end)`, divided into windows anchored at `start` using the rule's configured `interval`. A final partial window is included. For example, a five-minute rule over `[00:00, 00:12)` evaluates `[00:00, 00:05)`, `[00:05, 00:10)`, and `[00:10, 00:12)`. Backtest supplies those exact boundaries to the rule; the rule's own KQL determines boundary inclusion.
+The range is explicitly `[start, end)`, divided into windows anchored at `start` using the rule's configured `interval`. `--start` is required, while `--end` defaults to the current time. Each value accepts RFC3339, `now`, or a positive Go duration interpreted as that long ago, such as `12h` or `1h30m`. Both relative values use the same captured current time. A final partial window is included. For example, a five-minute rule over `[00:00, 00:12)` evaluates `[00:00, 00:05)`, `[00:05, 00:10)`, and `[00:10, 00:12)`. Backtest supplies those exact boundaries to the rule; the rule's own KQL determines boundary inclusion.
 
 Each rule database must have an explicit, repeatable `--kusto-endpoint <database>=<endpoint>` mapping; backtest does not discover or select infrastructure. Criteria use repeatable `--tag <key>=<value>` values. `--region` and `--cloud` are also added as the `region` and `cloud` criteria tags, and region is supplied to the rule's query parameters.
 
@@ -382,8 +382,7 @@ Key optional defaults are `--concurrency 4`, `--max-results-per-window 25`, `--q
 ```sh
 alerter backtest \
   --rule ./alerts/high-error-rate.yaml \
-  --start 2026-07-01T00:00:00Z \
-  --end 2026-07-01T01:00:00Z \
+  --start 12h \
   --kusto-endpoint Telemetry=https://example.kusto.windows.net \
   --region eastus \
   --cloud public \
