@@ -167,6 +167,50 @@ func TestParseError(t *testing.T) {
 	})
 }
 
+func TestIsMissingEntityError(t *testing.T) {
+	missingEntityBody := `{
+		"error": {
+			"code": "General_BadRequest",
+			"@type": "Kusto.Data.Exceptions.KustoBadRequestException",
+			"@permanent": true,
+			"innererror": {
+				"code": "SEM0100",
+				"@type": "Kusto.Data.Exceptions.SemanticException",
+				"@errorCode": "SEM0100",
+				"@errorMessage": "'where' operator: Failed to resolve table or column expression named 'MissingTable'"
+			}
+		}
+	}`
+
+	t.Run("azkusto structured missing entity error", func(t *testing.T) {
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(missingEntityBody)), "")
+		require.True(t, IsMissingEntityError(fmt.Errorf("create function: %w", err)))
+	})
+
+	t.Run("legacy structured missing entity error", func(t *testing.T) {
+		err := kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(missingEntityBody)), "")
+		require.True(t, IsMissingEntityError(err))
+	})
+
+	t.Run("other permanent kusto error", func(t *testing.T) {
+		body := `{"error":{"code":"General_BadRequest","@permanent":true,"innererror":{"code":"SYN0002","@errorCode":"SYN0002"}}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingEntityError(err))
+	})
+
+	t.Run("message without structured code", func(t *testing.T) {
+		body := `{"error":{"@message":"Semantic error SEM0100: Failed to resolve table MissingTable"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingEntityError(err))
+	})
+
+	t.Run("non-string error codes", func(t *testing.T) {
+		body := `{"error":{"code":{"unexpected":"SEM0100"},"@errorCode":["SEM0100"],"innererror":{"code":100,"@errorCode":true}}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingEntityError(err))
+	})
+}
+
 // stringError is a simple error type for testing
 type stringError struct {
 	msg string
