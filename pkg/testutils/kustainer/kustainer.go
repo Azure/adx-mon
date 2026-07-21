@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
@@ -347,8 +347,7 @@ func (c *KustainerContainer) ConnectionUrl() string {
 }
 
 func (c *KustainerContainer) CreateDatabase(ctx context.Context, dbName string) error {
-	cb := kusto.NewConnectionStringBuilder(c.endpoint)
-	client, err := kusto.New(cb)
+	client, err := azkustodata.New(azkustodata.NewConnectionStringBuilder(c.endpoint))
 	if err != nil {
 		return fmt.Errorf("new kusto client: %w", err)
 	}
@@ -406,8 +405,7 @@ func (p IngestionBatchingPolicy) String() string {
 }
 
 func (c *KustainerContainer) SetIngestionBatchingPolicy(ctx context.Context, dbName string, p IngestionBatchingPolicy) error {
-	cb := kusto.NewConnectionStringBuilder(c.endpoint)
-	client, err := kusto.New(cb)
+	client, err := azkustodata.New(azkustodata.NewConnectionStringBuilder(c.endpoint))
 	if err != nil {
 		return fmt.Errorf("new kusto client: %w", err)
 	}
