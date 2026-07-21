@@ -259,7 +259,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) (err error) {
 				recordFailure(err)
 				logger.Errorf("Kusto function execution completed: function=%s/%s database=%s endpoint=%s duration=%s success=false error=%v", function.Namespace, function.Name, availableDB, t.kustoCli.Endpoint(), time.Since(executionStarted), err)
 				parsed := kustoutil.ParseError(err)
-				if !errors.Retry(err) {
+				if !errors.Retry(err) && !kustoutil.IsMissingEntityError(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 					function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", parsed)
 					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {

@@ -10,7 +10,8 @@ import (
 const (
 	// MaxErrorMessageLength defines the maximum length for error messages
 	// to prevent excessively long messages in status conditions
-	MaxErrorMessageLength = 256
+	MaxErrorMessageLength  = 256
+	missingEntityErrorCode = "SEM0100"
 )
 
 // ParseError extracts a clean error message from Kusto HttpError objects
@@ -43,6 +44,35 @@ func ParseError(err error) string {
 	}
 
 	return errMsg
+}
+
+// IsMissingEntityError reports whether Kusto rejected a query because a referenced
+// table or column could not be resolved. These dependencies may be created later.
+func IsMissingEntityError(err error) bool {
+	var azkustoErr *azkustoerrors.HttpError
+	if errors.As(err, &azkustoErr) && hasErrorCode(azkustoErr.UnmarshalREST(), missingEntityErrorCode) {
+		return true
+	}
+
+	var legacyKustoErr *legacykustoerrors.HttpError
+	return errors.As(err, &legacyKustoErr) && hasErrorCode(legacyKustoErr.UnmarshalREST(), missingEntityErrorCode)
+}
+
+func hasErrorCode(decoded map[string]interface{}, code string) bool {
+	current, ok := decoded["error"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	for {
+		if current["code"] == code || current["@errorCode"] == code {
+			return true
+		}
+		current, ok = current["innererror"].(map[string]interface{})
+		if !ok {
+			return false
+		}
+	}
 }
 
 func extractRESTMessage(decoded map[string]interface{}) (string, bool) {
