@@ -37,6 +37,39 @@ func TestNewQueryContext_QueryWrapped(t *testing.T) {
 	}
 }
 
+func TestNewQueryContextForWindow_InjectsExactWindow(t *testing.T) {
+	startTime := time.Date(2023, 4, 10, 1, 2, 3, 0, time.UTC)
+	endTime := time.Date(2023, 4, 10, 4, 5, 6, 0, time.UTC)
+	r := &rules.Rule{Query: "Foo | limit 1", Interval: time.Hour}
+
+	qc, err := NewQueryContextForWindow(r, startTime, endTime, "region")
+	require.NoError(t, err)
+	require.Equal(t, startTime, qc.StartTime)
+	require.Equal(t, endTime, qc.EndTime)
+	require.Equal(t, "\nlet _startTime = datetime(2023-04-10T01:02:03Z);\nlet _endTime = datetime(2023-04-10T04:05:06Z);\nlet _region = \"region\";\nFoo | limit 1\n", qc.Query)
+}
+
+func TestNewQueryContext_UsesRuleIntervalWindow(t *testing.T) {
+	endTime := time.Date(2023, 4, 10, 4, 5, 6, 0, time.UTC)
+	r := &rules.Rule{Query: "Foo | limit 1", Interval: 90 * time.Minute}
+
+	qc, err := NewQueryContext(r, endTime, "region")
+	require.NoError(t, err)
+	require.Equal(t, endTime.Add(-r.Interval), qc.StartTime)
+	require.Equal(t, endTime, qc.EndTime)
+	require.Equal(t, "\nlet _startTime = datetime(2023-04-10T02:35:06Z);\nlet _endTime = datetime(2023-04-10T04:05:06Z);\nlet _region = \"region\";\nFoo | limit 1\n", qc.Query)
+}
+
+func TestNewQueryContext_NilRule(t *testing.T) {
+	_, err := NewQueryContext(nil, time.Now(), "region")
+	require.EqualError(t, err, "rule must not be nil")
+}
+
+func TestNewQueryContextForWindow_NilRule(t *testing.T) {
+	_, err := NewQueryContextForWindow(nil, time.Now(), time.Now(), "region")
+	require.EqualError(t, err, "rule must not be nil")
+}
+
 func TestQueryContext_ConstructsWrappedQuery(t *testing.T) {
 	r := &rules.Rule{Query: "Foo | where Timestamp between (_startTime .. _endTime)", Interval: time.Hour}
 	qc, err := NewQueryContext(r, time.Date(2023, 04, 10, 0, 0, 0, 0, time.UTC), "region")
