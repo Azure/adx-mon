@@ -1174,24 +1174,24 @@ func collectDatabaseHeartbeatSchema(ctx context.Context, client *azkustodata.Cli
 	}
 	sort.Strings(s.Tables)
 
-	functions, err := listHeartbeatFunctions(ctx, client, database)
+	functionNames, err := listHeartbeatFunctions(ctx, client, database)
 	if err != nil {
 		return ADXClusterSchema{}, stats, err
 	}
-	stats.Functions = len(functions)
-	for _, fn := range functions {
-		isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fn.Name)
+	stats.Functions = len(functionNames)
+	for _, fnName := range functionNames {
+		isView, viewSchema, err := checkIfFunctionIsView(ctx, client, database, fnName)
 		if err != nil {
 			stats.SkippedFunctions++
-			stats.SampleSkippedFunctionNames = appendBoundedNames(stats.SampleSkippedFunctionNames, []string{fmt.Sprintf("%s.%s", database, fn.Name)}, heartbeatSkippedFunctionLimit)
+			stats.SampleSkippedFunctionNames = appendBoundedNames(stats.SampleSkippedFunctionNames, []string{fmt.Sprintf("%s.%s", database, fnName)}, heartbeatSkippedFunctionLimit)
 			if stats.FirstSkippedFunctionError == "" {
-				stats.FirstSkippedFunctionError = fmt.Sprintf("%s.%s: %s", database, fn.Name, kustoutil.ParseError(err))
+				stats.FirstSkippedFunctionError = fmt.Sprintf("%s.%s: %s", database, fnName, kustoutil.ParseError(err))
 			}
 			continue
 		}
 		if isView {
-			s.Views = append(s.Views, fn.Name)
-			s.TableSchemas[fn.Name] = viewSchema
+			s.Views = append(s.Views, fnName)
+			s.TableSchemas[fnName] = viewSchema
 		}
 	}
 	sort.Strings(s.Views)
@@ -1229,28 +1229,28 @@ func listHeartbeatDatabaseTableColumns(ctx context.Context, client *azkustodata.
 	return tableColumns, nil
 }
 
-func listHeartbeatFunctions(ctx context.Context, client *azkustodata.Client, database string) ([]FunctionRec, error) {
+func listHeartbeatFunctions(ctx context.Context, client *azkustodata.Client, database string) ([]string, error) {
 	stage := fmt.Sprintf("show functions for %s", database)
 
 	stageCtx, cancel := context.WithTimeout(ctx, heartbeatListFunctionsTimeout)
 	defer cancel()
 
-	result, err := client.Mgmt(stageCtx, database, kql.New(".show functions"))
+	result, err := client.Mgmt(stageCtx, database, kql.New(".show functions | project Name"))
 	if err != nil {
 		return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, err)
 	}
 
-	var functions []FunctionRec
+	var functions []string
 	for _, table := range result.Tables() {
 		if !table.IsPrimaryResult() {
 			continue
 		}
 		for _, row := range table.Rows() {
-			var fn FunctionRec
-			if err := row.ToStruct(&fn); err != nil {
+			functionName, err := row.StringByName("Name")
+			if err != nil {
 				return nil, wrapHeartbeatStageError(stage, heartbeatListFunctionsTimeout, fmt.Errorf("parse function: %w", err))
 			}
-			functions = append(functions, fn)
+			functions = append(functions, functionName)
 		}
 	}
 	return functions, nil
@@ -1899,14 +1899,6 @@ func executeKustoScripts(ctx context.Context, client *azkustodata.Client, databa
 		}
 	}
 	return nil
-}
-
-type FunctionRec struct {
-	Name       string `kusto:"Name"`
-	Parameters string `kusto:"Parameters"`
-	Body       string `kusto:"Body"`
-	Folder     string `kusto:"Folder"`
-	DocString  string `kusto:"DocString"`
 }
 
 type FunctionKind struct {
