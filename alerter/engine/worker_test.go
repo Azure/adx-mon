@@ -583,6 +583,74 @@ func TestWorker_NotificationHealth(t *testing.T) {
 	require.Equal(t, NotificationHealthHealthy, notificationHealthValue)
 }
 
+func TestWorker_EvaluationMetrics(t *testing.T) {
+	tests := []struct {
+		name       string
+		queryErr   error
+		outcome    string
+		alertCalls int
+	}{
+		{name: "success", outcome: evaluationOutcomeSuccess},
+		{name: "service error", queryErr: context.DeadlineExceeded, outcome: evaluationOutcomeServiceError},
+		{name: "user error", queryErr: &UnknownDBError{DB: "missing"}, outcome: evaluationOutcomeUserError, alertCalls: 1},
+		{name: "notification throttled", queryErr: alert.ErrTooManyRequests, outcome: evaluationOutcomeNotificationThrottled, alertCalls: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule := &rules.Rule{Namespace: "metrics", Name: tt.name, Destination: "destination"}
+			alertCalls := 0
+			w := NewWorker(&WorkerConfig{
+				Rule:        rule,
+				Region:      "eastus",
+				KustoClient: &fakeKustoClient{queryErr: tt.queryErr},
+				AlertClient: &fakeAlerter{createFn: func(context.Context, string, alert.Alert) error {
+					alertCalls++
+					return nil
+				}},
+			})
+
+			outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(rule.Namespace, rule.Name, tt.outcome)
+			durationHistogram := metrics.AlertRuleEvaluationDurationSeconds.WithLabelValues(rule.Namespace, rule.Name)
+			durationMetric, ok := durationHistogram.(prometheus.Metric)
+			require.True(t, ok)
+			counterBefore := getCounterValue(t, outcomeCounter)
+			histogramCountBefore := getHistogramCount(t, durationMetric)
+
+			w.ExecuteQuery(context.Background())
+
+			require.Equal(t, counterBefore+1, getCounterValue(t, outcomeCounter))
+			require.Equal(t, histogramCountBefore+1, getHistogramCount(t, durationMetric))
+			require.Equal(t, tt.alertCalls, alertCalls)
+		})
+	}
+}
+
+func TestWorker_AlertsGeneratedMetricIncludesPartialSuccess(t *testing.T) {
+	rule := &rules.Rule{Namespace: "metrics", Name: "partial-alerts", Destination: "destination"}
+	w := NewWorker(&WorkerConfig{
+		Rule:   rule,
+		Region: "eastus",
+		KustoClient: &fakeKustoClient{queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			for range 2 {
+				require.NoError(t, fn(ctx, "endpoint", qc, testRow(nil, nil)))
+			}
+			return alert.ErrTooManyRequests, 2
+		}},
+		AlertClient: &fakeAlerter{},
+		HandlerFn: func(context.Context, string, *QueryContext, azquery.Row) error {
+			return nil
+		},
+	})
+
+	alertsCounter := metrics.AlertsGeneratedTotal.WithLabelValues(rule.Namespace, rule.Name)
+	counterBefore := getCounterValue(t, alertsCounter)
+
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, counterBefore+2, getCounterValue(t, alertsCounter))
+}
+
 func TestCalculateNextQueryTime(t *testing.T) {
 	now := time.Now()
 	interval := 5 * time.Minute
@@ -610,4 +678,22 @@ func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
 	err := metric.Write(metricDTO)
 	require.NoError(t, err)
 	return metricDTO.Gauge.GetValue()
+}
+
+func getCounterValue(t *testing.T, metric prometheus.Metric) float64 {
+	t.Helper()
+
+	metricDTO := &dto.Metric{}
+	err := metric.Write(metricDTO)
+	require.NoError(t, err)
+	return metricDTO.Counter.GetValue()
+}
+
+func getHistogramCount(t *testing.T, metric prometheus.Metric) uint64 {
+	t.Helper()
+
+	metricDTO := &dto.Metric{}
+	err := metric.Write(metricDTO)
+	require.NoError(t, err)
+	return metricDTO.Histogram.GetSampleCount()
 }
