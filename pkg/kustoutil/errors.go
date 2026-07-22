@@ -2,6 +2,7 @@ package kustoutil
 
 import (
 	"errors"
+	"strings"
 
 	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	legacykustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
@@ -12,7 +13,14 @@ const (
 	// to prevent excessively long messages in status conditions
 	MaxErrorMessageLength  = 256
 	missingEntityErrorCode = "SEM0100"
+	scriptAbortedErrorType = "Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException"
+	scriptDetailsSeparator = "'. Details: '"
 )
+
+var missingTableMessageSignatures = [...]string{
+	"Failed to resolve table expression named",
+	"Failed to resolve table or column expression named",
+}
 
 // ParseError extracts a clean error message from Kusto HttpError objects
 // and truncates the message to a maximum length for consistent error handling.
@@ -36,10 +44,10 @@ func ParseError(err error) string {
 	return errMsg
 }
 
-// IsMissingEntityError reports whether Kusto rejected a query because a referenced
-// table or column could not be resolved. These dependencies may be created later.
-func IsMissingEntityError(err error) bool {
-	return hasErrorCode(decodeRESTError(err), missingEntityErrorCode)
+// IsMissingTableError reports whether Kusto rejected a query because a referenced
+// table could not be resolved. The table may be created later.
+func IsMissingTableError(err error) bool {
+	return hasWrappedMissingTableError(decodeRESTError(err))
 }
 
 func decodeRESTError(err error) map[string]interface{} {
@@ -56,26 +64,37 @@ func decodeRESTError(err error) map[string]interface{} {
 	return nil
 }
 
-func hasErrorCode(decoded map[string]interface{}, code string) bool {
-	current, ok := decoded["error"].(map[string]interface{})
+func stringValueEquals(values map[string]interface{}, key, expected string) bool {
+	value, ok := values[key].(string)
+	return ok && value == expected
+}
+
+func hasWrappedMissingTableError(decoded map[string]interface{}) bool {
+	errMap, ok := decoded["error"].(map[string]interface{})
+	if !ok || !stringValueEquals(errMap, "@type", scriptAbortedErrorType) {
+		return false
+	}
+
+	message, ok := errMap["@message"].(string)
 	if !ok {
 		return false
 	}
 
-	for {
-		if stringValueEquals(current, "code", code) || stringValueEquals(current, "@errorCode", code) {
-			return true
-		}
-		current, ok = current["innererror"].(map[string]interface{})
-		if !ok {
-			return false
-		}
+	separator := strings.LastIndex(message, scriptDetailsSeparator)
+	if separator == -1 {
+		return false
 	}
+	details := message[separator+len(scriptDetailsSeparator):]
+	return strings.Contains(details, "Semantic error: "+missingEntityErrorCode+":") && isMissingTableMessage(details)
 }
 
-func stringValueEquals(values map[string]interface{}, key, expected string) bool {
-	value, ok := values[key].(string)
-	return ok && value == expected
+func isMissingTableMessage(message string) bool {
+	for _, signature := range missingTableMessageSignatures {
+		if strings.Contains(message, signature) {
+			return true
+		}
+	}
+	return false
 }
 
 func extractRESTMessage(decoded map[string]interface{}) (string, bool) {

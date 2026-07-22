@@ -167,47 +167,62 @@ func TestParseError(t *testing.T) {
 	})
 }
 
-func TestIsMissingEntityError(t *testing.T) {
-	missingEntityBody := `{
+func TestIsMissingTableError(t *testing.T) {
+	wrappedMissingTableBody := `{
 		"error": {
 			"code": "General_BadRequest",
-			"@type": "Kusto.Data.Exceptions.KustoBadRequestException",
-			"@permanent": true,
-			"innererror": {
-				"code": "SEM0100",
-				"@type": "Kusto.Data.Exceptions.SemanticException",
-				"@errorCode": "SEM0100",
-				"@errorMessage": "'where' operator: Failed to resolve table or column expression named 'MissingTable'"
-			}
+			"message": "Request is invalid and cannot be executed.",
+			"@type": "Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException",
+			"@message": "The command script was aborted due to a failure in command number 1 (1-based). Command: '.create-or-alter function MissingEntityProbe() { MissingTable | take 1 }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'take' operator: Failed to resolve table or column expression named 'MissingTable''",
+			"@failureCode": 400,
+			"@permanent": true
 		}
 	}`
 
-	t.Run("azkusto structured missing entity error", func(t *testing.T) {
-		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(missingEntityBody)), "")
-		require.True(t, IsMissingEntityError(fmt.Errorf("create function: %w", err)))
+	t.Run("azkusto wrapped missing table error", func(t *testing.T) {
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(wrappedMissingTableBody)), "")
+		require.True(t, IsMissingTableError(fmt.Errorf("create function: %w", err)))
 	})
 
-	t.Run("legacy structured missing entity error", func(t *testing.T) {
-		err := kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(missingEntityBody)), "")
-		require.True(t, IsMissingEntityError(err))
+	t.Run("legacy wrapped missing table error", func(t *testing.T) {
+		err := kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(wrappedMissingTableBody)), "")
+		require.True(t, IsMissingTableError(err))
 	})
 
 	t.Run("other permanent kusto error", func(t *testing.T) {
 		body := `{"error":{"code":"General_BadRequest","@permanent":true,"innererror":{"code":"SYN0002","@errorCode":"SYN0002"}}}`
 		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
-		require.False(t, IsMissingEntityError(err))
+		require.False(t, IsMissingTableError(err))
 	})
 
 	t.Run("message without structured code", func(t *testing.T) {
 		body := `{"error":{"@message":"Semantic error SEM0100: Failed to resolve table MissingTable"}}`
 		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
-		require.False(t, IsMissingEntityError(err))
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("wrapped unresolved column", func(t *testing.T) {
+		body := `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create function f() { MissingTable | project MissingColumn }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'project' operator: Failed to resolve scalar expression named 'MissingColumn''"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("wrapped unresolved function", func(t *testing.T) {
+		body := `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create function f() { MissingFunction() }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'take' operator: Failed to resolve tabular function named 'MissingFunction''"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("signature in wrapped command text", func(t *testing.T) {
+		body := `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create function f() { print note=\"Semantic error: SEM0100: Failed to resolve table expression named\" }'. Details: 'Request is invalid due to another permanent error'"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
 	})
 
 	t.Run("non-string error codes", func(t *testing.T) {
 		body := `{"error":{"code":{"unexpected":"SEM0100"},"@errorCode":["SEM0100"],"innererror":{"code":100,"@errorCode":true}}}`
 		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
-		require.False(t, IsMissingEntityError(err))
+		require.False(t, IsMissingTableError(err))
 	})
 }
 
