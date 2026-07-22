@@ -610,17 +610,14 @@ func TestWorker_EvaluationMetrics(t *testing.T) {
 				}},
 			})
 
-			outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(rule.Namespace, rule.Name, tt.outcome)
-			durationHistogram := metrics.AlertRuleEvaluationDurationSeconds.WithLabelValues(rule.Namespace, rule.Name)
-			durationMetric, ok := durationHistogram.(prometheus.Metric)
-			require.True(t, ok)
+			outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(tt.outcome)
 			counterBefore := getCounterValue(t, outcomeCounter)
-			histogramCountBefore := getHistogramCount(t, durationMetric)
+			histogramCountBefore := getHistogramCount(t, metrics.AlertRuleEvaluationDurationSeconds)
 
 			w.ExecuteQuery(context.Background())
 
 			require.Equal(t, counterBefore+1, getCounterValue(t, outcomeCounter))
-			require.Equal(t, histogramCountBefore+1, getHistogramCount(t, durationMetric))
+			require.Equal(t, histogramCountBefore+1, getHistogramCount(t, metrics.AlertRuleEvaluationDurationSeconds))
 			require.Equal(t, tt.alertCalls, alertCalls)
 		})
 	}
@@ -643,12 +640,11 @@ func TestWorker_AlertsGeneratedMetricIncludesPartialSuccess(t *testing.T) {
 		},
 	})
 
-	alertsCounter := metrics.AlertsGeneratedTotal.WithLabelValues(rule.Namespace, rule.Name)
-	counterBefore := getCounterValue(t, alertsCounter)
+	counterBefore := getCounterValue(t, metrics.AlertsGeneratedTotal)
 
 	w.ExecuteQuery(context.Background())
 
-	require.Equal(t, counterBefore+2, getCounterValue(t, alertsCounter))
+	require.Equal(t, counterBefore+2, getCounterValue(t, metrics.AlertsGeneratedTotal))
 }
 
 func TestCalculateNextQueryTime(t *testing.T) {

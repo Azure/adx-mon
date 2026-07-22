@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/alerter/rules"
+	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestWorker_StatusUpdate_NoKubernetesClient(t *testing.T) {
@@ -96,4 +102,40 @@ func TestWorker_AlertCounting(t *testing.T) {
 			require.Equal(t, tt.expectedAlerts, w.alertsGenerated)
 		})
 	}
+}
+
+func TestWorker_StatusUpdateIncludesLatestEvaluationDetails(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, alertrulev1.AddToScheme(scheme))
+
+	alertRule := &alertrulev1.AlertRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test-namespace", Name: "test-rule"},
+		Spec: alertrulev1.AlertRuleSpec{
+			Database:    "TestDB",
+			Query:       "Table | take 1",
+			Destination: "destination",
+		},
+	}
+	ctrlCli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&alertrulev1.AlertRule{}).
+		WithObjects(alertRule).
+		Build()
+
+	rule := &rules.Rule{Namespace: alertRule.Namespace, Name: alertRule.Name, Database: "TestDB"}
+	w := NewWorker(&WorkerConfig{
+		Rule:       rule,
+		CtrlClient: ctrlCli,
+	})
+
+	w.updateAlertRuleStatus(context.Background(), time.Now().UTC(), 1500*time.Millisecond, 2, 2, "Success", "")
+
+	updated := &alertrulev1.AlertRule{}
+	require.NoError(t, ctrlCli.Get(context.Background(), types.NamespacedName{Namespace: alertRule.Namespace, Name: alertRule.Name}, updated))
+	require.Equal(t, "Success", updated.Status.Status)
+	require.Equal(t, int64(1500), updated.Status.LastEvaluationDurationMilliseconds)
+	require.Equal(t, int64(2), updated.Status.LastRowsReturned)
+	require.Equal(t, int64(2), updated.Status.LastAlertsGenerated)
+	require.False(t, updated.Status.LastQueryTime.IsZero())
+	require.False(t, updated.Status.LastAlertTime.IsZero())
 }
