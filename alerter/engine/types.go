@@ -4,6 +4,18 @@ import (
 	"math"
 )
 
+// AlertResult is the delivery-neutral result of converting an alert query row.
+type AlertResult struct {
+	Destination   string
+	Title         string
+	Summary       string
+	Description   string
+	Severity      int64
+	Source        string
+	CorrelationID string
+	CustomFields  map[string]string
+}
+
 type Notification struct {
 	// Title maps to the Title Notification field.
 	Title string `kusto:"Title"`

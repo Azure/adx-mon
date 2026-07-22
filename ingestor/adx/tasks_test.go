@@ -678,6 +678,25 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Contains(t, fn.Status.Error, "temporary failure")
 	})
+
+	t.Run("missing referenced table retries later", func(t *testing.T) {
+		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
+		exec := &TestStatementExecutor{database: "db"}
+		body := `{"error":{"code":"General_BadRequest","@permanent":true,"innererror":{"code":"SEM0100","@type":"Kusto.Data.Exceptions.SemanticException","@errorCode":"SEM0100","@errorMessage":"Failed to resolve table or column expression named 'MissingTable'"}}}`
+		exec.nextMgmtErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		task := NewSyncFunctionsTask(store, exec, nil)
+
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 1)
+		fn := store.funcs[0]
+		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Zero(t, fn.Status.ObservedGeneration)
+		require.Equal(t, "KustoExecutionRetrying", apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled).Reason)
+
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, exec.stmts, 2)
+		require.Equal(t, v1.Success, store.funcs[0].Status.Status)
+	})
 }
 
 func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
