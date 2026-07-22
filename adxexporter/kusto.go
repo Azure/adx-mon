@@ -129,16 +129,19 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 			Duration: qe.clock.Since(start),
 		}, nil
 	}
+	defer dataset.Close()
 
 	// Convert results to rows
 	rows, err := qe.iterativeDatasetToRows(dataset)
-	if closeErr := dataset.Close(); err == nil && closeErr != nil {
-		err = fmt.Errorf("failed to close query result: %w", closeErr)
+	if err != nil {
+		return &QueryResult{
+			Error:    fmt.Errorf("failed to read query results: %w", err),
+			Duration: qe.clock.Since(start),
+		}, nil
 	}
 
 	return &QueryResult{
 		Rows:     rows,
-		Error:    err,
 		Duration: qe.clock.Since(start),
 	}, nil
 }
@@ -152,14 +155,13 @@ func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]
 			return rows, err
 		}
 		table := tableResult.Table()
-		primary := table.IsPrimaryResult()
+		if !table.IsPrimaryResult() {
+			continue
+		}
 
 		for rowResult := range table.Rows() {
 			if err := rowResult.Err(); err != nil {
 				return rows, err
-			}
-			if !primary {
-				continue
 			}
 			if qe.maxRows > 0 && len(rows) >= qe.maxRows {
 				return rows, fmt.Errorf("query result exceeded maximum row limit (%d)", qe.maxRows)
@@ -178,9 +180,7 @@ func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]
 			rows = append(rows, rowMap)
 		}
 
-		if primary {
-			return rows, nil
-		}
+		return rows, nil
 	}
 
 	return rows, nil

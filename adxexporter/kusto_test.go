@@ -68,6 +68,8 @@ type MockKustoExecutor struct {
 	errors        []error
 	callIdx       int
 	lastIterative *mockIterativeDataset
+	tableErr      error
+	rowErr        error
 }
 
 func NewMockKustoExecutor(t *testing.T, database, endpoint string) *MockKustoExecutor {
@@ -97,6 +99,8 @@ func (m *MockKustoExecutor) IterativeQuery(ctx context.Context, query azkustodat
 		return nil, err
 	}
 	m.lastIterative = newMockIterativeDataset(result)
+	m.lastIterative.tableErr = m.tableErr
+	m.lastIterative.rowErr = m.rowErr
 	return m.lastIterative, nil
 }
 
@@ -127,6 +131,14 @@ func (m *MockKustoExecutor) SetNextError(err error) {
 	m.errors = append(m.errors, err)
 }
 
+func (m *MockKustoExecutor) SetTableError(err error) {
+	m.tableErr = err
+}
+
+func (m *MockKustoExecutor) SetRowError(err error) {
+	m.rowErr = err
+}
+
 func (m *MockKustoExecutor) SetNextResult(t *testing.T, rows [][]interface{}) {
 	t.Helper()
 	m.results = append(m.results, createMockDataset(rows))
@@ -142,6 +154,8 @@ func (m *MockKustoExecutor) Reset() {
 	m.errors = make([]error, 0)
 	m.callIdx = 0
 	m.lastIterative = nil
+	m.tableErr = nil
+	m.rowErr = nil
 }
 
 func createMockDataset(rows [][]interface{}) azquery.Dataset {
@@ -223,8 +237,10 @@ func (d *mockDataset) Tables() []azquery.Table {
 }
 
 type mockIterativeDataset struct {
-	base   azquery.Dataset
-	closed bool
+	base     azquery.Dataset
+	closed   bool
+	tableErr error
+	rowErr   error
 }
 
 func newMockIterativeDataset(dataset azquery.Dataset) *mockIterativeDataset {
@@ -237,9 +253,14 @@ func (d *mockIterativeDataset) PrimaryResultKind() string { return d.base.Primar
 
 func (d *mockIterativeDataset) Tables() <-chan azquery.TableResult {
 	tables := d.base.Tables()
-	results := make(chan azquery.TableResult, len(tables))
+	results := make(chan azquery.TableResult, len(tables)+1)
+	if d.tableErr != nil {
+		results <- azquery.TableResultError(d.tableErr)
+		close(results)
+		return results
+	}
 	for _, table := range tables {
-		results <- azquery.TableResultSuccess(&mockIterativeTable{base: table})
+		results <- azquery.TableResultSuccess(&mockIterativeTable{base: table, rowErr: d.rowErr})
 	}
 	close(results)
 	return results
@@ -253,7 +274,8 @@ func (d *mockIterativeDataset) Close() error {
 }
 
 type mockIterativeTable struct {
-	base azquery.Table
+	base   azquery.Table
+	rowErr error
 }
 
 func (t *mockIterativeTable) Id() string                { return t.base.Id() }
@@ -269,9 +291,12 @@ func (t *mockIterativeTable) IsPrimaryResult() bool { return t.base.IsPrimaryRes
 
 func (t *mockIterativeTable) Rows() <-chan azquery.RowResult {
 	rows := t.base.Rows()
-	results := make(chan azquery.RowResult, len(rows))
+	results := make(chan azquery.RowResult, len(rows)+1)
 	for _, row := range rows {
 		results <- azquery.RowResultSuccess(row)
+	}
+	if t.rowErr != nil {
+		results <- azquery.RowResultError(t.rowErr)
 	}
 	close(results)
 	return results
@@ -327,6 +352,37 @@ MyTable | summarize avg_value = avg(Value) by ServiceName`
 		require.Contains(t, result.Error.Error(), "failed to execute query")
 		require.Contains(t, result.Error.Error(), "connection failed")
 	})
+
+	t.Run("streamed table error", func(t *testing.T) {
+		mockClient.Reset()
+		streamErr := errors.New("table stream failed")
+		mockClient.SetTableError(streamErr)
+
+		result, err := executor.ExecuteQuery(ctx, queryBody, startTime, endTime, clusterLabels)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.ErrorIs(t, result.Error, streamErr)
+		require.Contains(t, result.Error.Error(), "failed to read query results")
+		require.Empty(t, result.Rows)
+		require.True(t, mockClient.lastIterative.closed)
+	})
+
+	t.Run("streamed row error", func(t *testing.T) {
+		mockClient.Reset()
+		streamErr := errors.New("row stream failed")
+		mockClient.SetNextResult(t, [][]interface{}{{"metric_one", 1.0, startTime}})
+		mockClient.SetRowError(streamErr)
+
+		result, err := executor.ExecuteQuery(ctx, queryBody, startTime, endTime, clusterLabels)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.ErrorIs(t, result.Error, streamErr)
+		require.Contains(t, result.Error.Error(), "failed to read query results")
+		require.Empty(t, result.Rows)
+		require.True(t, mockClient.lastIterative.closed)
+	})
 }
 
 func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
@@ -350,7 +406,7 @@ func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
 	require.NotNil(t, result)
 	require.Error(t, result.Error)
 	require.Contains(t, result.Error.Error(), "maximum row limit")
-	require.Len(t, result.Rows, 1)
+	require.Empty(t, result.Rows)
 	require.True(t, mockClient.lastIterative.closed)
 }
 
