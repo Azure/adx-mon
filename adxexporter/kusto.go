@@ -3,13 +3,15 @@ package adxexporter
 import (
 	"context"
 	"fmt"
-	"io"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/kustoutil"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"k8s.io/utils/clock"
 )
 
@@ -20,15 +22,15 @@ type KustoExecutor interface {
 	Database() string
 	// Endpoint returns the Kusto cluster endpoint
 	Endpoint() string
-	// Query executes a KQL query and returns the results
-	Query(ctx context.Context, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error)
+	// IterativeQuery executes a KQL query and streams the results
+	IterativeQuery(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error)
 	// Mgmt executes a Kusto management command (dot-command)
-	Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error)
+	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.Dataset, error)
 }
 
 // KustoClient wraps the Azure Kusto Go client to implement KustoExecutor
 type KustoClient struct {
-	client   *kusto.Client
+	client   *azkustodata.Client
 	database string
 	endpoint string
 }
@@ -37,13 +39,13 @@ const DefaultQueryExecutorMaxRows = 50000
 
 // NewKustoClient creates a new KustoClient with the given endpoint and database
 func NewKustoClient(endpoint, database string) (*KustoClient, error) {
-	kcsb := kusto.NewConnectionStringBuilder(endpoint)
+	kcsb := azkustodata.NewConnectionStringBuilder(endpoint)
 
 	if strings.HasPrefix(endpoint, "https://") {
 		kcsb.WithDefaultAzureCredential()
 	}
 
-	client, err := kusto.New(kcsb)
+	client, err := azkustodata.New(kcsb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kusto client: %w", err)
 	}
@@ -63,12 +65,12 @@ func (k *KustoClient) Endpoint() string {
 	return k.endpoint
 }
 
-func (k *KustoClient) Query(ctx context.Context, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
-	return k.client.Query(ctx, k.database, query, options...)
+func (k *KustoClient) IterativeQuery(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error) {
+	return k.client.IterativeQuery(ctx, k.database, query, options...)
 }
 
 // Mgmt executes a Kusto management command (dot-command) against the configured database
-func (k *KustoClient) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
+func (k *KustoClient) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.Dataset, error) {
 	return k.client.Mgmt(ctx, k.database, query, options...)
 }
 
@@ -120,57 +122,99 @@ func (qe *QueryExecutor) ExecuteQuery(ctx context.Context, queryBody string, sta
 	stmt := kql.New("").AddUnsafe(processedQuery)
 
 	// Execute the query
-	iter, err := qe.kustoClient.Query(tCtx, stmt)
+	dataset, err := qe.kustoClient.IterativeQuery(tCtx, stmt)
 	if err != nil {
 		return &QueryResult{
 			Error:    fmt.Errorf("failed to execute query: %w", err),
 			Duration: qe.clock.Since(start),
 		}, nil
 	}
-	defer iter.Stop()
+	defer dataset.Close()
 
 	// Convert results to rows
-	rows, err := qe.iteratorToRows(iter)
+	rows, err := qe.iterativeDatasetToRows(dataset)
+	if err != nil {
+		return &QueryResult{
+			Error:    fmt.Errorf("failed to read query results: %w", err),
+			Duration: qe.clock.Since(start),
+		}, nil
+	}
 
 	return &QueryResult{
 		Rows:     rows,
-		Error:    err,
 		Duration: qe.clock.Since(start),
 	}, nil
 }
 
-// iteratorToRows converts a Kusto RowIterator to a slice of maps
-func (qe *QueryExecutor) iteratorToRows(iter *kusto.RowIterator) ([]map[string]interface{}, error) {
+// iterativeDatasetToRows converts a streamed Kusto query dataset to a slice of row maps.
+func (qe *QueryExecutor) iterativeDatasetToRows(ds azquery.IterativeDataset) ([]map[string]interface{}, error) {
 	var rows []map[string]interface{}
-	limit := qe.maxRows
 
-	for {
-		row, errInline, errFinal := iter.NextRowOrError()
-		if errFinal == io.EOF {
-			break
+	for tableResult := range ds.Tables() {
+		if err := tableResult.Err(); err != nil {
+			return rows, err
 		}
-		if errInline != nil {
-			// Log inline error but continue processing
+		table := tableResult.Table()
+		if !table.IsPrimaryResult() {
 			continue
 		}
-		if errFinal != nil {
-			return rows, fmt.Errorf("failed to read query results: %w", errFinal)
-		}
 
-		if limit > 0 && len(rows) >= limit {
-			return rows, fmt.Errorf("query result exceeded maximum row limit (%d)", limit)
-		}
-
-		// Convert row to map
-		rowMap := make(map[string]interface{})
-		columns := row.ColumnNames()
-		for i, colName := range columns {
-			if i < len(row.Values) {
-				rowMap[colName] = row.Values[i]
+		for rowResult := range table.Rows() {
+			if err := rowResult.Err(); err != nil {
+				return rows, err
 			}
+			if qe.maxRows > 0 && len(rows) >= qe.maxRows {
+				return rows, fmt.Errorf("query result exceeded maximum row limit (%d)", qe.maxRows)
+			}
+
+			// Convert row to map.
+			row := rowResult.Row()
+			columns := row.Columns()
+			values := row.Values()
+			rowMap := make(map[string]interface{}, len(columns))
+			for i, col := range columns {
+				if i < len(values) {
+					rowMap[col.Name()] = materializeKustoValue(values[i])
+				}
+			}
+			rows = append(rows, rowMap)
 		}
-		rows = append(rows, rowMap)
+
+		return rows, nil
 	}
 
 	return rows, nil
+}
+
+// materializeKustoValue converts azkustodata value wrappers to plain Go scalars.
+func materializeKustoValue(kustoValue azvalue.Kusto) interface{} {
+	if isNilValue(kustoValue) {
+		return nil
+	}
+
+	rawValue := kustoValue.GetValue()
+	if isNilValue(rawValue) {
+		return nil
+	}
+
+	value := reflect.ValueOf(rawValue)
+	if value.Kind() == reflect.Ptr {
+		return value.Elem().Interface()
+	}
+
+	return rawValue
+}
+
+func isNilValue(value interface{}) bool {
+	if value == nil {
+		return true
+	}
+
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
