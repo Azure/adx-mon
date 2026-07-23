@@ -228,7 +228,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			_, err := t.kustoCli.Mgmt(ctx, stmt)
 			if err != nil {
 				parsed := kustoutil.ParseError(err)
-				if !errors.Retry(err) {
+				if !errors.Retry(err) && !kustoutil.IsMissingEntityError(err) {
 					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
 					function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", parsed)
 					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {

@@ -3,7 +3,6 @@ package adxexporter
 import (
 	"context"
 	"fmt"
-	"io"
 	"time"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -11,8 +10,9 @@ import (
 	"github.com/Azure/adx-mon/pkg/crd/summaryrule/backfill"
 	"github.com/Azure/adx-mon/pkg/kustoutil"
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,7 +40,7 @@ type SummaryRuleReconciler struct {
 	ClusterLabels map[string]string
 	KustoClusters map[string]string // database name -> endpoint URL
 
-	KustoExecutors map[string]KustoExecutor // per-database Kusto clients supporting Query and Mgmt
+	KustoExecutors map[string]KustoExecutor // per-database Kusto clients supporting iterative queries and management commands
 	Clock          clock.Clock
 }
 
@@ -238,7 +238,7 @@ func (r *SummaryRuleReconciler) adoptIfDesired(ctx context.Context, rule *adxmon
 // initializeQueryExecutors creates per-database executors for SummaryRule processing.
 func (r *SummaryRuleReconciler) initializeQueryExecutors() error {
 	for database, endpoint := range r.KustoClusters {
-		// Reuse the shared Kusto client capable of both Query and Mgmt
+		// Reuse the shared Kusto client for iterative queries and management commands.
 		kustoClient, err := NewKustoClient(endpoint, database)
 		if err != nil {
 			return err
@@ -329,26 +329,47 @@ func (r *SummaryRuleReconciler) updateSummaryRuleStatus(rule *adxmonv1.SummaryRu
 	}
 }
 
-// operationIDFromResult extracts a single string cell (operation id) from the RowIterator
-func operationIDFromResult(iter *kusto.RowIterator) (string, error) {
-	defer iter.Stop()
-	for {
-		row, errInline, errFinal := iter.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
+// operationIDFromResult extracts an operation id from the primary result table.
+// It prefers the OperationId column when present, falling back to the first value
+// for compatibility with single-cell responses.
+func operationIDFromResult(ds azquery.Dataset) (string, error) {
+	for _, table := range ds.Tables() {
+		if !table.IsPrimaryResult() {
 			continue
 		}
-		if errFinal != nil {
-			return "", fmt.Errorf("failed to retrieve operation ID: %v", errFinal)
+		rows := table.Rows()
+		if len(rows) != 1 {
+			return "", fmt.Errorf("expected one operation result row, got %d", len(rows))
 		}
-		if len(row.Values) != 1 {
-			return "", fmt.Errorf("unexpected number of values in row: %d", len(row.Values))
+		row := rows[0]
+		if column := table.ColumnByName("OperationId"); column != nil {
+			if column.Type() != aztypes.String && column.Type() != aztypes.GUID {
+				return "", fmt.Errorf("operation id has unsupported type %s", column.Type())
+			}
+
+			value, err := row.ValueByColumn(column)
+			if err != nil {
+				return "", fmt.Errorf("failed to read operation id: %w", err)
+			}
+			opID := value.String()
+			if opID == "" {
+				return "", fmt.Errorf("operation id is empty")
+			}
+			return opID, nil
 		}
-		return row.Values[0].String(), nil
+
+		values := row.Values()
+		if len(values) != 1 {
+			return "", fmt.Errorf("expected one value in row without OperationId column, got %d", len(values))
+		}
+
+		opID := values[0].String()
+		if opID == "" {
+			return "", fmt.Errorf("operation id is empty")
+		}
+		return opID, nil
 	}
-	return "", nil
+	return "", fmt.Errorf("operation id not found in result set")
 }
 
 // AsyncOperationStatus mirrors the schema returned by .show operations
@@ -381,27 +402,20 @@ func (r *SummaryRuleReconciler) getOperation(ctx context.Context, database strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve operation %s: %w", operationId, err)
 	}
-	defer rows.Stop()
-
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
+	for _, table := range rows.Tables() {
+		if !table.IsPrimaryResult() {
 			continue
 		}
-		if errFinal != nil {
-			return nil, fmt.Errorf("failed to retrieve operation %s: %v", operationId, errFinal)
+		for _, row := range table.Rows() {
+			var status AsyncOperationStatus
+			if err := row.ToStruct(&status); err != nil {
+				return nil, fmt.Errorf("failed to parse operation %s: %w", operationId, err)
+			}
+			if status.State != "" {
+				return &status, nil
+			}
 		}
-
-		var status AsyncOperationStatus
-		if err := row.ToStruct(&status); err != nil {
-			return nil, fmt.Errorf("failed to parse operation %s: %v", operationId, err)
-		}
-		if status.State != "" {
-			return &status, nil
-		}
+		break
 	}
 	return nil, nil
 }
