@@ -132,6 +132,10 @@ type AlertRuleStatus struct {
 	Message       string      `json:"message,omitempty"`
 	LastQueryTime metav1.Time `json:"lastQueryTime,omitempty"`
 	LastAlertTime metav1.Time `json:"lastAlertTime,omitempty"`
+
+	LastEvaluationDurationMilliseconds int64 `json:"lastEvaluationDurationMilliseconds,omitempty"`
+	LastRowsReturned                   int64 `json:"lastRowsReturned,omitempty"`
+	LastAlertsGenerated                int64 `json:"lastAlertsGenerated,omitempty"`
 	// Conditions provide standardized status signaling. Controllers may
 	// set shared conditions defined in conditions.go such as ConditionCriteria
 	// to reflect evaluation of Spec.Criteria / Spec.CriteriaExpression.

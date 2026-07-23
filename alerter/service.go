@@ -11,6 +11,7 @@ import (
 
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
+	alertermetrics "github.com/Azure/adx-mon/alerter/metrics"
 	"github.com/Azure/adx-mon/alerter/multikustoclient"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -63,6 +64,7 @@ type Alerter struct {
 	closeFn   context.CancelFunc
 	CtrlCli   client.Client
 	ruleStore ruleStore
+	metrics   alertermetrics.Service
 
 	alertHandler http.Handler
 }
@@ -135,6 +137,7 @@ func NewService(opts *AlerterOpts) (*Alerter, error) {
 		})
 
 	l.executor = executor
+	l.metrics = alertermetrics.NewService()
 	return l, nil
 }
 
@@ -205,6 +208,9 @@ func (l *Alerter) Open(ctx context.Context) error {
 	if err := l.ruleStore.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open rule store: %w", err)
 	}
+	if err := l.metrics.Open(ctx); err != nil {
+		return fmt.Errorf("failed to open metrics service: %w", err)
+	}
 
 	if err := l.executor.Open(ctx); err != nil {
 		return fmt.Errorf("failed to open executor: %w", err)
@@ -254,6 +260,9 @@ func (l *Alerter) Close() error {
 	l.closeFn()
 	if err := l.executor.Close(); err != nil {
 		return fmt.Errorf("failed to close executor: %w", err)
+	}
+	if err := l.metrics.Close(); err != nil {
+		return fmt.Errorf("failed to close metrics service: %w", err)
 	}
 
 	if err := l.ruleStore.Close(); err != nil {

@@ -14,12 +14,12 @@ RUN tdnf install -y \
   systemd-devel \
  && tdnf clean all
 
-# Install Go 1.25.3 to match go.mod requirements
-RUN tdnf install -y golang-1.25.3
+# Install Go 1.26.0 to match go.mod requirements
+RUN tdnf install -y golang-1.26.0
 
 
 # Install controller-gen
-RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest && \
+RUN go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 && \
     mv /root/go/bin/controller-gen /usr/local/bin/controller-gen
 
 # install operator-sdk
