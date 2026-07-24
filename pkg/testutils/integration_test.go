@@ -80,7 +80,7 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	restConfig, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
 
@@ -154,6 +154,25 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		exporterContainer, err := testadxexporter.Run(ctx, testadxexporter.WithCluster(ctx, k3sContainer))
 		testcontainers.CleanupContainer(t, exporterContainer)
 		require.NoError(tt, err)
+	})
+
+	t.Run("Wait for Collector function", func(t *testing.T) {
+		require.Eventually(t, func() bool {
+			var function adxmonv1.Function
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "collector", Namespace: "adx-mon"}, &function); err != nil {
+				t.Logf("Failed to retrieve Collector Function: %v", err)
+				return false
+			}
+
+			condition := function.GetCondition()
+			if condition == nil || condition.Status != metav1.ConditionTrue || condition.ObservedGeneration != function.Generation {
+				if condition != nil {
+					t.Logf("Collector Function pending: status=%s reason=%s message=%s", condition.Status, condition.Reason, condition.Message)
+				}
+				return false
+			}
+			return true
+		}, 5*time.Minute, time.Second, "Collector Function did not reconcile")
 	})
 
 	return kustoUrl, k3sContainer
