@@ -11,6 +11,7 @@ import (
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -954,6 +955,76 @@ func TestTransformAndRegisterMetrics(t *testing.T) {
 	// Execute transformation and registration
 	err = reconciler.transformAndRegisterMetrics(context.Background(), me, rows)
 	require.NoError(t, err)
+}
+
+func TestKustoQueryValuesTransformAndPushToOTLP(t *testing.T) {
+	requestChan := make(chan *v1.ExportMetricsServiceRequest, 1)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		request := &v1.ExportMetricsServiceRequest{}
+		require.NoError(t, proto.Unmarshal(body, request))
+		requestChan <- request
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mockServer.Close()
+
+	timestamp := time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC)
+	mockClient := NewMockKustoExecutor(t, "Metrics", "https://test.kusto.windows.net")
+	mockClient.results = append(mockClient.results, createDatasetWithColumns(
+		[]string{"metric_name", "value", "timestamp", "region"},
+		[][]interface{}{{
+			azvalue.NewString("request_count"),
+			azvalue.NewReal(42.5),
+			azvalue.NewDateTime(timestamp),
+			azvalue.NewString("west"),
+		}},
+	))
+
+	result, err := NewQueryExecutor(mockClient).ExecuteQuery(
+		context.Background(),
+		"print metric_name, value, timestamp, region",
+		timestamp.Add(-time.Minute),
+		timestamp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NoError(t, result.Error)
+
+	reconciler := &MetricsExporterReconciler{OTLPEndpoint: mockServer.URL}
+	require.NoError(t, reconciler.initOtlpExporter())
+	metricsExporter := &adxmonv1.MetricsExporter{
+		Spec: adxmonv1.MetricsExporterSpec{
+			Transform: adxmonv1.TransformConfig{
+				MetricNameColumn: "metric_name",
+				ValueColumns:     []string{"value"},
+				TimestampColumn:  "timestamp",
+				LabelColumns:     []string{"region"},
+			},
+		},
+	}
+	require.NoError(t, reconciler.transformAndRegisterMetrics(context.Background(), metricsExporter, result.Rows))
+
+	select {
+	case request := <-requestChan:
+		require.Len(t, request.ResourceMetrics, 1)
+		require.Len(t, request.ResourceMetrics[0].ScopeMetrics, 1)
+		metrics := request.ResourceMetrics[0].ScopeMetrics[0].Metrics
+		require.Len(t, metrics, 1)
+		require.Equal(t, "request_count_value", metrics[0].Name)
+
+		dataPoints := metrics[0].GetGauge().GetDataPoints()
+		require.Len(t, dataPoints, 1)
+		require.Equal(t, 42.5, dataPoints[0].GetAsDouble())
+		require.Equal(t, uint64(timestamp.UnixNano()), dataPoints[0].TimeUnixNano)
+		require.Len(t, dataPoints[0].Attributes, 1)
+		require.Equal(t, "region", dataPoints[0].Attributes[0].Key)
+		require.Equal(t, "west", dataPoints[0].Attributes[0].Value.GetStringValue())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for OTLP request")
+	}
 }
 
 func TestTransformAndRegisterMetrics_DefaultMetricName(t *testing.T) {

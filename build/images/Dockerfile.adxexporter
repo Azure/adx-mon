@@ -1,0 +1,20 @@
+FROM golang:1.26 AS builder
+ARG TARGETOS TARGETARCH VERSION GIT_COMMIT BUILD_TIME
+
+ADD . /code
+WORKDIR /code
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+-ldflags=" \
+-X 'github.com/Azure/adx-mon/pkg/version.Version=${VERSION}' \
+-X 'github.com/Azure/adx-mon/pkg/version.GitCommit=${GIT_COMMIT}' \
+-X 'github.com/Azure/adx-mon/pkg/version.BuildTime=${BUILD_TIME}' \
+" -o ./bin/adxexporter ./cmd/adxexporter
+
+FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
+
+LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon
+
+COPY --from=builder /code/bin /
+
+ENTRYPOINT ["/adxexporter"]

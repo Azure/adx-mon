@@ -35,7 +35,7 @@ build-adxexporter:
 build: build-alerter build-ingestor build-collector build-operator build-adxexporter
 .PHONY: build
 
-image: image-ingestor image-alerter image-collector image-operator
+image: image-ingestor image-alerter image-collector image-operator image-adxexporter
 .PHONY: image
 
 image-ingestor:
@@ -54,6 +54,10 @@ image-operator:
 	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/operator:latest -f build/images/Dockerfile.operator .
 .PHONY: image-operator
 
+image-adxexporter:
+	docker build --no-cache --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t ghcr.io/azure/adx-mon/adxexporter:latest -f build/images/Dockerfile.adxexporter .
+.PHONY: image-adxexporter
+
 image-operator-dev:
 .PHONY: image-operator-dev
 
@@ -62,6 +66,7 @@ push:
 	docker push ghcr.io/azure/adx-mon/ingestor:latest
 	docker push ghcr.io/azure/adx-mon/collector:latest
 	docker push ghcr.io/azure/adx-mon/operator:latest
+	docker push ghcr.io/azure/adx-mon/adxexporter:latest
 .PHONY: push
 
 clean:
