@@ -682,7 +682,7 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 	t.Run("missing referenced table retries later", func(t *testing.T) {
 		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
 		exec := &TestStatementExecutor{database: "db"}
-		body := `{"error":{"code":"General_BadRequest","@permanent":true,"innererror":{"code":"SEM0100","@type":"Kusto.Data.Exceptions.SemanticException","@errorCode":"SEM0100","@errorMessage":"Failed to resolve table or column expression named 'MissingTable'"}}}`
+		body := `{"error":{"code":"General_BadRequest","message":"Request is invalid and cannot be executed.","@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create-or-alter function fn() { MissingTable | take 1 }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'take' operator: Failed to resolve table or column expression named 'MissingTable''","@failureCode":400,"@permanent":true}}`
 		exec.nextMgmtErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
 		task := NewSyncFunctionsTask(store, exec, nil)
 
