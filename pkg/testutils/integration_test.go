@@ -162,58 +162,60 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 func VerifyMetricsExporter(ctx context.Context, t *testing.T, k3sContainer *k3s.K3sContainer) {
 	t.Helper()
 
-	restConfig, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
-	require.NoError(t, err)
-	clientset, err := kubernetes.NewForConfig(restConfig)
-	require.NoError(t, err)
+	t.Run("Verify Metrics Exporter", func(t *testing.T) {
+		restConfig, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
+		require.NoError(t, err)
+		clientset, err := kubernetes.NewForConfig(restConfig)
+		require.NoError(t, err)
 
-	rule := &adxmonv1.MetricsExporter{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "MetricsExporter",
-			APIVersion: "adx-mon.azure.com/v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kusto-values-e2e",
-			Namespace: "adx-mon",
-		},
-		Spec: adxmonv1.MetricsExporterSpec{
-			Database: "Metrics",
-			Body:     `print metric_name="e2e_request_count", value=real(42.5), timestamp=now(), region="west"`,
-			Interval: metav1.Duration{Duration: time.Minute},
-			Transform: adxmonv1.TransformConfig{
-				MetricNameColumn: "metric_name",
-				ValueColumns:     []string{"value"},
-				TimestampColumn:  "timestamp",
-				LabelColumns:     []string{"region"},
+		rule := &adxmonv1.MetricsExporter{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "MetricsExporter",
+				APIVersion: "adx-mon.azure.com/v1",
 			},
-		},
-	}
-
-	require.Eventually(t, func() bool {
-		if err := k8sClient.Create(ctx, rule.DeepCopy()); err != nil {
-			t.Logf("MetricsExporter CRD not ready: %v", err)
-			return false
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kusto-values-e2e",
+				Namespace: "adx-mon",
+			},
+			Spec: adxmonv1.MetricsExporterSpec{
+				Database: "Metrics",
+				Body:     `print metric_name="e2e_request_count", value=real(42.5), timestamp=now(), region="west"`,
+				Interval: metav1.Duration{Duration: time.Minute},
+				Transform: adxmonv1.TransformConfig{
+					MetricNameColumn: "metric_name",
+					ValueColumns:     []string{"value"},
+					TimestampColumn:  "timestamp",
+					LabelColumns:     []string{"region"},
+				},
+			},
 		}
-		return true
-	}, 5*time.Minute, time.Second)
 
-	require.Eventually(t, func() bool {
-		var current adxmonv1.MetricsExporter
-		if err := k8sClient.Get(ctx, types.NamespacedName{Name: rule.Name, Namespace: rule.Namespace}, &current); err != nil {
-			t.Logf("Failed to retrieve MetricsExporter: %v", err)
-			return false
-		}
-		condition := current.GetCondition()
-		return condition != nil && condition.Status == metav1.ConditionTrue
-	}, 5*time.Minute, time.Second, "MetricsExporter did not report a successful execution")
+		require.Eventually(t, func() bool {
+			if err := k8sClient.Create(ctx, rule.DeepCopy()); err != nil {
+				t.Logf("MetricsExporter CRD not ready: %v", err)
+				return false
+			}
+			return true
+		}, 5*time.Minute, time.Second)
 
-	require.Eventually(t, func() bool {
-		found, err := podLogsContain(ctx, clientset, "adx-mon", "app=otel-collector", "otel-collector", "e2e_request_count_value")
-		if err != nil {
-			t.Logf("Failed to inspect OTel Collector logs: %v", err)
-		}
-		return found
-	}, 5*time.Minute, time.Second, "OTel Collector did not receive the exported metric")
+		require.Eventually(t, func() bool {
+			var current adxmonv1.MetricsExporter
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: rule.Name, Namespace: rule.Namespace}, &current); err != nil {
+				t.Logf("Failed to retrieve MetricsExporter: %v", err)
+				return false
+			}
+			condition := current.GetCondition()
+			return condition != nil && condition.Status == metav1.ConditionTrue
+		}, 5*time.Minute, time.Second, "MetricsExporter did not report a successful execution")
+
+		require.Eventually(t, func() bool {
+			found, err := podLogsContain(ctx, clientset, "adx-mon", "app=otel-collector", "otel-collector", "e2e_request_count_value")
+			if err != nil {
+				t.Logf("Failed to inspect OTel Collector logs: %v", err)
+			}
+			return found
+		}, 5*time.Minute, time.Second, "OTel Collector did not receive the exported metric")
+	})
 }
 
 func podLogsContain(ctx context.Context, clientset kubernetes.Interface, namespace, labelSelector, container, expected string) (bool, error) {
