@@ -175,6 +175,8 @@ func createDatasetWithColumns(columnNames []string, rows [][]interface{}) azquer
 		vals := make(azvalue.Values, 0, len(rowData))
 		for _, col := range rowData {
 			switch v := col.(type) {
+			case azvalue.Kusto:
+				vals = append(vals, v)
 			case string:
 				vals = append(vals, azvalue.NewString(v))
 			case uuid.UUID:
@@ -200,7 +202,9 @@ func inferColumnType(rows [][]interface{}, idx int) aztypes.Column {
 			continue
 		}
 
-		switch row[idx].(type) {
+		switch value := row[idx].(type) {
+		case azvalue.Kusto:
+			return value.GetType()
 		case string:
 			return aztypes.String
 		case uuid.UUID:

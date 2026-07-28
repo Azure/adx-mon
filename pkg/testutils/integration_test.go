@@ -13,6 +13,7 @@ import (
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
+	testadxexporter "github.com/Azure/adx-mon/pkg/testutils/adxexporter"
 	"github.com/Azure/adx-mon/pkg/testutils/alerter"
 	"github.com/Azure/adx-mon/pkg/testutils/collector"
 	"github.com/Azure/adx-mon/pkg/testutils/ingestor"
@@ -24,6 +25,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -58,6 +60,12 @@ func TestIntegration(t *testing.T) {
 		VerifyAlerts(ctx, t, kustainerUrl, k3sContainer)
 	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		VerifyMetricsExporter(ctx, t, k3sContainer)
+	}()
+
 	wg.Wait()
 }
 
@@ -72,7 +80,7 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	restConfig, _, err := testutils.GetKubeConfig(ctx, k3sContainer)
+	restConfig, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
 	require.NoError(t, err)
 	require.NoError(t, kustoContainer.PortForward(ctx, restConfig))
 
@@ -142,7 +150,119 @@ func StartCluster(ctx context.Context, t *testing.T) (kustoUrl string, k3sContai
 		require.NoError(tt, err)
 	})
 
+	t.Run("Build and install ADX Exporter", func(tt *testing.T) {
+		exporterContainer, err := testadxexporter.Run(ctx, testadxexporter.WithCluster(ctx, k3sContainer))
+		testcontainers.CleanupContainer(t, exporterContainer)
+		require.NoError(tt, err)
+	})
+
+	t.Run("Wait for Collector function", func(t *testing.T) {
+		require.Eventually(t, func() bool {
+			var function adxmonv1.Function
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "collector", Namespace: "adx-mon"}, &function); err != nil {
+				t.Logf("Failed to retrieve Collector Function: %v", err)
+				return false
+			}
+
+			condition := function.GetCondition()
+			if condition == nil || condition.Status != metav1.ConditionTrue || condition.ObservedGeneration != function.Generation {
+				if condition != nil {
+					t.Logf("Collector Function pending: status=%s reason=%s message=%s", condition.Status, condition.Reason, condition.Message)
+				}
+				return false
+			}
+			return true
+		}, 5*time.Minute, time.Second, "Collector Function did not reconcile")
+	})
+
 	return kustoUrl, k3sContainer
+}
+
+func VerifyMetricsExporter(ctx context.Context, t *testing.T, k3sContainer *k3s.K3sContainer) {
+	t.Helper()
+
+	t.Run("Verify Metrics Exporter", func(t *testing.T) {
+		restConfig, k8sClient, err := testutils.GetKubeConfig(ctx, k3sContainer)
+		require.NoError(t, err)
+		clientset, err := kubernetes.NewForConfig(restConfig)
+		require.NoError(t, err)
+
+		rule := &adxmonv1.MetricsExporter{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "MetricsExporter",
+				APIVersion: "adx-mon.azure.com/v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kusto-values-e2e",
+				Namespace: "adx-mon",
+			},
+			Spec: adxmonv1.MetricsExporterSpec{
+				Database: "Metrics",
+				Body:     `print metric_name="e2e_request_count", value=real(42.5), timestamp=now(), region="west"`,
+				Interval: metav1.Duration{Duration: time.Minute},
+				Transform: adxmonv1.TransformConfig{
+					MetricNameColumn: "metric_name",
+					ValueColumns:     []string{"value"},
+					TimestampColumn:  "timestamp",
+					LabelColumns:     []string{"region"},
+				},
+			},
+		}
+
+		require.Eventually(t, func() bool {
+			if err := k8sClient.Create(ctx, rule.DeepCopy()); err != nil {
+				t.Logf("MetricsExporter CRD not ready: %v", err)
+				return false
+			}
+			return true
+		}, 5*time.Minute, time.Second)
+
+		require.Eventually(t, func() bool {
+			var current adxmonv1.MetricsExporter
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: rule.Name, Namespace: rule.Namespace}, &current); err != nil {
+				t.Logf("Failed to retrieve MetricsExporter: %v", err)
+				return false
+			}
+			condition := current.GetCondition()
+			return condition != nil && condition.Status == metav1.ConditionTrue
+		}, 5*time.Minute, time.Second, "MetricsExporter did not report a successful execution")
+
+		require.Eventually(t, func() bool {
+			found, err := podLogsContain(ctx, clientset, "adx-mon", "app=otel-collector", "otel-collector", "e2e_request_count_value")
+			if err != nil {
+				t.Logf("Failed to inspect OTel Collector logs: %v", err)
+			}
+			return found
+		}, 5*time.Minute, time.Second, "OTel Collector did not receive the exported metric")
+	})
+}
+
+func podLogsContain(ctx context.Context, clientset kubernetes.Interface, namespace, labelSelector, container, expected string) (bool, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return false, fmt.Errorf("list pods: %w", err)
+	}
+
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+
+		stream, err := clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: container}).Stream(ctx)
+		if err != nil {
+			continue
+		}
+		body, readErr := io.ReadAll(stream)
+		stream.Close()
+		if readErr != nil {
+			return false, fmt.Errorf("read pod logs: %w", readErr)
+		}
+		if strings.Contains(string(body), expected) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func VerifyAlerts(ctx context.Context, t *testing.T, kustainerUrl string, k3sContainer *k3s.K3sContainer) {

@@ -1,0 +1,142 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adx-mon
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: adxexporter
+  namespace: adx-mon
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:adxexporter
+rules:
+  - apiGroups: ["adx-mon.azure.com"]
+    resources: ["metricsexporters", "summaryrules"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["adx-mon.azure.com"]
+    resources: ["metricsexporters/status", "summaryrules/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:adxexporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:adxexporter
+subjects:
+  - kind: ServiceAccount
+    name: adxexporter
+    namespace: adx-mon
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: adx-mon
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+    exporters:
+      debug:
+        verbosity: detailed
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          exporters: [debug]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: adx-mon
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: adx-mon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector:0.130.1
+          args: ["--config=/etc/otelcol/config.yaml"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          ports:
+            - containerPort: 4318
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adxexporter
+  namespace: adx-mon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adxexporter
+  template:
+    metadata:
+      labels:
+        app: adxexporter
+    spec:
+      serviceAccountName: adxexporter
+      containers:
+        - name: adxexporter
+          image: adxexporter:latest
+          imagePullPolicy: Never
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          args:
+            - "--kusto-endpoints=Metrics=http://kustainer.default.svc.cluster.local:8080"
+            - "--otlp-endpoint=http://otel-collector.adx-mon.svc.cluster.local:4318/v1/metrics"
+          env:
+            - name: GODEBUG
+              value: http2client=0
+          ports:
+            - containerPort: 8081
