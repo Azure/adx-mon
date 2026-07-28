@@ -23,7 +23,6 @@ import (
 	kwait "k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
-	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -155,7 +154,7 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					})
 
 					// Wait for our manifests to be applied
-					restConfig, _, err := testutils.GetKubeConfig(ctx, k)
+					restConfig, ctrlCli, err := testutils.GetKubeConfig(ctx, k)
 					if err != nil {
 						return fmt.Errorf("failed to get kube config: %w", err)
 					}
@@ -163,11 +162,6 @@ func WithCluster(ctx context.Context, k *k3s.K3sContainer) testcontainers.Custom
 					clientset, err := kubernetes.NewForConfig(restConfig)
 					if err != nil {
 						return fmt.Errorf("failed to create clientset: %w", err)
-					}
-
-					ctrlCli, err := ctrlclient.New(restConfig, ctrlclient.Options{})
-					if err != nil {
-						return fmt.Errorf("failed to create controller client: %w", err)
 					}
 
 					err = kwait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
