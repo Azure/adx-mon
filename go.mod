@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260310202139-5f2c7d4f7405.2
 	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20260310202139-5f2c7d4f7405.1
-	github.com/Azure/azure-kusto-go v0.15.2
 	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
 	github.com/Azure/azure-kusto-go/azkustoingest v1.2.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0
@@ -181,7 +180,6 @@ require (
 )
 
 replace (
-	github.com/Azure/azure-kusto-go => github.com/jwilder/azure-kusto-go v0.15.3-0.20240403192022-0d7016e79525
 	github.com/Azure/azure-kusto-go/azkustoingest => github.com/mkeesey/azure-kusto-go/azkustoingest v0.0.0-20260515201423-2ab6d60df35a
 	github.com/redis/go-redis/v9 => github.com/redis/go-redis/v9 v9.7.3
 	github.com/tenebris-tech/tail => github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445

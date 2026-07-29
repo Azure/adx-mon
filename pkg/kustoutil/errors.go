@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
-	legacykustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 )
 
 const (
@@ -54,11 +53,6 @@ func decodeRESTError(err error) map[string]interface{} {
 	var azkustoErr *azkustoerrors.HttpError
 	if errors.As(err, &azkustoErr) {
 		return azkustoErr.UnmarshalREST()
-	}
-
-	var legacyKustoErr *legacykustoerrors.HttpError
-	if errors.As(err, &legacyKustoErr) {
-		return legacyKustoErr.UnmarshalREST()
 	}
 
 	return nil
