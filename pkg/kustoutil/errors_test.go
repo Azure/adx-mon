@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
-	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +33,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto http error extracts @message", func(t *testing.T) {
 		body := `{"error":{"@message": "this function is invalid"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "this function is invalid", result)
@@ -43,7 +42,7 @@ func TestParseError(t *testing.T) {
 	t.Run("long kusto http error @message is truncated", func(t *testing.T) {
 		longMsg := strings.Repeat("b", 300)
 		body := `{"error":{"@message": "` + longMsg + `"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, longMsg[:256], result)
@@ -73,7 +72,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with additional details is parsed correctly", func(t *testing.T) {
 		body := `{"error":{"@message": "function is invalid", "code": "InvalidFunction"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "function is invalid", result)
@@ -81,7 +80,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with malformed json", func(t *testing.T) {
 		body := `{"error": malformed json}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -90,7 +89,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with missing error field", func(t *testing.T) {
 		body := `{"other": "field"}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -99,7 +98,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with missing @message field", func(t *testing.T) {
 		body := `{"error": {"code": "BadRequest"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -108,7 +107,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with wrong @message type", func(t *testing.T) {
 		body := `{"error": {"@message": 123}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -117,24 +116,16 @@ func TestParseError(t *testing.T) {
 
 	t.Run("wrapped kusto error", func(t *testing.T) {
 		body := `{"error": {"@message": "Invalid KQL query"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 		wrappedErr := fmt.Errorf("query failed: %w", kustoErr)
 
 		result := ParseError(wrappedErr)
 		require.Equal(t, "Invalid KQL query", result)
 	})
 
-	t.Run("azkusto http error extracts @message", func(t *testing.T) {
-		body := `{"error":{"@message": "this function is invalid"}}`
-		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
-
-		result := ParseError(kustoErr)
-		require.Equal(t, "this function is invalid", result)
-	})
-
 	t.Run("empty kusto error message", func(t *testing.T) {
 		body := `{"error": {"@message": ""}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message since @message is empty
@@ -151,7 +142,7 @@ func TestParseError(t *testing.T) {
 				}
 			}
 		}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "Query execution failed", result)
@@ -182,11 +173,6 @@ func TestIsMissingTableError(t *testing.T) {
 	t.Run("azkusto wrapped missing table error", func(t *testing.T) {
 		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(wrappedMissingTableBody)), "")
 		require.True(t, IsMissingTableError(fmt.Errorf("create function: %w", err)))
-	})
-
-	t.Run("legacy wrapped missing table error", func(t *testing.T) {
-		err := kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(wrappedMissingTableBody)), "")
-		require.True(t, IsMissingTableError(err))
 	})
 
 	t.Run("other permanent kusto error", func(t *testing.T) {
