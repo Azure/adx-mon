@@ -120,14 +120,32 @@ func (l *Log) SetAttributeValue(key string, value any) {
 	l.attributes[key] = value
 }
 
+// DeleteAttributeValue deletes an attribute value by key.
+func (l *Log) DeleteAttributeValue(key string) {
+	l.checkWrite()
+	delete(l.attributes, key)
+}
+
 func (l *Log) SetBodyValue(key string, value any) {
 	l.checkWrite()
 	l.body[key] = value
 }
 
+// DeleteBodyValue deletes a body value by key.
+func (l *Log) DeleteBodyValue(key string) {
+	l.checkWrite()
+	delete(l.body, key)
+}
+
 func (l *Log) SetResourceValue(key string, value any) {
 	l.checkWrite()
 	l.resource[key] = value
+}
+
+// DeleteResourceValue deletes a resource value by key.
+func (l *Log) DeleteResourceValue(key string) {
+	l.checkWrite()
+	delete(l.resource, key)
 }
 
 func (l *Log) checkWrite() {
