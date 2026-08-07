@@ -378,6 +378,48 @@ func TestStore_WriteNativeLogs_Empty(t *testing.T) {
 	}
 }
 
+func TestStore_WriteNativeLogs_BatchesSameDestination(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:     dir,
+		SegmentMaxSize: 1024 * 1024,
+		MaxDiskUsage:   1024 * 1024,
+	})
+	require.NoError(t, s.Open(ctx))
+
+	logs := make([]*types.Log, 2)
+	for i := range logs {
+		logs[i] = types.NewLog()
+		logs[i].SetAttributeValue(types.AttributeDatabaseName, "adxlogs")
+		logs[i].SetAttributeValue(types.AttributeTableName, "foo")
+		logs[i].SetBodyValue(types.BodyKeyMessage, fmt.Sprintf("message-%d", i))
+	}
+
+	require.NoError(t, s.WriteNativeLogs(ctx, &types.LogBatch{Logs: logs}))
+
+	key := []byte(fmt.Sprintf(
+		"%s_%s_%s",
+		"adxlogs",
+		"foo",
+		strconv.FormatUint(schema.SchemaHash(schema.DefaultLogsMapping), 36),
+	))
+	w, err := s.GetWAL(ctx, key)
+	require.NoError(t, err)
+	path := w.Path()
+	require.NoError(t, s.Close())
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	iter, err := wal.NewSegmentIterator(f)
+	require.NoError(t, err)
+	n, err := iter.Verify()
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+}
+
 func TestStore_WriteNativeLogs_DropsLogsWithoutDestination(t *testing.T) {
 	metrics.InvalidLogsDropped.Reset()
 	t.Cleanup(metrics.InvalidLogsDropped.Reset)

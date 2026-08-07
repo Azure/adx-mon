@@ -23,6 +23,13 @@ var (
 	)
 )
 
+const (
+	maxRetainedTimeSeries = 4096
+	maxRetainedLabels     = 64
+	maxRetainedSamples    = 256
+	maxRetainedLabelBytes = 4096
+)
+
 // WriteRequest represents Prometheus remote write API request
 type WriteRequest struct {
 	Timeseries []*TimeSeries
@@ -96,10 +103,16 @@ func (wr *WriteRequest) MarshalTo(dst []byte) ([]byte, error) {
 // Reset resets wr.
 func (wr *WriteRequest) Reset() {
 	for i := range wr.Timeseries {
-		ts := wr.Timeseries[i]
-		TimeSeriesPool.Put(ts)
+		ReleaseTimeSeries(wr.Timeseries[i])
 	}
-	wr.Timeseries = wr.Timeseries[:0]
+
+	all := wr.Timeseries[:cap(wr.Timeseries)]
+	clear(all)
+	if cap(all) > maxRetainedTimeSeries {
+		wr.Timeseries = nil
+		return
+	}
+	wr.Timeseries = all[:0]
 }
 
 func (wr *WriteRequest) Size() (n int) {
@@ -219,8 +232,7 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			if !ok {
 				return fmt.Errorf("cannot read Timeseries sample data")
 			}
-			m.Labels = append(m.Labels, &Label{})
-			s := m.Labels[len(m.Labels)-1]
+			s := m.nextLabel()
 			if err := s.unmarshalProtobuf(data); err != nil {
 				return fmt.Errorf("cannot unmarshal sample: %w", err)
 			}
@@ -229,8 +241,7 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			if !ok {
 				return fmt.Errorf("cannot read Timeseries sample data")
 			}
-			m.Samples = append(m.Samples, &Sample{})
-			s := m.Samples[len(m.Samples)-1]
+			s := m.nextSample()
 			if err := s.unmarshalProtobuf(data); err != nil {
 				return fmt.Errorf("cannot unmarshal sample: %w", err)
 			}
@@ -240,33 +251,84 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 }
 
 func (ts *TimeSeries) Reset() {
-	for i := range ts.Labels {
-		ts.Labels[i].Reset()
+	labels := ts.Labels[:cap(ts.Labels)]
+	for i := range labels {
+		if labels[i] != nil {
+			labels[i].Reset()
+		}
 	}
-	for i := range ts.Samples {
-		ts.Samples[i].Reset()
+	samples := ts.Samples[:cap(ts.Samples)]
+	for i := range samples {
+		if samples[i] != nil {
+			samples[i].Reset()
+		}
 	}
-	ts.Labels = ts.Labels[:0]
-	ts.Samples = ts.Samples[:0]
+	ts.Labels = labels[:0]
+	ts.Samples = samples[:0]
+}
+
+func (ts *TimeSeries) retainable() bool {
+	return cap(ts.Labels) <= maxRetainedLabels && cap(ts.Samples) <= maxRetainedSamples
+}
+
+func (ts *TimeSeries) discard() {
+	ts.Labels = nil
+	ts.Samples = nil
+}
+
+func ReleaseTimeSeries(ts *TimeSeries) {
+	if ts == nil {
+		return
+	}
+	if ts.retainable() {
+		TimeSeriesPool.Put(ts)
+		return
+	}
+	ts.discard()
+}
+
+func (m *TimeSeries) nextLabel() *Label {
+	if len(m.Labels) < cap(m.Labels) {
+		m.Labels = m.Labels[:len(m.Labels)+1]
+		if m.Labels[len(m.Labels)-1] == nil {
+			m.Labels[len(m.Labels)-1] = &Label{}
+		}
+		return m.Labels[len(m.Labels)-1]
+	}
+
+	l := &Label{}
+	m.Labels = append(m.Labels, l)
+	return l
+}
+
+func (m *TimeSeries) nextSample() *Sample {
+	if len(m.Samples) < cap(m.Samples) {
+		m.Samples = m.Samples[:len(m.Samples)+1]
+		if m.Samples[len(m.Samples)-1] == nil {
+			m.Samples[len(m.Samples)-1] = &Sample{}
+		}
+		return m.Samples[len(m.Samples)-1]
+	}
+
+	s := &Sample{}
+	m.Samples = append(m.Samples, s)
+	return s
 }
 
 func (m *TimeSeries) AppendLabel(key []byte, value []byte) {
-	m.Labels = append(m.Labels, &Label{})
-	l := m.Labels[len(m.Labels)-1]
+	l := m.nextLabel()
 	l.Name = append(l.Name[:0], key...)
 	l.Value = append(l.Value[:0], value...)
 }
 
 func (m *TimeSeries) AppendLabelString(key string, value string) {
-	m.Labels = append(m.Labels, &Label{})
-	l := m.Labels[len(m.Labels)-1]
+	l := m.nextLabel()
 	l.Name = append(l.Name[:0], key...)
 	l.Value = append(l.Value[:0], value...)
 }
 
 func (m *TimeSeries) AppendSample(timestamp int64, value float64) {
-	m.Samples = append(m.Samples, &Sample{})
-	s := m.Samples[len(m.Samples)-1]
+	s := m.nextSample()
 	s.Timestamp = timestamp
 	s.Value = value
 }
@@ -325,8 +387,16 @@ func (m *Label) unmarshalProtobuf(src []byte) (err error) {
 }
 
 func (l *Label) Reset() {
-	l.Name = l.Name[:0]
-	l.Value = l.Value[:0]
+	if cap(l.Name) > maxRetainedLabelBytes {
+		l.Name = nil
+	} else {
+		l.Name = l.Name[:0]
+	}
+	if cap(l.Value) > maxRetainedLabelBytes {
+		l.Value = nil
+	} else {
+		l.Value = l.Value[:0]
+	}
 }
 
 func sizeOf(x uint64) (n int) {

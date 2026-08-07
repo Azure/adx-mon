@@ -79,12 +79,14 @@ func (w *NativeLogsCSVWriter) MarshalNativeLog(log *types.Log) error {
 		w.headerWritten = true
 	}
 
-	// There are 9 fields defined in an OTLP log schema
-	fields := make([]string, 0, 9)
+	// There are 9 fields defined in an OTLP log schema.
+	fields := w.fields[:0]
+	defer func() {
+		clear(fields)
+		w.fields = fields[:0]
+	}()
 	// Convert log records to CSV
 	// see samples at https://opentelemetry.io/docs/specs/otel/protocol/file-exporter/#examples
-	// Reset fields
-	fields = fields[:0]
 	// Timestamp
 	fields = append(fields, otlpTSToUTC(int64(log.GetTimestamp())))
 	// ObservedTimestamp

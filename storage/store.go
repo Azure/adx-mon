@@ -40,6 +40,8 @@ var (
 	})
 )
 
+const maxNativeLogsBatchSize = 16 * 1024
+
 type Store interface {
 	service.Component
 
@@ -207,21 +209,45 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
 	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
-	defer nativeLogsCSVWriterPool.Put(enc)
+	defer func() {
+		enc.Reset()
+		nativeLogsCSVWriterPool.Put(enc)
+	}()
 	enc.InitColumns(s.opts.LiftedResources)
+	enc.Reset()
 
 	key := gbp.Get(256)
 	defer gbp.Put(key)
+	currentKey := gbp.Get(256)
+	defer gbp.Put(currentKey)
+
+	var currentWAL *wal.WAL
+	batchSize := int64(maxNativeLogsBatchSize)
+	if s.opts.SegmentMaxSize > 0 && s.opts.SegmentMaxSize/2 < batchSize {
+		batchSize = s.opts.SegmentMaxSize / 2
+	}
+	if batchSize <= 0 {
+		batchSize = maxNativeLogsBatchSize
+	}
 
 	if logger.IsDebug() {
 		logger.Debugf("Store received %d native logs", len(logs.Logs))
 	}
 
 	noDestinationCount := 0
+	flush := func() error {
+		if currentWAL == nil || len(enc.Bytes()) == 0 {
+			return nil
+		}
+		if err := s.writeNativeLogsBatch(ctx, currentWAL, enc.Bytes()); err != nil {
+			return err
+		}
+		enc.Reset()
+		return nil
+	}
 
 	// Each log can potentially have a different destination.
-	// Instead of splitting ahead of time and allocating n slices, just encode and write to the wal on
-	// a per-log basis.
+	// Batch consecutive logs with the same destination without allocating per-destination slices.
 	for _, log := range logs.Logs {
 		// If we don't have a destination, we can't do anything with the log.
 		// Skip instead of trying again, which will just repeat the same error.
@@ -250,29 +276,31 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		key = fmt.Appendf(key[:0], "%s_%s_", sanitizedDB, sanitizedTable)
 		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
 
-		w, err := s.GetWAL(ctx, key)
-		if err != nil {
-			return err
+		if !bytes.Equal(key, currentKey) {
+			if err := flush(); err != nil {
+				return err
+			}
+			w, err := s.GetWAL(ctx, key)
+			if err != nil {
+				return err
+			}
+			currentWAL = w
+			currentKey = append(currentKey[:0], key...)
 		}
 
-		enc.Reset()
 		if err := enc.MarshalNativeLog(log); err != nil {
 			return err
 		}
-		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 
-		if s.Size() > s.opts.MaxDiskUsage {
-			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
-			return wal.ErrMaxDiskUsageExceeded
+		if int64(len(enc.Bytes())) >= batchSize {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
+	}
 
-		if err := w.Write(ctx, enc.Bytes()); err != nil {
-			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
-			return err
-		}
-
-		// Decrement the inflight write bytes after writing to avoid double counting.
-		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+	if err := flush(); err != nil {
+		return err
 	}
 
 	if noDestinationCount > 0 {
@@ -281,6 +309,17 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 	}
 
 	return nil
+}
+
+func (s *LocalStore) writeNativeLogsBatch(ctx context.Context, w *wal.WAL, data []byte) error {
+	atomic.AddInt64(&s.inflightWriteBytes, int64(len(data)))
+	defer atomic.AddInt64(&s.inflightWriteBytes, -int64(len(data)))
+
+	if s.Size() > s.opts.MaxDiskUsage {
+		return wal.ErrMaxDiskUsageExceeded
+	}
+
+	return w.Write(ctx, data)
 }
 
 func (s *LocalStore) PrefixesByAge() []string {

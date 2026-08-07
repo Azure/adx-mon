@@ -175,7 +175,7 @@ func (t *OltpMetricWriter) addSeriesAndFlushIfNecessary(ctx context.Context, wr 
 			return fmt.Errorf("addSeriesAndFlushIfNecessary flush failure: %w", err)
 		}
 		for _, ts := range wr.Timeseries {
-			prompb.TimeSeriesPool.Put(ts)
+			prompb.ReleaseTimeSeries(ts)
 		}
 
 		wr.Timeseries = wr.Timeseries[:0]

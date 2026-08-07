@@ -238,6 +238,7 @@ func BenchmarkMarshalCSV_NativeLog(b *testing.B) {
 
 	buf := bytes.NewBuffer(make([]byte, 0, 64*1024))
 	enc := NewCSVNativeLogsCSVWriter(buf, nil)
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {

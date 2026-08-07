@@ -39,6 +39,48 @@ func TestRequestTransformer_TransformWriteRequest_DropMetrics(t *testing.T) {
 	require.Equal(t, 1, len(res.Timeseries))
 }
 
+func TestRequestTransformer_TransformWriteRequest_ReleasesDroppedSeries(t *testing.T) {
+	dropped := &prompb.TimeSeries{
+		Labels: []*prompb.Label{{
+			Name:  []byte("__name__"),
+			Value: []byte("cpu"),
+		}},
+		Samples: []*prompb.Sample{{Value: 1}},
+	}
+	kept := &prompb.TimeSeries{
+		Labels: []*prompb.Label{{
+			Name:  []byte("__name__"),
+			Value: []byte("mem"),
+		}},
+	}
+	req := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{dropped, kept}}
+	f := &transform.RequestTransformer{DropMetrics: []*regexp.Regexp{regexp.MustCompile("cpu")}}
+
+	res := f.TransformWriteRequest(req)
+
+	require.Equal(t, []*prompb.TimeSeries{kept}, res.Timeseries)
+	require.Empty(t, dropped.Labels)
+	require.Empty(t, dropped.Samples)
+}
+
+func TestRequestTransformer_TransformTimeSeries_ReusesDroppedLabels(t *testing.T) {
+	name := &prompb.Label{Name: []byte("__name__"), Value: []byte("cpu")}
+	dropped := &prompb.Label{Name: []byte("drop"), Value: []byte("value")}
+	kept := &prompb.Label{Name: []byte("keep"), Value: []byte("value")}
+	ts := &prompb.TimeSeries{Labels: []*prompb.Label{name, dropped, kept}}
+	f := &transform.RequestTransformer{
+		DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+			regexp.MustCompile("cpu"): regexp.MustCompile("drop"),
+		},
+	}
+
+	f.TransformTimeSeries(ts)
+	ts.AppendLabelString("new", "value")
+
+	require.Equal(t, []*prompb.Label{name, kept, dropped}, ts.Labels)
+	require.Equal(t, "new", string(dropped.Name))
+}
+
 func TestRequestTransformer_TransformWriteRequest_DropMetricsRegex(t *testing.T) {
 	f := &transform.RequestTransformer{DropMetrics: []*regexp.Regexp{
 		regexp.MustCompile("cpu|mem"),
