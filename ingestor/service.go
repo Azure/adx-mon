@@ -228,6 +228,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	metricsSvc := ingestormetrics.NewService(ingestormetrics.ServiceOpts{
 		Elector:          coord,
+		Region:           opts.Region,
 		MetricsKustoCli:  opts.MetricsKustoCli,
 		KustoCli:         allKustoCli,
 		PeerHealthReport: health,
