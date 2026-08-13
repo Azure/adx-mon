@@ -414,7 +414,7 @@ func realMain(ctx *cli.Context) error {
 	// Only start the shutdown runner if running in a cluster
 	if _, err := rest.InClusterConfig(); err == nil {
 		go func() {
-			sd := runner.NewShutDownRunner(k8scli, srv, svc)
+			sd := runner.NewShutDownRunnerForNamespace(k8scli, srv, svc, namespace)
 			scheduler.RunForever(svcCtx, time.Minute, sd)
 		}()
 	}

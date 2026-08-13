@@ -13,6 +13,7 @@ import (
 )
 
 func TestShutDownRunner_ShutdownNotCalledIfNotAnnotated(t *testing.T) {
+	const namespace = "test-namespace"
 	// Set up the fake Kubernetes client
 	client := fake.NewClientset()
 
@@ -36,7 +37,7 @@ func TestShutDownRunner_ShutdownNotCalledIfNotAnnotated(t *testing.T) {
 	service := &fakeIngestorService{}
 
 	// Create the ShutDownRunner
-	runner := NewShutDownRunner(client, httpServer, service)
+	runner := NewShutDownRunnerForNamespace(client, httpServer, service, namespace)
 
 	// Run the ShutDownRunner
 	err := runner.Run(context.Background())
@@ -47,6 +48,7 @@ func TestShutDownRunner_ShutdownNotCalledIfNotAnnotated(t *testing.T) {
 }
 
 func TestShutDownRunner_ShutdownNotCalledIfAnnotated(t *testing.T) {
+	const namespace = "test-namespace"
 	// Set up the fake Kubernetes client
 	client := fake.NewClientset()
 
@@ -72,7 +74,7 @@ func TestShutDownRunner_ShutdownNotCalledIfAnnotated(t *testing.T) {
 	service := &fakeIngestorService{}
 
 	// Create the ShutDownRunner
-	runner := NewShutDownRunner(client, httpServer, service)
+	runner := NewShutDownRunnerForNamespace(client, httpServer, service, namespace)
 
 	// Run the ShutDownRunner
 	err := runner.Run(context.Background())
