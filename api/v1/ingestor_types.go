@@ -72,7 +72,10 @@ func (s *IngestorSpec) LoadAppliedProvisioningState() (*IngestorSpec, error) {
 	return &stored, nil
 }
 
-const IngestorConditionOwner = "ingestor.adx-mon.azure.com"
+const (
+	IngestorConditionOwner         = "ingestor.adx-mon.azure.com"
+	IngestorConditionSecurityReady = "SecurityReady"
+)
 
 // IngestorStatus defines the observed state of Ingestor
 type IngestorStatus struct {

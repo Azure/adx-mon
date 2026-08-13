@@ -52,9 +52,8 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 
 ## Kubernetes Compatibility and Ingestor Security
 
-- Kubernetes 1.20 or newer is required. Ingestor pods use projected, one-hour service account tokens and the namespace `kube-root-ca.crt` ConfigMap.
-- During upgrades, the operator first removes cluster-wide core API permissions, then creates namespace-local pod permissions and rolls the StatefulSet onto projected credentials.
-- StatefulSets using the `OnDelete` update strategy require an administrator to delete the existing pods before migration can complete.
+- Kubernetes 1.22 or newer is required. Kubernetes automatically injects a rotating, Pod-bound service account token into ingestor pods.
+- During upgrades, the operator first removes cluster-wide core API permissions, then creates namespace-local pod permissions.
 - Graceful shutdown requires `patch` on pods in the ingestor namespace. Kubernetes RBAC cannot dynamically restrict this permission to only the current StatefulSet pod, so namespace-wide pod patch is an accepted residual risk.
 
 ---

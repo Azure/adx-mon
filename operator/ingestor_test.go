@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -481,31 +482,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 
 	// c0034 - Service account token mounting
 	require.NotNil(t, sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
-	require.False(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "automatic service account token mounting should be disabled")
-
-	var tokenVolume *corev1.Volume
-	for i := range sts.Spec.Template.Spec.Volumes {
-		if sts.Spec.Template.Spec.Volumes[i].Name == "kube-api-access" {
-			tokenVolume = &sts.Spec.Template.Spec.Volumes[i]
-			break
-		}
-	}
-	require.NotNil(t, tokenVolume, "projected Kubernetes API credentials should be configured")
-	require.NotNil(t, tokenVolume.Projected)
-	require.Len(t, tokenVolume.Projected.Sources, 3)
-	tokenProjection := tokenVolume.Projected.Sources[0].ServiceAccountToken
-	require.NotNil(t, tokenProjection)
-	require.Equal(t, int64(3600), *tokenProjection.ExpirationSeconds)
-	require.Equal(t, "token", tokenProjection.Path)
-	require.Empty(t, tokenProjection.Audience, "the API server should select its configured audience")
-	require.Equal(t, "kube-root-ca.crt", sts.Spec.Template.Spec.Volumes[0].Projected.Sources[1].ConfigMap.Name)
-	require.Equal(t, "metadata.namespace", sts.Spec.Template.Spec.Volumes[0].Projected.Sources[2].DownwardAPI.Items[0].FieldRef.FieldPath)
-
-	require.Contains(t, container.VolumeMounts, corev1.VolumeMount{
-		Name:      "kube-api-access",
-		MountPath: "/var/run/secrets/kubernetes.io/serviceaccount",
-		ReadOnly:  true,
-	})
+	require.True(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "the pod should opt in to Kubernetes bound-token injection")
 
 	// Verify that service account has automountServiceAccountToken set to false
 	sa := &corev1.ServiceAccount{}
@@ -564,7 +541,6 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 		}}},
 	}
 
-	automount := true
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "ingestor",
@@ -575,21 +551,14 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: to.Ptr(int32(3)),
 			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-				AutomountServiceAccountToken: &automount,
-				NodeSelector:                 map[string]string{"preserve": "selector"},
+				NodeSelector: map[string]string{"preserve": "selector"},
 				Containers: []corev1.Container{{
-					Name:  "ingestor",
-					Image: "custom-image:v1",
-					Args:  []string{"--preserve=argument"},
-					VolumeMounts: []corev1.VolumeMount{
-						{Name: "data", MountPath: "/data"},
-						{Name: "legacy-token", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount"},
-					},
+					Name:         "ingestor",
+					Image:        "custom-image:v1",
+					Args:         []string{"--preserve=argument"},
+					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
 				}},
-				Volumes: []corev1.Volume{
-					{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-					{Name: "kube-api-access", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-				},
+				Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 			}},
 		},
 	}
@@ -644,7 +613,6 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 
 	updatedSTS := &appsv1.StatefulSet{}
 	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "ingestor", Namespace: namespace}, updatedSTS))
-	require.False(t, *updatedSTS.Spec.Template.Spec.AutomountServiceAccountToken)
 	require.Equal(t, int32(3), *updatedSTS.Spec.Replicas)
 	require.Equal(t, map[string]string{"preserve": "label"}, updatedSTS.Labels)
 	require.Equal(t, map[string]string{"preserve": "annotation"}, updatedSTS.Annotations)
@@ -652,10 +620,7 @@ func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
 	require.Equal(t, "custom-image:v1", updatedSTS.Spec.Template.Spec.Containers[0].Image)
 	require.Equal(t, []string{"--preserve=argument"}, updatedSTS.Spec.Template.Spec.Containers[0].Args)
 	require.Contains(t, updatedSTS.Spec.Template.Spec.Volumes, corev1.Volume{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
-	require.Contains(t, updatedSTS.Spec.Template.Spec.Volumes, ingestorKubeAPIAccessVolume())
 	require.Contains(t, updatedSTS.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "data", MountPath: "/data"})
-	require.Contains(t, updatedSTS.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "kube-api-access", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true})
-	require.NotContains(t, updatedSTS.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "legacy-token", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount"})
 
 	resourceVersion := updatedSTS.ResourceVersion
 	_, err = reconciler.Reconcile(context.Background(), req)
@@ -758,30 +723,71 @@ func TestIngestorReconciler_RevokesClusterRoleBeforeAdditiveFailure(t *testing.T
 	}
 }
 
-func TestIngestorReconciler_OnDeleteStatefulSetRequiresManualRollout(t *testing.T) {
-	scheme := runtime.NewScheme()
-	require.NoError(t, clientgoscheme.AddToScheme(scheme))
-	automount := true
-	sts := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: "on-delete"},
-		Spec: appsv1.StatefulSetSpec{
-			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
-			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-				AutomountServiceAccountToken: &automount,
-				Containers:                   []corev1.Container{{Name: "ingestor"}},
-			}},
-		},
+func TestIngestorReconciler_SecurityConditionPreservesLifecycleState(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason string
+		status metav1.ConditionStatus
+	}{
+		{name: "pending generation", reason: "Ready", status: metav1.ConditionTrue},
+		{name: "installation", reason: "WaitForReady", status: metav1.ConditionUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, adxmonv1.AddToScheme(scheme))
+			require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+			const namespace = "condition-test"
+			ingestor := &adxmonv1.Ingestor{
+				ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace, Generation: 8},
+				Spec: adxmonv1.IngestorSpec{
+					ADXClusterSelector: &metav1.LabelSelector{},
+					CriteriaExpression: "false",
+				},
+				Status: adxmonv1.IngestorStatus{Conditions: []metav1.Condition{{
+					Type:               adxmonv1.IngestorConditionOwner,
+					Status:             tc.status,
+					Reason:             tc.reason,
+					ObservedGeneration: 7,
+				}}},
+			}
+			vulnerableRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"}}
+			baseClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&adxmonv1.Ingestor{}).
+				WithObjects(ingestor, vulnerableRole).
+				Build()
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: namespace}}
+
+			failing := &IngestorReconciler{Client: &failRoleCreateClient{Client: baseClient}, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+			_, err := failing.Reconcile(context.Background(), req)
+			require.ErrorContains(t, err, "role creation denied")
+
+			updated := &adxmonv1.Ingestor{}
+			require.NoError(t, baseClient.Get(context.Background(), req.NamespacedName, updated))
+			owner := meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+			require.NotNil(t, owner)
+			require.Equal(t, tc.reason, owner.Reason)
+			require.Equal(t, int64(7), owner.ObservedGeneration)
+			security := meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionSecurityReady)
+			require.NotNil(t, security)
+			require.Equal(t, metav1.ConditionFalse, security.Status)
+
+			recovered := &IngestorReconciler{Client: baseClient, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+			require.NoError(t, recovered.setSecurityCondition(context.Background(), updated, metav1.ConditionTrue, "SecurityMigrationComplete", "security controls reconciled"))
+			require.NoError(t, baseClient.Get(context.Background(), req.NamespacedName, updated))
+			owner = meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+			require.NotNil(t, owner)
+			require.Equal(t, tc.reason, owner.Reason)
+			require.Equal(t, int64(7), owner.ObservedGeneration)
+			security = meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionSecurityReady)
+			require.NotNil(t, security)
+			require.Equal(t, metav1.ConditionTrue, security.Status)
+			if tc.reason == "Ready" {
+				require.NotEqual(t, updated.Generation, owner.ObservedGeneration, "the pending generation must remain eligible for manifest reconciliation")
+			} else {
+				require.Equal(t, "WaitForReady", owner.Reason, "installation must remain eligible for readiness checks")
+			}
+		})
 	}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sts).Build()
-	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
-
-	err := reconciler.reconcileIngestorTokenProjection(context.Background(), "on-delete")
-	require.ErrorContains(t, err, "delete existing ingestor pods")
-	updated := &appsv1.StatefulSet{}
-	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "ingestor", Namespace: "on-delete"}, updated))
-	require.False(t, *updated.Spec.Template.Spec.AutomountServiceAccountToken)
-	require.Contains(t, updated.Spec.Template.Spec.Volumes, ingestorKubeAPIAccessVolume())
-
-	err = reconciler.reconcileIngestorTokenProjection(context.Background(), "on-delete")
-	require.ErrorContains(t, err, "delete existing ingestor pods")
 }
