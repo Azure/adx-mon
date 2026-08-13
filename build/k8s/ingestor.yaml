@@ -135,7 +135,7 @@ spec:
         adx-mon/log-destination: "Logs:Ingestor"
         adx-mon/log-parsers: json
     spec:
-      automountServiceAccountToken: false
+      automountServiceAccountToken: true
       securityContext: {}
       serviceAccountName: ingestor
       containers:
@@ -176,9 +176,6 @@ spec:
           volumeMounts:
             - name: metrics
               mountPath: /mnt/data
-            - name: kube-api-access
-              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              readOnly: true
             - mountPath: /etc/pki/ca-trust/extracted
               name: etc-pki-ca-certs
               readOnly: true
@@ -212,24 +209,6 @@ spec:
                     values:
                       - aks-system
       volumes:
-        - name: kube-api-access
-          projected:
-            defaultMode: 420
-            sources:
-              - serviceAccountToken:
-                  expirationSeconds: 3600
-                  path: token
-              - configMap:
-                  items:
-                    - key: ca.crt
-                      path: ca.crt
-                  name: kube-root-ca.crt
-              - downwardAPI:
-                  items:
-                    - fieldRef:
-                        apiVersion: v1
-                        fieldPath: metadata.namespace
-                      path: namespace
         - name: ca-certs
           hostPath:
             path: /etc/ssl/certs

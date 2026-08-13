@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
@@ -61,13 +60,11 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if err := r.reconcileIngestorSecurity(ctx, ingestor); err != nil {
-		_ = r.setCondition(ctx, ingestor, "SecurityMigrationFailed", err.Error(), metav1.ConditionFalse)
+		_ = r.setSecurityCondition(ctx, ingestor, metav1.ConditionFalse, "SecurityMigrationFailed", err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile ingestor security controls: %w", err)
 	}
-	if condition := meta.FindStatusCondition(ingestor.Status.Conditions, adxmonv1.IngestorConditionOwner); condition != nil && condition.Reason == "SecurityMigrationFailed" {
-		if err := r.setCondition(ctx, ingestor, "SecurityMigrationComplete", "Ingestor security controls are reconciled", metav1.ConditionTrue); err != nil {
-			return ctrl.Result{}, err
-		}
+	if err := r.setSecurityCondition(ctx, ingestor, metav1.ConditionTrue, "SecurityMigrationComplete", "Ingestor security controls are reconciled"); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if expr := ingestor.Spec.CriteriaExpression; expr != "" {
@@ -183,7 +180,7 @@ func (r *IngestorReconciler) reconcileIngestorSecurity(ctx context.Context, inge
 		return err
 	}
 
-	return r.reconcileIngestorTokenProjection(ctx, namespace)
+	return nil
 }
 
 func desiredIngestorClusterRole(namespace string) *rbacv1.ClusterRole {
@@ -309,85 +306,6 @@ func (r *IngestorReconciler) cleanupIngestorSecurity(ctx context.Context, ingest
 	}
 	controllerutil.RemoveFinalizer(ingestor, ingestorSecurityFinalizer)
 	return r.Update(ctx, ingestor)
-}
-
-func (r *IngestorReconciler) reconcileIngestorTokenProjection(ctx context.Context, namespace string) error {
-	sts := &appsv1.StatefulSet{}
-	if err := r.Get(ctx, client.ObjectKey{Name: "ingestor", Namespace: namespace}, sts); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-
-	desiredVolume := ingestorKubeAPIAccessVolume()
-	changed := sts.Spec.Template.Spec.AutomountServiceAccountToken == nil || *sts.Spec.Template.Spec.AutomountServiceAccountToken
-	sts.Spec.Template.Spec.AutomountServiceAccountToken = boolPtr(false)
-
-	volumes := make([]corev1.Volume, 0, len(sts.Spec.Template.Spec.Volumes)+1)
-	for _, volume := range sts.Spec.Template.Spec.Volumes {
-		if volume.Name != desiredVolume.Name {
-			volumes = append(volumes, volume)
-		}
-	}
-	volumes = append(volumes, desiredVolume)
-	if !reflect.DeepEqual(sts.Spec.Template.Spec.Volumes, volumes) {
-		sts.Spec.Template.Spec.Volumes = volumes
-		changed = true
-	}
-
-	for i := range sts.Spec.Template.Spec.Containers {
-		if sts.Spec.Template.Spec.Containers[i].Name != "ingestor" {
-			continue
-		}
-		mounts := make([]corev1.VolumeMount, 0, len(sts.Spec.Template.Spec.Containers[i].VolumeMounts)+1)
-		for _, mount := range sts.Spec.Template.Spec.Containers[i].VolumeMounts {
-			if mount.Name != "kube-api-access" && mount.MountPath != "/var/run/secrets/kubernetes.io/serviceaccount" {
-				mounts = append(mounts, mount)
-			}
-		}
-		mounts = append(mounts, corev1.VolumeMount{Name: "kube-api-access", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true})
-		if !reflect.DeepEqual(sts.Spec.Template.Spec.Containers[i].VolumeMounts, mounts) {
-			sts.Spec.Template.Spec.Containers[i].VolumeMounts = mounts
-			changed = true
-		}
-	}
-
-	if changed {
-		if err := r.Update(ctx, sts); err != nil {
-			return err
-		}
-	}
-	if sts.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType {
-		return fmt.Errorf("StatefulSet uses OnDelete update strategy; delete existing ingestor pods to complete the projected-token migration")
-	}
-	if !changed && sts.Status.UpdateRevision != "" && sts.Status.CurrentRevision != sts.Status.UpdateRevision {
-		return fmt.Errorf("StatefulSet rollout is still replacing pods that used automatically mounted credentials")
-	}
-	return nil
-}
-
-func ingestorKubeAPIAccessVolume() corev1.Volume {
-	defaultMode := int32(420)
-	expirationSeconds := int64(3600)
-	return corev1.Volume{
-		Name: "kube-api-access",
-		VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
-			DefaultMode: &defaultMode,
-			Sources: []corev1.VolumeProjection{
-				{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{ExpirationSeconds: &expirationSeconds, Path: "token"}},
-				{ConfigMap: &corev1.ConfigMapProjection{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"},
-					Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
-				}},
-				{DownwardAPI: &corev1.DownwardAPIProjection{Items: []corev1.DownwardAPIVolumeFile{{
-					Path:     "namespace",
-					FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.namespace"},
-				}}}},
-			},
-		}},
-	}
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }
 
 func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
@@ -815,6 +733,23 @@ func (r *IngestorReconciler) setCondition(ctx context.Context, ingestor *adxmonv
 	if meta.SetStatusCondition(&ingestor.Status.Conditions, condition) {
 		if err := r.Status().Update(ctx, ingestor); err != nil {
 			return fmt.Errorf("failed to update status: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *IngestorReconciler) setSecurityCondition(ctx context.Context, ingestor *adxmonv1.Ingestor, status metav1.ConditionStatus, reason, message string) error {
+	condition := metav1.Condition{
+		Type:               adxmonv1.IngestorConditionSecurityReady,
+		Status:             status,
+		ObservedGeneration: ingestor.GetGeneration(),
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+	if meta.SetStatusCondition(&ingestor.Status.Conditions, condition) {
+		if err := r.Status().Update(ctx, ingestor); err != nil {
+			return fmt.Errorf("failed to update security status: %w", err)
 		}
 	}
 	return nil
