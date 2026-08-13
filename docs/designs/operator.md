@@ -20,6 +20,7 @@ The operator aims to provide a simple, production-ready bootstrap experience for
 - **adx-mon Component Management:**
   - Generate and apply manifests for adx-mon components (collector, ingestor, alerter) based on their respective CRDs (`Collector`, `Ingestor`, `Alerter`).
   - Manage Kubernetes resources like StatefulSets, Deployments, and Services for these components.
+  - The operator service account requires get, list, watch, create, update, and delete access to Roles, RoleBindings, ClusterRoles, and ClusterRoleBindings, plus update access to StatefulSets, so security controls can be migrated and continuously enforced. Production operator RBAC is maintained in the deployment repository and must be upgraded before this operator version is rolled out.
   - Support default container images for each component, with overrides via the `image` field in each CRD spec.
   - Allow configuration of the number of ingestor instances via `spec.replicas` in the `Ingestor` CRD.
   - Support deployment of only a subset of components (e.g., only collectors) to enable federated/multi-cluster topologies.
@@ -48,6 +49,13 @@ The operator aims to provide a simple, production-ready bootstrap experience for
   kubectl port-forward deploy/<operator-deployment> 6060:6060
   ```
   Then open `http://localhost:6060/debug/pprof/`.
+
+## Kubernetes Compatibility and Ingestor Security
+
+- Kubernetes 1.20 or newer is required. Ingestor pods use projected, one-hour service account tokens and the namespace `kube-root-ca.crt` ConfigMap.
+- During upgrades, the operator first removes cluster-wide core API permissions, then creates namespace-local pod permissions and rolls the StatefulSet onto projected credentials.
+- StatefulSets using the `OnDelete` update strategy require an administrator to delete the existing pods before migration can complete.
+- Graceful shutdown requires `patch` on pods in the ingestor namespace. Kubernetes RBAC cannot dynamically restrict this permission to only the current StatefulSet pod, so namespace-wide pod patch is an accepted residual risk.
 
 ---
 

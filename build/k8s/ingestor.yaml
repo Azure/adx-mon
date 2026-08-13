@@ -12,31 +12,58 @@ metadata:
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: adx-mon:ingestor
+  name: adx-mon-ingestor-pods
+  namespace: adx-mon
 rules:
   - apiGroups:
       - ""
     resources:
-      - namespaces
       - pods
     verbs:
       - get
       - list
       - watch
-      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: adx-mon-ingestor-pods
+  namespace: adx-mon
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: adx-mon-ingestor-pods
+subjects:
+  - kind: ServiceAccount
+    name: ingestor
+    namespace: adx-mon
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:ingestor
+  labels:
+    adx-mon.azure.com/managed-by: ingestor-operator
+rules:
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions
+    verbs:
+      - get
+      - list
+      - update
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
       - managementcommands
       - summaryrules
     verbs:
       - get
       - list
-      - update
-      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
@@ -45,22 +72,19 @@ rules:
       - summaryrules/status
     verbs:
       - update
-      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions/finalizers
-      - managementcommands/finalizers
-      - summaryrules/finalizers
     verbs:
-      - get
       - update
-      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: adx-mon:ingestor
+  labels:
+    adx-mon.azure.com/managed-by: ingestor-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -111,7 +135,7 @@ spec:
         adx-mon/log-destination: "Logs:Ingestor"
         adx-mon/log-parsers: json
     spec:
-      automountServiceAccountToken: true
+      automountServiceAccountToken: false
       securityContext: {}
       serviceAccountName: ingestor
       containers:
@@ -152,6 +176,9 @@ spec:
           volumeMounts:
             - name: metrics
               mountPath: /mnt/data
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
             - mountPath: /etc/pki/ca-trust/extracted
               name: etc-pki-ca-certs
               readOnly: true
@@ -185,6 +212,24 @@ spec:
                     values:
                       - aks-system
       volumes:
+        - name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken:
+                  expirationSeconds: 3600
+                  path: token
+              - configMap:
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+                  name: kube-root-ca.crt
+              - downwardAPI:
+                  items:
+                    - fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+                      path: namespace
         - name: ca-certs
           hostPath:
             path: /etc/ssl/certs
