@@ -319,8 +319,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/testcontainers/testcontainers-go v0.44.0 h1:/Fwh6HY1mIikhnm9e7HwoxGycx0lzRAE0f5VQpjFxzI=
 github.com/testcontainers/testcontainers-go v0.44.0/go.mod h1:IcnwQrYTO86xHXu5bvMaBH7ATlbS3Qn1M1QWW3c66rE=
-github.com/testcontainers/testcontainers-go/modules/k3s v0.42.0 h1:bTVmcnYaSHesN6HXXxV/k0+BMkyfo3VBy4w4yRqOIgE=
-github.com/testcontainers/testcontainers-go/modules/k3s v0.42.0/go.mod h1:2O8+V4WzMb/bjg/Sez+aYci9LpGUbT5cSz7ildfTIb8=
+github.com/testcontainers/testcontainers-go/modules/k3s v0.44.0 h1:NWvw3DJkUzGIYdDxHWfaPqvT3zPWPj+oIE5h2x4KT+4=
+github.com/testcontainers/testcontainers-go/modules/k3s v0.44.0/go.mod h1:mC5hA8VlVLeuYXzRScoJAqMel81ndUtALJagr7+QFX0=
 github.com/tidwall/pretty v1.0.0/go.mod h1:XNkn88O1ChpSDQmQeStsy+sBenx6DDtFZJxhVysOjyk=
 github.com/tinylib/msgp v1.6.4 h1:mOwYbyYDLPj35mkA2BjjYejgJk9BuHxDdvRnb6v2ZcQ=
 github.com/tinylib/msgp v1.6.4/go.mod h1:RSp0LW9oSxFut3KzESt5Voq4GVWyS+PSulT77roAqEA=
