@@ -38,7 +38,7 @@ require (
 	github.com/prometheus/common v0.70.1
 	github.com/shopspring/decimal v1.4.0
 	github.com/siderolabs/go-kmsg v0.1.6
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	github.com/tenebris-tech/tail v1.0.5
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/k3s v0.44.0
