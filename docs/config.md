@@ -493,7 +493,6 @@ Enable watching Kubernetes node labels and annotations to add them as labels to 
 [metadata-watch]
   # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
   [metadata-watch.kubernetes-node]
-
 # Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
 [add-metadata-labels]
   # Configures the node labels and annotations to add as labels
@@ -559,7 +558,6 @@ Pair a global node metadata mapping with host log-specific aliases so different 
 [metadata-watch]
   # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
   [metadata-watch.kubernetes-node]
-
 # Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
 [add-metadata-labels]
   # Configures the node labels and annotations to add as labels
