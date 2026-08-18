@@ -3,7 +3,7 @@ module github.com/Azure/adx-mon
 go 1.26.0
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260310202139-5f2c7d4f7405.2
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260722205108-41ecbd638b41.2
 	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.11-20260310202139-5f2c7d4f7405.1
 	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
 	github.com/Azure/azure-kusto-go/azkustoingest v1.2.0
