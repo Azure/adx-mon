@@ -206,8 +206,8 @@ github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e h1:Q6MvJtQK/iRcRt
 github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e/go.mod h1:autxFIvghDt3jPTLoqZ9OZ7s9qTGNAWmYCjVFWPX/zg=
 github.com/magiconair/properties v1.8.10 h1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=
 github.com/magiconair/properties v1.8.10/go.mod h1:Dhd985XPs7jluiymwWYZ0G4Z61jb3vdS329zhj2hYo0=
-github.com/mattn/go-isatty v0.0.22 h1:j8l17JJ9i6VGPUFUYoTUKPSgKe/83EYU2zBC7YNKMw4=
-github.com/mattn/go-isatty v0.0.22/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
+github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=
+github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
 github.com/mkeesey/azure-kusto-go/azkustoingest v0.0.0-20260515201423-2ab6d60df35a h1:zbc7qHc+V5QijxoROI/MeageMi2HE/SdmXVhOc89sSc=
 github.com/mkeesey/azure-kusto-go/azkustoingest v0.0.0-20260515201423-2ab6d60df35a/go.mod h1:ttDjL9q6ldGul19cNa0NZf4zXjucNVSoWYrM8aTFQGo=
 github.com/mkeesey/tail v1.1.1-0.20240917203328-d83cd4147445 h1:kAwHCQ2tUrUb7+TMRfZL2P19ubFQoPbYAapUVd/bA0s=
