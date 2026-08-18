@@ -1271,6 +1271,10 @@ func TestEndpointRequestTimeouts(t *testing.T) {
 	promTimeout, err = prom.RequestTimeout()
 	require.NoError(t, err)
 	require.Equal(t, 30*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = MaxRequestTimeoutSeconds
+	require.NoError(t, prom.Validate())
+	prom.RequestTimeoutSeconds++
+	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must not exceed 300")
 	prom.RequestTimeoutSeconds = -1
 	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must be greater than 0")
 
@@ -1280,6 +1284,8 @@ func TestEndpointRequestTimeouts(t *testing.T) {
 	logsTimeout, err := logs.RequestTimeout()
 	require.NoError(t, err)
 	require.Equal(t, 15*time.Second, logsTimeout)
+	logs.RequestTimeoutSeconds = MaxRequestTimeoutSeconds + 1
+	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must not exceed 300")
 	logs.RequestTimeoutSeconds = -1
 	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must be greater than 0")
 
@@ -1289,6 +1295,8 @@ func TestEndpointRequestTimeouts(t *testing.T) {
 	metricsTimeout, err := metrics.RequestTimeout()
 	require.NoError(t, err)
 	require.Equal(t, 15*time.Second, metricsTimeout)
+	metrics.RequestTimeoutSeconds = MaxRequestTimeoutSeconds + 1
+	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must not exceed 300")
 	metrics.RequestTimeoutSeconds = -1
 	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must be greater than 0")
 }

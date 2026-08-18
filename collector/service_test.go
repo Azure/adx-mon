@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/storage"
 	connect "github.com/bufbuild/connect-go"
@@ -29,6 +30,37 @@ func TestRequestTimeoutInterceptor(t *testing.T) {
 	var connectErr *connect.Error
 	require.True(t, errors.As(err, &connectErr))
 	require.Equal(t, connect.CodeDeadlineExceeded, connectErr.Code())
+}
+
+func TestHTTPWriteTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		enablePprof bool
+		handlers    []*http.HttpHandler
+		want        time.Duration
+	}{
+		{name: "default", want: 30 * time.Second},
+		{name: "pprof", enablePprof: true, want: 60 * time.Second},
+		{
+			name:     "short endpoint retains default",
+			handlers: []*http.HttpHandler{{Timeout: 15 * time.Second}},
+			want:     30 * time.Second,
+		},
+		{
+			name: "longest endpoint plus grace",
+			handlers: []*http.HttpHandler{
+				{Timeout: 45 * time.Second},
+				{Timeout: 5 * time.Minute},
+			},
+			want: 5*time.Minute + httpWriteTimeoutGrace,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, httpWriteTimeout(tt.enablePprof, tt.handlers))
+		})
+	}
 }
 
 const MetricListenAddr = ":9090"

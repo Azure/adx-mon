@@ -169,6 +169,23 @@ type PrometheusRemoteWriteHandlerOpts struct {
 	MetricOpts MetricsHandlerOpts
 }
 
+const httpWriteTimeoutGrace = time.Second
+
+func httpWriteTimeout(enablePprof bool, handlers []*http.HttpHandler) time.Duration {
+	writeTimeout := 30 * time.Second
+	if enablePprof {
+		writeTimeout = 60 * time.Second
+	}
+
+	for _, handler := range handlers {
+		if handler.Timeout > 0 {
+			writeTimeout = max(writeTimeout, handler.Timeout+httpWriteTimeoutGrace)
+		}
+	}
+
+	return writeTimeout
+}
+
 func requestTimeoutInterceptor(timeout time.Duration) connect.Interceptor {
 	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
@@ -478,7 +495,7 @@ func (s *Service) Open(ctx context.Context) error {
 
 	opts := &http.ServerOpts{
 		MaxConns:     s.opts.MaxConnections,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: httpWriteTimeout(s.opts.EnablePprof, s.httpHandlers),
 		Listener:     listener,
 	}
 
@@ -488,7 +505,6 @@ func (s *Service) Open(ctx context.Context) error {
 	primaryHttp.RegisterHandlerFunc("/readyz", s.HandleReady)
 	primaryHttp.RegisterHandlerFunc("/debug/store", s.HandleDebugStore)
 	if s.opts.EnablePprof {
-		opts.WriteTimeout = 60 * time.Second
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/", pprof.Index)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/cmdline", pprof.Cmdline)
 		primaryHttp.RegisterHandlerFunc("/debug/pprof/profile", pprof.Profile)
