@@ -199,7 +199,7 @@ Prometheus remote write accepts metrics from [Prometheus remote write protocol](
   database = 'Metrics'
   # The path to listen on for prometheus remote write requests.  Defaults to /receive.
   path = '/receive'
-  # Maximum duration in seconds for a remote write request. Defaults to 15.
+  # Maximum duration in seconds for a remote write request. Defaults to 15 and cannot exceed 300.
   request-timeout-seconds = 15
   # Regexes of metrics to drop.
   drop-metrics = [
@@ -242,7 +242,7 @@ The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/ot
 ```toml
 # Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP.
 [otel-log]
-  # Maximum duration in seconds for an OTLP/HTTP logs request. Defaults to 15.
+  # Maximum duration in seconds for an OTLP/HTTP logs request. Defaults to 15 and cannot exceed 300.
   request-timeout-seconds = 15
   # Attributes lifted from the Body and added to Attributes.
   lift-attributes = [
@@ -279,7 +279,7 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
   path = '/v1/otlpmetrics'
   # The port to listen on for OTLP/gRPC requests.
   grpc-port = 4317
-  # Maximum duration in seconds for an OTLP metrics request. Defaults to 15.
+  # Maximum duration in seconds for an OTLP metrics request. Defaults to 15 and cannot exceed 300.
   request-timeout-seconds = 15
   # Regexes of metrics to drop.
   drop-metrics = [
