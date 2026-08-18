@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/logs/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
@@ -378,6 +379,43 @@ func TestLogsService_Overloaded(t *testing.T) {
 
 	keys := store.PrefixesByAge()
 	require.Equal(t, 0, len(keys))
+}
+
+func TestLogsService_HandlerReturnsWhenQueueFullAndRequestCanceled(t *testing.T) {
+	s := NewLogsService(LogsServiceOpts{
+		HealthChecker: fakeHealthChecker{true},
+	})
+	for range cap(s.outputQueue) {
+		s.outputQueue <- &types.LogBatch{}
+	}
+
+	var msg v1.ExportLogsServiceRequest
+	require.NoError(t, protojson.Unmarshal(rawlog, &msg))
+	body, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "/v1/logs", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-protobuf")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Handler(httptest.NewRecorder(), req)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		// Release the current implementation so the test does not leak its goroutine.
+		<-s.outputQueue
+		<-done
+		t.Fatal("handler did not return after request cancellation")
+	}
+
+	require.Len(t, s.outputQueue, cap(s.outputQueue), "canceled batch was enqueued")
 }
 
 func TestLogsService_ErrorStatusResponses(t *testing.T) {

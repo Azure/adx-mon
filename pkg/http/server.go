@@ -16,6 +16,14 @@ import (
 type HttpHandler struct {
 	Path    string
 	Handler http.HandlerFunc
+	Timeout time.Duration
+}
+
+func (h *HttpHandler) WithTimeout() http.Handler {
+	if h.Timeout <= 0 {
+		return h.Handler
+	}
+	return http.TimeoutHandler(h.Handler, h.Timeout, "")
 }
 
 type GRPCHandler struct {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -1257,6 +1258,39 @@ func TestConfig_Validate_PrometheusRemoteWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEndpointRequestTimeouts(t *testing.T) {
+	prom := &PrometheusRemoteWrite{Database: "db", Path: "/receive"}
+	require.NoError(t, prom.Validate())
+	require.Zero(t, prom.RequestTimeoutSeconds)
+	promTimeout, err := prom.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = 30
+	promTimeout, err = prom.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = -1
+	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must be greater than 0")
+
+	logs := &OtelLog{}
+	require.NoError(t, logs.Validate())
+	require.Zero(t, logs.RequestTimeoutSeconds)
+	logsTimeout, err := logs.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, logsTimeout)
+	logs.RequestTimeoutSeconds = -1
+	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must be greater than 0")
+
+	metrics := &OtelMetric{Database: "db", Path: "/v1/metrics"}
+	require.NoError(t, metrics.Validate())
+	require.Zero(t, metrics.RequestTimeoutSeconds)
+	metricsTimeout, err := metrics.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, metricsTimeout)
+	metrics.RequestTimeoutSeconds = -1
+	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must be greater than 0")
 }
 
 func TestConfig_Validate_HostLog(t *testing.T) {
