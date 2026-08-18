@@ -2,18 +2,34 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/storage"
+	connect "github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestRequestTimeoutInterceptor(t *testing.T) {
+	interceptor := requestTimeoutInterceptor(10 * time.Millisecond)
+	wrapped := interceptor.WrapUnary(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	_, err := wrapped(context.Background(), nil)
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.True(t, errors.As(err, &connectErr))
+	require.Equal(t, connect.CodeDeadlineExceeded, connectErr.Code())
+}
 
 const MetricListenAddr = ":9090"
 

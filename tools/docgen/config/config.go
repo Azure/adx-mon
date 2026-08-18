@@ -214,8 +214,9 @@ func getContents() Contents {
 				Config: &config.Config{
 					PrometheusRemoteWrite: []*config.PrometheusRemoteWrite{
 						{
-							Database: "Metrics",
-							Path:     "/receive",
+							Database:              "Metrics",
+							Path:                  "/receive",
+							RequestTimeoutSeconds: config.DefaultRequestTimeoutSeconds,
 							AddLabels: map[string]string{
 								"cluster": "cluster1",
 							},
@@ -248,6 +249,7 @@ func getContents() Contents {
 				Description: "The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/otlp/) logs from an OpenTelemetry sender. By default, this listens under the path `/v1/logs`. This endpoint expects the Attributes or Body fields to contain the key-value pairs `kusto.database` and `kusto.table` to route logs to the appropriate ADX database and table.",
 				Config: &config.Config{
 					OtelLog: &config.OtelLog{
+						RequestTimeoutSeconds: config.DefaultRequestTimeoutSeconds,
 						AddAttributes: map[string]string{
 							"cluster": "cluster1",
 							"geo":     "eu",
@@ -272,9 +274,10 @@ func getContents() Contents {
 				Config: &config.Config{
 					OtelMetric: []*config.OtelMetric{
 						{
-							Database: "Metrics",
-							Path:     "/v1/otlpmetrics",
-							GrpcPort: 4317,
+							Database:              "Metrics",
+							Path:                  "/v1/otlpmetrics",
+							GrpcPort:              4317,
+							RequestTimeoutSeconds: config.DefaultRequestTimeoutSeconds,
 							AddLabels: map[string]string{
 								"cluster": "cluster1",
 							},

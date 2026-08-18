@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
@@ -19,6 +20,8 @@ var (
 	homedir         string
 	validColumnName = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
 )
+
+const DefaultRequestTimeoutSeconds = 15
 
 func init() {
 	homedir = os.Getenv("HOME")
@@ -225,6 +228,7 @@ func (t *ScrapeTarget) Validate() error {
 type PrometheusRemoteWrite struct {
 	Database                 string `toml:"database" comment:"Database to store metrics in."`
 	Path                     string `toml:"path" comment:"The path to listen on for prometheus remote write requests.  Defaults to /receive."`
+	RequestTimeoutSeconds    int    `toml:"request-timeout-seconds,omitempty" comment:"Maximum duration in seconds for a remote write request. Defaults to 15."`
 	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	DefaultDropMetrics        *bool              `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
@@ -239,6 +243,9 @@ type PrometheusRemoteWrite struct {
 }
 
 func (w *PrometheusRemoteWrite) Validate() error {
+	if _, err := w.RequestTimeout(); err != nil {
+		return err
+	}
 	if w.Path == "" {
 		return errors.New("prometheus-remote-write.path must be set")
 	}
@@ -278,15 +285,23 @@ func (w *PrometheusRemoteWrite) Validate() error {
 	return nil
 }
 
+func (w *PrometheusRemoteWrite) RequestTimeout() (time.Duration, error) {
+	return defaultRequestTimeout(w.RequestTimeoutSeconds, "prometheus-remote-write")
+}
+
 type OtelLog struct {
-	AddAttributes     map[string]string  `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
-	AddMetadataLabels *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to logs received on this endpoint."`
-	LiftAttributes    []string           `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
-	Transforms        []*LogTransform    `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
-	Exporters         []string           `toml:"exporters" comment:"List of exporter names to forward logs to."`
+	RequestTimeoutSeconds int                `toml:"request-timeout-seconds,omitempty" comment:"Maximum duration in seconds for an OTLP/HTTP logs request. Defaults to 15."`
+	AddAttributes         map[string]string  `toml:"add-attributes" comment:"Key/value pairs of attributes to add to all logs."`
+	AddMetadataLabels     *AddMetadataLabels `toml:"add-metadata-labels" comment:"Optional configuration for adding dynamic metadata as labels to logs received on this endpoint."`
+	LiftAttributes        []string           `toml:"lift-attributes" comment:"Attributes lifted from the Body and added to Attributes."`
+	Transforms            []*LogTransform    `toml:"transforms" comment:"Defines a list of transforms to apply to log lines."`
+	Exporters             []string           `toml:"exporters" comment:"List of exporter names to forward logs to."`
 }
 
 func (w *OtelLog) Validate() error {
+	if _, err := w.RequestTimeout(); err != nil {
+		return err
+	}
 	for k, v := range w.AddAttributes {
 		if k == "" {
 			return errors.New("otel-log.add-attributes key must be set")
@@ -308,10 +323,15 @@ func (w *OtelLog) Validate() error {
 	return nil
 }
 
+func (w *OtelLog) RequestTimeout() (time.Duration, error) {
+	return defaultRequestTimeout(w.RequestTimeoutSeconds, "otel-log")
+}
+
 type OtelMetric struct {
 	Database                 string `toml:"database" comment:"Database to store metrics in."`
 	Path                     string `toml:"path" comment:"The path to listen on for OTLP/HTTP requests."`
 	GrpcPort                 int    `toml:"grpc-port" comment:"The port to listen on for OTLP/gRPC requests."`
+	RequestTimeoutSeconds    int    `toml:"request-timeout-seconds,omitempty" comment:"Maximum duration in seconds for an OTLP metrics request. Defaults to 15."`
 	DisableMetricsForwarding *bool  `toml:"disable-metrics-forwarding" comment:"Disable metrics forwarding to endpoints."`
 
 	DefaultDropMetrics        *bool              `toml:"default-drop-metrics" comment:"Default to dropping all metrics.  Only metrics matching a keep rule will be kept."`
@@ -326,6 +346,9 @@ type OtelMetric struct {
 }
 
 func (w *OtelMetric) Validate() error {
+	if _, err := w.RequestTimeout(); err != nil {
+		return err
+	}
 	if w.Database == "" {
 		return errors.New("otel-metric.database must be set")
 	}
@@ -369,6 +392,20 @@ func (w *OtelMetric) Validate() error {
 	}
 
 	return nil
+}
+
+func (w *OtelMetric) RequestTimeout() (time.Duration, error) {
+	return defaultRequestTimeout(w.RequestTimeoutSeconds, "otel-metric")
+}
+
+func defaultRequestTimeout(timeoutSeconds int, endpoint string) (time.Duration, error) {
+	if timeoutSeconds < 0 {
+		return 0, fmt.Errorf("%s.request-timeout-seconds must be greater than 0", endpoint)
+	}
+	if timeoutSeconds == 0 {
+		timeoutSeconds = DefaultRequestTimeoutSeconds
+	}
+	return time.Duration(timeoutSeconds) * time.Second, nil
 }
 
 type HostLog struct {

@@ -280,4 +280,13 @@ func (l *LogBatch) Reset() {
 	l.Ack = noop
 }
 
+// DisposeLogBatch returns a batch and all of its logs to their pools.
+func DisposeLogBatch(batch *LogBatch) {
+	for _, log := range batch.Logs {
+		LogPool.Put(log)
+	}
+	batch.Reset()
+	LogBatchPool.Put(batch)
+}
+
 func noop() {}

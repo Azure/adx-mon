@@ -49,7 +49,7 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 		if err != nil {
 			logger.Warnf("Failed to transform logs from source %s -> %s: %v", w.SourceName, transform.Name(), err)
 			metrics.LogsCollectorLogsDropped.WithLabelValues(w.SourceName, transform.Name()).Add(float64(len(batch.Logs)))
-			disposeBatch(batch)
+			types.DisposeLogBatch(batch)
 			return
 		}
 	}
@@ -69,7 +69,7 @@ func (w *worker) processBatch(ctx context.Context, batch *types.LogBatch) {
 	}
 
 	wg.Wait()
-	disposeBatch(batch)
+	types.DisposeLogBatch(batch)
 }
 
 func sendToSink(ctx context.Context, sink types.Sink, batch *types.LogBatch, sourceName string) {
@@ -80,11 +80,4 @@ func sendToSink(ctx context.Context, sink types.Sink, batch *types.LogBatch, sou
 		return
 	}
 	metrics.LogsCollectorLogsSent.WithLabelValues(sourceName, sink.Name()).Add(float64(len(batch.Logs)))
-}
-
-func disposeBatch(batch *types.LogBatch) {
-	for _, log := range batch.Logs {
-		types.LogPool.Put(log)
-	}
-	types.LogBatchPool.Put(batch)
 }

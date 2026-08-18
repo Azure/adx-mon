@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	stdhttp "net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
+	connect "github.com/bufbuild/connect-go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -152,6 +154,8 @@ type OtlpMetricsHandlerOpts struct {
 	Path string
 	// Optional. GrpcPort is the port where the metrics OTLP/GRPC handler will listen.
 	GrpcPort int
+	// RequestTimeout is the maximum duration for an OTLP metrics request.
+	RequestTimeout time.Duration
 
 	MetricOpts MetricsHandlerOpts
 }
@@ -159,8 +163,28 @@ type OtlpMetricsHandlerOpts struct {
 type PrometheusRemoteWriteHandlerOpts struct {
 	// Path is the path where the handler will be registered.
 	Path string
+	// RequestTimeout is the maximum duration for a remote write request.
+	RequestTimeout time.Duration
 
 	MetricOpts MetricsHandlerOpts
+}
+
+func requestTimeoutInterceptor(timeout time.Duration) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if timeout <= 0 {
+				return next(ctx, req)
+			}
+
+			ctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			response, err := next(ctx, req)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, ctx.Err())
+			}
+			return response, err
+		}
+	})
 }
 
 type MetricsHandlerOpts struct {
@@ -259,6 +283,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		httpHandlers = append(httpHandlers, &http.HttpHandler{
 			Path:    handlerOpts.Path,
 			Handler: metricsProxySvc.HandleReceive,
+			Timeout: handlerOpts.RequestTimeout,
 		})
 	}
 
@@ -275,11 +300,15 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			httpHandlers = append(httpHandlers, &http.HttpHandler{
 				Path:    handlerOpts.Path,
 				Handler: oltpMetricsService.Handler,
+				Timeout: handlerOpts.RequestTimeout,
 			})
 		}
 
 		if handlerOpts.GrpcPort > 0 {
-			path, handler := metricsv1connect.NewMetricsServiceHandler(oltpMetricsService)
+			path, handler := metricsv1connect.NewMetricsServiceHandler(
+				oltpMetricsService,
+				connect.WithInterceptors(requestTimeoutInterceptor(handlerOpts.RequestTimeout)),
+			)
 
 			grpcHandlers = append(grpcHandlers, &http.GRPCHandler{
 				Port:    handlerOpts.GrpcPort,
@@ -468,7 +497,7 @@ func (s *Service) Open(ctx context.Context) error {
 	}
 
 	for _, handler := range s.httpHandlers {
-		primaryHttp.RegisterHandlerFunc(handler.Path, handler.Handler)
+		primaryHttp.RegisterHandler(handler.Path, handler.WithTimeout())
 	}
 	s.httpServers = append(s.httpServers, primaryHttp)
 

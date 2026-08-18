@@ -129,7 +129,15 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.outputQueue <- logBatch
+		select {
+		case s.outputQueue <- logBatch:
+			// The worker owns the batch after it is enqueued.
+		case <-r.Context().Done():
+			// Context has timed out with the outputQueue not being able to consume. Dispose the logBatch.
+			types.DisposeLogBatch(logBatch)
+			// At this point, either the client has given up or the server timeout middleware will return an error back to the client.
+			return
+		}
 
 		// The logs have been committed by the OTLP endpoint
 		resp := &v1.ExportLogsServiceResponse{}
