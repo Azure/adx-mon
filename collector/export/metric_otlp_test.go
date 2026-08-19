@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"testing"
+	"time"
 
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
@@ -295,7 +296,7 @@ func TestSendRequest(t *testing.T) {
 			tc.exporter.destination = server.URL + "/v1/metrics"
 
 			body := []byte("test body")
-			err := tc.exporter.sendRequest(body, 20)
+			err := tc.exporter.sendRequest(context.Background(), body, 20)
 
 			if tc.expectedStatus == http.StatusOK {
 				require.NoError(t, err)
@@ -303,6 +304,42 @@ func TestSendRequest(t *testing.T) {
 				require.Error(t, err)
 			}
 		})
+	}
+}
+
+func TestPromToOtlpExporterWriteCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+	}))
+	defer server.Close()
+	defer close(releaseRequest)
+
+	exporter := NewPromToOtlpExporter(PromToOtlpExporterOpts{
+		Transformer: &transform.RequestTransformer{},
+		Destination: server.URL,
+		Timeout:     time.Minute,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- exporter.Write(ctx, newWR())
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("outbound request did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("outbound request did not stop after context cancellation")
 	}
 }
 

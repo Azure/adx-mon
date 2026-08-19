@@ -63,6 +63,11 @@ func TestHTTPWriteTimeout(t *testing.T) {
 	}
 }
 
+func TestRequestWriteTimeout(t *testing.T) {
+	require.Equal(t, 30*time.Second, requestWriteTimeout(30*time.Second, 15*time.Second))
+	require.Equal(t, 5*time.Minute+httpWriteTimeoutGrace, requestWriteTimeout(30*time.Second, 5*time.Minute))
+}
+
 const MetricListenAddr = ":9090"
 
 var serviceBackends = []struct {

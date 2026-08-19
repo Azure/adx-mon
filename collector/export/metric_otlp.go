@@ -169,7 +169,7 @@ func (c *PromToOtlpExporter) Write(ctx context.Context, wr *prompb.WriteRequest)
 	if timeseriesCount == 0 {
 		return nil
 	}
-	return c.sendRequest(serialized, timeseriesCount)
+	return c.sendRequest(ctx, serialized, timeseriesCount)
 }
 
 func (c *PromToOtlpExporter) CloseIdleConnections() {
@@ -262,8 +262,8 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 	return serialized, count, err
 }
 
-func (c *PromToOtlpExporter) sendRequest(body []byte, count int64) error {
-	req, err := http.NewRequest("POST", c.destination, bytes.NewReader(body))
+func (c *PromToOtlpExporter) sendRequest(ctx context.Context, body []byte, count int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.destination, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("metric otlp forwarder request: %w", err)
 	}

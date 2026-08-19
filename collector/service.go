@@ -171,6 +171,13 @@ type PrometheusRemoteWriteHandlerOpts struct {
 
 const httpWriteTimeoutGrace = time.Second
 
+func requestWriteTimeout(baseline, requestTimeout time.Duration) time.Duration {
+	if requestTimeout > 0 {
+		return max(baseline, requestTimeout+httpWriteTimeoutGrace)
+	}
+	return baseline
+}
+
 func httpWriteTimeout(enablePprof bool, handlers []*http.HttpHandler) time.Duration {
 	writeTimeout := 30 * time.Second
 	if enablePprof {
@@ -178,9 +185,7 @@ func httpWriteTimeout(enablePprof bool, handlers []*http.HttpHandler) time.Durat
 	}
 
 	for _, handler := range handlers {
-		if handler.Timeout > 0 {
-			writeTimeout = max(writeTimeout, handler.Timeout+httpWriteTimeoutGrace)
-		}
+		writeTimeout = requestWriteTimeout(writeTimeout, handler.Timeout)
 	}
 
 	return writeTimeout
@@ -331,6 +336,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 				Port:    handlerOpts.GrpcPort,
 				Path:    path,
 				Handler: handler,
+				Timeout: handlerOpts.RequestTimeout,
 			})
 		}
 	}
@@ -523,8 +529,9 @@ func (s *Service) Open(ctx context.Context) error {
 			return err
 		}
 		server := http.NewServer(&http.ServerOpts{
-			MaxConns: s.opts.MaxConnections,
-			Listener: listener,
+			MaxConns:     s.opts.MaxConnections,
+			WriteTimeout: requestWriteTimeout(30*time.Second, handler.Timeout),
+			Listener:     listener,
 		})
 		server.RegisterHandler(handler.Path, handler.Handler)
 		s.httpServers = append(s.httpServers, server)
