@@ -30,6 +30,7 @@ type GRPCHandler struct {
 	Path    string
 	Handler http.Handler
 	Port    int
+	Timeout time.Duration
 }
 
 type ServerOpts struct {
