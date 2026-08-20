@@ -26,9 +26,11 @@ func (f *fakeRequestWriter) CloseIdleConnections() {}
 
 func TestHandler_HandleReceive(t *testing.T) {
 	var called bool
+	var received *prompb.WriteRequest
 	writer := &fakeRequestWriter{
 		fn: func(ctx context.Context, wr *prompb.WriteRequest) error {
 			require.Equal(t, 1, len(wr.Timeseries))
+			received = wr
 			called = true
 			return nil
 		},
@@ -73,6 +75,7 @@ func TestHandler_HandleReceive(t *testing.T) {
 	h.HandleReceive(resp, req)
 	require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
 	require.True(t, called)
+	require.Empty(t, received.Timeseries)
 
 }
 
