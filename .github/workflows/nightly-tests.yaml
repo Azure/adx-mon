@@ -14,10 +14,10 @@ jobs:
     timeout-minutes: 120
     permissions: read-all
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v7
       with:
         go-version: 1.22
 
