@@ -214,6 +214,83 @@ type TestStatementExecutor struct {
 	queriedOperations map[string]bool                  // Track which operations have been queried
 }
 
+type functionTargetConcurrencyTracker struct {
+	mu          sync.Mutex
+	inFlight    int
+	maxInFlight int
+	started     chan struct{}
+	release     chan struct{}
+}
+
+func (t *functionTargetConcurrencyTracker) begin() {
+	t.mu.Lock()
+	t.inFlight++
+	if t.inFlight > t.maxInFlight {
+		t.maxInFlight = t.inFlight
+	}
+	t.mu.Unlock()
+	t.started <- struct{}{}
+}
+
+func (t *functionTargetConcurrencyTracker) end() {
+	t.mu.Lock()
+	t.inFlight--
+	t.mu.Unlock()
+}
+
+func (t *functionTargetConcurrencyTracker) maxConcurrent() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.maxInFlight
+}
+
+type concurrentFunctionTarget struct {
+	database string
+	endpoint string
+	tracker  *functionTargetConcurrencyTracker
+}
+
+func (t *concurrentFunctionTarget) Database() string { return t.database }
+func (t *concurrentFunctionTarget) Endpoint() string { return t.endpoint }
+
+func (t *concurrentFunctionTarget) Mgmt(ctx context.Context, _ azkustodata.Statement, _ ...azkustodata.QueryOption) (kustov1.Dataset, error) {
+	t.tracker.begin()
+	defer t.tracker.end()
+	select {
+	case <-t.tracker.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func newBlockingFunctionTargets(count int) (*functionTargetConcurrencyTracker, []StatementExecutor) {
+	tracker := &functionTargetConcurrencyTracker{
+		started: make(chan struct{}, count),
+		release: make(chan struct{}),
+	}
+	targets := make([]StatementExecutor, count)
+	for i := range targets {
+		targets[i] = &concurrentFunctionTarget{
+			database: fmt.Sprintf("db-%d", i),
+			endpoint: fmt.Sprintf("https://cluster-%d", i),
+			tracker:  tracker,
+		}
+	}
+	return tracker, targets
+}
+
+func requireFunctionTargetsStarted(t *testing.T, started <-chan struct{}, count int) {
+	t.Helper()
+	for range count {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			require.FailNow(t, "target did not start")
+		}
+	}
+}
+
 func (t *TestStatementExecutor) Reset() {
 	t.stmts = nil
 	t.queriedOperations = nil
@@ -274,16 +351,20 @@ func (t *TestStatementExecutor) Mgmt(ctx context.Context, stmt azkustodata.State
 }
 
 type TestFunctionStore struct {
-	funcs         []*v1.Function
-	updates       []*v1.Function
-	statusUpdates []*v1.Function
-	nextUpdateErr error
+	funcs          []*v1.Function
+	updates        []*v1.Function
+	statusUpdates  []*v1.Function
+	nextUpdateErr  error
+	filterObserved bool
 }
 
 func (t *TestFunctionStore) List(ctx context.Context) ([]*v1.Function, error) {
-	ret := make([]*v1.Function, len(t.funcs))
-	for i, f := range t.funcs {
-		ret[i] = f.DeepCopy()
+	ret := make([]*v1.Function, 0, len(t.funcs))
+	for _, f := range t.funcs {
+		if t.filterObserved && f.Generation == f.Status.ObservedGeneration {
+			continue
+		}
+		ret = append(ret, f.DeepCopy())
 	}
 	return ret, nil
 }
@@ -305,6 +386,9 @@ func (t *TestFunctionStore) Update(ctx context.Context, fn *v1.Function) error {
 }
 
 func (t *TestFunctionStore) UpdateStatus(ctx context.Context, fn *v1.Function) error {
+	if fn.Status.Status == v1.Success || fn.Status.Status == v1.PermanentFailure {
+		fn.Status.ObservedGeneration = fn.Generation
+	}
 	t.statusUpdates = append(t.statusUpdates, fn.DeepCopy())
 	if t.nextUpdateErr != nil {
 		ret := t.nextUpdateErr
@@ -416,16 +500,18 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "prod", endpoint: "https://cluster.kusto.windows.net"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		logs := &TestStatementExecutor{database: "logs", endpoint: "https://cluster.kusto.windows.net"}
+		task := NewSyncFunctionsTask(store, []StatementExecutor{logs, exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.NotEmpty(t, exec.stmts)
+		require.Empty(t, logs.stmts)
 
 		fn := store.funcs[0]
 		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionTrue, recCond.Status)
 		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
-		require.Contains(t, recCond.Message, exec.Endpoint())
+		require.Equal(t, "Function created on all 1 targets", recCond.Message)
 		require.Equal(t, v1.Success, fn.Status.Status)
 	})
 
@@ -442,7 +528,7 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "Logs"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts)
 
@@ -475,7 +561,7 @@ func TestSyncFunctionsTaskDatabaseMatching(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "prod", endpoint: "https://cluster.kusto.windows.net"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.NotEmpty(t, exec.stmts)
 
@@ -505,7 +591,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
-		task := NewSyncFunctionsTask(store, exec, map[string]string{"region": "eastus"})
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, map[string]string{"region": "eastus"})
 		require.NoError(t, task.Run(ctx))
 		require.NotEmpty(t, exec.stmts)
 
@@ -524,11 +610,12 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 
 	t.Run("skips when expression evaluates false", func(t *testing.T) {
 		store := &TestFunctionStore{
+			filterObserved: true,
 			funcs: []*v1.Function{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
 					Spec: v1.FunctionSpec{
-						Database:           "db",
+						Database:           v1.AllDatabases,
 						Body:               ".create-or-alter function fn() { print 1 }",
 						CriteriaExpression: "region == 'eastus'",
 					},
@@ -536,7 +623,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "db"}
-		task := NewSyncFunctionsTask(store, exec, map[string]string{"region": "westus"})
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, map[string]string{"region": "westus"})
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts)
 
@@ -553,10 +640,17 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		require.Equal(t, "CriteriaNotMatched", recCond.Reason)
 		require.Contains(t, recCond.Message, "evaluated to false")
 		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Equal(t, fn.Generation, fn.Status.ObservedGeneration)
+		require.Len(t, store.statusUpdates, 1)
+
+		require.NoError(t, task.Run(ctx))
+		require.Empty(t, exec.stmts)
+		require.Len(t, store.statusUpdates, 1)
 	})
 
 	t.Run("records failures when expression evaluation errors", func(t *testing.T) {
 		store := &TestFunctionStore{
+			filterObserved: true,
 			funcs: []*v1.Function{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
@@ -569,7 +663,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "db"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts)
 
@@ -587,6 +681,10 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 		require.Contains(t, recCond.Message, "evaluation failed")
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Contains(t, fn.Status.Error, "criteriaExpression evaluation failed")
+		require.Zero(t, fn.Status.ObservedGeneration)
+
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, store.statusUpdates, 2)
 	})
 
 	t.Run("empty expression defaults to match", func(t *testing.T) {
@@ -602,7 +700,7 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.NotEmpty(t, exec.stmts)
 
@@ -630,7 +728,7 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 	t.Run("success updates conditions", func(t *testing.T) {
 		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
 		exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.NotEmpty(t, exec.stmts)
 
@@ -639,7 +737,7 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionTrue, recCond.Status)
 		require.Equal(t, "KustoExecutionSucceeded", recCond.Reason)
-		require.Contains(t, recCond.Message, exec.Endpoint())
+		require.Equal(t, "Function created on all 1 targets", recCond.Message)
 		require.Equal(t, v1.Success, fn.Status.Status)
 	})
 
@@ -647,7 +745,7 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
 		exec := &TestStatementExecutor{database: "db"}
 		exec.nextMgmtErr = kustoerrors.ES(kustoerrors.OpMgmt, kustoerrors.KClientArgs, "permanent failure").SetNoRetry()
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Len(t, exec.stmts, 1)
 
@@ -656,16 +754,16 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionFalse, recCond.Status)
 		require.Equal(t, "KustoExecutionFailed", recCond.Reason)
-		require.Contains(t, recCond.Message, "permanent failure")
+		require.Equal(t, "Function permanently failed on 1 of 1 targets", recCond.Message)
 		require.Equal(t, v1.PermanentFailure, fn.Status.Status)
-		require.Contains(t, fn.Status.Error, "permanent failure")
+		require.Equal(t, recCond.Message, fn.Status.Error)
 	})
 
 	t.Run("transient failure retries later", func(t *testing.T) {
 		store := &TestFunctionStore{funcs: []*v1.Function{newFunction()}}
 		exec := &TestStatementExecutor{database: "db"}
 		exec.nextMgmtErr = kustoerrors.ES(kustoerrors.OpMgmt, kustoerrors.KTimeout, "temporary failure")
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Len(t, exec.stmts, 1)
 
@@ -674,9 +772,9 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionFalse, recCond.Status)
 		require.Equal(t, "KustoExecutionRetrying", recCond.Reason)
-		require.Contains(t, recCond.Message, "temporary failure")
+		require.Equal(t, "Function failed on 1 of 1 targets; 1 target failure is retryable", recCond.Message)
 		require.Equal(t, v1.Failed, fn.Status.Status)
-		require.Contains(t, fn.Status.Error, "temporary failure")
+		require.Equal(t, recCond.Message, fn.Status.Error)
 	})
 
 	t.Run("missing referenced table retries later", func(t *testing.T) {
@@ -684,7 +782,7 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		exec := &TestStatementExecutor{database: "db"}
 		body := `{"error":{"code":"General_BadRequest","message":"Request is invalid and cannot be executed.","@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create-or-alter function fn() { MissingTable | take 1 }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'take' operator: Failed to resolve table or column expression named 'MissingTable''","@failureCode":400,"@permanent":true}}`
 		exec.nextMgmtErr = kustoerrors.HTTP(kustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 
 		require.NoError(t, task.Run(ctx))
 		require.Len(t, exec.stmts, 1)
@@ -719,7 +817,7 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 		},
 	}
 	exec := &TestStatementExecutor{database: "db", endpoint: "https://cluster"}
-	task := NewSyncFunctionsTask(store, exec, nil)
+	task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 	require.NoError(t, task.Run(ctx))
 	require.Empty(t, exec.stmts)
 
@@ -734,8 +832,128 @@ func TestSyncFunctionsTaskDeletionConditions(t *testing.T) {
 	require.Contains(t, fn.Status.Message, "Finalization no-op")
 }
 
+func TestReconcileFunctionTargetsBoundsConcurrency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tracker, targets := newBlockingFunctionTargets(maxConcurrentFunctionTargets + 1)
+
+	done := make(chan functionReconcileResult, 1)
+	go func() {
+		done <- reconcileFunctionTargets(ctx, &v1.Function{}, targets)
+	}()
+
+	requireFunctionTargetsStarted(t, tracker.started, maxConcurrentFunctionTargets)
+	select {
+	case <-tracker.started:
+		require.FailNow(t, "target concurrency exceeded limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.Equal(t, maxConcurrentFunctionTargets, tracker.maxConcurrent())
+
+	close(tracker.release)
+	select {
+	case result := <-done:
+		require.Equal(t, v1.Success, result.status)
+	case <-time.After(time.Second):
+		require.FailNow(t, "target reconciliation did not finish")
+	}
+}
+
+func TestSyncFunctionsTaskCancellationStopsTargetsWithoutStatusUpdate(t *testing.T) {
+	store := &TestFunctionStore{
+		funcs: []*v1.Function{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+				Spec: v1.FunctionSpec{
+					AllDatabases: true,
+					Body:         ".create-or-alter function fn() { print 1 }",
+				},
+			},
+		},
+	}
+	tracker, targets := newBlockingFunctionTargets(1)
+	task := NewSyncFunctionsTask(store, targets, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- task.Run(ctx) }()
+
+	requireFunctionTargetsStarted(t, tracker.started, 1)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.FailNow(t, "reconciliation did not stop")
+	}
+	require.Empty(t, store.statusUpdates)
+}
+
 func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 	ctx := context.Background()
+
+	t.Run("allDatabases reconciles every unique target with one status update", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						AllDatabases: true,
+						Body:         ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		metrics := &TestStatementExecutor{database: "metrics", endpoint: "https://cluster"}
+		logs := &TestStatementExecutor{database: "logs", endpoint: "https://cluster"}
+		task := NewSyncFunctionsTask(store, []StatementExecutor{logs, metrics, metrics}, nil)
+
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, metrics.stmts, 1)
+		require.Len(t, logs.stmts, 1)
+		require.Len(t, store.statusUpdates, 1)
+
+		fn := store.funcs[0]
+		require.Equal(t, v1.Success, fn.Status.Status)
+		require.Equal(t, fn.Generation, fn.Status.ObservedGeneration)
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionTrue, recCond.Status)
+		require.Equal(t, "Function created on all 2 targets", recCond.Message)
+	})
+
+	t.Run("allDatabases aggregates target failures", func(t *testing.T) {
+		store := &TestFunctionStore{
+			funcs: []*v1.Function{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default", Generation: 1},
+					Spec: v1.FunctionSpec{
+						AllDatabases: true,
+						Body:         ".create-or-alter function fn() { print 1 }",
+					},
+				},
+			},
+		}
+		metrics := &TestStatementExecutor{database: "metrics", endpoint: "https://cluster"}
+		metrics.nextMgmtErr = kustoerrors.ES(kustoerrors.OpMgmt, kustoerrors.KClientArgs, "invalid function").SetNoRetry()
+		logs := &TestStatementExecutor{database: "logs", endpoint: "https://cluster"}
+		logs.nextMgmtErr = kustoerrors.ES(kustoerrors.OpMgmt, kustoerrors.KTimeout, "temporary failure")
+		task := NewSyncFunctionsTask(store, []StatementExecutor{metrics, logs}, nil)
+
+		require.NoError(t, task.Run(ctx))
+		require.Len(t, metrics.stmts, 1)
+		require.Len(t, logs.stmts, 1)
+		require.Len(t, store.statusUpdates, 1)
+
+		fn := store.funcs[0]
+		require.Equal(t, v1.Failed, fn.Status.Status)
+		require.Zero(t, fn.Status.ObservedGeneration)
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.NotNil(t, recCond)
+		require.Equal(t, metav1.ConditionFalse, recCond.Status)
+		require.Equal(t, "KustoExecutionRetrying", recCond.Reason)
+		require.Equal(t, "Function failed on 2 of 2 targets; 1 target failure is retryable", recCond.Message)
+		require.Equal(t, recCond.Message, fn.Status.Error)
+	})
 
 	t.Run("allDatabases true applies to any database", func(t *testing.T) {
 		store := &TestFunctionStore{
@@ -750,7 +968,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "prod", endpoint: "https://cluster.kusto.windows.net"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.NotEmpty(t, exec.stmts)
 
@@ -775,7 +993,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "mydb", endpoint: "https://cluster.kusto.windows.net"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts, "should not execute when validation fails")
 
@@ -802,7 +1020,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "dev", endpoint: "https://cluster.kusto.windows.net"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts, "should not execute for non-matching database")
 	})
@@ -820,7 +1038,7 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 			},
 		}
 		exec := &TestStatementExecutor{database: "mydb", endpoint: "https://cluster.kusto.windows.net"}
-		task := NewSyncFunctionsTask(store, exec, nil)
+		task := NewSyncFunctionsTask(store, []StatementExecutor{exec}, nil)
 		require.NoError(t, task.Run(ctx))
 		require.Empty(t, exec.stmts, "should not execute when validation fails")
 
@@ -1013,7 +1231,7 @@ func TestFunctions(t *testing.T) {
 	}
 
 	functionStore := storage.NewFunctions(ctrlCli, nil)
-	task := NewSyncFunctionsTask(functionStore, executor, map[string]string{"environment": "test"})
+	task := NewSyncFunctionsTask(functionStore, []StatementExecutor{executor}, map[string]string{"environment": "test"})
 
 	resourceName := "testtest"
 	typeNamespacedName := types.NamespacedName{
