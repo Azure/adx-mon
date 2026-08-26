@@ -9,3 +9,34 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    groups:
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      opentelemetry:
+        patterns:
+          - "go.opentelemetry.io/otel*"
+      testcontainers:
+        patterns:
+          - "github.com/testcontainers/testcontainers-go*"
+      otel-generated:
+        patterns:
+          - "buf.build/gen/go/opentelemetry/opentelemetry/*"
+      prometheus:
+        patterns:
+          - "github.com/prometheus/*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
+      docker-actions:
+        patterns:
+          - "docker/*-action"
+      github-maintained-actions:
+        patterns:
+          - "actions/*"

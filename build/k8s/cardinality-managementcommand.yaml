@@ -4,6 +4,7 @@ metadata:
   name: cardinality-table
   namespace: adx-mon
 spec:
-  scope: AllDatabases
+  database: Metrics
+  scope: Database
   body: |
     .create table AdxmonIngestorTableCardinalityCount (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real)
