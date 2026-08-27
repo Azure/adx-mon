@@ -50,6 +50,7 @@ func main() {
 		UsageText: ``,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
+			&cli.StringFlag{Name: "host-ip", Usage: "Host IP config variable override"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
 			&cli.StringFlag{
 				Name:        "storage-backend",
@@ -152,7 +153,9 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
-
+	if hostIP := ctx.String("host-ip"); hostIP != "" {
+		cfg.ReplaceVariable("$(HOSTIP)", hostIP)
+	}
 	var kubeNode *metadata.KubeNode
 	if cfg.MetadataWatch != nil && cfg.MetadataWatch.KubernetesNode != nil {
 		client, err := getKubeClient(cfg.Kubeconfig)
