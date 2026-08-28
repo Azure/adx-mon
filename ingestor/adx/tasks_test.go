@@ -354,11 +354,19 @@ type TestFunctionStore struct {
 	funcs          []*v1.Function
 	updates        []*v1.Function
 	statusUpdates  []*v1.Function
+	listCalls      []bool
+	nextListErrs   []error
 	nextUpdateErr  error
 	filterObserved bool
 }
 
-func (t *TestFunctionStore) List(ctx context.Context) ([]*v1.Function, error) {
+func (t *TestFunctionStore) List(ctx context.Context, opts storage.ListOptions) ([]*v1.Function, error) {
+	t.listCalls = append(t.listCalls, opts.IncludeCriteriaMismatches)
+	if len(t.nextListErrs) > 0 {
+		err := t.nextListErrs[0]
+		t.nextListErrs = t.nextListErrs[1:]
+		return nil, err
+	}
 	ret := make([]*v1.Function, 0, len(t.funcs))
 	for _, f := range t.funcs {
 		if t.filterObserved && f.Generation == f.Status.ObservedGeneration {
@@ -712,6 +720,21 @@ func TestSyncFunctionsTaskCriteriaExpression(t *testing.T) {
 	})
 }
 
+func TestSyncFunctionsTaskIncludesCriteriaMismatchesOnFirstSuccessfulList(t *testing.T) {
+	ctx := context.Background()
+	store := &TestFunctionStore{nextListErrs: []error{
+		storage.ErrNotLeader,
+		errors.New("temporary list failure"),
+	}}
+	task := NewSyncFunctionsTask(store, nil, nil)
+
+	require.NoError(t, task.Run(ctx))
+	require.EqualError(t, task.Run(ctx), "failed to list functions: temporary list failure")
+	require.NoError(t, task.Run(ctx))
+	require.NoError(t, task.Run(ctx))
+	require.Equal(t, []bool{true, true, true, false}, store.listCalls)
+}
+
 func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 	ctx := context.Background()
 
@@ -754,9 +777,10 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionFalse, recCond.Status)
 		require.Equal(t, "KustoExecutionFailed", recCond.Reason)
-		require.Equal(t, "Function permanently failed on 1 of 1 targets", recCond.Message)
+		require.Contains(t, recCond.Message, "Function permanently failed on 1 of 1 targets")
+		require.Contains(t, recCond.Message, "permanent failure")
 		require.Equal(t, v1.PermanentFailure, fn.Status.Status)
-		require.Equal(t, recCond.Message, fn.Status.Error)
+		require.Contains(t, fn.Status.Error, "permanent failure")
 	})
 
 	t.Run("transient failure retries later", func(t *testing.T) {
@@ -772,9 +796,10 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionFalse, recCond.Status)
 		require.Equal(t, "KustoExecutionRetrying", recCond.Reason)
-		require.Equal(t, "Function failed on 1 of 1 targets; 1 target failure is retryable", recCond.Message)
+		require.Contains(t, recCond.Message, "Function failed on 1 of 1 targets; 1 target failure is retryable")
+		require.Contains(t, recCond.Message, "temporary failure")
 		require.Equal(t, v1.Failed, fn.Status.Status)
-		require.Equal(t, recCond.Message, fn.Status.Error)
+		require.Contains(t, fn.Status.Error, "temporary failure")
 	})
 
 	t.Run("missing referenced table retries later", func(t *testing.T) {
@@ -789,7 +814,10 @@ func TestSyncFunctionsTaskKustoExecution(t *testing.T) {
 		fn := store.funcs[0]
 		require.Equal(t, v1.Failed, fn.Status.Status)
 		require.Zero(t, fn.Status.ObservedGeneration)
-		require.Equal(t, "KustoExecutionRetrying", apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled).Reason)
+		recCond := apimeta.FindStatusCondition(fn.Status.Conditions, v1.FunctionReconciled)
+		require.Equal(t, "KustoExecutionRetrying", recCond.Reason)
+		require.Contains(t, recCond.Message, "The command script was aborted")
+		require.Contains(t, fn.Status.Error, "The command script was aborted")
 
 		require.NoError(t, task.Run(ctx))
 		require.Len(t, exec.stmts, 2)
@@ -857,6 +885,35 @@ func TestReconcileFunctionTargetsBoundsConcurrency(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "target reconciliation did not finish")
 	}
+}
+
+func TestAggregateFunctionTargetResultsPreservesRepresentativeError(t *testing.T) {
+	function := &v1.Function{ObjectMeta: metav1.ObjectMeta{Name: "fn", Namespace: "default"}}
+	results := []functionTargetResult{
+		{endpoint: "https://a", database: "metrics", err: errors.New("permanent first")},
+		{endpoint: "https://b", database: "logs", err: errors.New("retryable first"), retryable: true},
+		{endpoint: "https://c", database: "traces", err: errors.New("retryable second"), retryable: true},
+	}
+
+	result := aggregateFunctionTargetResults(function, results)
+	require.Equal(t, v1.Failed, result.status)
+	require.EqualError(t, result.err, "retryable first")
+	require.Contains(t, result.message, "Function failed on 3 of 3 targets; 2 target failures are retryable")
+	require.Contains(t, result.message, "https://b/logs")
+	require.Contains(t, result.message, "retryable first")
+	require.NotContains(t, result.message, "retryable second")
+}
+
+func TestFunctionFailureMessageIsBounded(t *testing.T) {
+	result := &functionTargetResult{
+		endpoint: "https://cluster",
+		database: "metrics",
+		err:      errors.New(strings.Repeat("x", kustoutil.MaxErrorMessageLength)),
+	}
+
+	message := functionFailureMessage("Function failed", result)
+	require.Len(t, message, kustoutil.MaxErrorMessageLength)
+	require.Contains(t, message, "Function failed; first error on https://cluster/metrics")
 }
 
 func TestSyncFunctionsTaskCancellationStopsTargetsWithoutStatusUpdate(t *testing.T) {
@@ -951,8 +1008,10 @@ func TestSyncFunctionsTaskAllDatabasesField(t *testing.T) {
 		require.NotNil(t, recCond)
 		require.Equal(t, metav1.ConditionFalse, recCond.Status)
 		require.Equal(t, "KustoExecutionRetrying", recCond.Reason)
-		require.Equal(t, "Function failed on 2 of 2 targets; 1 target failure is retryable", recCond.Message)
-		require.Equal(t, recCond.Message, fn.Status.Error)
+		require.Contains(t, recCond.Message, "Function failed on 2 of 2 targets; 1 target failure is retryable")
+		require.Contains(t, recCond.Message, "logs")
+		require.Contains(t, recCond.Message, "temporary failure")
+		require.Contains(t, fn.Status.Error, "temporary failure")
 	})
 
 	t.Run("allDatabases true applies to any database", func(t *testing.T) {

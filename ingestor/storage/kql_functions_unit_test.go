@@ -82,6 +82,44 @@ func TestFunctionsUpdateStatusRetriesConflict(t *testing.T) {
 	})
 }
 
+func TestFunctionsListIncludesCriteriaMismatchesWhenRequested(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	criteriaMismatch := &adxmonv1.Function{
+		ObjectMeta: metav1.ObjectMeta{Name: "criteria-mismatch", Namespace: "default", Generation: 1},
+		Status: adxmonv1.FunctionStatus{
+			ObservedGeneration: 1,
+			Conditions: []metav1.Condition{{
+				Type:   adxmonv1.FunctionReconciled,
+				Reason: adxmonv1.ReasonCriteriaNotMatched,
+			}},
+		},
+	}
+	upToDate := &adxmonv1.Function{
+		ObjectMeta: metav1.ObjectMeta{Name: "up-to-date", Namespace: "default", Generation: 1},
+		Status:     adxmonv1.FunctionStatus{ObservedGeneration: 1},
+	}
+	store := NewFunctions(fake.NewClientBuilder().WithScheme(scheme).WithObjects(criteriaMismatch, upToDate).Build(), nil)
+
+	functions, err := store.List(ctx, ListOptions{IncludeCriteriaMismatches: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"criteria-mismatch"}, functionNames(functions))
+
+	functions, err = store.List(ctx, ListOptions{})
+	require.NoError(t, err)
+	require.Empty(t, functions)
+}
+
+func functionNames(functions []*adxmonv1.Function) []string {
+	names := make([]string, len(functions))
+	for i, function := range functions {
+		names[i] = function.Name
+	}
+	return names
+}
+
 func TestFunctionsUpdateStatusRetriesFinalizerConflict(t *testing.T) {
 	ctx := context.Background()
 	scheme := runtime.NewScheme()

@@ -24,11 +24,18 @@ const (
 	FinalizerName = "function.adx-mon.azure.com/finalizer"
 )
 
+// ErrNotLeader indicates that Function listing was skipped because this instance is not the leader.
+var ErrNotLeader = errors.New("not leader")
+
 type Functions interface {
 	UpdateStatus(ctx context.Context, fn *adxmonv1.Function) error
 	Update(ctx context.Context, fn *adxmonv1.Function) error
-	List(ctx context.Context) ([]*adxmonv1.Function, error)
+	List(ctx context.Context, opts ListOptions) ([]*adxmonv1.Function, error)
 	UpdateCondition(ctx context.Context, fn *adxmonv1.Function, condition metav1.Condition) error
+}
+
+type ListOptions struct {
+	IncludeCriteriaMismatches bool
 }
 
 type functions struct {
@@ -220,13 +227,13 @@ func (f *functions) UpdateCondition(ctx context.Context, fn *adxmonv1.Function, 
 	return f.UpdateStatus(ctx, fn)
 }
 
-func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
+func (f *functions) List(ctx context.Context, opts ListOptions) ([]*adxmonv1.Function, error) {
 	if f.Client == nil {
 		return nil, fmt.Errorf("no client provided")
 	}
 
 	if f.Elector != nil && !f.Elector.IsLeader() {
-		return nil, nil
+		return nil, ErrNotLeader
 	}
 
 	list := &adxmonv1.FunctionList{}
@@ -236,7 +243,6 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 		}
 		return nil, fmt.Errorf("failed to list functions: %w", err)
 	}
-
 	var fns []*adxmonv1.Function
 	for _, fn := range list.Items {
 		if fn.Spec.Suspend != nil && *fn.Spec.Suspend {
@@ -247,16 +253,14 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 		if !fn.GetDeletionTimestamp().IsZero() {
 			fn.Status.Reason = "Function deleted"
 
-		} else {
-
-			switch fn.GetGeneration() {
-			case fn.Status.ObservedGeneration:
-				// Skip functions that are up to date
+		} else if fn.GetGeneration() == fn.Status.ObservedGeneration {
+			if !opts.IncludeCriteriaMismatches || !criteriaNotMatched(&fn) {
 				continue
-
+			}
+		} else {
+			switch fn.GetGeneration() {
 			case 1:
 				fn.Status.Reason = "Function created"
-
 			default:
 				fn.Status.Reason = "Function updated"
 			}
@@ -266,6 +270,11 @@ func (f *functions) List(ctx context.Context) ([]*adxmonv1.Function, error) {
 	}
 
 	return fns, nil
+}
+
+func criteriaNotMatched(fn *adxmonv1.Function) bool {
+	condition := meta.FindStatusCondition(fn.Status.Conditions, adxmonv1.FunctionReconciled)
+	return condition != nil && condition.Reason == adxmonv1.ReasonCriteriaNotMatched
 }
 
 // logConditionStatusUpdate emits a log entry when a status condition transitions in a meaningful way.

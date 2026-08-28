@@ -122,8 +122,9 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 }
 
 type SyncFunctionsTask struct {
-	store     storage.Functions
-	executors []StatementExecutor
+	store      storage.Functions
+	executors  []StatementExecutor
+	initialRun bool
 	// ClusterLabels carries the ingestor's cluster identity for criteriaExpression evaluation.
 	ClusterLabels map[string]string
 }
@@ -132,15 +133,22 @@ func NewSyncFunctionsTask(store storage.Functions, executors []StatementExecutor
 	return &SyncFunctionsTask{
 		store:         store,
 		executors:     executors,
+		initialRun:    true,
 		ClusterLabels: clusterLabels,
 	}
 }
 
 func (t *SyncFunctionsTask) Run(ctx context.Context) error {
-	functions, err := t.store.List(ctx)
+	functions, err := t.store.List(ctx, storage.ListOptions{
+		IncludeCriteriaMismatches: t.initialRun,
+	})
+	if stderrors.Is(err, storage.ErrNotLeader) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to list functions: %w", err)
 	}
+	t.initialRun = false
 	for _, function := range functions {
 		targetsAllDBs := function.Spec.AllDatabases
 		configuredDB := function.Spec.Database
@@ -315,6 +323,7 @@ func executeFunctionTarget(ctx context.Context, body string, target StatementExe
 func aggregateFunctionTargetResults(function *v1.Function, results []functionTargetResult) functionReconcileResult {
 	transientFailures := 0
 	permanentFailures := 0
+	var firstTransient, firstPermanent *functionTargetResult
 	for _, result := range results {
 		if result.err == nil {
 			logger.Infof("Successfully created function %s/%s on %s/%s", function.Namespace, function.Name, result.endpoint, result.database)
@@ -322,10 +331,16 @@ func aggregateFunctionTargetResults(function *v1.Function, results []functionTar
 		}
 		if result.retryable {
 			transientFailures++
+			if firstTransient == nil {
+				firstTransient = &result
+			}
 			logger.Warnf("Transient failure to create function %s/%s on %s/%s: %v", function.Namespace, function.Name, result.endpoint, result.database, result.err)
 			continue
 		}
 		permanentFailures++
+		if firstPermanent == nil {
+			firstPermanent = &result
+		}
 		logger.Errorf("Permanent failure to create function %s/%s on %s/%s: %v", function.Namespace, function.Name, result.endpoint, result.database, result.err)
 	}
 
@@ -335,23 +350,29 @@ func aggregateFunctionTargetResults(function *v1.Function, results []functionTar
 		if transientFailures == 1 {
 			retryableMessage = "1 target failure is retryable"
 		}
-		message := fmt.Sprintf("Function failed on %d of %d targets; %s", failed, len(results), retryableMessage)
+		message := functionFailureMessage(
+			fmt.Sprintf("Function failed on %d of %d targets; %s", failed, len(results), retryableMessage),
+			firstTransient,
+		)
 		return functionReconcileResult{
 			status:          v1.Failed,
 			conditionStatus: metav1.ConditionFalse,
 			reason:          "KustoExecutionRetrying",
 			message:         message,
-			err:             stderrors.New(message),
+			err:             firstTransient.err,
 		}
 	}
 	if permanentFailures > 0 {
-		message := fmt.Sprintf("Function permanently failed on %d of %d targets", permanentFailures, len(results))
+		message := functionFailureMessage(
+			fmt.Sprintf("Function permanently failed on %d of %d targets", permanentFailures, len(results)),
+			firstPermanent,
+		)
 		return functionReconcileResult{
 			status:          v1.PermanentFailure,
 			conditionStatus: metav1.ConditionFalse,
 			reason:          "KustoExecutionFailed",
 			message:         message,
-			err:             stderrors.New(message),
+			err:             firstPermanent.err,
 		}
 	}
 
@@ -362,6 +383,14 @@ func aggregateFunctionTargetResults(function *v1.Function, results []functionTar
 		reason:          "KustoExecutionSucceeded",
 		message:         message,
 	}
+}
+
+func functionFailureMessage(summary string, result *functionTargetResult) string {
+	message := fmt.Sprintf("%s; first error on %s/%s: %s", summary, result.endpoint, result.database, kustoutil.ParseError(result.err))
+	if len(message) > kustoutil.MaxErrorMessageLength {
+		return message[:kustoutil.MaxErrorMessageLength]
+	}
+	return message
 }
 
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
