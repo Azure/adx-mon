@@ -127,8 +127,13 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: this cause allocations, but holding onto them in a pool causes a lot of memory to be used over time.
-	req := prompb.WriteRequestPool.Get()
+	// Note: this causes an allocation, but holding onto WriteRequests in a pool causes a lot of
+	// memory to be used over time, since senders can flush very large backlogs (e.g. after a
+	// restart) and there's no bound on how many outsized requests the pool could retain at once.
+	// The individual TimeSeries/Label/Sample objects decoded below are still pooled and bounded
+	// via TimeSeriesPool, which is where the allocation savings actually come from.
+	req := &prompb.WriteRequest{}
+	defer req.Reset()
 	if err := req.Unmarshal(reqBuf); err != nil {
 		m.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, err.Error(), http.StatusBadRequest)

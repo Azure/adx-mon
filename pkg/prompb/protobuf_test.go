@@ -70,6 +70,51 @@ func TestUnmarshal(t *testing.T) {
 	require.Equal(t, 1.0, wr.Timeseries[0].Samples[0].Value)
 }
 
+func TestTimeSeriesReusesLabelsAndSamples(t *testing.T) {
+	ts := &TimeSeries{}
+	ts.AppendLabelString("__name__", "cpu")
+	ts.AppendSample(1, 1)
+
+	label := ts.Labels[0]
+	sample := ts.Samples[0]
+	nameBuffer := &ts.Labels[0].Name[:cap(ts.Labels[0].Name)][0]
+	valueBuffer := &ts.Labels[0].Value[:cap(ts.Labels[0].Value)][0]
+
+	ts.Reset()
+	ts.AppendLabelString("__name__", "mem")
+	ts.AppendSample(2, 2)
+
+	require.Same(t, label, ts.Labels[0])
+	require.Same(t, sample, ts.Samples[0])
+	require.Same(t, nameBuffer, &ts.Labels[0].Name[:cap(ts.Labels[0].Name)][0])
+	require.Same(t, valueBuffer, &ts.Labels[0].Value[:cap(ts.Labels[0].Value)][0])
+}
+
+func TestWriteRequestResetDropsOversizedStorage(t *testing.T) {
+	wr := &WriteRequest{
+		Timeseries: make([]*TimeSeries, maxRetainedTimeSeries+1),
+	}
+	for i := range wr.Timeseries {
+		wr.Timeseries[i] = &TimeSeries{}
+	}
+
+	wr.Reset()
+
+	require.Nil(t, wr.Timeseries)
+}
+
+func TestReleaseTimeSeriesDropsOversizedStorage(t *testing.T) {
+	ts := &TimeSeries{
+		Labels:  make([]*Label, maxRetainedLabels+1),
+		Samples: []*Sample{{Value: 1}},
+	}
+
+	ReleaseTimeSeries(ts)
+
+	require.Nil(t, ts.Labels)
+	require.Nil(t, ts.Samples)
+}
+
 func BenchmarkWriteRequestMarshalTo(b *testing.B) {
 	wr := WriteRequest{
 		Timeseries: []*TimeSeries{
@@ -124,8 +169,9 @@ func BenchmarkWriteRequestUnmarshal(b *testing.B) {
 	b.ResetTimer()
 
 	wr = &WriteRequest{}
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		wr.Timeseries = nil
 		require.NoError(b, wr.Unmarshal(buf))
+		wr.Reset()
 	}
 }

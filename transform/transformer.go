@@ -91,6 +91,7 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 			if metrics.DebugMetricsEnabled {
 				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			}
+			prompb.ReleaseTimeSeries(v)
 			continue
 		}
 
@@ -107,13 +108,15 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 				if metrics.DebugMetricsEnabled {
 					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 				}
+				prompb.ReleaseTimeSeries(v)
 				continue
 			}
 		}
 
-		req.Timeseries[i] = f.TransformTimeSeries(v)
+		req.Timeseries[i], req.Timeseries[j] = f.TransformTimeSeries(v), req.Timeseries[i]
 		i++
 	}
+	clear(req.Timeseries[i:])
 	req.Timeseries = req.Timeseries[:i]
 
 	return req
@@ -130,7 +133,7 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 	for j, l := range v.Labels {
 		// Never attempt to drop __name__ label as this is required to identify the metric.
 		if bytes.Equal(l.Name, []byte("__name__")) {
-			v.Labels[i] = v.Labels[j]
+			v.Labels[i], v.Labels[j] = v.Labels[j], v.Labels[i]
 			i++
 			continue
 		}
@@ -160,7 +163,7 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 			continue
 		}
 
-		v.Labels[i] = v.Labels[j]
+		v.Labels[i], v.Labels[j] = v.Labels[j], v.Labels[i]
 		i++
 	}
 	v.Labels = v.Labels[:i]

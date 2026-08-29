@@ -243,7 +243,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 
 			name := prompb.MetricName(ts)
 			if s.requestTransformer.ShouldDropMetric(ts, name) {
-				prompb.TimeSeriesPool.Put(ts)
+				prompb.ReleaseTimeSeries(ts)
 				if metrics.DebugMetricsEnabled {
 					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
 				}
@@ -304,7 +304,7 @@ func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteReq
 		}
 		for i := range filtered.Timeseries {
 			ts := filtered.Timeseries[i]
-			prompb.TimeSeriesPool.Put(ts)
+			prompb.ReleaseTimeSeries(ts)
 		}
 		filtered.Timeseries = filtered.Timeseries[:0]
 	}
