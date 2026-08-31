@@ -5,6 +5,8 @@ package journal
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -111,11 +113,18 @@ func TestReadFile(t *testing.T) {
 	cursorPath := cursorPath(tmpdir, []string{"test"}, "testdb", "testtable")
 	queue := make(chan *types.Log, 1000)
 
+	// journalPath opens a directory rather than individual files, so stage the
+	// fixture in a directory of its own.
+	journalDir := t.TempDir()
+	contents, err := os.ReadFile("test_file.journal")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(journalDir, "test_file.journal"), contents, 0o644))
+
 	tailer := &tailer{
 		database:       "testdb",
 		table:          "testtable",
 		cursorFilePath: cursorPath,
-		journalFiles:   []string{"test_file.journal"},
+		journalPath:    journalDir,
 		batchQueue:     queue,
 		streamPartials: make(map[string]string),
 	}
@@ -149,7 +158,7 @@ func TestReadFromJournalNonExisting(t *testing.T) {
 		table:          "testtable",
 		matches:        []string{"_SYSTEMD_UNIT=kubelet.service", "_HOSTNAME=testmachine"},
 		cursorFilePath: cursorPath,
-		journalFiles:   []string{"non_existing_file.journal"},
+		journalPath:    filepath.Join(t.TempDir(), "non_existing_dir"),
 		batchQueue:     queue,
 		streamPartials: make(map[string]string),
 	}
