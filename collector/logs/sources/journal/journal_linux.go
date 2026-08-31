@@ -72,16 +72,25 @@ func (s *Source) Open(ctx context.Context) error {
 
 	tailers := make([]*tailer, 0, len(s.targets))
 	for _, target := range s.targets {
-		logger.Info("Opening journal source", "filters", target.Matches, "database", target.Database, "table", target.Table)
+		logger.Info("Opening journal source", "filters", target.Matches, "database", target.Database, "table", target.Table, "path", target.JournalPath)
 		batchQueue := make(chan *types.Log, 512)
 		outputQueue := make(chan *types.LogBatch, 1)
 
-		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table)
+		// Targets reading a non-default journal need their own cursor, or two
+		// targets that agree on database, table and matches would share one
+		// cursor file and clobber each other. Only mixed in when set, so cursor
+		// paths for existing configurations are unchanged.
+		cursorKey := target.Matches
+		if target.JournalPath != "" {
+			cursorKey = append(append([]string{}, target.Matches...), "journal-path="+target.JournalPath)
+		}
+		cPath := cursorPath(s.cursorDirectory, cursorKey, target.Database, target.Table)
 		tailer := &tailer{
 			matches:        target.Matches,
 			database:       target.Database,
 			table:          target.Table,
 			journalFields:  target.JournalFields,
+			journalPath:    target.JournalPath,
 			cursorFilePath: cPath,
 			logLineParsers: target.LogLineParsers,
 			batchQueue:     batchQueue,

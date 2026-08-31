@@ -49,6 +49,10 @@ type tailer struct {
 	// journalFile is the path to journal files. This is used for testing purposes.
 	journalFiles []string
 
+	// journalPath is an optional directory to read journal files from instead
+	// of the local system journal.
+	journalPath string
+
 	// streamPartials maps _STREAM_ID to the accumulated partial log messages
 	streamPartials map[string]string
 
@@ -155,10 +159,13 @@ func (t *tailer) ReadFromJournal(ctx context.Context) {
 func (t *tailer) openJournal(mode openmode) (*sdjournal.Journal, error) {
 	var reader *sdjournal.Journal
 	var err error
-	if len(t.journalFiles) == 0 {
-		reader, err = sdjournal.NewJournal()
-	} else {
+	switch {
+	case t.journalPath != "":
+		reader, err = sdjournal.NewJournalFromDir(t.journalPath)
+	case len(t.journalFiles) > 0:
 		reader, err = sdjournal.NewJournalFromFiles(t.journalFiles...)
+	default:
+		reader, err = sdjournal.NewJournal()
 	}
 
 	if err != nil {
