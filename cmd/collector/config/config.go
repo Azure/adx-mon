@@ -498,6 +498,7 @@ type JournalTarget struct {
 	Table         string   `toml:"table" comment:"Table to store logs in."`
 	Parsers       []string `toml:"parsers" comment:"Parsers to apply sequentially to the log line."`
 	JournalFields []string `toml:"journal-fields" comment:"Optional journal metadata fields http://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html"`
+	JournalPath   string   `toml:"journal-path" comment:"Optional directory to read journal files from. When unset, the local system journal is opened, which only exposes the journal matching the current machine ID. Set this to read a journal belonging to another machine ID, such as a host journal bind-mounted into a container."`
 }
 
 func (j *JournalTarget) Validate() error {

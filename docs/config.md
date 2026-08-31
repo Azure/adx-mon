@@ -427,6 +427,8 @@ Available parser types:
     parsers = []
     # Optional journal metadata fields http://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html
     journal-fields = []
+    # Optional directory to read journal files from. When unset, the local system journal is opened, which only exposes the journal matching the current machine ID. Set this to read a journal belonging to another machine ID, such as a host journal bind-mounted into a container.
+    journal-path = ''
 
   # Defines a kernel target to scrape.
   [[host-log.kernel-target]]

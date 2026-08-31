@@ -851,6 +851,7 @@ func realMain(ctx *cli.Context) error {
 						Table:          target.Table,
 						LogLineParsers: parsers,
 						JournalFields:  target.JournalFields,
+						JournalPath:    target.JournalPath,
 					})
 				}
 
