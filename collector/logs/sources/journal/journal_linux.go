@@ -76,15 +76,7 @@ func (s *Source) Open(ctx context.Context) error {
 		batchQueue := make(chan *types.Log, 512)
 		outputQueue := make(chan *types.LogBatch, 1)
 
-		// Targets reading a non-default journal need their own cursor, or two
-		// targets that agree on database, table and matches would share one
-		// cursor file and clobber each other. Only mixed in when set, so cursor
-		// paths for existing configurations are unchanged.
-		cursorKey := target.Matches
-		if target.JournalPath != "" {
-			cursorKey = append(append([]string{}, target.Matches...), "journal-path="+target.JournalPath)
-		}
-		cPath := cursorPath(s.cursorDirectory, cursorKey, target.Database, target.Table)
+		cPath := cursorPath(s.cursorDirectory, target.Matches, target.Database, target.Table, target.JournalPath)
 		tailer := &tailer{
 			matches:        target.Matches,
 			database:       target.Database,

@@ -281,7 +281,7 @@ func TestJournalInvalidCursor(t *testing.T) {
 		Database: "testdb",
 		Table:    "testtable",
 	}
-	cursorFilePath := cursorPath(cursorDir, targetConfig.Matches, targetConfig.Database, targetConfig.Table)
+	cursorFilePath := cursorPath(cursorDir, targetConfig.Matches, targetConfig.Database, targetConfig.Table, "")
 
 	// Write an invalid cursor with the correct format, but not from this system
 	invalidCursor := "s=65a1fbde9961443ab61e48f57b1e1cfb;i=32904c2;b=93046e4a5c424d96ad6e02659ce7dde9;m=7b29e77112;t=639d5fa6bb246;x=1cacd317ebe1eb33"
