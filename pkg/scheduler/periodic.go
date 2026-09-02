@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/logger"
@@ -13,8 +15,10 @@ type Elector interface {
 
 type Periodic struct {
 	cancelFn context.CancelFunc
+	ctx      context.Context
 	closing  chan struct{}
 	elector  Elector
+	wg       sync.WaitGroup
 }
 
 func NewScheduler(elector Elector) *Periodic {
@@ -25,6 +29,7 @@ func NewScheduler(elector Elector) *Periodic {
 
 func (s *Periodic) Open(ctx context.Context) error {
 	ctx, cancelFn := context.WithCancel(ctx)
+	s.ctx = ctx
 	s.cancelFn = cancelFn
 	s.closing = make(chan struct{})
 	return nil
@@ -33,6 +38,7 @@ func (s *Periodic) Open(ctx context.Context) error {
 func (s *Periodic) Close() error {
 	s.cancelFn()
 	close(s.closing)
+	s.wg.Wait()
 	return nil
 }
 
@@ -57,7 +63,9 @@ func (s *Periodic) Close() error {
 //	    return nil
 //	})
 func (s *Periodic) ScheduleEvery(interval time.Duration, name string, fn func(ctx context.Context) error) {
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		t := time.NewTicker(interval)
 		defer t.Stop()
 
@@ -69,8 +77,13 @@ func (s *Periodic) ScheduleEvery(interval time.Duration, name string, fn func(ct
 				if s.elector != nil && !s.elector.IsLeader() {
 					continue
 				}
+				select {
+				case <-s.ctx.Done():
+					return
+				default:
+				}
 
-				if err := fn(context.Background()); err != nil {
+				if err := fn(s.ctx); err != nil && !errors.Is(err, context.Canceled) {
 					logger.Errorf("Failed to run scheduled task %s: %s", name, err)
 				}
 			}

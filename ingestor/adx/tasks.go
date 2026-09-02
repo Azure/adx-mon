@@ -2,10 +2,12 @@ package adx
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +24,15 @@ import (
 	"github.com/Azure/azure-kusto-go/azkustodata/errors"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	kustov1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
+	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/clock"
+)
+
+const (
+	maxConcurrentFunctionTargets = 5
+	functionReconcileTimeout     = 5 * time.Minute
+	functionTargetTimeout        = 2 * time.Minute
 )
 
 type TableDetail struct {
@@ -113,40 +122,42 @@ func (t *DropUnusedTablesTask) loadTableDetails(ctx context.Context) ([]TableDet
 }
 
 type SyncFunctionsTask struct {
-	store    storage.Functions
-	kustoCli StatementExecutor
+	store      storage.Functions
+	executors  []StatementExecutor
+	initialRun bool
 	// ClusterLabels carries the ingestor's cluster identity for criteriaExpression evaluation.
 	ClusterLabels map[string]string
 }
 
-func NewSyncFunctionsTask(store storage.Functions, kustoCli StatementExecutor, clusterLabels map[string]string) *SyncFunctionsTask {
+func NewSyncFunctionsTask(store storage.Functions, executors []StatementExecutor, clusterLabels map[string]string) *SyncFunctionsTask {
 	return &SyncFunctionsTask{
 		store:         store,
-		kustoCli:      kustoCli,
+		executors:     executors,
+		initialRun:    true,
 		ClusterLabels: clusterLabels,
 	}
 }
 
 func (t *SyncFunctionsTask) Run(ctx context.Context) error {
-	functions, err := t.store.List(ctx)
+	functions, err := t.store.List(ctx, storage.ListOptions{
+		IncludeCriteriaMismatches: t.initialRun,
+	})
+	if stderrors.Is(err, storage.ErrNotLeader) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to list functions: %w", err)
 	}
+	t.initialRun = false
 	for _, function := range functions {
-		availableDB := t.kustoCli.Database()
-
-		// Determine if this function targets all databases or a specific one.
-		// AllDatabases field (new) takes precedence; legacy wildcard "*" still supported but deprecated.
 		targetsAllDBs := function.Spec.AllDatabases
 		configuredDB := function.Spec.Database
 
-		// Handle deprecated wildcard pattern
 		if configuredDB == v1.AllDatabases {
 			logger.Warnf("Function %s/%s uses deprecated database wildcard '*'; use allDatabases: true instead", function.Namespace, function.Name)
 			targetsAllDBs = true
 		}
 
-		// Validation: allDatabases: true with a specific database name is invalid
 		if function.Spec.AllDatabases && configuredDB != "" && configuredDB != v1.AllDatabases {
 			err := fmt.Errorf("invalid Function spec: allDatabases is true but database %q is also specified; these fields are mutually exclusive", configuredDB)
 			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
@@ -157,7 +168,6 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			continue
 		}
 
-		// Validation: at least one of Database or AllDatabases must be set
 		if !targetsAllDBs && configuredDB == "" {
 			err := fmt.Errorf("invalid Function spec: neither database nor allDatabases is set; one must be specified")
 			logger.Errorf("Function %s/%s validation error: %v", function.Namespace, function.Name, err)
@@ -165,11 +175,6 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			if updErr := t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); updErr != nil {
 				logger.Errorf("Failed to update function status for %s.%s: %v", function.Spec.Database, function.Name, updErr)
 			}
-			continue
-		}
-
-		// Skip if this function doesn't target this database
-		if !targetsAllDBs && !strings.EqualFold(configuredDB, availableDB) {
 			continue
 		}
 
@@ -193,6 +198,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 				message := fmt.Sprintf("Function skipped because criteria expression evaluated to false for cluster labels: %s", v1.FormatClusterLabels(t.ClusterLabels))
 				function.SetReconcileCondition(metav1.ConditionFalse, "CriteriaNotMatched", message)
 				function.Status.Status = v1.Failed
+				function.Status.ObservedGeneration = function.GetGeneration()
 				function.Status.Error = ""
 				function.Status.Reason = "CriteriaNotMatched"
 				function.Status.Message = message
@@ -210,10 +216,7 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			function.Status.Error = ""
 			function.Status.Reason = "Function finalizing"
 			function.Status.Message = "Finalization in progress; Kusto function drop is disabled"
-			if err := t.store.UpdateStatus(ctx, function); err != nil {
-				logger.Errorf("Failed to update function status for %s.%s prior to deletion: %v", function.Spec.Database, function.Name, err)
-			}
-			noopMsg := fmt.Sprintf("Finalization no-op; skipping Kusto function drop for %s", availableDB)
+			noopMsg := "Finalization no-op; skipping Kusto function drop"
 			function.SetReconcileCondition(metav1.ConditionTrue, "FunctionDeleted", noopMsg)
 			function.Status.Reason = "Function finalized (no-op)"
 			function.Status.Message = noopMsg
@@ -223,43 +226,171 @@ func (t *SyncFunctionsTask) Run(ctx context.Context) error {
 			continue
 		}
 
-		if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint || function.Status.Status != v1.Success || function.GetGeneration() != function.Status.ObservedGeneration {
-			stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(function.Spec.Body)
-			_, err := t.kustoCli.Mgmt(ctx, stmt)
-			if err != nil {
-				parsed := kustoutil.ParseError(err)
-				if !errors.Retry(err) && !kustoutil.IsMissingTableError(err) {
-					logger.Errorf("Permanent failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-					function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionFailed", parsed)
-					if err = t.updateKQLFunctionStatus(ctx, function, v1.PermanentFailure, err); err != nil {
-						logger.Errorf("Failed to update permanent failure status: %v", err)
-					}
-					continue
-				}
-				function.SetReconcileCondition(metav1.ConditionFalse, "KustoExecutionRetrying", parsed)
-				if err := t.updateKQLFunctionStatus(ctx, function, v1.Failed, err); err != nil {
-					logger.Errorf("Failed to persist transient failure for %s.%s: %v", function.Spec.Database, function.Name, err)
-				}
-				logger.Warnf("Transient failure to create function %s.%s: %v", function.Spec.Database, function.Name, err)
-				continue
-			}
+		targets := t.functionTargets(configuredDB, targetsAllDBs)
+		if len(targets) == 0 {
+			continue
+		}
 
-			logger.Infof("Successfully created function %s.%s", function.Spec.Database, function.Name)
-			if t.kustoCli.Endpoint() != function.Spec.AppliedEndpoint {
-				function.Spec.AppliedEndpoint = t.kustoCli.Endpoint()
-				if err := t.store.Update(ctx, function); err != nil {
-					logger.Errorf("Failed to update function %s.%s: %v", function.Spec.Database, function.Name, err)
-				}
-			}
-
-			function.SetReconcileCondition(metav1.ConditionTrue, "KustoExecutionSucceeded", fmt.Sprintf("Function created at %s", t.kustoCli.Endpoint()))
-			if err := t.updateKQLFunctionStatus(ctx, function, v1.Success, nil); err != nil {
-				logger.Errorf("Failed to update success status: %v", err)
-			}
+		functionCtx, cancel := context.WithTimeout(ctx, functionReconcileTimeout)
+		result := reconcileFunctionTargets(functionCtx, function, targets)
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		function.SetReconcileCondition(result.conditionStatus, result.reason, result.message)
+		if err := t.updateKQLFunctionStatus(ctx, function, result.status, result.err); err != nil {
+			logger.Errorf("Failed to update status for function %s/%s: %v", function.Namespace, function.Name, err)
 		}
 	}
 
 	return nil
+}
+
+func (t *SyncFunctionsTask) functionTargets(database string, allDatabases bool) []StatementExecutor {
+	targets := make(map[string]StatementExecutor)
+	for _, executor := range t.executors {
+		if !allDatabases && !strings.EqualFold(database, executor.Database()) {
+			continue
+		}
+		// A null byte cannot occur in endpoints or database names, so the composite key is unambiguous.
+		key := executor.Endpoint() + "\x00" + strings.ToLower(executor.Database())
+		targets[key] = executor
+	}
+
+	keys := make([]string, 0, len(targets))
+	for key := range targets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	result := make([]StatementExecutor, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, targets[key])
+	}
+	return result
+}
+
+type functionTargetResult struct {
+	endpoint  string
+	database  string
+	err       error
+	retryable bool
+}
+
+type functionReconcileResult struct {
+	status          v1.FunctionStatusEnum
+	conditionStatus metav1.ConditionStatus
+	reason          string
+	message         string
+	err             error
+}
+
+func reconcileFunctionTargets(ctx context.Context, function *v1.Function, targets []StatementExecutor) functionReconcileResult {
+	results := make([]functionTargetResult, len(targets))
+	var group errgroup.Group
+	group.SetLimit(maxConcurrentFunctionTargets)
+	for i, target := range targets {
+		group.Go(func() error {
+			results[i] = executeFunctionTarget(ctx, function.Spec.Body, target)
+			return nil
+		})
+	}
+	_ = group.Wait()
+	if stderrors.Is(ctx.Err(), context.Canceled) {
+		return functionReconcileResult{err: ctx.Err()}
+	}
+
+	return aggregateFunctionTargetResults(function, results)
+}
+
+func executeFunctionTarget(ctx context.Context, body string, target StatementExecutor) functionTargetResult {
+	result := functionTargetResult{endpoint: target.Endpoint(), database: target.Database()}
+	targetCtx, cancel := context.WithTimeout(ctx, functionTargetTimeout)
+	defer cancel()
+
+	if err := targetCtx.Err(); err != nil {
+		result.err = err
+		result.retryable = true
+		return result
+	}
+
+	stmt := kql.New(".execute database script with (ThrowOnErrors=true) <| ").AddUnsafe(body)
+	_, result.err = target.Mgmt(targetCtx, stmt)
+	result.retryable = targetCtx.Err() != nil || errors.Retry(result.err) || kustoutil.IsMissingTableError(result.err)
+	return result
+}
+
+func aggregateFunctionTargetResults(function *v1.Function, results []functionTargetResult) functionReconcileResult {
+	transientFailures := 0
+	permanentFailures := 0
+	var firstTransient, firstPermanent *functionTargetResult
+	for _, result := range results {
+		if result.err == nil {
+			logger.Infof("Successfully created function %s/%s on %s/%s", function.Namespace, function.Name, result.endpoint, result.database)
+			continue
+		}
+		if result.retryable {
+			transientFailures++
+			if firstTransient == nil {
+				firstTransient = &result
+			}
+			logger.Warnf("Transient failure to create function %s/%s on %s/%s: %v", function.Namespace, function.Name, result.endpoint, result.database, result.err)
+			continue
+		}
+		permanentFailures++
+		if firstPermanent == nil {
+			firstPermanent = &result
+		}
+		logger.Errorf("Permanent failure to create function %s/%s on %s/%s: %v", function.Namespace, function.Name, result.endpoint, result.database, result.err)
+	}
+
+	failed := transientFailures + permanentFailures
+	if transientFailures > 0 {
+		retryableMessage := fmt.Sprintf("%d target failures are retryable", transientFailures)
+		if transientFailures == 1 {
+			retryableMessage = "1 target failure is retryable"
+		}
+		message := functionFailureMessage(
+			fmt.Sprintf("Function failed on %d of %d targets; %s", failed, len(results), retryableMessage),
+			firstTransient,
+		)
+		return functionReconcileResult{
+			status:          v1.Failed,
+			conditionStatus: metav1.ConditionFalse,
+			reason:          "KustoExecutionRetrying",
+			message:         message,
+			err:             firstTransient.err,
+		}
+	}
+	if permanentFailures > 0 {
+		message := functionFailureMessage(
+			fmt.Sprintf("Function permanently failed on %d of %d targets", permanentFailures, len(results)),
+			firstPermanent,
+		)
+		return functionReconcileResult{
+			status:          v1.PermanentFailure,
+			conditionStatus: metav1.ConditionFalse,
+			reason:          "KustoExecutionFailed",
+			message:         message,
+			err:             firstPermanent.err,
+		}
+	}
+
+	message := fmt.Sprintf("Function created on all %d targets", len(results))
+	return functionReconcileResult{
+		status:          v1.Success,
+		conditionStatus: metav1.ConditionTrue,
+		reason:          "KustoExecutionSucceeded",
+		message:         message,
+	}
+}
+
+func functionFailureMessage(summary string, result *functionTargetResult) string {
+	message := fmt.Sprintf("%s; first error on %s/%s: %s", summary, result.endpoint, result.database, kustoutil.ParseError(result.err))
+	if len(message) > kustoutil.MaxErrorMessageLength {
+		return message[:kustoutil.MaxErrorMessageLength]
+	}
+	return message
 }
 
 func (t *SyncFunctionsTask) updateKQLFunctionStatus(ctx context.Context, fn *v1.Function, status v1.FunctionStatusEnum, err error) error {
