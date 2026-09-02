@@ -1706,16 +1706,17 @@ func TestConfig_ReplaceVariables(t *testing.T) {
 			Database: "$(HOSTNAME)_bar",
 			StaticScrapeTarget: []*ScrapeTarget{
 				{
-					URL: "http://$(HOSTNAME):9999",
+					URL: "http://$(HOSTIP):9999",
 				},
 			},
 		},
 	}
 
 	c.ReplaceVariable("$(HOSTNAME)", "FOO")
+	c.ReplaceVariable("$(HOSTIP)", "10.0.0.1")
 	require.Equal(t, "FOO_bar", c.PrometheusRemoteWrite[0].Database)
 	require.Equal(t, "FOO_bar", c.PrometheusScrape.Database)
-	require.Equal(t, "http://FOO:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
+	require.Equal(t, "http://10.0.0.1:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
 	require.Equal(t, "FOO_bar", c.AddLabels["foo"])
 }
 
