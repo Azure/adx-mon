@@ -34,8 +34,8 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.70.1
+	github.com/prometheus/client_model v0.6.3
+	github.com/prometheus/common v0.71.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/siderolabs/go-kmsg v0.1.6
 	github.com/stretchr/testify v1.12.1
