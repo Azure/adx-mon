@@ -37,6 +37,7 @@ func main() {
 			&cli.IntFlag{Name: "concurrency", Value: 10, Usage: "Number of concurrent queries to run"},
 			&cli.IntFlag{Name: "max-notifications", Value: 25, Usage: "Maximum number of notifications to send per rule"},
 			&cli.StringSliceFlag{Name: "tag", Usage: "Tag in the format of <key>=<value> that applies to execution context"},
+			&cli.BoolFlag{Name: "enable-pprof", Usage: "Enable pprof endpoints."},
 		},
 		Action: realMain,
 		Commands: []*cli.Command{
@@ -106,6 +107,7 @@ func realMain(ctx *cli.Context) error {
 		KustoToken:       ctx.String("auth-token"),
 		Tags:             tags,
 		CtrlCli:          ctrlCli,
+		EnablePprof:      ctx.Bool("enable-pprof"),
 	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())

@@ -277,7 +277,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 
 	if noDestinationCount > 0 {
 		logger.Warnf("Got %d logs without ADX destinations - dropped", noDestinationCount)
-		metrics.InvalidLogsDropped.WithLabelValues("no_destination").Add(float64(noDestinationCount))
+		metrics.InvalidLogsDropped.WithLabelValues().Add(float64(noDestinationCount))
 	}
 
 	return nil

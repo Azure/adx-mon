@@ -300,15 +300,20 @@ func (s *Service) Open(ctx context.Context) error {
 	if s.opts.StorageBackend == storage.BackendADX {
 		fnStore := ingestorstorage.NewFunctions(s.opts.K8sCtrlCli, s.coordinator)
 		crdStore := ingestorstorage.NewCRDHandler(s.opts.K8sCtrlCli, s.coordinator)
+		functionClients := make([]adx.StatementExecutor, 0, len(s.opts.MetricsKustoCli)+len(s.opts.LogsKustoCli))
+		for _, client := range s.opts.MetricsKustoCli {
+			functionClients = append(functionClients, client)
+		}
+		for _, client := range s.opts.LogsKustoCli {
+			functionClients = append(functionClients, client)
+		}
+		functions := adx.NewSyncFunctionsTask(fnStore, functionClients, s.opts.ClusterLabels)
+		s.scheduler.ScheduleEvery(time.Minute, "sync-functions", functions.Run)
+
 		for _, v := range s.opts.MetricsKustoCli {
 			t := adx.NewDropUnusedTablesTask(v)
 			s.scheduler.ScheduleEvery(12*time.Hour, "delete-unused-tables", func(ctx context.Context) error {
 				return t.Run(ctx)
-			})
-
-			f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
-			s.scheduler.ScheduleEvery(time.Minute, "sync-metrics-functions", func(ctx context.Context) error {
-				return f.Run(ctx)
 			})
 
 			m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
@@ -323,11 +328,6 @@ func (s *Service) Open(ctx context.Context) error {
 		}
 
 		for _, v := range s.opts.LogsKustoCli {
-			f := adx.NewSyncFunctionsTask(fnStore, v, s.opts.ClusterLabels)
-			s.scheduler.ScheduleEvery(time.Minute, "sync-logs-functions", func(ctx context.Context) error {
-				return f.Run(ctx)
-			})
-
 			m := adx.NewManagementCommandsTask(crdStore, v, s.opts.ClusterLabels)
 			s.scheduler.ScheduleEvery(10*time.Minute, "management-commands", func(ctx context.Context) error {
 				return m.Run(ctx)

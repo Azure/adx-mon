@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
 )
@@ -123,6 +122,31 @@ func TestTransformWithTimestamp(t *testing.T) {
 	require.True(t, metric.Timestamp.Equal(testTime))
 }
 
+func TestTransformMaterializedKustoRow(t *testing.T) {
+	timestamp := time.Date(2023, 12, 25, 12, 0, 0, 0, time.UTC)
+	transformer := NewKustoToMetricsTransformer(TransformConfig{
+		MetricNameColumn: "metric_name",
+		ValueColumns:     []string{"value"},
+		TimestampColumn:  "timestamp",
+		LabelColumns:     []string{"host"},
+	}, noop.NewMeterProvider().Meter("test"))
+
+	metrics, err := transformer.Transform([]map[string]any{{
+		"metric_name": "cpu_usage",
+		"value":       float64(42.5),
+		"timestamp":   timestamp,
+		"host":        "server1",
+	}})
+
+	require.NoError(t, err)
+	require.Equal(t, []MetricData{{
+		Name:      "cpu_usage_value",
+		Value:     42.5,
+		Timestamp: timestamp,
+		Labels:    map[string]string{"host": "server1"},
+	}}, metrics)
+}
+
 func TestTransformValueTypes(t *testing.T) {
 	config := TransformConfig{
 		ValueColumns:      []string{"value"},
@@ -152,51 +176,6 @@ func TestTransformValueTypes(t *testing.T) {
 
 			metrics, err := transformer.Transform(results)
 			require.NoError(t, err)
-			require.Len(t, metrics, 1)
-			require.Equal(t, tc.expected, metrics[0].Value)
-		})
-	}
-}
-
-func TestTransformKustoValueTypes(t *testing.T) {
-	config := TransformConfig{
-		ValueColumns:      []string{"value"},
-		DefaultMetricName: "test_metric",
-	}
-	meter := noop.NewMeterProvider().Meter("test")
-	transformer := NewKustoToMetricsTransformer(config, meter)
-
-	testCases := []struct {
-		name     string
-		value    any
-		expected float64
-	}{
-		{"value.Long valid", value.Long{Value: 42, Valid: true}, 42.0},
-		{"value.Real valid", value.Real{Value: 42.5, Valid: true}, 42.5},
-		{"value.Int valid", value.Int{Value: 42, Valid: true}, 42.0},
-		{"value.Long invalid", value.Long{Value: 42, Valid: false}, 0.0},   // Should fail validation
-		{"value.Real invalid", value.Real{Value: 42.5, Valid: false}, 0.0}, // Should fail validation
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			results := []map[string]any{
-				{"value": tc.value},
-			}
-
-			// Test validation first
-			err := transformer.Validate(results)
-			if tc.name == "value.Long invalid" || tc.name == "value.Real invalid" {
-				// These should fail validation due to Valid=false
-				require.Error(t, err)
-				require.Contains(t, err.Error(), "null value")
-				return
-			}
-			require.NoError(t, err, "Validation should pass for valid Kusto types")
-
-			// Test transformation
-			metrics, err := transformer.Transform(results)
-			require.NoError(t, err, "Transform should handle Kusto types")
 			require.Len(t, metrics, 1)
 			require.Equal(t, tc.expected, metrics[0].Value)
 		})
@@ -249,6 +228,7 @@ func TestTransformErrors(t *testing.T) {
 		config  TransformConfig
 		results []map[string]any
 		wantErr bool
+		errMsg  string
 	}{
 		{
 			name: "missing value column",
@@ -271,6 +251,7 @@ func TestTransformErrors(t *testing.T) {
 				{"value": nil},
 			},
 			wantErr: true,
+			errMsg:  "value column 'value' contains null value",
 		},
 		{
 			name: "no metric name config",
@@ -281,6 +262,44 @@ func TestTransformErrors(t *testing.T) {
 				{"value": 42.0},
 			},
 			wantErr: true,
+		},
+		{
+			name: "null metric name",
+			config: TransformConfig{
+				ValueColumns:     []string{"value"},
+				MetricNameColumn: "name",
+			},
+			results: []map[string]any{
+				{"value": 42.0, "name": nil},
+			},
+			wantErr: true,
+			errMsg:  "metric name column 'name' contains null value",
+		},
+		{
+			name: "null timestamp",
+			config: TransformConfig{
+				ValueColumns:      []string{"value"},
+				DefaultMetricName: "test",
+				TimestampColumn:   "timestamp",
+			},
+			results: []map[string]any{
+				{"value": 42.0, "timestamp": nil},
+			},
+			wantErr: true,
+			errMsg:  "timestamp column 'timestamp' contains null value",
+		},
+		{
+			name: "null label",
+			config: TransformConfig{
+				ValueColumns:      []string{"value"},
+				DefaultMetricName: "test",
+				LabelColumns:      []string{"host"},
+			},
+			results: []map[string]any{
+				{"value": 42.0, "host": nil},
+			},
+			wantErr: true,
+			errMsg:  "label column 'host' contains null value",
 		},
 		{
 			name: "missing metric name column",
@@ -323,6 +342,9 @@ func TestTransformErrors(t *testing.T) {
 			_, err := transformer.Transform(tc.results)
 			if tc.wantErr {
 				require.Error(t, err)
+				if tc.errMsg != "" {
+					require.ErrorContains(t, err, tc.errMsg)
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -850,85 +872,32 @@ func TestTransformBackwardCompatibility(t *testing.T) {
 	})
 }
 
-func TestValidateKustoValueTypes(t *testing.T) {
+func TestValidateNativeValueTypes(t *testing.T) {
 	meter := noop.NewMeterProvider().Meter("test")
+	transformer := NewKustoToMetricsTransformer(TransformConfig{
+		ValueColumns:      []string{"value"},
+		DefaultMetricName: "test",
+	}, meter)
 
-	testCases := []struct {
+	tests := []struct {
 		name    string
-		config  TransformConfig
-		results []map[string]any
-		wantErr bool
-		errMsg  string
+		value   any
+		wantErr string
 	}{
-		{
-			name: "value.Long valid should pass validation",
-			config: TransformConfig{
-				ValueColumns:      []string{"value"},
-				DefaultMetricName: "test",
-			},
-			results: []map[string]any{
-				{"value": value.Long{Value: 42, Valid: true}},
-			},
-			wantErr: false,
-		},
-		{
-			name: "value.Real valid should pass validation",
-			config: TransformConfig{
-				ValueColumns:      []string{"value"},
-				DefaultMetricName: "test",
-			},
-			results: []map[string]any{
-				{"value": value.Real{Value: 42.5, Valid: true}},
-			},
-			wantErr: false,
-		},
-		{
-			name: "value.Int valid should pass validation",
-			config: TransformConfig{
-				ValueColumns:      []string{"value"},
-				DefaultMetricName: "test",
-			},
-			results: []map[string]any{
-				{"value": value.Int{Value: 42, Valid: true}},
-			},
-			wantErr: false,
-		},
-		{
-			name: "value.Long invalid should fail validation",
-			config: TransformConfig{
-				ValueColumns:      []string{"value"},
-				DefaultMetricName: "test",
-			},
-			results: []map[string]any{
-				{"value": value.Long{Value: 42, Valid: false}},
-			},
-			wantErr: true,
-			errMsg:  "null value",
-		},
-		{
-			name: "value.Real invalid should fail validation",
-			config: TransformConfig{
-				ValueColumns:      []string{"value"},
-				DefaultMetricName: "test",
-			},
-			results: []map[string]any{
-				{"value": value.Real{Value: 42.5, Valid: false}},
-			},
-			wantErr: true,
-			errMsg:  "null value",
-		},
+		{name: "real", value: float64(42.5)},
+		{name: "int", value: int32(42)},
+		{name: "long", value: int64(42)},
+		{name: "null", value: nil, wantErr: "null value"},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			transformer := NewKustoToMetricsTransformer(tc.config, meter)
-			err := transformer.Validate(tc.results)
-			if tc.wantErr {
-				require.Error(t, err)
-				require.Contains(t, err.Error(), tc.errMsg)
-			} else {
-				require.NoError(t, err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := transformer.Validate([]map[string]any{{"value": test.value}})
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
 			}
+			require.NoError(t, err)
 		})
 	}
 }
@@ -1609,21 +1578,6 @@ func TestExtractValues(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "extraction with Kusto value types",
-			row: map[string]any{
-				"LongValue": value.Long{Value: 12345, Valid: true},
-				"RealValue": value.Real{Value: 98.76, Valid: true},
-				"IntValue":  value.Int{Value: 999, Valid: true},
-			},
-			valueColumns: []string{"LongValue", "RealValue", "IntValue"},
-			expected: map[string]float64{
-				"LongValue": 12345.0,
-				"RealValue": 98.76,
-				"IntValue":  999.0,
-			},
-			wantErr: false,
-		},
-		{
 			name: "extraction with string numeric values",
 			row: map[string]any{
 				"StringInt":   "42",
@@ -1658,17 +1612,6 @@ func TestExtractValues(t *testing.T) {
 			expected:     nil,
 			wantErr:      true,
 			errMsg:       "value column 'NullColumn' contains null value",
-		},
-		{
-			name: "invalid Kusto value",
-			row: map[string]any{
-				"ValidColumn":  42.0,
-				"InvalidValue": value.Long{Value: 0, Valid: false},
-			},
-			valueColumns: []string{"ValidColumn", "InvalidValue"},
-			expected:     nil,
-			wantErr:      true,
-			errMsg:       "value column 'InvalidValue' contains null value",
 		},
 		{
 			name: "unparseable string value",
@@ -1755,13 +1698,6 @@ func TestExtractValueFromColumn(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:       "extract Kusto Long",
-			row:        map[string]any{"test_col": value.Long{Value: 12345, Valid: true}},
-			columnName: "test_col",
-			expected:   12345.0,
-			wantErr:    false,
-		},
-		{
 			name:       "extract string number",
 			row:        map[string]any{"test_col": "3.14159"},
 			columnName: "test_col",
@@ -1779,14 +1715,6 @@ func TestExtractValueFromColumn(t *testing.T) {
 		{
 			name:       "null value",
 			row:        map[string]any{"test_col": nil},
-			columnName: "test_col",
-			expected:   0,
-			wantErr:    true,
-			errMsg:     "value column 'test_col' contains null value",
-		},
-		{
-			name:       "invalid Kusto Real",
-			row:        map[string]any{"test_col": value.Real{Value: 0, Valid: false}},
 			columnName: "test_col",
 			expected:   0,
 			wantErr:    true,
@@ -1904,7 +1832,7 @@ func BenchmarkExtractValues(b *testing.B) {
 			map[string]any{
 				"col1": 42.0,
 				"col2": int(43),
-				"col3": value.Long{Value: 44, Valid: true},
+				"col3": int64(44),
 				"col4": "45.5",
 				"col5": float32(46.5),
 			},

@@ -12,53 +12,79 @@ metadata:
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: {{ .Namespace }}:ingestor
+  name: adx-mon-ingestor-pods
+  namespace: {{ .Namespace }}
 rules:
   - apiGroups:
       - ""
     resources:
-      - namespaces
       - pods
     verbs:
       - get
       - list
       - watch
-      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: adx-mon-ingestor-pods
+  namespace: {{ .Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: adx-mon-ingestor-pods
+subjects:
+  - kind: ServiceAccount
+    name: ingestor
+    namespace: {{ .Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Namespace }}:ingestor
+  labels:
+    adx-mon.azure.com/managed-by: ingestor-operator
+rules:
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions
+    verbs:
+      - get
+      - list
+      - update
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
       - managementcommands
       - summaryrules
     verbs:
       - get
       - list
-      - update
-      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions/status
+      - managementcommands/status
+      - summaryrules/status
     verbs:
       - update
-      - patch
   - apiGroups:
       - adx-mon.azure.com
     resources:
       - functions/finalizers
-      - managementcommands/finalizers
-      - summaryrules/finalizers
     verbs:
-      - get
       - update
-      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: {{ .Namespace }}:ingestor
+  labels:
+    adx-mon.azure.com/managed-by: ingestor-operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

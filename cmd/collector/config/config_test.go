@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -1259,6 +1260,47 @@ func TestConfig_Validate_PrometheusRemoteWrite(t *testing.T) {
 	}
 }
 
+func TestEndpointRequestTimeouts(t *testing.T) {
+	prom := &PrometheusRemoteWrite{Database: "db", Path: "/receive"}
+	require.NoError(t, prom.Validate())
+	require.Zero(t, prom.RequestTimeoutSeconds)
+	promTimeout, err := prom.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = 30
+	promTimeout, err = prom.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, promTimeout)
+	prom.RequestTimeoutSeconds = MaxRequestTimeoutSeconds
+	require.NoError(t, prom.Validate())
+	prom.RequestTimeoutSeconds++
+	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must not exceed 300")
+	prom.RequestTimeoutSeconds = -1
+	require.EqualError(t, prom.Validate(), "prometheus-remote-write.request-timeout-seconds must be greater than 0")
+
+	logs := &OtelLog{}
+	require.NoError(t, logs.Validate())
+	require.Zero(t, logs.RequestTimeoutSeconds)
+	logsTimeout, err := logs.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, logsTimeout)
+	logs.RequestTimeoutSeconds = MaxRequestTimeoutSeconds + 1
+	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must not exceed 300")
+	logs.RequestTimeoutSeconds = -1
+	require.EqualError(t, logs.Validate(), "otel-log.request-timeout-seconds must be greater than 0")
+
+	metrics := &OtelMetric{Database: "db", Path: "/v1/metrics"}
+	require.NoError(t, metrics.Validate())
+	require.Zero(t, metrics.RequestTimeoutSeconds)
+	metricsTimeout, err := metrics.RequestTimeout()
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, metricsTimeout)
+	metrics.RequestTimeoutSeconds = MaxRequestTimeoutSeconds + 1
+	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must not exceed 300")
+	metrics.RequestTimeoutSeconds = -1
+	require.EqualError(t, metrics.Validate(), "otel-metric.request-timeout-seconds must be greater than 0")
+}
+
 func TestConfig_Validate_HostLog(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1664,16 +1706,17 @@ func TestConfig_ReplaceVariables(t *testing.T) {
 			Database: "$(HOSTNAME)_bar",
 			StaticScrapeTarget: []*ScrapeTarget{
 				{
-					URL: "http://$(HOSTNAME):9999",
+					URL: "http://$(HOSTIP):9999",
 				},
 			},
 		},
 	}
 
 	c.ReplaceVariable("$(HOSTNAME)", "FOO")
+	c.ReplaceVariable("$(HOSTIP)", "10.0.0.1")
 	require.Equal(t, "FOO_bar", c.PrometheusRemoteWrite[0].Database)
 	require.Equal(t, "FOO_bar", c.PrometheusScrape.Database)
-	require.Equal(t, "http://FOO:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
+	require.Equal(t, "http://10.0.0.1:9999", c.PrometheusScrape.StaticScrapeTarget[0].URL)
 	require.Equal(t, "FOO_bar", c.AddLabels["foo"])
 }
 

@@ -2,18 +2,71 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/storage"
+	connect "github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestRequestTimeoutInterceptor(t *testing.T) {
+	interceptor := requestTimeoutInterceptor(10 * time.Millisecond)
+	wrapped := interceptor.WrapUnary(func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	_, err := wrapped(context.Background(), nil)
+	require.Error(t, err)
+	var connectErr *connect.Error
+	require.True(t, errors.As(err, &connectErr))
+	require.Equal(t, connect.CodeDeadlineExceeded, connectErr.Code())
+}
+
+func TestHTTPWriteTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		enablePprof bool
+		handlers    []*http.HttpHandler
+		want        time.Duration
+	}{
+		{name: "default", want: 30 * time.Second},
+		{name: "pprof", enablePprof: true, want: 60 * time.Second},
+		{
+			name:     "short endpoint retains default",
+			handlers: []*http.HttpHandler{{Timeout: 15 * time.Second}},
+			want:     30 * time.Second,
+		},
+		{
+			name: "longest endpoint plus grace",
+			handlers: []*http.HttpHandler{
+				{Timeout: 45 * time.Second},
+				{Timeout: 5 * time.Minute},
+			},
+			want: 5*time.Minute + httpWriteTimeoutGrace,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, httpWriteTimeout(tt.enablePprof, tt.handlers))
+		})
+	}
+}
+
+func TestRequestWriteTimeout(t *testing.T) {
+	require.Equal(t, 30*time.Second, requestWriteTimeout(30*time.Second, 15*time.Second))
+	require.Equal(t, 5*time.Minute+httpWriteTimeoutGrace, requestWriteTimeout(30*time.Second, 5*time.Minute))
+}
 
 const MetricListenAddr = ":9090"
 

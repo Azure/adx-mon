@@ -15,8 +15,8 @@ import (
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/testutils"
 	"github.com/Azure/adx-mon/pkg/testutils/kustainer"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -78,6 +78,17 @@ func TestWrapHeartbeatStageError(t *testing.T) {
 			require.ErrorIs(t, err, tt.err)
 		})
 	}
+}
+
+func TestBuildHeartbeatQuery(t *testing.T) {
+	t.Parallel()
+
+	query, err := buildHeartbeatQuery("HeartbeatTable", "1h30m")
+	require.NoError(t, err)
+	require.Equal(t, `HeartbeatTable | where Timestamp > ago(timespan(01:30:00.0000000)) | summarize arg_max(Timestamp, Schema) by ClusterEndpoint`, query.String())
+
+	_, err = buildHeartbeatQuery("Heartbeat", "not-a-duration")
+	require.EqualError(t, err, `invalid heartbeat TTL "not-a-duration": time: invalid duration "not-a-duration"`)
 }
 
 func TestEnsureDatabasesHandlesNilFederation(t *testing.T) {
@@ -718,9 +729,10 @@ func TestHeartbeatFederatedClusters(t *testing.T) {
 	require.True(t, created)
 
 	// Create some tables in the partitioned cluster
-	ep := kusto.NewConnectionStringBuilder(kustainerPartitionedCluster.ConnectionUrl())
-	client, err := kusto.New(ep)
+	ep := azkustodata.NewConnectionStringBuilder(kustainerPartitionedCluster.ConnectionUrl())
+	client, err := azkustodata.New(ep)
 	require.NoError(t, err)
+	defer client.Close()
 
 	for _, tableName := range []string{"Table1", "Table2"} {
 		stmt := kql.New("").AddUnsafe(fmt.Sprintf(".create table %s (x: int)", tableName))
@@ -1135,8 +1147,8 @@ func TestEnsureHubTables(t *testing.T) {
 	testcontainers.CleanupContainer(t, kustoContainer)
 	require.NoError(t, err)
 
-	ep := kusto.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
-	client, err := kusto.New(ep)
+	ep := azkustodata.NewConnectionStringBuilder(kustoContainer.ConnectionUrl())
+	client, err := azkustodata.New(ep)
 	require.NoError(t, err)
 	defer client.Close()
 

@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"text/template"
@@ -15,6 +16,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/celutil"
 	"github.com/Azure/adx-mon/pkg/logger"
 	appsv1 "k8s.io/api/apps/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +35,13 @@ import (
 //go:embed manifests/crds/functions_crd.yaml manifests/crds/managementcommands_crd.yaml manifests/crds/summaryrules_crd.yaml manifests/ingestor.yaml
 var ingestorCrdsFS embed.FS
 
+const (
+	ingestorSecurityFinalizer = "ingestor.adx-mon.azure.com/security-cleanup"
+	ingestorManagedLabelKey   = "adx-mon.azure.com/managed-by"
+	ingestorManagedLabelValue = "ingestor-operator"
+	ingestorPodRoleName       = "adx-mon-ingestor-pods"
+)
+
 type IngestorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -44,6 +53,18 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	ingestor := &adxmonv1.Ingestor{}
 	if err := r.Get(ctx, req.NamespacedName, ingestor); err != nil {
 		return r.ReconcileComponent(ctx, req)
+	}
+
+	if !ingestor.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.cleanupIngestorSecurity(ctx, ingestor)
+	}
+
+	if err := r.reconcileIngestorSecurity(ctx, ingestor); err != nil {
+		_ = r.setSecurityCondition(ctx, ingestor, metav1.ConditionFalse, "SecurityMigrationFailed", err.Error())
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile ingestor security controls: %w", err)
+	}
+	if err := r.setSecurityCondition(ctx, ingestor, metav1.ConditionTrue, "SecurityMigrationComplete", "Ingestor security controls are reconciled"); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if expr := ingestor.Spec.CriteriaExpression; expr != "" {
@@ -67,11 +88,6 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	if !ingestor.DeletionTimestamp.IsZero() {
-		logger.Infof("Ingestor %s/%s is being deleted, skipping reconciliation", ingestor.Namespace, ingestor.Name)
-		return ctrl.Result{}, nil
-	}
-
 	condition := meta.FindStatusCondition(ingestor.Status.Conditions, adxmonv1.IngestorConditionOwner)
 	switch {
 	case condition == nil:
@@ -92,6 +108,204 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *IngestorReconciler) reconcileIngestorSecurity(ctx context.Context, ingestor *adxmonv1.Ingestor) error {
+	namespace := ingestor.Namespace
+	clusterRoleName := namespace + ":ingestor"
+
+	// Do not provision resources for a new Ingestor that may be excluded by its criteria.
+	// Existing installations always have either this ClusterRole or the StatefulSet.
+	existingClusterRole := &rbacv1.ClusterRole{}
+	if err := r.Get(ctx, client.ObjectKey{Name: clusterRoleName}, existingClusterRole); err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+		existingStatefulSet := &appsv1.StatefulSet{}
+		if err := r.Get(ctx, client.ObjectKey{Name: "ingestor", Namespace: namespace}, existingStatefulSet); err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+	}
+
+	// Revoke the vulnerable cluster-wide core API permissions before any additive
+	// migration step that could fail.
+	clusterRole := desiredIngestorClusterRole(namespace)
+	if err := r.reconcileClusterRole(ctx, clusterRole); err != nil {
+		return err
+	}
+
+	if !controllerutil.ContainsFinalizer(ingestor, ingestorSecurityFinalizer) {
+		controllerutil.AddFinalizer(ingestor, ingestorSecurityFinalizer)
+		if err := r.Update(ctx, ingestor); err != nil {
+			return err
+		}
+	}
+
+	clusterRoleBinding := desiredIngestorClusterRoleBinding(namespace)
+	if err := r.reconcileClusterRoleBinding(ctx, clusterRoleBinding); err != nil {
+		return err
+	}
+
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: ingestorPodRoleName, Namespace: namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"pods"},
+			Verbs:     []string{"get", "list", "watch", "patch"},
+		}},
+	}
+	if err := controllerutil.SetControllerReference(ingestor, role, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.reconcileRole(ctx, role); err != nil {
+		return err
+	}
+
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: ingestorPodRoleName, Namespace: namespace},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "Role",
+			Name:     ingestorPodRoleName,
+		},
+		Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
+	}
+	if err := controllerutil.SetControllerReference(ingestor, roleBinding, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.reconcileRoleBinding(ctx, roleBinding); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func desiredIngestorClusterRole(namespace string) *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor", Labels: map[string]string{ingestorManagedLabelKey: ingestorManagedLabelValue}},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{"adx-mon.azure.com"}, Resources: []string{"functions"}, Verbs: []string{"get", "list", "update"}},
+			{APIGroups: []string{"adx-mon.azure.com"}, Resources: []string{"managementcommands", "summaryrules"}, Verbs: []string{"get", "list"}},
+			{APIGroups: []string{"adx-mon.azure.com"}, Resources: []string{"functions/status", "managementcommands/status", "summaryrules/status"}, Verbs: []string{"update"}},
+			{APIGroups: []string{"adx-mon.azure.com"}, Resources: []string{"functions/finalizers"}, Verbs: []string{"update"}},
+		},
+	}
+}
+
+func desiredIngestorClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	name := namespace + ":ingestor"
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{ingestorManagedLabelKey: ingestorManagedLabelValue}},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
+	}
+}
+
+func (r *IngestorReconciler) reconcileRole(ctx context.Context, desired *rbacv1.Role) error {
+	existing := &rbacv1.Role{}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, existing); err != nil {
+		if errors.IsNotFound(err) {
+			return r.Create(ctx, desired)
+		}
+		return err
+	}
+	if reflect.DeepEqual(existing.Rules, desired.Rules) && reflect.DeepEqual(existing.OwnerReferences, desired.OwnerReferences) {
+		return nil
+	}
+	existing.Rules = desired.Rules
+	existing.OwnerReferences = desired.OwnerReferences
+	return r.Update(ctx, existing)
+}
+
+func (r *IngestorReconciler) reconcileRoleBinding(ctx context.Context, desired *rbacv1.RoleBinding) error {
+	existing := &rbacv1.RoleBinding{}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, existing); err != nil {
+		if errors.IsNotFound(err) {
+			return r.Create(ctx, desired)
+		}
+		return err
+	}
+	if !reflect.DeepEqual(existing.RoleRef, desired.RoleRef) {
+		if err := r.Delete(ctx, existing); err != nil {
+			return err
+		}
+		return r.Create(ctx, desired)
+	}
+	if reflect.DeepEqual(existing.Subjects, desired.Subjects) && reflect.DeepEqual(existing.OwnerReferences, desired.OwnerReferences) {
+		return nil
+	}
+	existing.Subjects = desired.Subjects
+	existing.OwnerReferences = desired.OwnerReferences
+	return r.Update(ctx, existing)
+}
+
+func (r *IngestorReconciler) reconcileClusterRole(ctx context.Context, desired *rbacv1.ClusterRole) error {
+	existing := &rbacv1.ClusterRole{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil {
+		if errors.IsNotFound(err) {
+			return r.Create(ctx, desired)
+		}
+		return err
+	}
+	if reflect.DeepEqual(existing.Rules, desired.Rules) && reflect.DeepEqual(existing.Labels, desired.Labels) {
+		return nil
+	}
+	existing.Rules = desired.Rules
+	existing.Labels = desired.Labels
+	return r.Update(ctx, existing)
+}
+
+func (r *IngestorReconciler) reconcileClusterRoleBinding(ctx context.Context, desired *rbacv1.ClusterRoleBinding) error {
+	existing := &rbacv1.ClusterRoleBinding{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil {
+		if errors.IsNotFound(err) {
+			return r.Create(ctx, desired)
+		}
+		return err
+	}
+	if !reflect.DeepEqual(existing.RoleRef, desired.RoleRef) {
+		if err := r.Delete(ctx, existing); err != nil {
+			return err
+		}
+		return r.Create(ctx, desired)
+	}
+	if reflect.DeepEqual(existing.Subjects, desired.Subjects) && reflect.DeepEqual(existing.Labels, desired.Labels) {
+		return nil
+	}
+	existing.Subjects = desired.Subjects
+	existing.Labels = desired.Labels
+	return r.Update(ctx, existing)
+}
+
+func (r *IngestorReconciler) cleanupIngestorSecurity(ctx context.Context, ingestor *adxmonv1.Ingestor) error {
+	if !controllerutil.ContainsFinalizer(ingestor, ingestorSecurityFinalizer) {
+		return nil
+	}
+	name := ingestor.Namespace + ":ingestor"
+	for _, obj := range []client.Object{
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}},
+	} {
+		if err := r.Get(ctx, client.ObjectKey{Name: name}, obj); err != nil {
+			if errors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		if obj.GetLabels()[ingestorManagedLabelKey] != ingestorManagedLabelValue {
+			continue
+		}
+		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	}
+	controllerutil.RemoveFinalizer(ingestor, ingestorSecurityFinalizer)
+	return r.Update(ctx, ingestor)
 }
 
 func (r *IngestorReconciler) IsReady(ctx context.Context, ingestor *adxmonv1.Ingestor) (ctrl.Result, error) {
@@ -308,15 +522,40 @@ func (r *IngestorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return requests
 	}
+	securityMapFn := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		name := obj.GetName()
+		if !strings.HasSuffix(name, ":ingestor") {
+			return nil
+		}
+		separator := strings.LastIndex(name, ":ingestor")
+		if separator <= 0 {
+			return nil
+		}
+		namespace := name[:separator]
+		var ingestors adxmonv1.IngestorList
+		if err := r.List(ctx, &ingestors, client.InNamespace(namespace)); err != nil {
+			logger.Errorf("Failed to list Ingestors in namespace %s for RBAC drift event: %v", namespace, err)
+			return nil
+		}
+		requests := make([]reconcile.Request, 0, len(ingestors.Items))
+		for _, ingestor := range ingestors.Items {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&ingestor)})
+		}
+		return requests
+	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&adxmonv1.Ingestor{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&rbacv1.Role{}).
+		Owns(&rbacv1.RoleBinding{}).
 		// Add Watches for ADXCluster changes
 		Watches(
 			&adxmonv1.ADXCluster{},
 			handler.EnqueueRequestsFromMapFunc(mapFn),
 		).
+		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(securityMapFn)).
+		Watches(&rbacv1.ClusterRoleBinding{}, handler.EnqueueRequestsFromMapFunc(securityMapFn)).
 		Complete(r)
 }
 
@@ -494,6 +733,23 @@ func (r *IngestorReconciler) setCondition(ctx context.Context, ingestor *adxmonv
 	if meta.SetStatusCondition(&ingestor.Status.Conditions, condition) {
 		if err := r.Status().Update(ctx, ingestor); err != nil {
 			return fmt.Errorf("failed to update status: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *IngestorReconciler) setSecurityCondition(ctx context.Context, ingestor *adxmonv1.Ingestor, status metav1.ConditionStatus, reason, message string) error {
+	condition := metav1.Condition{
+		Type:               adxmonv1.IngestorConditionSecurityReady,
+		Status:             status,
+		ObservedGeneration: ingestor.GetGeneration(),
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	}
+	if meta.SetStatusCondition(&ingestor.Status.Conditions, condition) {
+		if err := r.Status().Update(ctx, ingestor); err != nil {
+			return fmt.Errorf("failed to update security status: %w", err)
 		}
 	}
 	return nil

@@ -199,6 +199,8 @@ Prometheus remote write accepts metrics from [Prometheus remote write protocol](
   database = 'Metrics'
   # The path to listen on for prometheus remote write requests.  Defaults to /receive.
   path = '/receive'
+  # Maximum duration in seconds for a remote write request. Defaults to 15 and cannot exceed 300.
+  request-timeout-seconds = 15
   # Regexes of metrics to drop.
   drop-metrics = [
     '^kube_pod_ips$',
@@ -240,6 +242,8 @@ The Otel log endpoint accepts [OTLP/HTTP](https://opentelemetry.io/docs/specs/ot
 ```toml
 # Defines an OpenTelemetry log endpoint. Accepts OTLP/HTTP.
 [otel-log]
+  # Maximum duration in seconds for an OTLP/HTTP logs request. Defaults to 15 and cannot exceed 300.
+  request-timeout-seconds = 15
   # Attributes lifted from the Body and added to Attributes.
   lift-attributes = [
     'host'
@@ -275,6 +279,8 @@ The Otel metrics endpoint accepts [OTLP/HTTP and/or OTLP/gRPC](https://opentelem
   path = '/v1/otlpmetrics'
   # The port to listen on for OTLP/gRPC requests.
   grpc-port = 4317
+  # Maximum duration in seconds for an OTLP metrics request. Defaults to 15 and cannot exceed 300.
+  request-timeout-seconds = 15
   # Regexes of metrics to drop.
   drop-metrics = [
     '^kube_pod_ips$',
@@ -421,6 +427,8 @@ Available parser types:
     parsers = []
     # Optional journal metadata fields http://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html
     journal-fields = []
+    # Optional directory to read journal files from. When unset, the local system journal is opened, which only exposes the journal matching the current machine ID. Set this to read a journal belonging to another machine ID, such as a host journal bind-mounted into a container.
+    journal-path = ''
 
   # Defines a kernel target to scrape.
   [[host-log.kernel-target]]
@@ -493,7 +501,6 @@ Enable watching Kubernetes node labels and annotations to add them as labels to 
 [metadata-watch]
   # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
   [metadata-watch.kubernetes-node]
-
 # Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
 [add-metadata-labels]
   # Configures the node labels and annotations to add as labels
@@ -559,7 +566,6 @@ Pair a global node metadata mapping with host log-specific aliases so different 
 [metadata-watch]
   # Defines a watcher for Kubernetes node metadata (labels, annotations), consumed by add-metadata-labels
   [metadata-watch.kubernetes-node]
-
 # Optional global configuration for adding dynamic metadata as labels to all logs and metrics.
 [add-metadata-labels]
   # Configures the node labels and annotations to add as labels

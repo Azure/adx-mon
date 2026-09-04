@@ -50,6 +50,7 @@ func main() {
 		UsageText: ``,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname filter override"},
+			&cli.StringFlag{Name: "host-ip", Usage: "Host IP config variable override"},
 			&cli.StringFlag{Name: "config", Usage: "Config file path"},
 			&cli.StringFlag{
 				Name:        "storage-backend",
@@ -152,7 +153,9 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	cfg.ReplaceVariable("$(HOSTNAME)", hostname)
-
+	if hostIP := ctx.String("host-ip"); hostIP != "" {
+		cfg.ReplaceVariable("$(HOSTIP)", hostIP)
+	}
 	var kubeNode *metadata.KubeNode
 	if cfg.MetadataWatch != nil && cfg.MetadataWatch.KubernetesNode != nil {
 		client, err := getKubeClient(cfg.Kubeconfig)
@@ -373,6 +376,10 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {
+		requestTimeout, err := v.RequestTimeout()
+		if err != nil {
+			return err
+		}
 		// Add this pods identity for all metrics received
 		addLabels := mergeMaps(cfg.AddLabels, map[string]string{
 			"adxmon_namespace": k8s.Instance.Namespace,
@@ -451,7 +458,8 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		opts.PromMetricsHandlers = append(opts.PromMetricsHandlers, collector.PrometheusRemoteWriteHandlerOpts{
-			Path: v.Path,
+			Path:           v.Path,
+			RequestTimeout: requestTimeout,
 			MetricOpts: collector.MetricsHandlerOpts{
 				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
 				AddLabels:                addLabels,
@@ -467,6 +475,10 @@ func realMain(ctx *cli.Context) error {
 	}
 
 	for _, v := range cfg.OtelMetric {
+		requestTimeout, err := v.RequestTimeout()
+		if err != nil {
+			return err
+		}
 		// Add this pods identity for all metrics received
 		addLabels := mergeMaps(cfg.AddLabels, v.AddLabels, map[string]string{
 			"adxmon_namespace": k8s.Instance.Namespace,
@@ -545,8 +557,9 @@ func realMain(ctx *cli.Context) error {
 		}
 
 		opts.OtlpMetricsHandlers = append(opts.OtlpMetricsHandlers, collector.OtlpMetricsHandlerOpts{
-			Path:     v.Path,
-			GrpcPort: v.GrpcPort,
+			Path:           v.Path,
+			GrpcPort:       v.GrpcPort,
+			RequestTimeout: requestTimeout,
 			MetricOpts: collector.MetricsHandlerOpts{
 				DefaultDropMetrics:       defaultDropMetrics,
 				DynamicLabeler:           newMetricLabeler(kubeNode, cfg.AddMetadataLabels, v.AddMetadataLabels),
@@ -563,6 +576,10 @@ func realMain(ctx *cli.Context) error {
 
 	if cfg.OtelLog != nil {
 		v := cfg.OtelLog
+		requestTimeout, err := v.RequestTimeout()
+		if err != nil {
+			return err
+		}
 		addAttributes := mergeMaps(cfg.AddAttributes, v.AddAttributes)
 
 		createHttpFunc := func(store storage.Store, health *cluster.Health) (*logs.Service, *http.HttpHandler, error) {
@@ -615,6 +632,7 @@ func realMain(ctx *cli.Context) error {
 			httpHandler := &http.HttpHandler{
 				Path:    "/v1/logs",
 				Handler: logsSvc.Handler,
+				Timeout: requestTimeout,
 			}
 			return workerSvc, httpHandler, nil
 		}
@@ -833,6 +851,7 @@ func realMain(ctx *cli.Context) error {
 						Table:          target.Table,
 						LogLineParsers: parsers,
 						JournalFields:  target.JournalFields,
+						JournalPath:    target.JournalPath,
 					})
 				}
 

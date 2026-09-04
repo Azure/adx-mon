@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	azkustoerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
-	kustoerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +33,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto http error extracts @message", func(t *testing.T) {
 		body := `{"error":{"@message": "this function is invalid"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "this function is invalid", result)
@@ -43,7 +42,7 @@ func TestParseError(t *testing.T) {
 	t.Run("long kusto http error @message is truncated", func(t *testing.T) {
 		longMsg := strings.Repeat("b", 300)
 		body := `{"error":{"@message": "` + longMsg + `"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, longMsg[:256], result)
@@ -73,7 +72,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with additional details is parsed correctly", func(t *testing.T) {
 		body := `{"error":{"@message": "function is invalid", "code": "InvalidFunction"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "function is invalid", result)
@@ -81,7 +80,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with malformed json", func(t *testing.T) {
 		body := `{"error": malformed json}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -90,7 +89,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with missing error field", func(t *testing.T) {
 		body := `{"other": "field"}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -99,7 +98,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with missing @message field", func(t *testing.T) {
 		body := `{"error": {"code": "BadRequest"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -108,7 +107,7 @@ func TestParseError(t *testing.T) {
 
 	t.Run("kusto error with wrong @message type", func(t *testing.T) {
 		body := `{"error": {"@message": 123}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message
@@ -117,24 +116,16 @@ func TestParseError(t *testing.T) {
 
 	t.Run("wrapped kusto error", func(t *testing.T) {
 		body := `{"error": {"@message": "Invalid KQL query"}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 		wrappedErr := fmt.Errorf("query failed: %w", kustoErr)
 
 		result := ParseError(wrappedErr)
 		require.Equal(t, "Invalid KQL query", result)
 	})
 
-	t.Run("azkusto http error extracts @message", func(t *testing.T) {
-		body := `{"error":{"@message": "this function is invalid"}}`
-		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
-
-		result := ParseError(kustoErr)
-		require.Equal(t, "this function is invalid", result)
-	})
-
 	t.Run("empty kusto error message", func(t *testing.T) {
 		body := `{"error": {"@message": ""}}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		// Should fall back to the standard error message since @message is empty
@@ -151,7 +142,7 @@ func TestParseError(t *testing.T) {
 				}
 			}
 		}`
-		kustoErr := kustoerrors.HTTP(kustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
+		kustoErr := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "bad request", 400, io.NopCloser(strings.NewReader(body)), "")
 
 		result := ParseError(kustoErr)
 		require.Equal(t, "Query execution failed", result)
@@ -164,6 +155,60 @@ func TestParseError(t *testing.T) {
 		result := ParseError(err)
 		require.Len(t, result, MaxErrorMessageLength)
 		require.Equal(t, exactMessage, result)
+	})
+}
+
+func TestIsMissingTableError(t *testing.T) {
+	wrappedMissingTableBody := `{
+		"error": {
+			"code": "General_BadRequest",
+			"message": "Request is invalid and cannot be executed.",
+			"@type": "Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException",
+			"@message": "The command script was aborted due to a failure in command number 1 (1-based). Command: '.create-or-alter function MissingEntityProbe() { MissingTable | take 1 }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'take' operator: Failed to resolve table or column expression named 'MissingTable''",
+			"@failureCode": 400,
+			"@permanent": true
+		}
+	}`
+
+	t.Run("azkusto wrapped missing table error", func(t *testing.T) {
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(wrappedMissingTableBody)), "")
+		require.True(t, IsMissingTableError(fmt.Errorf("create function: %w", err)))
+	})
+
+	t.Run("other permanent kusto error", func(t *testing.T) {
+		body := `{"error":{"code":"General_BadRequest","@permanent":true,"innererror":{"code":"SYN0002","@errorCode":"SYN0002"}}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("message without structured code", func(t *testing.T) {
+		body := `{"error":{"@message":"Semantic error SEM0100: Failed to resolve table MissingTable"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("wrapped unresolved column", func(t *testing.T) {
+		body := `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create function f() { MissingTable | project MissingColumn }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'project' operator: Failed to resolve scalar expression named 'MissingColumn''"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("wrapped unresolved function", func(t *testing.T) {
+		body := `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create function f() { MissingFunction() }'. Details: 'Request is invalid and cannot be processed: Semantic error: SEM0100: 'take' operator: Failed to resolve tabular function named 'MissingFunction''"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("signature in wrapped command text", func(t *testing.T) {
+		body := `{"error":{"@type":"Kusto.Common.Svc.Exceptions.AdminCommandExecuteScriptAbortedException","@message":"The command script was aborted due to a failure in command number 1 (1-based). Command: '.create function f() { print note=\"Semantic error: SEM0100: Failed to resolve table expression named\" }'. Details: 'Request is invalid due to another permanent error'"}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
+	})
+
+	t.Run("non-string error codes", func(t *testing.T) {
+		body := `{"error":{"code":{"unexpected":"SEM0100"},"@errorCode":["SEM0100"],"innererror":{"code":100,"@errorCode":true}}}`
+		err := azkustoerrors.HTTP(azkustoerrors.OpMgmt, "BadRequest", 400, io.NopCloser(strings.NewReader(body)), "")
+		require.False(t, IsMissingTableError(err))
 	})
 }
 

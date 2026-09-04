@@ -4,33 +4,44 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
 	"github.com/Azure/adx-mon/alerter/rules"
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
-	"github.com/Azure/azure-kusto-go/kusto/unsafe"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	azerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	azqueryv1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"github.com/stretchr/testify/require"
 )
 
 type fakeQueryClient struct {
-	nextQueryIter *kusto.RowIterator
-	nextQueryErr  error
+	nextQueryDataset azquery.IterativeDataset
+	nextQueryErr     error
+	lastQuery        azkustodata.Statement
+	lastQueryOptions []azkustodata.QueryOption
 
-	nextMgmtIter *kusto.RowIterator
-	nextMgmtErr  error
+	nextMgmtDataset azqueryv1.Dataset
+	nextMgmtErr     error
+	lastMgmt        azkustodata.Statement
+	lastMgmtOptions []azkustodata.QueryOption
 
 	endpoint string
 }
 
-func (f *fakeQueryClient) Query(ctx context.Context, db string, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
-	return f.nextQueryIter, f.nextQueryErr
+func (f *fakeQueryClient) IterativeQuery(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error) {
+	f.lastQuery = query
+	f.lastQueryOptions = options
+	return f.nextQueryDataset, f.nextQueryErr
 }
 
-func (f *fakeQueryClient) Mgmt(ctx context.Context, db string, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	return f.nextMgmtIter, f.nextMgmtErr
+func (f *fakeQueryClient) Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (azqueryv1.Dataset, error) {
+	f.lastMgmt = query
+	f.lastMgmtOptions = options
+	return f.nextMgmtDataset, f.nextMgmtErr
 }
 
 func (f *fakeQueryClient) Endpoint() string {
@@ -41,211 +52,125 @@ func TestQuery(t *testing.T) {
 	maxNotifications := 5
 
 	type testcase struct {
-		name         string
-		rows         *kusto.MockRows
-		rule         *rules.Rule
-		queryErr     error
-		callbackErr  error
-		expectedSent int
-		expectError  bool
+		name             string
+		rows             []string
+		rowErr           error
+		rule             *rules.Rule
+		queryErr         error
+		callbackErr      error
+		expectedSent     int
+		expectedConsumed int
+		expectError      bool
+		expectThrottle   bool
 	}
 
 	testcases := []testcase{
 		{
-			name: "Query with no rows",
-			rows: newRows(t, []string{}),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 0,
-			expectError:  false,
+			name:             "Query with no rows",
+			rows:             []string{},
+			rule:             &rules.Rule{Database: "dbOne"},
+			expectedSent:     0,
+			expectedConsumed: 0,
 		},
 		{
-			name: "Two rows",
-			rows: newRows(t, []string{
-				"rowOne",
-				"rowTwo",
-			}),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 2,
-			expectError:  false,
+			name:             "Two rows",
+			rows:             []string{"rowOne", "rowTwo"},
+			rule:             &rules.Rule{Database: "dbOne"},
+			expectedSent:     2,
+			expectedConsumed: 2,
 		},
 		{
-			name: "Max notifications",
-			rows: newRows(t, []string{
-				"rowOne",
-				"rowTwo",
-				"rowThree",
-				"rowFour",
-				"rowFive",
-			}),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 5,
-			expectError:  false,
+			name:             "Max notifications",
+			rows:             []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive"},
+			rule:             &rules.Rule{Database: "dbOne"},
+			expectedSent:     5,
+			expectedConsumed: 5,
 		},
 		{
-			name: "Over max notifications",
-			rows: newRows(t, []string{
-				"rowOne",
-				"rowTwo",
-				"rowThree",
-				"rowFour",
-				"rowFive",
-				"rowSix",
-			}),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 5, // first 5 sent, then error
-			expectError:  true,
+			name:             "Over max notifications sends first batch then throttles",
+			rows:             []string{"rowOne", "rowTwo", "rowThree", "rowFour", "rowFive", "rowSix"},
+			rule:             &rules.Rule{Database: "dbOne"},
+			expectedSent:     5,
+			expectedConsumed: 6,
+			expectError:      true,
+			expectThrottle:   true,
 		},
 		{
-			name: "Unknown db",
-			rows: newRows(t, []string{}),
-			rule: &rules.Rule{
-				Database: "dbUnknown",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 0,
-			expectError:  true,
+			name:        "Unknown db",
+			rows:        []string{},
+			rule:        &rules.Rule{Database: "dbUnknown"},
+			expectError: true,
 		},
 		{
-			name: "Client query error",
-			rows: newRows(t, []string{}),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     errors.New("query error"),
-			callbackErr:  nil,
-			expectedSent: 0,
-			expectError:  true,
+			name:        "Client query error",
+			rows:        []string{},
+			rule:        &rules.Rule{Database: "dbOne"},
+			queryErr:    errors.New("query error"),
+			expectError: true,
 		},
 		{
-			name: "Callback error",
-			rows: newRows(t, []string{
-				"rowOne",
-				"rowTwo",
-			}),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  errors.New("callback error"),
-			expectedSent: 1, // still attempts to send first, bails out
-			expectError:  true,
+			name:             "Callback error",
+			rows:             []string{"rowOne", "rowTwo"},
+			rule:             &rules.Rule{Database: "dbOne"},
+			callbackErr:      errors.New("callback error"),
+			expectedSent:     1,
+			expectedConsumed: 2,
+			expectError:      true,
 		},
 		{
-			name: "Client mgmt query error",
-			rows: newRows(t, []string{}),
-			rule: &rules.Rule{
-				Database:    "dbOne",
-				IsMgmtQuery: true,
-			},
-			queryErr:     errors.New("query error"),
-			callbackErr:  nil,
-			expectedSent: 0,
-			expectError:  true,
+			name:        "Client mgmt query error",
+			rows:        []string{},
+			rule:        &rules.Rule{Database: "dbOne", IsMgmtQuery: true},
+			queryErr:    errors.New("query error"),
+			expectError: true,
 		},
 		{
-			name: "Query with no rows mgmt query",
-			rows: newRows(t, []string{}),
-			rule: &rules.Rule{
-				Database:    "dbOne",
-				IsMgmtQuery: true,
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 0,
-			expectError:  false,
+			name:             "Query with no rows mgmt query",
+			rows:             []string{},
+			rule:             &rules.Rule{Database: "dbOne", IsMgmtQuery: true},
+			expectedConsumed: 0,
 		},
 		{
-			name: "Two rows mgmt query",
-			rows: newRows(t, []string{
-				"rowOne",
-				"rowTwo",
-			}),
-			rule: &rules.Rule{
-				Database:    "dbOne",
-				IsMgmtQuery: true,
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 2,
-			expectError:  false,
+			name:             "Two rows mgmt query",
+			rows:             []string{"rowOne", "rowTwo"},
+			rule:             &rules.Rule{Database: "dbOne", IsMgmtQuery: true},
+			expectedSent:     2,
+			expectedConsumed: 0,
 		},
 		{
-			name: "Error after first row - no rows should be sent",
-			rows: newRowsWithError(t, []string{
-				"rowOne",
-			}, errors.New("iterator error after first row")),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 0, // no rows should be sent when error occurs
-			expectError:  true,
+			name:             "Error after first row - no rows should be sent",
+			rows:             []string{"rowOne"},
+			rowErr:           errors.New("iterator error after first row"),
+			rule:             &rules.Rule{Database: "dbOne"},
+			expectedConsumed: 1,
+			expectError:      true,
 		},
 		{
-			name: "Error after third row - no rows should be sent",
-			rows: newRowsWithError(t, []string{
-				"rowOne",
-				"rowTwo",
-				"rowThree",
-			}, errors.New("iterator error after third row")),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 0, // no rows should be sent when error occurs
-			expectError:  true,
+			name:             "Error after third row - no rows should be sent",
+			rows:             []string{"rowOne", "rowTwo", "rowThree"},
+			rowErr:           errors.New("iterator error after third row"),
+			rule:             &rules.Rule{Database: "dbOne"},
+			expectedConsumed: 3,
+			expectError:      true,
 		},
 		{
-			name: "Error on first row - no rows should be sent",
-			rows: newRowsWithError(t, []string{}, errors.New("iterator error immediately")),
-			rule: &rules.Rule{
-				Database: "dbOne",
-			},
-			queryErr:     nil,
-			callbackErr:  nil,
-			expectedSent: 0,
-			expectError:  true,
+			name:        "Error on first row - no rows should be sent",
+			rowErr:      errors.New("iterator error immediately"),
+			rule:        &rules.Rule{Database: "dbOne"},
+			expectError: true,
 		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			rowIterator := &kusto.RowIterator{}
-			err := rowIterator.Mock(tc.rows)
-			require.NoError(t, err)
-
-			var client QueryClient
+			iterative := newFakeIterativeDataset(tc.rows, tc.rowErr)
+			client := &fakeQueryClient{endpoint: "endpointOne"}
 			if tc.rule.IsMgmtQuery {
-				client = &fakeQueryClient{
-					nextMgmtIter: rowIterator,
-					nextMgmtErr:  tc.queryErr,
-					endpoint:     "endpointOne",
-				}
+				client.nextMgmtDataset = newFakeDataset(tc.rows)
+				client.nextMgmtErr = tc.queryErr
 			} else {
-				client = &fakeQueryClient{
-					nextQueryIter: rowIterator,
-					nextQueryErr:  tc.queryErr,
-					endpoint:      "endpointOne",
-				}
+				client.nextQueryDataset = iterative
+				client.nextQueryErr = tc.queryErr
 			}
 
 			multiKustoClient := multiKustoClient{
@@ -256,13 +181,11 @@ func TestQuery(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			queryContext := &engine.QueryContext{
-				Rule: tc.rule,
-				Stmt: kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd("query"),
-			}
+			queryContext, err := engine.NewQueryContext(tc.rule, time.Date(2023, 04, 10, 0, 0, 0, 0, time.UTC), "eastus")
+			require.NoError(t, err)
 
 			callbackCounter := 0
-			callback := func(context.Context, string, *engine.QueryContext, *table.Row) error {
+			callback := func(context.Context, string, *engine.QueryContext, azquery.Row) error {
 				callbackCounter++
 				return tc.callbackErr
 			}
@@ -270,6 +193,15 @@ func TestQuery(t *testing.T) {
 			err, _ = multiKustoClient.Query(ctx, queryContext, callback)
 
 			require.Equal(t, tc.expectedSent, callbackCounter)
+			if tc.rule.IsMgmtQuery {
+				require.False(t, iterative.closed)
+			} else if tc.queryErr == nil && tc.rule.Database == "dbOne" {
+				require.True(t, iterative.closed)
+				require.Equal(t, tc.expectedConsumed, iterative.table.consumed)
+			}
+			if tc.expectThrottle {
+				require.ErrorIs(t, err, alert.ErrTooManyRequests)
+			}
 			if tc.expectError {
 				require.Error(t, err)
 			} else {
@@ -277,37 +209,6 @@ func TestQuery(t *testing.T) {
 			}
 		})
 	}
-}
-
-func newRows(t *testing.T, values []string) *kusto.MockRows {
-	t.Helper()
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "columnOne", Type: types.String},
-	})
-	require.NoError(t, err)
-	for _, val := range values {
-		err = rows.Row(value.Values{value.String{Value: val, Valid: true}})
-		require.NoError(t, err)
-	}
-	return rows
-}
-
-func newRowsWithError(t *testing.T, values []string, rowError error) *kusto.MockRows {
-	t.Helper()
-
-	rows, err := kusto.NewMockRows(table.Columns{
-		{Name: "columnOne", Type: types.String},
-	})
-	require.NoError(t, err)
-	for _, val := range values {
-		err = rows.Row(value.Values{value.String{Value: val, Valid: true}})
-		require.NoError(t, err)
-	}
-	// Add error to the stream
-	err = rows.Error(rowError)
-	require.NoError(t, err)
-	return rows
 }
 
 func TestFindCaseInsensitiveMatch(t *testing.T) {
@@ -318,21 +219,39 @@ func TestFindCaseInsensitiveMatch(t *testing.T) {
 		},
 	}
 
-	// Different casing
 	match := client.FindCaseInsensitiveMatch("cluster_state")
 	require.Equal(t, "Cluster_State", match)
 
-	// Different casing
 	match = client.FindCaseInsensitiveMatch("CLUSTER_STATE")
 	require.Equal(t, "Cluster_State", match)
 
-	// No match
 	match = client.FindCaseInsensitiveMatch("unknown")
 	require.Empty(t, match)
 
-	// Metrics with different case
 	match = client.FindCaseInsensitiveMatch("metrics")
 	require.Equal(t, "Metrics", match)
+}
+
+func TestQuery_UsesConstructedWrappedQuery(t *testing.T) {
+	client := &fakeQueryClient{endpoint: "endpoint", nextQueryDataset: newFakeIterativeDataset(nil, nil)}
+	multiKustoClient := multiKustoClient{
+		clients:          map[string]QueryClient{"dbOne": client},
+		maxNotifications: 5,
+	}
+	queryContext, err := engine.NewQueryContext(&rules.Rule{
+		Database: "dbOne",
+		Interval: time.Hour,
+		Query:    "Table | where Region == _region",
+	}, time.Date(2023, 04, 10, 0, 0, 0, 0, time.UTC), "eastus")
+	require.NoError(t, err)
+
+	err, _ = multiKustoClient.Query(context.Background(), queryContext, func(context.Context, string, *engine.QueryContext, azquery.Row) error {
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "\nlet _startTime = _adxmonStartTime;\nlet _endTime = _adxmonEndTime;\nlet _region = _adxmonRegion;\nTable | where Region == _region\n", client.lastQuery.String())
+	require.Len(t, client.lastQueryOptions, 1)
 }
 
 func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
@@ -346,14 +265,10 @@ func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	queryContext := &engine.QueryContext{
-		Rule: &rules.Rule{
-			Database: "cluster_state", // Wrong case
-		},
-		Stmt: kusto.NewStmt(``, kusto.UnsafeStmt(unsafe.Stmt{Add: true, SuppressWarning: true})).UnsafeAdd("query"),
-	}
+	queryContext, err := engine.NewQueryContext(&rules.Rule{Database: "cluster_state"}, time.Now(), "eastus")
+	require.NoError(t, err)
 
-	err, _ := client.Query(ctx, queryContext, func(context.Context, string, *engine.QueryContext, *table.Row) error {
+	err, _ = client.Query(ctx, queryContext, func(context.Context, string, *engine.QueryContext, azquery.Row) error {
 		return nil
 	})
 
@@ -365,8 +280,99 @@ func TestQuery_UnknownDB_EnhancedError(t *testing.T) {
 	require.Equal(t, "Cluster_State", unknownDBErr.CaseInsensitiveMatch)
 	require.Equal(t, []string{"Cluster_State", "Metrics"}, unknownDBErr.AvailableDatabases)
 
-	// Check error message contains helpful info
 	errMsg := err.Error()
 	require.Contains(t, errMsg, `did you mean "Cluster_State"?`)
 	require.Contains(t, errMsg, "--kusto-endpoint")
+}
+
+type fakeDataset struct {
+	azquery.BaseDataset
+	tables []azquery.Table
+}
+
+func newFakeDataset(values []string) azqueryv1.Dataset {
+	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
+	table := newFakeTable(base, values)
+	return &fakeV1Dataset{fakeDataset: fakeDataset{BaseDataset: base, tables: []azquery.Table{table}}}
+}
+
+func (d *fakeDataset) Tables() []azquery.Table { return d.tables }
+
+type fakeV1Dataset struct{ fakeDataset }
+
+func (d *fakeV1Dataset) Index() []azqueryv1.TableIndexRow  { return nil }
+func (d *fakeV1Dataset) Status() []azqueryv1.QueryStatus   { return nil }
+func (d *fakeV1Dataset) Info() []azqueryv1.QueryProperties { return nil }
+
+type fakeIterativeDataset struct {
+	azquery.BaseDataset
+	table  *fakeIterativeTable
+	closed bool
+}
+
+func newFakeIterativeDataset(values []string, rowErr error) *fakeIterativeDataset {
+	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
+	return &fakeIterativeDataset{BaseDataset: base, table: newFakeIterativeTable(base, values, rowErr)}
+}
+
+func (d *fakeIterativeDataset) Tables() <-chan azquery.TableResult {
+	out := make(chan azquery.TableResult, 1)
+	out <- azquery.TableResultSuccess(d.table)
+	close(out)
+	return out
+}
+
+func (d *fakeIterativeDataset) ToDataset() (azquery.Dataset, error) { return nil, nil }
+
+func (d *fakeIterativeDataset) Close() error {
+	d.closed = true
+	return nil
+}
+
+type fakeIterativeTable struct {
+	azquery.BaseTable
+	rows     []azquery.Row
+	rowErr   error
+	consumed int
+}
+
+func newFakeIterativeTable(base azquery.BaseDataset, values []string, rowErr error) *fakeIterativeTable {
+	table := &fakeIterativeTable{}
+	table.BaseTable = azquery.NewBaseTable(base, 0, "", "QueryResult", "QueryResult", []azquery.Column{azquery.NewColumn(0, "columnOne", aztypes.String)})
+	for i, val := range values {
+		table.rows = append(table.rows, azquery.NewRow(table, i, azvalue.Values{azvalue.NewString(val)}))
+	}
+	table.rowErr = rowErr
+	return table
+}
+
+func (t *fakeIterativeTable) Rows() <-chan azquery.RowResult {
+	out := make(chan azquery.RowResult)
+	go func() {
+		defer close(out)
+		for _, row := range t.rows {
+			t.consumed++
+			out <- azquery.RowResultSuccess(row)
+		}
+		if t.rowErr != nil {
+			out <- azquery.RowResultError(t.rowErr)
+		}
+	}()
+	return out
+}
+
+func (t *fakeIterativeTable) ToTable() (azquery.Table, error) {
+	return azquery.NewTable(t.BaseTable, t.rows), nil
+}
+
+func newFakeTable(base azquery.BaseDataset, values []string) azquery.Table {
+	baseTable, ok := base.(azquery.BaseTable)
+	if !ok {
+		baseTable = azquery.NewBaseTable(base, 0, "", "QueryResult", "QueryResult", []azquery.Column{azquery.NewColumn(0, "columnOne", aztypes.String)})
+	}
+	rows := make([]azquery.Row, 0, len(values))
+	for i, val := range values {
+		rows = append(rows, azquery.NewRow(baseTable, i, azvalue.Values{azvalue.NewString(val)}))
+	}
+	return azquery.NewTable(baseTable, rows)
 }

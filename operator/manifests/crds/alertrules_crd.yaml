@@ -150,9 +150,18 @@ spec:
               lastAlertTime:
                 format: date-time
                 type: string
+              lastAlertsGenerated:
+                format: int64
+                type: integer
+              lastEvaluationDurationMilliseconds:
+                format: int64
+                type: integer
               lastQueryTime:
                 format: date-time
                 type: string
+              lastRowsReturned:
+                format: int64
+                type: integer
               message:
                 type: string
               status:

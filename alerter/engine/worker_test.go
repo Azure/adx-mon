@@ -12,8 +12,8 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
-	kerrors "github.com/Azure/azure-kusto-go/kusto/data/errors"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
+	kerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -33,7 +33,7 @@ const (
 
 func TestWorker_TagsMismatch(t *testing.T) {
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			t.Logf("Query should not be called")
 			t.Fail()
 			return nil, 0
@@ -68,7 +68,7 @@ func TestWorker_TagsMismatch(t *testing.T) {
 func TestWorker_TagsAtLeastOne(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -103,7 +103,7 @@ func TestWorker_TagsAtLeastOne(t *testing.T) {
 func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
 	queryCalled := false
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -152,7 +152,7 @@ func TestWorker_ExecuteQuery_StopsWaitingForSlotOnCancel(t *testing.T) {
 func TestWorker_ExecuteQuery_DoesNotAcquireSlotWhenAlreadyCanceled(t *testing.T) {
 	queryCalled := false
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -182,7 +182,7 @@ func TestWorker_ExecuteQuery_DoesNotAcquireSlotWhenAlreadyCanceled(t *testing.T)
 func TestWorker_TagsNoneMatch(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -217,7 +217,7 @@ func TestWorker_TagsNoneMatch(t *testing.T) {
 func TestWorker_TagsMultiple(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -263,7 +263,7 @@ func TestWorker_TagsMultiple(t *testing.T) {
 func TestWorker_CriteriaExpression_ExecutesOnMatch(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -284,7 +284,7 @@ func TestWorker_CriteriaExpression_ExecutesOnMatch(t *testing.T) {
 func TestWorker_CriteriaExpression_ExecutesOnMatchTwo(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -306,7 +306,7 @@ func TestWorker_CriteriaExpression_ExecutesOnMatchTwo(t *testing.T) {
 func TestWorker_CriteriaExpression_SkipsOnNoMatch(t *testing.T) {
 	var queryCalled bool
 	kcli := &fakeKustoClient{
-		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, *table.Row) error) (error, int) {
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
 			queryCalled = true
 			return nil, 0
 		},
@@ -583,6 +583,70 @@ func TestWorker_NotificationHealth(t *testing.T) {
 	require.Equal(t, NotificationHealthHealthy, notificationHealthValue)
 }
 
+func TestWorker_EvaluationMetrics(t *testing.T) {
+	tests := []struct {
+		name       string
+		queryErr   error
+		outcome    string
+		alertCalls int
+	}{
+		{name: "success", outcome: evaluationOutcomeSuccess},
+		{name: "service error", queryErr: context.DeadlineExceeded, outcome: evaluationOutcomeServiceError},
+		{name: "user error", queryErr: &UnknownDBError{DB: "missing"}, outcome: evaluationOutcomeUserError, alertCalls: 1},
+		{name: "notification throttled", queryErr: alert.ErrTooManyRequests, outcome: evaluationOutcomeNotificationThrottled, alertCalls: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule := &rules.Rule{Namespace: "metrics", Name: tt.name, Destination: "destination"}
+			alertCalls := 0
+			w := NewWorker(&WorkerConfig{
+				Rule:        rule,
+				Region:      "eastus",
+				KustoClient: &fakeKustoClient{queryErr: tt.queryErr},
+				AlertClient: &fakeAlerter{createFn: func(context.Context, string, alert.Alert) error {
+					alertCalls++
+					return nil
+				}},
+			})
+
+			outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(tt.outcome)
+			counterBefore := getCounterValue(t, outcomeCounter)
+			histogramCountBefore := getHistogramCount(t, metrics.AlertRuleEvaluationDurationSeconds)
+
+			w.ExecuteQuery(context.Background())
+
+			require.Equal(t, counterBefore+1, getCounterValue(t, outcomeCounter))
+			require.Equal(t, histogramCountBefore+1, getHistogramCount(t, metrics.AlertRuleEvaluationDurationSeconds))
+			require.Equal(t, tt.alertCalls, alertCalls)
+		})
+	}
+}
+
+func TestWorker_AlertsGeneratedMetricIncludesPartialSuccess(t *testing.T) {
+	rule := &rules.Rule{Namespace: "metrics", Name: "partial-alerts", Destination: "destination"}
+	w := NewWorker(&WorkerConfig{
+		Rule:   rule,
+		Region: "eastus",
+		KustoClient: &fakeKustoClient{queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			for range 2 {
+				require.NoError(t, fn(ctx, "endpoint", qc, testRow(nil, nil)))
+			}
+			return alert.ErrTooManyRequests, 2
+		}},
+		AlertClient: &fakeAlerter{},
+		HandlerFn: func(context.Context, string, *QueryContext, azquery.Row) error {
+			return nil
+		},
+	})
+
+	counterBefore := getCounterValue(t, metrics.AlertsGeneratedTotal)
+
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, counterBefore+2, getCounterValue(t, metrics.AlertsGeneratedTotal))
+}
+
 func TestCalculateNextQueryTime(t *testing.T) {
 	now := time.Now()
 	interval := 5 * time.Minute
@@ -610,4 +674,22 @@ func getGaugeValue(t *testing.T, metric prometheus.Metric) float64 {
 	err := metric.Write(metricDTO)
 	require.NoError(t, err)
 	return metricDTO.Gauge.GetValue()
+}
+
+func getCounterValue(t *testing.T, metric prometheus.Metric) float64 {
+	t.Helper()
+
+	metricDTO := &dto.Metric{}
+	err := metric.Write(metricDTO)
+	require.NoError(t, err)
+	return metricDTO.Counter.GetValue()
+}
+
+func getHistogramCount(t *testing.T, metric prometheus.Metric) uint64 {
+	t.Helper()
+
+	metricDTO := &dto.Metric{}
+	err := metric.Write(metricDTO)
+	require.NoError(t, err)
+	return metricDTO.Histogram.GetSampleCount()
 }

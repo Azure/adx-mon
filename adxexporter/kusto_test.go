@@ -3,15 +3,17 @@ package adxexporter
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/data/table"
-	"github.com/Azure/azure-kusto-go/kusto/data/types"
-	"github.com/Azure/azure-kusto-go/kusto/data/value"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	azerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
+	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
@@ -59,12 +61,15 @@ func (f *FakeClock) Tick(d time.Duration) <-chan time.Time {
 
 // MockKustoExecutor implements KustoExecutor for testing
 type MockKustoExecutor struct {
-	database string
-	endpoint string
-	queries  []string
-	results  []*kusto.RowIterator
-	errors   []error
-	callIdx  int
+	database      string
+	endpoint      string
+	queries       []string
+	results       []azquery.Dataset
+	errors        []error
+	callIdx       int
+	lastIterative *mockIterativeDataset
+	tableErr      error
+	rowErr        error
 }
 
 func NewMockKustoExecutor(t *testing.T, database, endpoint string) *MockKustoExecutor {
@@ -73,7 +78,7 @@ func NewMockKustoExecutor(t *testing.T, database, endpoint string) *MockKustoExe
 		database: database,
 		endpoint: endpoint,
 		queries:  make([]string, 0),
-		results:  make([]*kusto.RowIterator, 0),
+		results:  make([]azquery.Dataset, 0),
 		errors:   make([]error, 0),
 	}
 }
@@ -86,33 +91,27 @@ func (m *MockKustoExecutor) Endpoint() string {
 	return m.endpoint
 }
 
-func (m *MockKustoExecutor) Query(ctx context.Context, query kusto.Statement, options ...kusto.QueryOption) (*kusto.RowIterator, error) {
+func (m *MockKustoExecutor) IterativeQuery(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.IterativeDataset, error) {
 	m.queries = append(m.queries, query.String())
 
-	if m.callIdx < len(m.errors) && m.errors[m.callIdx] != nil {
-		err := m.errors[m.callIdx]
-		m.callIdx++
+	result, err := m.nextResult()
+	if err != nil {
 		return nil, err
 	}
-
-	if m.callIdx < len(m.results) {
-		result := m.results[m.callIdx]
-		m.callIdx++
-		return result, nil
-	}
-
-	// Return empty iterator if no specific result configured
-	return createEmptyMockRowIterator(), nil
+	m.lastIterative = newMockIterativeDataset(result)
+	m.lastIterative.tableErr = m.tableErr
+	m.lastIterative.rowErr = m.rowErr
+	return m.lastIterative, nil
 }
 
 // Mgmt implements the management command execution for the mock executor.
-// For current tests, no behavior changes are needed, so it mirrors Query by
-// recording the statement and returning configured results or an empty iterator.
-func (m *MockKustoExecutor) Mgmt(ctx context.Context, query kusto.Statement, options ...kusto.MgmtOption) (*kusto.RowIterator, error) {
-	// Reuse Query behavior to avoid duplicating test plumbing
-	// Cast MgmtOption to no-op and delegate to Query-like path
+// It records the statement and returns configured results or an empty dataset.
+func (m *MockKustoExecutor) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (azquery.Dataset, error) {
 	m.queries = append(m.queries, query.String())
+	return m.nextResult()
+}
 
+func (m *MockKustoExecutor) nextResult() (azquery.Dataset, error) {
 	if m.callIdx < len(m.errors) && m.errors[m.callIdx] != nil {
 		err := m.errors[m.callIdx]
 		m.callIdx++
@@ -125,17 +124,24 @@ func (m *MockKustoExecutor) Mgmt(ctx context.Context, query kusto.Statement, opt
 		return result, nil
 	}
 
-	return createEmptyMockRowIterator(), nil
+	return createMockDataset(nil), nil
 }
 
 func (m *MockKustoExecutor) SetNextError(err error) {
 	m.errors = append(m.errors, err)
 }
 
+func (m *MockKustoExecutor) SetTableError(err error) {
+	m.tableErr = err
+}
+
+func (m *MockKustoExecutor) SetRowError(err error) {
+	m.rowErr = err
+}
+
 func (m *MockKustoExecutor) SetNextResult(t *testing.T, rows [][]interface{}) {
 	t.Helper()
-	iter := createMockRowIterator(t, rows)
-	m.results = append(m.results, iter)
+	m.results = append(m.results, createMockDataset(rows))
 }
 
 func (m *MockKustoExecutor) GetQueries() []string {
@@ -144,109 +150,163 @@ func (m *MockKustoExecutor) GetQueries() []string {
 
 func (m *MockKustoExecutor) Reset() {
 	m.queries = make([]string, 0)
-	m.results = make([]*kusto.RowIterator, 0)
+	m.results = make([]azquery.Dataset, 0)
 	m.errors = make([]error, 0)
 	m.callIdx = 0
+	m.lastIterative = nil
+	m.tableErr = nil
+	m.rowErr = nil
 }
 
-// createMockRowIterator creates a mock RowIterator for testing with actual data
-func createMockRowIterator(t *testing.T, rows [][]interface{}) *kusto.RowIterator {
-	t.Helper()
-	iter := &kusto.RowIterator{}
+func createMockDataset(rows [][]interface{}) azquery.Dataset {
+	return createDatasetWithColumns([]string{"metric_name", "value", "timestamp"}, rows)
+}
 
-	// If no rows provided, return empty iterator
-	if len(rows) == 0 {
-		// Create empty mock rows to avoid nil pointer issues
-		mockRows, err := kusto.NewMockRows(table.Columns{})
-		require.NoError(t, err, "Failed to create empty mock rows")
-
-		// Work-around for Azure Kusto SDK's test environment check.
-		// The SDK's RowIterator.Mock() method explicitly checks if it's running in a test
-		// by calling isTest() which looks for the "test.v" flag (set by `go test`).
-		// If not found, Mock() panics with "cannot call Mock outside a test".
-		// We ensure the flag exists to bypass this safety check.
-		if flag.Lookup("test.v") == nil {
-			flag.String("test.v", "", "")
-			err := flag.CommandLine.Set("test.v", "true")
-			require.NoError(t, err, "Failed to set test.v flag")
-		}
-		err = iter.Mock(mockRows)
-		require.NoError(t, err, "Failed to mock empty iterator")
-		return iter
+func createDatasetWithColumns(columnNames []string, rows [][]interface{}) azquery.Dataset {
+	base := azquery.NewBaseDataset(context.Background(), azerrors.OpQuery, "QueryResult")
+	columns := make([]azquery.Column, 0, len(columnNames))
+	for i, name := range columnNames {
+		columns = append(columns, azquery.NewColumn(i, name, inferColumnType(rows, i)))
 	}
+	baseTable := azquery.NewBaseTable(base, 0, "", "QueryResult", "QueryResult", columns)
 
-	// Create columns based on the first row structure
-	// For simplicity, assume first row has: metric_name, value, timestamp
-	columns := table.Columns{
-		{Name: "metric_name", Type: types.String},
-		{Name: "value", Type: types.Real},
-		{Name: "timestamp", Type: types.DateTime},
-	}
-
-	mockRows, err := kusto.NewMockRows(columns)
-	require.NoError(t, err, "Failed to create mock rows")
-
-	// Add each row to the mock
-	for _, rowData := range rows {
-		var values value.Values
+	queryRows := make([]azquery.Row, 0, len(rows))
+	for i, rowData := range rows {
+		vals := make(azvalue.Values, 0, len(rowData))
 		for _, col := range rowData {
 			switch v := col.(type) {
+			case azvalue.Kusto:
+				vals = append(vals, v)
 			case string:
-				values = append(values, value.String{Value: v, Valid: true})
+				vals = append(vals, azvalue.NewString(v))
+			case uuid.UUID:
+				vals = append(vals, azvalue.NewGUID(v))
 			case float64:
-				values = append(values, value.Real{Value: v, Valid: true})
+				vals = append(vals, azvalue.NewReal(v))
 			case time.Time:
-				values = append(values, value.DateTime{Value: v, Valid: true})
+				vals = append(vals, azvalue.NewDateTime(v))
 			default:
-				// Convert to string as fallback
-				values = append(values, value.String{Value: fmt.Sprintf("%v", v), Valid: true})
+				vals = append(vals, azvalue.NewString(fmt.Sprintf("%v", v)))
 			}
 		}
-		mockRows.Row(values)
+		queryRows = append(queryRows, azquery.NewRow(baseTable, i, vals))
 	}
 
-	// Work-around for Azure Kusto SDK's test environment check.
-	// The SDK's RowIterator.Mock() method explicitly checks if it's running in a test
-	// by calling isTest() which looks for the "test.v" flag (set by `go test`).
-	// If not found, Mock() panics with "cannot call Mock outside a test".
-	// We ensure the flag exists to bypass this safety check.
-	if flag.Lookup("test.v") == nil {
-		flag.String("test.v", "", "")
-		err := flag.CommandLine.Set("test.v", "true")
-		require.NoError(t, err, "Failed to set test.v flag")
-	}
-	err = iter.Mock(mockRows)
-	require.NoError(t, err, "Failed to mock iterator")
-	return iter
+	table := azquery.NewTable(baseTable, queryRows)
+	return &mockDataset{base: base, tables: []azquery.Table{table}}
 }
 
-// createEmptyMockRowIterator creates an empty mock RowIterator without requiring *testing.T
-// This is used internally by MockKustoExecutor when no specific result is configured
-func createEmptyMockRowIterator() *kusto.RowIterator {
-	iter := &kusto.RowIterator{}
+func inferColumnType(rows [][]interface{}, idx int) aztypes.Column {
+	for _, row := range rows {
+		if idx >= len(row) {
+			continue
+		}
 
-	// Create empty mock rows to avoid nil pointer issues
-	mockRows, err := kusto.NewMockRows(table.Columns{})
-	if err != nil {
-		panic(fmt.Sprintf("Failed to create empty mock rows: %v", err))
-	}
-
-	// Work-around for Azure Kusto SDK's test environment check.
-	// The SDK's RowIterator.Mock() method explicitly checks if it's running in a test
-	// by calling isTest() which looks for the "test.v" flag (set by `go test`).
-	// If not found, Mock() panics with "cannot call Mock outside a test".
-	// We ensure the flag exists to bypass this safety check.
-	if flag.Lookup("test.v") == nil {
-		flag.String("test.v", "", "")
-		if err := flag.CommandLine.Set("test.v", "true"); err != nil {
-			panic(err)
+		switch value := row[idx].(type) {
+		case azvalue.Kusto:
+			return value.GetType()
+		case string:
+			return aztypes.String
+		case uuid.UUID:
+			return aztypes.GUID
+		case float64:
+			return aztypes.Real
+		case time.Time:
+			return aztypes.DateTime
 		}
 	}
-	if err := iter.Mock(mockRows); err != nil {
-		panic(fmt.Sprintf("Failed to mock empty iterator: %v", err))
-	}
-	return iter
+
+	return aztypes.String
 }
+
+type mockDataset struct {
+	base   azquery.BaseDataset
+	tables []azquery.Table
+}
+
+func (d *mockDataset) Context() context.Context {
+	return d.base.Context()
+}
+
+func (d *mockDataset) Op() azerrors.Op {
+	return d.base.Op()
+}
+
+func (d *mockDataset) PrimaryResultKind() string {
+	return d.base.PrimaryResultKind()
+}
+
+func (d *mockDataset) Tables() []azquery.Table {
+	return d.tables
+}
+
+type mockIterativeDataset struct {
+	base     azquery.Dataset
+	closed   bool
+	tableErr error
+	rowErr   error
+}
+
+func newMockIterativeDataset(dataset azquery.Dataset) *mockIterativeDataset {
+	return &mockIterativeDataset{base: dataset}
+}
+
+func (d *mockIterativeDataset) Context() context.Context  { return d.base.Context() }
+func (d *mockIterativeDataset) Op() azerrors.Op           { return d.base.Op() }
+func (d *mockIterativeDataset) PrimaryResultKind() string { return d.base.PrimaryResultKind() }
+
+func (d *mockIterativeDataset) Tables() <-chan azquery.TableResult {
+	tables := d.base.Tables()
+	results := make(chan azquery.TableResult, len(tables)+1)
+	if d.tableErr != nil {
+		results <- azquery.TableResultError(d.tableErr)
+		close(results)
+		return results
+	}
+	for _, table := range tables {
+		results <- azquery.TableResultSuccess(&mockIterativeTable{base: table, rowErr: d.rowErr})
+	}
+	close(results)
+	return results
+}
+
+func (d *mockIterativeDataset) ToDataset() (azquery.Dataset, error) { return d.base, nil }
+
+func (d *mockIterativeDataset) Close() error {
+	d.closed = true
+	return nil
+}
+
+type mockIterativeTable struct {
+	base   azquery.Table
+	rowErr error
+}
+
+func (t *mockIterativeTable) Id() string                { return t.base.Id() }
+func (t *mockIterativeTable) Index() int64              { return t.base.Index() }
+func (t *mockIterativeTable) Name() string              { return t.base.Name() }
+func (t *mockIterativeTable) Columns() []azquery.Column { return t.base.Columns() }
+func (t *mockIterativeTable) Kind() string              { return t.base.Kind() }
+func (t *mockIterativeTable) ColumnByName(name string) azquery.Column {
+	return t.base.ColumnByName(name)
+}
+func (t *mockIterativeTable) Op() azerrors.Op       { return t.base.Op() }
+func (t *mockIterativeTable) IsPrimaryResult() bool { return t.base.IsPrimaryResult() }
+
+func (t *mockIterativeTable) Rows() <-chan azquery.RowResult {
+	rows := t.base.Rows()
+	results := make(chan azquery.RowResult, len(rows)+1)
+	for _, row := range rows {
+		results <- azquery.RowResultSuccess(row)
+	}
+	if t.rowErr != nil {
+		results <- azquery.RowResultError(t.rowErr)
+	}
+	close(results)
+	return results
+}
+
+func (t *mockIterativeTable) ToTable() (azquery.Table, error) { return t.base, nil }
 
 func TestQueryExecutor_ExecuteQuery(t *testing.T) {
 	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
@@ -263,15 +323,13 @@ func TestQueryExecutor_ExecuteQuery(t *testing.T) {
 	t.Run("query construction and execution call", func(t *testing.T) {
 		mockClient.Reset()
 
-		// For successful case, we just want to verify the query gets constructed correctly
-		// We'll mock an error to avoid the RowIterator processing issues
-		mockClient.SetNextError(errors.New("mock error to bypass iterator"))
+		mockClient.SetNextResult(t, nil)
 
 		result, err := executor.ExecuteQuery(ctx, queryBody, startTime, endTime, clusterLabels)
 
-		require.NoError(t, err) // No error from the function itself
+		require.NoError(t, err)
 		require.NotNil(t, result)
-		require.Error(t, result.Error) // The mock error we set
+		require.NoError(t, result.Error)
 		require.Greater(t, result.Duration, time.Duration(0))
 
 		// Verify the query was called with proper substitutions
@@ -298,6 +356,37 @@ MyTable | summarize avg_value = avg(Value) by ServiceName`
 		require.Contains(t, result.Error.Error(), "failed to execute query")
 		require.Contains(t, result.Error.Error(), "connection failed")
 	})
+
+	t.Run("streamed table error", func(t *testing.T) {
+		mockClient.Reset()
+		streamErr := errors.New("table stream failed")
+		mockClient.SetTableError(streamErr)
+
+		result, err := executor.ExecuteQuery(ctx, queryBody, startTime, endTime, clusterLabels)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.ErrorIs(t, result.Error, streamErr)
+		require.Contains(t, result.Error.Error(), "failed to read query results")
+		require.Empty(t, result.Rows)
+		require.True(t, mockClient.lastIterative.closed)
+	})
+
+	t.Run("streamed row error", func(t *testing.T) {
+		mockClient.Reset()
+		streamErr := errors.New("row stream failed")
+		mockClient.SetNextResult(t, [][]interface{}{{"metric_one", 1.0, startTime}})
+		mockClient.SetRowError(streamErr)
+
+		result, err := executor.ExecuteQuery(ctx, queryBody, startTime, endTime, clusterLabels)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.ErrorIs(t, result.Error, streamErr)
+		require.Contains(t, result.Error.Error(), "failed to read query results")
+		require.Empty(t, result.Rows)
+		require.True(t, mockClient.lastIterative.closed)
+	})
 }
 
 func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
@@ -321,7 +410,58 @@ func TestQueryExecutor_ExecuteQuery_MaxRowsLimit(t *testing.T) {
 	require.NotNil(t, result)
 	require.Error(t, result.Error)
 	require.Contains(t, result.Error.Error(), "maximum row limit")
-	require.Len(t, result.Rows, 1)
+	require.Empty(t, result.Rows)
+	require.True(t, mockClient.lastIterative.closed)
+}
+
+func TestQueryExecutor_ExecuteQuery_MaterializesNativeValues(t *testing.T) {
+	mockClient := NewMockKustoExecutor(t, "TestDB", "https://test.kusto.windows.net")
+	executor := NewQueryExecutor(mockClient)
+	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
+	mockClient.SetNextResult(t, [][]interface{}{{"metric_one", 1.5, now}})
+
+	result, err := executor.ExecuteQuery(context.Background(), "MyTable", now.Add(-time.Hour), now, nil)
+
+	require.NoError(t, err)
+	require.NoError(t, result.Error)
+	require.Equal(t, "metric_one", result.Rows[0]["metric_name"])
+	require.Equal(t, 1.5, result.Rows[0]["value"])
+	require.Equal(t, now, result.Rows[0]["timestamp"])
+}
+
+func TestMaterializeKustoValue(t *testing.T) {
+	now := time.Date(2023, 1, 1, 14, 0, 0, 0, time.UTC)
+	duration := 5 * time.Minute
+	id := uuid.MustParse("eeab2025-9cc6-411f-8ef5-9e5c6b720f22")
+	decimalValue := decimal.RequireFromString("123.45")
+	dynamicValue := []byte(`{"region":"west"}`)
+	var typedNilReal *azvalue.Real
+
+	tests := []struct {
+		name  string
+		value azvalue.Kusto
+		want  interface{}
+	}{
+		{name: "string", value: azvalue.NewString("metric_one"), want: "metric_one"},
+		{name: "bool", value: azvalue.NewBool(true), want: true},
+		{name: "int", value: azvalue.NewInt(42), want: int32(42)},
+		{name: "long", value: azvalue.NewLong(42), want: int64(42)},
+		{name: "real", value: azvalue.NewReal(1.5), want: 1.5},
+		{name: "datetime", value: azvalue.NewDateTime(now), want: now},
+		{name: "timespan", value: azvalue.NewTimespan(duration), want: duration},
+		{name: "decimal", value: azvalue.NewDecimal(decimalValue), want: decimalValue},
+		{name: "guid", value: azvalue.NewGUID(id), want: id},
+		{name: "dynamic", value: azvalue.NewDynamic(dynamicValue), want: dynamicValue},
+		{name: "null pointer value", value: azvalue.NewNullReal(), want: nil},
+		{name: "null slice value", value: azvalue.NewNullDynamic(), want: nil},
+		{name: "typed nil wrapper", value: typedNilReal, want: nil},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, materializeKustoValue(test.value))
+		})
+	}
 }
 
 func TestNewKustoClient(t *testing.T) {

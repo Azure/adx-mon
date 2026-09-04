@@ -77,6 +77,51 @@ func TestScheduleEveryLogsError(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 }
 
+func TestScheduleEveryCancelsActiveFunction(t *testing.T) {
+	elector := &FakeElector{isLeader: true}
+	scheduler := scheduler.NewScheduler(elector)
+	require.NoError(t, scheduler.Open(context.Background()))
+
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	scheduler.ScheduleEvery(time.Millisecond, "test-task", func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return ctx.Err()
+	})
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "function did not start")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		closed <- scheduler.Close()
+	}()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "function context was not canceled")
+	}
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+		require.FailNow(t, "scheduler closed before active function returned")
+	default:
+	}
+	close(release)
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "scheduler did not wait for active function")
+	}
+}
+
 type FakeElector struct {
 	isLeader bool
 }

@@ -233,6 +233,7 @@ spec:
           args:
             - "--config=/etc/config/config.toml"
             - "--hostname=$(HOSTNAME)"
+            - "--host-ip=$(HOSTIP)"
           ports:
             - containerPort: 8080
               protocol: TCP
@@ -244,6 +245,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: HOSTIP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: "GODEBUG"
               value: "http2client=0"
           volumeMounts:

@@ -4,11 +4,11 @@ import (
 	"fmt"
 
 	"github.com/Azure/adx-mon/pkg/logger"
-	"github.com/Azure/azure-kusto-go/kusto"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
 )
 
 // AuthConfiguror is a function that can be used to configure a kusto connection's authentication method
-type authConfiguror func(*kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder
+type authConfiguror func(*azkustodata.ConnectionStringBuilder) *azkustodata.ConnectionStringBuilder
 
 type authMethod func() (authConfiguror, error)
 
@@ -16,7 +16,7 @@ type authMethod func() (authConfiguror, error)
 func DefaultAuth() authMethod {
 	return func() (authConfiguror, error) {
 		logger.Infof("Using default authentication")
-		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
+		return func(kcsb *azkustodata.ConnectionStringBuilder) *azkustodata.ConnectionStringBuilder {
 			return kcsb.WithDefaultAzureCredential()
 		}, nil
 	}
@@ -29,8 +29,8 @@ func MsiAuth(msi string) authMethod {
 			return nil, fmt.Errorf("msi cannot be empty")
 		}
 		logger.Infof("Using MSI authentication")
-		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
-			return kcsb.WithUserManagedIdentity(msi)
+		return func(kcsb *azkustodata.ConnectionStringBuilder) *azkustodata.ConnectionStringBuilder {
+			return kcsb.WithUserAssignedIdentityClientId(msi)
 		}, nil
 	}
 }
@@ -45,7 +45,7 @@ func TokenAuth(kustoAppId string, kustoToken string) authMethod {
 			return nil, fmt.Errorf("token cannot be empty")
 		}
 		logger.Infof("Using token authentication")
-		return func(kcsb *kusto.ConnectionStringBuilder) *kusto.ConnectionStringBuilder {
+		return func(kcsb *azkustodata.ConnectionStringBuilder) *azkustodata.ConnectionStringBuilder {
 			return kcsb.WithApplicationToken(kustoAppId, kustoToken)
 		}, nil
 	}

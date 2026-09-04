@@ -3,11 +3,11 @@ package testutils
 import (
 	"context"
 	"fmt"
-	"io"
 	"testing"
 
-	"github.com/Azure/azure-kusto-go/kusto"
-	"github.com/Azure/azure-kusto-go/kusto/kql"
+	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
+	"github.com/Azure/azure-kusto-go/azkustodata/kql"
+	"github.com/Azure/azure-kusto-go/azkustodata/query"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,32 +16,67 @@ type TableSchema interface {
 	CslColumns() []string
 }
 
+func newKustoClient(t *testing.T, uri string) *azkustodata.Client {
+	t.Helper()
+
+	client, err := azkustodata.New(azkustodata.NewConnectionStringBuilder(uri))
+	require.NoError(t, err)
+	return client
+}
+
+func primaryResultRows(t *testing.T, dataset query.Dataset) []query.Row {
+	t.Helper()
+
+	for _, table := range dataset.Tables() {
+		if table.IsPrimaryResult() {
+			return table.Rows()
+		}
+	}
+
+	require.FailNow(t, "Kusto response did not contain a primary result table")
+	return nil
+}
+
+func forEachPrimaryResultRow(dataset query.IterativeDataset, visit func(query.Row) error) error {
+	foundPrimary := false
+	for tableResult := range dataset.Tables() {
+		if err := tableResult.Err(); err != nil {
+			return err
+		}
+
+		table := tableResult.Table()
+		if !table.IsPrimaryResult() {
+			continue
+		}
+		foundPrimary = true
+
+		for rowResult := range table.Rows() {
+			if err := rowResult.Err(); err != nil {
+				return err
+			}
+			if err := visit(rowResult.Row()); err != nil {
+				return err
+			}
+		}
+	}
+
+	if !foundPrimary {
+		return fmt.Errorf("Kusto response did not contain a primary result table")
+	}
+	return nil
+}
+
 func TableExists(ctx context.Context, t *testing.T, database, table, uri string) bool {
 	t.Helper()
 
-	cb := kusto.NewConnectionStringBuilder(uri)
-	client, err := kusto.New(cb)
-	require.NoError(t, err)
+	client := newKustoClient(t, uri)
 	defer client.Close()
 
 	stmt := kql.New(".show tables")
-	rows, err := client.Mgmt(ctx, database, stmt)
+	dataset, err := client.Mgmt(ctx, database, stmt)
 	require.NoError(t, err)
-	defer rows.Stop()
 
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			t.Logf("Partial failure to retrieve tables: %v", errInline)
-			continue
-		}
-		if errFinal != nil {
-			t.Errorf("Failed to retrieve tables: %v", errFinal)
-		}
-
+	for _, row := range primaryResultRows(t, dataset) {
 		var tbl Table
 		if err := row.ToStruct(&tbl); err != nil {
 			t.Errorf("Failed to convert row to struct: %v", err)
@@ -72,29 +107,14 @@ func FunctionExists(ctx context.Context, t *testing.T, database, function, uri s
 func GetFunction(ctx context.Context, t *testing.T, database, function, uri string) Function {
 	t.Helper()
 
-	cb := kusto.NewConnectionStringBuilder(uri)
-	client, err := kusto.New(cb)
-	require.NoError(t, err)
+	client := newKustoClient(t, uri)
 	defer client.Close()
 
 	stmt := kql.New(".show functions")
-	rows, err := client.Mgmt(ctx, database, stmt)
+	dataset, err := client.Mgmt(ctx, database, stmt)
 	require.NoError(t, err)
-	defer rows.Stop()
 
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			t.Logf("Partial failure to retrieve functions: %v", errInline)
-			continue
-		}
-		if errFinal != nil {
-			t.Errorf("Failed to retrieve functions: %v", errFinal)
-		}
-
+	for _, row := range primaryResultRows(t, dataset) {
 		var fn Function
 		if err := row.ToStruct(&fn); err != nil {
 			t.Errorf("Failed to convert row to struct: %v", err)
@@ -119,38 +139,20 @@ type Function struct {
 func TableHasRows(ctx context.Context, t *testing.T, database, table, uri string) bool {
 	t.Helper()
 
-	cb := kusto.NewConnectionStringBuilder(uri)
-	client, err := kusto.New(cb)
-	require.NoError(t, err)
+	client := newKustoClient(t, uri)
 	defer client.Close()
 
-	query := kql.New("").AddUnsafe(table).AddLiteral(" | count")
-	rows, err := client.Query(ctx, database, query)
+	stmt := kql.New("").AddUnsafe(table).AddLiteral(" | count")
+	dataset, err := client.Query(ctx, database, stmt)
 	require.NoError(t, err)
-	defer rows.Stop()
 
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			t.Logf("Partial failure to retrieve row count: %v", errInline)
-			continue
-		}
-		if errFinal != nil {
-			t.Errorf("Failed to retrieve row count: %v", errFinal)
-		}
+	rows := primaryResultRows(t, dataset)
+	require.Len(t, rows, 1, "Expected one row count result")
 
-		var count RowCount
-		if err := row.ToStruct(&count); err != nil {
-			t.Errorf("Failed to convert row to struct: %v", err)
-			continue
-		}
-		return count.Count > 0
-	}
+	var count RowCount
+	require.NoError(t, rows[0].ToStruct(&count), "Failed to convert row count to struct")
 
-	return false
+	return count.Count > 0
 }
 
 type RowCount struct {
@@ -160,37 +162,24 @@ type RowCount struct {
 func VerifyTableSchema(ctx context.Context, t *testing.T, database, table, uri string, expect TableSchema) {
 	t.Helper()
 
-	cb := kusto.NewConnectionStringBuilder(uri)
-	client, err := kusto.New(cb)
-	require.NoError(t, err)
+	client := newKustoClient(t, uri)
 	defer client.Close()
 
-	query := kql.New("").AddUnsafe(table).AddLiteral(" | getschema")
-	rows, err := client.Query(ctx, database, query)
+	stmt := kql.New("").AddUnsafe(table).AddLiteral(" | getschema")
+	dataset, err := client.IterativeQuery(ctx, database, stmt)
 	require.NoError(t, err)
-	defer rows.Stop()
+	defer dataset.Close()
 
 	var schema []*KqlSchema
-	for {
-		row, errInline, errFinal := rows.NextRowOrError()
-		if errFinal == io.EOF {
-			break
-		}
-		if errInline != nil {
-			t.Logf("Partial failure to retrieve schema: %v", errInline)
-			continue
-		}
-		if errFinal != nil {
-			t.Errorf("Failed to retrieve schema: %v", errFinal)
-		}
-
+	err = forEachPrimaryResultRow(dataset, func(row query.Row) error {
 		var s KqlSchema
 		if err := row.ToStruct(&s); err != nil {
-			t.Errorf("Failed to convert row to struct: %v", err)
-			continue
+			return fmt.Errorf("convert schema row to struct: %w", err)
 		}
 		schema = append(schema, &s)
-	}
+		return nil
+	})
+	require.NoError(t, err, "Failed to retrieve schema")
 
 	require.Equal(t, expect.TableName(), table)
 	require.Equal(t, cslSchemaFromKqlSchema(schema), expect.CslColumns())

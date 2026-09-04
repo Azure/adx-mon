@@ -5,6 +5,8 @@ package journal
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -106,16 +108,33 @@ func TestApplyMatches(t *testing.T) {
 // Can view in journalctl with journalctl --file test_file.journal
 
 func TestReadFile(t *testing.T) {
-	t.Skip("skipping test because of inconsistent journalctl feature support in some build containers. Some will error out with 'protocol not supported' based on compiled features.")
 	tmpdir := t.TempDir()
-	cursorPath := cursorPath(tmpdir, []string{"test"}, "testdb", "testtable")
+	cursorPath := cursorPath(tmpdir, []string{"test"}, "testdb", "testtable", "")
 	queue := make(chan *types.Log, 1000)
+
+	// journalPath opens a directory rather than individual files, so stage the
+	// fixture in a directory of its own.
+	journalDir := t.TempDir()
+	contents, err := os.ReadFile("test_file.journal")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(journalDir, "test_file.journal"), contents, 0o644))
+
+	// journalctl feature support varies between build containers: some are
+	// compiled without what this fixture needs and fail with "protocol not
+	// supported". Probe the staged directory once and skip only where the
+	// environment genuinely cannot read it, so the success path still runs
+	// everywhere else instead of being skipped unconditionally.
+	probe, err := sdjournal.NewJournalFromDir(journalDir)
+	if err != nil {
+		t.Skipf("journal directory reads unsupported in this environment: %v", err)
+	}
+	probe.Close()
 
 	tailer := &tailer{
 		database:       "testdb",
 		table:          "testtable",
 		cursorFilePath: cursorPath,
-		journalFiles:   []string{"test_file.journal"},
+		journalPath:    journalDir,
 		batchQueue:     queue,
 		streamPartials: make(map[string]string),
 	}
@@ -141,7 +160,7 @@ func TestReadFile(t *testing.T) {
 
 func TestReadFromJournalNonExisting(t *testing.T) {
 	tmpdir := t.TempDir()
-	cursorPath := cursorPath(tmpdir, []string{"test"}, "testdb", "testtable")
+	cursorPath := cursorPath(tmpdir, []string{"test"}, "testdb", "testtable", "")
 	queue := make(chan *types.Log, 1000)
 
 	tailer := &tailer{
@@ -149,7 +168,7 @@ func TestReadFromJournalNonExisting(t *testing.T) {
 		table:          "testtable",
 		matches:        []string{"_SYSTEMD_UNIT=kubelet.service", "_HOSTNAME=testmachine"},
 		cursorFilePath: cursorPath,
-		journalFiles:   []string{"non_existing_file.journal"},
+		journalPath:    filepath.Join(t.TempDir(), "non_existing_dir"),
 		batchQueue:     queue,
 		streamPartials: make(map[string]string),
 	}

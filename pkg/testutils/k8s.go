@@ -10,6 +10,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/k3s"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -34,7 +35,7 @@ func WriteKubeConfig(ctx context.Context, k *k3s.K3sContainer, dir string) (stri
 }
 
 func GetKubeConfig(ctx context.Context, k *k3s.K3sContainer) (*rest.Config, ctrlclient.Client, error) {
-	scheme := clientgoscheme.Scheme
+	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, nil, fmt.Errorf("failed to add client-go scheme: %w", err)
 	}
@@ -53,7 +54,7 @@ func GetKubeConfig(ctx context.Context, k *k3s.K3sContainer) (*rest.Config, ctrl
 	}
 	restCfg.WarningHandler = rest.NoWarnings{}
 
-	ctrlCli, err := ctrlclient.New(restCfg, ctrlclient.Options{})
+	ctrlCli, err := ctrlclient.New(restCfg, ctrlclient.Options{Scheme: scheme})
 
 	return restCfg, ctrlCli, err
 }

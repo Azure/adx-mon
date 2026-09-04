@@ -11,7 +11,7 @@ import (
 
 func TestCursorPath(t *testing.T) {
 	t.Run("sanitizes", func(t *testing.T) {
-		cursorPath := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "database/20", "desttable")
+		cursorPath := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "database/20", "desttable", "")
 		require.NotEmpty(t, cursorPath)
 
 		require.Equal(t, "cursorDirectory", filepath.Dir(cursorPath), "no sub directories")
@@ -20,17 +20,17 @@ func TestCursorPath(t *testing.T) {
 	})
 
 	t.Run("consistent", func(t *testing.T) {
-		pathOne := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "desttable")
-		pathTwo := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "desttable")
+		pathOne := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "desttable", "")
+		pathTwo := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "desttable", "")
 		require.Equal(t, pathOne, pathTwo)
 
-		pathOne = cursorPath("cursorDirectory", nil, "destdatabase", "desttable")
-		pathTwo = cursorPath("cursorDirectory", nil, "destdatabase", "desttable")
+		pathOne = cursorPath("cursorDirectory", nil, "destdatabase", "desttable", "")
+		pathTwo = cursorPath("cursorDirectory", nil, "destdatabase", "desttable", "")
 		require.Equal(t, pathOne, pathTwo)
 	})
 
 	t.Run("no filter", func(t *testing.T) {
-		cPath := cursorPath("cursorDirectory", nil, "destdatabase", "desttable")
+		cPath := cursorPath("cursorDirectory", nil, "destdatabase", "desttable", "")
 		require.NotEmpty(t, cPath)
 
 		require.Equal(t, "cursorDirectory", filepath.Dir(cPath), "no sub directories")
@@ -39,23 +39,23 @@ func TestCursorPath(t *testing.T) {
 	})
 
 	t.Run("varies by filter,db,table", func(t *testing.T) {
-		controlPath := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "desttable")
-		testPath := cursorPath("cursorDirectory", []string{"filter1", "filter3", "filter2"}, "destdatabase", "desttable")
+		controlPath := cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "desttable", "")
+		testPath := cursorPath("cursorDirectory", []string{"filter1", "filter3", "filter2"}, "destdatabase", "desttable", "")
 		require.NotEqual(t, controlPath, testPath)
 
-		testPath = cursorPath("cursorDirectory", []string{"filter2"}, "destdatabase", "desttable")
+		testPath = cursorPath("cursorDirectory", []string{"filter2"}, "destdatabase", "desttable", "")
 		require.NotEqual(t, controlPath, testPath)
 
 		// different order of filter
-		testPath = cursorPath("cursorDirectory", []string{"filter2", "filter1"}, "destdatabase", "desttable")
+		testPath = cursorPath("cursorDirectory", []string{"filter2", "filter1"}, "destdatabase", "desttable", "")
 		require.NotEqual(t, controlPath, testPath)
 
 		// different table
-		testPath = cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "secondtable")
+		testPath = cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "destdatabase", "secondtable", "")
 		require.NotEqual(t, controlPath, testPath)
 
 		// different db
-		testPath = cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "otherdatabase", "desttable")
+		testPath = cursorPath("cursorDirectory", []string{"filter1", "filter2"}, "otherdatabase", "desttable", "")
 		require.NotEqual(t, controlPath, testPath)
 	})
 }
@@ -134,5 +134,38 @@ func TestClean(t *testing.T) {
 		cleanCursor(cursorPath)
 		_, err := os.Stat(cursorPath)
 		require.ErrorIs(t, err, os.ErrNotExist)
+	})
+}
+
+func TestCursorPathJournalPath(t *testing.T) {
+	matches := []string{"_TRANSPORT=kernel"}
+
+	t.Run("empty journal path preserves the legacy cursor name", func(t *testing.T) {
+		// Pinned rather than recomputed: the whole point is that targets reading
+		// the default journal keep the exact cursor file they had before
+		// journal-path existed, so an upgrade does not re-ingest from the head of
+		// the journal. Recomputing the hash here would pass even if the scheme
+		// changed underneath us.
+		require.Equal(t,
+			filepath.Join("cursorDirectory", "journal_destdatabase_desttable_43a88ce0d2e1e5de.cursor"),
+			cursorPath("cursorDirectory", matches, "destdatabase", "desttable", ""))
+	})
+
+	t.Run("a journal path yields a different cursor than the default journal", func(t *testing.T) {
+		def := cursorPath("cursorDirectory", matches, "destdatabase", "desttable", "")
+		withPath := cursorPath("cursorDirectory", matches, "destdatabase", "desttable", "/var/log/host-journal")
+		require.NotEqual(t, def, withPath)
+	})
+
+	t.Run("different journal paths yield different cursors", func(t *testing.T) {
+		one := cursorPath("cursorDirectory", matches, "destdatabase", "desttable", "/var/log/host-journal")
+		two := cursorPath("cursorDirectory", matches, "destdatabase", "desttable", "/var/log/other-journal")
+		require.NotEqual(t, one, two)
+	})
+
+	t.Run("the same journal path is stable", func(t *testing.T) {
+		one := cursorPath("cursorDirectory", matches, "destdatabase", "desttable", "/var/log/host-journal")
+		two := cursorPath("cursorDirectory", matches, "destdatabase", "desttable", "/var/log/host-journal")
+		require.Equal(t, one, two)
 	})
 }

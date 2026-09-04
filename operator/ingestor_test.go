@@ -2,6 +2,7 @@ package operator
 
 import (
 	context "context"
+	"errors"
 	"testing"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -9,13 +10,28 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+type failRoleCreateClient struct {
+	client.Client
+}
+
+func (c *failRoleCreateClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*rbacv1.Role); ok {
+		return errors.New("role creation denied")
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
 
 func TestIngestorReconciler_IsReady(t *testing.T) {
 	scheme := runtime.NewScheme()
@@ -466,7 +482,7 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 
 	// c0034 - Service account token mounting
 	require.NotNil(t, sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be explicitly set")
-	require.True(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "automountServiceAccountToken should be true in statefulset")
+	require.True(t, *sts.Spec.Template.Spec.AutomountServiceAccountToken, "the pod should opt in to Kubernetes bound-token injection")
 
 	// Verify that service account has automountServiceAccountToken set to false
 	sa := &corev1.ServiceAccount{}
@@ -476,4 +492,302 @@ func TestIngestorReconciler_SecurityControlsValidation(t *testing.T) {
 	}, sa))
 	require.NotNil(t, sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be explicitly set")
 	require.False(t, *sa.AutomountServiceAccountToken, "ServiceAccount automountServiceAccountToken should be false")
+
+	role := &rbacv1.Role{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: ingestorPodRoleName, Namespace: "default"}, role))
+	require.Equal(t, []rbacv1.PolicyRule{{
+		APIGroups: []string{""},
+		Resources: []string{"pods"},
+		Verbs:     []string{"get", "list", "watch", "patch"},
+	}}, role.Rules)
+
+	roleBinding := &rbacv1.RoleBinding{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: ingestorPodRoleName, Namespace: "default"}, roleBinding))
+	require.Equal(t, "Role", roleBinding.RoleRef.Kind)
+	require.Equal(t, ingestorPodRoleName, roleBinding.RoleRef.Name)
+
+	clusterRole := &rbacv1.ClusterRole{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "default:ingestor"}, clusterRole))
+	for _, rule := range clusterRole.Rules {
+		require.NotContains(t, rule.Resources, "namespaces")
+		require.NotContains(t, rule.Resources, "pods")
+	}
+	require.Contains(t, clusterRole.Rules, rbacv1.PolicyRule{
+		APIGroups: []string{"adx-mon.azure.com"},
+		Resources: []string{"functions/status", "managementcommands/status", "summaryrules/status"},
+		Verbs:     []string{"update"},
+	})
+}
+
+func TestIngestorReconciler_MigratesExistingSecurityControls(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	const namespace = "existing-namespace"
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace},
+		Spec: adxmonv1.IngestorSpec{
+			Image:              "custom-image:v1",
+			Replicas:           3,
+			ADXClusterSelector: &metav1.LabelSelector{},
+			CriteriaExpression: "false",
+		},
+		Status: adxmonv1.IngestorStatus{Conditions: []metav1.Condition{{
+			Type:               adxmonv1.IngestorConditionOwner,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Ready",
+			ObservedGeneration: 1,
+		}}},
+	}
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "ingestor",
+			Namespace:   namespace,
+			Labels:      map[string]string{"preserve": "label"},
+			Annotations: map[string]string{"preserve": "annotation"},
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: to.Ptr(int32(3)),
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				NodeSelector: map[string]string{"preserve": "selector"},
+				Containers: []corev1.Container{{
+					Name:         "ingestor",
+					Image:        "custom-image:v1",
+					Args:         []string{"--preserve=argument"},
+					VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}},
+				}},
+				Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
+			}},
+		},
+	}
+
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"namespaces", "pods"},
+			Verbs:     []string{"get", "list", "watch", "update"},
+		}},
+	}
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: namespace + ":ingestor"},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		WithObjects(ingestor, sts, clusterRole, clusterRoleBinding).
+		Build()
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: namespace}}
+
+	result, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, result.IsZero(), "criteria evaluation should still skip normal reconciliation")
+	updatedIngestor := &adxmonv1.Ingestor{}
+	require.NoError(t, client.Get(context.Background(), req.NamespacedName, updatedIngestor))
+	require.Contains(t, updatedIngestor.Finalizers, ingestorSecurityFinalizer)
+
+	updatedRole := &rbacv1.ClusterRole{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: namespace + ":ingestor"}, updatedRole))
+	for _, rule := range updatedRole.Rules {
+		require.NotContains(t, rule.Resources, "namespaces")
+		require.NotContains(t, rule.Resources, "pods")
+	}
+	require.Contains(t, updatedRole.Rules, rbacv1.PolicyRule{
+		APIGroups: []string{"adx-mon.azure.com"},
+		Resources: []string{"functions"},
+		Verbs:     []string{"get", "list", "update"},
+	})
+
+	localRole := &rbacv1.Role{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: ingestorPodRoleName, Namespace: namespace}, localRole))
+	require.Equal(t, []string{"get", "list", "watch", "patch"}, localRole.Rules[0].Verbs)
+	localBinding := &rbacv1.RoleBinding{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: ingestorPodRoleName, Namespace: namespace}, localBinding))
+	require.Equal(t, "Role", localBinding.RoleRef.Kind)
+
+	updatedSTS := &appsv1.StatefulSet{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "ingestor", Namespace: namespace}, updatedSTS))
+	require.Equal(t, int32(3), *updatedSTS.Spec.Replicas)
+	require.Equal(t, map[string]string{"preserve": "label"}, updatedSTS.Labels)
+	require.Equal(t, map[string]string{"preserve": "annotation"}, updatedSTS.Annotations)
+	require.Equal(t, map[string]string{"preserve": "selector"}, updatedSTS.Spec.Template.Spec.NodeSelector)
+	require.Equal(t, "custom-image:v1", updatedSTS.Spec.Template.Spec.Containers[0].Image)
+	require.Equal(t, []string{"--preserve=argument"}, updatedSTS.Spec.Template.Spec.Containers[0].Args)
+	require.Contains(t, updatedSTS.Spec.Template.Spec.Volumes, corev1.Volume{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	require.Contains(t, updatedSTS.Spec.Template.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{Name: "data", MountPath: "/data"})
+
+	resourceVersion := updatedSTS.ResourceVersion
+	_, err = reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "ingestor", Namespace: namespace}, updatedSTS))
+	require.Equal(t, resourceVersion, updatedSTS.ResourceVersion, "an idempotent migration should not update the StatefulSet")
+}
+
+func TestIngestorReconciler_RecreatesRoleBindingWhenRoleRefDiffers(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	const namespace = "binding-conflict"
+	ingestor := &adxmonv1.Ingestor{ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace}}
+	clusterRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"}}
+	conflicting := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: ingestorPodRoleName, Namespace: namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "wrong-role"},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor, clusterRole, conflicting).Build()
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+	require.NoError(t, reconciler.reconcileIngestorSecurity(context.Background(), ingestor))
+	updated := &rbacv1.RoleBinding{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: ingestorPodRoleName, Namespace: namespace}, updated))
+	require.Equal(t, "Role", updated.RoleRef.Kind)
+	require.Equal(t, ingestorPodRoleName, updated.RoleRef.Name)
+	require.Equal(t, []rbacv1.Subject{{Kind: "ServiceAccount", Name: "ingestor", Namespace: namespace}}, updated.Subjects)
+}
+
+func TestIngestorReconciler_CleansUpManagedClusterRBAC(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	const namespace = "cleanup"
+	name := namespace + ":ingestor"
+	ingestor := &adxmonv1.Ingestor{ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace, Finalizers: []string{ingestorSecurityFinalizer}}}
+	role := desiredIngestorClusterRole(namespace)
+	binding := desiredIngestorClusterRoleBinding(namespace)
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor, role, binding).Build()
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+	require.NoError(t, reconciler.cleanupIngestorSecurity(context.Background(), ingestor))
+	require.True(t, apierrors.IsNotFound(client.Get(context.Background(), types.NamespacedName{Name: name}, &rbacv1.ClusterRole{})))
+	require.True(t, apierrors.IsNotFound(client.Get(context.Background(), types.NamespacedName{Name: name}, &rbacv1.ClusterRoleBinding{})))
+	updated := &adxmonv1.Ingestor{}
+	require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: "ingestor", Namespace: namespace}, updated))
+	require.NotContains(t, updated.Finalizers, ingestorSecurityFinalizer)
+}
+
+func TestIngestorReconciler_DoesNotProvisionSecurityResourcesWhenCriteriaIsFalse(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	ingestor := &adxmonv1.Ingestor{
+		ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: "excluded"},
+		Spec: adxmonv1.IngestorSpec{
+			ADXClusterSelector: &metav1.LabelSelector{},
+			CriteriaExpression: "false",
+		},
+	}
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&adxmonv1.Ingestor{}).
+		WithObjects(ingestor).
+		Build()
+	reconciler := &IngestorReconciler{Client: client, Scheme: scheme}
+
+	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: "excluded"}})
+	require.NoError(t, err)
+
+	require.True(t, apierrors.IsNotFound(client.Get(context.Background(), types.NamespacedName{Name: "excluded:ingestor"}, &rbacv1.ClusterRole{})))
+	require.True(t, apierrors.IsNotFound(client.Get(context.Background(), types.NamespacedName{Name: ingestorPodRoleName, Namespace: "excluded"}, &rbacv1.Role{})))
+}
+
+func TestIngestorReconciler_RevokesClusterRoleBeforeAdditiveFailure(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+	const namespace = "fail-closed"
+	ingestor := &adxmonv1.Ingestor{ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace}}
+	vulnerableRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"},
+		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"namespaces", "pods"}, Verbs: []string{"update"}}},
+	}
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingestor, vulnerableRole).Build()
+	reconciler := &IngestorReconciler{Client: &failRoleCreateClient{Client: baseClient}, Scheme: scheme}
+
+	err := reconciler.reconcileIngestorSecurity(context.Background(), ingestor)
+	require.ErrorContains(t, err, "role creation denied")
+	updated := &rbacv1.ClusterRole{}
+	require.NoError(t, baseClient.Get(context.Background(), types.NamespacedName{Name: namespace + ":ingestor"}, updated))
+	for _, rule := range updated.Rules {
+		require.NotContains(t, rule.Resources, "namespaces")
+		require.NotContains(t, rule.Resources, "pods")
+	}
+}
+
+func TestIngestorReconciler_SecurityConditionPreservesLifecycleState(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason string
+		status metav1.ConditionStatus
+	}{
+		{name: "pending generation", reason: "Ready", status: metav1.ConditionTrue},
+		{name: "installation", reason: "WaitForReady", status: metav1.ConditionUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, adxmonv1.AddToScheme(scheme))
+			require.NoError(t, clientgoscheme.AddToScheme(scheme))
+
+			const namespace = "condition-test"
+			ingestor := &adxmonv1.Ingestor{
+				ObjectMeta: metav1.ObjectMeta{Name: "ingestor", Namespace: namespace, Generation: 8},
+				Spec: adxmonv1.IngestorSpec{
+					ADXClusterSelector: &metav1.LabelSelector{},
+					CriteriaExpression: "false",
+				},
+				Status: adxmonv1.IngestorStatus{Conditions: []metav1.Condition{{
+					Type:               adxmonv1.IngestorConditionOwner,
+					Status:             tc.status,
+					Reason:             tc.reason,
+					ObservedGeneration: 7,
+				}}},
+			}
+			vulnerableRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: namespace + ":ingestor"}}
+			baseClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&adxmonv1.Ingestor{}).
+				WithObjects(ingestor, vulnerableRole).
+				Build()
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ingestor", Namespace: namespace}}
+
+			failing := &IngestorReconciler{Client: &failRoleCreateClient{Client: baseClient}, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+			_, err := failing.Reconcile(context.Background(), req)
+			require.ErrorContains(t, err, "role creation denied")
+
+			updated := &adxmonv1.Ingestor{}
+			require.NoError(t, baseClient.Get(context.Background(), req.NamespacedName, updated))
+			owner := meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+			require.NotNil(t, owner)
+			require.Equal(t, tc.reason, owner.Reason)
+			require.Equal(t, int64(7), owner.ObservedGeneration)
+			security := meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionSecurityReady)
+			require.NotNil(t, security)
+			require.Equal(t, metav1.ConditionFalse, security.Status)
+
+			recovered := &IngestorReconciler{Client: baseClient, Scheme: scheme, waitForReadyReason: "WaitForReady"}
+			require.NoError(t, recovered.setSecurityCondition(context.Background(), updated, metav1.ConditionTrue, "SecurityMigrationComplete", "security controls reconciled"))
+			require.NoError(t, baseClient.Get(context.Background(), req.NamespacedName, updated))
+			owner = meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionOwner)
+			require.NotNil(t, owner)
+			require.Equal(t, tc.reason, owner.Reason)
+			require.Equal(t, int64(7), owner.ObservedGeneration)
+			security = meta.FindStatusCondition(updated.Status.Conditions, adxmonv1.IngestorConditionSecurityReady)
+			require.NotNil(t, security)
+			require.Equal(t, metav1.ConditionTrue, security.Status)
+			if tc.reason == "Ready" {
+				require.NotEqual(t, updated.Generation, owner.ObservedGeneration, "the pending generation must remain eligible for manifest reconciliation")
+			} else {
+				require.Equal(t, "WaitForReady", owner.Reason, "installation must remain eligible for readiness checks")
+			}
+		})
+	}
 }
