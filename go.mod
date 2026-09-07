@@ -30,7 +30,7 @@ require (
 	github.com/libp2p/go-buffer-pool v0.1.0
 	github.com/lmittmann/tint v1.2.0
 	github.com/mattn/go-isatty v0.0.24
-	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/api v1.56.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
 	github.com/prometheus/client_golang v1.24.1
