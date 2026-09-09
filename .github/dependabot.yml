@@ -9,6 +9,8 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    open-pull-requests-limit: 1
+    rebase-strategy: "disabled"
     groups:
       kubernetes:
         patterns:
@@ -30,6 +32,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    open-pull-requests-limit: 1
+    rebase-strategy: "disabled"
     groups:
       codeql-action:
         patterns:
