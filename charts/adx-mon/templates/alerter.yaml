@@ -1,0 +1,170 @@
+{{- if .Values.alerter.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alerter
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:alerter
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - alertrules
+      - functions
+      - managementcommands
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - alertrules/status
+      - functions/status
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - alertrules/finalizers
+      - functions/finalizers
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:alerter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:alerter
+subjects:
+  - kind: ServiceAccount
+    name: alerter
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alerter
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: alerter
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alerter
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.alerter.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: alerter
+  template:
+    metadata:
+      labels:
+        app: alerter
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/port: "8080"
+        adx-mon/path: "/metrics"
+        adx-mon/log-destination: {{ .Values.alerter.log_destination | quote }}
+        adx-mon/log-parsers: json
+    spec:
+      serviceAccountName: alerter
+      automountServiceAccountToken: true
+      priorityClassName: system-cluster-critical
+      {{- if .Values.alerter.affinity }}
+      {{- if .Values.alerter.affinity.required }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.alerter.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.alerter.affinity.value | default "system" }}
+      {{- else }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: {{ .Values.alerter.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.alerter.affinity.value | default "system" }}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: alerter
+          image: {{ include "adx-mon.image" (dict "image" .Values.alerter.image "component" "alerter" "registry" .Values.image_registry) }}
+          imagePullPolicy: {{ .Values.alerter.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /alerter
+          args:
+            - "--alerter-address={{ required "alerter.alerter_address must be set when alerter.enabled=true" (.Values.alerter.alerter_address | default "" | trim) }}"
+            - "--port=8080"
+            - "--cloud={{ .Values.cloud }}"
+            - "--region={{ required "region must be set" (.Values.region | default "" | trim) }}"
+            - "--tag=environment={{ required "environment must be set" (.Values.environment | default "" | trim) }}"
+            - "--auth-msi-id={{ required "alerter.auth_msi_id must be set" (.Values.alerter.auth_msi_id | default "" | trim) }}"
+            {{- range .Values.adx.databases }}
+            - "--kusto-endpoint={{ .name }}={{ $.Values.adx.url }}"
+            {{- end }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: GODEBUG
+              value: http2client=0
+          volumeMounts:
+            - mountPath: /etc/ssl/certs
+              name: ssl-certs
+              readOnly: true
+            - mountPath: /etc/pki/ca-trust/extracted
+              name: etc-pki-ca-certs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.alerter.resources | nindent 12 }}
+      volumes:
+        - name: ssl-certs
+          hostPath:
+            path: /etc/ssl/certs
+            type: Directory
+        - name: etc-pki-ca-certs
+          hostPath:
+            path: /etc/pki/ca-trust/extracted
+            type: DirectoryOrCreate
+{{- end }}

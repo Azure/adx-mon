@@ -1,0 +1,235 @@
+{{- if .Values.operator.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    azure.workload.identity/client-id: {{ required "operator.client_id must be set when operator.enabled=true" (.Values.operator.client_id | default "" | trim) | quote }}
+  name: operator
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adx-mon:operator
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - endpoints
+      - events
+      - namespaces
+      - pods
+      - secrets
+      - serviceaccounts
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - daemonsets
+      - replicasets
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - adxclusters
+      - alerters
+      - alertrules
+      - collectors
+      - functions
+      - ingestors
+      - managementcommands
+      - metricsexporters
+      - summaryrules
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - adxclusters/status
+      - alerters/status
+      - alertrules/status
+      - collectors/status
+      - functions/status
+      - ingestors/status
+      - managementcommands/status
+      - metricsexporters/status
+      - summaryrules/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - adx-mon.azure.com
+    resources:
+      - adxclusters/finalizers
+      - alerters/finalizers
+      - alertrules/finalizers
+      - collectors/finalizers
+      - functions/finalizers
+      - ingestors/finalizers
+      - managementcommands/finalizers
+      - metricsexporters/finalizers
+      - summaryrules/finalizers
+    verbs:
+      - get
+      - update
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adx-mon:operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adx-mon:operator
+subjects:
+  - kind: ServiceAccount
+    name: operator
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operator
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: operator
+  template:
+    metadata:
+      annotations:
+        adx-mon/scrape: "true"
+        adx-mon/log-destination: {{ .Values.operator.log_destination | quote }}
+        adx-mon/log-parsers: json
+      labels:
+        app: operator
+        azure.workload.identity/use: "true"
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 3000
+        fsGroup: 65534
+      containers:
+        - name: operator
+          image: {{ include "adx-mon.image" (dict "image" .Values.operator.image "component" "operator" "registry" .Values.image_registry) }}
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "Always" }}
+          args:
+            - --pprof-bind-address=:6060
+          ports:
+            - containerPort: 6060
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+      {{- if .Values.operator.affinity }}
+      {{- if .Values.operator.affinity.required }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.operator.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.operator.affinity.value | default "system" }}
+      {{- else }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: {{ .Values.operator.affinity.key | default "agentpool"}}
+                    operator: In
+                    values:
+                      - {{ .Values.operator.affinity.value | default "system" }}
+      {{- end }}
+      {{- end }}
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - effect: NoExecute
+          key: node.kubernetes.io/not-ready
+          operator: Exists
+          tolerationSeconds: 300
+        - effect: NoExecute
+          key: node.kubernetes.io/unreachable
+          operator: Exists
+          tolerationSeconds: 300
+---
+apiVersion: adx-mon.azure.com/v1
+kind: ADXCluster
+metadata:
+  name: {{ required "adx.name must be set" (.Values.adx.name | default "" | trim) }}
+spec:
+  clusterName: {{ .Values.adx.name }}
+  databases:
+  {{- range .Values.adx.databases }}
+  - databaseName: {{ .name }}
+    retentionInDays: {{ .retentionInDays | default 30 }}
+    telemetryType: {{ .telemetryType }}
+  {{- end }}
+  endpoint: {{ .Values.adx.url }}
+  federation:
+    # Hub clusters
+    federatedTargets:
+    - endpoint: {{ required "adx_hub_url must be set" (.Values.adx_hub_url | default "" | trim) }}
+      heartbeatDatabase: Federation
+      heartbeatTable: Heartbeats
+      # Empty string uses DefaultAzureCredential for all authentication and authorization.
+      # To use a specific managed identity, set this to the client ID of the identity.
+      # See: https://github.com/Azure/adx-mon/blob/main/docs/adxcluster-controller.md#partition-clusters
+      # Tracking workload identity support: https://github.com/Azure/adx-mon/issues/1073
+      managedIdentityClientId: ""
+    heartbeatTTL: 1h
+    partitioning:
+      region: {{ required "region must be set" (.Values.region | default "" | trim) }}
+  role: Partition
+{{- end }}
