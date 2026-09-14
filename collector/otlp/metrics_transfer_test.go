@@ -10,7 +10,10 @@ import (
 
 	"buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go/opentelemetry/proto/collector/metrics/v1/metricsv1connect"
 	v1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/collector/metrics/v1"
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	metricsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/metrics/v1"
+	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/transform"
 	"github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/rpc/status"
@@ -194,6 +197,23 @@ func TestMetricsService_OLTP_ContentTypes(t *testing.T) {
 			require.Equal(t, http.StatusUnsupportedMediaType, resp.Code)
 		})
 	}
+}
+
+func TestAddSeriesAndFlushIfNecessarySortsSyntheticLabels(t *testing.T) {
+	writer := &OltpMetricWriter{
+		maxBatchSize:       2,
+		requestTransformer: &transform.RequestTransformer{},
+	}
+	request := &prompb.WriteRequest{}
+	series := newSeries("request_duration_bucket", []*commonv1.KeyValue{
+		{Key: "region", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "eastus"}}},
+	})
+	t.Cleanup(func() { prompb.TimeSeriesPool.Put(series) })
+	series.AppendLabelString("le", "1.0")
+
+	require.False(t, prompb.IsSorted(series.Labels))
+	require.NoError(t, writer.addSeriesAndFlushIfNecessary(context.Background(), request, series))
+	require.True(t, prompb.IsSorted(request.Timeseries[0].Labels))
 }
 
 type ErrMetricWriter struct {

@@ -38,6 +38,36 @@ func TestSortedLabels(t *testing.T) {
 	require.Equal(t, []byte("foo"), l[3].Name)
 }
 
+func TestIsSortedChecksLastPair(t *testing.T) {
+	labels := []*Label{
+		{Name: []byte("z")},
+		{Name: []byte("a")},
+	}
+
+	require.False(t, IsSorted(labels))
+}
+
+func TestIsSortedEmptyOrSingleLabel(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []*Label
+	}{
+		{name: "empty"},
+		{
+			name: "single",
+			labels: []*Label{
+				{Name: []byte("label")},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.True(t, IsSorted(tt.labels))
+		})
+	}
+}
+
 func TestCompareLower(t *testing.T) {
 	for _, tc := range []struct {
 		a, b     []byte
