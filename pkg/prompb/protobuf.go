@@ -2,7 +2,6 @@ package prompb
 
 import (
 	"fmt"
-	mathbits "math/bits"
 
 	"github.com/VictoriaMetrics/easyproto"
 )
@@ -26,6 +25,11 @@ var (
 // WriteRequest represents Prometheus remote write API request
 type WriteRequest struct {
 	Timeseries []*TimeSeries
+
+	// CommonLabels is an immutable sorted set of labels shared by every time
+	// series in this request. It is materialized into each series when the
+	// request is marshaled to the Prometheus remote write protobuf format.
+	CommonLabels []*Label
 }
 
 // TimeSeries is a timeseries.
@@ -49,6 +53,7 @@ type Sample struct {
 // Unmarshal unmarshals m from src.
 func (wr *WriteRequest) Unmarshal(src []byte) (err error) {
 	wr.Timeseries = wr.Timeseries[:0]
+	wr.CommonLabels = nil
 	var fc easyproto.FieldContext
 	for len(src) > 0 {
 		src, err = fc.NextField(src)
@@ -77,8 +82,7 @@ func (wr *WriteRequest) Unmarshal(src []byte) (err error) {
 }
 
 func (wr *WriteRequest) Marshal() (dAtA []byte, err error) {
-	b := make([]byte, wr.Size())
-	return wr.MarshalTo(b[:0])
+	return wr.MarshalTo(nil)
 }
 
 func (wr *WriteRequest) MarshalTo(dst []byte) ([]byte, error) {
@@ -86,7 +90,7 @@ func (wr *WriteRequest) MarshalTo(dst []byte) ([]byte, error) {
 	marshaller.Reset()
 	mm := marshaller.MessageMarshaler()
 	for _, ts := range wr.Timeseries {
-		ts.marshalProtobuf(mm.AppendMessage(1))
+		ts.marshalProtobuf(mm.AppendMessage(1), wr.CommonLabels)
 	}
 	dst = marshaller.Marshal(dst[:0])
 	mp.Put(marshaller)
@@ -100,36 +104,7 @@ func (wr *WriteRequest) Reset() {
 		TimeSeriesPool.Put(ts)
 	}
 	wr.Timeseries = wr.Timeseries[:0]
-}
-
-func (wr *WriteRequest) Size() (n int) {
-	if wr == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if len(wr.Timeseries) > 0 {
-		for _, e := range wr.Timeseries {
-			l = e.Size()
-			n += 1 + l + sizeOf(uint64(l))
-		}
-	}
-	return n
-}
-
-func (s *Sample) Size() (n int) {
-	if s == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if s.Value != 0 {
-		n += 9
-	}
-	if s.Timestamp != 0 {
-		n += 1 + sizeOf(uint64(s.Timestamp))
-	}
-	return n
+	wr.CommonLabels = nil
 }
 
 func (s *Sample) marshalProtobuf(mm *easyproto.MessageMarshaler) {
@@ -173,29 +148,8 @@ func (s *Sample) Reset() {
 	s.Timestamp = 0
 }
 
-func (m *TimeSeries) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if len(m.Labels) > 0 {
-		for _, e := range m.Labels {
-			l = e.Size()
-			n += 1 + l + sizeOf(uint64(l))
-		}
-	}
-	if len(m.Samples) > 0 {
-		for _, e := range m.Samples {
-			l = e.Size()
-			n += 1 + l + sizeOf(uint64(l))
-		}
-	}
-	return n
-}
-
-func (m *TimeSeries) marshalProtobuf(mm *easyproto.MessageMarshaler) {
-	for _, l := range m.Labels {
+func (m *TimeSeries) marshalProtobuf(mm *easyproto.MessageMarshaler, commonLabels []*Label) {
+	for l := range MergedLabels(m.Labels, commonLabels) {
 		l.marshalProtobuf(mm.AppendMessage(1))
 	}
 	for _, s := range m.Samples {
@@ -236,16 +190,13 @@ func (m *TimeSeries) unmarshalProtobuf(src []byte) (err error) {
 			}
 		}
 	}
+	Sort(m.Labels)
 	return nil
 }
 
 func (ts *TimeSeries) Reset() {
-	for i := range ts.Labels {
-		ts.Labels[i].Reset()
-	}
-	for i := range ts.Samples {
-		ts.Samples[i].Reset()
-	}
+	clear(ts.Labels[:cap(ts.Labels)])
+	clear(ts.Samples[:cap(ts.Samples)])
 	ts.Labels = ts.Labels[:0]
 	ts.Samples = ts.Samples[:0]
 }
@@ -269,23 +220,6 @@ func (m *TimeSeries) AppendSample(timestamp int64, value float64) {
 	s := m.Samples[len(m.Samples)-1]
 	s.Timestamp = timestamp
 	s.Value = value
-}
-
-func (m *Label) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	l = len(m.Name)
-	if l > 0 {
-		n += 1 + l + sizeOf(uint64(l))
-	}
-	l = len(m.Value)
-	if l > 0 {
-		n += 1 + l + sizeOf(uint64(l))
-	}
-	return n
 }
 
 func (m *Label) marshalProtobuf(mm *easyproto.MessageMarshaler) {
@@ -327,8 +261,4 @@ func (m *Label) unmarshalProtobuf(src []byte) (err error) {
 func (l *Label) Reset() {
 	l.Name = l.Name[:0]
 	l.Value = l.Value[:0]
-}
-
-func sizeOf(x uint64) (n int) {
-	return (mathbits.Len64(x|1) + 6) / 7
 }

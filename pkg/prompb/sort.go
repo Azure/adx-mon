@@ -19,10 +19,10 @@ func (l Labels) Swap(i, j int) {
 
 // IsSorted return true if the labels are sorted according to Sort.
 func IsSorted(l []*Label) bool {
-	if len(l) == 1 {
+	if len(l) <= 1 {
 		return true
 	}
-	for i := 1; i < len(l)-1; i++ {
+	for i := 1; i < len(l); i++ {
 		if !labelLess(l[i-1].Name, l[i].Name) {
 			return false
 		}
