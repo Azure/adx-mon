@@ -410,8 +410,12 @@ func TestWorker_ContextTimeout(t *testing.T) {
 }
 
 func TestWorker_RequestInvalid(t *testing.T) {
+	queryCalls := 0
 	kcli := &fakeKustoClient{
-		queryErr: kerrors.HTTP(kerrors.OpQuery, "Bad Request", http.StatusBadRequest, io.NopCloser(bytes.NewBufferString("query")), "Request is invalid and cannot be processed: Semantic error: SEM0001: Arithmetic expression cannot be carried-out between DateTime and StringBuffer"),
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			return semanticError("SEM0001: Arithmetic expression cannot be carried-out between DateTime and StringBuffer"), 0
+		},
 	}
 
 	var createCalled bool
@@ -432,10 +436,197 @@ func TestWorker_RequestInvalid(t *testing.T) {
 	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
 
 	w.ExecuteQuery(context.Background())
+	require.Equal(t, 1, queryCalls)
 	require.True(t, createCalled, "Create alert should be called")
 	gaugeValue := getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name))
 	// user caused error
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
+}
+
+func TestWorker_RemoteEntityResolutionError_RetrySucceeds(t *testing.T) {
+	queryCalls := 0
+	var firstQueryContext *QueryContext
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			if queryCalls == 1 {
+				firstQueryContext = qc
+				return remoteEntityResolutionError(), 0
+			}
+			require.Same(t, firstQueryContext, qc)
+			return nil, 0
+		},
+	}
+
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			t.Fatal("Create alert should not be called after a successful retry")
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
+
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthUnhealthy)
+	successCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(evaluationOutcomeSuccess)
+	successCounterBefore := getCounterValue(t, successCounter)
+
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, 2, queryCalls)
+	require.Equal(t, QueryHealthHealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+	require.Equal(t, successCounterBefore+1, getCounterValue(t, successCounter))
+}
+
+func TestWorker_RemoteEntityResolutionError_RetriesRemainFailLoud(t *testing.T) {
+	queryCalls := 0
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			return remoteEntityResolutionError(), 0
+		},
+	}
+
+	createCalls := 0
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			createCalls++
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
+	serviceErrorCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(evaluationOutcomeServiceError)
+	serviceErrorCounterBefore := getCounterValue(t, serviceErrorCounter)
+
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, 2, queryCalls)
+	require.Equal(t, 1, createCalls)
+	require.Equal(t, QueryHealthUnhealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+	require.Equal(t, serviceErrorCounterBefore+1, getCounterValue(t, serviceErrorCounter))
+}
+
+func TestWorker_RemoteEntityResolutionError_InsufficientRetryBudgetRemainsFailLoud(t *testing.T) {
+	queryCalls := 0
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			<-ctx.Done()
+			require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+			return remoteEntityResolutionError(), 0
+		},
+	}
+
+	createCalls := 0
+	alertCli := &fakeAlerter{
+		createFn: func(ctx context.Context, endpoint string, alert alert.Alert) error {
+			require.NoError(t, ctx.Err())
+			createCalls++
+			return nil
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+	}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: alertCli})
+	w.queryTime = queryErrorNotificationReserve + 10*time.Millisecond
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+	serviceErrorCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(evaluationOutcomeServiceError)
+	serviceErrorCounterBefore := getCounterValue(t, serviceErrorCounter)
+
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, 1, queryCalls)
+	require.Equal(t, 1, createCalls)
+	require.Equal(t, QueryHealthUnhealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+	require.Equal(t, serviceErrorCounterBefore+1, getCounterValue(t, serviceErrorCounter))
+}
+
+func TestTransientRemoteEntityResolutionError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		transient bool
+	}{
+		{
+			name:      "production remote entity resolution payload",
+			err:       remoteEntityResolutionError(),
+			transient: true,
+		},
+		{
+			name:      "syntax error",
+			err:       semanticError("SEM0001: Arithmetic expression cannot be carried-out between DateTime and StringBuffer"),
+			transient: false,
+		},
+		{
+			name:      "local missing entity",
+			err:       semanticError("SEM0056: Failed to resolve name or pattern 'TypoedTable' in one or more scopes"),
+			transient: false,
+		},
+		{
+			name:      "remote authorization denial",
+			err:       remoteEntityResolutionErrorWithSuffix("Access denied"),
+			transient: false,
+		},
+		{
+			name:      "remote OBO requirement",
+			err:       remoteEntityResolutionErrorWithSuffix("OBO token is required for cross-cluster communication"),
+			transient: false,
+		},
+		{
+			name:      "remote callout policy denial",
+			err:       remoteEntityResolutionErrorWithSuffix("Caller is not allowed by the callout policy"),
+			transient: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.transient, isTransientRemoteEntityResolutionError(tt.err))
+		})
+	}
+}
+
+func TestHasRemoteEntityResolutionRetryBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), minRemoteEntityResolutionRetryTime)
+	defer cancel()
+
+	require.False(t, hasRemoteEntityResolutionRetryBudget(ctx))
+}
+
+func remoteEntityResolutionError() error {
+	return remoteEntityResolutionErrorWithSuffix("")
+}
+
+func remoteEntityResolutionErrorWithSuffix(suffix string) error {
+	message := "Request is invalid and cannot be processed: Semantic error: SEM0056: Errors occurred while resolving remote entities. Failed to resolve name or pattern 'ManagedClusterSnapshot' in one or more scopes"
+	if suffix != "" {
+		message += ". " + suffix
+	}
+
+	return semanticError(message)
+}
+
+func semanticError(message string) error {
+	body := fmt.Sprintf(`{"error":{"code":"General_BadRequest","message":%q,"@permanent":true,"innererror":{"code":"SEM0056","message":%q}}}`, message, message)
+	return fmt.Errorf("failed to execute kusto query: %w", kerrors.HTTP(
+		kerrors.OpQuery,
+		"Bad Request",
+		http.StatusBadRequest,
+		io.NopCloser(bytes.NewBufferString(body)),
+		"error from Kusto endpoint",
+	))
 }
 
 func TestWorker_UnknownDB(t *testing.T) {
