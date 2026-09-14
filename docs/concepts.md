@@ -296,7 +296,8 @@ The **Alerter** component is responsible for evaluating alert rules (defined as 
 #### Key Features
 - **CRD-Driven:** Alerting rules are defined as `AlertRule` CRDs, specifying the KQL query, schedule, and notification destination.
 - **Kusto Query Execution:** Periodically executes KQL queries against ADX clusters, as configured in the rule.
-- **Notification Delivery:** Sends alert notifications to a configurable HTTP endpoint (e.g., ICM, PagerDuty, custom webhooks) in a standard JSON format.
+- **Notification Delivery:** Sends ADX-Mon alert notifications to a configurable HTTP endpoint (e.g., PagerDuty, custom webhooks) in a standard JSON format.
+- **Notification Throttling:** When notification limits are exceeded, ADX-Mon sends a summary with the severity and title of up to 100 suppressed alerts, an omitted-alert count when needed, and links and query text for the evaluated time window. Alerts already delivered are excluded from the table.
 - **Correlation & Auto-Mitigation:** Supports correlation IDs to deduplicate alerts and auto-mitigate after a configurable duration.
 - **Tag-Based Routing:** Supports tag-based filtering to control which alerter instance processes which rules (e.g., by region, cloud, or custom tags).
 - **Conditional Execution (criteria / criteriaExpression):** AlertRule, SummaryRule and MetricsExporter share unified conditional logic. A legacy `criteria` map (OR semantics across entries) and an optional CEL `criteriaExpression` (evaluated against lower‑cased cluster label/tag variables such as `region`, `cloud`, `environment`, etc.) combine with AND semantics. If either is empty it is permissive. Evaluation errors skip execution.

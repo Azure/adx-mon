@@ -13,7 +13,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 )
 
-const icmTitleMaxLength = 150
+const alertTitleMaxLength = 150
 
 type fakeKustoClient struct {
 	endpoint string
@@ -59,7 +59,7 @@ func NewLinter() *lintAlertHandler {
 // It logs out the type of failure and tracks that we have had failed queries.
 func (lh *lintAlertHandler) Create(ctx context.Context, endpoint string, alert alert.Alert) error {
 	lh.alertCount[alert.CorrelationID]++
-	if len(alert.Title) > icmTitleMaxLength {
+	if len(alert.Title) > alertTitleMaxLength {
 		logger.Errorf("Title Exceeded Max Length: %s", alert.Title)
 		lh.hasFailedQueries = true
 		lh.failures = append(lh.failures, "title exceeded max length: "+alert.Title)
