@@ -152,7 +152,6 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
 		if errors.Is(err, alert.ErrTooManyRequests) {
 			logger.Errorf("Failed to create Notification due to throttling: %s/%s", qc.Rule.Namespace, qc.Rule.Name)
-			// We are throttled. Bail out of this loop so we stop trying to send notifications that will just be throttled.
 			return err
 		}
 

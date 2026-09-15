@@ -204,24 +204,53 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 
 	// Create a wrapper handler that tracks alerts generated
+	var notificationsThrottled bool
+	var throttledAlerts ThrottledNotificationsError
 	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
-		err := e.handlerFn(ctx, endpoint, qc, row)
-		if err == nil {
-			// If HandlerFn succeeded, it means an alert was generated
-			evaluation.alertsGenerated++
+		if !notificationsThrottled {
+			err := e.handlerFn(ctx, endpoint, qc, row)
+			if err == nil {
+				evaluation.alertsGenerated++
+				return nil
+			}
+			if !errors.Is(err, alert.ErrTooManyRequests) {
+				return err
+			}
+			notificationsThrottled = true
 		}
-		return err
+
+		result, err := ParseAlertResult(qc, row)
+		if err != nil {
+			return err
+		}
+		throttledAlerts.Add(result)
+		return nil
 	}
 
 	err, evaluation.rows = e.kustoClient.Query(ctx, queryContext, wrappedHandler)
-	if err != nil {
+	if err != nil || notificationsThrottled {
 		// This failed because we sent too many notifications.
-		if errors.Is(err, alert.ErrTooManyRequests) {
+		if notificationsThrottled || errors.Is(err, alert.ErrTooManyRequests) {
 			evaluation.outcome = evaluationOutcomeNotificationThrottled
+			var overflow *ThrottledNotificationsError
+			if errors.As(err, &overflow) {
+				throttledAlerts.merge(overflow)
+			}
+			summary := throttledNotificationSummary(&throttledAlerts)
+			if err != nil && !errors.Is(err, alert.ErrTooManyRequests) {
+				logger.Errorf("Failed to collect throttled notifications for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+				summary += "<br/>The query results could not be fully processed; this table may be incomplete."
+			}
+			linkedSummary, linkErr := KustoQueryLinks(summary, queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+			if linkErr != nil {
+				logger.Errorf("Failed to create query links for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, linkErr)
+			} else {
+				summary = linkedSummary
+			}
 			err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
 				Destination:   e.rule.Destination,
 				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
-				Summary:       "This alert has been throttled by ICM due to too many notifications.  Please reduce the number of notifications for this alert.",
+				Summary:       summary,
 				Severity:      3,
 				Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
 				CorrelationID: fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),

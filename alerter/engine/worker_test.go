@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	kerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
+	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -526,6 +529,158 @@ func TestWorker_AlertsThrottled(t *testing.T) {
 
 	require.Equal(t, createdAlert.Destination, rule.Destination)
 	require.Contains(t, createdAlert.Title, "has too many notifications in eastus")
+	require.Contains(t, createdAlert.Summary, "throttled by ADX-Mon")
+	require.Contains(t, createdAlert.Summary, "Click here to show query")
+}
+
+func TestWorker_AlertsThrottledDetails(t *testing.T) {
+	for _, throttleAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("throttle_at_%d", throttleAt), func(t *testing.T) {
+			rule := &rules.Rule{
+				Namespace:   "namespace",
+				Name:        "name",
+				Database:    "fakedb",
+				Destination: "destination/queue",
+				Query:       `Example | where Value < 10 | project Title, Severity`,
+			}
+			titles := []string{"First alert", "Second alert", `Third <alert> & "details"`}
+			var executedQuery string
+			kcli := &fakeKustoClient{
+				queryFn: func(ctx context.Context, qc *QueryContext, handler func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+					executedQuery = qc.Query
+					for index, title := range titles {
+						row := testRow(
+							azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.String)},
+							azvalue.Values{azvalue.NewString(title), azvalue.NewString(fmt.Sprint(index + 1))},
+						)
+						if err := handler(ctx, "https://fakedb.mockcluster.kusto.windows.net", qc, row); err != nil {
+							return err, index + 1
+						}
+					}
+					return nil, len(titles)
+				},
+			}
+			var attempts int
+			var fallbackAlerts []alert.Alert
+			alertCli := &fakeAlerter{
+				createFn: func(ctx context.Context, endpoint string, notification alert.Alert) error {
+					if notification.Source == "notification-failure/namespace/name" {
+						fallbackAlerts = append(fallbackAlerts, notification)
+						return nil
+					}
+					attempts++
+					if attempts >= throttleAt {
+						return fmt.Errorf("notification rejected: %w", alert.ErrTooManyRequests)
+					}
+					return nil
+				},
+			}
+			executor := NewExecutor(ExecutorOpts{Region: "eastus", KustoClient: kcli, AlertCli: alertCli})
+			worker := executor.newWorker(rule)
+
+			worker.ExecuteQuery(context.Background())
+
+			require.Equal(t, throttleAt, attempts)
+			require.Len(t, fallbackAlerts, 1)
+			fallback := fallbackAlerts[0]
+			require.Equal(t, rule.Destination, fallback.Destination)
+			require.Equal(t, 3, fallback.Severity)
+			require.Equal(t, "notification-failure/namespace/name", fallback.CorrelationID)
+			require.Contains(t, fallback.Summary, "<th>Severity</th><th>Title</th>")
+			if throttleAt == 1 {
+				require.Contains(t, fallback.Summary, "<td>1</td><td>First alert</td>")
+			} else {
+				require.NotContains(t, fallback.Summary, "First alert")
+			}
+			require.Contains(t, fallback.Summary, "<td>2</td><td>Second alert</td>")
+			require.Contains(t, fallback.Summary, "<td>3</td><td>Third &lt;alert&gt; &amp; &#34;details&#34;</td>")
+			require.NotContains(t, fallback.Summary, "Third <alert>")
+			queryDetails, err := KustoQueryLinks("", executedQuery, kcli.Endpoint(rule.Database), rule.Database)
+			require.NoError(t, err)
+			require.Contains(t, fallback.Summary, queryDetails)
+		})
+	}
+}
+
+func TestWorker_AlertsThrottledOverflow(t *testing.T) {
+	for _, deliveryThrottled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delivery_throttled_%t", deliveryThrottled), func(t *testing.T) {
+			var overflow ThrottledNotificationsError
+			for index := range maxThrottledNotificationDetails + 5 {
+				overflow.Add(AlertResult{Title: fmt.Sprintf("Overflow alert %d", index), Severity: 2, Summary: "Not retained"})
+			}
+			require.Len(t, overflow.Notifications, maxThrottledNotificationDetails)
+			require.Empty(t, overflow.Notifications[0].Summary)
+			var createdAlert alert.Alert
+			var attempts int
+			worker := NewWorker(&WorkerConfig{
+				Rule: &rules.Rule{Namespace: "namespace", Name: "name", Database: "db", Destination: "destination"},
+				KustoClient: &fakeKustoClient{queryFn: func(ctx context.Context, qc *QueryContext, handler func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+					row := testRow(
+						azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long)},
+						azvalue.Values{azvalue.NewString("Rejected alert"), azvalue.NewLong(1)},
+					)
+					require.NoError(t, handler(ctx, "endpoint", qc, row))
+					return fmt.Errorf("notification limit: %w", &overflow), 1
+				}},
+				HandlerFn: func(context.Context, string, *QueryContext, azquery.Row) error {
+					attempts++
+					if deliveryThrottled {
+						return alert.ErrTooManyRequests
+					}
+					return nil
+				},
+				AlertClient: &fakeAlerter{createFn: func(ctx context.Context, endpoint string, notification alert.Alert) error {
+					createdAlert = notification
+					return nil
+				}},
+			})
+
+			worker.ExecuteQuery(context.Background())
+
+			require.Equal(t, 1, attempts)
+			require.Equal(t, maxThrottledNotificationDetails, strings.Count(createdAlert.Summary, "<tr><td>"))
+			require.Contains(t, createdAlert.Summary, "Overflow alert 0")
+			require.NotContains(t, createdAlert.Summary, fmt.Sprintf("Overflow alert %d", maxThrottledNotificationDetails))
+			if deliveryThrottled {
+				require.Contains(t, createdAlert.Summary, "Rejected alert")
+				require.NotContains(t, createdAlert.Summary, fmt.Sprintf("Overflow alert %d", maxThrottledNotificationDetails-1))
+				require.Contains(t, createdAlert.Summary, "6 additional suppressed alerts are not shown")
+			} else {
+				require.NotContains(t, createdAlert.Summary, "Rejected alert")
+				require.Contains(t, createdAlert.Summary, fmt.Sprintf("Overflow alert %d", maxThrottledNotificationDetails-1))
+				require.Contains(t, createdAlert.Summary, "5 additional suppressed alerts are not shown")
+			}
+		})
+	}
+}
+
+func TestWorker_AlertsThrottledIncompleteResults(t *testing.T) {
+	var createdAlert alert.Alert
+	worker := NewWorker(&WorkerConfig{
+		Rule: &rules.Rule{Namespace: "namespace", Name: "name", Destination: "destination"},
+		KustoClient: &fakeKustoClient{queryFn: func(ctx context.Context, qc *QueryContext, handler func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			row := testRow(
+				azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long)},
+				azvalue.Values{azvalue.NewString("Suppressed alert"), azvalue.NewLong(2)},
+			)
+			require.NoError(t, handler(ctx, "endpoint", qc, row))
+			return handler(ctx, "endpoint", qc, testRow(nil, nil)), 2
+		}},
+		HandlerFn: func(context.Context, string, *QueryContext, azquery.Row) error {
+			return alert.ErrTooManyRequests
+		},
+		AlertClient: &fakeAlerter{createFn: func(ctx context.Context, endpoint string, notification alert.Alert) error {
+			createdAlert = notification
+			return nil
+		}},
+	})
+
+	worker.ExecuteQuery(context.Background())
+
+	require.Contains(t, createdAlert.Summary, "<td>2</td><td>Suppressed alert</td>")
+	require.Contains(t, createdAlert.Summary, "this table may be incomplete")
+	require.Contains(t, createdAlert.Summary, "Click here to show query")
 }
 
 func TestWorker_NotificationHealth(t *testing.T) {
