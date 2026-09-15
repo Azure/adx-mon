@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/engine"
+	"github.com/Azure/adx-mon/pkg/logger"
 	azkustodata "github.com/Azure/azure-kusto-go/azkustodata"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	azqueryv1 "github.com/Azure/azure-kusto-go/azkustodata/query/v1"
@@ -82,6 +82,7 @@ func (c multiKustoClient) Query(ctx context.Context, qc *engine.QueryContext, fn
 func (c multiKustoClient) handleIterativeRows(ctx context.Context, endpoint string, qc *engine.QueryContext, ds azquery.IterativeDataset, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	var rows []azquery.Row
 	tooManyRows := false
+	var throttled engine.ThrottledNotificationsError
 
 	for tableResult := range ds.Tables() {
 		if tableResult.Err() != nil {
@@ -100,18 +101,20 @@ func (c multiKustoClient) handleIterativeRows(ctx context.Context, endpoint stri
 
 			if len(rows) >= c.maxNotifications {
 				tooManyRows = true
+				collectThrottledNotification(qc, rowResult.Row(), &throttled)
 				continue // consume the rest of the rows to consume the rest of the body
 			}
 			rows = append(rows, rowResult.Row())
 		}
 	}
 
-	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, fn)
+	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, &throttled, fn)
 }
 
 func (c multiKustoClient) handleDatasetRows(ctx context.Context, endpoint string, qc *engine.QueryContext, ds azquery.Dataset, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	var rows []azquery.Row
 	tooManyRows := false
+	var throttled engine.ThrottledNotificationsError
 
 	for _, table := range ds.Tables() {
 		if !table.IsPrimaryResult() {
@@ -121,16 +124,26 @@ func (c multiKustoClient) handleDatasetRows(ctx context.Context, endpoint string
 		for _, row := range table.Rows() {
 			if len(rows) >= c.maxNotifications {
 				tooManyRows = true
+				collectThrottledNotification(qc, row, &throttled)
 				continue
 			}
 			rows = append(rows, row)
 		}
 	}
 
-	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, fn)
+	return c.emitRows(ctx, endpoint, qc, rows, tooManyRows, &throttled, fn)
 }
 
-func (c multiKustoClient) emitRows(ctx context.Context, endpoint string, qc *engine.QueryContext, rows []azquery.Row, tooManyRows bool, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
+func collectThrottledNotification(qc *engine.QueryContext, row azquery.Row, throttled *engine.ThrottledNotificationsError) {
+	notification, err := engine.ParseAlertResult(qc, row)
+	if err != nil {
+		logger.Warnf("Skipping invalid throttled notification for %s/%s: %s", qc.Rule.Namespace, qc.Rule.Name, err)
+		return
+	}
+	throttled.Add(notification)
+}
+
+func (c multiKustoClient) emitRows(ctx context.Context, endpoint string, qc *engine.QueryContext, rows []azquery.Row, tooManyRows bool, throttled *engine.ThrottledNotificationsError, fn func(context.Context, string, *engine.QueryContext, azquery.Row) error) (error, int) {
 	for _, row := range rows {
 		if err := fn(ctx, endpoint, qc, row); err != nil {
 			return err, 0
@@ -138,7 +151,7 @@ func (c multiKustoClient) emitRows(ctx context.Context, endpoint string, qc *eng
 	}
 
 	if tooManyRows {
-		return fmt.Errorf("%s/%s returned more than %d icm, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, alert.ErrTooManyRequests), 0
+		return fmt.Errorf("%s/%s returned more than %d notifications, throttling query. %w", qc.Rule.Namespace, qc.Rule.Name, c.maxNotifications, throttled), 0
 	}
 
 	return nil, len(rows)

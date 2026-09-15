@@ -211,6 +211,55 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+func TestQuery_ThrottledNotificationDetails(t *testing.T) {
+	for _, queryType := range []string{"query", "management"} {
+		t.Run(queryType, func(t *testing.T) {
+			dataset := newFakeIterativeDataset(nil, nil)
+			table := dataset.table
+			table.BaseTable = azquery.NewBaseTable(dataset.BaseDataset, 0, "", "QueryResult", "QueryResult", azquery.Columns{
+				azquery.NewColumn(0, "Title", aztypes.String),
+				azquery.NewColumn(1, "Severity", aztypes.Long),
+				azquery.NewColumn(2, "Summary", aztypes.String),
+			})
+			for index, title := range []string{"Delivered", "Suppressed", "", "Also suppressed"} {
+				table.rows = append(table.rows, azquery.NewRow(table, index, azvalue.Values{
+					azvalue.NewString(title), azvalue.NewLong(int64(index + 1)), azvalue.NewString("Not retained in throttle details"),
+				}))
+			}
+			queryClient := &fakeQueryClient{endpoint: "https://cluster.kusto.windows.net", nextQueryDataset: dataset}
+			if queryType == "management" {
+				queryClient.nextMgmtDataset = &fakeV1Dataset{fakeDataset: fakeDataset{
+					BaseDataset: dataset.BaseDataset,
+					tables:      []azquery.Table{azquery.NewTable(table.BaseTable, table.rows)},
+				}}
+			}
+			client := multiKustoClient{clients: map[string]QueryClient{"db": queryClient}, maxNotifications: 1}
+			queryContext, err := engine.NewQueryContext(&rules.Rule{
+				Database: "db", Destination: "destination", IsMgmtQuery: queryType == "management",
+			}, time.Now(), "eastus")
+			require.NoError(t, err)
+			var delivered []string
+
+			err, _ = client.Query(context.Background(), queryContext, func(ctx context.Context, endpoint string, qc *engine.QueryContext, row azquery.Row) error {
+				notification, err := engine.ParseAlertResult(qc, row)
+				require.NoError(t, err)
+				delivered = append(delivered, notification.Title)
+				return nil
+			})
+
+			require.ErrorIs(t, err, alert.ErrTooManyRequests)
+			var throttled *engine.ThrottledNotificationsError
+			require.ErrorAs(t, err, &throttled)
+			require.Equal(t, []string{"Delivered"}, delivered)
+			require.Equal(t, 2, throttled.Total)
+			require.Equal(t, []engine.AlertResult{
+				{Title: "Suppressed", Severity: 2},
+				{Title: "Also suppressed", Severity: 4},
+			}, throttled.Notifications)
+		})
+	}
+}
+
 func TestFindCaseInsensitiveMatch(t *testing.T) {
 	client := multiKustoClient{
 		clients: map[string]QueryClient{
