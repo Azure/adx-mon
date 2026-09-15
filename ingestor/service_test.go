@@ -292,7 +292,7 @@ func (f fakeStore) Close() error {
 	panic("implement me")
 }
 
-func (f fakeStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
+func (f fakeStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error {
 	panic("implement me")
 }
 

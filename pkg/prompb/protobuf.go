@@ -30,6 +30,10 @@ type WriteRequest struct {
 	// series in this request. It is materialized into each series when the
 	// request is marshaled to the Prometheus remote write protobuf format.
 	CommonLabels []*Label
+
+	// LabelFilter is an immutable set of request-level filtering rules applied
+	// when consumers walk the effective labels for each time series.
+	LabelFilter *LabelFilter
 }
 
 // TimeSeries is a timeseries.
@@ -54,6 +58,7 @@ type Sample struct {
 func (wr *WriteRequest) Unmarshal(src []byte) (err error) {
 	wr.Timeseries = wr.Timeseries[:0]
 	wr.CommonLabels = nil
+	wr.LabelFilter = nil
 	var fc easyproto.FieldContext
 	for len(src) > 0 {
 		src, err = fc.NextField(src)
@@ -90,7 +95,7 @@ func (wr *WriteRequest) MarshalTo(dst []byte) ([]byte, error) {
 	marshaller.Reset()
 	mm := marshaller.MessageMarshaler()
 	for _, ts := range wr.Timeseries {
-		ts.marshalProtobuf(mm.AppendMessage(1), wr.CommonLabels)
+		ts.marshalProtobuf(mm.AppendMessage(1), wr)
 	}
 	dst = marshaller.Marshal(dst[:0])
 	mp.Put(marshaller)
@@ -105,6 +110,7 @@ func (wr *WriteRequest) Reset() {
 	}
 	wr.Timeseries = wr.Timeseries[:0]
 	wr.CommonLabels = nil
+	wr.LabelFilter = nil
 }
 
 func (s *Sample) marshalProtobuf(mm *easyproto.MessageMarshaler) {
@@ -148,8 +154,8 @@ func (s *Sample) Reset() {
 	s.Timestamp = 0
 }
 
-func (m *TimeSeries) marshalProtobuf(mm *easyproto.MessageMarshaler, commonLabels []*Label) {
-	for l := range MergedLabels(m.Labels, commonLabels) {
+func (m *TimeSeries) marshalProtobuf(mm *easyproto.MessageMarshaler, wr *WriteRequest) {
+	for l := range wr.Labels(m) {
 		l.marshalProtobuf(mm.AppendMessage(1))
 	}
 	for _, s := range m.Samples {

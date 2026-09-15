@@ -64,7 +64,8 @@ func NewMetricsCSVWriterWithSchema(w *bytes.Buffer, lifted Fields, mapping schem
 	return writer
 }
 
-func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
+// MarshalCSV marshals a time series using its effective labels from req.
+func (w *MetricsCSVWriter) MarshalCSV(req *prompb.WriteRequest, ts *prompb.TimeSeries) error {
 	if !w.headerWritten {
 		line := w.line[:0]
 		line = schema.AppendCSVHeader(line, w.schema)
@@ -87,7 +88,7 @@ func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 
 	// Marshal the labels as JSON and avoid allocations since this code is in the hot path.
 	buf.WriteByte('{')
-	for _, v := range ts.Labels {
+	for v := range req.Labels(ts) {
 		w.seriesIdBuf.Write(v.Name)
 		w.seriesIdBuf.Write(v.Value)
 
@@ -150,18 +151,22 @@ func (w *MetricsCSVWriter) MarshalCSV(ts *prompb.TimeSeries) error {
 		line = strconv.AppendFloat(line, v.Value, 'f', 9, 64)
 
 		if len(w.columns) > 0 {
-			var i, j int
-			for i < len(ts.Labels) && j < len(w.columns) {
-				cmp := prompb.CompareLower(ts.Labels[i].Name, w.columns[j])
-				if cmp == 0 {
-					line = adxcsv.Append(line, ts.Labels[i].Value)
-					j++
-					i++
-				} else if cmp > 0 {
+			var j int
+		labels:
+			for label := range req.Labels(ts) {
+				for j < len(w.columns) {
+					cmp := prompb.CompareLower(label.Name, w.columns[j])
+					if cmp < 0 {
+						continue labels
+					}
+					if cmp == 0 {
+						line = adxcsv.Append(line, label.Value)
+						j++
+						continue labels
+					}
+
 					j++
 					line = append(line, ',')
-				} else {
-					i++
 				}
 			}
 

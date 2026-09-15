@@ -231,6 +231,168 @@ func TestRequestTransformer_TransformWriteRequest_DynamicLabeler(t *testing.T) {
 	}
 }
 
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_DynamicLabeler(t *testing.T) {
+	dl := newFakeDynamicLabeler(map[string]string{"dyn": "value"})
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}},
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("memory")}}},
+		},
+	}
+	transformer := &transform.RequestTransformer{DynamicLabeler: dl}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Len(t, result.Timeseries, 2)
+	require.Zero(t, dl.appendPromLabelsCalled, "the lazy path must not append labels to individual series")
+	value, found := findLabelValue(result.CommonLabels, "dyn")
+	require.True(t, found)
+	require.Equal(t, "value", value)
+	for _, series := range result.Timeseries {
+		_, found := findLabelValue(series.Labels, "dyn")
+		require.False(t, found)
+	}
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_AddLabels(t *testing.T) {
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("cpu")},
+				{Name: []byte("Host"), Value: []byte("source-host")},
+				{Name: []byte("region"), Value: []byte("eastus")},
+			}},
+			{Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("memory")},
+				{Name: []byte("Host"), Value: []byte("source-host")},
+				{Name: []byte("region"), Value: []byte("westus")},
+			}},
+		},
+	}
+	transformer := &transform.RequestTransformer{AddLabels: map[string]string{
+		"adxmon_database": "Metrics",
+		"Host":            "collector-host",
+	}}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Len(t, result.CommonLabels, 2)
+	require.Equal(t, "collector-host", mustFindLabelValue(t, result.CommonLabels, "Host"))
+	require.Equal(t, "Metrics", mustFindLabelValue(t, result.CommonLabels, "adxmon_database"))
+	for _, series := range result.Timeseries {
+		_, found := findLabelValue(series.Labels, "Host")
+		require.False(t, found)
+
+		labels := make(map[string]string)
+		for label := range result.Labels(series) {
+			labels[string(label.Name)] = string(label.Value)
+		}
+		require.Equal(t, "collector-host", labels["Host"])
+		require.Equal(t, "Metrics", labels["adxmon_database"])
+	}
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_PerMetricFilter(t *testing.T) {
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}},
+			{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("memory")}}},
+		},
+		CommonLabels: []*prompb.Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+	}
+	transformer := &transform.RequestTransformer{DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+		regexp.MustCompile("^cpu$"): regexp.MustCompile("^Environment$"),
+	}}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Equal(t, []string{"__name__"}, effectiveLabelNames(result, result.Timeseries[0]))
+	require.Equal(t, []string{"__name__", "Environment"}, effectiveLabelNames(result, result.Timeseries[1]))
+	require.Equal(t, "prod", string(result.CommonLabels[0].Value), "the shared labels must remain immutable")
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_ReusesFilterPolicy(t *testing.T) {
+	transformer := &transform.RequestTransformer{DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+		regexp.MustCompile("^cpu$"): regexp.MustCompile("^Environment$"),
+	}}
+	newRequest := func() *prompb.WriteRequest {
+		return &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{{
+			Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+		}}}
+	}
+
+	first := transformer.TransformWriteRequestWithCommonLabels(newRequest())
+	second := transformer.TransformWriteRequestWithCommonLabels(newRequest())
+
+	require.NotNil(t, first.LabelFilter)
+	require.Same(t, first.LabelFilter, second.LabelFilter)
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_UsesAddedDatabaseForAllowList(t *testing.T) {
+	req := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{{
+		Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+	}}}
+	transformer := &transform.RequestTransformer{
+		AddLabels:       map[string]string{"adxmon_database": "Metrics"},
+		AllowedDatabase: map[string]struct{}{"Metrics": {}},
+	}
+
+	result := transformer.TransformWriteRequestWithCommonLabels(req)
+
+	require.Len(t, result.Timeseries, 1)
+	require.Equal(t, "Metrics", mustFindLabelValue(t, result.CommonLabels, "adxmon_database"))
+}
+
+func TestRequestTransformer_TransformWriteRequestWithCommonLabels_MatchesMaterializedOutput(t *testing.T) {
+	newTransformer := func() *transform.RequestTransformer {
+		return &transform.RequestTransformer{
+			AddLabels: map[string]string{
+				"adxmon_database": "Metrics",
+				"Host":            "collector-host",
+			},
+			DropLabels: map[*regexp.Regexp]*regexp.Regexp{
+				regexp.MustCompile("^cpu$"): regexp.MustCompile("^Environment$"),
+			},
+		}
+	}
+	newSeries := func(name string, includeEnvironment bool) *prompb.TimeSeries {
+		labels := []*prompb.Label{
+			{Name: []byte("__name__"), Value: []byte(name)},
+			{Name: []byte("Host"), Value: []byte("source-host")},
+			{Name: []byte("region"), Value: []byte("eastus")},
+		}
+		if includeEnvironment {
+			labels = append(labels, &prompb.Label{Name: []byte("Environment"), Value: []byte("prod")})
+		}
+		prompb.Sort(labels)
+		return &prompb.TimeSeries{
+			Labels:  labels,
+			Samples: []*prompb.Sample{{Timestamp: 1, Value: 1}},
+		}
+	}
+
+	materialized := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{
+		newSeries("cpu", true),
+		newSeries("memory", true),
+	}}
+	newTransformer().TransformWriteRequest(materialized)
+
+	lazy := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			newSeries("cpu", false),
+			newSeries("memory", false),
+		},
+		CommonLabels: []*prompb.Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+	}
+	newTransformer().TransformWriteRequestWithCommonLabels(lazy)
+
+	materializedBytes, err := materialized.Marshal()
+	require.NoError(t, err)
+	lazyBytes, err := lazy.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, materializedBytes, lazyBytes)
+}
+
 func TestRequestTransformer_TransformWriteRequest_DropLabels(t *testing.T) {
 	f := &transform.RequestTransformer{
 		DropLabels: map[*regexp.Regexp]*regexp.Regexp{
@@ -742,6 +904,21 @@ func findLabelValue(labels []*prompb.Label, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func mustFindLabelValue(t *testing.T, labels []*prompb.Label, key string) string {
+	t.Helper()
+	value, found := findLabelValue(labels, key)
+	require.True(t, found, "label %q not found", key)
+	return value
+}
+
+func effectiveLabelNames(request *prompb.WriteRequest, series *prompb.TimeSeries) []string {
+	var names []string
+	for label := range request.Labels(series) {
+		names = append(names, string(label.Name))
+	}
+	return names
 }
 
 func BenchmarkRequestTransformer_TransformWriteRequest(b *testing.B) {

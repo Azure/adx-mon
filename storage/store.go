@@ -44,7 +44,7 @@ type Store interface {
 	service.Component
 
 	// WriteTimeSeries writes a batch of time series to the Store.
-	WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error
+	WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error
 
 	// WriteOTLPLogs writes a batch of logs to the Store.
 	WriteOTLPLogs(ctx context.Context, database, table string, logs *otlp.Logs) error
@@ -116,7 +116,7 @@ func (s *LocalStore) WALCount() int {
 	return s.repository.Count()
 }
 
-func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSeries) error {
+func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error {
 	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
 	defer metricsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedLabels)
@@ -124,8 +124,8 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 	b := gbp.Get(256)
 	defer gbp.Put(b)
 
-	for _, v := range ts {
-		key, err := SegmentKey(b[:0], v.Labels, enc.SchemaHash())
+	for _, v := range req.Timeseries {
+		key, err := SegmentKey(b[:0], req, v, enc.SchemaHash())
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, ts []*prompb.TimeSerie
 		metrics.SamplesStored.Add(float64(len(v.Samples)))
 
 		enc.Reset()
-		if err := enc.MarshalCSV(v); err != nil {
+		if err := enc.MarshalCSV(req, v); err != nil {
 			return err
 		}
 
@@ -388,17 +388,24 @@ func (s *LocalStore) WriteDebug(w io.Writer) error {
 	return nil
 }
 
-func SegmentKey(dst []byte, labels []*prompb.Label, hash uint64) ([]byte, error) {
+// SegmentKey returns the segment key for series using its effective labels
+// from req, including request-level common labels and the per-series filter.
+func SegmentKey(dst []byte, req *prompb.WriteRequest, series *prompb.TimeSeries, hash uint64) ([]byte, error) {
 	var name, database []byte
-	for _, v := range labels {
+	for v := range req.Labels(series) {
 		if bytes.Equal(v.Name, []byte("adxmon_database")) {
 			database = v.Value
+			if len(name) > 0 {
+				break
+			}
 			continue
 		}
 
 		if bytes.Equal(v.Name, []byte("__name__")) {
 			name = v.Value
-			continue
+			if len(database) > 0 {
+				break
+			}
 		}
 	}
 

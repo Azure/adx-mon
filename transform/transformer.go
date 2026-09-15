@@ -40,6 +40,10 @@ type RequestTransformer struct {
 	// addLabelsKeys is a slice of the label names in AddLabels as byte slices for efficient comparison.
 	addLabelsKeys [][]byte
 
+	// labelFilter is the immutable request-level policy shared by transformed
+	// requests. It is built once from DropLabels and addLabelsKeys.
+	labelFilter *prompb.LabelFilter
+
 	// AllowedDatabase is a map of database names that are allowed to be written to.
 	AllowedDatabase map[string]struct{}
 
@@ -75,6 +79,19 @@ func (f *RequestTransformer) init() {
 		// If a DynamicLabeler is configured, ensure its labels are included in the addLabelsKeys slice.
 		if f.DynamicLabeler != nil {
 			f.addLabelsKeys = f.DynamicLabeler.AppendLabelNamesBytes(f.addLabelsKeys)
+		}
+
+		labelFilter := &prompb.LabelFilter{
+			Keep: append([][]byte(nil), f.addLabelsKeys...),
+		}
+		for metricRegexp, labelRegexp := range f.DropLabels {
+			labelFilter.Drop = append(labelFilter.Drop, prompb.LabelDropRule{
+				Metric: metricRegexp,
+				Label:  labelRegexp,
+			})
+		}
+		if len(labelFilter.Drop) > 0 || len(labelFilter.Keep) > 0 {
+			f.labelFilter = labelFilter
 		}
 	})
 }
@@ -119,13 +136,72 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 	return req
 }
 
+// TransformWriteRequestWithCommonLabels transforms req while keeping labels
+// shared by every series at the request level. Callers may opt into this path
+// once all of their downstream consumers support CommonLabels and LabelFilter.
+func (f *RequestTransformer) TransformWriteRequestWithCommonLabels(req *prompb.WriteRequest) *prompb.WriteRequest {
+	f.init()
+	commonLabels := f.commonLabels(req.CommonLabels)
+
+	var i int
+	for _, v := range req.Timeseries {
+		name := prompb.MetricName(v)
+		if f.ShouldDropMetricWithCommonLabels(v, commonLabels, name) {
+			if metrics.DebugMetricsEnabled {
+				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+			}
+			continue
+		}
+
+		if len(f.AllowedDatabase) > 0 {
+			var database []byte
+			for label := range prompb.MergedLabels(v.Labels, commonLabels) {
+				if bytes.Equal(label.Name, []byte("adxmon_database")) {
+					database = label.Value
+					break
+				}
+			}
+			if _, ok := f.AllowedDatabase[string(database)]; !ok {
+				if metrics.DebugMetricsEnabled {
+					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
+				}
+				continue
+			}
+		}
+
+		f.filterTimeSeries(v)
+		req.Timeseries[i] = v
+		i++
+	}
+
+	req.Timeseries = req.Timeseries[:i]
+	req.CommonLabels = commonLabels
+	req.LabelFilter = f.labelFilter
+	return req
+}
+
 func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.TimeSeries {
 	f.init()
+	f.filterTimeSeries(v)
+	if f.DynamicLabeler != nil {
+		f.DynamicLabeler.AppendPromLabels(v)
+	}
+	for _, ll := range f.addLabels {
+		v.AppendLabel(ll.Name, ll.Value)
+	}
+
+	prompb.Sort(v.Labels)
+
+	return v
+}
+
+func (f *RequestTransformer) filterTimeSeries(v *prompb.TimeSeries) {
 	// If labels are configured to be dropped, filter them next.
 	var (
 		i         int
 		skipLabel bool
 	)
+	name := prompb.MetricName(v)
 
 	for j, l := range v.Labels {
 		// Never attempt to drop __name__ label as this is required to identify the metric.
@@ -138,7 +214,7 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 		// To drop a label, it has to match the metrics regex and the label regex.
 		skipLabel = false
 		for metrReg, labelReg := range f.DropLabels {
-			if metrReg.Match(v.Labels[0].Value) && labelReg.Match(l.Name) {
+			if metrReg.Match(name) && labelReg.Match(l.Name) {
 				skipLabel = true
 				break
 			}
@@ -164,26 +240,61 @@ func (f *RequestTransformer) TransformTimeSeries(v *prompb.TimeSeries) *prompb.T
 		i++
 	}
 	v.Labels = v.Labels[:i]
+}
+
+func (f *RequestTransformer) commonLabels(existing []*prompb.Label) []*prompb.Label {
+	if f.DynamicLabeler == nil && len(f.addLabels) == 0 {
+		return existing
+	}
+
+	labels := make([]*prompb.Label, 0, len(existing)+len(f.addLabelsKeys))
+	for _, label := range existing {
+		var overwritten bool
+		for _, name := range f.addLabelsKeys {
+			if bytes.Equal(label.Name, name) {
+				overwritten = true
+				break
+			}
+		}
+		if !overwritten {
+			labels = append(labels, label)
+		}
+	}
+
 	if f.DynamicLabeler != nil {
-		f.DynamicLabeler.AppendPromLabels(v)
-	}
-	for _, ll := range f.addLabels {
-		v.AppendLabel(ll.Name, ll.Value)
+		f.DynamicLabeler.WalkLabels(func(name, value []byte) {
+			for _, label := range f.addLabels {
+				if bytes.Equal(name, label.Name) {
+					return
+				}
+			}
+			labels = append(labels, &prompb.Label{
+				Name:  bytes.Clone(name),
+				Value: bytes.Clone(value),
+			})
+		})
 	}
 
-	prompb.Sort(v.Labels)
-
-	return v
+	labels = append(labels, f.addLabels...)
+	prompb.Sort(labels)
+	return labels
 }
 
 // WalkLabels operates similarly to TransformTimeSeries, but instead of modifying the TimeSeries, it calls the callback with the key and value
 // This is safe to call in parallel if the name and value bytes are not modified by the callback.
 func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name []byte, value []byte)) {
+	f.WalkLabelsInRequest(&prompb.WriteRequest{}, v, callback)
+}
+
+// WalkLabelsInRequest walks the transformed view of a time series using the
+// request's common labels and filtering policy.
+func (f *RequestTransformer) WalkLabelsInRequest(req *prompb.WriteRequest, v *prompb.TimeSeries, callback func(name []byte, value []byte)) {
 	f.init()
 
 	var skipLabel bool
+	metricName := prompb.MetricName(v)
 
-	for _, l := range v.Labels {
+	for l := range req.Labels(v) {
 		// Never attempt to drop __name__ label as this is required to identify the metric.
 		if bytes.Equal(l.Name, []byte("__name__")) {
 			callback(l.Name, l.Value)
@@ -193,7 +304,7 @@ func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name
 		// To drop a label, it has to match the metrics regex and the label regex.
 		skipLabel = false
 		for metrReg, labelReg := range f.DropLabels {
-			if metrReg.Match(v.Labels[0].Value) && labelReg.Match(l.Name) {
+			if metrReg.Match(metricName) && labelReg.Match(l.Name) {
 				skipLabel = true
 				break
 			}
@@ -226,6 +337,12 @@ func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name
 }
 
 func (f *RequestTransformer) ShouldDropMetric(v *prompb.TimeSeries, name []byte) bool {
+	return f.ShouldDropMetricWithCommonLabels(v, nil, name)
+}
+
+// ShouldDropMetricWithCommonLabels reports whether a time series should be
+// dropped after considering both per-series and request-level common labels.
+func (f *RequestTransformer) ShouldDropMetricWithCommonLabels(v *prompb.TimeSeries, commonLabels []*prompb.Label, name []byte) bool {
 	if f.DefaultDropMetrics {
 		// Explicitly dropped metrics take precedence over explicitly kept metrics.
 		for _, r := range f.DropMetrics {
@@ -241,7 +358,7 @@ func (f *RequestTransformer) ShouldDropMetric(v *prompb.TimeSeries, name []byte)
 		}
 
 		if len(f.KeepMetricsWithLabelValue) > 0 {
-			for _, label := range v.Labels {
+			for label := range prompb.MergedLabels(v.Labels, commonLabels) {
 				// Keep metrics that have a certain label
 				for lableRe, valueRe := range f.KeepMetricsWithLabelValue {
 					if lableRe.Match(label.Name) && valueRe.Match(label.Value) {
