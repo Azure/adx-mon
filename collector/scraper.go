@@ -320,13 +320,15 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		var sb strings.Builder
 		for _, ts := range wr.Timeseries {
 			sb.Reset()
-			for i, l := range ts.Labels {
+			first := true
+			for l := range wr.Labels(ts) {
+				if !first {
+					sb.WriteByte(',')
+				}
 				sb.Write(l.Name)
 				sb.WriteString("=")
 				sb.Write(l.Value)
-				if i < len(ts.Labels)-1 {
-					sb.Write([]byte(","))
-				}
+				first = false
 			}
 			sb.Write([]byte(" "))
 			for _, s := range ts.Samples {

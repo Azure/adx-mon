@@ -653,7 +653,7 @@ type StoreRequestWriter struct {
 }
 
 func (s *StoreRequestWriter) Write(ctx context.Context, req *prompb.WriteRequest) error {
-	return s.store.WriteTimeSeries(ctx, req.Timeseries)
+	return s.store.WriteTimeSeries(ctx, req)
 }
 
 func (s *StoreRequestWriter) CloseIdleConnections() {
@@ -664,7 +664,7 @@ type StoreRemoteClient struct {
 }
 
 func (s *StoreRemoteClient) Write(ctx context.Context, wr *prompb.WriteRequest) error {
-	return s.store.WriteTimeSeries(ctx, wr.Timeseries)
+	return s.store.WriteTimeSeries(ctx, wr)
 }
 
 func (s *StoreRemoteClient) CloseIdleConnections() {

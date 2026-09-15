@@ -1,6 +1,7 @@
 package prompb
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -122,6 +123,26 @@ func TestMarshalCommonLabelsSeriesValueTakesPrecedence(t *testing.T) {
 	require.Equal(t, "series-region", string(decoded.Timeseries[0].Labels[1].Value))
 }
 
+func TestMarshalCommonLabelsAppliesSeriesFilter(t *testing.T) {
+	request := &WriteRequest{
+		Timeseries: []*TimeSeries{{
+			Labels: []*Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+		}},
+		CommonLabels: []*Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+		LabelFilter: &LabelFilter{Drop: []LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^Environment$"),
+		}}},
+	}
+
+	encoded, err := request.Marshal()
+	require.NoError(t, err)
+
+	var decoded WriteRequest
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, []string{"__name__"}, labelNames(decoded.Timeseries[0].Labels))
+}
+
 func TestUnmarshalSortsLabels(t *testing.T) {
 	request := &WriteRequest{Timeseries: []*TimeSeries{{Labels: []*Label{
 		{Name: []byte("region"), Value: []byte("eastus")},
@@ -147,12 +168,16 @@ func TestTimeSeriesResetDoesNotMutateSharedLabels(t *testing.T) {
 	require.Empty(t, series.Labels)
 }
 
-func TestWriteRequestResetClearsCommonLabels(t *testing.T) {
-	request := &WriteRequest{CommonLabels: []*Label{{Name: []byte("Environment"), Value: []byte("prod")}}}
+func TestWriteRequestResetClearsCommonLabelsAndFilter(t *testing.T) {
+	request := &WriteRequest{
+		CommonLabels: []*Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+		LabelFilter:  &LabelFilter{},
+	}
 
 	request.Reset()
 
 	require.Nil(t, request.CommonLabels)
+	require.Nil(t, request.LabelFilter)
 }
 
 func BenchmarkWriteRequestMarshalTo(b *testing.B) {

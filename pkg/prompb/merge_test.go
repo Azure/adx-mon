@@ -3,11 +3,60 @@ package prompb
 import (
 	"hash"
 	"iter"
+	"regexp"
 	"testing"
 
 	"github.com/cespare/xxhash"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLabelFilterNeverDropsMetricName(t *testing.T) {
+	filter := &LabelFilter{Drop: []LabelDropRule{newLabelDropRule(".*", "name")}}
+
+	require.False(t, filter.Drops([]byte("cpu"), []byte("__name__")))
+	require.True(t, filter.Drops([]byte("cpu"), []byte("display_name")))
+}
+
+func TestLabelFilterKeepTakesPrecedence(t *testing.T) {
+	filter := &LabelFilter{
+		Drop: []LabelDropRule{newLabelDropRule(".*", "region")},
+		Keep: [][]byte{[]byte("region")},
+	}
+
+	require.False(t, filter.Drops([]byte("cpu"), []byte("region")))
+}
+
+func TestLabelFilterSupportsMoreThanSixtyFourRules(t *testing.T) {
+	filter := &LabelFilter{Drop: make([]LabelDropRule, 65)}
+	for i := range 64 {
+		filter.Drop[i] = newLabelDropRule("^memory$", "^region$")
+	}
+	filter.Drop[64] = newLabelDropRule("^cpu$", "^region$")
+
+	require.True(t, filter.Drops([]byte("cpu"), []byte("region")))
+}
+
+func TestWriteRequestLabelsAppliesFilter(t *testing.T) {
+	series := &TimeSeries{Labels: []*Label{
+		newMergeTestLabel("__name__", "cpu"),
+		newMergeTestLabel("region", "series-region"),
+	}}
+	request := &WriteRequest{
+		Timeseries: []*TimeSeries{series},
+		CommonLabels: []*Label{
+			newMergeTestLabel("Environment", "prod"),
+			newMergeTestLabel("region", "common-region"),
+		},
+		LabelFilter: &LabelFilter{Drop: []LabelDropRule{newLabelDropRule("^cpu$", "^(Environment|region)$")}},
+	}
+
+	var names []string
+	for label := range request.Labels(series) {
+		names = append(names, string(label.Name))
+	}
+
+	require.Equal(t, []string{"__name__"}, names)
+}
 
 func TestMergedLabels(t *testing.T) {
 	seriesLabels := []*Label{
@@ -206,6 +255,13 @@ func benchmarkHashLabels(b *testing.B, writeLabels func(hash.Hash64)) {
 
 func newMergeTestLabel(name, value string) *Label {
 	return &Label{Name: []byte(name), Value: []byte(value)}
+}
+
+func newLabelDropRule(metric, label string) LabelDropRule {
+	return LabelDropRule{
+		Metric: regexp.MustCompile(metric),
+		Label:  regexp.MustCompile(label),
+	}
 }
 
 var mergedLabelsHash uint64

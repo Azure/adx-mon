@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"testing"
@@ -29,27 +30,62 @@ import (
 
 func TestSeriesKey(t *testing.T) {
 	tests := []struct {
-		Database []byte
-		Labels   []*prompb.Label
-		Expect   []byte
+		Database   []byte
+		TimeSeries *prompb.TimeSeries
+		Expect     []byte
 	}{
 		{
-			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0).Labels,
-			Expect: []byte("adxmetrics_Foo_0"),
+			TimeSeries: newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0),
+			Expect:     []byte("adxmetrics_Foo_0"),
 		},
 		{
-			Labels: newTimeSeries("foo", map[string]string{"adxmon_database": "OverrideDB"}, 0, 0).Labels,
-			Expect: []byte("OverrideDB_Foo_0"),
+			TimeSeries: newTimeSeries("foo", map[string]string{"adxmon_database": "OverrideDB"}, 0, 0),
+			Expect:     []byte("OverrideDB_Foo_0"),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.Expect), func(t *testing.T) {
 			b := make([]byte, 256)
-			key, err := storage.SegmentKey(b[:0], tt.Labels, 0)
+			key, err := segmentKey(b[:0], tt.TimeSeries, 0)
 			require.NoError(t, err)
 			require.Equal(t, string(tt.Expect), string(key))
 		})
 	}
+}
+
+func TestSeriesKeyWithCommonLabels(t *testing.T) {
+	series := &prompb.TimeSeries{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}}
+	request := &prompb.WriteRequest{
+		Timeseries:   []*prompb.TimeSeries{series},
+		CommonLabels: []*prompb.Label{{Name: []byte("adxmon_database"), Value: []byte("Metrics")}},
+	}
+
+	key, err := storage.SegmentKey(nil, request, series, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, "Metrics_Cpu_0", string(key))
+}
+
+func TestSeriesKeyWithCommonLabelsAndFilter(t *testing.T) {
+	series := &prompb.TimeSeries{
+		Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+	}
+	request := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{series},
+		CommonLabels: []*prompb.Label{
+			{Name: []byte("adxmon_database"), Value: []byte("Metrics")},
+			{Name: []byte("database_alias"), Value: []byte("ignored")},
+		},
+		LabelFilter: &prompb.LabelFilter{Drop: []prompb.LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^database_alias$"),
+		}}},
+	}
+
+	key, err := storage.SegmentKey(nil, request, series, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, "Metrics_Cpu_0", string(key))
 }
 
 func TestStore_Open(t *testing.T) {
@@ -69,28 +105,28 @@ func TestStore_Open(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
-	key1, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key1, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
-	key2, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key2, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	path := w.Path()
 
@@ -131,28 +167,28 @@ func TestStore_Open_StartupOpenConcurrency(t *testing.T) {
 	require.Equal(t, 0, s.WALCount())
 
 	ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
-	key, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err := s.GetWAL(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	ts = newTimeSeries("foo", map[string]string{"adxmon_database": database}, 1, 1)
-	key1, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key1, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key1)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	ts = newTimeSeries("bar", map[string]string{"adxmon_database": database}, 0, 0)
-	key2, err := storage.SegmentKey(b[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+	key2, err := segmentKey(b[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 	require.NoError(t, err)
 	w, err = s.GetWAL(ctx, key2)
 	require.NoError(t, err)
 	require.NotNil(t, w)
-	require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+	require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 	path := w.Path()
 
@@ -211,14 +247,14 @@ func TestStore_WriteTimeSeries(t *testing.T) {
 
 			ts := newTimeSeries("foo", map[string]string{"adxmon_database": database}, 0, 0)
 			keyBuf := make([]byte, 256)
-			key, err := storage.SegmentKey(keyBuf[:0], ts.Labels, schema.SchemaHash(schema.DefaultMetricsMapping))
+			key, err := segmentKey(keyBuf[:0], ts, schema.SchemaHash(schema.DefaultMetricsMapping))
 			require.NoError(t, err)
 
 			w, err := s.GetWAL(ctx, key)
 			require.NoError(t, err)
 			require.NotNil(t, w)
 
-			require.NoError(t, s.WriteTimeSeries(context.Background(), []*prompb.TimeSeries{ts}))
+			require.NoError(t, s.WriteTimeSeries(context.Background(), &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{ts}}))
 
 			path := w.Path()
 
@@ -504,13 +540,18 @@ func TestStore_Import_Append(t *testing.T) {
 
 }
 
+func segmentKey(dst []byte, series *prompb.TimeSeries, hash uint64) ([]byte, error) {
+	request := &prompb.WriteRequest{Timeseries: []*prompb.TimeSeries{series}}
+	return storage.SegmentKey(dst, request, series, hash)
+}
+
 func BenchmarkSegmentKey(b *testing.B) {
 	buf := make([]byte, 256)
-	labels := newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0).Labels
+	series := newTimeSeries("foo", map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		storage.SegmentKey(buf[:0], labels, 0)
+		segmentKey(buf[:0], series, 0)
 	}
 }
 
@@ -531,8 +572,9 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 	for i := 0; i < 2500; i++ {
 		batch[i] = newTimeSeries(fmt.Sprintf("metric%d", i%100), map[string]string{"adxmon_database": "adxmetrics"}, 0, 0)
 	}
+	req := &prompb.WriteRequest{Timeseries: batch}
 	for i := 0; i < b.N; i++ {
-		require.NoError(b, s.WriteTimeSeries(context.Background(), batch))
+		require.NoError(b, s.WriteTimeSeries(context.Background(), req))
 	}
 }
 

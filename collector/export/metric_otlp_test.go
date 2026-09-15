@@ -231,6 +231,50 @@ func TestPromToOtlpRequest(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPromToOtlpRequestCommonLabels(t *testing.T) {
+	exporter := NewPromToOtlpExporter(PromToOtlpExporterOpts{
+		Transformer: &transform.RequestTransformer{},
+	})
+	req := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{{
+			Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("cpu")},
+				{Name: []byte("instance"), Value: []byte("node-1")},
+				{Name: []byte("job"), Value: []byte("node-exporter")},
+				{Name: []byte("region"), Value: []byte("eastus")},
+			},
+			Samples: []*prompb.Sample{{Value: 1, Timestamp: basets}},
+		}},
+		CommonLabels: []*prompb.Label{
+			{Name: []byte("adxmon_database"), Value: []byte("Metrics")},
+			{Name: []byte("Cloud"), Value: []byte("Public")},
+			{Name: []byte("Environment"), Value: []byte("prod")},
+			{Name: []byte("Host"), Value: []byte("collector-1")},
+			{Name: []byte("Secret"), Value: []byte("hidden")},
+		},
+		LabelFilter: &prompb.LabelFilter{Drop: []prompb.LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^Secret$"),
+		}}},
+	}
+
+	serialized, count, err := exporter.promToOtlpRequest(req)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	var exportRequest v1.ExportMetricsServiceRequest
+	require.NoError(t, proto.Unmarshal(serialized, &exportRequest))
+	datapoint := exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetGauge().DataPoints[0]
+	validateAttributes(t, datapoint, map[string]string{
+		"Cloud":       "Public",
+		"Environment": "prod",
+		"Host":        "collector-1",
+		"instance":    "node-1",
+		"job":         "node-exporter",
+		"region":      "eastus",
+	})
+}
+
 func TestSendRequest(t *testing.T) {
 	type testcase struct {
 		name           string
@@ -416,6 +460,7 @@ func validateSerialized(t *testing.T, serialized []byte) {
 
 func validateAttributes(t *testing.T, datapoint *metricsv1.NumberDataPoint, expectedAttrs map[string]string) {
 	t.Helper()
+	require.Len(t, datapoint.Attributes, len(expectedAttrs))
 
 	attributesMap := make(map[string]string)
 	for _, attr := range datapoint.Attributes {

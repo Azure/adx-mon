@@ -197,7 +197,7 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 	count := int64(0)
 	for _, ts := range wr.Timeseries {
 		nameBytes := prompb.MetricName(ts)
-		if c.transformer.ShouldDropMetric(ts, nameBytes) {
+		if c.transformer.ShouldDropMetricWithCommonLabels(ts, wr.CommonLabels, nameBytes) {
 			continue
 		}
 		count++
@@ -211,8 +211,8 @@ func (c *PromToOtlpExporter) promToOtlpRequest(wr *prompb.WriteRequest) ([]byte,
 			},
 		}
 
-		attributes := make([]*commonv1.KeyValue, 0, len(ts.Labels))
-		c.transformer.WalkLabels(ts, func(k, v []byte) {
+		attributes := make([]*commonv1.KeyValue, 0, len(ts.Labels)+len(wr.CommonLabels))
+		c.transformer.WalkLabelsInRequest(wr, ts, func(k, v []byte) {
 			// skip adding the name label and any adxmon_ prefixed labels
 			if bytes.Equal(k, nameLabel) || bytes.HasPrefix(k, []byte("adxmon_")) {
 				return
