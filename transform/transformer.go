@@ -104,7 +104,7 @@ func (f *RequestTransformer) TransformWriteRequest(req *prompb.WriteRequest) *pr
 		// First skip any metrics that should be dropped.
 		name := prompb.MetricName(v)
 
-		if f.ShouldDropMetric(v, name) {
+		if f.shouldDropMetricWithCommonLabels(v, nil, name) {
 			if metrics.DebugMetricsEnabled {
 				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			}
@@ -146,7 +146,7 @@ func (f *RequestTransformer) TransformWriteRequestWithCommonLabels(req *prompb.W
 	var i int
 	for _, v := range req.Timeseries {
 		name := prompb.MetricName(v)
-		if f.ShouldDropMetricWithCommonLabels(v, commonLabels, name) {
+		if f.shouldDropMetricWithCommonLabels(v, commonLabels, name) {
 			if metrics.DebugMetricsEnabled {
 				metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(float64(len(v.Samples)))
 			}
@@ -280,15 +280,10 @@ func (f *RequestTransformer) commonLabels(existing []*prompb.Label) []*prompb.La
 	return labels
 }
 
-// WalkLabels operates similarly to TransformTimeSeries, but instead of modifying the TimeSeries, it calls the callback with the key and value
-// This is safe to call in parallel if the name and value bytes are not modified by the callback.
-func (f *RequestTransformer) WalkLabels(v *prompb.TimeSeries, callback func(name []byte, value []byte)) {
-	f.WalkLabelsInRequest(&prompb.WriteRequest{}, v, callback)
-}
-
-// WalkLabelsInRequest walks the transformed view of a time series using the
-// request's common labels and filtering policy.
-func (f *RequestTransformer) WalkLabelsInRequest(req *prompb.WriteRequest, v *prompb.TimeSeries, callback func(name []byte, value []byte)) {
+// WalkLabels walks the transformed view of a time series using the request's
+// common labels and filtering policy. It is safe to call in parallel if the
+// callback does not modify the name and value bytes.
+func (f *RequestTransformer) WalkLabels(req *prompb.WriteRequest, v *prompb.TimeSeries, callback func(name []byte, value []byte)) {
 	f.init()
 
 	var skipLabel bool
@@ -336,43 +331,71 @@ func (f *RequestTransformer) WalkLabelsInRequest(req *prompb.WriteRequest, v *pr
 	}
 }
 
-func (f *RequestTransformer) ShouldDropMetric(v *prompb.TimeSeries, name []byte) bool {
-	return f.ShouldDropMetricWithCommonLabels(v, nil, name)
+// ShouldDropUntransformedMetric reports whether a raw time series should be
+// dropped before request-level label transformation has run.
+func (f *RequestTransformer) ShouldDropUntransformedMetric(v *prompb.TimeSeries, name []byte) bool {
+	return f.shouldDropMetricWithCommonLabels(v, nil, name)
 }
 
-// ShouldDropMetricWithCommonLabels reports whether a time series should be
-// dropped after considering both per-series and request-level common labels.
-func (f *RequestTransformer) ShouldDropMetricWithCommonLabels(v *prompb.TimeSeries, commonLabels []*prompb.Label, name []byte) bool {
+func (f *RequestTransformer) shouldDropMetricWithCommonLabels(v *prompb.TimeSeries, commonLabels []*prompb.Label, name []byte) bool {
+	if drop, decided := f.shouldDropMetricByName(name); decided {
+		return drop
+	}
+	for label := range prompb.MergedLabels(v.Labels, commonLabels) {
+		if f.shouldKeepMetricWithLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// ShouldDropMetric reports whether a time series from an already-transformed
+// request should be dropped. Label-based keep rules inspect the request's
+// effective labels and cannot see labels removed upstream.
+func (f *RequestTransformer) ShouldDropMetric(req *prompb.WriteRequest, v *prompb.TimeSeries, name []byte) bool {
+	if drop, decided := f.shouldDropMetricByName(name); decided {
+		return drop
+	}
+	for label := range req.Labels(v) {
+		if f.shouldKeepMetricWithLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *RequestTransformer) shouldDropMetricByName(name []byte) (drop, decided bool) {
 	if f.DefaultDropMetrics {
 		// Explicitly dropped metrics take precedence over explicitly kept metrics.
 		for _, r := range f.DropMetrics {
 			if r.Match(name) {
-				return true
+				return true, true
 			}
 		}
 
 		for _, r := range f.KeepMetrics {
 			if r.Match(name) {
-				return false
+				return false, true
 			}
 		}
 
-		if len(f.KeepMetricsWithLabelValue) > 0 {
-			for label := range prompb.MergedLabels(v.Labels, commonLabels) {
-				// Keep metrics that have a certain label
-				for lableRe, valueRe := range f.KeepMetricsWithLabelValue {
-					if lableRe.Match(label.Name) && valueRe.Match(label.Value) {
-						return false
-					}
-				}
-			}
+		if len(f.KeepMetricsWithLabelValue) == 0 {
+			return true, true
 		}
-
-		return true
+		return false, false
 	}
 
 	for _, r := range f.DropMetrics {
 		if r.Match(name) {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+func (f *RequestTransformer) shouldKeepMetricWithLabel(label *prompb.Label) bool {
+	for labelRe, valueRe := range f.KeepMetricsWithLabelValue {
+		if labelRe.Match(label.Name) && valueRe.Match(label.Value) {
 			return true
 		}
 	}

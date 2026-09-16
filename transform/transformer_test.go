@@ -171,7 +171,7 @@ func TestRequestTransformer_WalkLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			labels := make(map[string]string)
-			tt.transformer.WalkLabels(ts, func(k, v []byte) {
+			tt.transformer.WalkLabels(&prompb.WriteRequest{}, ts, func(k, v []byte) {
 				labels[string(k)] = string(v)
 			})
 			require.Equal(t, tt.expectedLabels, labels)
@@ -1055,7 +1055,7 @@ func TestRequestTransformer_ShouldDropMetric(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.f.ShouldDropMetric(tt.args.v, tt.args.name); got != tt.want {
+			if got := tt.f.ShouldDropMetric(&prompb.WriteRequest{}, tt.args.v, tt.args.name); got != tt.want {
 				t.Errorf("RequestTransformer.ShouldDropMetric() = %v, want %v", got, tt.want)
 			}
 		})

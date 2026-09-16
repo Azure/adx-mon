@@ -242,7 +242,7 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			}
 
 			name := prompb.MetricName(ts)
-			if s.requestTransformer.ShouldDropMetric(ts, name) {
+			if s.requestTransformer.ShouldDropUntransformedMetric(ts, name) {
 				prompb.TimeSeriesPool.Put(ts)
 				if metrics.DebugMetricsEnabled {
 					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
