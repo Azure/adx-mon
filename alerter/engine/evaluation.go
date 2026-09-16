@@ -22,10 +22,14 @@ type alertRuleEvaluation struct {
 }
 
 func newAlertRuleEvaluation(rule *rules.Rule) *alertRuleEvaluation {
+	return newAlertRuleEvaluationAt(rule, time.Now())
+}
+
+func newAlertRuleEvaluationAt(rule *rules.Rule, executionTime time.Time) *alertRuleEvaluation {
 	now := time.Now()
 	return &alertRuleEvaluation{
 		rule:          rule,
-		executionTime: now.UTC(),
+		executionTime: executionTime.UTC(),
 		startTime:     now,
 		outcome:       evaluationOutcomeSuccess,
 	}

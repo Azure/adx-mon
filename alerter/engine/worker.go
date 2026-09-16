@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,11 @@ import (
 )
 
 const (
-	maxQueryTime = 5 * time.Minute
+	maxQueryTime                       = 5 * time.Minute
+	queryErrorNotificationReserve      = 30 * time.Second
+	remoteEntityResolutionMaxAttempts  = 2
+	remoteEntityResolutionRetryDelay   = 5 * time.Second
+	remoteEntityResolutionMinQueryTime = 30 * time.Second
 
 	evaluationOutcomeSuccess               = metrics.AlertRuleEvaluationOutcomeSuccess
 	evaluationOutcomeSetupError            = metrics.AlertRuleEvaluationOutcomeSetupError
@@ -44,9 +49,12 @@ type worker struct {
 	alertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	handlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
-	querySlots chan struct{}
-	ctrlCli    client.Client
+	handlerFn    func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
+	querySlots   chan struct{}
+	ctrlCli      client.Client
+	queryTime    time.Duration
+	retryDelay   time.Duration
+	minRetryTime time.Duration
 
 	// criteria/expression evaluation cached at construction
 	matchAllowed bool
@@ -80,14 +88,17 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		querySlots = queue.New(cfg.MaxConcurrentQueries)
 	}
 	w := &worker{
-		rule:        cfg.Rule,
-		region:      cfg.Region,
-		kustoClient: cfg.KustoClient,
-		alertCli:    cfg.AlertClient,
-		alertAddr:   cfg.AlertAddr,
-		handlerFn:   cfg.HandlerFn,
-		querySlots:  querySlots,
-		ctrlCli:     cfg.CtrlClient,
+		rule:         cfg.Rule,
+		region:       cfg.Region,
+		kustoClient:  cfg.KustoClient,
+		alertCli:     cfg.AlertClient,
+		alertAddr:    cfg.AlertAddr,
+		handlerFn:    cfg.HandlerFn,
+		querySlots:   querySlots,
+		ctrlCli:      cfg.CtrlClient,
+		queryTime:    maxQueryTime,
+		retryDelay:   remoteEntityResolutionRetryDelay,
+		minRetryTime: remoteEntityResolutionMinQueryTime,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
 	w.matchAllowed = allowed
@@ -115,33 +126,68 @@ func (e *worker) Run(ctx context.Context) {
 
 		// Calculate the next execution time based on last execution
 		nextQueryTime := e.calculateNextQueryTime()
+		scheduledQueryTime := nextQueryTime
+		if e.rule.LastQueryTime.IsZero() {
+			// calculateNextQueryTime returns a slightly-past timestamp only to
+			// trigger immediate execution. Use the actual desired execution
+			// time as the end of the first query window.
+			scheduledQueryTime = time.Now()
+		}
 
 		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
 			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
 
-		// If we should execute immediately (e.g., first time or overdue), do so
-		if nextQueryTime.Before(time.Now()) {
-			e.ExecuteQuery(ctx)
-		} else {
-			// Wait until the calculated next execution time before starting the ticker
-			waitDuration := time.Until(nextQueryTime)
+		timer := time.NewTimer(time.Until(nextQueryTime))
+		defer timer.Stop()
 
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(waitDuration):
-				e.ExecuteQuery(ctx)
-			}
-		}
-
-		ticker := time.NewTicker(e.rule.Interval)
-		defer ticker.Stop()
+		var (
+			retry          *queryRetryState
+			normalSchedule bool
+		)
 		for {
 			select {
 			case <-ctx.Done():
+				if retry != nil {
+					e.finishAbortedQuery(retry)
+				}
 				return
-			case <-ticker.C:
-				e.ExecuteQuery(ctx)
+			case <-timer.C:
+				// Once the initial evaluation has completed, keep the normal
+				// schedule anchored to absolute deadlines like time.Ticker does.
+				// A retry temporarily replaces the timer but does not move the
+				// next normal execution.
+				if retry == nil && normalSchedule {
+					scheduledQueryTime = nextQueryTime
+					nextQueryTime = e.advanceQuerySchedule(nextQueryTime, time.Now())
+				}
+
+				result := e.executeQueryAttempt(ctx, retry, scheduledQueryTime)
+				if result.aborted {
+					if ctx.Err() != nil {
+						e.finishAbortedQuery(result.retry)
+						return
+					}
+					retry = nil
+					timer.Reset(e.rule.Interval)
+					continue
+				}
+				if result.retryable {
+					retry = result.retry
+					timer.Reset(e.retryDelay)
+					continue
+				}
+
+				e.handleQueryResult(ctx, result)
+				retry = nil
+				if !normalSchedule {
+					// The original implementation created its ticker after the
+					// initial query returned. Anchor the recurring schedule at
+					// the end of that initial evaluation, including any retry.
+					nextQueryTime = time.Now().Add(e.rule.Interval)
+					scheduledQueryTime = nextQueryTime
+					normalSchedule = true
+				}
+				timer.Reset(time.Until(nextQueryTime))
 			}
 		}
 	}()
@@ -162,121 +208,271 @@ func (e *worker) calculateNextQueryTime() time.Time {
 	return nextQueryTime
 }
 
+// advanceQuerySchedule advances the normal schedule by one interval and skips any
+// additional deadlines missed while the worker was busy. This mirrors a
+// time.Ticker's behavior of delivering at most one pending tick rather than
+// accumulating a backlog.
+func (e *worker) advanceQuerySchedule(next time.Time, now time.Time) time.Time {
+	next = next.Add(e.rule.Interval)
+	for !next.After(now) {
+		next = next.Add(e.rule.Interval)
+	}
+	return next
+}
+
 func (e *worker) ExecuteQuery(ctx context.Context) {
+	result := e.executeQueryAttempt(ctx, nil, time.Time{})
+	if result.aborted {
+		e.finishAbortedQuery(result.retry)
+		return
+	}
+	if result.skipped {
+		return
+	}
+	// RunOnce is used by linting and has no scheduler. Treat a transient
+	// failure as terminal for this one-shot execution rather than waiting.
+	if result.retryable {
+		result.err = result.retry.initialErr
+		result.retryable = false
+	}
+	e.handleQueryResult(ctx, result)
+}
+
+func (e *worker) finishAbortedQuery(retry *queryRetryState) {
+	if retry == nil {
+		return
+	}
+	retry.evaluation.outcome = evaluationOutcomeServiceError
+	retry.evaluation.finish()
+}
+
+type queryRetryState struct {
+	evaluation             *alertRuleEvaluation
+	queryContext           *QueryContext
+	deadline               time.Time
+	attempt                int
+	initialErr             error
+	notificationsThrottled bool
+	throttledAlerts        ThrottledNotificationsError
+}
+
+type queryAttemptResult struct {
+	retry      *queryRetryState
+	err        error
+	retryable  bool
+	setupError bool
+	aborted    bool
+	skipped    bool
+}
+
+func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState, scheduledQueryTime time.Time) queryAttemptResult {
 	// Use cached match decision
 	if e.matchErr != nil {
 		logger.Errorf("Skipping %s/%s due to cached criteria evaluation error: %v", e.rule.Namespace, e.rule.Name, e.matchErr)
-		return
+		return queryAttemptResult{skipped: true}
 	}
 	if !e.matchAllowed {
 		logger.Infof("Skipping %s/%s due to cached criteria evaluation", e.rule.Namespace, e.rule.Name)
-		return
+		return queryAttemptResult{skipped: true}
 	}
 
 	if err := ctx.Err(); err != nil {
-		return
+		return queryAttemptResult{aborted: true}
+	}
+
+	if retry == nil {
+		if scheduledQueryTime.IsZero() {
+			scheduledQueryTime = time.Now()
+		}
+		evaluation := newAlertRuleEvaluationAt(e.rule, scheduledQueryTime)
+		retry = &queryRetryState{
+			evaluation: evaluation,
+			attempt:    1,
+		}
 	}
 
 	// Try to acquire a worker slot while still honoring shutdown.
 	select {
 	case e.querySlots <- struct{}{}:
 	case <-ctx.Done():
-		return
+		return queryAttemptResult{retry: retry, aborted: true}
 	}
 
 	// Release the worker slot.
 	defer func() { <-e.querySlots }()
 
-	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
-	defer cancel()
-
-	evaluation := newAlertRuleEvaluation(e.rule)
-	defer evaluation.finish()
-
-	queryContext, err := NewQueryContext(e.rule, evaluation.executionTime, e.region)
-	if err != nil {
-		evaluation.outcome = evaluationOutcomeSetupError
-		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
-		e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Failed to wrap query: %v", err))
-		return
+	if retry.deadline.IsZero() {
+		retry.deadline = e.retryDeadline(ctx)
 	}
+	if retry.queryContext == nil {
+		var err error
+		retry.queryContext, err = NewQueryContext(e.rule, retry.evaluation.executionTime, e.region)
+		if err != nil {
+			return queryAttemptResult{retry: retry, err: err, setupError: true}
+		}
+	}
+
+	queryCtx, cancel := e.queryAttemptContext(ctx, retry.deadline)
+	defer cancel()
 
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 
-	// Create a wrapper handler that tracks alerts generated
-	var notificationsThrottled bool
-	var throttledAlerts ThrottledNotificationsError
+	// Create a wrapper handler that tracks alerts generated and retains rows
+	// after notification throttling so the summary can identify affected alerts.
 	wrappedHandler := func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
-		if !notificationsThrottled {
+		if !retry.notificationsThrottled {
 			err := e.handlerFn(ctx, endpoint, qc, row)
 			if err == nil {
-				evaluation.alertsGenerated++
+				retry.evaluation.alertsGenerated++
 				return nil
 			}
 			if !errors.Is(err, alert.ErrTooManyRequests) {
 				return err
 			}
-			notificationsThrottled = true
+			retry.notificationsThrottled = true
 		}
-
 		result, err := ParseAlertResult(qc, row)
 		if err != nil {
 			return err
 		}
-		throttledAlerts.Add(result)
+		retry.throttledAlerts.Add(result)
 		return nil
 	}
 
-	err, evaluation.rows = e.kustoClient.Query(ctx, queryContext, wrappedHandler)
-	if err != nil || notificationsThrottled {
-		// This failed because we sent too many notifications.
-		if notificationsThrottled || errors.Is(err, alert.ErrTooManyRequests) {
-			evaluation.outcome = evaluationOutcomeNotificationThrottled
-			var overflow *ThrottledNotificationsError
-			if errors.As(err, &overflow) {
-				throttledAlerts.merge(overflow)
-			}
-			summary := throttledNotificationSummary(&throttledAlerts)
-			if err != nil && !errors.Is(err, alert.ErrTooManyRequests) {
-				logger.Errorf("Failed to collect throttled notifications for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-				summary += "<br/>The query results could not be fully processed; this table may be incomplete."
-			}
-			linkedSummary, linkErr := KustoQueryLinks(summary, queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
-			if linkErr != nil {
-				logger.Errorf("Failed to create query links for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, linkErr)
-			} else {
-				summary = linkedSummary
-			}
-			err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
-				Destination:   e.rule.Destination,
-				Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
-				Summary:       summary,
-				Severity:      3,
-				Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
-				CorrelationID: fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
-			})
-			if err != nil {
-				logger.Errorf("Failed to send alert for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
-			}
-			e.updateAlertRuleStatus(ctx, evaluation, "Throttled", "Too many notifications sent")
-			return
-		}
+	var err error
+	err, retry.evaluation.rows = e.kustoClient.Query(queryCtx, retry.queryContext, wrappedHandler)
+	if ctx.Err() != nil {
+		return queryAttemptResult{retry: retry, aborted: true}
+	}
+	if err == nil {
+		return queryAttemptResult{retry: retry}
+	}
 
+	if isTransientRemoteEntityResolutionError(err) {
+		if retry.initialErr == nil {
+			retry.initialErr = err
+		}
+		if retry.attempt < remoteEntityResolutionMaxAttempts && e.hasRetryBudget(retry.deadline) {
+			retry.attempt++
+			logger.Warnf("Query %s/%s failed with a transient remote entity resolution error; scheduling retry attempt %d/%d after %s", e.rule.Namespace, e.rule.Name, retry.attempt, remoteEntityResolutionMaxAttempts, e.retryDelay)
+			return queryAttemptResult{retry: retry, retryable: true}
+		}
+		return queryAttemptResult{
+			retry: retry,
+			err: &remoteEntityResolutionRetryError{
+				initialErr: retry.initialErr,
+				retryErr:   err,
+			},
+		}
+	}
+
+	return queryAttemptResult{retry: retry, err: err}
+}
+
+func (e *worker) retryDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(e.queryTime)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		return parentDeadline
+	}
+	return deadline
+}
+
+func (e *worker) queryAttemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	queryDeadline := deadline.Add(-queryErrorNotificationReserve)
+	if parentDeadline, ok := ctx.Deadline(); ok {
+		parentQueryDeadline := parentDeadline.Add(-queryErrorNotificationReserve)
+		if parentQueryDeadline.Before(queryDeadline) {
+			queryDeadline = parentQueryDeadline
+		}
+	}
+	return context.WithDeadline(ctx, queryDeadline)
+}
+
+func (e *worker) hasRetryBudget(deadline time.Time) bool {
+	return time.Until(deadline) >= e.retryDelay+e.minRetryTime+queryErrorNotificationReserve
+}
+
+func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResult) {
+	if result.retry == nil {
+		return
+	}
+	evaluation := result.retry.evaluation
+	defer evaluation.finish()
+
+	err := result.err
+	if result.setupError {
+		evaluation.outcome = evaluationOutcomeSetupError
+		logger.Errorf("Failed to wrap query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Failed to wrap query: %v", err))
+		return
+	}
+	if err == nil && !result.retry.notificationsThrottled {
+		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+		metrics.QueriesRunTotal.WithLabelValues().Inc()
+		logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(evaluation.executionTime))
+		logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, evaluation.rows)
+		e.updateAlertRuleStatus(ctx, evaluation, "Success", "")
+		return
+	}
+
+	if result.retry.notificationsThrottled || errors.Is(err, alert.ErrTooManyRequests) {
+		// This failed because we sent too many notifications.
+		evaluation.outcome = evaluationOutcomeNotificationThrottled
+		var overflow *ThrottledNotificationsError
+		if errors.As(err, &overflow) {
+			result.retry.throttledAlerts.merge(overflow)
+		}
+		summary := throttledNotificationSummary(&result.retry.throttledAlerts)
+		if err != nil && !errors.Is(err, alert.ErrTooManyRequests) {
+			logger.Errorf("Failed to collect throttled notifications for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+			summary += "<br/>The query results could not be fully processed; this table may be incomplete."
+		}
+		linkedSummary, linkErr := KustoQueryLinks(summary, result.retry.queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+		if linkErr != nil {
+			logger.Errorf("Failed to create query links for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, linkErr)
+		} else {
+			summary = linkedSummary
+		}
+		err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
+			Destination:   e.rule.Destination,
+			Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
+			Summary:       summary,
+			Severity:      3,
+			Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
+			CorrelationID: fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
+		})
+		if err != nil {
+			logger.Errorf("Failed to send alert for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
+		}
+		e.updateAlertRuleStatus(ctx, evaluation, "Throttled", "Too many notifications sent")
+		return
+	}
+
+	if err != nil {
 		// This failed because the query failed.
 		logger.Errorf("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
-		if !isUserError(err) {
+		retryExhausted := isRemoteEntityResolutionRetryExhausted(err)
+		if !retryExhausted && !isUserError(err) {
 			evaluation.outcome = evaluationOutcomeServiceError
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query execution failed: %v", err))
 			return
 		}
-		evaluation.outcome = evaluationOutcomeUserError
+		if retryExhausted {
+			evaluation.outcome = evaluationOutcomeServiceError
+			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+		} else {
+			evaluation.outcome = evaluationOutcomeUserError
+		}
 
 		// Store the original query error before it gets overwritten
 		originalQueryErr := err
 
-		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", originalQueryErr.Error()), queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+		notificationCtx, cancel := e.notificationContext(ctx, result.retry.deadline)
+		defer cancel()
+
+		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", originalQueryErr.Error()), result.retry.queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
@@ -285,7 +481,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		}
 
 		endpointBaseName, _ := strings.CutPrefix(e.kustoClient.Endpoint(e.rule.Database), "https://")
-		err = e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
+		err = e.alertCli.Create(notificationCtx, e.alertAddr, alert.Alert{
 			Destination:   e.rule.Destination,
 			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
 			Summary:       summary,
@@ -303,19 +499,65 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 		} else {
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		}
-		// Query failed due to user error, so return the query to healthy.
-		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-		e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed with user error: %v", originalQueryErr))
+		if retryExhausted {
+			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed after remote entity resolution retry: %v", originalQueryErr))
+		} else {
+			// Query failed due to user error, so return the query to healthy.
+			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed with user error: %v", originalQueryErr))
+		}
 		return
 	}
+}
 
-	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-	metrics.QueriesRunTotal.WithLabelValues().Inc()
-	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(evaluation.executionTime))
-	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, evaluation.rows)
+func (e *worker) notificationContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	notificationDeadline := time.Now().Add(queryErrorNotificationReserve)
+	if deadline.Before(notificationDeadline) {
+		notificationDeadline = deadline
+	}
+	return context.WithDeadline(ctx, notificationDeadline)
+}
 
-	// Update AlertRule status with execution information
-	e.updateAlertRuleStatus(ctx, evaluation, "Success", "")
+func isTransientRemoteEntityResolutionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var kerr *kerrors.HttpError
+	if !errors.As(err, &kerr) {
+		return false
+	}
+
+	lowerErr := strings.ToLower(kerr.Error())
+	if kerr.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(lowerErr, "sem0056") ||
+		!strings.Contains(lowerErr, "resolving remote entities") ||
+		!strings.Contains(lowerErr, "failed to resolve name or pattern") {
+		return false
+	}
+
+	return !strings.Contains(lowerErr, "obo token is required for cross-cluster communication") &&
+		!strings.Contains(lowerErr, "is not authorized to") &&
+		!strings.Contains(lowerErr, "access denied") &&
+		!strings.Contains(lowerErr, "is not allowed by the callout policy")
+}
+
+type remoteEntityResolutionRetryError struct {
+	initialErr error
+	retryErr   error
+}
+
+func (e *remoteEntityResolutionRetryError) Error() string {
+	return fmt.Sprintf("remote entity resolution retry failed: initial error: %v; retry error: %v", e.initialErr, e.retryErr)
+}
+
+func (e *remoteEntityResolutionRetryError) Unwrap() error {
+	return e.retryErr
+}
+
+func isRemoteEntityResolutionRetryExhausted(err error) bool {
+	var retryErr *remoteEntityResolutionRetryError
+	return errors.As(err, &retryErr)
 }
 
 // updateAlertRuleStatus updates the AlertRule status with the execution information
