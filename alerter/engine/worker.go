@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -55,6 +56,7 @@ type worker struct {
 	queryTime    time.Duration
 	retryDelay   time.Duration
 	minRetryTime time.Duration
+	clock        clock.Clock
 
 	// criteria/expression evaluation cached at construction
 	matchAllowed bool
@@ -75,6 +77,7 @@ type WorkerConfig struct {
 	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
 	CtrlClient       client.Client
 	sharedQuerySlots chan struct{}
+	Clock            clock.Clock
 }
 
 // NewWorker creates a worker and performs one-time match evaluation.
@@ -86,6 +89,10 @@ func NewWorker(cfg *WorkerConfig) *worker {
 	querySlots := cfg.sharedQuerySlots
 	if querySlots == nil {
 		querySlots = queue.New(cfg.MaxConcurrentQueries)
+	}
+	workerClock := cfg.Clock
+	if workerClock == nil {
+		workerClock = clock.RealClock{}
 	}
 	w := &worker{
 		rule:         cfg.Rule,
@@ -99,6 +106,7 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		queryTime:    maxQueryTime,
 		retryDelay:   remoteEntityResolutionRetryDelay,
 		minRetryTime: remoteEntityResolutionMinQueryTime,
+		clock:        workerClock,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
 	w.matchAllowed = allowed
@@ -131,13 +139,13 @@ func (e *worker) Run(ctx context.Context) {
 			// calculateNextQueryTime returns a slightly-past timestamp only to
 			// trigger immediate execution. Use the actual desired execution
 			// time as the end of the first query window.
-			scheduledQueryTime = time.Now()
+			scheduledQueryTime = e.clock.Now()
 		}
 
 		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
 			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
 
-		timer := time.NewTimer(time.Until(nextQueryTime))
+		timer := e.clock.NewTimer(nextQueryTime.Sub(e.clock.Now()))
 		defer timer.Stop()
 
 		var (
@@ -151,25 +159,20 @@ func (e *worker) Run(ctx context.Context) {
 					e.finishAbortedQuery(retry)
 				}
 				return
-			case <-timer.C:
+			case <-timer.C():
 				// Once the initial evaluation has completed, keep the normal
 				// schedule anchored to absolute deadlines like time.Ticker does.
 				// A retry temporarily replaces the timer but does not move the
 				// next normal execution.
 				if retry == nil && normalSchedule {
 					scheduledQueryTime = nextQueryTime
-					nextQueryTime = e.advanceQuerySchedule(nextQueryTime, time.Now())
+					nextQueryTime = e.advanceQuerySchedule(nextQueryTime, e.clock.Now())
 				}
 
 				result := e.executeQueryAttempt(ctx, retry, scheduledQueryTime)
 				if result.aborted {
-					if ctx.Err() != nil {
-						e.finishAbortedQuery(result.retry)
-						return
-					}
-					retry = nil
-					timer.Reset(e.rule.Interval)
-					continue
+					e.finishAbortedQuery(result.retry)
+					return
 				}
 				if result.retryable {
 					retry = result.retry
@@ -183,11 +186,11 @@ func (e *worker) Run(ctx context.Context) {
 					// The original implementation created its ticker after the
 					// initial query returned. Anchor the recurring schedule at
 					// the end of that initial evaluation, including any retry.
-					nextQueryTime = time.Now().Add(e.rule.Interval)
+					nextQueryTime = e.clock.Now().Add(e.rule.Interval)
 					scheduledQueryTime = nextQueryTime
 					normalSchedule = true
 				}
-				timer.Reset(time.Until(nextQueryTime))
+				timer.Reset(nextQueryTime.Sub(e.clock.Now()))
 			}
 		}
 	}()
@@ -198,7 +201,7 @@ func (e *worker) Run(ctx context.Context) {
 func (e *worker) calculateNextQueryTime() time.Time {
 	// If no last query time, this is the first execution
 	if e.rule.LastQueryTime.IsZero() {
-		return time.Now().Add(-time.Second) // Immediate execution
+		return e.clock.Now().Add(-time.Second) // Immediate execution
 	}
 
 	// Calculate next execution time based on last execution + interval
@@ -282,9 +285,9 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 
 	if retry == nil {
 		if scheduledQueryTime.IsZero() {
-			scheduledQueryTime = time.Now()
+			scheduledQueryTime = e.clock.Now()
 		}
-		evaluation := newAlertRuleEvaluationAt(e.rule, scheduledQueryTime)
+		evaluation := newAlertRuleEvaluationAt(e.rule, scheduledQueryTime, e.clock)
 		retry = &queryRetryState{
 			evaluation: evaluation,
 			attempt:    1,
@@ -370,26 +373,28 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 }
 
 func (e *worker) retryDeadline(ctx context.Context) time.Time {
-	deadline := time.Now().Add(e.queryTime)
-	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
-		return parentDeadline
+	now := e.clock.Now()
+	deadline := now.Add(e.queryTime)
+	if parentDeadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(parentDeadline); remaining < e.queryTime {
+			return now.Add(remaining)
+		}
 	}
 	return deadline
 }
 
 func (e *worker) queryAttemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
-	queryDeadline := deadline.Add(-queryErrorNotificationReserve)
+	remaining := deadline.Sub(e.clock.Now())
 	if parentDeadline, ok := ctx.Deadline(); ok {
-		parentQueryDeadline := parentDeadline.Add(-queryErrorNotificationReserve)
-		if parentQueryDeadline.Before(queryDeadline) {
-			queryDeadline = parentQueryDeadline
+		if parentRemaining := time.Until(parentDeadline); parentRemaining < remaining {
+			remaining = parentRemaining
 		}
 	}
-	return context.WithDeadline(ctx, queryDeadline)
+	return context.WithTimeout(ctx, remaining-queryErrorNotificationReserve)
 }
 
 func (e *worker) hasRetryBudget(deadline time.Time) bool {
-	return time.Until(deadline) >= e.retryDelay+e.minRetryTime+queryErrorNotificationReserve
+	return deadline.Sub(e.clock.Now()) >= e.retryDelay+e.minRetryTime+queryErrorNotificationReserve
 }
 
 func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResult) {
@@ -409,7 +414,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 	if err == nil && !result.retry.notificationsThrottled {
 		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 		metrics.QueriesRunTotal.WithLabelValues().Inc()
-		logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(evaluation.executionTime))
+		logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, e.clock.Since(evaluation.executionTime))
 		logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, evaluation.rows)
 		e.updateAlertRuleStatus(ctx, evaluation, "Success", "")
 		return
@@ -511,11 +516,16 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 }
 
 func (e *worker) notificationContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
-	notificationDeadline := time.Now().Add(queryErrorNotificationReserve)
-	if deadline.Before(notificationDeadline) {
-		notificationDeadline = deadline
+	remaining := queryErrorNotificationReserve
+	if retryRemaining := deadline.Sub(e.clock.Now()); retryRemaining < remaining {
+		remaining = retryRemaining
 	}
-	return context.WithDeadline(ctx, notificationDeadline)
+	if parentDeadline, ok := ctx.Deadline(); ok {
+		if parentRemaining := time.Until(parentDeadline); parentRemaining < remaining {
+			remaining = parentRemaining
+		}
+	}
+	return context.WithTimeout(ctx, remaining)
 }
 
 func isTransientRemoteEntityResolutionError(err error) bool {
@@ -640,7 +650,7 @@ func (e *worker) updateAlertRuleCriteriaCondition(ctx context.Context) {
 		Reason:             reason,
 		Message:            message,
 		ObservedGeneration: alertRule.GetGeneration(),
-		LastTransitionTime: metav1.Now(),
+		LastTransitionTime: metav1.NewTime(e.clock.Now()),
 	}
 	if meta.SetStatusCondition(&alertRule.Status.Conditions, cond) {
 		if err := e.ctrlCli.Status().Update(updateCtx, alertRule); err != nil {
