@@ -275,6 +275,54 @@ func TestPromToOtlpRequestCommonLabels(t *testing.T) {
 	})
 }
 
+func TestPromToOtlpRequestMetricRetentionUsesEffectiveLabels(t *testing.T) {
+	exporter := NewPromToOtlpExporter(PromToOtlpExporterOpts{
+		Transformer: &transform.RequestTransformer{
+			DefaultDropMetrics: true,
+			KeepMetricsWithLabelValue: map[*regexp.Regexp]*regexp.Regexp{
+				regexp.MustCompile("^Environment$"): regexp.MustCompile("^prod$"),
+			},
+		},
+	})
+	newRequest := func() *prompb.WriteRequest {
+		return &prompb.WriteRequest{
+			Timeseries: []*prompb.TimeSeries{{
+				Labels:  []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}},
+				Samples: []*prompb.Sample{{Value: 1, Timestamp: basets}},
+			}},
+			CommonLabels: []*prompb.Label{{Name: []byte("Environment"), Value: []byte("prod")}},
+		}
+	}
+
+	t.Run("visible common label keeps metric", func(t *testing.T) {
+		request := newRequest()
+
+		serialized, count, err := exporter.promToOtlpRequest(request)
+
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+		var exportRequest v1.ExportMetricsServiceRequest
+		require.NoError(t, proto.Unmarshal(serialized, &exportRequest))
+		require.Len(t, exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics, 1)
+	})
+
+	t.Run("upstream-filtered common label cannot keep metric", func(t *testing.T) {
+		request := newRequest()
+		request.LabelFilter = &prompb.LabelFilter{Drop: []prompb.LabelDropRule{{
+			Metric: regexp.MustCompile("^cpu$"),
+			Label:  regexp.MustCompile("^Environment$"),
+		}}}
+
+		serialized, count, err := exporter.promToOtlpRequest(request)
+
+		require.NoError(t, err)
+		require.Zero(t, count)
+		var exportRequest v1.ExportMetricsServiceRequest
+		require.NoError(t, proto.Unmarshal(serialized, &exportRequest))
+		require.Empty(t, exportRequest.ResourceMetrics[0].ScopeMetrics[0].Metrics)
+	})
+}
+
 func TestSendRequest(t *testing.T) {
 	type testcase struct {
 		name           string
