@@ -18,6 +18,8 @@ import (
 	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/clock"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 func TestExecutor_Handler_MissingTitle(t *testing.T) {
@@ -74,6 +76,27 @@ func TestExecutor_newWorker_UsesExecutorQueue(t *testing.T) {
 
 	require.NotNil(t, w)
 	require.Equal(t, slots, w.querySlots)
+}
+
+func TestExecutor_syncWorkers_SharesExecutorClock(t *testing.T) {
+	clk := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	e := NewExecutor(ExecutorOpts{
+		Clock:       clk,
+		Region:      "eastus",
+		Concurrency: 2,
+		RuleStore:   &fakeRuleStore{rules: []*rules.Rule{{Namespace: "ns", Name: "one", Interval: time.Hour}, {Namespace: "ns", Name: "two", Interval: time.Hour}}},
+		KustoClient: &fakeKustoClient{},
+	})
+	e.syncWorkers(context.Background())
+	require.Len(t, e.workers, 2)
+	for _, w := range e.workers {
+		require.Same(t, clk, w.clock)
+	}
+}
+
+func TestNewExecutor_DefaultsToRealClock(t *testing.T) {
+	e := NewExecutor(ExecutorOpts{})
+	require.IsType(t, clock.RealClock{}, e.clock)
 }
 
 func TestExecutor_Handler_Severity(t *testing.T) {
