@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1418,41 +1420,25 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		hubDatabases = append(hubDatabases, dbSpec.DatabaseName)
 	}
 
-	// Step 6: Generate and execute entity group definitions
-	entityGroupsByDB := generateEntityGroupDefinitions(state.SpokeDBEndpoints, hubDatabases)
-	logger.Infof("ADXCluster %s: updating entity groups for %d databases", cluster.Spec.ClusterName, len(entityGroupsByDB))
-	for db, entityGroups := range entityGroupsByDB {
-		logger.Infof("ADXCluster %s: executing %d entity group statements for database %s", cluster.Spec.ClusterName, len(entityGroups), db)
-		scripts := splitKustoScripts(entityGroups, maxKustoScriptSz)
-		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to execute entity group scripts for db %s: %w", db, err)
-		}
+	// Steps 6-9: apply hub-side changes. A database that is missing on the hub (for
+	// example, discovered from a spoke heartbeat but never provisioned on a
+	// bring-your-own hub cluster) must not abort the whole reconcile, so failures are
+	// collected per-database and surfaced after every step has had a chance to run.
+	hub := federationHubExecutor{
+		databaseExists: func(ctx context.Context, db string) (bool, error) {
+			return databaseExists(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase, db)
+		},
+		ensureTables: func(ctx context.Context, db string, tables map[string]string) error {
+			return ensureHubTables(ctx, client, db, tables)
+		},
+		executeScripts: func(ctx context.Context, db string, scripts [][]string) error {
+			return executeKustoScripts(ctx, client, db, scripts)
+		},
 	}
-
-	// Step 7: Ensure hub tables exist for all tables and views
-	logger.Infof("ADXCluster %s: ensuring hub tables exist for alias functions", cluster.Spec.ClusterName)
-	for db, tableMap := range state.DBTableEndpoints {
-		// Build a map with empty schemas to use OTLP default for all tables
-		tables := make(map[string]string)
-		for table := range tableMap {
-			tables[table] = ""
-		}
-		if err := ensureHubTables(ctx, client, db, tables); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to ensure hub tables for database %s: %w", db, err)
-		}
-	}
-
-	// Step 8: Generate function definitions
-	funcsByDB := generateKustoFunctionDefinitions(state.DBTableEndpoints)
-
-	// Step 9: For each database, split scripts and execute
-	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
-	for db, funcs := range funcsByDB {
-		logger.Infof("ADXCluster %s: executing %d functions for database %s", cluster.Spec.ClusterName, len(funcs), db)
-		scripts := splitKustoScripts(funcs, maxKustoScriptSz)
-		if err := executeKustoScripts(ctx, client, db, scripts); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to execute Kusto scripts for db %s: %w", db, err)
-		}
+	if err := applyFederationHubChanges(ctx, cluster.Spec.ClusterName, state, hubDatabases, hub); err != nil {
+		// Surface the failure so the reconcile is retried, but only after every
+		// database and step has been attempted.
+		return ctrl.Result{}, err
 	}
 
 	logger.Infof("ADXCluster %s: federation reconciliation complete, requeuing in %v", cluster.Spec.ClusterName, requeueLong)
@@ -1788,6 +1774,143 @@ func tableExists(ctx context.Context, client *azkustodata.Client, database, tabl
 	var rec DatabaseExistsRec
 	if err := row.ToStruct(&rec); err != nil {
 		return false, fmt.Errorf("failed to parse table existence: %w", err)
+	}
+	return rec.Count > 0, nil
+}
+
+// maxJoinedFederationErrors caps how many per-database failures are aggregated into
+// the error returned by applyFederationHubChanges. Each failure is logged separately,
+// and controller-runtime re-logs the returned error on every retry.
+const maxJoinedFederationErrors = 10
+
+// federationHubExecutor abstracts the hub-side Kusto operations performed by
+// applyFederationHubChanges so the sequencing and error handling can be tested
+// without a live cluster.
+type federationHubExecutor struct {
+	databaseExists func(ctx context.Context, database string) (bool, error)
+	ensureTables   func(ctx context.Context, database string, tables map[string]string) error
+	executeScripts func(ctx context.Context, database string, scripts [][]string) error
+}
+
+// applyFederationHubChanges performs federation steps 6-9 (entity groups, hub tables
+// and alias functions) against the hub cluster.
+//
+// Hub databases are discovered by unioning the ADXCluster spec with databases seen in
+// spoke heartbeats, so a database may legitimately not exist on the hub (most commonly
+// on a bring-your-own hub cluster, where nothing provisions it). Previously the first
+// such database failed the whole reconcile and the remaining databases and steps never
+// ran. Instead, databases that do not exist are skipped with a warning, per-database
+// failures are collected, and every step is attempted before the aggregated error is
+// returned to trigger a requeue.
+func applyFederationHubChanges(ctx context.Context, clusterName string, state *FederationState, hubDatabases []string, hub federationHubExecutor) error {
+	var errs []error
+	var skipped []string
+
+	// missing caches the databases we have already determined are absent so each is
+	// only probed and logged once across the steps below.
+	missing := make(map[string]bool)
+	exists := func(db string) bool {
+		if present, ok := missing[db]; ok {
+			return !present
+		}
+		ok, err := hub.databaseExists(ctx, db)
+		if err != nil {
+			// Degrade safely: if the existence check itself fails, assume the
+			// database exists and let the operation report the real error.
+			logger.Warnf("ADXCluster %s: failed to check whether hub database %s exists, assuming it does: %v", clusterName, db, err)
+			missing[db] = false
+			return true
+		}
+		missing[db] = !ok
+		if !ok {
+			skipped = append(skipped, db)
+			logger.Warnf("ADXCluster %s: hub database %s does not exist on the hub cluster; skipping entity groups, tables and functions for it. Declare it under spec.databases or provision it on the hub cluster.", clusterName, db)
+		}
+		return ok
+	}
+
+	// Step 6: Generate and execute entity group definitions
+	entityGroupsByDB := generateEntityGroupDefinitions(state.SpokeDBEndpoints, hubDatabases)
+	logger.Infof("ADXCluster %s: updating entity groups for %d databases", clusterName, len(entityGroupsByDB))
+	for _, db := range slices.Sorted(maps.Keys(entityGroupsByDB)) {
+		if !exists(db) {
+			continue
+		}
+		entityGroups := entityGroupsByDB[db]
+		logger.Infof("ADXCluster %s: executing %d entity group statements for database %s", clusterName, len(entityGroups), db)
+		scripts := splitKustoScripts(entityGroups, maxKustoScriptSz)
+		if err := hub.executeScripts(ctx, db, scripts); err != nil {
+			logger.Errorf("ADXCluster %s: failed to execute entity group scripts for database %s, continuing with remaining databases: %v", clusterName, db, err)
+			errs = append(errs, fmt.Errorf("failed to execute entity group scripts for db %s: %w", db, err))
+		}
+	}
+
+	// Step 7: Ensure hub tables exist for all tables and views
+	logger.Infof("ADXCluster %s: ensuring hub tables exist for alias functions", clusterName)
+	for _, db := range slices.Sorted(maps.Keys(state.DBTableEndpoints)) {
+		if !exists(db) {
+			continue
+		}
+		// Build a map with empty schemas to use OTLP default for all tables
+		tables := make(map[string]string)
+		for table := range state.DBTableEndpoints[db] {
+			tables[table] = ""
+		}
+		if err := hub.ensureTables(ctx, db, tables); err != nil {
+			logger.Errorf("ADXCluster %s: failed to ensure hub tables for database %s, continuing with remaining databases: %v", clusterName, db, err)
+			errs = append(errs, fmt.Errorf("failed to ensure hub tables for database %s: %w", db, err))
+		}
+	}
+
+	// Step 8: Generate function definitions
+	funcsByDB := generateKustoFunctionDefinitions(state.DBTableEndpoints)
+
+	// Step 9: For each database, split scripts and execute
+	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", clusterName, len(funcsByDB))
+	for _, db := range slices.Sorted(maps.Keys(funcsByDB)) {
+		if !exists(db) {
+			continue
+		}
+		funcs := funcsByDB[db]
+		logger.Infof("ADXCluster %s: executing %d functions for database %s", clusterName, len(funcs), db)
+		scripts := splitKustoScripts(funcs, maxKustoScriptSz)
+		if err := hub.executeScripts(ctx, db, scripts); err != nil {
+			logger.Errorf("ADXCluster %s: failed to execute Kusto scripts for database %s, continuing with remaining databases: %v", clusterName, db, err)
+			errs = append(errs, fmt.Errorf("failed to execute Kusto scripts for db %s: %w", db, err))
+		}
+	}
+
+	if len(skipped) > 0 {
+		logger.Warnf("ADXCluster %s: skipped %d hub databases that do not exist: %s", clusterName, len(skipped), formatNameList(skipped, 10))
+	}
+
+	// Every failure above is already logged individually, so the returned error is
+	// capped: controller-runtime logs it in full on every backoff interval, and a
+	// fleet-wide hub outage would otherwise emit one entry per database per step.
+	if len(errs) > maxJoinedFederationErrors {
+		remaining := len(errs) - maxJoinedFederationErrors
+		errs = append(errs[:maxJoinedFederationErrors:maxJoinedFederationErrors],
+			fmt.Errorf("+%d more federation errors, see logs", remaining))
+	}
+	return errors.Join(errs...)
+}
+
+// databaseExists reports whether the named database exists on the cluster. The query
+// is issued against queryDatabase, which is expected to exist (the heartbeat database).
+func databaseExists(ctx context.Context, client *azkustodata.Client, queryDatabase, database string) (bool, error) {
+	stmt := kql.New(".show databases | where DatabaseName == ").AddString(database).AddLiteral(" | count")
+	result, err := client.Mgmt(ctx, queryDatabase, stmt)
+	if err != nil {
+		return false, fmt.Errorf("failed to query database existence: %w", err)
+	}
+
+	row, err := getSinglePrimaryRow(result)
+	if err != nil {
+		return false, fmt.Errorf("failed to read database existence result: %w", err)
+	}
+	var rec DatabaseExistsRec
+	if err := row.ToStruct(&rec); err != nil {
+		return false, fmt.Errorf("failed to parse database existence: %w", err)
 	}
 	return rec.Count > 0, nil
 }

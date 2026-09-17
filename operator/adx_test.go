@@ -1172,3 +1172,109 @@ func TestEnsureHubTables(t *testing.T) {
 	// Re-run to confirm it remains idempotent when tables already exist.
 	require.NoError(t, ensureHubTables(ctx, client, database, tables))
 }
+
+func TestApplyFederationHubChanges(t *testing.T) {
+	newState := func() *FederationState {
+		return &FederationState{
+			DBSet: map[string]struct{}{"Good": {}, "Missing": {}},
+			DBTableEndpoints: map[string]map[string][]string{
+				"Good":    {"T1": {"https://spoke1.kusto.net"}},
+				"Missing": {"T2": {"https://spoke1.kusto.net"}},
+			},
+			SpokeDBEndpoints: map[string][]string{
+				"Good":    {"https://spoke1.kusto.net"},
+				"Missing": {"https://spoke1.kusto.net"},
+			},
+		}
+	}
+	hubDatabases := []string{"Good", "Missing"}
+
+	t.Run("nonexistent database is skipped without failing the reconcile", func(t *testing.T) {
+		var scriptDBs, tableDBs []string
+		hub := federationHubExecutor{
+			databaseExists: func(_ context.Context, db string) (bool, error) {
+				return db != "Missing", nil
+			},
+			ensureTables: func(_ context.Context, db string, _ map[string]string) error {
+				tableDBs = append(tableDBs, db)
+				return nil
+			},
+			executeScripts: func(_ context.Context, db string, _ [][]string) error {
+				scriptDBs = append(scriptDBs, db)
+				return nil
+			},
+		}
+
+		err := applyFederationHubChanges(context.Background(), "hub", newState(), hubDatabases, hub)
+		require.NoError(t, err)
+		// Steps 6 and 9 both run for the existing database, step 7 once.
+		require.Equal(t, []string{"Good", "Good"}, scriptDBs)
+		require.Equal(t, []string{"Good"}, tableDBs)
+	})
+
+	t.Run("failing database does not prevent other databases or later steps", func(t *testing.T) {
+		var scriptDBs, tableDBs []string
+		hub := federationHubExecutor{
+			databaseExists: func(_ context.Context, _ string) (bool, error) { return true, nil },
+			ensureTables: func(_ context.Context, db string, _ map[string]string) error {
+				tableDBs = append(tableDBs, db)
+				return nil
+			},
+			executeScripts: func(_ context.Context, db string, _ [][]string) error {
+				scriptDBs = append(scriptDBs, db)
+				if db == "Missing" {
+					return errors.New("BadRequest_EntityNotFound")
+				}
+				return nil
+			},
+		}
+
+		err := applyFederationHubChanges(context.Background(), "hub", newState(), hubDatabases, hub)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "BadRequest_EntityNotFound")
+		// Both databases attempted in both script steps.
+		require.Equal(t, []string{"Good", "Missing", "Good", "Missing"}, scriptDBs)
+		// Step 7 still ran for every database despite step 6 failing.
+		require.Equal(t, []string{"Good", "Missing"}, tableDBs)
+	})
+
+	t.Run("failing existence check degrades to attempting the database", func(t *testing.T) {
+		var tableDBs []string
+		hub := federationHubExecutor{
+			databaseExists: func(_ context.Context, _ string) (bool, error) {
+				return false, errors.New("throttled")
+			},
+			ensureTables: func(_ context.Context, db string, _ map[string]string) error {
+				tableDBs = append(tableDBs, db)
+				return nil
+			},
+			executeScripts: func(_ context.Context, _ string, _ [][]string) error { return nil },
+		}
+
+		err := applyFederationHubChanges(context.Background(), "hub", newState(), hubDatabases, hub)
+		require.NoError(t, err)
+		require.Equal(t, []string{"Good", "Missing"}, tableDBs)
+	})
+
+	t.Run("ensureTables failure does not prevent function step", func(t *testing.T) {
+		var scriptDBs []string
+		hub := federationHubExecutor{
+			databaseExists: func(_ context.Context, _ string) (bool, error) { return true, nil },
+			ensureTables: func(_ context.Context, db string, _ map[string]string) error {
+				if db == "Good" {
+					return errors.New("table boom")
+				}
+				return nil
+			},
+			executeScripts: func(_ context.Context, db string, _ [][]string) error {
+				scriptDBs = append(scriptDBs, db)
+				return nil
+			},
+		}
+
+		err := applyFederationHubChanges(context.Background(), "hub", newState(), hubDatabases, hub)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "table boom")
+		require.Equal(t, []string{"Good", "Missing", "Good", "Missing"}, scriptDBs)
+	})
+}
