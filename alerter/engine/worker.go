@@ -25,11 +25,10 @@ import (
 )
 
 const (
-	maxQueryTime                       = 5 * time.Minute
-	queryErrorNotificationReserve      = 30 * time.Second
-	remoteEntityResolutionMaxAttempts  = 2
-	remoteEntityResolutionRetryDelay   = 5 * time.Second
-	remoteEntityResolutionMinQueryTime = 30 * time.Second
+	maxQueryTime                  = 5 * time.Minute
+	maxRetryAttempts              = 2
+	defaultRetryDelay             = 5 * time.Second
+	queryErrorNotificationTimeout = 30 * time.Second
 
 	evaluationOutcomeSuccess               = metrics.AlertRuleEvaluationOutcomeSuccess
 	evaluationOutcomeSetupError            = metrics.AlertRuleEvaluationOutcomeSetupError
@@ -50,13 +49,12 @@ type worker struct {
 	alertCli    interface {
 		Create(ctx context.Context, endpoint string, alert alert.Alert) error
 	}
-	handlerFn    func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
-	querySlots   chan struct{}
-	ctrlCli      client.Client
-	queryTime    time.Duration
-	retryDelay   time.Duration
-	minRetryTime time.Duration
-	clock        clock.Clock
+	handlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
+	querySlots chan struct{}
+	ctrlCli    client.Client
+	queryTime  time.Duration
+	retryDelay time.Duration
+	clock      clock.Clock
 
 	// criteria/expression evaluation cached at construction
 	matchAllowed bool
@@ -95,18 +93,17 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		workerClock = clock.RealClock{}
 	}
 	w := &worker{
-		rule:         cfg.Rule,
-		region:       cfg.Region,
-		kustoClient:  cfg.KustoClient,
-		alertCli:     cfg.AlertClient,
-		alertAddr:    cfg.AlertAddr,
-		handlerFn:    cfg.HandlerFn,
-		querySlots:   querySlots,
-		ctrlCli:      cfg.CtrlClient,
-		queryTime:    maxQueryTime,
-		retryDelay:   remoteEntityResolutionRetryDelay,
-		minRetryTime: remoteEntityResolutionMinQueryTime,
-		clock:        workerClock,
+		rule:        cfg.Rule,
+		region:      cfg.Region,
+		kustoClient: cfg.KustoClient,
+		alertCli:    cfg.AlertClient,
+		alertAddr:   cfg.AlertAddr,
+		handlerFn:   cfg.HandlerFn,
+		querySlots:  querySlots,
+		ctrlCli:     cfg.CtrlClient,
+		queryTime:   maxQueryTime,
+		retryDelay:  defaultRetryDelay,
+		clock:       workerClock,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
 	w.matchAllowed = allowed
@@ -148,40 +145,27 @@ func (e *worker) Run(ctx context.Context) {
 		timer := e.clock.NewTimer(nextQueryTime.Sub(e.clock.Now()))
 		defer timer.Stop()
 
-		var (
-			retry          *queryRetryState
-			normalSchedule bool
-		)
+		normalSchedule := false
 		for {
 			select {
 			case <-ctx.Done():
-				if retry != nil {
-					e.finishAbortedQuery(retry)
-				}
 				return
 			case <-timer.C():
 				// Once the initial evaluation has completed, keep the normal
 				// schedule anchored to absolute deadlines like time.Ticker does.
-				// A retry temporarily replaces the timer but does not move the
-				// next normal execution.
-				if retry == nil && normalSchedule {
+				// Retry work is synchronous here but does not move the next
+				// normal execution.
+				if normalSchedule {
 					scheduledQueryTime = nextQueryTime
 					nextQueryTime = e.advanceQuerySchedule(nextQueryTime, e.clock.Now())
 				}
 
-				result := e.executeQueryAttempt(ctx, retry, scheduledQueryTime)
+				result := e.executeScheduledQuery(ctx, scheduledQueryTime)
 				if result.aborted {
 					e.finishAbortedQuery(result.retry)
 					return
 				}
-				if result.retryable {
-					retry = result.retry
-					timer.Reset(e.retryDelay)
-					continue
-				}
-
 				e.handleQueryResult(ctx, result)
-				retry = nil
 				if !normalSchedule {
 					// The original implementation created its ticker after the
 					// initial query returned. Anchor the recurring schedule at
@@ -241,18 +225,49 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	e.handleQueryResult(ctx, result)
 }
 
+// executeScheduledQuery runs an evaluation and, when appropriate, its one
+// retry. The evaluation context is deliberately created by the first attempt
+// after it acquires a query slot. It remains alive across the retry delay and
+// the second slot wait, so the query budget is shared by the whole evaluation.
+func (e *worker) executeScheduledQuery(ctx context.Context, scheduledQueryTime time.Time) queryAttemptResult {
+	result := e.executeQueryAttempt(ctx, nil, scheduledQueryTime)
+	if result.aborted || !result.retryable {
+		return result
+	}
+
+	retry := result.retry
+	timer := e.clock.NewTimer(e.retryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return queryAttemptResult{retry: retry, aborted: true}
+	case <-retry.evaluationContext.Done():
+		if ctx.Err() != nil {
+			return queryAttemptResult{retry: retry, aborted: true}
+		}
+		return retriableFailure(retry, retry.evaluationContext.Err())
+	case <-timer.C():
+	}
+
+	return e.executeQueryAttempt(ctx, retry, scheduledQueryTime)
+}
+
 func (e *worker) finishAbortedQuery(retry *queryRetryState) {
 	if retry == nil {
 		return
 	}
 	retry.evaluation.outcome = evaluationOutcomeServiceError
+	if retry.evaluationCancel != nil {
+		retry.evaluationCancel()
+	}
 	retry.evaluation.finish()
 }
 
 type queryRetryState struct {
 	evaluation             *alertRuleEvaluation
 	queryContext           *QueryContext
-	deadline               time.Time
+	evaluationContext      context.Context
+	evaluationCancel       context.CancelFunc
 	attempt                int
 	initialErr             error
 	notificationsThrottled bool
@@ -294,19 +309,33 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		}
 	}
 
-	// Try to acquire a worker slot while still honoring shutdown.
+	// The first slot wait is outside the query budget. A retry's slot wait is
+	// inside the shared evaluation context.
+	slotContext := ctx
+	if retry.evaluationContext != nil {
+		slotContext = retry.evaluationContext
+	}
 	select {
 	case e.querySlots <- struct{}{}:
-	case <-ctx.Done():
-		return queryAttemptResult{retry: retry, aborted: true}
+	case <-slotContext.Done():
+		if ctx.Err() != nil {
+			return queryAttemptResult{retry: retry, aborted: true}
+		}
+		if retry.initialErr != nil {
+			return retriableFailure(retry, slotContext.Err())
+		}
+		return queryAttemptResult{retry: retry, err: slotContext.Err()}
 	}
 
-	// Release the worker slot.
+	// The first query slot has now been acquired, so waiting for it did not
+	// consume the evaluation's query budget.
+	if retry.evaluationContext == nil {
+		retry.evaluationContext, retry.evaluationCancel = context.WithTimeout(ctx, e.queryTime)
+	}
+
+	// Release the worker slot while waiting for a retry and after this query.
 	defer func() { <-e.querySlots }()
 
-	if retry.deadline.IsZero() {
-		retry.deadline = e.retryDeadline(ctx)
-	}
 	if retry.queryContext == nil {
 		var err error
 		retry.queryContext, err = NewQueryContext(e.rule, retry.evaluation.executionTime, e.region)
@@ -314,10 +343,14 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 			return queryAttemptResult{retry: retry, err: err, setupError: true}
 		}
 	}
+	if err := retry.evaluationContext.Err(); err != nil {
+		if ctx.Err() != nil {
+			return queryAttemptResult{retry: retry, aborted: true}
+		}
+		return queryAttemptResult{retry: retry, err: err}
+	}
 
-	queryCtx, cancel := e.queryAttemptContext(ctx, retry.deadline)
-	defer cancel()
-
+	queryCtx := retry.evaluationContext
 	logger.Infof("Executing %s/%s on %s/%s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
 
 	// Create a wrapper handler that tracks alerts generated and retains rows
@@ -348,53 +381,42 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		return queryAttemptResult{retry: retry, aborted: true}
 	}
 	if err == nil {
+		if evaluationErr := retry.evaluationContext.Err(); evaluationErr != nil {
+			return queryAttemptResult{retry: retry, err: evaluationErr}
+		}
 		return queryAttemptResult{retry: retry}
 	}
 
-	if isTransientRemoteEntityResolutionError(err) {
+	if isTransientFailedRequest(err) {
 		if retry.initialErr == nil {
 			retry.initialErr = err
 		}
-		if retry.attempt < remoteEntityResolutionMaxAttempts && e.hasRetryBudget(retry.deadline) {
+		if evaluationErr := retry.evaluationContext.Err(); evaluationErr != nil {
+			return retriableFailure(retry, evaluationErr)
+		}
+		if retry.attempt < maxRetryAttempts {
 			retry.attempt++
-			logger.Warnf("Query %s/%s failed with a transient remote entity resolution error; scheduling retry attempt %d/%d after %s", e.rule.Namespace, e.rule.Name, retry.attempt, remoteEntityResolutionMaxAttempts, e.retryDelay)
+			logger.Warnf("Query %s/%s failed with a transient request error; scheduling retry attempt %d/%d after %s", e.rule.Namespace, e.rule.Name, retry.attempt, maxRetryAttempts, e.retryDelay)
 			return queryAttemptResult{retry: retry, retryable: true}
 		}
-		return queryAttemptResult{
-			retry: retry,
-			err: &remoteEntityResolutionRetryError{
-				initialErr: retry.initialErr,
-				retryErr:   err,
-			},
-		}
+		return retriableFailure(retry, err)
+	}
+
+	if evaluationErr := retry.evaluationContext.Err(); evaluationErr != nil && retry.initialErr != nil {
+		return retriableFailure(retry, evaluationErr)
 	}
 
 	return queryAttemptResult{retry: retry, err: err}
 }
 
-func (e *worker) retryDeadline(ctx context.Context) time.Time {
-	now := e.clock.Now()
-	deadline := now.Add(e.queryTime)
-	if parentDeadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(parentDeadline); remaining < e.queryTime {
-			return now.Add(remaining)
-		}
+func retriableFailure(retry *queryRetryState, err error) queryAttemptResult {
+	return queryAttemptResult{
+		retry: retry,
+		err: &retriableError{
+			initialErr: retry.initialErr,
+			retryErr:   err,
+		},
 	}
-	return deadline
-}
-
-func (e *worker) queryAttemptContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
-	remaining := deadline.Sub(e.clock.Now())
-	if parentDeadline, ok := ctx.Deadline(); ok {
-		if parentRemaining := time.Until(parentDeadline); parentRemaining < remaining {
-			remaining = parentRemaining
-		}
-	}
-	return context.WithTimeout(ctx, remaining-queryErrorNotificationReserve)
-}
-
-func (e *worker) hasRetryBudget(deadline time.Time) bool {
-	return deadline.Sub(e.clock.Now()) >= e.retryDelay+e.minRetryTime+queryErrorNotificationReserve
 }
 
 func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResult) {
@@ -403,6 +425,11 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 	}
 	evaluation := result.retry.evaluation
 	defer evaluation.finish()
+	defer func() {
+		if result.retry.evaluationCancel != nil {
+			result.retry.evaluationCancel()
+		}
+	}()
 
 	err := result.err
 	if result.setupError {
@@ -457,7 +484,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		// This failed because the query failed.
 		logger.Errorf("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
 
-		retryExhausted := isRemoteEntityResolutionRetryExhausted(err)
+		retryExhausted := isRetriableError(err)
 		if !retryExhausted && !isUserError(err) {
 			evaluation.outcome = evaluationOutcomeServiceError
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
@@ -474,7 +501,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		// Store the original query error before it gets overwritten
 		originalQueryErr := err
 
-		notificationCtx, cancel := e.notificationContext(ctx, result.retry.deadline)
+		notificationCtx, cancel := e.notificationContext(ctx)
 		defer cancel()
 
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", originalQueryErr.Error()), result.retry.queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
@@ -505,7 +532,7 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		}
 		if retryExhausted {
-			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed after remote entity resolution retry: %v", originalQueryErr))
+			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed after retry: %v", originalQueryErr))
 		} else {
 			// Query failed due to user error, so return the query to healthy.
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
@@ -515,20 +542,11 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 	}
 }
 
-func (e *worker) notificationContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
-	remaining := queryErrorNotificationReserve
-	if retryRemaining := deadline.Sub(e.clock.Now()); retryRemaining < remaining {
-		remaining = retryRemaining
-	}
-	if parentDeadline, ok := ctx.Deadline(); ok {
-		if parentRemaining := time.Until(parentDeadline); parentRemaining < remaining {
-			remaining = parentRemaining
-		}
-	}
-	return context.WithTimeout(ctx, remaining)
+func (e *worker) notificationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, queryErrorNotificationTimeout)
 }
 
-func isTransientRemoteEntityResolutionError(err error) bool {
+func isTransientFailedRequest(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -538,35 +556,58 @@ func isTransientRemoteEntityResolutionError(err error) bool {
 		return false
 	}
 
+	if kerr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	if isTransientRemoteSchemaCalloutBlockedError(kerr.UnmarshalREST()) {
+		return true
+	}
+
 	lowerErr := strings.ToLower(kerr.Error())
-	if kerr.StatusCode != http.StatusBadRequest ||
-		!strings.Contains(lowerErr, "sem0056") ||
-		!strings.Contains(lowerErr, "resolving remote entities") ||
-		!strings.Contains(lowerErr, "failed to resolve name or pattern") {
+	if strings.Contains(lowerErr, "sem0056") &&
+		strings.Contains(lowerErr, "resolving remote entities") &&
+		strings.Contains(lowerErr, "failed to resolve name or pattern") {
+		return !strings.Contains(lowerErr, "obo token is required for cross-cluster communication") &&
+			!strings.Contains(lowerErr, "is not authorized to") &&
+			!strings.Contains(lowerErr, "access denied") &&
+			!strings.Contains(lowerErr, "is not allowed by the callout policy")
+	}
+
+	return false
+}
+
+func isTransientRemoteSchemaCalloutBlockedError(restError map[string]interface{}) bool {
+	const transientMessage = "host failed loopback link local check: 'uri.idnhost cannot be resolved into an ip address: no such host is known'"
+
+	errorDetails, ok := restError["error"].(map[string]interface{})
+	if !ok {
 		return false
 	}
 
-	return !strings.Contains(lowerErr, "obo token is required for cross-cluster communication") &&
-		!strings.Contains(lowerErr, "is not authorized to") &&
-		!strings.Contains(lowerErr, "access denied") &&
-		!strings.Contains(lowerErr, "is not allowed by the callout policy")
+	errorType, _ := errorDetails["@type"].(string)
+	if errorType != "Kusto.DataNode.Exceptions.RemoteSchemaCalloutBlockedException" {
+		return false
+	}
+
+	message, _ := errorDetails["@message"].(string)
+	return strings.Contains(strings.ToLower(message), transientMessage)
 }
 
-type remoteEntityResolutionRetryError struct {
+type retriableError struct {
 	initialErr error
 	retryErr   error
 }
 
-func (e *remoteEntityResolutionRetryError) Error() string {
-	return fmt.Sprintf("remote entity resolution retry failed: initial error: %v; retry error: %v", e.initialErr, e.retryErr)
+func (e *retriableError) Error() string {
+	return fmt.Sprintf("query retry failed: initial error: %v; retry error: %v", e.initialErr, e.retryErr)
 }
 
-func (e *remoteEntityResolutionRetryError) Unwrap() error {
+func (e *retriableError) Unwrap() error {
 	return e.retryErr
 }
 
-func isRemoteEntityResolutionRetryExhausted(err error) bool {
-	var retryErr *remoteEntityResolutionRetryError
+func isRetriableError(err error) bool {
+	var retryErr *retriableError
 	return errors.As(err, &retryErr)
 }
 
