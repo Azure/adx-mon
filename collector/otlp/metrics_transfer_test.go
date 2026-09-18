@@ -13,6 +13,7 @@ import (
 	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	metricsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/metrics/v1"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
 	"github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
@@ -215,6 +216,69 @@ func TestAddSeriesAndFlushIfNecessarySortsSyntheticLabels(t *testing.T) {
 	require.NoError(t, writer.addSeriesAndFlushIfNecessary(context.Background(), request, series))
 	require.True(t, prompb.IsSorted(request.Timeseries[0].Labels))
 }
+
+func TestOltpMetricWriterFlushesWithCommonLabels(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		maxBatchSize int
+	}{
+		{name: "full batch", maxBatchSize: 1},
+		{name: "remainder", maxBatchSize: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &capturingRemoteWriteClient{}
+			writer := NewOltpMetricWriter(OltpMetricWriterOpts{
+				RequestTransformer: &transform.RequestTransformer{AddLabels: map[string]string{
+					"Environment": "prod",
+					"Host":        "collector-1",
+				}},
+				MaxBatchSize:  tt.maxBatchSize,
+				Clients:       []remote.RemoteWriteClient{client},
+				HealthChecker: metricHealthChecker{},
+			})
+
+			require.NoError(t, writer.Write(context.Background(), newServiceRequest()))
+			require.Equal(t, 1, client.calls)
+			require.Equal(t, map[string]string{
+				"Environment": "prod",
+				"Host":        "collector-1",
+			}, client.commonLabels)
+			require.Equal(t, []map[string]string{{
+				"__name__":    "test",
+				"Environment": "prod",
+				"Host":        "collector-1",
+			}}, client.seriesLabels)
+		})
+	}
+}
+
+type metricHealthChecker struct{}
+
+func (metricHealthChecker) IsHealthy() bool { return true }
+
+type capturingRemoteWriteClient struct {
+	calls        int
+	commonLabels map[string]string
+	seriesLabels []map[string]string
+}
+
+func (c *capturingRemoteWriteClient) Write(_ context.Context, wr *prompb.WriteRequest) error {
+	c.calls++
+	c.commonLabels = make(map[string]string, len(wr.CommonLabels))
+	for _, label := range wr.CommonLabels {
+		c.commonLabels[string(label.Name)] = string(label.Value)
+	}
+	for _, series := range wr.Timeseries {
+		labels := make(map[string]string)
+		for label := range wr.Labels(series) {
+			labels[string(label.Name)] = string(label.Value)
+		}
+		c.seriesLabels = append(c.seriesLabels, labels)
+	}
+	return nil
+}
+
+func (c *capturingRemoteWriteClient) CloseIdleConnections() {}
 
 type ErrMetricWriter struct {
 	Err error

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/metadata"
-	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -241,15 +240,6 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 				continue
 			}
 
-			name := prompb.MetricName(ts)
-			if s.requestTransformer.ShouldDropUntransformedMetric(ts, name) {
-				prompb.TimeSeriesPool.Put(ts)
-				if metrics.DebugMetricsEnabled {
-					metrics.MetricsDroppedTotal.WithLabelValues(string(name)).Add(1)
-				}
-				continue
-			}
-
 			for i, s := range ts.Samples {
 				if s.Timestamp == 0 {
 					s.Timestamp = scrapeTime
@@ -271,7 +261,6 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 
 			prompb.Sort(ts.Labels)
 
-			ts = s.requestTransformer.TransformTimeSeries(ts)
 			wr.Timeseries = append(wr.Timeseries, ts)
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
@@ -286,28 +275,37 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 		wr = s.flushBatchIfNecessary(ctx, wr)
 	}
 
-	if err := s.sendBatch(ctx, wr); err != nil {
-		logger.Error(err.Error())
-	}
-	wr.Timeseries = wr.Timeseries[:0]
+	s.flushBatch(ctx, wr)
 }
 
 func (s *Scraper) flushBatchIfNecessary(ctx context.Context, wr *prompb.WriteRequest) *prompb.WriteRequest {
-	filtered := wr
-	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
-		filtered = s.requestTransformer.TransformWriteRequest(wr)
+	if len(wr.Timeseries) < s.opts.MaxBatchSize {
+		return wr
 	}
 
-	if len(filtered.Timeseries) >= s.opts.MaxBatchSize {
+	return s.flushBatch(ctx, wr)
+}
+
+func (s *Scraper) flushBatch(ctx context.Context, wr *prompb.WriteRequest) *prompb.WriteRequest {
+	if len(wr.Timeseries) == 0 {
+		return wr
+	}
+
+	original := append([]*prompb.TimeSeries(nil), wr.Timeseries...)
+	filtered := s.requestTransformer.TransformWriteRequestWithCommonLabels(wr)
+	if len(filtered.Timeseries) > 0 {
 		if err := s.sendBatch(ctx, filtered); err != nil {
 			logger.Error(err.Error())
 		}
-		for i := range filtered.Timeseries {
-			ts := filtered.Timeseries[i]
-			prompb.TimeSeriesPool.Put(ts)
-		}
-		filtered.Timeseries = filtered.Timeseries[:0]
 	}
+
+	for _, ts := range original {
+		prompb.TimeSeriesPool.Put(ts)
+	}
+	clear(filtered.Timeseries[:cap(filtered.Timeseries)])
+	filtered.Timeseries = filtered.Timeseries[:0]
+	filtered.CommonLabels = nil
+	filtered.LabelFilter = nil
 	return filtered
 }
 
