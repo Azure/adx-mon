@@ -153,8 +153,8 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 	}
 
 	// Flush any remaining points.
-	if err := t.sendBatch(ctx, wr); err != nil {
-		return fmt.Errorf("OLTP Write flush failure: %w", err)
+	if err := t.flushBatch(ctx, wr); err != nil {
+		return fmt.Errorf("OTLP Write flush failure: %w", err)
 	}
 
 	if rejectedRecordsExpHist > 0 {
@@ -168,20 +168,33 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 }
 
 func (t *OltpMetricWriter) addSeriesAndFlushIfNecessary(ctx context.Context, wr *prompb.WriteRequest, series *prompb.TimeSeries) error {
-	series = t.requestTransformer.TransformTimeSeries(series)
+	prompb.Sort(series.Labels)
 	wr.Timeseries = append(wr.Timeseries, series)
 	if len(wr.Timeseries) >= t.maxBatchSize {
-		if err := t.sendBatch(ctx, wr); err != nil {
+		if err := t.flushBatch(ctx, wr); err != nil {
 			return fmt.Errorf("addSeriesAndFlushIfNecessary flush failure: %w", err)
 		}
-		for _, ts := range wr.Timeseries {
-			prompb.TimeSeriesPool.Put(ts)
-		}
-
-		wr.Timeseries = wr.Timeseries[:0]
 	}
 
 	return nil
+}
+
+func (t *OltpMetricWriter) flushBatch(ctx context.Context, wr *prompb.WriteRequest) error {
+	if len(wr.Timeseries) == 0 {
+		return nil
+	}
+
+	original := append([]*prompb.TimeSeries(nil), wr.Timeseries...)
+	filtered := t.requestTransformer.TransformWriteRequestWithCommonLabels(wr)
+	err := t.sendBatch(ctx, filtered)
+	for _, ts := range original {
+		prompb.TimeSeriesPool.Put(ts)
+	}
+	clear(filtered.Timeseries[:cap(filtered.Timeseries)])
+	filtered.Timeseries = filtered.Timeseries[:0]
+	filtered.CommonLabels = nil
+	filtered.LabelFilter = nil
+	return err
 }
 
 func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error {
@@ -216,7 +229,7 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 
 	start := time.Now()
 	defer func() {
-		logger.Infof("OLTP Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(t.remoteClients), time.Since(start))
+		logger.Infof("OTLP Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(t.remoteClients), time.Since(start))
 	}()
 
 	err := remote.WriteRequest(ctx, t.remoteClients, wr)
