@@ -150,6 +150,68 @@ func TestWorker_StatusUpdateIncludesLatestEvaluationDetails(t *testing.T) {
 	require.False(t, updated.Status.LastAlertTime.IsZero())
 }
 
+func TestWorker_OverdueExecutionPersistsCurrentWindow(t *testing.T) {
+	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	interval := 5 * time.Minute
+	lastQueryTime := metav1.NewTime(base.Add(-time.Hour))
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, alertrulev1.AddToScheme(scheme))
+	alertRule := &alertrulev1.AlertRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test-namespace", Name: "overdue-rule"},
+		Spec: alertrulev1.AlertRuleSpec{
+			Database:    "TestDB",
+			Interval:    metav1.Duration{Duration: interval},
+			Query:       "Table | take 1",
+			Destination: "destination",
+		},
+		Status: alertrulev1.AlertRuleStatus{
+			LastQueryTime: lastQueryTime,
+		},
+	}
+	ctrlCli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&alertrulev1.AlertRule{}).
+		WithObjects(alertRule).
+		Build()
+
+	queries := make(chan *QueryContext, 1)
+	fakeClock := clocktesting.NewFakeClock(base)
+	w := NewWorker(&WorkerConfig{
+		Rule: &rules.Rule{
+			Namespace:     alertRule.Namespace,
+			Name:          alertRule.Name,
+			Database:      "TestDB",
+			Interval:      interval,
+			LastQueryTime: lastQueryTime.Time,
+		},
+		Clock:      fakeClock,
+		CtrlClient: ctrlCli,
+		KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queries <- qc
+			return nil, 0
+		}},
+		AlertClient: &fakeAlerter{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+	require.Equal(t, base, waitForQuery(t, queries).EndTime)
+
+	require.Eventually(t, func() bool {
+		updated := &alertrulev1.AlertRule{}
+		if err := ctrlCli.Get(context.Background(), types.NamespacedName{Namespace: alertRule.Namespace, Name: alertRule.Name}, updated); err != nil {
+			return false
+		}
+		return updated.Status.LastQueryTime.Time.Equal(base)
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	w.Close()
+}
+
 func TestWorker_ThrottledStatusIncludesPartialAlerts(t *testing.T) {
 	// Alerts generated before throttling must remain visible in AlertRule status.
 	scheme := runtime.NewScheme()
