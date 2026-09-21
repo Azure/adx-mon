@@ -685,7 +685,7 @@ func TestWorker_Run_RetryExhaustionKeepsQueryHealthUnhealthyWhenAlertFails(t *te
 	require.Equal(t, QueryHealthUnhealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
 }
 
-func TestWorker_ExecuteQueryAttempt_UsesScheduledWindowAndStartsDeadlineAfterSlot(t *testing.T) {
+func TestWorker_ExecuteQueryAttempt_UsesSlotAcquisitionWindowAndStartsDeadlineAfterSlot(t *testing.T) {
 	queryCalled := make(chan struct{}, 1)
 	var queryContext *QueryContext
 	var queryDeadline time.Time
@@ -701,33 +701,24 @@ func TestWorker_ExecuteQueryAttempt_UsesScheduledWindowAndStartsDeadlineAfterSlo
 	interval := 5 * time.Minute
 	rule := &rules.Rule{Namespace: "namespace", Name: "scheduled-window", Interval: interval}
 	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	nowCalls := make(chan time.Time, 4)
-	workerClock := &notifyingFakeClock{FakeClock: fakeClock, nowCalls: nowCalls}
 	w := NewWorker(&WorkerConfig{
 		Rule:                 rule,
 		Region:               "eastus",
 		KustoClient:          kcli,
 		MaxConcurrentQueries: 1,
 		AlertClient:          &fakeAlerter{},
-		Clock:                workerClock,
+		Clock:                fakeClock,
 	})
 	w.queryTime = 30*time.Second + 500*time.Millisecond
 	w.querySlots <- struct{}{}
 
-	scheduledEnd := fakeClock.Now().Add(-time.Minute)
 	done := make(chan queryAttemptResult, 1)
 	go func() {
-		done <- w.executeQueryAttempt(context.Background(), nil, scheduledEnd)
+		done <- w.executeQueryAttempt(context.Background(), nil)
 	}()
 
-	// Once evaluation construction has occurred, the full slot guarantees the
-	// attempt cannot create its budget until the test releases the slot.
-	select {
-	case <-nowCalls:
-	case <-time.After(time.Second):
-		t.Fatal("attempt did not reach the query-slot wait")
-	}
 	fakeClock.Step(time.Hour)
+	expectedEnd := fakeClock.Now()
 	budgetStartedAfter := time.Now()
 	<-w.querySlots
 
@@ -738,8 +729,10 @@ func TestWorker_ExecuteQueryAttempt_UsesScheduledWindowAndStartsDeadlineAfterSlo
 	}
 	result := <-done
 	require.NoError(t, result.err)
-	require.True(t, queryContext.EndTime.Equal(scheduledEnd))
-	require.True(t, queryContext.StartTime.Equal(scheduledEnd.Add(-interval)))
+	require.Equal(t, expectedEnd, queryContext.EndTime)
+	require.Equal(t, expectedEnd.Add(-interval), queryContext.StartTime)
+	require.Equal(t, expectedEnd, result.retry.evaluation.executionTime)
+	require.Zero(t, result.retry.evaluation.elapsed(), "query-slot wait should not count toward evaluation duration")
 	deadline, ok := result.retry.evaluationContext.Deadline()
 	require.True(t, ok)
 	require.Equal(t, deadline, queryDeadline)
@@ -773,7 +766,7 @@ func TestWorker_ExecuteScheduledQuery_TimeoutDuringRetryReportsExhaustion(t *tes
 	w.queryTime = 20 * time.Millisecond
 	w.retryDelay = time.Hour
 
-	result := w.executeScheduledQuery(context.Background(), time.Time{})
+	result := w.executeScheduledQuery(context.Background())
 	require.ErrorIs(t, result.err, context.DeadlineExceeded)
 	require.True(t, isRetriableError(result.err))
 	require.Equal(t, 1, queryCalls, "the retry should not start after the shared budget expires")
@@ -896,17 +889,6 @@ func TestNewWorker_DefaultsToRealClock(t *testing.T) {
 	require.IsType(t, clock.RealClock{}, w.clock)
 }
 
-type notifyingFakeClock struct {
-	*clocktesting.FakeClock
-	nowCalls chan<- time.Time
-}
-
-func (c *notifyingFakeClock) Now() time.Time {
-	now := c.FakeClock.Now()
-	c.nowCalls <- now
-	return now
-}
-
 func waitForQuery(t *testing.T, queries <-chan *QueryContext) *QueryContext {
 	t.Helper()
 	select {
@@ -993,9 +975,44 @@ func TestWorker_Run_ScheduledFirstExecutionBoundary(t *testing.T) {
 		cancel()
 		w.Close()
 	})
+
+	t.Run("overdue execution uses current window", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(base)
+		queries := make(chan *QueryContext, 1)
+		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "overdue-first", Interval: time.Hour, LastQueryTime: base.Add(-2 * time.Hour)}, Clock: clk,
+			KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+				queries <- qc
+				return nil, 0
+			}}, AlertClient: &fakeAlerter{}})
+		ctx, cancel := context.WithCancel(context.Background())
+		w.Run(ctx)
+		waitForWorkerTimer(t, clk)
+		clk.Step(0)
+		require.Equal(t, base, waitForQuery(t, queries).EndTime)
+		cancel()
+		w.Close()
+	})
+
+	t.Run("late execution preserves existing cadence below one interval", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(base)
+		queries := make(chan *QueryContext, 2)
+		w := newScheduledWorker(clk, queries)
+		ctx, cancel := context.WithCancel(context.Background())
+		w.Run(ctx)
+		waitForWorkerTimer(t, clk)
+		clk.Step(2*time.Hour - time.Nanosecond)
+		require.Equal(t, base.Add(2*time.Hour-time.Nanosecond), waitForQuery(t, queries).EndTime)
+
+		waitForWorkerTimer(t, clk)
+		require.Empty(t, queries)
+		clk.Step(time.Nanosecond)
+		require.Equal(t, base.Add(2*time.Hour), waitForQuery(t, queries).EndTime)
+		cancel()
+		w.Close()
+	})
 }
 
-func TestWorker_Run_InitialAndRecurringScheduleUsesFixedWindows(t *testing.T) {
+func TestWorker_Run_InitialAndRecurringScheduleUsesCurrentWindows(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(base)
 	interval := time.Hour
@@ -1028,7 +1045,7 @@ func TestWorker_Run_InitialAndRecurringScheduleUsesFixedWindows(t *testing.T) {
 	w.Close()
 }
 
-func TestWorker_Run_InitialRetryDelaysFirstRecurringSchedule(t *testing.T) {
+func TestWorker_Run_InitialRetryDoesNotDelayFirstRecurringSchedule(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	clk := clocktesting.NewFakeClock(base)
 	interval := time.Hour
@@ -1067,43 +1084,71 @@ func TestWorker_Run_InitialRetryDelaysFirstRecurringSchedule(t *testing.T) {
 	require.Equal(t, base.Add(-interval), retry.StartTime)
 
 	waitForWorkerTimer(t, clk)
-	clk.Step(interval - time.Nanosecond)
-	require.Empty(t, queries, "first recurring query ran before a full interval elapsed after the retry")
+	clk.Step(interval - defaultRetryDelay - time.Nanosecond)
+	require.Empty(t, queries, "first recurring query ran before a full interval elapsed after the initial window")
 	clk.Step(time.Nanosecond)
 	recurring := waitForQuery(t, queries)
-	expectedEnd := base.Add(defaultRetryDelay + interval)
+	expectedEnd := base.Add(interval)
 	require.Equal(t, expectedEnd, recurring.EndTime)
 	require.Equal(t, expectedEnd.Add(-interval), recurring.StartTime)
 
 	require.Equal(t, 3, queryCalls)
 }
 
-func TestWorker_Run_RecurringScheduleSkipsMissedDeadlines(t *testing.T) {
+func TestWorker_Run_RecurringScheduleResetBoundary(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	clk := clocktesting.NewFakeClock(base)
-	queries := make(chan *QueryContext, 2)
-	w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "missed", Interval: time.Hour}, Clock: clk,
-		KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
-			queries <- qc
-			return nil, 0
-		}}, AlertClient: &fakeAlerter{}})
-	ctx, cancel := context.WithCancel(context.Background())
-	w.Run(ctx)
-	waitForWorkerTimer(t, clk)
-	clk.Step(0)
-	waitForQuery(t, queries)
-	waitForWorkerTimer(t, clk)
-	clk.Step(3*time.Hour + time.Nanosecond)
-	second := waitForQuery(t, queries)
-	// One pending evaluation is delivered for the first missed deadline; the
-	// worker's following timer is advanced past the backlog.
-	require.Equal(t, base.Add(time.Hour), second.EndTime)
-	waitForWorkerTimer(t, clk)
-	require.Empty(t, queries, "missed deadlines should not accumulate a query backlog")
-	clk.Step(time.Hour - time.Nanosecond)
-	require.Equal(t, base.Add(4*time.Hour), waitForQuery(t, queries).EndTime)
-	cancel()
-	w.Close()
+	interval := time.Hour
+	newWorker := func(clk *clocktesting.FakeClock, queries chan<- *QueryContext) *worker {
+		return NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "schedule-reset", Interval: interval}, Clock: clk,
+			KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+				queries <- qc
+				return nil, 0
+			}}, AlertClient: &fakeAlerter{}})
+	}
+
+	t.Run("preserves cadence when less than one interval late", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(base)
+		queries := make(chan *QueryContext, 3)
+		w := newWorker(clk, queries)
+		ctx, cancel := context.WithCancel(context.Background())
+		w.Run(ctx)
+		waitForWorkerTimer(t, clk)
+		clk.Step(0)
+		require.Equal(t, base, waitForQuery(t, queries).EndTime)
+
+		waitForWorkerTimer(t, clk)
+		clk.Step(2*interval - time.Nanosecond)
+		require.Equal(t, base.Add(2*interval-time.Nanosecond), waitForQuery(t, queries).EndTime)
+		waitForWorkerTimer(t, clk)
+		require.Empty(t, queries)
+		clk.Step(time.Nanosecond)
+		require.Equal(t, base.Add(2*interval), waitForQuery(t, queries).EndTime)
+		cancel()
+		w.Close()
+	})
+
+	t.Run("resets cadence when one interval late", func(t *testing.T) {
+		clk := clocktesting.NewFakeClock(base)
+		queries := make(chan *QueryContext, 3)
+		w := newWorker(clk, queries)
+		ctx, cancel := context.WithCancel(context.Background())
+		w.Run(ctx)
+		waitForWorkerTimer(t, clk)
+		clk.Step(0)
+		require.Equal(t, base, waitForQuery(t, queries).EndTime)
+
+		waitForWorkerTimer(t, clk)
+		clk.Step(2 * interval)
+		require.Equal(t, base.Add(2*interval), waitForQuery(t, queries).EndTime)
+		waitForWorkerTimer(t, clk)
+		require.Empty(t, queries, "reset should not leave an immediately pending evaluation")
+		clk.Step(interval - time.Nanosecond)
+		require.Empty(t, queries)
+		clk.Step(time.Nanosecond)
+		require.Equal(t, base.Add(3*interval), waitForQuery(t, queries).EndTime)
+		cancel()
+		w.Close()
+	})
 }
 
 func TestWorker_Run_RetryDoesNotMoveNormalSchedule(t *testing.T) {
@@ -1592,14 +1637,19 @@ func TestAdvanceQuerySchedule(t *testing.T) {
 	})
 
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	t.Run("advances the next deadline by one interval", func(t *testing.T) {
-		next := now
-		require.Equal(t, now.Add(interval), w.advanceQuerySchedule(next, now))
+	t.Run("preserves cadence below one interval of lateness", func(t *testing.T) {
+		executionTime := now.Add(interval - time.Nanosecond)
+		require.Equal(t, now.Add(interval), w.advanceQuerySchedule(now, executionTime))
 	})
 
-	t.Run("skips additional missed deadlines", func(t *testing.T) {
-		next := now.Add(-2 * interval)
-		require.Equal(t, now.Add(interval), w.advanceQuerySchedule(next, now))
+	t.Run("resets cadence at one interval of lateness", func(t *testing.T) {
+		executionTime := now.Add(interval)
+		require.Equal(t, executionTime.Add(interval), w.advanceQuerySchedule(now, executionTime))
+	})
+
+	t.Run("resets cadence beyond one interval of lateness", func(t *testing.T) {
+		executionTime := now.Add(3*interval + time.Second)
+		require.Equal(t, executionTime.Add(interval), w.advanceQuerySchedule(now, executionTime))
 	})
 }
 

@@ -129,15 +129,8 @@ func (e *worker) Run(ctx context.Context) {
 	go func() {
 		defer e.wg.Done()
 
-		// Calculate the next execution time based on last execution
+		// Calculate the next execution time based on last execution.
 		nextQueryTime := e.calculateNextQueryTime()
-		scheduledQueryTime := nextQueryTime
-		if e.rule.LastQueryTime.IsZero() {
-			// calculateNextQueryTime returns a slightly-past timestamp only to
-			// trigger immediate execution. Use the actual desired execution
-			// time as the end of the first query window.
-			scheduledQueryTime = e.clock.Now()
-		}
 
 		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
 			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
@@ -145,35 +138,32 @@ func (e *worker) Run(ctx context.Context) {
 		timer := e.clock.NewTimer(nextQueryTime.Sub(e.clock.Now()))
 		defer timer.Stop()
 
-		normalSchedule := false
+		establishingSchedule := e.rule.LastQueryTime.IsZero()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-timer.C():
-				// Once the initial evaluation has completed, keep the normal
-				// schedule anchored to absolute deadlines like time.Ticker does.
-				// Retry work is synchronous here but does not move the next
-				// normal execution.
-				if normalSchedule {
-					scheduledQueryTime = nextQueryTime
-					nextQueryTime = e.advanceQuerySchedule(nextQueryTime, e.clock.Now())
-				}
-
-				result := e.executeScheduledQuery(ctx, scheduledQueryTime)
+				scheduledQueryTime := nextQueryTime
+				result := e.executeScheduledQuery(ctx)
 				if result.aborted {
 					e.finishAbortedQuery(result.retry)
 					return
 				}
 				e.handleQueryResult(ctx, result)
-				if !normalSchedule {
-					// The original implementation created its ticker after the
-					// initial query returned. Anchor the recurring schedule at
-					// the end of that initial evaluation, including any retry.
+
+				if result.retry == nil {
+					// No query ran, so use the current time to keep a skipped rule
+					// from accumulating overdue timer events.
 					nextQueryTime = e.clock.Now().Add(e.rule.Interval)
-					scheduledQueryTime = nextQueryTime
-					normalSchedule = true
+				} else if establishingSchedule {
+					// A rule without persisted scheduling state establishes its
+					// cadence from the first query window it actually evaluates.
+					nextQueryTime = result.retry.evaluation.executionTime.Add(e.rule.Interval)
+				} else {
+					nextQueryTime = e.advanceQuerySchedule(scheduledQueryTime, result.retry.evaluation.executionTime)
 				}
+				establishingSchedule = false
 				timer.Reset(nextQueryTime.Sub(e.clock.Now()))
 			}
 		}
@@ -195,20 +185,18 @@ func (e *worker) calculateNextQueryTime() time.Time {
 	return nextQueryTime
 }
 
-// advanceQuerySchedule advances the normal schedule by one interval and skips any
-// additional deadlines missed while the worker was busy. This mirrors a
-// time.Ticker's behavior of delivering at most one pending tick rather than
-// accumulating a backlog.
-func (e *worker) advanceQuerySchedule(next time.Time, now time.Time) time.Time {
-	next = next.Add(e.rule.Interval)
-	for !next.After(now) {
-		next = next.Add(e.rule.Interval)
+// advanceQuerySchedule preserves the established cadence for delays shorter
+// than one interval. Once a query starts at least one full interval late, it
+// resets the cadence from the query window it actually evaluates.
+func (e *worker) advanceQuerySchedule(scheduledTime time.Time, executionTime time.Time) time.Time {
+	if !executionTime.Before(scheduledTime.Add(e.rule.Interval)) {
+		return executionTime.Add(e.rule.Interval)
 	}
-	return next
+	return scheduledTime.Add(e.rule.Interval)
 }
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
-	result := e.executeQueryAttempt(ctx, nil, time.Time{})
+	result := e.executeQueryAttempt(ctx, nil)
 	if result.aborted {
 		e.finishAbortedQuery(result.retry)
 		return
@@ -229,8 +217,8 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 // retry. The evaluation context is deliberately created by the first attempt
 // after it acquires a query slot. It remains alive across the retry delay and
 // the second slot wait, so the query budget is shared by the whole evaluation.
-func (e *worker) executeScheduledQuery(ctx context.Context, scheduledQueryTime time.Time) queryAttemptResult {
-	result := e.executeQueryAttempt(ctx, nil, scheduledQueryTime)
+func (e *worker) executeScheduledQuery(ctx context.Context) queryAttemptResult {
+	result := e.executeQueryAttempt(ctx, nil)
 	if result.aborted || !result.retryable {
 		return result
 	}
@@ -249,7 +237,7 @@ func (e *worker) executeScheduledQuery(ctx context.Context, scheduledQueryTime t
 	case <-timer.C():
 	}
 
-	return e.executeQueryAttempt(ctx, retry, scheduledQueryTime)
+	return e.executeQueryAttempt(ctx, retry)
 }
 
 func (e *worker) finishAbortedQuery(retry *queryRetryState) {
@@ -283,7 +271,7 @@ type queryAttemptResult struct {
 	skipped    bool
 }
 
-func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState, scheduledQueryTime time.Time) queryAttemptResult {
+func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState) queryAttemptResult {
 	// Use cached match decision
 	if e.matchErr != nil {
 		logger.Errorf("Skipping %s/%s due to cached criteria evaluation error: %v", e.rule.Namespace, e.rule.Name, e.matchErr)
@@ -298,21 +286,10 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		return queryAttemptResult{aborted: true}
 	}
 
-	if retry == nil {
-		if scheduledQueryTime.IsZero() {
-			scheduledQueryTime = e.clock.Now()
-		}
-		evaluation := newAlertRuleEvaluationAt(e.rule, scheduledQueryTime, e.clock)
-		retry = &queryRetryState{
-			evaluation: evaluation,
-			attempt:    1,
-		}
-	}
-
 	// The first slot wait is outside the query budget. A retry's slot wait is
 	// inside the shared evaluation context.
 	slotContext := ctx
-	if retry.evaluationContext != nil {
+	if retry != nil {
 		slotContext = retry.evaluationContext
 	}
 	select {
@@ -321,10 +298,20 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		if ctx.Err() != nil {
 			return queryAttemptResult{retry: retry, aborted: true}
 		}
-		if retry.initialErr != nil {
+		if retry != nil && retry.initialErr != nil {
 			return retriableFailure(retry, slotContext.Err())
 		}
 		return queryAttemptResult{retry: retry, err: slotContext.Err()}
+	}
+	defer func() { <-e.querySlots }()
+
+	if retry == nil {
+		executionTime := e.clock.Now()
+		evaluation := newAlertRuleEvaluationAt(e.rule, executionTime, e.clock)
+		retry = &queryRetryState{
+			evaluation: evaluation,
+			attempt:    1,
+		}
 	}
 
 	// The first query slot has now been acquired, so waiting for it did not
@@ -332,9 +319,6 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 	if retry.evaluationContext == nil {
 		retry.evaluationContext, retry.evaluationCancel = context.WithTimeout(ctx, e.queryTime)
 	}
-
-	// Release the worker slot while waiting for a retry and after this query.
-	defer func() { <-e.querySlots }()
 
 	if retry.queryContext == nil {
 		var err error
