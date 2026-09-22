@@ -34,6 +34,8 @@ max-batch-size = 1000
 max-segment-age-seconds = 30
 # Maximum segment size in bytes.
 max-segment-size = 52428800
+# Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive.
+max-segment-count = 10000
 # Maximum allowed size in bytes of all segments on disk.
 max-disk-usage = 53687091200
 # Interval to flush the WAL. (default 100)

@@ -91,6 +91,7 @@ type Config struct {
 	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
 	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
 	MaxSegmentSize               int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
+	MaxSegmentCount              int64 `toml:"max-segment-count,omitempty" comment:"Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive."`
 	MaxDiskUsage                 int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
 	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
 	MaxTransferConcurrency       int   `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
