@@ -100,6 +100,7 @@ func getContents() Contents {
 					MaxBatchSize:                 1000,
 					MaxSegmentAgeSeconds:         30,
 					MaxSegmentSize:               52428800,
+					MaxSegmentCount:              10000,
 					MaxDiskUsage:                 53687091200,
 					MaxTransferConcurrency:       100,
 					WALFlushIntervalMilliSeconds: 100,
