@@ -368,6 +368,7 @@ func realMain(ctx *cli.Context) error {
 		MaxBatchSize:           cfg.MaxBatchSize,
 		MaxSegmentAge:          time.Duration(cfg.MaxSegmentAgeSeconds) * time.Second,
 		MaxSegmentSize:         cfg.MaxSegmentSize,
+		MaxSegmentCount:        cfg.MaxSegmentCount,
 		MaxDiskUsage:           cfg.MaxDiskUsage,
 		MaxTransferConcurrency: cfg.MaxTransferConcurrency,
 		WALFlushInterval:       time.Duration(cfg.WALFlushIntervalMilliSeconds) * time.Millisecond,
