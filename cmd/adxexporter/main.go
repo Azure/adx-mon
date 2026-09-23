@@ -13,6 +13,7 @@ import (
 	"github.com/urfave/cli/v2"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -98,6 +99,8 @@ func realMain(ctx *cli.Context) error {
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: ctx.String("health-probe-port"),
+		// Initial-list objects must not be starved by a continuous stream of update events.
+		Controller: config.Controller{UsePriorityQueue: new(false)},
 		Metrics: metricsserver.Options{
 			BindAddress: "0", // Disable built-in metrics server - we push via OTLP
 		},
