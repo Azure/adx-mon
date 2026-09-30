@@ -1098,7 +1098,7 @@ type heartbeatSchemaCollectionStats struct {
 
 func collectHeartbeatSchema(ctx context.Context, client *azkustodata.Client, heartbeatDatabase string) ([]ADXClusterSchema, heartbeatSchemaCollectionStats, error) {
 	var stats heartbeatSchemaCollectionStats
-	databases, err := listHeartbeatDatabases(ctx, client, heartbeatDatabase)
+	databases, err := listKustoDatabases(ctx, client, heartbeatDatabase)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -1123,7 +1123,7 @@ func collectHeartbeatSchema(ctx context.Context, client *azkustodata.Client, hea
 	return schema, stats, nil
 }
 
-func listHeartbeatDatabases(ctx context.Context, client *azkustodata.Client, heartbeatDatabase string) ([]string, error) {
+func listKustoDatabases(ctx context.Context, client *azkustodata.Client, heartbeatDatabase string) ([]string, error) {
 	const stage = "show databases"
 
 	stageCtx, cancel := context.WithTimeout(ctx, heartbeatListDatabasesTimeout)
@@ -1412,10 +1412,15 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 		return ctrl.Result{}, fmt.Errorf("failed to ensure databases: %w", err)
 	}
 
-	// Step 5: Extract hub database names for entity group replication
-	var hubDatabases []string
-	for _, dbSpec := range merged {
-		hubDatabases = append(hubDatabases, dbSpec.DatabaseName)
+	// Step 5: Only target databases that are available on the hub. Provisioning
+	// is optional and asynchronous: discovered databases may not exist here yet.
+	availableDatabases, err := listKustoDatabases(ctx, client, *cluster.Spec.Federation.HeartbeatDatabase)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list available hub databases: %w", err)
+	}
+	hubDatabases, tableEndpoints, skippedDatabases := selectFederationDestinations(merged, state.DBTableEndpoints, availableDatabases)
+	if len(skippedDatabases) > 0 {
+		logger.Warnf("ADXCluster %s: skipping %d unavailable hub databases this cycle: %s; provision them or grant the operator access to enable synchronization", cluster.Spec.ClusterName, len(skippedDatabases), formatNameList(skippedDatabases, 10))
 	}
 
 	// Step 6: Generate and execute entity group definitions
@@ -1431,7 +1436,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 
 	// Step 7: Ensure hub tables exist for all tables and views
 	logger.Infof("ADXCluster %s: ensuring hub tables exist for alias functions", cluster.Spec.ClusterName)
-	for db, tableMap := range state.DBTableEndpoints {
+	for db, tableMap := range tableEndpoints {
 		// Build a map with empty schemas to use OTLP default for all tables
 		tables := make(map[string]string)
 		for table := range tableMap {
@@ -1443,7 +1448,7 @@ func (r *AdxReconciler) FederateClusters(ctx context.Context, cluster *adxmonv1.
 	}
 
 	// Step 8: Generate function definitions
-	funcsByDB := generateKustoFunctionDefinitions(state.DBTableEndpoints)
+	funcsByDB := generateKustoFunctionDefinitions(tableEndpoints)
 
 	// Step 9: For each database, split scripts and execute
 	logger.Infof("ADXCluster %s: updating Kusto functions for %d databases", cluster.Spec.ClusterName, len(funcsByDB))
@@ -1733,6 +1738,33 @@ func mergeDatabaseSpecs(userDbs, discoveredDbs []adxmonv1.ADXClusterDatabaseSpec
 	}
 	sort.Slice(merged, func(i, j int) bool { return merged[i].DatabaseName < merged[j].DatabaseName })
 	return merged
+}
+
+// selectFederationDestinations intersects the desired hub databases with the
+// data-plane inventory. Keep the original heartbeat state intact so missing
+// destinations can be retried, and keep all spoke entity groups available for
+// cross-database queries from the remaining hub databases.
+func selectFederationDestinations(desired []adxmonv1.ADXClusterDatabaseSpec, tableEndpoints map[string]map[string][]string, available []string) ([]string, map[string]map[string][]string, []string) {
+	exists := make(map[string]bool, len(available))
+	for _, db := range available {
+		exists[db] = true
+	}
+	var destinations, skipped []string
+	selected := make(map[string]map[string][]string)
+	for _, spec := range desired {
+		db := spec.DatabaseName
+		if !exists[db] {
+			skipped = append(skipped, db)
+			continue
+		}
+		destinations = append(destinations, db)
+		if tables, ok := tableEndpoints[db]; ok {
+			selected[db] = tables
+		}
+	}
+	sort.Strings(destinations)
+	sort.Strings(skipped)
+	return destinations, selected, skipped
 }
 
 func ensureHubTables(ctx context.Context, client *azkustodata.Client, database string, tables map[string]string) error {

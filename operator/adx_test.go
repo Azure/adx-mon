@@ -1140,6 +1140,62 @@ func TestSplitKustoScripts(t *testing.T) {
 	require.Contains(t, joined, "//\nc\n")
 }
 
+func TestFederationSkipsUnavailableHubDatabases(t *testing.T) {
+	t.Parallel()
+
+	// Logs and Metrics must still synchronize when a spoke advertises databases
+	// absent from an externally provisioned hub (or still being provisioned).
+	configured := []adxmonv1.ADXClusterDatabaseSpec{{DatabaseName: "Federation"}, {DatabaseName: "MissingConfigured"}}
+	discovered := []adxmonv1.ADXClusterDatabaseSpec{{DatabaseName: "Logs"}, {DatabaseName: "Metrics"}, {DatabaseName: "containers"}, {DatabaseName: "StorageTelemetry"}}
+	desired := mergeDatabaseSpecs(configured, discovered)
+	tables := map[string]map[string][]string{
+		"Logs":             {"Containerd": {"https://spoke"}},
+		"Metrics":          {"GoInfo": {"https://spoke"}},
+		"containers":       {"ContainerLog": {"https://spoke"}},
+		"StorageTelemetry": {"StorageLog": {"https://spoke"}},
+	}
+	spokes := map[string][]string{"Logs": {"https://spoke"}, "Metrics": {"https://spoke"}, "containers": {"https://spoke"}}
+	available := []string{"Metrics", "Federation", "Logs", "Unrelated"}
+
+	destinations, selected, skipped := selectFederationDestinations(desired, tables, available)
+	require.Equal(t, []string{"Federation", "Logs", "Metrics"}, destinations)
+	require.Equal(t, []string{"MissingConfigured", "StorageTelemetry", "containers"}, skipped)
+	require.Len(t, selected, 2)
+	require.Equal(t, tables["Logs"], selected["Logs"])
+	require.Equal(t, tables["Metrics"], selected["Metrics"])
+	groups := generateEntityGroupDefinitions(spokes, destinations)
+	require.Len(t, groups, 3)
+	require.NotContains(t, groups, "containers")
+	// Cross-database spoke references do not require a same-name hub database.
+	require.Contains(t, strings.Join(groups["Logs"], "\n"), "containersSpoke")
+	functions := generateKustoFunctionDefinitions(selected)
+	require.Len(t, functions, 2)
+	require.Contains(t, strings.Join(functions["Logs"], "\n"), "Containerd()")
+	require.Contains(t, strings.Join(functions["Metrics"], "\n"), "GoInfo()")
+
+	// A later reconciliation includes a newly created database without losing
+	// its original heartbeat schema or requiring a controller restart.
+	available = append(available, "containers")
+	destinations, selected, skipped = selectFederationDestinations(desired, tables, available)
+	require.Contains(t, destinations, "containers")
+	require.Equal(t, tables["containers"], selected["containers"])
+	require.NotContains(t, skipped, "containers")
+	require.Len(t, tables, 4)
+	require.Len(t, desired, 6)
+}
+
+func TestFederationNoAvailableDestinations(t *testing.T) {
+	t.Parallel()
+	desired := []adxmonv1.ADXClusterDatabaseSpec{{DatabaseName: "Logs"}}
+	tables := map[string]map[string][]string{"Logs": {"Containerd": {"https://spoke"}}}
+	destinations, selected, skipped := selectFederationDestinations(desired, tables, nil)
+	require.Empty(t, destinations)
+	require.Empty(t, selected)
+	require.Equal(t, []string{"Logs"}, skipped)
+	require.Empty(t, generateEntityGroupDefinitions(map[string][]string{"Logs": {"https://spoke"}}, destinations))
+	require.Empty(t, generateKustoFunctionDefinitions(selected))
+}
+
 func TestEnsureHubTables(t *testing.T) {
 	testutils.IntegrationTest(t)
 	ctx := context.Background()

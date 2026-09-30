@@ -629,7 +629,9 @@ The operator supports a federated ADX cluster model to enable organizations to p
 - **Named Entity Groups:**  
   - The federated operator creates persistent named entity groups in ADX using the naming pattern `{SpokeDatabaseName}Spoke` (e.g., `MetricsSpoke`, `LogsSpoke`).
   - Each entity group contains references to all partition cluster endpoints that have that database: `cluster('ep1').database('db'), cluster('ep2').database('db'), ...`
-  - Entity groups are replicated across all hub databases, ensuring consistent cross-cluster query capabilities.
+  - Entity groups are replicated across configured or discovered hub databases that are present in the hub's data-plane database inventory, ensuring consistent cross-cluster query capabilities.
+  - A discovered database need not already exist on an externally provisioned hub. After the optional provisioning step, the operator lists available hub databases and skips unavailable destinations for entity-group, table, and function updates, logging a warning. Other databases continue synchronizing. Skipped destinations are reconsidered on the next reconciliation, including databases whose asynchronous provisioning has not finished. Database-listing errors still fail reconciliation rather than being treated as an empty inventory.
+  - Spoke entity groups remain available in the selected hub databases even when the corresponding database is absent on the hub, preserving cross-database query capabilities. This does not create the missing hub database or remove existing federation objects.
   - Since ADX does not support `.create-or-alter` for entity groups, the operator uses a drop-then-create pattern:
     ```kql
     .drop entity_group MetricsSpoke
