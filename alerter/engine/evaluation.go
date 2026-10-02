@@ -7,12 +7,14 @@ import (
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"k8s.io/utils/clock"
 )
 
 type alertRuleEvaluation struct {
 	rule          *rules.Rule
 	executionTime time.Time
 	startTime     time.Time
+	clock         clock.PassiveClock
 	duration      time.Duration
 	finished      bool
 
@@ -21,12 +23,17 @@ type alertRuleEvaluation struct {
 	alertsGenerated int
 }
 
-func newAlertRuleEvaluation(rule *rules.Rule) *alertRuleEvaluation {
-	now := time.Now()
+func newAlertRuleEvaluation(rule *rules.Rule, clk clock.PassiveClock) *alertRuleEvaluation {
+	return newAlertRuleEvaluationAt(rule, clk.Now(), clk)
+}
+
+func newAlertRuleEvaluationAt(rule *rules.Rule, executionTime time.Time, clk clock.PassiveClock) *alertRuleEvaluation {
+	now := clk.Now()
 	return &alertRuleEvaluation{
 		rule:          rule,
-		executionTime: now.UTC(),
+		executionTime: executionTime.UTC(),
 		startTime:     now,
+		clock:         clk,
 		outcome:       evaluationOutcomeSuccess,
 	}
 }
@@ -48,7 +55,7 @@ func (e *alertRuleEvaluation) finish() {
 
 func (e *alertRuleEvaluation) elapsed() time.Duration {
 	if !e.finished {
-		e.duration = time.Since(e.startTime)
+		e.duration = e.clock.Since(e.startTime)
 		e.finished = true
 	}
 	return e.duration
