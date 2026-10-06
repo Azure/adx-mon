@@ -331,3 +331,71 @@ func TestRepository_OpenAssignsPriorityToExistingSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ingestpolicy.PriorityRealtime, w.Priority())
 }
+
+func TestRepository_RotatesWALsWithSharedScheduler(t *testing.T) {
+	r := NewRepository(RepositoryOpts{StorageDir: t.TempDir(), SegmentMaxAge: 20 * time.Millisecond})
+	require.NoError(t, r.Open(context.Background()))
+	defer r.Close()
+
+	for i := 0; i < 10; i++ {
+		w, err := r.Get(context.Background(), []byte(fmt.Sprintf("db_t%d", i)))
+		require.NoError(t, err)
+		require.Same(t, r.scheduler, w.scheduler)
+		require.False(t, w.ownsScheduler)
+		require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	}
+
+	require.Eventually(t, func() bool {
+		return r.index.TotalSegments() == 10
+	}, time.Second, time.Millisecond)
+}
+
+func TestRepository_CloseStopsScheduler(t *testing.T) {
+	r := NewRepository(RepositoryOpts{StorageDir: t.TempDir(), SegmentMaxAge: time.Hour})
+	require.NoError(t, r.Open(context.Background()))
+
+	w, err := r.Get(context.Background(), []byte("db_table"))
+	require.NoError(t, err)
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+
+	done := make(chan struct{})
+	go func() {
+		require.NoError(t, r.Close())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("repository close did not return")
+	}
+	_, ok := r.scheduler.next()
+	require.False(t, ok)
+}
+
+func TestRepository_CloseStopsRotationBeforeClosingWALs(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRepository(RepositoryOpts{StorageDir: dir, SegmentMaxAge: time.Millisecond})
+	require.NoError(t, r.Open(context.Background()))
+
+	for i := 0; i < 10; i++ {
+		w, err := r.Get(context.Background(), []byte(fmt.Sprintf("db_t%d", i)))
+		require.NoError(t, err)
+		require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	}
+	require.Eventually(t, func() bool { return r.index.TotalSegments() >= 10 }, time.Second, time.Millisecond)
+
+	require.NoError(t, r.Close())
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	time.Sleep(20 * time.Millisecond)
+	after, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, files, after)
+
+	r.wals.Each(func(key string, w *WAL) error {
+		require.Nil(t, w.Segment(), key)
+		return nil
+	})
+}

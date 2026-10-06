@@ -344,21 +344,61 @@ func TestWAL_SubSecondMaxAge(t *testing.T) {
 	path := w.Path()
 	createdAt := w.Segment().CreatedAt()
 
-	if time.Since(createdAt) < maxAge {
-		require.False(t, w.requiresRotation())
-	}
-
-	time.Sleep(time.Until(createdAt.Add(maxAge)) + 5*time.Millisecond)
-	require.True(t, w.requiresRotation())
-
-	w.rotateSegmentIfNecessary()
+	// The scheduler rotates the segment at its deadline rather than at the periodic sweep.
+	require.Eventually(t, func() bool {
+		return w.index.TotalSegments() == 1
+	}, time.Second, time.Millisecond)
+	require.GreaterOrEqual(t, time.Since(createdAt), maxAge)
 	require.NotEqual(t, path, w.Path())
-	require.Equal(t, 1, w.index.TotalSegments())
 
 	// The replacement segment's age is tracked with sub-second precision.
 	seg := w.Segment()
 	require.NotNil(t, seg)
 	require.Equal(t, seg.CreatedAt().UnixNano(), atomic.LoadInt64(&w.segmentCreatedAt))
+}
+
+func TestWAL_RotatesEachSegmentAtMaxAge(t *testing.T) {
+	const maxAge = 20 * time.Millisecond
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: maxAge})
+
+	for i := 1; i <= 3; i++ {
+		require.NoError(t, w.Write(context.Background(), []byte("foo")))
+		require.Eventually(t, func() bool {
+			return w.index.TotalSegments() == i
+		}, time.Second, time.Millisecond)
+	}
+}
+
+func TestWAL_ClosedWALIsNotRotated(t *testing.T) {
+	w, err := NewWAL(WALOpts{StorageDir: t.TempDir(), Prefix: "db_table", SegmentMaxAge: time.Nanosecond})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	require.NoError(t, w.Close())
+
+	segments := w.index.TotalSegments()
+	w.rotateSegmentIfNecessary()
+	require.Nil(t, w.Segment())
+	require.Equal(t, segments, w.index.TotalSegments())
+	require.Equal(t, -1, w.rotationIndex)
+}
+
+func TestWAL_UsesSharedScheduler(t *testing.T) {
+	sched := newRotationScheduler(0, nil)
+	sched.Open(context.Background())
+	defer sched.Close()
+
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: time.Hour, scheduler: sched})
+	require.False(t, w.ownsScheduler)
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+
+	deadline, ok := sched.next()
+	require.True(t, ok)
+	require.True(t, w.Segment().CreatedAt().Add(time.Hour).Equal(deadline))
+
+	require.NoError(t, w.Close())
+	_, ok = sched.next()
+	require.False(t, ok)
 }
 
 func TestWAL_NoSegmentIsNotRotated(t *testing.T) {
@@ -391,4 +431,29 @@ func BenchmarkWAL_RequiresRotation(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = w.requiresRotation()
 	}
+}
+
+func TestWAL_CloseStopsOwnedSchedulerFirst(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", SegmentMaxAge: time.Millisecond})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+	require.True(t, w.ownsScheduler)
+
+	// Keep the WAL rotating continuously while it is closed.
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	require.Eventually(t, func() bool { return w.index.TotalSegments() >= 1 }, time.Second, time.Millisecond)
+
+	require.NoError(t, w.Close())
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	time.Sleep(20 * time.Millisecond)
+	after, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, files, after)
+	require.Nil(t, w.Segment())
+
+	// Close is idempotent.
+	require.NoError(t, w.Close())
 }

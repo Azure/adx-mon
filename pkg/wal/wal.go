@@ -51,9 +51,14 @@ type WAL struct {
 
 	sampleMetadataBuffer [12]byte
 
-	closeFn context.CancelFunc
+	// scheduler rotates the WAL's segments at their max age.  ownsScheduler is true when the WAL created it.
+	scheduler     *rotationScheduler
+	ownsScheduler bool
 
-	wg      sync.WaitGroup
+	// rotationIndex and rotationDeadline are guarded by scheduler.mu.  rotationIndex is -1 when not scheduled.
+	rotationIndex    int
+	rotationDeadline time.Time
+
 	mu      sync.RWMutex
 	closed  bool
 	segment Segment
@@ -108,6 +113,9 @@ type WALOpts struct {
 
 	// Priority is the ingestion priority of the WAL's table.
 	Priority ingestpolicy.Priority
+
+	// scheduler is the shared rotation scheduler.  When nil, the WAL creates its own.
+	scheduler *rotationScheduler
 }
 
 type SampleType uint16
@@ -131,40 +139,48 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 	}
 
 	return &WAL{
-		index: opts.Index,
-		opts:  opts,
+		index:         opts.Index,
+		opts:          opts,
+		scheduler:     opts.scheduler,
+		rotationIndex: -1,
 	}, nil
 }
 
 func (w *WAL) Open(ctx context.Context) error {
-	ctx, w.closeFn = context.WithCancel(context.Background())
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.wg.Add(1)
-	go w.rotate(ctx)
+	if w.scheduler == nil {
+		w.scheduler = newRotationScheduler(defaultRotationSweepInterval, w.rotateSegmentIfNecessary)
+		w.ownsScheduler = true
+		w.scheduler.Open(context.Background())
+	}
 
 	return nil
 }
 
 func (w *WAL) Close() error {
-	w.closeFn()
-
-	w.wg.Wait()
+	// Stop background rotations before closing the segment.  This must not hold w.mu since a rotation in progress
+	// acquires it.
+	if w.ownsScheduler {
+		w.scheduler.Close()
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.closed = true
 
-	if w.segment != nil {
-		info := w.segment.Info()
-		if err := w.segment.Close(); err != nil {
+	seg := w.segment
+	w.setSegment(nil)
+
+	if seg != nil {
+		info := seg.Info()
+		if err := seg.Close(); err != nil {
 			return err
 		}
 
 		w.index.Add(info)
-		w.segment = nil
 	}
 
 	return nil
@@ -265,22 +281,6 @@ func (w *WAL) Segment() Segment {
 	return w.segment
 }
 
-func (w *WAL) rotate(ctx context.Context) {
-	defer w.wg.Done()
-
-	t := time.NewTicker(10 * time.Second)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			w.rotateSegmentIfNecessary()
-		}
-	}
-}
-
 func (w *WAL) requiresRotation() bool {
 	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
 		return true
@@ -297,24 +297,47 @@ func (w *WAL) newSegment() (Segment, error) {
 		WithFsync(w.opts.EnableWALFsync))
 }
 
-// setSegment sets the current segment and its tracked size and creation time.  seg may be nil.  w.mu must be held
-// for writing.
+// setSegment sets the current segment and its tracked size and creation time, and schedules its rotation.  seg may
+// be nil.  w.mu must be held for writing.
 func (w *WAL) setSegment(seg Segment) {
 	w.segment = seg
 	if seg == nil {
 		atomic.StoreInt64(&w.segmentSize, 0)
 		atomic.StoreInt64(&w.segmentCreatedAt, 0)
+		if w.scheduler != nil {
+			w.scheduler.unschedule(w)
+		}
 		return
 	}
 	atomic.StoreInt64(&w.segmentSize, seg.Size())
 	atomic.StoreInt64(&w.segmentCreatedAt, seg.CreatedAt().UnixNano())
+	w.scheduleRotationLocked()
+}
+
+// scheduleRotation schedules rotation of the current segment at its max age.
+func (w *WAL) scheduleRotation() {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	w.scheduleRotationLocked()
+}
+
+// scheduleRotationLocked is like scheduleRotation.  w.mu must be held.
+func (w *WAL) scheduleRotationLocked() {
+	if w.closed || w.scheduler == nil || w.opts.SegmentMaxAge <= 0 {
+		return
+	}
+	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
+	if createdAt == 0 {
+		return
+	}
+	w.scheduler.schedule(w, time.Unix(0, createdAt).Add(w.opts.SegmentMaxAge))
 }
 
 func (w *WAL) rotateSegmentIfNecessary() {
 	if w.requiresRotation() {
 		w.mu.Lock()
 		// Re-verify rotation is needed under write lock since the fast path check is racy
-		if !w.requiresRotation() {
+		if w.closed || !w.requiresRotation() {
 			w.mu.Unlock()
 			return
 		}
