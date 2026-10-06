@@ -1,6 +1,7 @@
 package wal_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -67,5 +68,50 @@ func TestParseFilenameMissingParts(t *testing.T) {
 			_, _, _, _, err := wal.ParseFilename(path)
 			require.NotNil(t, err)
 		})
+	}
+}
+
+func TestParsePrefix(t *testing.T) {
+	database, table, err := wal.ParsePrefix("testdb_testtable")
+	require.NoError(t, err)
+	require.Equal(t, "testdb", database)
+	require.Equal(t, "testtable", table)
+
+	database, table, err = wal.ParsePrefix("testdb_testtable_testschema")
+	require.NoError(t, err)
+	require.Equal(t, "testdb", database)
+	require.Equal(t, "testtable", table)
+}
+
+func TestParsePrefixInvalid(t *testing.T) {
+	for _, prefix := range []string{
+		"",
+		"testdb",
+		"_testtable",
+		"testdb_",
+		"testdb__schema",
+		"testdb_testtable_",
+		"testdb_testtable_schema_extra",
+	} {
+		t.Run(prefix, func(t *testing.T) {
+			_, _, err := wal.ParsePrefix(prefix)
+			require.ErrorIs(t, err, wal.ErrInvalidWALSegment)
+		})
+	}
+}
+
+func TestParsePrefixMatchesParseFilename(t *testing.T) {
+	for _, filename := range []string{
+		"testdb_testtable_1234567890.wal",
+		"testdb_testtable_testschema_1234567890.wal",
+	} {
+		database, table, _, _, err := wal.ParseFilename(filename)
+		require.NoError(t, err)
+
+		prefix := filename[:strings.LastIndex(filename, "_")]
+		pdb, ptable, err := wal.ParsePrefix(prefix)
+		require.NoError(t, err)
+		require.Equal(t, database, pdb)
+		require.Equal(t, table, ptable)
 	}
 }

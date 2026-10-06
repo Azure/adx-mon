@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/davidnarayan/go-flake"
@@ -104,6 +105,9 @@ type WALOpts struct {
 
 	// EnableWALFsync enables fsync of the segment after every flush.
 	EnableWALFsync bool
+
+	// Priority is the ingestion priority of the WAL's table.
+	Priority ingestpolicy.Priority
 }
 
 type SampleType uint16
@@ -239,6 +243,11 @@ func (w *WAL) validateLimits() error {
 	}
 
 	return nil
+}
+
+// Priority returns the ingestion priority of the WAL's table.
+func (w *WAL) Priority() ingestpolicy.Priority {
+	return w.opts.Priority
 }
 
 func (w *WAL) Size() int {

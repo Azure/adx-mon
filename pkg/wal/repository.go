@@ -13,6 +13,7 @@ import (
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
 	"golang.org/x/sync/errgroup"
@@ -41,6 +42,19 @@ type RepositoryOpts struct {
 	MaxSegmentCount  int
 	WALFlushInterval time.Duration
 	EnableWALFsync   bool
+
+	// Policy assigns an ingestion priority to each WAL prefix.  When nil, all WALs are queued.
+	Policy *ingestpolicy.Policy
+
+	// Realtime overrides the segment rotation settings for realtime WALs.
+	Realtime RotationPolicy
+}
+
+// RotationPolicy overrides segment rotation settings.  Zero values inherit the repository settings.
+type RotationPolicy struct {
+	SegmentMaxAge    time.Duration
+	SegmentMaxSize   int64
+	WALFlushInterval time.Duration
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
@@ -232,16 +246,7 @@ func (s *Repository) Close() error {
 }
 
 func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
-	walOpts := WALOpts{
-		Prefix:           prefix,
-		StorageDir:       s.opts.StorageDir,
-		SegmentMaxSize:   s.opts.SegmentMaxSize,
-		SegmentMaxAge:    s.opts.SegmentMaxAge,
-		MaxDiskUsage:     s.opts.MaxDiskUsage,
-		Index:            s.index,
-		WALFlushInterval: s.opts.WALFlushInterval,
-		EnableWALFsync:   s.opts.EnableWALFsync,
-	}
+	walOpts := s.walOpts(prefix)
 
 	wal, err := NewWAL(walOpts)
 	if err != nil {
@@ -253,6 +258,44 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	}
 
 	return wal, nil
+}
+
+// walOpts returns the options for the WAL with the given prefix based on its ingestion priority.
+func (s *Repository) walOpts(prefix string) WALOpts {
+	opts := WALOpts{
+		Prefix:           prefix,
+		StorageDir:       s.opts.StorageDir,
+		SegmentMaxSize:   s.opts.SegmentMaxSize,
+		SegmentMaxAge:    s.opts.SegmentMaxAge,
+		MaxDiskUsage:     s.opts.MaxDiskUsage,
+		Index:            s.index,
+		WALFlushInterval: s.opts.WALFlushInterval,
+		EnableWALFsync:   s.opts.EnableWALFsync,
+	}
+
+	if !s.opts.Policy.HasRealtime() {
+		return opts
+	}
+
+	database, table, err := ParsePrefix(prefix)
+	if err != nil {
+		return opts
+	}
+
+	opts.Priority = s.opts.Policy.Priority(database, table)
+	if opts.Priority == ingestpolicy.PriorityRealtime {
+		rt := s.opts.Realtime
+		if rt.SegmentMaxAge > 0 {
+			opts.SegmentMaxAge = rt.SegmentMaxAge
+		}
+		if rt.SegmentMaxSize > 0 {
+			opts.SegmentMaxSize = rt.SegmentMaxSize
+		}
+		if rt.WALFlushInterval > 0 {
+			opts.WALFlushInterval = rt.WALFlushInterval
+		}
+	}
+	return opts
 }
 
 func (s *Repository) Get(ctx context.Context, key []byte) (*WAL, error) {
