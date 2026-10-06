@@ -343,10 +343,20 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		}
 
 		toClose := w.segment
-		seg, err := w.newSegment()
-		if err != nil {
-			logger.Errorf("Failed to create new segment: %s", err.Error())
-			seg = nil
+
+		// Proactively create the next segment so writers do not create it while holding w.mu.  If the segment
+		// being rotated is empty and no writes are in flight, the WAL has been idle for a full rotation period so
+		// the next segment is created lazily by the next write instead.  This avoids repeatedly creating and
+		// removing empty segments for idle WALs.
+		var seg Segment
+		idle := toClose != nil && toClose.Size() <= 8 && atomic.LoadInt64(&w.inflightWriteBytes) == 0
+		if !idle {
+			var err error
+			seg, err = w.newSegment()
+			if err != nil {
+				logger.Errorf("Failed to create new segment: %s", err.Error())
+				seg = nil
+			}
 		}
 		w.setSegment(seg)
 		w.mu.Unlock()

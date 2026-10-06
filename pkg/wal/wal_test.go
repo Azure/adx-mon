@@ -457,3 +457,113 @@ func TestWAL_CloseStopsOwnedSchedulerFirst(t *testing.T) {
 	// Close is idempotent.
 	require.NoError(t, w.Close())
 }
+
+// expireSegment makes the current segment old enough to require rotation.
+func expireSegment(w *WAL) {
+	atomic.StoreInt64(&w.segmentCreatedAt, time.Now().Add(-2*w.opts.SegmentMaxAge).UnixNano())
+}
+
+func walFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestWAL_ActiveRotationCreatesNextSegment(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: time.Hour})
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	path := w.Path()
+
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+
+	// The rotated segment had data so the next segment is created proactively.
+	require.Equal(t, 1, w.index.TotalSegments())
+	require.NotNil(t, w.Segment())
+	require.NotEqual(t, path, w.Path())
+	require.NotZero(t, atomic.LoadInt64(&w.segmentCreatedAt))
+}
+
+func TestWAL_InflightWriteCreatesNextSegment(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: time.Hour})
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+	require.NotNil(t, w.Segment())
+
+	// The new segment is empty, but a write is in flight so the WAL is not idle.
+	atomic.AddInt64(&w.inflightWriteBytes, 3)
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+	atomic.AddInt64(&w.inflightWriteBytes, -3)
+
+	require.NotNil(t, w.Segment())
+}
+
+func TestWAL_IdleRotationDoesNotCreateNextSegment(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", SegmentMaxAge: time.Hour})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+	defer w.Close()
+
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+	emptyPath := w.Path()
+	require.NotEmpty(t, emptyPath)
+
+	// The proactively created segment received no writes for a full period.
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+
+	require.Nil(t, w.Segment())
+	require.Zero(t, atomic.LoadInt64(&w.segmentCreatedAt))
+	require.Equal(t, -1, w.rotationIndex)
+	require.NoFileExists(t, emptyPath)
+	require.Equal(t, 1, w.index.TotalSegments())
+	require.Len(t, walFiles(t, dir), 1)
+
+	// The next write lazily creates a segment and resumes proactive rotation.
+	require.NoError(t, w.Write(context.Background(), []byte("bar")))
+	require.NotNil(t, w.Segment())
+	require.NotEqual(t, -1, w.rotationIndex)
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+	require.Equal(t, 2, w.index.TotalSegments())
+	require.NotNil(t, w.Segment())
+}
+
+func TestWAL_IdleWALStopsCreatingSegments(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", SegmentMaxAge: 5 * time.Millisecond})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+	defer w.Close()
+
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	require.Eventually(t, func() bool { return w.Segment() == nil }, time.Second, time.Millisecond)
+
+	// Only the segment with data remains and no new segments are created while idle.
+	files := walFiles(t, dir)
+	require.Len(t, files, 1)
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, files, walFiles(t, dir))
+	require.Nil(t, w.Segment())
+}
+
+func TestWAL_ContinuousWritesKeepProactiveSegment(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: 5 * time.Millisecond})
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		require.NoError(t, w.Write(context.Background(), []byte("foo")))
+		time.Sleep(time.Millisecond)
+	}
+	require.Greater(t, w.index.TotalSegments(), 1)
+}
