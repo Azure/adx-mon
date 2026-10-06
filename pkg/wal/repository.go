@@ -27,6 +27,9 @@ type Repository struct {
 
 	wals *partmap.Map[*WAL]
 
+	// scheduler rotates segments of all WALs in the repository.
+	scheduler *rotationScheduler
+
 	// Total size of all wals in the repository.  This is updated
 	// lazily in the background.
 	size int64
@@ -58,11 +61,21 @@ type RotationPolicy struct {
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
-	return &Repository{
+	r := &Repository{
 		opts:  opts,
 		index: NewIndex(),
 		wals:  partmap.NewMap[*WAL](64),
 	}
+	r.scheduler = newRotationScheduler(defaultRotationSweepInterval, r.sweepRotations)
+	return r
+}
+
+// sweepRotations rotates any WAL segments that require it.
+func (s *Repository) sweepRotations() {
+	_ = s.wals.Each(func(key string, value *WAL) error {
+		value.rotateSegmentIfNecessary()
+		return nil
+	})
 }
 
 func (s *Repository) Open(ctx context.Context) error {
@@ -104,6 +117,8 @@ func (s *Repository) Open(ctx context.Context) error {
 			walPaths = append(walPaths, path)
 		}
 	}
+
+	s.scheduler.Open(context.Background())
 
 	if err := s.openStartupSegments(ctx, walPaths); err != nil {
 		return err
@@ -235,6 +250,9 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 }
 
 func (s *Repository) Close() error {
+	// Stop background rotations before closing WALs so segments are not rotated while shutting down.
+	s.scheduler.Close()
+
 	if err := s.wals.Each(func(key string, value *WAL) error {
 		wal := value
 		return wal.Close()
@@ -271,6 +289,7 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 		Index:            s.index,
 		WALFlushInterval: s.opts.WALFlushInterval,
 		EnableWALFsync:   s.opts.EnableWALFsync,
+		scheduler:        s.scheduler,
 	}
 
 	if !s.opts.Policy.HasRealtime() {
