@@ -543,10 +543,17 @@ func isTransientFailedRequest(err error) bool {
 	if kerr.StatusCode != http.StatusBadRequest {
 		return false
 	}
-	if isTransientRemoteSchemaCalloutBlockedError(kerr.UnmarshalREST()) {
+	if isTransientRemoteSchemaCalloutBlockedError(kerr) {
+		return true
+	}
+	if isTransientRemoteEntityResolutionError(kerr) {
 		return true
 	}
 
+	return false
+}
+
+func isTransientRemoteEntityResolutionError(kerr *kerrors.HttpError) bool {
 	lowerErr := strings.ToLower(kerr.Error())
 	if strings.Contains(lowerErr, "sem0056") &&
 		strings.Contains(lowerErr, "resolving remote entities") &&
@@ -560,9 +567,10 @@ func isTransientFailedRequest(err error) bool {
 	return false
 }
 
-func isTransientRemoteSchemaCalloutBlockedError(restError map[string]interface{}) bool {
+func isTransientRemoteSchemaCalloutBlockedError(kerr *kerrors.HttpError) bool {
 	const transientMessage = "host failed loopback link local check: 'uri.idnhost cannot be resolved into an ip address: no such host is known'"
 
+	restError := kerr.UnmarshalREST()
 	errorDetails, ok := restError["error"].(map[string]interface{})
 	if !ok {
 		return false

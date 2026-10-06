@@ -1208,6 +1208,82 @@ func remoteSchemaCalloutBlockedError(errorType, message string) error {
 	))
 }
 
+func TestIsTransientFailedRequest_RemoteEntityResolution(t *testing.T) {
+	const message = "Semantic error: SEM0056: Errors occurred while resolving remote entities. Failed to resolve name or pattern 'ManagedClusterSnapshot'"
+	requestError := func(status int, message string) error {
+		body := fmt.Sprintf(`{"error":{"message":%q}}`, message)
+		return fmt.Errorf("failed to execute kusto query: %w", kerrors.HTTP(
+			kerrors.OpQuery,
+			http.StatusText(status),
+			status,
+			io.NopCloser(bytes.NewBufferString(body)),
+			"error from Kusto endpoint",
+		))
+	}
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+		},
+		{
+			name: "non-Kusto error",
+			err:  fmt.Errorf("%s", message),
+		},
+		{
+			name: "wrapped remote entity resolution error",
+			err:  remoteEntityResolutionError(),
+			want: true,
+		},
+		{
+			name: "case insensitive message",
+			err:  requestError(http.StatusBadRequest, strings.ToUpper(message)),
+			want: true,
+		},
+		{
+			name: "not a bad request",
+			err:  requestError(http.StatusInternalServerError, message),
+		},
+		{
+			name: "different semantic error code",
+			err:  requestError(http.StatusBadRequest, strings.ReplaceAll(message, "SEM0056", "SEM0001")),
+		},
+		{
+			name: "missing remote entity resolution message",
+			err:  requestError(http.StatusBadRequest, strings.ReplaceAll(message, "resolving remote entities", "resolving entities")),
+		},
+		{
+			name: "missing name resolution message",
+			err:  requestError(http.StatusBadRequest, strings.ReplaceAll(message, "Failed to resolve name or pattern", "Unknown entity")),
+		},
+		{
+			name: "OBO token required",
+			err:  requestError(http.StatusBadRequest, message+": OBO token is required for cross-cluster communication"),
+		},
+		{
+			name: "unauthorized",
+			err:  requestError(http.StatusBadRequest, message+": Caller is not authorized to access the remote cluster"),
+		},
+		{
+			name: "access denied",
+			err:  requestError(http.StatusBadRequest, message+": Access denied"),
+		},
+		{
+			name: "callout policy rejection",
+			err:  requestError(http.StatusBadRequest, message+": Remote cluster is not allowed by the callout policy"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isTransientFailedRequest(tt.err))
+		})
+	}
+}
+
 func TestIsTransientFailedRequest_CalloutPolicy(t *testing.T) {
 	const exceptionType = "Kusto.DataNode.Exceptions.RemoteSchemaCalloutBlockedException"
 
