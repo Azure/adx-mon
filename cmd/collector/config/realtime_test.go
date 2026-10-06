@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var testRealtimeTables = []*RealtimeTable{{Database: "Metrics", Table: "CpuUsage"}}
+
 func TestRealtime_ParseTOML(t *testing.T) {
 	const data = `
 max-disk-usage = 21474836480
@@ -58,12 +60,26 @@ func TestRealtime_Defaults(t *testing.T) {
 	require.Equal(t, DefaultRealtimeMaxSegmentAge, r.MaxSegmentAge())
 	require.Equal(t, DefaultRealtimeMaxBatchLatency, r.MaxBatchLatency())
 	require.Equal(t, DefaultRealtimeMaxBatchBytes, r.MaxBatchBytes)
-	require.Equal(t, DefaultRealtimeReservedDiskBytes, r.ReservedDiskBytes)
+	// No disk is reserved without realtime tables so queued capacity is unchanged.
+	require.Zero(t, r.ReservedDiskBytes)
 	require.Equal(t, DefaultRealtimeQueuedReservedWorkersPercent, r.QueuedReservedWorkersPercent)
 
 	p, err := r.Policy()
 	require.NoError(t, err)
 	require.False(t, p.HasRealtime())
+}
+
+func TestRealtime_DefaultReservedDiskWithTables(t *testing.T) {
+	c := Config{Realtime: &Realtime{Tables: testRealtimeTables}}
+	require.NoError(t, c.Validate())
+	require.Equal(t, DefaultRealtimeReservedDiskBytes, c.Realtime.ReservedDiskBytes)
+}
+
+func TestRealtime_NoTablesIgnoresDiskUsage(t *testing.T) {
+	// A [realtime] section without tables must not fail on small disks or reduce queued capacity.
+	c := Config{MaxDiskUsage: 1024, Realtime: &Realtime{ReservedDiskBytes: 4096}}
+	require.NoError(t, c.Validate())
+	require.Zero(t, c.Realtime.ReservedDiskBytes)
 }
 
 func TestRealtime_Unset(t *testing.T) {
@@ -105,17 +121,17 @@ func TestRealtime_Validate(t *testing.T) {
 		},
 		{
 			name:     "reserved disk equals max disk usage",
-			config:   Config{MaxDiskUsage: 1024, Realtime: &Realtime{ReservedDiskBytes: 1024}},
+			config:   Config{MaxDiskUsage: 1024, Realtime: &Realtime{ReservedDiskBytes: 1024, Tables: testRealtimeTables}},
 			contains: "must be less than max-disk-usage (1024)",
 		},
 		{
 			name:     "default reserved disk exceeds small max disk usage",
-			config:   Config{MaxDiskUsage: 1024, Realtime: &Realtime{}},
+			config:   Config{MaxDiskUsage: 1024, Realtime: &Realtime{Tables: testRealtimeTables}},
 			contains: "must be less than max-disk-usage (1024)",
 		},
 		{
 			name:     "reserved disk exceeds default max disk usage",
-			config:   Config{Realtime: &Realtime{ReservedDiskBytes: DefaultMaxDiskUsage}},
+			config:   Config{Realtime: &Realtime{ReservedDiskBytes: DefaultMaxDiskUsage, Tables: testRealtimeTables}},
 			contains: "must be less than max-disk-usage",
 		},
 		{

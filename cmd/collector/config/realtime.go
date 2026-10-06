@@ -28,7 +28,7 @@ type Realtime struct {
 	MaxSegmentAgeMs              int              `toml:"max-segment-age-ms,omitempty" comment:"Maximum age in milliseconds of a realtime WAL segment before it is rotated. Defaults to 250."`
 	MaxBatchLatencyMs            int              `toml:"max-batch-latency-ms,omitempty" comment:"Maximum time in milliseconds a closed realtime segment waits to be batched with others before it is transferred. Defaults to 500."`
 	MaxBatchBytes                int64            `toml:"max-batch-bytes,omitempty" comment:"Maximum size in bytes of a realtime transfer batch. Defaults to 2097152."`
-	ReservedDiskBytes            int64            `toml:"reserved-disk-bytes,omitempty" comment:"Disk space in bytes reserved for realtime segments. Queued segments may use up to max-disk-usage minus this value. Defaults to 1073741824."`
+	ReservedDiskBytes            int64            `toml:"reserved-disk-bytes,omitempty" comment:"Disk space in bytes reserved for realtime segments. Queued segments may use up to max-disk-usage minus this value. Only applies when tables are configured. Defaults to 1073741824."`
 	QueuedReservedWorkersPercent int              `toml:"queued-reserved-workers-percent,omitempty" comment:"Percentage of transfer workers reserved for queued segments so realtime traffic cannot starve them. At least one worker is always reserved. Defaults to 10."`
 	Tables                       []*RealtimeTable `toml:"tables,omitempty" comment:"Tables that use realtime ingestion."`
 }
@@ -69,9 +69,6 @@ func (r *Realtime) Validate(maxDiskUsage int64) error {
 	if r.ReservedDiskBytes == 0 {
 		r.ReservedDiskBytes = DefaultRealtimeReservedDiskBytes
 	}
-	if r.ReservedDiskBytes >= maxDiskUsage {
-		return fmt.Errorf("realtime.reserved-disk-bytes (%d) must be less than max-disk-usage (%d)", r.ReservedDiskBytes, maxDiskUsage)
-	}
 
 	if r.QueuedReservedWorkersPercent < 0 || r.QueuedReservedWorkersPercent >= 100 {
 		return errors.New("realtime.queued-reserved-workers-percent must be between 1 and 99")
@@ -94,6 +91,15 @@ func (r *Realtime) Validate(maxDiskUsage int64) error {
 
 	if _, err := r.Policy(); err != nil {
 		return fmt.Errorf("realtime.tables: %w", err)
+	}
+
+	// Without realtime tables no disk is reserved so queued capacity is unchanged.
+	if len(r.Tables) == 0 {
+		r.ReservedDiskBytes = 0
+		return nil
+	}
+	if r.ReservedDiskBytes >= maxDiskUsage {
+		return fmt.Errorf("realtime.reserved-disk-bytes (%d) must be less than max-disk-usage (%d)", r.ReservedDiskBytes, maxDiskUsage)
 	}
 	return nil
 }
