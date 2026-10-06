@@ -21,6 +21,8 @@ Authenticates via `azidentity.NewDefaultAzureCredential`. When both system-assig
 
 For partition clusters, the managed identity specified in `federatedTargets[].managedIdentityClientId` needs ingest permissions on the hub's heartbeat database.
 
+For federated (hub) clusters, the operator's identity needs `Database Viewer` on every spoke database that reports into the hub's heartbeat table. The hub operator never connects to spokes directly, but ADX validates the generated cross-cluster federation functions when they are created and resolves the referenced spoke tables using the operator's identity. Without these grants, hub tables still reconcile but federation functions can be missing.
+
 ### Networking
 All `endpoint` values must be resolvable and reachable (HTTPS) from the operator pod. Ensure outbound egress rules (Calico, NSGs, firewalls, Private Link) allow connections from the operator namespace to ADX endpoints.
 
@@ -215,6 +217,7 @@ spec:
 - **Provisioning failures**: Look for `ProvisioningInvalid` or Azure state (e.g., `Failed`) in conditions. Azure Activity Logs (Portal → Monitor → Activity Log) reveal authoritative ARM failures.
 - **Database issues**: Check operator logs; no dedicated condition for database creation failures. Most errors surface as reconciliation warnings with the database name.
 - **Federation debugging**: Query heartbeat table: `<heartbeatTable> | where Timestamp > ago(2h)` to confirm heartbeat freshness and partition metadata.
+- **Missing hub functions**: If hub tables exist but federation functions are missing, grant the hub operator's identity `Database Viewer` on the spoke databases listed in the heartbeat table.
 - **Force requeue**: Update or annotate the CRD (`kubectl annotate --overwrite adxcluster/<name> adx-mon.azure.com/requeue=$(date +%s)`) to nudge a new reconciliation once prerequisites are fixed.
 - **Kusto errors**: Verify network connectivity, authentication, and required permissions, especially data-plane roles for managed identities listed in the CRD.
 
