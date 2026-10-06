@@ -1,4 +1,4 @@
-package wal_test
+package wal
 
 import (
 	"context"
@@ -7,8 +7,9 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
-	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -27,7 +28,7 @@ func createBenchmarkSegments(ctx context.Context, dir string, count int, payload
 	for i := 0; i < workers; i++ {
 		g.Go(func() error {
 			for idx := range jobs {
-				seg, err := wal.NewSegment(dir, fmt.Sprintf("db_t%d", idx))
+				seg, err := NewSegment(dir, fmt.Sprintf("db_t%d", idx))
 				if err != nil {
 					return err
 				}
@@ -98,7 +99,7 @@ func benchmarkRepositoryOpenStartup(b *testing.B, segmentCount int, payload []by
 
 			for i := 0; i < b.N; i++ {
 				ctx, cancel := context.WithCancel(context.Background())
-				r := wal.NewRepository(wal.RepositoryOpts{
+				r := NewRepository(RepositoryOpts{
 					StorageDir:             dir,
 					StartupOpenConcurrency: tc.concurrency,
 				})
@@ -128,7 +129,7 @@ func TestRepository_Write(t *testing.T) {
 	for _, tt := range providerTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			dir := t.TempDir()
-			r := wal.NewRepository(wal.RepositoryOpts{
+			r := NewRepository(RepositoryOpts{
 				StorageDir: dir,
 			})
 			defer r.Close()
@@ -152,7 +153,7 @@ func TestRepository_Keys(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 
 			dir := t.TempDir()
-			r := wal.NewRepository(wal.RepositoryOpts{
+			r := NewRepository(RepositoryOpts{
 				StorageDir: dir,
 			})
 			defer r.Close()
@@ -186,13 +187,13 @@ func TestRepository_Remove(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 
 			dir := t.TempDir()
-			r := wal.NewRepository(wal.RepositoryOpts{
+			r := NewRepository(RepositoryOpts{
 				StorageDir: dir,
 			})
 			defer r.Close()
 
 			// Add a closed segment for this WAL.
-			seg, err := wal.NewSegment(dir, "db_foo")
+			seg, err := NewSegment(dir, "db_foo")
 			n, err := seg.Write(context.Background(), []byte("bar"))
 			require.NoError(t, err)
 			require.True(t, n > 0)
@@ -222,4 +223,111 @@ func TestRepository_Remove(t *testing.T) {
 			require.Equal(t, 0, len(entries))
 		})
 	}
+}
+
+func TestRepository_WALOptsByPriority(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+
+	r := NewRepository(RepositoryOpts{
+		StorageDir:       t.TempDir(),
+		SegmentMaxSize:   1024,
+		SegmentMaxAge:    time.Minute,
+		WALFlushInterval: 100 * time.Millisecond,
+		EnableWALFsync:   true,
+		Policy:           policy,
+		Realtime: RotationPolicy{
+			SegmentMaxAge:    250 * time.Millisecond,
+			SegmentMaxSize:   512,
+			WALFlushInterval: 10 * time.Millisecond,
+		},
+	})
+
+	for _, prefix := range []string{"Metrics_CpuUsage", "Metrics_CpuUsage_abc123"} {
+		opts := r.walOpts(prefix)
+		require.Equal(t, ingestpolicy.PriorityRealtime, opts.Priority, prefix)
+		require.Equal(t, 250*time.Millisecond, opts.SegmentMaxAge, prefix)
+		require.Equal(t, int64(512), opts.SegmentMaxSize, prefix)
+		require.Equal(t, 10*time.Millisecond, opts.WALFlushInterval, prefix)
+		require.True(t, opts.EnableWALFsync, prefix)
+		require.Equal(t, prefix, opts.Prefix)
+	}
+
+	for _, prefix := range []string{"Metrics_MemoryUsage_abc123", "Logs_CpuUsage", "invalid"} {
+		opts := r.walOpts(prefix)
+		require.Equal(t, ingestpolicy.PriorityQueued, opts.Priority, prefix)
+		require.Equal(t, time.Minute, opts.SegmentMaxAge, prefix)
+		require.Equal(t, int64(1024), opts.SegmentMaxSize, prefix)
+		require.Equal(t, 100*time.Millisecond, opts.WALFlushInterval, prefix)
+		require.True(t, opts.EnableWALFsync, prefix)
+	}
+}
+
+func TestRepository_RealtimeInheritsUnsetRotation(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+
+	r := NewRepository(RepositoryOpts{
+		StorageDir:       t.TempDir(),
+		SegmentMaxSize:   1024,
+		SegmentMaxAge:    time.Minute,
+		WALFlushInterval: 100 * time.Millisecond,
+		Policy:           policy,
+		Realtime:         RotationPolicy{SegmentMaxAge: 250 * time.Millisecond},
+	})
+
+	opts := r.walOpts("Metrics_CpuUsage_abc123")
+	require.Equal(t, ingestpolicy.PriorityRealtime, opts.Priority)
+	require.Equal(t, 250*time.Millisecond, opts.SegmentMaxAge)
+	require.Equal(t, int64(1024), opts.SegmentMaxSize)
+	require.Equal(t, 100*time.Millisecond, opts.WALFlushInterval)
+}
+
+func TestRepository_NoPolicyIsQueued(t *testing.T) {
+	r := NewRepository(RepositoryOpts{
+		StorageDir:    t.TempDir(),
+		SegmentMaxAge: time.Minute,
+		Realtime:      RotationPolicy{SegmentMaxAge: 250 * time.Millisecond},
+	})
+
+	opts := r.walOpts("Metrics_CpuUsage_abc123")
+	require.Equal(t, ingestpolicy.PriorityQueued, opts.Priority)
+	require.Equal(t, time.Minute, opts.SegmentMaxAge)
+}
+
+func TestRepository_GetAssignsPriority(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+
+	r := NewRepository(RepositoryOpts{StorageDir: t.TempDir(), Policy: policy})
+	require.NoError(t, r.Open(context.Background()))
+	defer r.Close()
+
+	w, err := r.Get(context.Background(), []byte("Metrics_CpuUsage_abc123"))
+	require.NoError(t, err)
+	require.Equal(t, ingestpolicy.PriorityRealtime, w.Priority())
+
+	w, err = r.Get(context.Background(), []byte("Metrics_MemoryUsage_abc123"))
+	require.NoError(t, err)
+	require.Equal(t, ingestpolicy.PriorityQueued, w.Priority())
+}
+
+func TestRepository_OpenAssignsPriorityToExistingSegments(t *testing.T) {
+	dir := t.TempDir()
+	seg, err := NewSegment(dir, "Metrics_CpuUsage_abc123")
+	require.NoError(t, err)
+	_, err = seg.Write(context.Background(), []byte("foo"))
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+
+	r := NewRepository(RepositoryOpts{StorageDir: dir, Policy: policy})
+	require.NoError(t, r.Open(context.Background()))
+	defer r.Close()
+
+	w, err := r.Get(context.Background(), []byte("Metrics_CpuUsage_abc123"))
+	require.NoError(t, err)
+	require.Equal(t, ingestpolicy.PriorityRealtime, w.Priority())
 }

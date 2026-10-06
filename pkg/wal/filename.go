@@ -51,6 +51,20 @@ func ParseFilename(path string) (database, table, schema, epoch string, err erro
 	return
 }
 
+// ParsePrefix returns the database and table of a WAL prefix in the form <database>_<table> or
+// <database>_<table>_<schema>.
+func ParsePrefix(prefix string) (database, table string, err error) {
+	database, rest, ok := strings.Cut(prefix, "_")
+	if !ok || database == "" {
+		return "", "", ErrInvalidWALSegment
+	}
+	table, schema, hasSchema := strings.Cut(rest, "_")
+	if table == "" || (hasSchema && (schema == "" || strings.Contains(schema, "_"))) {
+		return "", "", ErrInvalidWALSegment
+	}
+	return database, table, nil
+}
+
 func Filename(database, table, schema, epoch string) string {
 	if schema == "" {
 		return fmt.Sprintf("%s_%s_%s.wal", database, table, epoch)
