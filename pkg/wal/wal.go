@@ -65,8 +65,8 @@ type WAL struct {
 	// the latter requires taking an RLock on the segments which creates lock contention.
 	segmentSize int64
 
-	// segmentCreatedAt is the unixtime when the current segment was created.  This is tracked separately from Segment
-	// itself to avoid lock contention.
+	// segmentCreatedAt is the creation time of the current segment in Unix nanoseconds, or 0 when there is no
+	// current segment.  This is tracked separately from Segment itself to avoid lock contention.
 	segmentCreatedAt int64
 }
 
@@ -205,15 +205,12 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (i
 
 	w.mu.Lock()
 	if w.segment == nil {
-		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix,
-			WithFlushIntervale(w.opts.WALFlushInterval),
-			WithFsync(w.opts.EnableWALFsync))
+		seg, err := w.newSegment()
 		if err != nil {
 			w.mu.Unlock()
 			return 0, err
 		}
-		w.segment = seg
+		w.setSegment(seg)
 	}
 	seg = w.segment
 	w.mu.Unlock()
@@ -276,8 +273,32 @@ func (w *WAL) rotate(ctx context.Context) {
 }
 
 func (w *WAL) requiresRotation() bool {
-	return (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize) ||
-		(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) >= w.opts.SegmentMaxAge)
+	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+		return true
+	}
+
+	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
+	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Since(time.Unix(0, createdAt)) >= w.opts.SegmentMaxAge
+}
+
+// newSegment creates a new segment for the WAL.
+func (w *WAL) newSegment() (Segment, error) {
+	return NewSegment(w.opts.StorageDir, w.opts.Prefix,
+		WithFlushIntervale(w.opts.WALFlushInterval),
+		WithFsync(w.opts.EnableWALFsync))
+}
+
+// setSegment sets the current segment and its tracked size and creation time.  seg may be nil.  w.mu must be held
+// for writing.
+func (w *WAL) setSegment(seg Segment) {
+	w.segment = seg
+	if seg == nil {
+		atomic.StoreInt64(&w.segmentSize, 0)
+		atomic.StoreInt64(&w.segmentCreatedAt, 0)
+		return
+	}
+	atomic.StoreInt64(&w.segmentSize, seg.Size())
+	atomic.StoreInt64(&w.segmentCreatedAt, seg.CreatedAt().UnixNano())
 }
 
 func (w *WAL) rotateSegmentIfNecessary() {
@@ -290,19 +311,12 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		}
 
 		toClose := w.segment
-		var err error
-		w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix,
-			WithFlushIntervale(w.opts.WALFlushInterval),
-			WithFsync(w.opts.EnableWALFsync))
+		seg, err := w.newSegment()
 		if err != nil {
 			logger.Errorf("Failed to create new segment: %s", err.Error())
-			w.segment = nil
-			atomic.StoreInt64(&w.segmentSize, 0)
-			atomic.StoreInt64(&w.segmentCreatedAt, 0)
-		} else {
-			atomic.StoreInt64(&w.segmentSize, w.segment.Size())
-			atomic.StoreInt64(&w.segmentCreatedAt, w.segment.CreatedAt().Unix())
+			seg = nil
 		}
+		w.setSegment(seg)
 		w.mu.Unlock()
 
 		if toClose != nil {
@@ -383,15 +397,12 @@ func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {
 
 	w.mu.Lock()
 	if w.segment == nil {
-		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix,
-			WithFlushIntervale(w.opts.WALFlushInterval),
-			WithFsync(w.opts.EnableWALFsync))
+		seg, err := w.newSegment()
 		if err != nil {
 			w.mu.Unlock()
 			return 0, err
 		}
-		w.segment = seg
+		w.setSegment(seg)
 	}
 	seg = w.segment
 	w.mu.Unlock()
