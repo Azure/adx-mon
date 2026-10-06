@@ -48,7 +48,7 @@ func main() {
 	app := &cli.App{
 		Name:  "ingestor",
 		Usage: "adx-mon metrics ingestor",
-		Flags: []cli.Flag{
+		Flags: append([]cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
@@ -77,7 +77,7 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
-		},
+		}, realtimeCLIFlags()...),
 
 		Action: func(ctx *cli.Context) error {
 			return realMain(ctx)
@@ -212,6 +212,14 @@ func realMain(ctx *cli.Context) error {
 
 	metricsEndpoints := ctx.StringSlice("metrics-kusto-endpoints")
 	logsEndpoints := ctx.StringSlice("logs-kusto-endpoints")
+
+	realtimeCfg, err := newRealtimeConfig(ctx, metricsEndpoints, logsEndpoints, maxDiskUsage, backend)
+	if err != nil {
+		logger.Fatalf("Invalid realtime configuration: %s", err)
+	}
+	if realtimeCfg.Policy.HasRealtime() {
+		logger.Infof("Realtime ingestion configured for tables: %v", realtimeCfg.Policy.RealtimeTables())
+	}
 
 	allowedDatabases := make([]string, 0, len(metricsEndpoints)+len(logsEndpoints))
 	var (
