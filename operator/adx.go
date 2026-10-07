@@ -1889,7 +1889,10 @@ func generateKustoFunctionDefinitions(dbTableEndpoints map[string]map[string][]s
 			// isfuzzy=true best_effort=true allows the function to succeed even when some spokes
 			// are missing the table, returning partial results instead of an error.
 			macro := fmt.Sprintf("macro-expand isfuzzy=true best_effort=true %s as X ( X.%s )", entityGroupName, table)
-			funcDef := fmt.Sprintf(".create-or-alter function %s() { %s }", table, macro)
+			// skipvalidation=true follows Microsoft guidance for cross-cluster functions created via scripts
+			// and avoids requiring the hub operator identity to have access to spoke databases.
+			// See https://learn.microsoft.com/kusto/management/create-function
+			funcDef := fmt.Sprintf(".create-or-alter function with (skipvalidation=true) %s() { %s }", table, macro)
 			funcsByDB[db] = append(funcsByDB[db], funcDef)
 		}
 	}

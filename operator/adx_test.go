@@ -1046,7 +1046,7 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 	foundT1 := false
 	foundT2 := false
 	for _, f := range funcs["db1"] {
-		if strings.Contains(f, ".create-or-alter function t1()") {
+		if strings.Contains(f, ".create-or-alter function with (skipvalidation=true) t1()") {
 			foundT1 = true
 			// Verify it references the named entity group, not an inline list
 			// Note: stored entity groups are referenced without the "entity_group" keyword
@@ -1054,7 +1054,7 @@ func TestGenerateKustoFunctionDefinitions(t *testing.T) {
 			require.NotContains(t, f, "entity_group")
 			require.Contains(t, f, "X.t1")
 		}
-		if strings.Contains(f, ".create-or-alter function t2()") {
+		if strings.Contains(f, ".create-or-alter function with (skipvalidation=true) t2()") {
 			foundT2 = true
 			// Verify it references the named entity group, not an inline list
 			// Note: stored entity groups are referenced without the "entity_group" keyword
