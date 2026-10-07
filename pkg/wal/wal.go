@@ -350,47 +350,84 @@ func (w *WAL) scheduleRotationLocked() {
 }
 
 func (w *WAL) rotateSegmentIfNecessary() {
-	if w.requiresRotation() {
-		w.mu.Lock()
-		// Re-verify rotation is needed under write lock since the fast path check is racy
-		if w.closed || !w.requiresRotation() {
-			w.mu.Unlock()
-			return
-		}
+	if !w.requiresRotation() {
+		return
+	}
 
-		toClose := w.segment
+	w.mu.RLock()
+	cur, closed := w.segment, w.closed
+	w.mu.RUnlock()
+	if closed {
+		return
+	}
 
-		// Proactively create the next segment so writers do not create it while holding w.mu.  If the segment
-		// being rotated is empty and no writes are in flight, the WAL has been idle for a full rotation period so
-		// the next segment is created lazily by the next write instead.  This avoids repeatedly creating and
-		// removing empty segments for idle WALs.
-		var seg Segment
-		idle := toClose != nil && toClose.Size() <= 8 && atomic.LoadInt64(&w.inflightWriteBytes) == 0
-		if !idle {
-			var err error
-			seg, err = w.newSegment()
-			if err != nil {
-				logger.Errorf("Failed to create new segment: %s", err.Error())
-				seg = nil
-			}
-		}
-		w.setSegment(seg)
+	// Proactively create the next segment so writers do not create it while holding w.mu.  It is created before
+	// acquiring w.mu so writers are not blocked on file creation during rotation.  If the WAL is idle, the next
+	// segment is created lazily by the next write instead to avoid repeatedly creating and removing empty segments.
+	var next Segment
+	if !w.isIdle(cur) {
+		next = w.createNextSegment()
+	}
+
+	w.mu.Lock()
+	// Re-verify rotation is needed under write lock since the segment may have been rotated concurrently.
+	if w.closed || w.segment != cur || !w.requiresRotation() {
 		w.mu.Unlock()
+		discardSegment(next)
+		return
+	}
 
-		if toClose != nil {
-			// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
-			// delete it so that we don't end up uploading empty segments to Kusto.
-			if toClose.Size() > 8 {
-				info := toClose.Info()
-				w.index.Add(info)
-			} else {
-				_ = os.Remove(toClose.Path())
-			}
+	// A write may have arrived after the WAL was considered idle.  Keep the next segment proactive in that case.
+	if next == nil && !w.isIdle(cur) {
+		next = w.createNextSegment()
+	}
 
-			if err := toClose.Close(); err != nil {
-				logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
-			}
+	toClose := cur
+	w.setSegment(next)
+	w.mu.Unlock()
+
+	if toClose != nil {
+		// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
+		// delete it so that we don't end up uploading empty segments to Kusto.
+		if toClose.Size() > 8 {
+			info := toClose.Info()
+			w.index.Add(info)
+		} else {
+			_ = os.Remove(toClose.Path())
 		}
+
+		if err := toClose.Close(); err != nil {
+			logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
+		}
+	}
+}
+
+// isIdle returns true if seg is empty and no writes are in flight, meaning the WAL received no writes for a full
+// rotation period.
+func (w *WAL) isIdle(seg Segment) bool {
+	return seg != nil && seg.Size() <= 8 && atomic.LoadInt64(&w.inflightWriteBytes) == 0
+}
+
+// createNextSegment creates the next segment, logging and returning nil on failure so the next write creates it.
+func (w *WAL) createNextSegment() Segment {
+	seg, err := w.newSegment()
+	if err != nil {
+		logger.Errorf("Failed to create new segment: %s", err.Error())
+		return nil
+	}
+	return seg
+}
+
+// discardSegment closes and removes an unused segment.
+func discardSegment(seg Segment) {
+	if seg == nil {
+		return
+	}
+	if err := seg.Close(); err != nil {
+		logger.Errorf("Failed to close segment: %s %s", seg.Path(), err.Error())
+	}
+	if err := os.Remove(seg.Path()); err != nil && !os.IsNotExist(err) {
+		logger.Errorf("Failed to remove segment: %s %s", seg.Path(), err.Error())
 	}
 }
 
