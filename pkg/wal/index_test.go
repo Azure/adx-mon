@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -310,4 +311,35 @@ func BenchmarkIndex_Add(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestIndex_TotalSizeByPriority(t *testing.T) {
+	i := NewIndex()
+	i.Add(SegmentInfo{Prefix: "db_a", Path: "/a", Size: 10})
+	i.Add(SegmentInfo{Prefix: "db_b", Path: "/b", Size: 20, Priority: ingestpolicy.PriorityRealtime})
+	i.Add(SegmentInfo{Prefix: "db_b", Path: "/c", Size: 5, Priority: ingestpolicy.PriorityRealtime})
+
+	require.Equal(t, int64(35), i.TotalSize())
+	require.Equal(t, int64(10), i.TotalSizeByPriority(ingestpolicy.PriorityQueued))
+	require.Equal(t, int64(25), i.TotalSizeByPriority(ingestpolicy.PriorityRealtime))
+
+	// Remove uses the indexed priority even if the caller does not set it.
+	i.Remove(SegmentInfo{Prefix: "db_b", Path: "/b", Size: 20})
+	require.Equal(t, int64(15), i.TotalSize())
+	require.Equal(t, int64(10), i.TotalSizeByPriority(ingestpolicy.PriorityQueued))
+	require.Equal(t, int64(5), i.TotalSizeByPriority(ingestpolicy.PriorityRealtime))
+
+	// Removing an unknown segment does not change sizes.
+	i.Remove(SegmentInfo{Prefix: "db_b", Path: "/missing", Size: 100})
+	require.Equal(t, int64(15), i.TotalSize())
+}
+
+func TestIndex_UnknownPriorityCountedAsQueued(t *testing.T) {
+	i := NewIndex()
+	i.Add(SegmentInfo{Prefix: "db_a", Path: "/a", Size: 10, Priority: 99})
+	require.Equal(t, int64(10), i.TotalSizeByPriority(ingestpolicy.PriorityQueued))
+	require.Equal(t, int64(10), i.TotalSizeByPriority(99))
+
+	i.Remove(SegmentInfo{Prefix: "db_a", Path: "/a", Size: 10})
+	require.Zero(t, i.TotalSizeByPriority(ingestpolicy.PriorityQueued))
 }

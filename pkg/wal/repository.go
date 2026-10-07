@@ -51,6 +51,11 @@ type RepositoryOpts struct {
 
 	// Realtime overrides the segment rotation settings for realtime WALs.
 	Realtime RotationPolicy
+
+	// RealtimeReservedDiskBytes is disk space reserved for realtime WALs.  Queued WALs reject writes once total disk
+	// usage reaches MaxDiskUsage minus this value.  It only applies when Policy has realtime tables and is less than
+	// MaxDiskUsage.
+	RealtimeReservedDiskBytes int64
 }
 
 // RotationPolicy overrides segment rotation settings.  Zero values inherit the repository settings.
@@ -286,7 +291,6 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 		StorageDir:       s.opts.StorageDir,
 		SegmentMaxSize:   s.opts.SegmentMaxSize,
 		SegmentMaxAge:    s.opts.SegmentMaxAge,
-		MaxDiskUsage:     s.opts.MaxDiskUsage,
 		Index:            s.index,
 		WALFlushInterval: s.opts.WALFlushInterval,
 		EnableWALFsync:   s.opts.EnableWALFsync,
@@ -294,6 +298,7 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 	}
 
 	opts.Priority = s.priority(prefix)
+	opts.MaxDiskUsage = s.MaxDiskUsage(opts.Priority)
 	if opts.Priority == ingestpolicy.PriorityRealtime {
 		rt := s.opts.Realtime
 		if rt.SegmentMaxAge > 0 {
@@ -307,6 +312,17 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 		}
 	}
 	return opts
+}
+
+// MaxDiskUsage returns the total disk usage at which writes with the given priority are rejected.  Queued writes are
+// limited to MaxDiskUsage minus the realtime reservation so realtime writes can continue when queued data backs up.
+// A value of 0 means no limit.
+func (s *Repository) MaxDiskUsage(p ingestpolicy.Priority) int64 {
+	max, reserved := s.opts.MaxDiskUsage, s.opts.RealtimeReservedDiskBytes
+	if p == ingestpolicy.PriorityRealtime || max <= 0 || reserved <= 0 || reserved >= max || !s.opts.Policy.HasRealtime() {
+		return max
+	}
+	return max - reserved
 }
 
 // priority returns the ingestion priority of the WAL prefix.

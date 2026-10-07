@@ -806,3 +806,15 @@ func TestWAL_EmptySegmentsAreNotNotified(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, ingestpolicy.PriorityQueued, got[0].Priority)
 }
+
+func TestWAL_DiskLimitByPriority(t *testing.T) {
+	// Queued and realtime WALs share an index but have different disk limits.
+	index := NewIndex()
+	index.Add(SegmentInfo{Prefix: "db_other", Path: "/other", Size: 100})
+
+	queued := newTestWAL(t, WALOpts{Prefix: "db_queued", Index: index, MaxDiskUsage: 100})
+	realtime := newTestWAL(t, WALOpts{Prefix: "db_realtime", Index: index, MaxDiskUsage: 200, Priority: ingestpolicy.PriorityRealtime})
+
+	require.ErrorIs(t, queued.Write(context.Background(), []byte("foo")), ErrMaxDiskUsageExceeded)
+	require.NoError(t, realtime.Write(context.Background(), []byte("foo")))
+}

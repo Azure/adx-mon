@@ -430,3 +430,42 @@ func TestRepository_StartupSegmentsCarryPriority(t *testing.T) {
 		require.Equal(t, priority, segments[0].Priority)
 	}
 }
+
+func TestRepository_MaxDiskUsage(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+	empty, err := ingestpolicy.New(nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name             string
+		policy           *ingestpolicy.Policy
+		max, reserved    int64
+		queued, realtime int64
+	}{
+		{name: "reservation applies", policy: policy, max: 100, reserved: 30, queued: 70, realtime: 100},
+		{name: "no reservation", policy: policy, max: 100, reserved: 0, queued: 100, realtime: 100},
+		{name: "no realtime tables", policy: empty, max: 100, reserved: 30, queued: 100, realtime: 100},
+		{name: "nil policy", policy: nil, max: 100, reserved: 30, queued: 100, realtime: 100},
+		{name: "unlimited", policy: policy, max: 0, reserved: 30, queued: 0, realtime: 0},
+		{name: "reservation not below max", policy: policy, max: 100, reserved: 100, queued: 100, realtime: 100},
+		{name: "negative reservation", policy: policy, max: 100, reserved: -1, queued: 100, realtime: 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRepository(RepositoryOpts{
+				StorageDir:                t.TempDir(),
+				MaxDiskUsage:              tt.max,
+				RealtimeReservedDiskBytes: tt.reserved,
+				Policy:                    tt.policy,
+			})
+			require.Equal(t, tt.queued, r.MaxDiskUsage(ingestpolicy.PriorityQueued))
+			require.Equal(t, tt.realtime, r.MaxDiskUsage(ingestpolicy.PriorityRealtime))
+
+			require.Equal(t, tt.queued, r.walOpts("Metrics_MemoryUsage_abc").MaxDiskUsage)
+			if tt.policy.HasRealtime() {
+				require.Equal(t, tt.realtime, r.walOpts("Metrics_CpuUsage_abc").MaxDiskUsage)
+			}
+		})
+	}
+}

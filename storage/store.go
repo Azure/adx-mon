@@ -15,6 +15,7 @@ import (
 
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/pool"
@@ -79,6 +80,16 @@ type StoreOpts struct {
 	LiftedResources  []string
 	WALFlushInterval time.Duration
 	EnableWALFsync   bool
+
+	// Policy assigns an ingestion priority to each table.  When nil, all tables are queued.
+	Policy *ingestpolicy.Policy
+
+	// Realtime overrides segment rotation settings for realtime tables.
+	Realtime wal.RotationPolicy
+
+	// RealtimeReservedDiskBytes is disk space reserved for realtime tables.  Queued writes are rejected once disk
+	// usage reaches MaxDiskUsage minus this value.
+	RealtimeReservedDiskBytes int64
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
@@ -89,13 +100,16 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
 		opts: opts,
 		repository: wal.NewRepository(wal.RepositoryOpts{
-			StorageDir:             opts.StorageDir,
-			SegmentMaxSize:         opts.SegmentMaxSize,
-			SegmentMaxAge:          opts.SegmentMaxAge,
-			MaxDiskUsage:           opts.MaxDiskUsage,
-			StartupOpenConcurrency: opts.StartupOpenConcurrency,
-			WALFlushInterval:       opts.WALFlushInterval,
-			EnableWALFsync:         opts.EnableWALFsync,
+			StorageDir:                opts.StorageDir,
+			SegmentMaxSize:            opts.SegmentMaxSize,
+			SegmentMaxAge:             opts.SegmentMaxAge,
+			MaxDiskUsage:              opts.MaxDiskUsage,
+			StartupOpenConcurrency:    opts.StartupOpenConcurrency,
+			WALFlushInterval:          opts.WALFlushInterval,
+			EnableWALFsync:            opts.EnableWALFsync,
+			Policy:                    opts.Policy,
+			Realtime:                  opts.Realtime,
+			RealtimeReservedDiskBytes: opts.RealtimeReservedDiskBytes,
 		}),
 	}
 }
@@ -144,7 +158,7 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 
 		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 
-		if s.Size() > s.opts.MaxDiskUsage {
+		if s.diskUsageExceeded(w) {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			return wal.ErrMaxDiskUsageExceeded
 		}
@@ -193,7 +207,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 	atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 	defer atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 
-	if s.Size() > s.opts.MaxDiskUsage {
+	if s.diskUsageExceeded(w) {
 		return wal.ErrMaxDiskUsageExceeded
 	}
 
@@ -261,7 +275,7 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		}
 		atomic.AddInt64(&s.inflightWriteBytes, int64(len(enc.Bytes())))
 
-		if s.Size() > s.opts.MaxDiskUsage {
+		if s.diskUsageExceeded(w) {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
 			return wal.ErrMaxDiskUsageExceeded
 		}
@@ -321,7 +335,7 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	atomic.AddInt64(&s.inflightWriteBytes, n)
 	defer atomic.AddInt64(&s.inflightWriteBytes, -n)
 
-	if s.Size() > s.opts.MaxDiskUsage {
+	if s.diskUsageExceeded(w) {
 		return 0, wal.ErrMaxDiskUsageExceeded
 	}
 
@@ -354,6 +368,12 @@ func (s *LocalStore) Index() *wal.Index {
 
 // Size returns the total size of the LocalStore, including the size of the repository (active WAL segments),
 // inflight write bytes, and index size (closed WAL segments).
+// diskUsageExceeded returns true if writes to w must be rejected because disk usage reached the limit for w's
+// ingestion priority.
+func (s *LocalStore) diskUsageExceeded(w *wal.WAL) bool {
+	return s.Size() > s.repository.MaxDiskUsage(w.Priority())
+}
+
 func (s *LocalStore) Size() int64 {
 	return s.repository.Size() + atomic.LoadInt64(&s.inflightWriteBytes) + s.Index().TotalSize()
 }
