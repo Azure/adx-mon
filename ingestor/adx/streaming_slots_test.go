@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -266,4 +267,38 @@ func BenchmarkStreamingSlots_AcquireRelease(b *testing.B) {
 			r(false)
 		}
 	})
+}
+
+func TestStreamingSlotsCollector(t *testing.T) {
+	s := NewStreamingSlots(10, 2, 0, cluster.PeerInfo{Count: 3, Rank: 0})
+	r, ok := s.TryAcquire()
+	require.True(t, ok)
+	defer r(false)
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(NewStreamingSlotsCollector(map[string]*StreamingSlots{"https://c.kusto.windows.net": s}))
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	got := map[string]float64{}
+	for _, f := range families {
+		for _, m := range f.GetMetric() {
+			key := f.GetName()
+			for _, l := range m.GetLabel() {
+				require.True(t, l.GetName() != "endpoint" || l.GetValue() == "https://c.kusto.windows.net")
+				if l.GetName() == "state" {
+					key += "/" + l.GetValue()
+				}
+			}
+			got[key] = m.GetGauge().GetValue()
+		}
+	}
+	require.Equal(t, map[string]float64{
+		"adxmon_ingestor_realtime_streaming_slots/budget":  10,
+		"adxmon_ingestor_realtime_streaming_slots/peers":   3,
+		"adxmon_ingestor_realtime_streaming_slots/share":   4,
+		"adxmon_ingestor_realtime_streaming_slots/limit":   4,
+		"adxmon_ingestor_realtime_streaming_slots/in_use":  1,
+		"adxmon_ingestor_realtime_streaming_overcommitted": 0,
+	}, got)
 }

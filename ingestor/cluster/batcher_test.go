@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -773,4 +774,24 @@ func (p *prefixPartitioner) Owner(b []byte) (string, string) {
 		return owner, ""
 	}
 	return p.defaultOwner, ""
+}
+
+func TestBatcher_SegmentSizeByPriorityMetric(t *testing.T) {
+	idx := wal.NewIndex()
+	addTestSegment(t, idx, "db", "Realtime", ingestpolicy.PriorityRealtime)
+	addTestSegment(t, idx, "db", "Queued", ingestpolicy.PriorityQueued)
+	addTestSegment(t, idx, "db", "Queued", ingestpolicy.PriorityQueued)
+
+	b := newPriorityTestBatcher(t, idx, "node1")
+	b.sizeByPriorityMetric = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "size_by_priority"}, []string{"priority"})
+	_, _, err := b.processSegments()
+	require.NoError(t, err)
+
+	gauge := func(p ingestpolicy.Priority) float64 {
+		m := &dto.Metric{}
+		require.NoError(t, b.sizeByPriorityMetric.WithLabelValues(p.String()).Write(m))
+		return m.GetGauge().GetValue()
+	}
+	require.Equal(t, float64(100), gauge(ingestpolicy.PriorityRealtime))
+	require.Equal(t, float64(200), gauge(ingestpolicy.PriorityQueued))
 }

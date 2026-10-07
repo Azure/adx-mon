@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	adxschema "github.com/Azure/adx-mon/schema"
 	azkustoingest "github.com/Azure/azure-kusto-go/azkustoingest"
@@ -127,12 +128,13 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 	buf := &bytes.Buffer{}
 	if _, err := io.Copy(buf, io.LimitReader(data, rt.MaxRequestBytes+1)); err != nil {
 		logger.Errorf("Failed to read realtime batch db=%s table=%s: %s", n.database, table, err)
-		return streamRetry, nil
+		return n.retry(table, "read_error")
 	}
 	if int64(buf.Len()) > rt.MaxRequestBytes {
 		return n.fallback(table, "too_large", io.MultiReader(buf, data))
 	}
 	if buf.Len() == 0 {
+		n.recordRealtime(table, "streamed")
 		return streamed, nil
 	}
 	buffered := buf.Bytes()
@@ -162,8 +164,11 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 	release, err := rt.Slots.Acquire(slotCtx)
 	cancel()
 	if err != nil {
-		if n.ctx.Err() != nil || rt.MaxLag <= 0 || time.Now().Before(lagDeadline) {
-			return streamRetry, nil
+		if n.ctx.Err() != nil {
+			return n.retry(table, "shutdown")
+		}
+		if rt.MaxLag <= 0 || time.Now().Before(lagDeadline) {
+			return n.retry(table, "no_slot")
 		}
 		return n.fallback(table, "lag", bytes.NewReader(buffered))
 	}
@@ -176,9 +181,13 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 		azkustoingest.IngestionMappingRef(mappingName, azkustoingest.CSV),
 	)
 	cancel()
+	metrics.IngestorRealtimeStreamingRequests.WithLabelValues(n.database).Inc()
+	metrics.IngestorRealtimeStreamingDuration.WithLabelValues(n.database).Add(time.Since(start).Seconds())
 
 	if err == nil {
 		release(false)
+		n.recordRealtime(table, "streamed")
+		metrics.IngestorRealtimeIngestLatency.WithLabelValues(n.database, table).Set(time.Since(oldest).Seconds())
 		if logger.IsDebug() {
 			logger.Debugf("Streamed db=%s table=%s bytes=%d duration=%s", n.database, table, len(buffered), time.Since(start))
 		}
@@ -190,8 +199,10 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 	logger.Warnf("Streaming ingestion failed db=%s table=%s failure=%s: %s", n.database, table, failure, sanitizeErrorString(err))
 
 	switch failure {
-	case streamingThrottled, streamingRetry:
-		return streamRetry, nil
+	case streamingThrottled:
+		return n.retry(table, "throttled")
+	case streamingRetry:
+		return n.retry(table, "transient")
 	case streamingUnavailable:
 		n.cooldowns.start(table, time.Now().Add(rt.Cooldown))
 		return n.fallback(table, failure.String(), bytes.NewReader(buffered))
@@ -201,10 +212,21 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 }
 
 func (n *uploader) fallback(table, reason string, data io.Reader) (streamOutcome, io.Reader) {
+	n.recordRealtime(table, "fallback_"+reason)
 	if logger.IsDebug() {
 		logger.Debugf("Realtime batch using queued ingestion db=%s table=%s reason=%s", n.database, table, reason)
 	}
 	return streamFallback, data
+}
+
+// retry records that a realtime batch will be retried with streaming ingestion.
+func (n *uploader) retry(table, reason string) (streamOutcome, io.Reader) {
+	n.recordRealtime(table, "retry_"+reason)
+	return streamRetry, nil
+}
+
+func (n *uploader) recordRealtime(table, outcome string) {
+	metrics.IngestorRealtimeBatches.WithLabelValues(n.database, table, outcome).Inc()
 }
 
 // oldestSegment returns the creation time of the oldest segment in the batch.

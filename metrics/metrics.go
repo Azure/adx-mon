@@ -107,6 +107,34 @@ var (
 		Help:      "Counter of the number of invalid logs dropped",
 	}, []string{})
 
+	IngestorRealtimeBatches = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_batches_total",
+		Help:      "Counter of realtime batches by outcome: streamed, retried (retry_<reason>) or ingested with queued ingestion (fallback_<reason>)",
+	}, []string{"database", "table", "outcome"})
+
+	IngestorRealtimeStreamingRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_streaming_requests_total",
+		Help:      "Counter of streaming ingestion requests",
+	}, []string{"database"})
+
+	IngestorRealtimeStreamingDuration = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_streaming_duration_seconds_total",
+		Help:      "Counter of the total duration in seconds of streaming ingestion requests.  Divide by realtime_streaming_requests_total for the average duration",
+	}, []string{"database"})
+
+	IngestorRealtimeIngestLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "ingestor",
+		Name:      "realtime_ingest_latency_seconds",
+		Help:      "Gauge of the age in seconds of the oldest segment of the most recent realtime batch ingested with streaming ingestion",
+	}, []string{"database", "table"})
+
 	SampleLatency = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,
 		Subsystem: "ingestor",
@@ -311,4 +339,38 @@ func NewCollectorSegmentMetrics() (segmentsTotal, segmentsSizeBytes, segmentsMax
 		})
 	})
 	return collectorSegmentsTotal, collectorSegmentsSizeBytes, collectorSegmentsMaxAge
+}
+
+var (
+	ingestorSegmentsSizeByPriorityOnce  sync.Once
+	ingestorSegmentsSizeByPriority      *prometheus.GaugeVec
+	collectorSegmentsSizeByPriorityOnce sync.Once
+	collectorSegmentsSizeByPriority     *prometheus.GaugeVec
+)
+
+// NewIngestorSegmentSizeByPriorityMetric creates the ingestor WAL segment size by ingestion priority metric.  It is
+// safe to call multiple times.
+func NewIngestorSegmentSizeByPriorityMetric() *prometheus.GaugeVec {
+	ingestorSegmentsSizeByPriorityOnce.Do(func() {
+		ingestorSegmentsSizeByPriority = newSegmentSizeByPriorityMetric("ingestor")
+	})
+	return ingestorSegmentsSizeByPriority
+}
+
+// NewCollectorSegmentSizeByPriorityMetric creates the collector WAL segment size by ingestion priority metric.  It is
+// safe to call multiple times.
+func NewCollectorSegmentSizeByPriorityMetric() *prometheus.GaugeVec {
+	collectorSegmentsSizeByPriorityOnce.Do(func() {
+		collectorSegmentsSizeByPriority = newSegmentSizeByPriorityMetric("collector")
+	})
+	return collectorSegmentsSizeByPriority
+}
+
+func newSegmentSizeByPriorityMetric(subsystem string) *prometheus.GaugeVec {
+	return promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: subsystem,
+		Name:      "wal_segments_size_bytes_by_priority",
+		Help:      "Gauge indicating the size of closed WAL segments by ingestion priority",
+	}, []string{"priority"})
 }
