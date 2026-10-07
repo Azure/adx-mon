@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/adx-mon/ingestor"
+	"github.com/Azure/adx-mon/ingestor/adx"
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
@@ -21,7 +24,8 @@ const (
 	maxStreamingRequestBytes int64 = 4 * 1024 * 1024
 
 	defaultRealtimeMaxSegmentAge              = 250 * time.Millisecond
-	defaultRealtimeMaxBatchBytes        int64 = 2 * 1024 * 1024
+	defaultRealtimeMaxBatchLatency            = 250 * time.Millisecond
+	defaultRealtimeMaxBatchBytes        int64 = 512 * 1024
 	defaultRealtimeMaxLag                     = 30 * time.Second
 	defaultRealtimeReservedDiskBytes    int64 = 1024 * 1024 * 1024
 	defaultQueuedReservedWorkersPercent       = 10
@@ -36,7 +40,8 @@ func realtimeCLIFlags() []cli.Flag {
 		&cli.IntFlag{Name: "realtime-min-slots", Usage: "Minimum streaming upload slots per ingestor per endpoint", Value: defaultRealtimeMinSlots},
 		&cli.IntFlag{Name: "realtime-max-slots", Usage: "Maximum streaming upload slots per ingestor per endpoint. 0 for no limit", Value: 0},
 		&cli.DurationFlag{Name: "realtime-max-segment-age", Usage: "Maximum age of a realtime segment before it is rotated", Value: defaultRealtimeMaxSegmentAge},
-		&cli.Int64Flag{Name: "realtime-max-batch-bytes", Usage: "Maximum size in bytes of a realtime streaming ingestion batch. Cannot exceed 4MiB", Value: defaultRealtimeMaxBatchBytes},
+		&cli.DurationFlag{Name: "realtime-max-batch-latency", Usage: "Maximum time a closed realtime segment waits to be batched with others before upload", Value: defaultRealtimeMaxBatchLatency},
+		&cli.Int64Flag{Name: "realtime-max-batch-bytes", Usage: "Maximum size of a realtime batch in compressed WAL bytes. Batches whose uncompressed data exceeds the 4MiB streaming limit use queued ingestion. Cannot exceed 4MiB", Value: defaultRealtimeMaxBatchBytes},
 		&cli.DurationFlag{Name: "realtime-max-lag", Usage: "Maximum age of a realtime segment before it falls back to queued ingestion", Value: defaultRealtimeMaxLag},
 		&cli.Int64Flag{Name: "realtime-reserved-disk-bytes", Usage: "Disk space in bytes reserved for realtime segments. Queued segments may use up to max-disk-usage minus this value. Only applies when realtime tables are configured", Value: defaultRealtimeReservedDiskBytes},
 		&cli.IntFlag{Name: "queued-reserved-workers-percent", Usage: "Percentage of upload workers reserved for queued segments. At least one worker is always reserved", Value: defaultQueuedReservedWorkersPercent},
@@ -50,6 +55,7 @@ type realtimeFlags struct {
 	MinSlots                     int
 	MaxSlots                     int
 	MaxSegmentAge                time.Duration
+	MaxBatchLatency              time.Duration
 	MaxBatchBytes                int64
 	MaxLag                       time.Duration
 	ReservedDiskBytes            int64
@@ -63,6 +69,7 @@ func realtimeFlagsFromContext(ctx *cli.Context) realtimeFlags {
 		MinSlots:                     ctx.Int("realtime-min-slots"),
 		MaxSlots:                     ctx.Int("realtime-max-slots"),
 		MaxSegmentAge:                ctx.Duration("realtime-max-segment-age"),
+		MaxBatchLatency:              ctx.Duration("realtime-max-batch-latency"),
 		MaxBatchBytes:                ctx.Int64("realtime-max-batch-bytes"),
 		MaxLag:                       ctx.Duration("realtime-max-lag"),
 		ReservedDiskBytes:            ctx.Int64("realtime-reserved-disk-bytes"),
@@ -77,11 +84,12 @@ type realtimeConfig struct {
 	// StreamingBudgets is keyed by normalized Kusto endpoint.
 	StreamingBudgets map[string]int
 
-	MinSlots      int
-	MaxSlots      int
-	MaxSegmentAge time.Duration
-	MaxBatchBytes int64
-	MaxLag        time.Duration
+	MinSlots        int
+	MaxSlots        int
+	MaxSegmentAge   time.Duration
+	MaxBatchLatency time.Duration
+	MaxBatchBytes   int64
+	MaxLag          time.Duration
 
 	// ReservedDiskBytes is 0 when no realtime tables are configured so queued capacity is unchanged.
 	ReservedDiskBytes            int64
@@ -115,6 +123,9 @@ func parseRealtimeConfig(f realtimeFlags, databaseEndpoints map[string]string, m
 	}
 	if f.MaxSegmentAge <= 0 {
 		return nil, errors.New("--realtime-max-segment-age must be greater than 0")
+	}
+	if f.MaxBatchLatency <= 0 {
+		return nil, errors.New("--realtime-max-batch-latency must be greater than 0")
 	}
 	if f.MaxBatchBytes <= 0 || f.MaxBatchBytes > maxStreamingRequestBytes {
 		return nil, fmt.Errorf("--realtime-max-batch-bytes must be between 1 and %d", maxStreamingRequestBytes)
@@ -171,6 +182,7 @@ func parseRealtimeConfig(f realtimeFlags, databaseEndpoints map[string]string, m
 		MinSlots:                     f.MinSlots,
 		MaxSlots:                     f.MaxSlots,
 		MaxSegmentAge:                f.MaxSegmentAge,
+		MaxBatchLatency:              f.MaxBatchLatency,
 		MaxBatchBytes:                f.MaxBatchBytes,
 		MaxLag:                       f.MaxLag,
 		QueuedReservedWorkersPercent: f.QueuedReservedWorkersPercent,
@@ -232,4 +244,63 @@ func parseStreamingBudget(s string) (string, int, error) {
 // normalizeEndpoint returns a canonical form of a Kusto endpoint for comparison.
 func normalizeEndpoint(endpoint string) string {
 	return strings.ToLower(strings.TrimRight(strings.TrimSpace(endpoint), "/"))
+}
+
+// newStreamingSlots returns a streaming slot pool for each endpoint with a streaming budget.  Uploaders for databases
+// on the same endpoint share its pool.
+func (c *realtimeConfig) newStreamingSlots() map[string]*adx.StreamingSlots {
+	slots := make(map[string]*adx.StreamingSlots, len(c.StreamingBudgets))
+	if !c.Policy.HasRealtime() {
+		return slots
+	}
+	for endpoint, budget := range c.StreamingBudgets {
+		slots[endpoint] = adx.NewStreamingSlots(budget, c.MinSlots, c.MaxSlots, cluster.PeerInfo{Count: 1})
+	}
+	return slots
+}
+
+// uploadOpts returns the realtime upload options for an uploader of database on endpoint, or nil if the database has
+// no realtime tables.
+func (c *realtimeConfig) uploadOpts(database, endpoint string, slots map[string]*adx.StreamingSlots) *adx.RealtimeUploadOpts {
+	if !c.hasRealtimeDatabase(database) {
+		return nil
+	}
+	s, ok := slots[normalizeEndpoint(endpoint)]
+	if !ok {
+		return nil
+	}
+	return &adx.RealtimeUploadOpts{Slots: s, MaxLag: c.MaxLag}
+}
+
+func (c *realtimeConfig) hasRealtimeDatabase(database string) bool {
+	db := schema.NormalizeAdxIdentifier(database)
+	for _, v := range c.Policy.RealtimeDatabases() {
+		if v == db {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceOpts returns the realtime options for the ingestor service, or nil if no realtime tables are configured.
+func (c *realtimeConfig) serviceOpts() *ingestor.RealtimeOpts {
+	if !c.Policy.HasRealtime() {
+		return nil
+	}
+	return &ingestor.RealtimeOpts{
+		Policy:            c.Policy,
+		MaxSegmentAge:     c.MaxSegmentAge,
+		MaxBatchLatency:   c.MaxBatchLatency,
+		MaxBatchBytes:     c.MaxBatchBytes,
+		ReservedDiskBytes: c.ReservedDiskBytes,
+	}
+}
+
+// peerListeners returns funcs that update the streaming slot pools when the ingestor's peers change.
+func peerListeners(slots map[string]*adx.StreamingSlots) []func(cluster.PeerInfo) {
+	listeners := make([]func(cluster.PeerInfo), 0, len(slots))
+	for _, s := range slots {
+		listeners = append(listeners, s.SetPeers)
+	}
+	return listeners
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,7 @@ func defaultRealtimeFlags() realtimeFlags {
 	return realtimeFlags{
 		MinSlots:                     defaultRealtimeMinSlots,
 		MaxSegmentAge:                defaultRealtimeMaxSegmentAge,
+		MaxBatchLatency:              defaultRealtimeMaxBatchLatency,
 		MaxBatchBytes:                defaultRealtimeMaxBatchBytes,
 		MaxLag:                       defaultRealtimeMaxLag,
 		ReservedDiskBytes:            defaultRealtimeReservedDiskBytes,
@@ -93,6 +95,7 @@ func TestParseRealtimeConfig_Invalid(t *testing.T) {
 		{name: "max slots negative", modify: func(f *realtimeFlags) { f.MaxSlots = -1 }, contains: "--realtime-max-slots must not be negative"},
 		{name: "max below min", modify: func(f *realtimeFlags) { f.MinSlots = 4; f.MaxSlots = 2 }, contains: "must be 0 or at least --realtime-min-slots"},
 		{name: "segment age zero", modify: func(f *realtimeFlags) { f.MaxSegmentAge = 0 }, contains: "--realtime-max-segment-age"},
+		{name: "batch latency zero", modify: func(f *realtimeFlags) { f.MaxBatchLatency = 0 }, contains: "--realtime-max-batch-latency"},
 		{name: "batch bytes zero", modify: func(f *realtimeFlags) { f.MaxBatchBytes = 0 }, contains: "--realtime-max-batch-bytes"},
 		{name: "batch bytes over streaming limit", modify: func(f *realtimeFlags) { f.MaxBatchBytes = maxStreamingRequestBytes + 1 }, contains: "--realtime-max-batch-bytes"},
 		{name: "max lag zero", modify: func(f *realtimeFlags) { f.MaxLag = 0 }, contains: "--realtime-max-lag"},
@@ -238,6 +241,8 @@ func TestNewRealtimeConfig_DefaultsFromCLI(t *testing.T) {
 	require.False(t, got.Policy.HasRealtime())
 	require.Equal(t, defaultRealtimeMinSlots, got.MinSlots)
 	require.Equal(t, defaultRealtimeMaxSegmentAge, got.MaxSegmentAge)
+	require.Equal(t, defaultRealtimeMaxBatchLatency, got.MaxBatchLatency)
+	require.Equal(t, defaultRealtimeMaxBatchBytes, got.MaxBatchBytes)
 	require.Equal(t, defaultRealtimeMaxLag, got.MaxLag)
 }
 
@@ -250,4 +255,74 @@ func TestNewRealtimeConfig_InvalidStorageEndpoint(t *testing.T) {
 		},
 	}
 	require.ErrorContains(t, app.Run([]string{"ingestor"}), "invalid endpoint")
+}
+
+func newTestRealtimeConfig(t *testing.T) *realtimeConfig {
+	t.Helper()
+	f := defaultRealtimeFlags()
+	f.Tables = []string{"Metrics.CpuUsage"}
+	f.StreamingBudgets = []string{testMetricsEndpoint + "=10"}
+	endpoints := map[string]string{
+		"Metrics":      testMetricsEndpoint,
+		"OtherMetrics": testMetricsEndpoint + "/",
+		"Logs":         testLogsEndpoint,
+	}
+	cfg, err := parseRealtimeConfig(f, endpoints, testMaxDiskUsage, storage.BackendADX)
+	require.NoError(t, err)
+	return cfg
+}
+
+func TestRealtimeConfig_NewStreamingSlots(t *testing.T) {
+	cfg := newTestRealtimeConfig(t)
+	slots := cfg.newStreamingSlots()
+	require.Len(t, slots, 1)
+	require.Equal(t, 10, slots[testMetricsEndpoint].Stats().Budget)
+
+	disabled, err := parseRealtimeConfig(defaultRealtimeFlags(), testDatabaseEndpoints, testMaxDiskUsage, storage.BackendADX)
+	require.NoError(t, err)
+	require.Empty(t, disabled.newStreamingSlots())
+}
+
+func TestRealtimeConfig_UploadOpts(t *testing.T) {
+	cfg := newTestRealtimeConfig(t)
+	cfg.MaxLag = time.Minute
+	slots := cfg.newStreamingSlots()
+
+	opts := cfg.uploadOpts("Metrics", testMetricsEndpoint, slots)
+	require.NotNil(t, opts)
+	require.Same(t, slots[testMetricsEndpoint], opts.Slots)
+	require.Equal(t, time.Minute, opts.MaxLag)
+
+	// Databases without realtime tables do not stream.
+	require.Nil(t, cfg.uploadOpts("OtherMetrics", testMetricsEndpoint, slots))
+	require.Nil(t, cfg.uploadOpts("Logs", testLogsEndpoint, slots))
+	// Endpoints are normalized when looking up slots.
+	require.NotNil(t, cfg.uploadOpts("Metrics", "HTTPS://metrics.kusto.windows.net/", slots))
+	// Without a slot pool for the endpoint, the database does not stream.
+	require.Nil(t, cfg.uploadOpts("Metrics", testLogsEndpoint, slots))
+}
+
+func TestRealtimeConfig_ServiceOpts(t *testing.T) {
+	cfg := newTestRealtimeConfig(t)
+	opts := cfg.serviceOpts()
+	require.NotNil(t, opts)
+	require.Same(t, cfg.Policy, opts.Policy)
+	require.Equal(t, defaultRealtimeMaxSegmentAge, opts.MaxSegmentAge)
+	require.Equal(t, defaultRealtimeMaxBatchLatency, opts.MaxBatchLatency)
+	require.Equal(t, defaultRealtimeMaxBatchBytes, opts.MaxBatchBytes)
+	require.Equal(t, defaultRealtimeReservedDiskBytes, opts.ReservedDiskBytes)
+
+	disabled, err := parseRealtimeConfig(defaultRealtimeFlags(), testDatabaseEndpoints, testMaxDiskUsage, storage.BackendADX)
+	require.NoError(t, err)
+	require.Nil(t, disabled.serviceOpts())
+}
+
+func TestPeerListenersUpdateSlots(t *testing.T) {
+	cfg := newTestRealtimeConfig(t)
+	slots := cfg.newStreamingSlots()
+	listeners := peerListeners(slots)
+	require.Len(t, listeners, 1)
+
+	listeners[0](cluster.PeerInfo{Count: 4, Rank: 3})
+	require.Equal(t, 2, slots[testMetricsEndpoint].Stats().Share)
 }
