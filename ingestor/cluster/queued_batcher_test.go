@@ -14,6 +14,7 @@ import (
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
+	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
 	"github.com/stretchr/testify/require"
@@ -232,4 +233,140 @@ func TestQueuedBatcher_MatchesScan(t *testing.T) {
 	sort.Strings(got)
 	require.Equal(t, want, got)
 	require.Greater(t, len(want), 8, strings.Join(want, "\n"))
+}
+
+// newBenchmarkBatcher returns a batcher with prefixes in-flight segments, one per prefix, and fresh unbatched segments
+// in the first fresh prefixes.
+func newBenchmarkBatcher(b *testing.B, prefixes, fresh int) (*batcher, []wal.SegmentInfo) {
+	b.Helper()
+	idx := wal.NewIndex()
+	idgen, err := flake.New()
+	require.NoError(b, err)
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
+	bt := &batcher{
+		hostname:                "node1",
+		maxTransferAge:          time.Hour,
+		maxTransferSize:         100 * 1024 * 1024,
+		minUploadSize:           100 * 1024 * 1024,
+		maxBatchSegments:        25,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		health:                  &fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		uploadQueue:             make(chan *Batch, fresh*2),
+		transferQueue:           make(chan *Batch, fresh*2),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
+	}
+
+	newSegment := func(table string) wal.SegmentInfo {
+		id := idgen.NextId()
+		created, err := flakeutil.ParseFlakeID(id.String())
+		require.NoError(b, err)
+		return wal.SegmentInfo{
+			Prefix:    "db_" + table,
+			Ulid:      id.String(),
+			Path:      filepath.Join("/wal", wal.Filename("db", table, "", id.String())),
+			Size:      1024,
+			CreatedAt: created,
+		}
+	}
+
+	for i := 0; i < prefixes; i++ {
+		si := newSegment(fmt.Sprintf("T%d", i))
+		idx.Add(si)
+		_ = bt.segments.Mutate(si.Path, func(n int) (int, error) { return n + 1, nil })
+	}
+
+	var freshSegments []wal.SegmentInfo
+	for i := 0; i < fresh; i++ {
+		si := newSegment(fmt.Sprintf("T%d", i))
+		idx.Add(si)
+		freshSegments = append(freshSegments, si)
+	}
+	return bt, freshSegments
+}
+
+// releaseBatches drains the batcher's queues and marks the fresh segments unbatched so the next iteration batches them
+// again.
+func releaseBatches(bt *batcher, fresh []wal.SegmentInfo) {
+	for len(bt.uploadQueue) > 0 {
+		<-bt.uploadQueue
+	}
+	for len(bt.transferQueue) > 0 {
+		<-bt.transferQueue
+	}
+	for _, si := range fresh {
+		_, _ = bt.segments.Delete(si.Path)
+	}
+}
+
+// BenchmarkBatcherPeriod measures the CPU used by each batcher mode in one 5 second period with many prefixes that
+// have in-flight segments and a few newly closed segments.
+func BenchmarkBatcherPeriod(b *testing.B) {
+	const fresh = 10
+	for _, prefixes := range []int{1000, 10000} {
+		b.Run(fmt.Sprintf("mode=scan/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, freshSegments := newBenchmarkBatcher(b, prefixes, fresh)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				owned, notOwned, err := bt.processSegments()
+				if err != nil || len(owned)+len(notOwned) != fresh {
+					b.Fatalf("unexpected batches %d %v", len(owned)+len(notOwned), err)
+				}
+				b.StopTimer()
+				releaseBatches(bt, freshSegments)
+				b.StartTimer()
+			}
+		})
+
+		b.Run(fmt.Sprintf("mode=event/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, freshSegments := newBenchmarkBatcher(b, prefixes, fresh)
+			e := newQueuedBatcher(bt, time.Hour)
+			ctx := context.Background()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bt.updateSegmentMetrics()
+				for _, si := range freshSegments {
+					e.onSegment(si)
+				}
+				e.process(ctx, time.Now(), true)
+				b.StopTimer()
+				if n := len(bt.uploadQueue) + len(bt.transferQueue); n != fresh {
+					b.Fatalf("unexpected batches %d", n)
+				}
+				releaseBatches(bt, freshSegments)
+				b.StartTimer()
+			}
+		})
+
+		// The event mode sweep, and processing the prefixes it marks pending, runs every queuedSweepInterval, which
+		// spans 12 periods.
+		b.Run(fmt.Sprintf("event-sweep/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, _ := newBenchmarkBatcher(b, prefixes, 0)
+			e := newQueuedBatcher(bt, time.Hour)
+			b.ReportAllocs()
+			b.ResetTimer()
+			ctx := context.Background()
+			for i := 0; i < b.N; i++ {
+				e.sweep()
+				e.process(ctx, time.Now(), true)
+				b.StopTimer()
+				e.pending = make(map[string]pendingPrefix)
+				b.StartTimer()
+			}
+		})
+
+		b.Run(fmt.Sprintf("metrics/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, _ := newBenchmarkBatcher(b, prefixes, fresh)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bt.updateSegmentMetrics()
+			}
+		})
+	}
 }

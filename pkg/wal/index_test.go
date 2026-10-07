@@ -343,3 +343,16 @@ func TestIndex_UnknownPriorityCountedAsQueued(t *testing.T) {
 	i.Remove(SegmentInfo{Prefix: "db_a", Path: "/a", Size: 10})
 	require.Zero(t, i.TotalSizeByPriority(ingestpolicy.PriorityQueued))
 }
+
+func TestIndex_Prefixes(t *testing.T) {
+	i := NewIndex()
+	require.Empty(t, i.Prefixes(nil))
+
+	i.Add(SegmentInfo{Prefix: "db_b", Path: "/b1", CreatedAt: time.Unix(2, 0)})
+	i.Add(SegmentInfo{Prefix: "db_a", Path: "/a1", CreatedAt: time.Unix(1, 0)})
+	i.Add(SegmentInfo{Prefix: "db_a", Path: "/a2", CreatedAt: time.Unix(3, 0)})
+
+	prefixes := i.Prefixes([]string{"existing"})
+	require.ElementsMatch(t, []string{"existing", "db_a", "db_b"}, prefixes)
+	require.ElementsMatch(t, i.PrefixesByAge(), i.Prefixes(nil))
+}

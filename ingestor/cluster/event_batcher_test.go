@@ -61,3 +61,26 @@ func TestEventBatcher_ReleasesUnsentNotOwnedOnCancel(t *testing.T) {
 	n, _ := env.b.segments.Get(q.Path)
 	require.Zero(t, n)
 }
+
+func TestEventBatcher_SweepSkipsBatchedPrefixes(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
+	e := newEventBatcher(env.b, transferPolicy{}, time.Hour)
+
+	inFlight := env.add(t, "InFlight", 100, ingestpolicy.PriorityQueued)
+	_ = env.b.segments.Mutate(inFlight.Path, func(n int) (int, error) { return n + 1, nil })
+	env.add(t, "Partial", 100, ingestpolicy.PriorityQueued)
+	partial := env.add(t, "Partial", 100, ingestpolicy.PriorityQueued)
+	_ = env.b.segments.Mutate(partial.Path, func(n int) (int, error) { return n + 1, nil })
+	env.add(t, "Realtime", 100, ingestpolicy.PriorityRealtime)
+
+	e.sweep()
+
+	// Only prefixes with unbatched segments accepted by the policy are pending.
+	_, inFlightPending := e.pending["db_InFlight"]
+	_, partialPending := e.pending["db_Partial"]
+	_, realtimePending := e.pending["db_Realtime"]
+	require.False(t, inFlightPending)
+	require.True(t, partialPending)
+	require.False(t, realtimePending)
+	require.Len(t, e.pending, 1)
+}
