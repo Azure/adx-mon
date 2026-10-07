@@ -3,12 +3,19 @@ package collector
 import (
 	"context"
 	"errors"
+	stdhttp "net/http"
+	"net/http/httptest"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/k8s"
+	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/storage"
 	connect "github.com/bufbuild/connect-go"
 	"github.com/stretchr/testify/require"
@@ -685,4 +692,60 @@ func fakePod(namespace, name string, labels map[string]string, node string) *v1.
 			NodeName: node,
 		},
 	}
+}
+
+func TestService_RealtimeTablesAreTransferredPromptly(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		transfers []string
+	)
+	server := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		mu.Lock()
+		transfers = append(transfers, r.URL.Query().Get("filename"))
+		mu.Unlock()
+		w.WriteHeader(stdhttp.StatusAccepted)
+	}))
+	defer server.Close()
+
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
+	require.NoError(t, err)
+
+	s, err := NewService(&ServiceOpts{
+		StorageDir:         t.TempDir(),
+		StorageBackend:     storage.BackendADX,
+		ListenAddr:         "127.0.0.1:0",
+		Endpoint:           server.URL,
+		InsecureSkipVerify: true,
+		DisableGzip:        true,
+		MaxSegmentAge:      time.Hour,
+		Realtime: &RealtimeOpts{
+			Policy:            policy,
+			MaxSegmentAge:     50 * time.Millisecond,
+			MaxBatchLatency:   50 * time.Millisecond,
+			MaxBatchBytes:     1024 * 1024,
+			ReservedDiskBytes: 1024 * 1024,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Open(context.Background()))
+	t.Cleanup(func() { s.Close() })
+
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{}}}
+	start := time.Now()
+	require.NoError(t, s.store.WriteOTLPLogs(context.Background(), "Logs", "Realtime", logs))
+	require.NoError(t, s.store.WriteOTLPLogs(context.Background(), "Logs", "Queued", logs))
+
+	// The realtime table is rotated, batched and transferred within its realtime latency rather than waiting for its
+	// queued max segment age, the 4MB minimum transfer size or the periodic scan.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(transfers) > 0
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Less(t, time.Since(start), 3*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, transfers, 1)
+	require.True(t, strings.HasPrefix(transfers[0], "Logs_Realtime_"), transfers[0])
 }
