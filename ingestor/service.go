@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/debug"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/reader"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -149,6 +150,38 @@ type ServiceOpts struct {
 	ClusterLabels map[string]string
 
 	StorageBackend storage.Backend
+
+	// Realtime configures realtime ingestion.  When nil or without realtime tables, all tables are queued.
+	Realtime *RealtimeOpts
+
+	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.
+	QueuedReservedWorkersPercent int
+
+	// PeerListeners are called with the ingestor's peer count and rank when the service opens and when they change.
+	PeerListeners []func(cluster.PeerInfo)
+}
+
+// RealtimeOpts configures realtime ingestion in the ingestor.
+type RealtimeOpts struct {
+	// Policy assigns ingestion priorities to tables.
+	Policy *ingestpolicy.Policy
+
+	// MaxSegmentAge is the max age of realtime WAL segments before they are rotated.
+	MaxSegmentAge time.Duration
+
+	// MaxBatchLatency is the max time a closed realtime segment waits to be batched.
+	MaxBatchLatency time.Duration
+
+	// MaxBatchBytes is the max size of a realtime batch in WAL bytes.
+	MaxBatchBytes int64
+
+	// ReservedDiskBytes is disk space reserved for realtime segments.
+	ReservedDiskBytes int64
+}
+
+// enabled returns true if realtime tables are configured.
+func (o *RealtimeOpts) enabled() bool {
+	return o != nil && o.Policy.HasRealtime()
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -156,14 +189,25 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		opts.StorageBackend = storage.BackendADX
 	}
 
-	store := storage.NewLocalStore(storage.StoreOpts{
+	storeOpts := storage.StoreOpts{
 		StorageDir:             opts.StorageDir,
 		SegmentMaxSize:         opts.MaxSegmentSize,
 		SegmentMaxAge:          opts.MaxSegmentAge,
 		EnableWALFsync:         opts.EnableWALFsync,
 		MaxDiskUsage:           opts.MaxDiskUsage,
 		StartupOpenConcurrency: opts.ConcurrentUploads,
-	})
+	}
+	var realtimeBatch cluster.RealtimeBatchOpts
+	if opts.Realtime.enabled() {
+		storeOpts.Policy = opts.Realtime.Policy
+		storeOpts.Realtime = wal.RotationPolicy{SegmentMaxAge: opts.Realtime.MaxSegmentAge}
+		storeOpts.RealtimeReservedDiskBytes = opts.Realtime.ReservedDiskBytes
+		realtimeBatch = cluster.RealtimeBatchOpts{
+			MaxBatchLatency: opts.Realtime.MaxBatchLatency,
+			MaxBatchBytes:   opts.Realtime.MaxBatchBytes,
+		}
+	}
+	store := storage.NewLocalStore(storeOpts)
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
 		K8sCli:        opts.K8sCli,
@@ -182,13 +226,14 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Hostname:               opts.Hostname,
-		Partitioner:            coord,
-		InsecureSkipVerify:     opts.InsecureSkipVerify,
-		Health:                 health,
-		SegmentRemover:         store,
-		MaxTransferConcurrency: opts.MaxTransferConcurrency,
-		DisableGzip:            true,
+		Hostname:                     opts.Hostname,
+		Partitioner:                  coord,
+		InsecureSkipVerify:           opts.InsecureSkipVerify,
+		Health:                       health,
+		SegmentRemover:               store,
+		MaxTransferConcurrency:       opts.MaxTransferConcurrency,
+		DisableGzip:                  true,
+		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 	})
 	if err != nil {
 		return nil, err
@@ -209,6 +254,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		RealtimeUploadQueue:     realtimeUploadQueue(opts.Uploader),
 		TransferQueue:           repl.TransferQueue(),
 		RealtimeTransferQueue:   repl.RealtimeTransferQueue(),
+		Realtime:                realtimeBatch,
 		PeerHealthReporter:      health,
 		TransfersDisabled:       opts.DisablePeerTransfer,
 		SegmentsCountMetric:     ingestorSegmentsTotal,
@@ -276,6 +322,11 @@ func (s *Service) Open(ctx context.Context) error {
 
 	if err := s.coordinator.Open(svcCtx); err != nil {
 		return err
+	}
+
+	for _, listener := range s.opts.PeerListeners {
+		s.coordinator.SubscribePeers(listener)
+		listener(s.coordinator.Peers())
 	}
 
 	if err := s.batcher.Open(svcCtx); err != nil {
