@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/service"
@@ -47,6 +48,11 @@ type BatcherOpts struct {
 	TransferQueue      chan *Batch
 	PeerHealthReporter PeerHealthReporter
 
+	// RealtimeUploadQueue and RealtimeTransferQueue receive realtime batches.  When nil, realtime batches are sent to
+	// UploadQueue and TransferQueue.
+	RealtimeUploadQueue   chan *Batch
+	RealtimeTransferQueue chan *Batch
+
 	TransfersDisabled bool
 
 	// Metrics for observability
@@ -60,6 +66,9 @@ type Batch struct {
 	Database string
 	Table    string
 	Prefix   string
+
+	// Priority is the ingestion priority of the batch's table.
+	Priority ingestpolicy.Priority
 
 	batcher Batcher
 
@@ -124,7 +133,11 @@ type Batcher interface {
 type batcher struct {
 	uploadQueue   chan *Batch
 	transferQueue chan *Batch
-	store         storage.Store
+
+	realtimeUploadQueue   chan *Batch
+	realtimeTransferQueue chan *Batch
+
+	store storage.Store
 
 	// pendingUploads is the number of batches ready for upload but not in the upload queue.
 	pendingUploads uint64
@@ -190,6 +203,8 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		Segmenter:               opts.Segmenter,
 		uploadQueue:             opts.UploadQueue,
 		transferQueue:           opts.TransferQueue,
+		realtimeUploadQueue:     opts.RealtimeUploadQueue,
+		realtimeTransferQueue:   opts.RealtimeTransferQueue,
 		health:                  opts.PeerHealthReporter,
 		transferDisabled:        opts.TransfersDisabled,
 		segments:                partmap.NewMap[int](64),
@@ -219,11 +234,35 @@ func (b *batcher) Close() error {
 }
 
 func (b *batcher) TransferQueueSize() int {
-	return len(b.transferQueue) + int(atomic.LoadUint64(&b.pendingTransfer))
+	return len(b.transferQueue) + separateQueueLen(b.realtimeTransferQueue, b.transferQueue) + int(atomic.LoadUint64(&b.pendingTransfer))
 }
 
 func (b *batcher) UploadQueueSize() int {
-	return len(b.uploadQueue) + int(atomic.LoadUint64(&b.pendingUploads))
+	return len(b.uploadQueue) + separateQueueLen(b.realtimeUploadQueue, b.uploadQueue) + int(atomic.LoadUint64(&b.pendingUploads))
+}
+
+// separateQueueLen returns the length of q if it is set and distinct from fallback so it is not counted twice.
+func separateQueueLen(q, fallback chan *Batch) int {
+	if q == nil || q == fallback {
+		return 0
+	}
+	return len(q)
+}
+
+// uploadQueueFor returns the upload queue for batches with priority p.
+func (b *batcher) uploadQueueFor(p ingestpolicy.Priority) chan *Batch {
+	if p == ingestpolicy.PriorityRealtime && b.realtimeUploadQueue != nil {
+		return b.realtimeUploadQueue
+	}
+	return b.uploadQueue
+}
+
+// transferQueueFor returns the transfer queue for batches with priority p.
+func (b *batcher) transferQueueFor(p ingestpolicy.Priority) chan *Batch {
+	if p == ingestpolicy.PriorityRealtime && b.realtimeTransferQueue != nil {
+		return b.realtimeTransferQueue
+	}
+	return b.transferQueue
 }
 
 func (b *batcher) SegmentsTotal() int64 {
@@ -267,12 +306,18 @@ func (b *batcher) BatchSegments() error {
 	metrics.IngestorQueueSize.WithLabelValues("upload").Set(float64(len(b.uploadQueue) + len(owned)))
 	metrics.IngestorQueueSize.WithLabelValues("transfer").Set(float64(len(b.transferQueue) + len(notOwned)))
 
-	for _, v := range owned {
-		b.uploadQueue <- v
-	}
-
-	for _, v := range notOwned {
-		b.transferQueue <- v
+	// Send realtime batches first so they are not delayed behind queued batches when queues are full.
+	for _, p := range []ingestpolicy.Priority{ingestpolicy.PriorityRealtime, ingestpolicy.PriorityQueued} {
+		for _, v := range owned {
+			if v.Priority == p {
+				b.uploadQueueFor(p) <- v
+			}
+		}
+		for _, v := range notOwned {
+			if v.Priority == p {
+				b.transferQueueFor(p) <- v
+			}
+		}
 	}
 
 	return nil
@@ -366,12 +411,18 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 			continue
 		}
 
-		batch = &Batch{
-			Prefix:   prefix,
-			Database: db,
-			Table:    table,
-			batcher:  b,
+		// All segments of a prefix belong to the same table and have the same priority.
+		priority := v[0].Priority
+		newBatch := func() *Batch {
+			return &Batch{
+				Prefix:   prefix,
+				Database: db,
+				Table:    table,
+				Priority: priority,
+				batcher:  b,
+			}
 		}
+		batch = newBatch()
 
 		for _, si := range v {
 			batch.Segments = append(batch.Segments, si)
@@ -390,12 +441,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				}
 
 				owned = append(owned, batch)
-				batch = &Batch{
-					Prefix:   prefix,
-					Database: db,
-					Table:    table,
-					batcher:  b,
-				}
+				batch = newBatch()
 				batchSize = 0
 				continue
 			}
@@ -407,12 +453,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				}
 
 				owned = append(owned, batch)
-				batch = &Batch{
-					Prefix:   prefix,
-					Database: db,
-					Table:    table,
-					batcher:  b,
-				}
+				batch = newBatch()
 				batchSize = 0
 				continue
 			}
@@ -423,12 +464,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 				}
 
 				owned = append(owned, batch)
-				batch = &Batch{
-					Prefix:   prefix,
-					Database: db,
-					Table:    table,
-					batcher:  b,
-				}
+				batch = newBatch()
 				batchSize = 0
 				continue
 			}
@@ -443,12 +479,7 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
 				}
 				owned = append(owned, batch)
-				batch = &Batch{
-					Prefix:   prefix,
-					Database: db,
-					Table:    table,
-					batcher:  b,
-				}
+				batch = newBatch()
 				batchSize = 0
 				continue
 
@@ -464,7 +495,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 		// If the peer has signaled that it's unhealthy, upload the segments directly.
 		peerHealthy := b.health.IsPeerHealthy(owner)
 
-		if owner == b.hostname || !peerHealthy || b.transferDisabled {
+		// Realtime batches are uploaded by the node that has them rather than transferred to a peer to avoid the added
+		// latency.
+		if owner == b.hostname || !peerHealthy || b.transferDisabled || priority == ingestpolicy.PriorityRealtime {
 			owned = append(owned, batch)
 		} else {
 			notOwned = append(notOwned, batch)
