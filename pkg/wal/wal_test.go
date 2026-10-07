@@ -722,3 +722,45 @@ func TestWAL_WriteRotatesForSizeOnce(t *testing.T) {
 	require.ErrorIs(t, err, ErrMaxSegmentSizeExceeded)
 	require.Equal(t, 2, calls)
 }
+
+func TestWAL_ConcurrentRotationDiscardsUnusedSegments(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", SegmentMaxAge: time.Hour})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+	defer w.Close()
+
+	for i := 0; i < 20; i++ {
+		require.NoError(t, w.Write(context.Background(), []byte("foo")))
+		expireSegment(w)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				w.rotateSegmentIfNecessary()
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		// Exactly one rotation happened and only the closed segments plus the active segment remain on disk.
+		require.Equal(t, i+1, w.index.TotalSegments())
+		require.NotNil(t, w.Segment())
+		require.Len(t, walFiles(t, dir), i+2)
+	}
+}
+
+func TestDiscardSegment(t *testing.T) {
+	discardSegment(nil)
+
+	dir := t.TempDir()
+	seg, err := NewSegment(dir, "db_table")
+	require.NoError(t, err)
+	discardSegment(seg)
+	require.NoFileExists(t, seg.Path())
+	require.Empty(t, walFiles(t, dir))
+}
