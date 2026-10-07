@@ -103,6 +103,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
 - **Batching & Coalescing:** Segments are batched by table/schema and uploaded to ADX in large, compressed batches (100MB–1GB recommended) to optimize ingestion cost and performance.
 - **Peer Transfer:** Small segments are transferred to peer ingestors for coalescing, reducing the number of small files ingested by ADX.
 - **Direct Upload Fallback:** If a segment is too old or too large, it is uploaded directly to ADX, bypassing peer transfer.
+- **Realtime Ingestion:** Selected tables are rotated and batched as soon as segments close and ingested with ADX streaming ingestion, falling back to queued ingestion when needed. See [realtime ingestion](ingestor.md#realtime-ingestion).
 - **Multi-Database Support:** Can upload to multiple ADX databases (e.g., metrics, logs) simultaneously.
 - **Kubernetes Native:** Deployed as a StatefulSet, supports scaling and partitioning.
 - **CRD-Driven:** Managed via the `Ingestor` CRD for declarative configuration.
@@ -121,6 +122,7 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
   - `--partition-size`: Number of nodes in a partition for sharding.
   - `--max-disk-usage`, `--max-segment-count`: Backpressure controls.
   - `--enable-wal-fsync`: Enable fsync for WAL durability.
+  - `--realtime-table`, `--realtime-streaming-budget`: Tables that use realtime streaming ingestion and the streaming concurrency budget per Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion) for all realtime options.
   - See `docs/config.md` for all options.
 
 #### Example Ingestor CRD
