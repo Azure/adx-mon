@@ -48,6 +48,100 @@ sized to be between 100MB and 1GB (uncompressed) to align with Kusto ingestion b
 
 ## Traces
 
+## Realtime ingestion
+
+Queued ingestion is optimized for throughput and cost, so data typically takes minutes to become queryable.
+Selected tables can instead use realtime ingestion, which uses Kusto
+[streaming ingestion](https://learn.microsoft.com/en-us/azure/data-explorer/ingest-data-streaming) to make data
+queryable within seconds.  Realtime tables still use the WAL on both the collector and the ingestor, so no data is lost
+if a component restarts.
+
+Realtime is a priority applied to the existing WAL, transfer and upload paths:
+
+1. The collector rotates realtime WAL segments quickly (250ms by default), batches them as soon as they close, and
+   transfers them to any ingestor ahead of queued tables.
+2. The ingestor rotates and batches realtime segments the same way.  Realtime batches are never transferred to peers;
+   the ingestor that receives them uploads them.
+3. The ingestor ingests realtime batches with streaming ingestion, limited by a concurrency budget per Kusto endpoint.
+4. If streaming ingestion is unavailable or a batch falls behind, the batch is ingested with queued ingestion
+   instead.
+
+Delivery is at least once.  A batch may be ingested twice if a streaming request succeeds but its response is lost
+and the batch is retried or falls back to queued ingestion.
+
+### Prerequisites
+
+* [Enable streaming ingestion](https://learn.microsoft.com/en-us/azure/data-explorer/ingest-data-streaming#enable-streaming-ingestion-on-your-cluster)
+  on the Kusto cluster.  Follower clusters must also enable it.
+* The ingestor enables the streaming ingestion policy on each realtime table
+  (`.alter table T policy streamingingestion enable`), which requires the Table Admin role.  If the ingestor lacks
+  permission, enable the policy on the table or database yourself.
+* Streaming requests are limited to 4MB of uncompressed data and share the cluster's capacity for concurrent
+  streaming requests, which is roughly 6 per core.  Microsoft recommends queued ingestion for tables with more than
+  about 4GB of data per hour.
+* New tables and mappings can take up to 5 minutes to become available to streaming ingestion.  During that time,
+  realtime batches use queued ingestion.
+
+### Configuration
+
+Configure the same tables on the collector, in the [`[realtime]`](config.md#realtime-ingestion) config section, and
+on the ingestor.  If they differ, data is still ingested but may not be prioritized end to end.
+
+| Ingestor flag | Default | Description |
+| --- | --- | --- |
+| `--realtime-table <db>.<table>` | | Table that uses realtime ingestion.  Can be repeated.  The database must be a configured metrics or logs database. |
+| `--realtime-streaming-budget <endpoint>=<n>` | | Maximum concurrent streaming requests the ingestor deployment may send to a Kusto endpoint.  Required for each endpoint with realtime tables.  The budget is divided among ingestor peers so the deployment as a whole stays within it. |
+| `--realtime-min-slots` | `1` | Minimum streaming slots per ingestor per endpoint.  If peers times this exceeds the budget, the budget is overcommitted. |
+| `--realtime-max-slots` | `0` (no limit) | Maximum streaming slots per ingestor per endpoint. |
+| `--realtime-max-segment-age` | `250ms` | Maximum age of a realtime WAL segment before it is rotated. |
+| `--realtime-max-batch-latency` | `250ms` | Maximum time a closed realtime segment waits to be batched with others. |
+| `--realtime-max-batch-bytes` | `512KiB` | Maximum size of a realtime batch in compressed WAL bytes.  Batches whose uncompressed data exceeds 4MB use queued ingestion. |
+| `--realtime-max-lag` | `30s` | Realtime batches older than this use queued ingestion. |
+| `--realtime-reserved-disk-bytes` | `1GiB` | Disk reserved for realtime segments when realtime tables are configured.  Other tables are limited to `--max-disk-usage` minus this value. |
+| `--queued-reserved-workers-percent` | `10` | Percentage of transfer and upload workers reserved for queued batches so realtime traffic cannot starve them.  At least one worker is reserved. |
+
+For example, with a 16 core cluster that supports about 96 concurrent streaming requests, leave headroom for other
+clients and update policies:
+
+```
+--realtime-table Metrics.CpuUsage
+--realtime-table Logs.ApplicationErrors
+--realtime-streaming-budget https://mycluster.eastus.kusto.windows.net=75
+```
+
+With 5 ingestor replicas, each ingestor may send 15 concurrent streaming requests to the cluster.  If streaming
+requests are throttled, an ingestor halves its limit and then raises it gradually as requests succeed.
+
+If several ingestor deployments, such as deployments in different regions, send to the same Kusto cluster, divide the
+cluster's capacity among their budgets since each deployment only knows about its own peers.
+
+### Fallback to queued ingestion
+
+| Condition | Behavior |
+| --- | --- |
+| Throttled or transient failure | Retried with streaming ingestion until the batch reaches `--realtime-max-lag`. |
+| No streaming slot available | Retried after a short delay, without holding an upload worker, until the batch reaches `--realtime-max-lag`. |
+| Batch older than `--realtime-max-lag` | Queued ingestion. |
+| Uncompressed batch larger than 4MB | Queued ingestion. |
+| Streaming unavailable for the table, such as when the policy is disabled, the schema has not propagated or the database is under maintenance | Queued ingestion, and the table uses queued ingestion for 5 minutes. |
+| Other errors, such as invalid data | Queued ingestion. |
+
+### Metrics
+
+| Metric | Description |
+| --- | --- |
+| `adxmon_ingestor_realtime_batches_total{database,table,outcome}` | Realtime batches by outcome: `streamed`, `retry_<reason>` or `fallback_<reason>`. |
+| `adxmon_ingestor_realtime_streaming_requests_total{database}` | Streaming requests sent. |
+| `adxmon_ingestor_realtime_streaming_duration_seconds_total{database}` | Total duration of streaming requests.  Divide by the request count for the average duration. |
+| `adxmon_ingestor_realtime_ingest_latency_seconds{database,table}` | Age of the oldest segment of the most recently streamed batch. |
+| `adxmon_ingestor_realtime_streaming_slots{endpoint,state}` | Streaming slots by state: `budget`, `peers`, `share`, `limit` and `in_use`. |
+| `adxmon_ingestor_realtime_streaming_overcommitted{endpoint}` | 1 when the minimum slots of all peers exceed the budget. |
+| `adxmon_{ingestor,collector}_wal_segments_size_bytes_by_priority{priority}` | Size of closed WAL segments by priority: `realtime` or `queued`. |
+
+A rising rate of `fallback_*` outcomes means realtime batches are using queued ingestion.  `fallback_lag` and
+`retry_no_slot` usually mean the streaming budget is too small for the realtime volume, and `fallback_too_large`
+means `--realtime-max-batch-bytes` should be lowered.
+
 ## ClickHouse sink
 
 The ingestor can stream batches to ClickHouse in addition to Azure Data Explorer. Switch the storage

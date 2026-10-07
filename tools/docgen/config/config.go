@@ -387,6 +387,23 @@ func getContents() Contents {
 					},
 				},
 			},
+			{
+				Title:       "Realtime Ingestion",
+				Description: RealtimeDescription,
+				Config: &config.Config{
+					Realtime: &config.Realtime{
+						MaxSegmentAgeMs:              250,
+						MaxBatchLatencyMs:            500,
+						MaxBatchBytes:                2097152,
+						ReservedDiskBytes:            1073741824,
+						QueuedReservedWorkersPercent: 10,
+						Tables: []*config.RealtimeTable{
+							{Database: "Metrics", Table: "CpuUsage"},
+							{Database: "Logs", Table: "ApplicationErrors"},
+						},
+					},
+				},
+			},
 		},
 		MetadataSections: []Section{
 			{
@@ -605,6 +622,10 @@ var HostLogDescription = "The host log config configures file and journald log c
 	"*   **`json`**: Attempts to parse the entire log message string as a JSON object. If successful, the key-value pairs from the JSON object are merged into the log body. The original `message` field is typically removed or overwritten by a field from the JSON payload if one exists with the key \"message\".\n" +
 	"*   **`keyvalue`**: Parses log messages formatted as `key1=value1 key2=\"quoted value\" key3=value3 ...`. It extracts these key-value pairs and adds them to the log body. Keys and values are strings. Values containing spaces should be quoted.\n" +
 	"*   **`space`**: Splits the log message string by whitespace (using `strings.Fields`, which handles multiple spaces, tabs, etc.). Each resulting part is added to the log body with keys named sequentially: `field0`, `field1`, `field2`, and so on. All resulting fields are strings.\n"
+
+var RealtimeDescription = "Realtime ingestion lowers the latency of selected tables from minutes to seconds. Segments for realtime tables are rotated and batched as soon as they close and are transferred to the ingestor ahead of other tables. The ingestor ingests them with [streaming ingestion](https://learn.microsoft.com/en-us/azure/data-explorer/ingest-data-streaming), falling back to queued ingestion when streaming is unavailable.\n\n" +
+	"Realtime tables must also be configured on the ingestor with `--realtime-table` and a `--realtime-streaming-budget` for their Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion). Database and table names are normalized the same way as table names, so `Cpu_Usage` matches the `CpuUsage` table.\n\n" +
+	"When tables are configured, `reserved-disk-bytes` of disk is reserved for realtime tables: other tables are limited to `max-disk-usage` minus the reservation so a backlog of queued data cannot block realtime writes."
 
 var KubeletDiscoveryDescription = "The kubelet-discovery configuration enables pod discovery via the local kubelet API instead of the Kubernetes API server. When configured, the collector polls the kubelet's `/pods` endpoint to discover running pods on the node." +
 	" This method of discovery is useful in large cluster scenarios where minimizing API server load is important. When the `[kubelet-discovery]` block exists, [Prometheus Scrape](#prometheus-scrape) and [Host Log](#host-log) will utilize this mechanism to discover pods.\n\n" +
