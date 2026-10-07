@@ -15,9 +15,10 @@ import (
 
 // fakeUploader is an Uploader that does nothing.
 type fakeUploader struct {
-	queue   chan *cluster.Batch
-	closeFn context.CancelFunc
-	db      string
+	queue         chan *cluster.Batch
+	realtimeQueue chan *cluster.Batch
+	closeFn       context.CancelFunc
+	db            string
 }
 
 func (f *fakeUploader) Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
@@ -34,8 +35,9 @@ func (f *fakeUploader) Mgmt(ctx context.Context, query azkustodata.Statement, op
 
 func NewFakeUploader(db string) Uploader {
 	return &fakeUploader{
-		db:    db,
-		queue: make(chan *cluster.Batch, 10000),
+		db:            db,
+		queue:         make(chan *cluster.Batch, 10000),
+		realtimeQueue: make(chan *cluster.Batch, 10000),
 	}
 }
 
@@ -54,6 +56,10 @@ func (f *fakeUploader) UploadQueue() chan *cluster.Batch {
 	return f.queue
 }
 
+func (f *fakeUploader) RealtimeUploadQueue() chan *cluster.Batch {
+	return f.realtimeQueue
+}
+
 func (f *fakeUploader) Database() string {
 	return f.db
 }
@@ -63,21 +69,20 @@ func (f *fakeUploader) Endpoint() string {
 }
 
 func (f *fakeUploader) upload(ctx context.Context) {
+	queues := cluster.PriorityQueues{Realtime: f.realtimeQueue, Queued: f.queue}
 	for {
-		select {
-		case <-ctx.Done():
+		batch, ok := queues.Next(ctx, false)
+		if !ok {
 			return
-		case batch := <-f.queue:
-			segments := batch.Segments
-
-			for _, si := range segments {
-				logger.Warnf("Uploading segment %s", si.Path)
-			}
-			if err := batch.Remove(); err != nil {
-				logger.Errorf("Failed to remove batch: %s", err.Error())
-			}
-			batch.Release()
 		}
+
+		for _, si := range batch.Segments {
+			logger.Warnf("Uploading segment %s", si.Path)
+		}
+		if err := batch.Remove(); err != nil {
+			logger.Errorf("Failed to remove batch: %s", err.Error())
+		}
+		batch.Release()
 	}
 }
 

@@ -16,9 +16,9 @@ type PriorityQueues struct {
 	Queued   chan *Batch
 }
 
-// next returns the next batch to process.  Reserved workers only process queued batches so realtime batches cannot
+// Next returns the next batch to process.  Reserved workers only process queued batches so realtime batches cannot
 // starve them.  Other workers process realtime batches before queued batches.  It returns false when ctx is done.
-func (q PriorityQueues) next(ctx context.Context, reserved bool) (*Batch, bool) {
+func (q PriorityQueues) Next(ctx context.Context, reserved bool) (*Batch, bool) {
 	if reserved {
 		select {
 		case <-ctx.Done():
@@ -66,7 +66,7 @@ func RunWorkers(ctx context.Context, q PriorityQueues, n, percent int, fn func(*
 		go func(reserved bool) {
 			defer done()
 			for {
-				b, ok := q.next(ctx, reserved)
+				b, ok := q.Next(ctx, reserved)
 				if !ok {
 					return
 				}

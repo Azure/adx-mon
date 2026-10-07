@@ -37,6 +37,9 @@ type Uploader interface {
 	// UploadQueue returns a channel that can be used to upload files to kusto.
 	UploadQueue() chan *cluster.Batch
 
+	// RealtimeUploadQueue returns a channel for realtime batches.  They are uploaded before queued batches.
+	RealtimeUploadQueue() chan *cluster.Batch
+
 	// Mgmt executes a management query against the database.
 	Mgmt(ctx context.Context, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error)
 }
@@ -48,8 +51,9 @@ type uploader struct {
 	opts       UploaderOpts
 	syncer     *Syncer
 
-	queue   chan *cluster.Batch
-	closeFn context.CancelFunc
+	queue         chan *cluster.Batch
+	realtimeQueue chan *cluster.Batch
+	closeFn       context.CancelFunc
 
 	wg                  sync.WaitGroup
 	mu                  sync.RWMutex
@@ -65,18 +69,23 @@ type UploaderOpts struct {
 	Dimensions        []string
 	DefaultMapping    adxschema.SchemaMapping
 	SampleType        SampleType
+
+	// QueuedReservedWorkersPercent is the percentage of upload workers reserved for queued batches.  Defaults to
+	// cluster.DefaultQueuedReservedWorkersPercent.
+	QueuedReservedWorkersPercent int
 }
 
 func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
 
 	return &uploader{
-		KustoCli:   kustoCli,
-		syncer:     syncer,
-		storageDir: opts.StorageDir,
-		database:   opts.Database,
-		opts:       opts,
-		queue:      make(chan *cluster.Batch, 10000),
+		KustoCli:      kustoCli,
+		syncer:        syncer,
+		storageDir:    opts.StorageDir,
+		database:      opts.Database,
+		opts:          opts,
+		queue:         make(chan *cluster.Batch, 10000),
+		realtimeQueue: make(chan *cluster.Batch, 10000),
 		gzipWriterPool: sync.Pool{
 			New: func() any {
 				return kgzip.NewWriter(nil)
@@ -102,11 +111,16 @@ func (n *uploader) Open(ctx context.Context) error {
 		n.requireDirectIngest = true
 	}
 
-	for i := 0; i < n.opts.ConcurrentUploads; i++ {
-		go n.upload(c)
-	}
+	n.startWorkers(c)
 
 	return nil
+}
+
+// startWorkers starts the upload workers.  Realtime batches are uploaded before queued batches with a share of
+// workers reserved for queued batches.
+func (n *uploader) startWorkers(ctx context.Context) {
+	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: n.queue}
+	cluster.RunWorkers(ctx, queues, n.opts.ConcurrentUploads, n.opts.QueuedReservedWorkersPercent, n.uploadBatch, func() {})
 }
 
 func (n *uploader) Close() error {
@@ -128,6 +142,10 @@ func (n *uploader) Close() error {
 
 func (n *uploader) UploadQueue() chan *cluster.Batch {
 	return n.queue
+}
+
+func (n *uploader) RealtimeUploadQueue() chan *cluster.Batch {
+	return n.realtimeQueue
 }
 
 func (n *uploader) Database() string {
@@ -269,125 +287,118 @@ func sanitizeErrorString(err error) error {
 	return errors.New(errString)
 }
 
-func (n *uploader) upload(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case batch := <-n.queue:
-			segments := batch.Segments
+// uploadBatch uploads a batch to kusto and removes its segments on success.
+func (n *uploader) uploadBatch(batch *cluster.Batch) {
+	segments := batch.Segments
 
-			if batch.Database != n.database {
-				logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
-				batch.Release()
+	if batch.Database != n.database {
+		logger.Errorf("Database mismatch: %s != %s. Skipping batch", batch.Database, n.database)
+		batch.Release()
+		return
+	}
+
+	func() {
+		defer batch.Release()
+
+		var (
+			readers        = make([]io.Reader, 0, len(segments))
+			segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
+			database       string
+			table          string
+			schema         string
+			header         string
+			err            error
+		)
+
+		for _, si := range segments {
+			database, table, schema, _, err = wal.ParseFilename(si.Path)
+			if err != nil {
+				logger.Errorf("Failed to parse file: %s", err.Error())
+				continue
+			}
+			metrics.SampleLatency.WithLabelValues(database, table).Set(time.Since(si.CreatedAt).Seconds())
+
+			var opts []wal.Option
+			if schema != "" {
+				opts = append(opts, wal.WithSkipHeader)
+			}
+			f, err := wal.NewSegmentReader(si.Path, opts...)
+			if os.IsNotExist(err) {
+				// batches are not disjoint, so the same segments could be included in multiple batches.
+				continue
+			} else if err != nil {
+				logger.Errorf("Failed to open file: %s", err.Error())
 				continue
 			}
 
-			func() {
-				defer batch.Release()
+			segmentReaders = append(segmentReaders, f)
+			readers = append(readers, f)
+		}
 
-				var (
-					readers        = make([]io.Reader, 0, len(segments))
-					segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
-					database       string
-					table          string
-					schema         string
-					header         string
-					err            error
-				)
+		defer func(segmentReaders []*wal.SegmentReader) {
+			for _, sr := range segmentReaders {
+				sr.Close()
+			}
+		}(segmentReaders)
 
-				for _, si := range segments {
-					database, table, schema, _, err = wal.ParseFilename(si.Path)
-					if err != nil {
-						logger.Errorf("Failed to parse file: %s", err.Error())
-						continue
-					}
-					metrics.SampleLatency.WithLabelValues(database, table).Set(time.Since(si.CreatedAt).Seconds())
+		if len(segmentReaders) == 0 {
+			if err := batch.Remove(); err != nil {
+				logger.Errorf("Failed to remove batch: %s", err.Error())
+			}
+			return
+		}
 
-					var opts []wal.Option
-					if schema != "" {
-						opts = append(opts, wal.WithSkipHeader)
-					}
-					f, err := wal.NewSegmentReader(si.Path, opts...)
-					if os.IsNotExist(err) {
-						// batches are not disjoint, so the same segments could be included in multiple batches.
-						continue
-					} else if err != nil {
-						logger.Errorf("Failed to open file: %s", err.Error())
-						continue
-					}
+		samplePath := segmentReaders[0].Path()
+		database, table, schema, _, err = wal.ParseFilename(samplePath)
+		if err != nil {
+			logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
+			return
+		}
 
-					segmentReaders = append(segmentReaders, f)
-					readers = append(readers, f)
-				}
+		mapping := n.opts.DefaultMapping
+		if schema != "" {
+			header, err = n.extractSchema(samplePath)
+			if err != nil {
+				logger.Errorf("Failed to extract schema: %s: %s", samplePath, err.Error())
 
-				defer func(segmentReaders []*wal.SegmentReader) {
-					for _, sr := range segmentReaders {
-						sr.Close()
-					}
-				}(segmentReaders)
-
-				if len(segmentReaders) == 0 {
-					if err := batch.Remove(); err != nil {
-						logger.Errorf("Failed to remove batch: %s", err.Error())
-					}
-					return
-				}
-
-				samplePath := segmentReaders[0].Path()
-				database, table, schema, _, err = wal.ParseFilename(samplePath)
-				if err != nil {
-					logger.Errorf("Failed to parse file: %s: %s", samplePath, err.Error())
-					return
-				}
-
-				mapping := n.opts.DefaultMapping
-				if schema != "" {
-					header, err = n.extractSchema(samplePath)
-					if err != nil {
-						logger.Errorf("Failed to extract schema: %s: %s", samplePath, err.Error())
-
-						// This batch is invalid, remove it.
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove batch: %s", err.Error())
-						}
-
-						return
-					}
-
-					mapping, err = adxschema.UnmarshalSchema(header)
-					if err != nil {
-						logger.Errorf("Failed to unmarshal schema: %s: %s", samplePath, err.Error())
-
-						// This batch is invalid, remove it.
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove batch: %s", err.Error())
-						}
-						return
-					}
-				}
-
-				mr := io.MultiReader(readers...)
-
-				now := time.Now()
-				if err := n.uploadReader(mr, database, table, mapping); err != nil {
-					logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
-					return
-				}
-
-				if logger.IsDebug() {
-					logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())
-				}
-
+				// This batch is invalid, remove it.
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to remove batch: %s", err.Error())
 				}
 
-				metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
-			}()
+				return
+			}
 
+			mapping, err = adxschema.UnmarshalSchema(header)
+			if err != nil {
+				logger.Errorf("Failed to unmarshal schema: %s: %s", samplePath, err.Error())
+
+				// This batch is invalid, remove it.
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove batch: %s", err.Error())
+				}
+				return
+			}
 		}
-	}
+
+		mr := io.MultiReader(readers...)
+
+		now := time.Now()
+		if err := n.uploadReader(mr, database, table, mapping); err != nil {
+			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
+			return
+		}
+
+		if logger.IsDebug() {
+			logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())
+		}
+
+		if err := batch.Remove(); err != nil {
+			logger.Errorf("Failed to remove batch: %s", err.Error())
+		}
+
+		metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
+	}()
 }
 
 func (n *uploader) extractSchema(path string) (string, error) {

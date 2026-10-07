@@ -41,11 +41,11 @@ func TestPriorityQueues_NextPrefersRealtime(t *testing.T) {
 	q.Queued <- queued
 	q.Realtime <- realtime
 
-	b, ok := q.next(context.Background(), false)
+	b, ok := q.Next(context.Background(), false)
 	require.True(t, ok)
 	require.Same(t, realtime, b)
 
-	b, ok = q.next(context.Background(), false)
+	b, ok = q.Next(context.Background(), false)
 	require.True(t, ok)
 	require.Same(t, queued, b)
 }
@@ -57,13 +57,13 @@ func TestPriorityQueues_ReservedOnlyTakesQueued(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, ok := q.next(ctx, true)
+	_, ok := q.Next(ctx, true)
 	require.False(t, ok)
 	require.Len(t, q.Realtime, 1)
 
 	queued := &Batch{Prefix: "queued"}
 	q.Queued <- queued
-	b, ok := q.next(context.Background(), true)
+	b, ok := q.Next(context.Background(), true)
 	require.True(t, ok)
 	require.Same(t, queued, b)
 }
@@ -72,7 +72,7 @@ func TestPriorityQueues_NilRealtimeQueue(t *testing.T) {
 	q := PriorityQueues{Queued: make(chan *Batch, 1)}
 	queued := &Batch{}
 	q.Queued <- queued
-	b, ok := q.next(context.Background(), false)
+	b, ok := q.Next(context.Background(), false)
 	require.True(t, ok)
 	require.Same(t, queued, b)
 }
@@ -82,7 +82,7 @@ func TestPriorityQueues_NextStopsOnContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, reserved := range []bool{true, false} {
-		_, ok := q.next(ctx, reserved)
+		_, ok := q.Next(ctx, reserved)
 		require.False(t, ok)
 	}
 }

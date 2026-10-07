@@ -206,6 +206,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Partitioner:             coord,
 		Segmenter:               store.Index(),
 		UploadQueue:             opts.Uploader.UploadQueue(),
+		RealtimeUploadQueue:     realtimeUploadQueue(opts.Uploader),
 		TransferQueue:           repl.TransferQueue(),
 		RealtimeTransferQueue:   repl.RealtimeTransferQueue(),
 		PeerHealthReporter:      health,
@@ -530,7 +531,7 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
-	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+	logger.Infof("Waiting for upload queue to drain, %d batches remaining", s.uploadQueueLen())
 	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", s.transferQueueLen())
 
 	t := time.NewTicker(time.Second)
@@ -539,12 +540,12 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	for {
 		select {
 		case <-t.C:
-			if len(s.uploader.UploadQueue()) == 0 && s.transferQueueLen() == 0 {
+			if s.uploadQueueLen() == 0 && s.transferQueueLen() == 0 {
 				return nil
 			}
 
-			if len(s.uploader.UploadQueue()) != 0 {
-				logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+			if n := s.uploadQueueLen(); n != 0 {
+				logger.Infof("Waiting for upload queue to drain, %d batches remaining", n)
 			}
 			if n := s.transferQueueLen(); n != 0 {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", n)
@@ -553,6 +554,24 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 			return fmt.Errorf("timed out to upload segments")
 		}
 	}
+}
+
+// realtimeUploader is implemented by uploaders that accept realtime batches on a separate queue.
+type realtimeUploader interface {
+	RealtimeUploadQueue() chan *cluster.Batch
+}
+
+// realtimeUploadQueue returns the realtime upload queue of u, or nil if u does not have one.
+func realtimeUploadQueue(u Uploader) chan *cluster.Batch {
+	if ru, ok := u.(realtimeUploader); ok {
+		return ru.RealtimeUploadQueue()
+	}
+	return nil
+}
+
+// uploadQueueLen returns the number of batches waiting to be uploaded.
+func (s *Service) uploadQueueLen() int {
+	return len(s.uploader.UploadQueue()) + len(realtimeUploadQueue(s.uploader))
 }
 
 // transferQueueLen returns the number of batches waiting to be transferred to peers.
