@@ -20,44 +20,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseBatcherMode(t *testing.T) {
-	for in, want := range map[string]BatcherMode{"": BatcherModeScan, "scan": BatcherModeScan, "event": BatcherModeEvent} {
-		got, err := ParseBatcherMode(in)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-	}
-	_, err := ParseBatcherMode("other")
-	require.ErrorContains(t, err, `invalid batcher mode "other"`)
-}
-
-func TestNewBatcher_Mode(t *testing.T) {
-	env := newRealtimeTestEnv(t, RealtimeBatchOpts{}, false)
-	require.Nil(t, env.b.queued, "scan is the default mode")
-
-	newBatcher := func(mode BatcherMode, segmenter Segmenter) (*batcher, error) {
+func TestNewBatcher_EventDriven(t *testing.T) {
+	newBatcher := func(segmenter Segmenter) *batcher {
 		countMetric, sizeMetric, ageMetric := newTestMetrics()
 		b, err := NewBatcher(BatcherOpts{
 			Segmenter:               segmenter,
-			Mode:                    mode,
 			SegmentsCountMetric:     countMetric,
 			SegmentsSizeBytesMetric: sizeMetric,
 			SegmentsMaxAgeMetric:    ageMetric,
 		})
-		if err != nil {
-			return nil, err
-		}
-		return b.(*batcher), nil
+		require.NoError(t, err)
+		return b.(*batcher)
 	}
 
-	b, err := newBatcher(BatcherModeEvent, wal.NewIndex())
-	require.NoError(t, err)
-	require.NotNil(t, b.queued)
+	// Queued segments are batched as they close when the segmenter publishes segment events.
+	require.NotNil(t, newBatcher(wal.NewIndex()).queued)
 
-	_, err = newBatcher("other", wal.NewIndex())
-	require.ErrorContains(t, err, `invalid batcher mode "other"`)
-
-	_, err = newBatcher(BatcherModeEvent, noEventsSegmenter{wal.NewIndex()})
-	require.ErrorContains(t, err, "requires a segmenter that publishes segment events")
+	// Otherwise the periodic scan batches them.
+	require.Nil(t, newBatcher(noEventsSegmenter{wal.NewIndex()}).queued)
 }
 
 // noEventsSegmenter hides the index's Subscribe method.
@@ -302,7 +282,7 @@ func releaseBatches(bt *batcher, fresh []wal.SegmentInfo) {
 	}
 }
 
-// BenchmarkBatcherPeriod measures the CPU used by each batcher mode in one 5 second period with many prefixes that
+// BenchmarkBatcherPeriod measures the CPU used by scan and event driven batching in one 5 second period with many prefixes that
 // have in-flight segments and a few newly closed segments.
 func BenchmarkBatcherPeriod(b *testing.B) {
 	const fresh = 10

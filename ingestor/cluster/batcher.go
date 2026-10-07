@@ -57,11 +57,8 @@ type BatcherOpts struct {
 	// the periodic scan.
 	Realtime RealtimeBatchOpts
 
-	// Mode selects how queued segments are batched.  Defaults to BatcherModeScan.
-	Mode BatcherMode
-
-	// QueuedLinger is the maximum time a closed queued segment waits to be batched with others in BatcherModeEvent.
-	// Defaults to DefaultQueuedLinger.
+	// QueuedLinger is the maximum time a closed queued segment waits to be batched with others.  Defaults to
+	// DefaultQueuedLinger.
 	QueuedLinger time.Duration
 
 	TransfersDisabled bool
@@ -160,7 +157,8 @@ type batcher struct {
 	// realtime batches realtime segments as they close.  When nil, the periodic scan batches them.
 	realtime *eventBatcher
 
-	// queued batches queued segments as they close in BatcherModeEvent.  When nil, the periodic scan batches them.
+	// queued batches queued segments as they close.  It is nil when the Segmenter does not publish segment events, in
+	// which case the periodic scan batches them.
 	queued *eventBatcher
 
 	store storage.Store
@@ -245,19 +243,14 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		b.realtime = newRealtimeBatcher(b, opts.Realtime)
 	}
 
-	switch opts.Mode {
-	case "", BatcherModeScan:
-	case BatcherModeEvent:
-		if _, ok := opts.Segmenter.(segmentSubscriber); !ok {
-			return nil, fmt.Errorf("batcher mode %q requires a segmenter that publishes segment events", opts.Mode)
-		}
+	// Queued segments are batched as they close.  The periodic scan is only used for segmenters that do not publish
+	// segment events.
+	if _, ok := opts.Segmenter.(segmentSubscriber); ok {
 		linger := opts.QueuedLinger
 		if linger <= 0 {
 			linger = DefaultQueuedLinger
 		}
 		b.queued = newQueuedBatcher(b, linger)
-	default:
-		return nil, fmt.Errorf("invalid batcher mode %q", opts.Mode)
 	}
 
 	return b, nil
@@ -350,7 +343,7 @@ func (b *batcher) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			// In event mode, segments are batched as they close so the periodic tick only updates metrics.
+			// Segments are batched as they close so the periodic tick only updates metrics.
 			if b.queued != nil {
 				b.updateSegmentMetrics()
 				b.updateQueueMetrics(0, 0)
