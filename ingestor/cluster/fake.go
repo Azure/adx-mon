@@ -34,7 +34,7 @@ func (f *FakeReplicator) Close() error {
 func (f *FakeReplicator) replicate(ctx context.Context) {
 	queues := PriorityQueues{Realtime: f.realtimeQueue, Queued: f.queue}
 	for {
-		batch, ok := queues.next(ctx, false)
+		batch, ok := queues.Next(ctx, false)
 		if !ok {
 			return
 		}
