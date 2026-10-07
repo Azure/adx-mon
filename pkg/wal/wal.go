@@ -82,6 +82,9 @@ type SegmentInfo struct {
 	Path      string
 	Size      int64
 	CreatedAt time.Time
+
+	// Priority is the ingestion priority of the segment's table.
+	Priority ingestpolicy.Priority
 }
 
 type WALOpts struct {
@@ -176,6 +179,7 @@ func (w *WAL) Close() error {
 
 	if seg != nil {
 		info := seg.Info()
+		info.Priority = w.opts.Priority
 		if err := seg.Close(); err != nil {
 			return err
 		}
@@ -391,6 +395,7 @@ func (w *WAL) rotateSegmentIfNecessary() {
 		// delete it so that we don't end up uploading empty segments to Kusto.
 		if toClose.Size() > 8 {
 			info := toClose.Info()
+			info.Priority = w.opts.Priority
 			w.index.Add(info)
 		} else {
 			_ = os.Remove(toClose.Path())

@@ -399,3 +399,34 @@ func TestRepository_CloseStopsRotationBeforeClosingWALs(t *testing.T) {
 		return nil
 	})
 }
+
+func TestRepository_StartupSegmentsCarryPriority(t *testing.T) {
+	dir := t.TempDir()
+	for _, prefix := range []string{"Metrics_CpuUsage_abc123", "Metrics_MemoryUsage_abc123"} {
+		seg, err := NewSegment(dir, prefix)
+		require.NoError(t, err)
+		_, err = seg.Write(context.Background(), []byte("foo"))
+		require.NoError(t, err)
+		require.NoError(t, seg.Close())
+	}
+
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+
+	r := NewRepository(RepositoryOpts{StorageDir: dir, Policy: policy})
+	got := map[string]ingestpolicy.Priority{}
+	r.Index().Subscribe(func(si SegmentInfo) { got[si.Prefix] = si.Priority })
+	require.NoError(t, r.Open(context.Background()))
+	defer r.Close()
+
+	require.Equal(t, map[string]ingestpolicy.Priority{
+		"Metrics_CpuUsage_abc123":    ingestpolicy.PriorityRealtime,
+		"Metrics_MemoryUsage_abc123": ingestpolicy.PriorityQueued,
+	}, got)
+
+	for prefix, priority := range got {
+		segments := r.Index().Get(nil, prefix)
+		require.Len(t, segments, 1)
+		require.Equal(t, priority, segments[0].Priority)
+	}
+}
