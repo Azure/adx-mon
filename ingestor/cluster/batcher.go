@@ -222,6 +222,7 @@ func (b *batcher) Open(ctx context.Context) error {
 		return err
 	}
 
+	b.wg.Add(1)
 	go b.watch(ctx)
 
 	return nil
@@ -278,7 +279,6 @@ func (b *batcher) MaxSegmentAge() time.Duration {
 }
 
 func (b *batcher) watch(ctx context.Context) {
-	b.wg.Add(1)
 	defer b.wg.Done()
 
 	t := time.NewTicker(5 * time.Second)
