@@ -151,7 +151,7 @@ type batcher struct {
 	realtimeTransferQueue chan *Batch
 
 	// realtime batches realtime segments as they close.  When nil, the periodic scan batches them.
-	realtime *realtimeBatcher
+	realtime *eventBatcher
 
 	store storage.Store
 
