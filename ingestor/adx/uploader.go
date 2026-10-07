@@ -14,6 +14,7 @@ import (
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
@@ -53,7 +54,16 @@ type uploader struct {
 
 	queue         chan *cluster.Batch
 	realtimeQueue chan *cluster.Batch
+	ctx           context.Context
 	closeFn       context.CancelFunc
+
+	// realtime and streamer stream realtime batches.  When streamer is nil, realtime batches use queued ingestion.
+	realtime  *RealtimeUploadOpts
+	streamer  streamIngester
+	cooldowns streamingCooldowns
+
+	// queuedUpload ingests a batch with queued ingestion.
+	queuedUpload func(reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error
 
 	wg                  sync.WaitGroup
 	mu                  sync.RWMutex
@@ -73,12 +83,15 @@ type UploaderOpts struct {
 	// QueuedReservedWorkersPercent is the percentage of upload workers reserved for queued batches.  Defaults to
 	// cluster.DefaultQueuedReservedWorkersPercent.
 	QueuedReservedWorkersPercent int
+
+	// Realtime enables streaming ingestion of realtime batches.  When nil, realtime batches use queued ingestion.
+	Realtime *RealtimeUploadOpts
 }
 
 func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 	syncer := NewSyncer(kustoCli, opts.Database, opts.DefaultMapping, opts.SampleType)
 
-	return &uploader{
+	u := &uploader{
 		KustoCli:      kustoCli,
 		syncer:        syncer,
 		storageDir:    opts.StorageDir,
@@ -91,12 +104,18 @@ func NewUploader(kustoCli *azkustodata.Client, opts UploaderOpts) *uploader {
 				return kgzip.NewWriter(nil)
 			},
 		},
+		ctx: context.Background(),
 	}
+	u.queuedUpload = u.uploadReader
+	if opts.Realtime != nil && opts.Realtime.Slots != nil {
+		u.realtime = opts.Realtime.withDefaults()
+	}
+	return u
 }
 
 func (n *uploader) Open(ctx context.Context) error {
 	c, closeFn := context.WithCancel(ctx)
-	n.closeFn = closeFn
+	n.ctx, n.closeFn = c, closeFn
 
 	if err := n.syncer.Open(c); err != nil {
 		return err
@@ -109,6 +128,16 @@ func (n *uploader) Open(ctx context.Context) error {
 	if requireDirectIngest {
 		logger.Warnf("Cluster=%s requires direct ingest: %s", n.database, n.KustoCli.Endpoint())
 		n.requireDirectIngest = true
+	}
+
+	if n.realtime != nil && !n.requireDirectIngest {
+		streamer, err := n.newStreamer()
+		if err != nil {
+			// Realtime batches use queued ingestion rather than failing startup.
+			logger.Errorf("Failed to create streaming ingestion client for %s, realtime batches will use queued ingestion: %s", n.database, err)
+		} else {
+			n.streamer = streamer
+		}
 	}
 
 	n.startWorkers(c)
@@ -134,6 +163,10 @@ func (n *uploader) Close() error {
 
 	if n.ingestor != nil {
 		n.ingestor.Close()
+	}
+	if n.streamer != nil {
+		n.streamer.Close()
+		n.streamer = nil
 	}
 
 	n.ingestor = nil
@@ -381,10 +414,26 @@ func (n *uploader) uploadBatch(batch *cluster.Batch) {
 			}
 		}
 
-		mr := io.MultiReader(readers...)
+		var data io.Reader = io.MultiReader(readers...)
+
+		if batch.Priority == ingestpolicy.PriorityRealtime && n.streamer != nil {
+			var outcome streamOutcome
+			outcome, data = n.streamBatch(batch, table, mapping, data)
+			switch outcome {
+			case streamed:
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove batch: %s", err.Error())
+				}
+				metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
+				return
+			case streamRetry:
+				// The batch is released and retried by the realtime batcher.
+				return
+			}
+		}
 
 		now := time.Now()
-		if err := n.uploadReader(mr, database, table, mapping); err != nil {
+		if err := n.queuedUpload(data, database, table, mapping); err != nil {
 			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
 			return
 		}
@@ -399,6 +448,15 @@ func (n *uploader) uploadBatch(batch *cluster.Batch) {
 
 		metrics.IngestorSegmentsUploadedTotal.WithLabelValues(batch.Prefix).Add(float64(len(segmentReaders)))
 	}()
+}
+
+// newStreamer returns a streaming ingestion client for the uploader's endpoint.
+func (n *uploader) newStreamer() (streamIngester, error) {
+	kcsb := azkustodata.NewConnectionStringBuilder(n.KustoCli.Endpoint())
+	if strings.HasPrefix(n.KustoCli.Endpoint(), "https://") {
+		kcsb.WithDefaultAzureCredential()
+	}
+	return azkustoingest.NewStreaming(kcsb, azkustoingest.WithDefaultDatabase(n.database))
 }
 
 func (n *uploader) extractSchema(path string) (string, error) {
