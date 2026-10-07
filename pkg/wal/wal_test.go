@@ -355,10 +355,12 @@ func TestWAL_SubSecondMaxAge(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(createdAt), maxAge)
 	require.NotEqual(t, path, w.Path())
 
-	// The replacement segment's age is tracked with sub-second precision.
-	seg := w.Segment()
-	require.NotNil(t, seg)
-	require.Equal(t, seg.CreatedAt().UnixNano(), atomic.LoadInt64(&w.segmentCreatedAt))
+	// The replacement segment may already have been rotated away as idle, so only check its tracking if present.
+	w.mu.RLock()
+	if w.segment != nil {
+		require.Equal(t, w.segment.CreatedAt().UnixNano(), atomic.LoadInt64(&w.segmentCreatedAt))
+	}
+	w.mu.RUnlock()
 }
 
 func TestWAL_RotatesEachSegmentAtMaxAge(t *testing.T) {
