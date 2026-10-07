@@ -260,6 +260,8 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		SegmentsCountMetric:     ingestorSegmentsTotal,
 		SegmentsSizeBytesMetric: ingestorSegmentsSizeBytes,
 		SegmentsMaxAgeMetric:    ingestorSegmentsMaxAge,
+
+		SegmentsSizeByPriorityMetric: metrics.NewIngestorSegmentSizeByPriorityMetric(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create batcher: %w", err)

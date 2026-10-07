@@ -8,7 +8,9 @@ import (
 	"sync"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // defaultSlotIncreaseAfter is the number of consecutive successful requests before the adaptive limit is raised by
@@ -189,5 +191,53 @@ func (s *StreamingSlots) Stats() SlotStats {
 		Limit:         s.limit,
 		InUse:         s.inUse,
 		Overcommitted: s.overcommittedLocked(),
+	}
+}
+
+// streamingSlotsCollector reports the state of streaming slot pools when metrics are scraped so acquiring and
+// releasing slots does not update metrics.
+type streamingSlotsCollector struct {
+	slots         map[string]*StreamingSlots
+	slotsDesc     *prometheus.Desc
+	overcommitted *prometheus.Desc
+}
+
+// NewStreamingSlotsCollector returns a collector for streaming slot pools keyed by Kusto endpoint.
+func NewStreamingSlotsCollector(slots map[string]*StreamingSlots) prometheus.Collector {
+	return &streamingSlotsCollector{
+		slots: slots,
+		slotsDesc: prometheus.NewDesc(
+			prometheus.BuildFQName(metrics.Namespace, "ingestor", "realtime_streaming_slots"),
+			"Streaming ingestion slots for a Kusto endpoint by state: budget, peers, share, limit and in_use",
+			[]string{"endpoint", "state"}, nil),
+		overcommitted: prometheus.NewDesc(
+			prometheus.BuildFQName(metrics.Namespace, "ingestor", "realtime_streaming_overcommitted"),
+			"1 if the minimum streaming slots of all ingestor peers exceeds the endpoint's streaming budget",
+			[]string{"endpoint"}, nil),
+	}
+}
+
+func (c *streamingSlotsCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.slotsDesc
+	ch <- c.overcommitted
+}
+
+func (c *streamingSlotsCollector) Collect(ch chan<- prometheus.Metric) {
+	for endpoint, s := range c.slots {
+		st := s.Stats()
+		for state, v := range map[string]int{
+			"budget": st.Budget,
+			"peers":  st.Peers,
+			"share":  st.Share,
+			"limit":  st.Limit,
+			"in_use": st.InUse,
+		} {
+			ch <- prometheus.MustNewConstMetric(c.slotsDesc, prometheus.GaugeValue, float64(v), endpoint, state)
+		}
+		overcommitted := 0.0
+		if st.Overcommitted {
+			overcommitted = 1
+		}
+		ch <- prometheus.MustNewConstMetric(c.overcommitted, prometheus.GaugeValue, overcommitted, endpoint)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -231,6 +232,9 @@ func realMain(ctx *cli.Context) error {
 	)
 
 	streamingSlots := realtimeCfg.newStreamingSlots()
+	if len(streamingSlots) > 0 {
+		prometheus.MustRegister(adx.NewStreamingSlotsCollector(streamingSlots))
+	}
 
 	switch backend {
 	case storage.BackendADX:

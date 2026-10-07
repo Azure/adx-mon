@@ -63,6 +63,15 @@ type BatcherOpts struct {
 	SegmentsCountMetric     prometheus.Gauge
 	SegmentsSizeBytesMetric prometheus.Gauge
 	SegmentsMaxAgeMetric    prometheus.Gauge
+
+	// SegmentsSizeByPriorityMetric is optional.  When set, it reports segment sizes by ingestion priority if the
+	// Segmenter tracks them.
+	SegmentsSizeByPriorityMetric *prometheus.GaugeVec
+}
+
+// prioritySizer is implemented by segmenters that track segment sizes by ingestion priority.
+type prioritySizer interface {
+	TotalSizeByPriority(p ingestpolicy.Priority) int64
 }
 
 type Batch struct {
@@ -176,6 +185,7 @@ type batcher struct {
 	segmentsCountMetric     prometheus.Gauge
 	segmentsSizeBytesMetric prometheus.Gauge
 	segmentsMaxAgeMetric    prometheus.Gauge
+	sizeByPriorityMetric    *prometheus.GaugeVec
 }
 
 func NewBatcher(opts BatcherOpts) (Batcher, error) {
@@ -218,6 +228,7 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		segmentsCountMetric:     opts.SegmentsCountMetric,
 		segmentsSizeBytesMetric: opts.SegmentsSizeBytesMetric,
 		segmentsMaxAgeMetric:    opts.SegmentsMaxAgeMetric,
+		sizeByPriorityMetric:    opts.SegmentsSizeByPriorityMetric,
 	}
 
 	if _, ok := opts.Segmenter.(segmentSubscriber); ok && opts.Realtime.enabled() {
@@ -355,6 +366,11 @@ func (b *batcher) BatchSegments() error {
 func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	// Update metrics
 	b.segmentsSizeBytesMetric.Set(float64(b.SegmentsSize()))
+	if sizer, ok := b.Segmenter.(prioritySizer); ok && b.sizeByPriorityMetric != nil {
+		for p := ingestpolicy.Priority(0); int(p) < ingestpolicy.NumPriorities; p++ {
+			b.sizeByPriorityMetric.WithLabelValues(p.String()).Set(float64(sizer.TotalSizeByPriority(p)))
+		}
+	}
 	b.segmentsCountMetric.Set(float64(b.SegmentsTotal()))
 	b.segmentsMaxAgeMetric.Set(b.MaxSegmentAge().Seconds())
 
