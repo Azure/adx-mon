@@ -207,6 +207,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Segmenter:               store.Index(),
 		UploadQueue:             opts.Uploader.UploadQueue(),
 		TransferQueue:           repl.TransferQueue(),
+		RealtimeTransferQueue:   repl.RealtimeTransferQueue(),
 		PeerHealthReporter:      health,
 		TransfersDisabled:       opts.DisablePeerTransfer,
 		SegmentsCountMetric:     ingestorSegmentsTotal,
@@ -530,7 +531,7 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 		return err
 	}
 	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
-	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", s.transferQueueLen())
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -538,20 +539,25 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	for {
 		select {
 		case <-t.C:
-			if len(s.uploader.UploadQueue()) == 0 && len(s.replicator.TransferQueue()) == 0 {
+			if len(s.uploader.UploadQueue()) == 0 && s.transferQueueLen() == 0 {
 				return nil
 			}
 
 			if len(s.uploader.UploadQueue()) != 0 {
 				logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
 			}
-			if len(s.replicator.TransferQueue()) != 0 {
-				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+			if n := s.transferQueueLen(); n != 0 {
+				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", n)
 			}
 		case <-ctx.Done():
 			return fmt.Errorf("timed out to upload segments")
 		}
 	}
+}
+
+// transferQueueLen returns the number of batches waiting to be transferred to peers.
+func (s *Service) transferQueueLen() int {
+	return len(s.replicator.TransferQueue()) + len(s.replicator.RealtimeTransferQueue())
 }
 
 func (s *Service) DisableWrites() error {

@@ -8,13 +8,15 @@ import (
 )
 
 type FakeReplicator struct {
-	cancelFn context.CancelFunc
-	queue    chan *Batch
+	cancelFn      context.CancelFunc
+	queue         chan *Batch
+	realtimeQueue chan *Batch
 }
 
 func NewFakeReplicator() *FakeReplicator {
 	return &FakeReplicator{
-		queue: make(chan *Batch, 10000),
+		queue:         make(chan *Batch, 10000),
+		realtimeQueue: make(chan *Batch, 10000),
 	}
 }
 
@@ -30,14 +32,12 @@ func (f *FakeReplicator) Close() error {
 }
 
 func (f *FakeReplicator) replicate(ctx context.Context) {
+	queues := PriorityQueues{Realtime: f.realtimeQueue, Queued: f.queue}
 	for {
-		select {
-		case <-ctx.Done():
+		batch, ok := queues.next(ctx, false)
+		if !ok {
 			return
-		default:
 		}
-
-		batch := <-f.queue
 
 		for _, seg := range batch.Segments {
 			if logger.IsDebug() {
@@ -53,6 +53,10 @@ func (f *FakeReplicator) replicate(ctx context.Context) {
 
 func (f *FakeReplicator) TransferQueue() chan *Batch {
 	return f.queue
+}
+
+func (f *FakeReplicator) RealtimeTransferQueue() chan *Batch {
+	return f.realtimeQueue
 }
 
 type fakeSegmentRemover struct {

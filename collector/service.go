@@ -342,9 +342,10 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	var (
-		replicator    service.Component
-		transferQueue chan *cluster.Batch
-		partitioner   cluster.MetricPartitioner
+		replicator            service.Component
+		transferQueue         chan *cluster.Batch
+		realtimeTransferQueue chan *cluster.Batch
+		partitioner           cluster.MetricPartitioner
 	)
 	if opts.Endpoint != "" {
 		// This is a static partitioner that forces all entries to be assigned to the remote endpoint.
@@ -366,6 +367,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)
 		}
 		transferQueue = r.TransferQueue()
+		realtimeTransferQueue = r.RealtimeTransferQueue()
 		replicator = r
 	} else {
 		partitioner = remotePartitioner{
@@ -375,6 +377,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 		r := cluster.NewFakeReplicator()
 		transferQueue = r.TransferQueue()
+		realtimeTransferQueue = r.RealtimeTransferQueue()
 		replicator = r
 	}
 
@@ -390,6 +393,8 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		UploadQueue:             transferQueue,
 		TransferQueue:           transferQueue,
+		RealtimeUploadQueue:     realtimeTransferQueue,
+		RealtimeTransferQueue:   realtimeTransferQueue,
 		PeerHealthReporter:      health,
 		SegmentsCountMetric:     collectorSegmentsTotal,
 		SegmentsSizeBytesMetric: collectorSegmentsSizeBytes,
