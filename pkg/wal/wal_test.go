@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"io"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -566,4 +569,156 @@ func TestWAL_ContinuousWritesKeepProactiveSegment(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	require.Greater(t, w.index.TotalSegments(), 1)
+}
+
+// BenchmarkWAL_WriteDuringRotation measures write latency for concurrent writers while segments rotate frequently.
+func BenchmarkWAL_WriteDuringRotation(b *testing.B) {
+	for _, maxAge := range []time.Duration{time.Millisecond, 10 * time.Millisecond} {
+		b.Run(maxAge.String(), func(b *testing.B) {
+			w, err := NewWAL(WALOpts{StorageDir: b.TempDir(), Prefix: "db_table", SegmentMaxAge: maxAge})
+			require.NoError(b, err)
+			require.NoError(b, w.Open(context.Background()))
+			defer w.Close()
+
+			buf := bytes.Repeat([]byte("a"), 256)
+			var (
+				mu        sync.Mutex
+				latencies []time.Duration
+			)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				local := make([]time.Duration, 0, 1024)
+				for pb.Next() {
+					start := time.Now()
+					if err := w.Write(context.Background(), buf); err != nil {
+						b.Error(err)
+						return
+					}
+					local = append(local, time.Since(start))
+				}
+				mu.Lock()
+				latencies = append(latencies, local...)
+				mu.Unlock()
+			})
+			b.StopTimer()
+
+			if len(latencies) == 0 {
+				return
+			}
+			slices.Sort(latencies)
+			b.ReportMetric(float64(latencies[len(latencies)*99/100].Nanoseconds()), "p99-ns")
+			b.ReportMetric(float64(latencies[len(latencies)-1].Nanoseconds()), "max-ns")
+			b.ReportMetric(float64(w.index.TotalSegments())/b.Elapsed().Seconds(), "rotations/s")
+		})
+	}
+}
+
+func TestWAL_WriteAfterSizeRotationKeepsOptions(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxSize: 16})
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	first := w.Path()
+
+	// The segment is over its max size so this write rotates and is retried in a new segment.
+	require.NoError(t, w.Write(context.Background(), []byte("bar"), WithSampleMetadata(LogSampleType, 7)))
+	second := w.Path()
+	require.NotEqual(t, first, second)
+	require.NoError(t, w.Close())
+
+	r, err := NewSegmentReader(second)
+	require.NoError(t, err)
+	defer r.Close()
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(b))
+
+	st, sc := r.SampleMetadata()
+	require.Equal(t, LogSampleType, st)
+	require.Equal(t, uint32(7), sc)
+}
+
+func TestWAL_ConcurrentWritesDuringRotation(t *testing.T) {
+	dir := t.TempDir()
+	w, err := NewWAL(WALOpts{StorageDir: dir, Prefix: "db_table", SegmentMaxAge: time.Millisecond})
+	require.NoError(t, err)
+	require.NoError(t, w.Open(context.Background()))
+
+	const (
+		writers = 8
+		writes  = 2000
+	)
+	payload := []byte("0123456789\n")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < writes; j++ {
+				if err := w.Write(context.Background(), payload); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+	require.Greater(t, w.index.TotalSegments(), 1)
+
+	// Every write is stored exactly once across all segments.
+	var total int
+	for _, info := range w.index.Get(nil, "db_table") {
+		r, err := NewSegmentReader(info.Path)
+		require.NoError(t, err)
+		b, err := io.ReadAll(r)
+		require.NoError(t, err)
+		require.NoError(t, r.Close())
+		total += bytes.Count(b, []byte("\n"))
+	}
+	require.Equal(t, writers*writes, total)
+}
+
+func TestWAL_WriteStopsRetryingWhenContextDone(t *testing.T) {
+	w := newTestWAL(t, WALOpts{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := 0
+	err := w.writeWithRetry(ctx, func() (int, error) {
+		calls++
+		return 0, ErrSegmentClosed
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, calls)
+}
+
+func TestWAL_WriteRetriesClosedSegmentBounded(t *testing.T) {
+	w := newTestWAL(t, WALOpts{})
+
+	calls := 0
+	err := w.writeWithRetry(context.Background(), func() (int, error) {
+		calls++
+		return 0, ErrSegmentClosed
+	})
+	require.ErrorIs(t, err, ErrSegmentClosed)
+	require.Equal(t, maxSegmentClosedRetries+1, calls)
+}
+
+func TestWAL_WriteRotatesForSizeOnce(t *testing.T) {
+	w := newTestWAL(t, WALOpts{})
+
+	calls := 0
+	err := w.writeWithRetry(context.Background(), func() (int, error) {
+		calls++
+		return 0, ErrMaxSegmentSizeExceeded
+	})
+	require.ErrorIs(t, err, ErrMaxSegmentSizeExceeded)
+	require.Equal(t, 2, calls)
 }

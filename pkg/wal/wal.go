@@ -186,25 +186,41 @@ func (w *WAL) Close() error {
 	return nil
 }
 
+// maxSegmentClosedRetries bounds how many times a write is retried when the segment it targeted was closed by a
+// concurrent rotation.  A closed segment rejects the write without writing any data so retrying is safe.
+const maxSegmentClosedRetries = 16
+
 func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	// Optimistically try to write, but the segment might rotate in the meantime.
-	// If it does, retry the write one more time.
-	n, err := w.tryWrite(ctx, buf, opts...)
-	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
-		w.rotateSegmentIfNecessary()
-		n, err = w.tryWrite(ctx, buf)
+	return w.writeWithRetry(ctx, func() (int, error) {
+		return w.tryWrite(ctx, buf, opts...)
+	})
+}
+
+// writeWithRetry calls write, retrying when the segment rotates concurrently.  A write that exceeds the max segment
+// size rotates the segment and is retried once.
+func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) error {
+	rotated := false
+	for closedRetries := 0; ; {
+		n, err := write()
 		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
-	} else if errors.Is(err, ErrSegmentClosed) {
-		n, err = w.tryWrite(ctx, buf, opts...)
-		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
+
+		switch {
+		case errors.Is(err, ErrMaxSegmentSizeExceeded) && !rotated:
+			rotated = true
+			w.rotateSegmentIfNecessary()
+		case errors.Is(err, ErrSegmentClosed) && closedRetries < maxSegmentClosedRetries:
+			closedRetries++
+		default:
+			return err
+		}
+
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
-	atomic.AddInt64(&w.segmentSize, int64(n))
-	return err
 }
 
 func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error) {
@@ -405,19 +421,9 @@ func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	n, err := w.tryAppend(ctx, buf)
-	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
-		w.rotateSegmentIfNecessary()
-		n, err = w.tryAppend(ctx, buf)
-		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
-	} else if errors.Is(err, ErrSegmentClosed) {
-		n, err = w.tryAppend(ctx, buf)
-		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
-	}
-	atomic.AddInt64(&w.segmentSize, int64(n))
-	return err
+	return w.writeWithRetry(ctx, func() (int, error) {
+		return w.tryAppend(ctx, buf)
+	})
 }
 
 func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {
