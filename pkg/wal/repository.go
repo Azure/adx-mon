@@ -237,6 +237,7 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		Path:      path,
 		Size:      fi.Size(),
 		CreatedAt: createdAt,
+		Priority:  s.priority(prefix),
 	}
 	s.index.Add(info)
 
@@ -292,16 +293,7 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 		scheduler:        s.scheduler,
 	}
 
-	if !s.opts.Policy.HasRealtime() {
-		return opts
-	}
-
-	database, table, err := ParsePrefix(prefix)
-	if err != nil {
-		return opts
-	}
-
-	opts.Priority = s.opts.Policy.Priority(database, table)
+	opts.Priority = s.priority(prefix)
 	if opts.Priority == ingestpolicy.PriorityRealtime {
 		rt := s.opts.Realtime
 		if rt.SegmentMaxAge > 0 {
@@ -315,6 +307,18 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 		}
 	}
 	return opts
+}
+
+// priority returns the ingestion priority of the WAL prefix.
+func (s *Repository) priority(prefix string) ingestpolicy.Priority {
+	if !s.opts.Policy.HasRealtime() {
+		return ingestpolicy.PriorityQueued
+	}
+	database, table, err := ParsePrefix(prefix)
+	if err != nil {
+		return ingestpolicy.PriorityQueued
+	}
+	return s.opts.Policy.Priority(database, table)
 }
 
 func (s *Repository) Get(ctx context.Context, key []byte) (*WAL, error) {

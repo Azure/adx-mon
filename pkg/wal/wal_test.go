@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -763,4 +764,45 @@ func TestDiscardSegment(t *testing.T) {
 	discardSegment(seg)
 	require.NoFileExists(t, seg.Path())
 	require.Empty(t, walFiles(t, dir))
+}
+
+func TestWAL_ClosedSegmentsCarryPriority(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: time.Hour, Priority: ingestpolicy.PriorityRealtime})
+	var got []SegmentInfo
+	w.index.Subscribe(func(si SegmentInfo) { got = append(got, si) })
+
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	path := w.Path()
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+
+	require.Len(t, got, 1)
+	require.Equal(t, path, got[0].Path)
+	require.Equal(t, "db_table", got[0].Prefix)
+	require.Equal(t, ingestpolicy.PriorityRealtime, got[0].Priority)
+
+	// Closing the WAL indexes and notifies the active segment.
+	require.NoError(t, w.Write(context.Background(), []byte("bar")))
+	path = w.Path()
+	require.NoError(t, w.Close())
+	require.Len(t, got, 2)
+	require.Equal(t, path, got[1].Path)
+	require.Equal(t, ingestpolicy.PriorityRealtime, got[1].Priority)
+}
+
+func TestWAL_EmptySegmentsAreNotNotified(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: time.Hour})
+	var got []SegmentInfo
+	w.index.Subscribe(func(si SegmentInfo) { got = append(got, si) })
+
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+	require.Len(t, got, 1)
+
+	// The proactively created segment is empty when it rotates so it is removed, not indexed.
+	expireSegment(w)
+	w.rotateSegmentIfNecessary()
+	require.Len(t, got, 1)
+	require.Equal(t, ingestpolicy.PriorityQueued, got[0].Priority)
 }

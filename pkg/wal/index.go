@@ -16,6 +16,14 @@ type Index struct {
 	segments map[string][]SegmentInfo
 
 	totalSize int64
+
+	// subscribers is a copy-on-write list read without locking by Add.  subMu serializes updates.
+	subMu       sync.Mutex
+	subscribers atomic.Pointer[[]*indexSubscriber]
+}
+
+type indexSubscriber struct {
+	fn func(SegmentInfo)
 }
 
 // NewIndex returns a new index.
@@ -25,13 +33,52 @@ func NewIndex() *Index {
 	}
 }
 
-// Add adds a segment to the index.
+// Add adds a closed segment to the index and notifies subscribers.
 func (i *Index) Add(s SegmentInfo) {
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
 	atomic.AddInt64(&i.totalSize, s.Size)
 	i.segments[s.Prefix] = append(i.segments[s.Prefix], s)
+	i.mu.Unlock()
+
+	if subs := i.subscribers.Load(); subs != nil {
+		for _, sub := range *subs {
+			sub.fn(s)
+		}
+	}
+}
+
+// Subscribe registers fn to be called each time a closed segment is added to the index.  fn is called synchronously
+// by the goroutine that added the segment, after the index lock is released, so it must return quickly and must not
+// block.  Segments added before Subscribe are not replayed; callers should read the index after subscribing to
+// discover existing segments.  The returned func unsubscribes fn.
+func (i *Index) Subscribe(fn func(SegmentInfo)) (unsubscribe func()) {
+	sub := &indexSubscriber{fn: fn}
+
+	i.subMu.Lock()
+	var subs []*indexSubscriber
+	if cur := i.subscribers.Load(); cur != nil {
+		subs = append(subs, *cur...)
+	}
+	subs = append(subs, sub)
+	i.subscribers.Store(&subs)
+	i.subMu.Unlock()
+
+	return func() {
+		i.subMu.Lock()
+		defer i.subMu.Unlock()
+
+		cur := i.subscribers.Load()
+		if cur == nil {
+			return
+		}
+		subs := make([]*indexSubscriber, 0, len(*cur))
+		for _, v := range *cur {
+			if v != sub {
+				subs = append(subs, v)
+			}
+		}
+		i.subscribers.Store(&subs)
+	}
 }
 
 // Get returns all segments for a given prefix.
