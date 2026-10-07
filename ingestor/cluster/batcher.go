@@ -57,6 +57,13 @@ type BatcherOpts struct {
 	// the periodic scan.
 	Realtime RealtimeBatchOpts
 
+	// Mode selects how queued segments are batched.  Defaults to BatcherModeScan.
+	Mode BatcherMode
+
+	// QueuedLinger is the maximum time a closed queued segment waits to be batched with others in BatcherModeEvent.
+	// Defaults to DefaultQueuedLinger.
+	QueuedLinger time.Duration
+
 	TransfersDisabled bool
 
 	// Metrics for observability
@@ -153,6 +160,9 @@ type batcher struct {
 	// realtime batches realtime segments as they close.  When nil, the periodic scan batches them.
 	realtime *eventBatcher
 
+	// queued batches queued segments as they close in BatcherModeEvent.  When nil, the periodic scan batches them.
+	queued *eventBatcher
+
 	store storage.Store
 
 	// pendingUploads is the number of batches ready for upload but not in the upload queue.
@@ -235,6 +245,21 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		b.realtime = newRealtimeBatcher(b, opts.Realtime)
 	}
 
+	switch opts.Mode {
+	case "", BatcherModeScan:
+	case BatcherModeEvent:
+		if _, ok := opts.Segmenter.(segmentSubscriber); !ok {
+			return nil, fmt.Errorf("batcher mode %q requires a segmenter that publishes segment events", opts.Mode)
+		}
+		linger := opts.QueuedLinger
+		if linger <= 0 {
+			linger = DefaultQueuedLinger
+		}
+		b.queued = newQueuedBatcher(b, linger)
+	default:
+		return nil, fmt.Errorf("invalid batcher mode %q", opts.Mode)
+	}
+
 	return b, nil
 }
 
@@ -249,6 +274,9 @@ func (b *batcher) Open(ctx context.Context) error {
 	if b.realtime != nil {
 		b.realtime.Open(ctx)
 	}
+	if b.queued != nil {
+		b.queued.Open(ctx)
+	}
 
 	b.wg.Add(1)
 	go b.watch(ctx)
@@ -260,6 +288,9 @@ func (b *batcher) Close() error {
 	b.closeFn()
 	if b.realtime != nil {
 		b.realtime.Close()
+	}
+	if b.queued != nil {
+		b.queued.Close()
 	}
 	b.wg.Wait()
 	return nil
@@ -319,6 +350,12 @@ func (b *batcher) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// In event mode, segments are batched as they close so the periodic tick only updates metrics.
+			if b.queued != nil {
+				b.updateSegmentMetrics()
+				b.updateQueueMetrics(0, 0)
+				continue
+			}
 			if err := b.BatchSegments(); err != nil {
 				logger.Errorf("Failed to batch segments: %v", err)
 			}
@@ -330,6 +367,10 @@ func (b *batcher) BatchSegments() error {
 	if b.realtime != nil {
 		b.realtime.Flush(context.Background())
 	}
+	if b.queued != nil {
+		b.queued.Flush(context.Background())
+		return nil
+	}
 
 	owned, notOwned, err := b.processSegments()
 	if err != nil {
@@ -338,8 +379,7 @@ func (b *batcher) BatchSegments() error {
 	atomic.StoreUint64(&b.pendingUploads, uint64(len(owned)))
 	atomic.StoreUint64(&b.pendingTransfer, uint64(len(notOwned)))
 
-	metrics.IngestorQueueSize.WithLabelValues("upload").Set(float64(len(b.uploadQueue) + len(owned)))
-	metrics.IngestorQueueSize.WithLabelValues("transfer").Set(float64(len(b.transferQueue) + len(notOwned)))
+	b.updateQueueMetrics(len(owned), len(notOwned))
 
 	// Send realtime batches first so they are not delayed behind queued batches when queues are full.
 	for _, p := range []ingestpolicy.Priority{ingestpolicy.PriorityRealtime, ingestpolicy.PriorityQueued} {
@@ -356,6 +396,12 @@ func (b *batcher) BatchSegments() error {
 	}
 
 	return nil
+}
+
+// updateQueueMetrics updates the queue size metrics with the batches waiting to be queued.
+func (b *batcher) updateQueueMetrics(pendingUploads, pendingTransfers int) {
+	metrics.IngestorQueueSize.WithLabelValues("upload").Set(float64(len(b.uploadQueue) + pendingUploads))
+	metrics.IngestorQueueSize.WithLabelValues("transfer").Set(float64(len(b.transferQueue) + pendingTransfers))
 }
 
 // updateSegmentMetrics updates the WAL segment metrics.
