@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -794,4 +795,38 @@ func TestBatcher_SegmentSizeByPriorityMetric(t *testing.T) {
 	}
 	require.Equal(t, float64(100), gauge(ingestpolicy.PriorityRealtime))
 	require.Equal(t, float64(200), gauge(ingestpolicy.PriorityQueued))
+}
+
+func TestBatcher_SplitPrefix(t *testing.T) {
+	b := newPriorityTestBatcher(t, wal.NewIndex(), "node1")
+
+	owned, notOwned := b.splitPrefix("db_Cpu", nil)
+	require.Empty(t, owned)
+	require.Empty(t, notOwned)
+
+	// Segments with unparsable names are skipped.
+	owned, notOwned = b.splitPrefix("bad", []wal.SegmentInfo{{Prefix: "bad", Path: "/tmp/bad.txt"}})
+	require.Empty(t, owned)
+	require.Empty(t, notOwned)
+
+	idx := wal.NewIndex()
+	var segments []wal.SegmentInfo
+	for i := 0; i < 3; i++ {
+		segments = append(segments, addTestSegment(t, idx, "db", "Cpu", ingestpolicy.PriorityQueued))
+	}
+
+	// Owned by a peer, so the remaining batch is transferred.
+	b = newPriorityTestBatcher(t, idx, "node2")
+	b.maxBatchSegments = 2
+	owned, notOwned = b.splitPrefix("db_Cpu", slices.Clone(segments))
+	require.Len(t, owned, 1)
+	require.Len(t, owned[0].Segments, 2)
+	require.Len(t, notOwned, 1)
+	require.Len(t, notOwned[0].Segments, 1)
+
+	// Segments are marked as batched.
+	for _, si := range segments {
+		n, _ := b.segments.Get(si.Path)
+		require.Equal(t, 1, n)
+	}
 }
