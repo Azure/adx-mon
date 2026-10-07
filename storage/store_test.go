@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	commonv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/common/v1"
 	logsv1 "buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go/opentelemetry/proto/logs/v1"
 	"github.com/Azure/adx-mon/collector/logs/types"
 	"github.com/Azure/adx-mon/metrics"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -562,6 +564,7 @@ func BenchmarkWriteTimeSeries(b *testing.B) {
 		StorageDir:     dir,
 		SegmentMaxSize: 100 * 1024 * 1024,
 		SegmentMaxAge:  time.Minute,
+		MaxDiskUsage:   100 * 1024 * 1024 * 1024,
 	})
 
 	require.NoError(b, s.Open(context.Background()))
@@ -608,4 +611,76 @@ type shortReader struct{}
 
 func (s shortReader) Read(p []byte) (n int, err error) {
 	return 0, io.ErrUnexpectedEOF
+}
+
+func TestStore_RealtimeDiskReservation(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
+	require.NoError(t, err)
+
+	const (
+		maxDiskUsage = 64 * 1024
+		reserved     = 32 * 1024
+	)
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:                t.TempDir(),
+		SegmentMaxSize:            1024,
+		SegmentMaxAge:             time.Minute,
+		MaxDiskUsage:              maxDiskUsage,
+		Policy:                    policy,
+		RealtimeReservedDiskBytes: reserved,
+	})
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+
+	ctx := context.Background()
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{
+		Value: &commonv1.AnyValue_StringValue{StringValue: string(bytes.Repeat([]byte("a"), 512))},
+	}}}}
+
+	// Fill the disk with queued data until queued writes are rejected.
+	var queuedErr error
+	for i := 0; i < 10000 && queuedErr == nil; i++ {
+		queuedErr = s.WriteOTLPLogs(ctx, "Logs", "Queued", logs)
+	}
+	require.ErrorIs(t, queuedErr, wal.ErrMaxDiskUsageExceeded)
+	// Queued data stops within one write of the queued limit, leaving the reservation free.
+	require.LessOrEqual(t, s.Size(), int64(maxDiskUsage-reserved))
+	require.GreaterOrEqual(t, s.Size(), int64(maxDiskUsage-reserved-2048))
+
+	// Realtime writes can use the reserved space.
+	require.NoError(t, s.WriteOTLPLogs(ctx, "Logs", "Realtime", logs))
+	require.ErrorIs(t, s.WriteOTLPLogs(ctx, "Logs", "Queued", logs), wal.ErrMaxDiskUsageExceeded)
+
+	// Realtime writes are rejected once the full limit is reached.
+	var realtimeErr error
+	for i := 0; i < 10000 && realtimeErr == nil; i++ {
+		realtimeErr = s.WriteOTLPLogs(ctx, "Logs", "Realtime", logs)
+	}
+	require.ErrorIs(t, realtimeErr, wal.ErrMaxDiskUsageExceeded)
+	require.GreaterOrEqual(t, s.Size(), int64(maxDiskUsage-2048))
+}
+
+func TestStore_NoRealtimeTablesUsesFullDisk(t *testing.T) {
+	const maxDiskUsage = 64 * 1024
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:                t.TempDir(),
+		SegmentMaxSize:            1024,
+		SegmentMaxAge:             time.Minute,
+		MaxDiskUsage:              maxDiskUsage,
+		RealtimeReservedDiskBytes: 32 * 1024,
+	})
+	require.NoError(t, s.Open(context.Background()))
+	defer s.Close()
+
+	logs := &otlp.Logs{Logs: []*logsv1.LogRecord{{Body: &commonv1.AnyValue{
+		Value: &commonv1.AnyValue_StringValue{StringValue: string(bytes.Repeat([]byte("a"), 512))},
+	}}}}
+
+	var err error
+	for i := 0; i < 10000 && err == nil; i++ {
+		err = s.WriteOTLPLogs(context.Background(), "Logs", "Queued", logs)
+	}
+	require.ErrorIs(t, err, wal.ErrMaxDiskUsageExceeded)
+	// Without realtime tables the reservation does not apply.
+	require.GreaterOrEqual(t, s.Size(), int64(maxDiskUsage-2048))
 }

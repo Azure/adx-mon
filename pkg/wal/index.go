@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
+
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 )
 
 // Index provides overview of all segments in a repository.
@@ -16,6 +18,9 @@ type Index struct {
 	segments map[string][]SegmentInfo
 
 	totalSize int64
+
+	// sizeByPriority is the total size of segments for each ingestion priority.
+	sizeByPriority [ingestpolicy.NumPriorities]int64
 
 	// subscribers is a copy-on-write list read without locking by Add.  subMu serializes updates.
 	subMu       sync.Mutex
@@ -37,6 +42,7 @@ func NewIndex() *Index {
 func (i *Index) Add(s SegmentInfo) {
 	i.mu.Lock()
 	atomic.AddInt64(&i.totalSize, s.Size)
+	atomic.AddInt64(i.prioritySize(s.Priority), s.Size)
 	i.segments[s.Prefix] = append(i.segments[s.Prefix], s)
 	i.mu.Unlock()
 
@@ -101,6 +107,8 @@ func (i *Index) Remove(s SegmentInfo) {
 		if seg.Path == s.Path {
 			segments = append(segments[:idx], segments[idx+1:]...)
 			atomic.AddInt64(&i.totalSize, -s.Size)
+			// Use the indexed priority since callers may not set it.
+			atomic.AddInt64(i.prioritySize(seg.Priority), -s.Size)
 
 			if len(segments) == 0 {
 				delete(i.segments, s.Prefix)
@@ -289,6 +297,19 @@ func (i *Index) PrefixesByCount() []string {
 // TotalSize returns the total size of all segments in the index.
 func (i *Index) TotalSize() int64 {
 	return atomic.LoadInt64(&i.totalSize)
+}
+
+// TotalSizeByPriority returns the total size of segments in the index with the given ingestion priority.
+func (i *Index) TotalSizeByPriority(p ingestpolicy.Priority) int64 {
+	return atomic.LoadInt64(i.prioritySize(p))
+}
+
+// prioritySize returns the size counter for p.  Unknown priorities are counted as queued.
+func (i *Index) prioritySize(p ingestpolicy.Priority) *int64 {
+	if int(p) >= len(i.sizeByPriority) {
+		p = ingestpolicy.PriorityQueued
+	}
+	return &i.sizeByPriority[p]
 }
 
 // OldestSegmentAge returns the age of the oldest segment in the index.
