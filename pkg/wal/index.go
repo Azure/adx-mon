@@ -242,6 +242,17 @@ func (i *Index) PrefixesBySize() []string {
 	return prefixes
 }
 
+// Prefixes appends all prefixes to dst in no particular order and returns it.
+func (i *Index) Prefixes(dst []string) []string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	for prefix := range i.segments {
+		dst = append(dst, prefix)
+	}
+	return dst
+}
+
 // PrefixesByAge returns all prefixes sorted by oldest to newest.
 func (i *Index) PrefixesByAge() []string {
 	i.mu.RLock()
