@@ -53,6 +53,10 @@ type BatcherOpts struct {
 	RealtimeUploadQueue   chan *Batch
 	RealtimeTransferQueue chan *Batch
 
+	// Realtime enables event driven batching of realtime segments.  When disabled, realtime segments are batched by
+	// the periodic scan.
+	Realtime RealtimeBatchOpts
+
 	TransfersDisabled bool
 
 	// Metrics for observability
@@ -137,6 +141,9 @@ type batcher struct {
 	realtimeUploadQueue   chan *Batch
 	realtimeTransferQueue chan *Batch
 
+	// realtime batches realtime segments as they close.  When nil, the periodic scan batches them.
+	realtime *realtimeBatcher
+
 	store storage.Store
 
 	// pendingUploads is the number of batches ready for upload but not in the upload queue.
@@ -193,7 +200,7 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		return nil, fmt.Errorf("SegmentsMaxAgeMetric is required")
 	}
 
-	return &batcher{
+	b := &batcher{
 		storageDir:              opts.StorageDir,
 		maxTransferAge:          opts.MaxTransferAge,
 		maxTransferSize:         opts.MaxTransferSize,
@@ -211,7 +218,13 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 		segmentsCountMetric:     opts.SegmentsCountMetric,
 		segmentsSizeBytesMetric: opts.SegmentsSizeBytesMetric,
 		segmentsMaxAgeMetric:    opts.SegmentsMaxAgeMetric,
-	}, nil
+	}
+
+	if _, ok := opts.Segmenter.(segmentSubscriber); ok && opts.Realtime.enabled() {
+		b.realtime = newRealtimeBatcher(b, opts.Realtime)
+	}
+
+	return b, nil
 }
 
 func (b *batcher) Open(ctx context.Context) error {
@@ -222,6 +235,10 @@ func (b *batcher) Open(ctx context.Context) error {
 		return err
 	}
 
+	if b.realtime != nil {
+		b.realtime.Open(ctx)
+	}
+
 	b.wg.Add(1)
 	go b.watch(ctx)
 
@@ -230,6 +247,9 @@ func (b *batcher) Open(ctx context.Context) error {
 
 func (b *batcher) Close() error {
 	b.closeFn()
+	if b.realtime != nil {
+		b.realtime.Close()
+	}
 	b.wg.Wait()
 	return nil
 }
@@ -296,6 +316,10 @@ func (b *batcher) watch(ctx context.Context) {
 }
 
 func (b *batcher) BatchSegments() error {
+	if b.realtime != nil {
+		b.realtime.Flush(context.Background())
+	}
+
 	owned, notOwned, err := b.processSegments()
 	if err != nil {
 		return fmt.Errorf("process segments: %w", err)
@@ -367,6 +391,11 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 		// If all the segments are already part of a batch, skip this prefix.
 		if len(b.tempSet) == 0 {
+			continue
+		}
+
+		// Realtime segments are batched as they close by the realtime batcher.
+		if b.realtime != nil && b.tempSet[0].Priority == ingestpolicy.PriorityRealtime {
 			continue
 		}
 
@@ -510,6 +539,12 @@ func (b *batcher) Release(batch *Batch) {
 	for _, si := range batch.Segments {
 		// Remove the segment from the map if it's no longer part of b batch so we don't leak keys
 		_, _ = b.segments.Delete(si.Path)
+	}
+
+	// Segments of a realtime batch that was not removed, such as after a failed upload, are not announced again by
+	// the index so they are retried by the realtime batcher.
+	if b.realtime != nil && batch.Priority == ingestpolicy.PriorityRealtime && !batch.IsRemoved() {
+		b.realtime.released(batch.Prefix)
 	}
 }
 
