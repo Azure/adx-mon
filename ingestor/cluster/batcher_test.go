@@ -6,6 +6,7 @@ import (
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/partmap"
 	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
@@ -620,3 +621,156 @@ type fakeHealthChecker struct {
 func (f fakeHealthChecker) IsPeerHealthy(peer string) bool { return true }
 func (f fakeHealthChecker) SetPeerUnhealthy(peer string)   {}
 func (f fakeHealthChecker) SetPeerHealthy(peer string)     {}
+
+func newPriorityTestBatcher(t *testing.T, idx *wal.Index, owner string) *batcher {
+	t.Helper()
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
+	return &batcher{
+		hostname:                "node1",
+		storageDir:              t.TempDir(),
+		maxTransferAge:          30 * time.Second,
+		maxTransferSize:         100 * 1024 * 1024,
+		minUploadSize:           100 * 1024 * 1024,
+		maxBatchSegments:        25,
+		Partitioner:             &fakePartitioner{owner: owner},
+		Segmenter:               idx,
+		health:                  &fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
+	}
+}
+
+func addTestSegment(t *testing.T, idx *wal.Index, db, table string, priority ingestpolicy.Priority) wal.SegmentInfo {
+	t.Helper()
+	idgen, err := flake.New()
+	require.NoError(t, err)
+	id := idgen.NextId()
+	created, err := flakeutil.ParseFlakeID(id.String())
+	require.NoError(t, err)
+
+	si := wal.SegmentInfo{
+		Prefix:    db + "_" + table,
+		Ulid:      id.String(),
+		Path:      filepath.Join(t.TempDir(), wal.Filename(db, table, "", id.String())),
+		Size:      100,
+		CreatedAt: created,
+		Priority:  priority,
+	}
+	idx.Add(si)
+	return si
+}
+
+func TestBatcher_RealtimeBatchesAreOwned(t *testing.T) {
+	idx := wal.NewIndex()
+	rt := addTestSegment(t, idx, "db", "Realtime", ingestpolicy.PriorityRealtime)
+	q := addTestSegment(t, idx, "db", "Queued", ingestpolicy.PriorityQueued)
+
+	// A peer owns both prefixes, but realtime batches are never transferred.
+	b := newPriorityTestBatcher(t, idx, "node2")
+	owned, notOwned, err := b.processSegments()
+	require.NoError(t, err)
+
+	require.Len(t, owned, 1)
+	require.Equal(t, []string{rt.Path}, owned[0].Paths())
+	require.Equal(t, ingestpolicy.PriorityRealtime, owned[0].Priority)
+
+	require.Len(t, notOwned, 1)
+	require.Equal(t, []string{q.Path}, notOwned[0].Paths())
+	require.Equal(t, ingestpolicy.PriorityQueued, notOwned[0].Priority)
+
+	requireValidBatch(t, owned)
+	requireValidBatch(t, notOwned)
+}
+
+func TestBatcher_SplitBatchesKeepPriority(t *testing.T) {
+	idx := wal.NewIndex()
+	for i := 0; i < 5; i++ {
+		addTestSegment(t, idx, "db", "Realtime", ingestpolicy.PriorityRealtime)
+	}
+
+	b := newPriorityTestBatcher(t, idx, "node1")
+	b.maxBatchSegments = 2
+	owned, _, err := b.processSegments()
+	require.NoError(t, err)
+
+	require.Len(t, owned, 3)
+	for _, batch := range owned {
+		require.Equal(t, ingestpolicy.PriorityRealtime, batch.Priority)
+	}
+}
+
+func TestBatcher_RoutesBatchesByPriority(t *testing.T) {
+	idx := wal.NewIndex()
+	rt := addTestSegment(t, idx, "db", "Realtime", ingestpolicy.PriorityRealtime)
+	q := addTestSegment(t, idx, "db", "Queued", ingestpolicy.PriorityQueued)
+	qPeer := addTestSegment(t, idx, "db", "Peer", ingestpolicy.PriorityQueued)
+
+	b := newPriorityTestBatcher(t, idx, "node1")
+	b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "node2"}, defaultOwner: "node1"}
+	b.uploadQueue = make(chan *Batch, 10)
+	b.transferQueue = make(chan *Batch, 10)
+	b.realtimeUploadQueue = make(chan *Batch, 10)
+	b.realtimeTransferQueue = make(chan *Batch, 10)
+
+	require.NoError(t, b.BatchSegments())
+
+	require.Len(t, b.realtimeUploadQueue, 1)
+	require.Equal(t, []string{rt.Path}, (<-b.realtimeUploadQueue).Paths())
+	require.Len(t, b.uploadQueue, 1)
+	require.Equal(t, []string{q.Path}, (<-b.uploadQueue).Paths())
+	require.Len(t, b.transferQueue, 1)
+	require.Equal(t, []string{qPeer.Path}, (<-b.transferQueue).Paths())
+	require.Empty(t, b.realtimeTransferQueue)
+}
+
+func TestBatcher_RealtimeFallsBackToDefaultQueues(t *testing.T) {
+	idx := wal.NewIndex()
+	addTestSegment(t, idx, "db", "Realtime", ingestpolicy.PriorityRealtime)
+	addTestSegment(t, idx, "db", "Queued", ingestpolicy.PriorityQueued)
+
+	b := newPriorityTestBatcher(t, idx, "node1")
+	b.uploadQueue = make(chan *Batch, 10)
+	b.transferQueue = make(chan *Batch, 10)
+
+	require.NoError(t, b.BatchSegments())
+
+	// Realtime batches are sent first.
+	require.Len(t, b.uploadQueue, 2)
+	require.Equal(t, ingestpolicy.PriorityRealtime, (<-b.uploadQueue).Priority)
+	require.Equal(t, ingestpolicy.PriorityQueued, (<-b.uploadQueue).Priority)
+}
+
+func TestBatcher_QueueSizesIncludeRealtime(t *testing.T) {
+	b := newPriorityTestBatcher(t, wal.NewIndex(), "node1")
+	b.uploadQueue = make(chan *Batch, 10)
+	b.transferQueue = make(chan *Batch, 10)
+	b.uploadQueue <- &Batch{}
+	b.transferQueue <- &Batch{}
+	require.Equal(t, 1, b.UploadQueueSize())
+	require.Equal(t, 1, b.TransferQueueSize())
+
+	b.realtimeUploadQueue = make(chan *Batch, 10)
+	b.realtimeTransferQueue = make(chan *Batch, 10)
+	b.realtimeUploadQueue <- &Batch{}
+	b.realtimeTransferQueue <- &Batch{}
+	require.Equal(t, 2, b.UploadQueueSize())
+	require.Equal(t, 2, b.TransferQueueSize())
+
+	// A realtime queue shared with the default queue is not counted twice.
+	b.realtimeUploadQueue = b.uploadQueue
+	require.Equal(t, 1, b.UploadQueueSize())
+}
+
+type prefixPartitioner struct {
+	owners       map[string]string
+	defaultOwner string
+}
+
+func (p *prefixPartitioner) Owner(b []byte) (string, string) {
+	if owner, ok := p.owners[string(b)]; ok {
+		return owner, ""
+	}
+	return p.defaultOwner, ""
+}
