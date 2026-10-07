@@ -181,7 +181,7 @@ still delivers segments to the ingestor over the transfer API.
 The helper script in `tools/clickhouse/dev_stack.sh` spins up a complete collector → ingestor →
 ClickHouse pipeline on Docker. It builds fresh images (unless `SKIP_BUILD=1`), launches a ClickHouse
 server with pre-created `observability` and `observability_logs` databases, and wires the collector to
-the ingestor using the clickhouse backend. See [`tools/clickhouse/README.md`](../tools/clickhouse/README.md)
+the ingestor using the clickhouse backend. See [`tools/clickhouse/README.md`](https://github.com/Azure/adx-mon/blob/main/tools/clickhouse/README.md)
 for usage, including how to seed OTLP metrics and query the data with `clickhouse-client` or the Tabix
 UI at `http://localhost:8123/play`.
 

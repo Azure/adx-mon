@@ -39,7 +39,7 @@ The collector continues to scrape and buffer data in WAL segments, but it must t
 ClickHouse before forwarding them to the ingestor. Set `storage-backend = "clickhouse"` in the TOML
 config (or pass `--storage-backend=clickhouse`) and keep the ingest endpoint pointed at the ingestor.
 
-Example snippet derived from [`tools/clickhouse/collector-minimal.toml`](../tools/clickhouse/collector-minimal.toml):
+Example snippet derived from [`tools/clickhouse/collector-minimal.toml`](https://github.com/Azure/adx-mon/blob/main/tools/clickhouse/collector-minimal.toml):
 
 ```toml
 endpoint = "https://ingestor:9090"
@@ -85,7 +85,7 @@ running `clickhouse-client`.
 `./tools/clickhouse/dev_stack.sh start` spins up ClickHouse, the ingestor, and the collector on a
 single Docker network. It applies the settings described above, seeds the schema, exposes the Tabix UI
 at [http://localhost:8123/play](http://localhost:8123/play), and mounts WAL directories under
-`tools/clickhouse/.stack/`. See the [README](../tools/clickhouse/README.md) for day-two commands such
+`tools/clickhouse/.stack/`. See the [README](https://github.com/Azure/adx-mon/blob/main/tools/clickhouse/README.md) for day-two commands such
 as `stop`, `cleanup`, and log streaming.
 
 ### Troubleshooting tips
