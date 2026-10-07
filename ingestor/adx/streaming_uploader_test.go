@@ -10,16 +10,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/wal"
 	adxschema "github.com/Azure/adx-mon/schema"
 	azkustoingest "github.com/Azure/azure-kusto-go/azkustoingest"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -405,4 +408,86 @@ func TestStreamBatch_NoSlotRetriesWithoutHoldingWorker(t *testing.T) {
 	require.FileExists(t, path)
 	require.True(t, batch.IsReleased())
 	require.False(t, batch.IsRemoved())
+}
+
+func realtimeBatchCount(t *testing.T, table, outcome string) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, metrics.IngestorRealtimeBatches.WithLabelValues("db", table, outcome).Write(m))
+	return m.GetCounter().GetValue()
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, c.Write(m))
+	return m.GetCounter().GetValue()
+}
+
+func gaugeValue(t *testing.T, g prometheus.Gauge) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	require.NoError(t, g.Write(m))
+	return m.GetGauge().GetValue()
+}
+
+func TestStreamBatch_Metrics(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		setup     func(env *streamingTestEnv)
+		createdAt time.Time
+		outcome   string
+		streamed  bool
+	}{
+		{name: "streamed", outcome: "streamed", streamed: true},
+		{name: "throttled", setup: func(env *streamingTestEnv) { env.stream.err = newStreamingHTTPError("429 Too Many Requests", 429, "") }, outcome: "retry_throttled"},
+		{name: "transient", setup: func(env *streamingTestEnv) {
+			env.stream.err = newStreamingHTTPError("500 Internal Server Error", 500, "")
+		}, outcome: "retry_transient"},
+		{name: "unavailable", setup: func(env *streamingTestEnv) {
+			env.stream.err = newStreamingHTTPError("404 Not Found", 404, "")
+		}, outcome: "fallback_unavailable"},
+		{name: "lag", createdAt: time.Now().Add(-time.Hour), outcome: "fallback_lag"},
+		{name: "direct ingest", setup: func(env *streamingTestEnv) { env.u.requireDirectIngest = true }, outcome: "fallback_direct_ingest"},
+		{name: "no slot", setup: func(env *streamingTestEnv) {
+			env.u.realtime.Slots = NewStreamingSlots(1, 1, 0, cluster.PeerInfo{Count: 1})
+			_, ok := env.u.realtime.Slots.TryAcquire()
+			require.True(t, ok)
+		}, outcome: "retry_no_slot"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newStreamingTestEnv(t)
+			if tt.setup != nil {
+				tt.setup(env)
+			}
+			table := "Metrics" + strings.ReplaceAll(tt.name, " ", "")
+			env.addSegment(t, table, ingestpolicy.PriorityRealtime, testCSV, tt.createdAt)
+
+			before := realtimeBatchCount(t, table, tt.outcome)
+			requests := counterValue(t, metrics.IngestorRealtimeStreamingRequests.WithLabelValues("db"))
+			duration := counterValue(t, metrics.IngestorRealtimeStreamingDuration.WithLabelValues("db"))
+			env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+
+			require.Equal(t, before+1, realtimeBatchCount(t, table, tt.outcome))
+
+			// Requests and their duration are counted whenever a streaming request is sent.
+			sent := env.stream.calls > 0
+			gotRequests := counterValue(t, metrics.IngestorRealtimeStreamingRequests.WithLabelValues("db"))
+			gotDuration := counterValue(t, metrics.IngestorRealtimeStreamingDuration.WithLabelValues("db"))
+			if sent {
+				require.Equal(t, requests+1, gotRequests)
+				require.Greater(t, gotDuration, duration)
+			} else {
+				require.Equal(t, requests, gotRequests)
+				require.Equal(t, duration, gotDuration)
+			}
+
+			latency := gaugeValue(t, metrics.IngestorRealtimeIngestLatency.WithLabelValues("db", table))
+			if tt.streamed {
+				require.Greater(t, latency, float64(0))
+			} else {
+				require.Zero(t, latency)
+			}
+		})
+	}
 }
