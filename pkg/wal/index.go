@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"container/heap"
 	"fmt"
 	"io"
 	"sort"
@@ -22,6 +23,11 @@ type Index struct {
 	// sizeByPriority is the total size of segments for each ingestion priority.
 	sizeByPriority [ingestpolicy.NumPriorities]int64
 
+	// ages orders segments by creation time so the oldest segment is found without scanning all segments.
+	// agesByPath finds a segment's entry for removal, linking entries for duplicate paths.  Both are guarded by mu.
+	ages       ageHeap
+	agesByPath map[string]*ageEntry
+
 	// subscribers is a copy-on-write list read without locking by Add.  subMu serializes updates.
 	subMu       sync.Mutex
 	subscribers atomic.Pointer[[]*indexSubscriber]
@@ -34,7 +40,8 @@ type indexSubscriber struct {
 // NewIndex returns a new index.
 func NewIndex() *Index {
 	return &Index{
-		segments: make(map[string][]SegmentInfo),
+		segments:   make(map[string][]SegmentInfo),
+		agesByPath: make(map[string]*ageEntry),
 	}
 }
 
@@ -44,6 +51,9 @@ func (i *Index) Add(s SegmentInfo) {
 	atomic.AddInt64(&i.totalSize, s.Size)
 	atomic.AddInt64(i.prioritySize(s.Priority), s.Size)
 	i.segments[s.Prefix] = append(i.segments[s.Prefix], s)
+	e := &ageEntry{createdAt: s.CreatedAt, next: i.agesByPath[s.Path]}
+	heap.Push(&i.ages, e)
+	i.agesByPath[s.Path] = e
 	i.mu.Unlock()
 
 	if subs := i.subscribers.Load(); subs != nil {
@@ -109,6 +119,7 @@ func (i *Index) Remove(s SegmentInfo) {
 			atomic.AddInt64(&i.totalSize, -s.Size)
 			// Use the indexed priority since callers may not set it.
 			atomic.AddInt64(i.prioritySize(seg.Priority), -s.Size)
+			i.removeAge(seg.Path, seg.CreatedAt)
 
 			if len(segments) == 0 {
 				delete(i.segments, s.Prefix)
@@ -323,25 +334,71 @@ func (i *Index) prioritySize(p ingestpolicy.Priority) *int64 {
 	return &i.sizeByPriority[p]
 }
 
-// OldestSegmentAge returns the age of the oldest segment in the index.
+// OldestSegmentAge returns the age of the oldest segment in the index or 0 if the index is empty.
 func (i *Index) OldestSegmentAge() time.Duration {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	var dur time.Duration
-	for _, segments := range i.segments {
-		for _, seg := range segments {
-			age := time.Since(seg.CreatedAt)
-			if dur.Seconds() == 0 || age > dur {
-				dur = age
-			}
-		}
-	}
-
-	if dur == 0 {
+	if len(i.ages) == 0 {
 		return 0
 	}
-	return dur
+	return time.Since(i.ages[0].createdAt)
+}
+
+// removeAge removes the age entry for the segment at path created at createdAt.  i.mu must be held for writing.
+func (i *Index) removeAge(path string, createdAt time.Time) {
+	var prev *ageEntry
+	for e := i.agesByPath[path]; e != nil; prev, e = e, e.next {
+		if !e.createdAt.Equal(createdAt) {
+			continue
+		}
+		heap.Remove(&i.ages, e.index)
+		switch {
+		case prev != nil:
+			prev.next = e.next
+		case e.next != nil:
+			i.agesByPath[path] = e.next
+		default:
+			delete(i.agesByPath, path)
+		}
+		return
+	}
+}
+
+// ageEntry is a segment's creation time in an ageHeap.
+type ageEntry struct {
+	createdAt time.Time
+	index     int
+	// next links entries for segments with the same path.
+	next *ageEntry
+}
+
+// ageHeap is a min-heap of segment creation times.
+type ageHeap []*ageEntry
+
+func (h ageHeap) Len() int { return len(h) }
+
+func (h ageHeap) Less(a, b int) bool { return h[a].createdAt.Before(h[b].createdAt) }
+
+func (h ageHeap) Swap(a, b int) {
+	h[a], h[b] = h[b], h[a]
+	h[a].index = a
+	h[b].index = b
+}
+
+func (h *ageHeap) Push(x any) {
+	e := x.(*ageEntry)
+	e.index = len(*h)
+	*h = append(*h, e)
+}
+
+func (h *ageHeap) Pop() any {
+	old := *h
+	n := len(old)
+	e := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return e
 }
 
 func (i *Index) WriteDebug(w io.Writer) error {
