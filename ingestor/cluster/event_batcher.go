@@ -140,16 +140,40 @@ func (r *eventBatcher) markPending(prefix string, deadline time.Time) {
 	}
 }
 
-// sweep marks every prefix in the index with segments accepted by the policy as pending.
+// sweep marks every prefix in the index with unbatched segments accepted by the policy as pending.  Prefixes whose
+// segments are all part of a batch are skipped so they are not reprocessed.
 func (r *eventBatcher) sweep() {
 	deadline := time.Now().Add(r.policy.maxLatency())
 	var segments []wal.SegmentInfo
-	for _, prefix := range r.b.Segmenter.PrefixesByAge() {
+	for _, prefix := range r.prefixes() {
 		segments = r.b.Segmenter.Get(segments[:0], prefix)
-		if len(segments) > 0 && r.policy.accepts(segments[0]) {
+		if len(segments) > 0 && r.policy.accepts(segments[0]) && r.hasUnbatched(segments) {
 			r.markPending(prefix, deadline)
 		}
 	}
+}
+
+// prefixLister is implemented by segmenters that list prefixes without sorting them.
+type prefixLister interface {
+	Prefixes(dst []string) []string
+}
+
+// prefixes returns the prefixes in the index.  The order does not matter since prefixes are only marked pending.
+func (r *eventBatcher) prefixes() []string {
+	if l, ok := r.b.Segmenter.(prefixLister); ok {
+		return l.Prefixes(nil)
+	}
+	return r.b.Segmenter.PrefixesByAge()
+}
+
+// hasUnbatched returns true if any of the segments is not part of a batch.
+func (r *eventBatcher) hasUnbatched(segments []wal.SegmentInfo) bool {
+	for _, si := range segments {
+		if n, _ := r.b.segments.Get(si.Path); n == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *eventBatcher) run(ctx context.Context) {
