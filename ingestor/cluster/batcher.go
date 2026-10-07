@@ -358,13 +358,8 @@ func (b *batcher) BatchSegments() error {
 	return nil
 }
 
-// processSegments returns the set of batches that are owned by the current instance and
-// the set that are owned by peers and need to be transferred.  The owned slice may contain
-// segments that are owned by other peers if they are already past the max age or max size
-// thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
-// lagging segments over new ones.
-func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
-	// Update metrics
+// updateSegmentMetrics updates the WAL segment metrics.
+func (b *batcher) updateSegmentMetrics() {
 	b.segmentsSizeBytesMetric.Set(float64(b.SegmentsSize()))
 	if sizer, ok := b.Segmenter.(prioritySizer); ok && b.sizeByPriorityMetric != nil {
 		for p := ingestpolicy.Priority(0); int(p) < ingestpolicy.NumPriorities; p++ {
@@ -373,6 +368,133 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 	}
 	b.segmentsCountMetric.Set(float64(b.SegmentsTotal()))
 	b.segmentsMaxAgeMetric.Set(b.MaxSegmentAge().Seconds())
+}
+
+// splitPrefix splits the unbatched segments of prefix into batches and marks the segments as batched.  Batches are
+// split by max segment count, upload size, transfer size and transfer age.  The returned owned batches are uploaded by
+// this node and notOwned batches are transferred to the peer that owns the prefix.
+func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwned []*Batch) {
+	if len(v) == 0 {
+		return nil, nil
+	}
+
+	sort.Slice(v, func(i, j int) bool {
+		return v[i].Path < v[j].Path
+	})
+
+	var (
+		batchSize int64
+		batch     *Batch
+	)
+
+	db, table, _, _, err := wal.ParseFilename(v[0].Path)
+	if err != nil {
+		logger.Errorf("Failed to parse segment filename: %s", err)
+		return nil, nil
+	}
+
+	// All segments of a prefix belong to the same table and have the same priority.
+	priority := v[0].Priority
+	newBatch := func() *Batch {
+		return &Batch{
+			Prefix:   prefix,
+			Database: db,
+			Table:    table,
+			Priority: priority,
+			batcher:  b,
+		}
+	}
+	batch = newBatch()
+
+	for _, si := range v {
+		batch.Segments = append(batch.Segments, si)
+		batchSize += si.Size
+
+		// Record that this segment is part of a batch.
+		_ = b.segments.Mutate(si.Path, func(n int) (int, error) {
+			return n + 1, nil
+		})
+
+		// Prevent trying to combine an unbounded number of segments at once even if they are very small.  This
+		// can incur a lot of CPU time and slower transfers when there are hundreds of segments that can be combined.
+		if len(batch.Segments) >= b.maxBatchSegments {
+			if logger.IsDebug() {
+				logger.Debugf("Batch %s is merging more than %d segments, uploading directly", si.Path, 25)
+			}
+
+			owned = append(owned, batch)
+			batch = newBatch()
+			batchSize = 0
+			continue
+		}
+
+		// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
+		if b.minUploadSize > 0 && batchSize >= b.minUploadSize {
+			if logger.IsDebug() {
+				logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
+			}
+
+			owned = append(owned, batch)
+			batch = newBatch()
+			batchSize = 0
+			continue
+		}
+
+		if b.maxTransferSize > 0 && batchSize >= b.maxTransferSize {
+			if logger.IsDebug() {
+				logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, b.maxTransferSize/1e6, batchSize)
+			}
+
+			owned = append(owned, batch)
+			batch = newBatch()
+			batchSize = 0
+			continue
+		}
+
+		createdAt := si.CreatedAt
+
+		// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
+		// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
+		// rather take that hit than have b node that's behind on uploading.
+		if b.maxTransferAge > 0 && time.Since(createdAt) > b.maxTransferAge {
+			if logger.IsDebug() {
+				logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
+			}
+			owned = append(owned, batch)
+			batch = newBatch()
+			batchSize = 0
+			continue
+
+		}
+	}
+
+	if len(batch.Segments) == 0 {
+		return owned, notOwned
+	}
+
+	owner, _ := b.Partitioner.Owner([]byte(prefix))
+
+	// If the peer has signaled that it's unhealthy, upload the segments directly.
+	peerHealthy := b.health.IsPeerHealthy(owner)
+
+	// Realtime batches are uploaded by the node that has them rather than transferred to a peer to avoid the added
+	// latency.
+	if owner == b.hostname || !peerHealthy || b.transferDisabled || priority == ingestpolicy.PriorityRealtime {
+		owned = append(owned, batch)
+	} else {
+		notOwned = append(notOwned, batch)
+	}
+
+	return owned, notOwned
+}
+
+// processSegments returns the set of batches that are owned by the current instance and
+// the set that are owned by peers and need to be transferred.  The owned slice may contain
+// segments that are owned by other peers if they are already past the max age or max size
+// thresholds.  In addition, the batches are ordered as oldest first to allow for prioritizing
+// lagging segments over new ones.
+func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
+	b.updateSegmentMetrics()
 
 	// Groups is b map of metrics name to b list of segments for that metric.
 	groups := make(map[string][]wal.SegmentInfo)
@@ -435,118 +557,9 @@ func (b *batcher) processSegments() ([]*Batch, []*Batch, error) {
 
 	// For each sample, sort the segments by name.  The last segment is the current segment.
 	for _, prefix := range byAge {
-		v := groups[prefix]
-
-		if len(v) == 0 {
-			continue
-		}
-
-		sort.Slice(v, func(i, j int) bool {
-			return v[i].Path < v[j].Path
-		})
-
-		var (
-			batchSize int64
-			batch     *Batch
-		)
-
-		db, table, _, _, err := wal.ParseFilename(v[0].Path)
-		if err != nil {
-			logger.Errorf("Failed to parse segment filename: %s", err)
-			continue
-		}
-
-		// All segments of a prefix belong to the same table and have the same priority.
-		priority := v[0].Priority
-		newBatch := func() *Batch {
-			return &Batch{
-				Prefix:   prefix,
-				Database: db,
-				Table:    table,
-				Priority: priority,
-				batcher:  b,
-			}
-		}
-		batch = newBatch()
-
-		for _, si := range v {
-			batch.Segments = append(batch.Segments, si)
-			batchSize += si.Size
-
-			// Record that this segment is part of a batch.
-			_ = b.segments.Mutate(si.Path, func(n int) (int, error) {
-				return n + 1, nil
-			})
-
-			// Prevent trying to combine an unbounded number of segments at once even if they are very small.  This
-			// can incur a lot of CPU time and slower transfers when there are hundreds of segments that can be combined.
-			if len(batch.Segments) >= b.maxBatchSegments {
-				if logger.IsDebug() {
-					logger.Debugf("Batch %s is merging more than %d segments, uploading directly", si.Path, 25)
-				}
-
-				owned = append(owned, batch)
-				batch = newBatch()
-				batchSize = 0
-				continue
-			}
-
-			// The batch is at the optimal size for uploading to kusto, upload directly and start a new batch.
-			if b.minUploadSize > 0 && batchSize >= b.minUploadSize {
-				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, (b.minUploadSize)/1e6, batchSize)
-				}
-
-				owned = append(owned, batch)
-				batch = newBatch()
-				batchSize = 0
-				continue
-			}
-
-			if b.maxTransferSize > 0 && batchSize >= b.maxTransferSize {
-				if logger.IsDebug() {
-					logger.Debugf("Batch %s is larger than %dMB (%d), uploading directly", si.Path, b.maxTransferSize/1e6, batchSize)
-				}
-
-				owned = append(owned, batch)
-				batch = newBatch()
-				batchSize = 0
-				continue
-			}
-
-			createdAt := si.CreatedAt
-
-			// If the file has been on disk for more than 30 seconds, we're behind on uploading so upload it directly
-			// ourselves vs transferring it to another node.  This could result in suboptimal upload batches, but we'd
-			// rather take that hit than have b node that's behind on uploading.
-			if b.maxTransferAge > 0 && time.Since(createdAt) > b.maxTransferAge {
-				if logger.IsDebug() {
-					logger.Debugf("File %s is older than %s (%s) seconds, uploading directly", si.Path, b.maxTransferAge.String(), time.Since(createdAt).String())
-				}
-				owned = append(owned, batch)
-				batch = newBatch()
-				batchSize = 0
-				continue
-
-			}
-		}
-
-		if len(batch.Segments) == 0 {
-			continue
-		}
-
-		owner, _ := b.Partitioner.Owner([]byte(prefix))
-
-		// If the peer has signaled that it's unhealthy, upload the segments directly.
-		peerHealthy := b.health.IsPeerHealthy(owner)
-
-		// Realtime batches are uploaded by the node that has them rather than transferred to a peer to avoid the added
-		// latency.
-		if owner == b.hostname || !peerHealthy || b.transferDisabled || priority == ingestpolicy.PriorityRealtime {
-			owned = append(owned, batch)
-		} else {
-			notOwned = append(notOwned, batch)
-		}
+		o, n := b.splitPrefix(prefix, groups[prefix])
+		owned = append(owned, o...)
+		notOwned = append(notOwned, n...)
 	}
 	return owned, notOwned, nil
 }
