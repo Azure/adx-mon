@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	kerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 )
 
 const maxDisplayedDatabases = 10
@@ -37,4 +40,36 @@ func (e *UnknownDBError) Error() string {
 	}
 
 	return sb.String()
+}
+
+func isUserError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// User specified a database in their CRD that adx-mon does not have configured.
+	var unknownDB *UnknownDBError
+	if errors.As(err, &unknownDB) {
+		return true
+	}
+
+	// User's query results are missing a required column, or they are the wrong type.
+	var validationErr *NotificationValidationError
+	if errors.As(err, &validationErr) {
+		return true
+	}
+
+	// Look to see if a kusto query error is specific to how the query was defined and not due to problems with adx-mon itself.
+	var kerr *kerrors.HttpError
+	if errors.As(err, &kerr) {
+		if kerr.Kind == kerrors.KClientArgs {
+			return true
+		}
+		lowerErr := strings.ToLower(kerr.Error())
+		if strings.Contains(lowerErr, "sem0001") || strings.Contains(lowerErr, "semantic error") || strings.Contains(lowerErr, "request is invalid") {
+			return true
+		}
+	}
+
+	return false
 }
