@@ -10,7 +10,11 @@ import (
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 )
 
-const maxQueryTime = 5 * time.Minute
+const (
+	maxQueryTime      = 5 * time.Minute
+	maxRetryAttempts  = 2
+	defaultRetryDelay = 5 * time.Second
+)
 
 func (e *worker) ExecuteQuery(ctx context.Context) {
 	result := e.executeQueryAttempt(ctx, nil)
@@ -21,7 +25,38 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	if result.skipped {
 		return
 	}
+	// RunOnce is used by linting and has no scheduler. Treat a transient
+	// failure as terminal for this one-shot execution rather than waiting.
+	if result.retryable {
+		result.err = result.retry.initialErr
+		result.retryable = false
+	}
 	e.handleQueryResult(ctx, result)
+}
+
+// executeScheduledQuery runs an evaluation and, when appropriate, its one
+// retry. The evaluation context is deliberately created by the first attempt
+// after it acquires a query slot. It remains alive across the retry delay and
+// the second slot wait, so the query budget is shared by the whole evaluation.
+func (e *worker) executeScheduledQuery(ctx context.Context) queryAttemptResult {
+	result := e.executeQueryAttempt(ctx, nil)
+	if result.aborted || !result.retryable {
+		return result
+	}
+
+	retry := result.retry
+	timer := e.clock.NewTimer(e.retryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-retry.evaluationContext.Done():
+	case <-timer.C():
+	}
+	if result, stopped := queryContextStopped(ctx, retry); stopped {
+		return result
+	}
+
+	return e.executeQueryAttempt(ctx, retry)
 }
 
 type queryRetryState struct {
@@ -29,6 +64,8 @@ type queryRetryState struct {
 	queryContext           *QueryContext
 	evaluationContext      context.Context
 	evaluationCancel       context.CancelFunc
+	attempt                int
+	initialErr             error
 	notificationsThrottled bool
 	throttledAlerts        ThrottledNotificationsError
 }
@@ -36,6 +73,7 @@ type queryRetryState struct {
 type queryAttemptResult struct {
 	retry      *queryRetryState
 	err        error
+	retryable  bool
 	setupError bool
 	aborted    bool
 	skipped    bool
@@ -53,6 +91,9 @@ func queryContextStopped(ctx context.Context, retry *queryRetryState) (queryAtte
 		return queryAttemptResult{}, false
 	}
 	if err := retry.evaluationContext.Err(); err != nil {
+		if retry.initialErr != nil {
+			return retriableFailure(retry, err), true
+		}
 		return queryAttemptResult{retry: retry, err: err}, true
 	}
 	return queryAttemptResult{}, false
@@ -73,8 +114,8 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		return queryAttemptResult{skipped: true}
 	}
 
-	// The first slot wait is outside the query budget. An existing evaluation's
-	// slot wait is inside its evaluation context.
+	// The first slot wait is outside the query budget. A retry's slot wait is
+	// inside the shared evaluation context.
 	slotContext := ctx
 	if retry != nil {
 		slotContext = retry.evaluationContext
@@ -97,6 +138,7 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		evaluation := newAlertRuleEvaluationAt(e.rule, executionTime, e.clock)
 		retry = &queryRetryState{
 			evaluation: evaluation,
+			attempt:    1,
 		}
 	}
 
@@ -147,8 +189,35 @@ func (e *worker) executeQueryAttempt(ctx context.Context, retry *queryRetryState
 		return result
 	}
 	err, retry.evaluation.rows = e.kustoClient.Query(queryCtx, retry.queryContext, wrappedHandler)
+	transient := isTransientFailedRequest(err)
+	if transient && retry.initialErr == nil {
+		retry.initialErr = err
+	}
 	if result, stopped := queryContextStopped(ctx, retry); stopped {
 		return result
 	}
+	if err == nil {
+		return queryAttemptResult{retry: retry}
+	}
+
+	if transient {
+		if retry.attempt < maxRetryAttempts {
+			retry.attempt++
+			logger.Warnf("Query %s/%s failed with a transient request error; scheduling retry attempt %d/%d after %s", e.rule.Namespace, e.rule.Name, retry.attempt, maxRetryAttempts, e.retryDelay)
+			return queryAttemptResult{retry: retry, retryable: true}
+		}
+		return retriableFailure(retry, err)
+	}
+
 	return queryAttemptResult{retry: retry, err: err}
+}
+
+func retriableFailure(retry *queryRetryState, err error) queryAttemptResult {
+	return queryAttemptResult{
+		retry: retry,
+		err: &retriableError{
+			initialErr: retry.initialErr,
+			retryErr:   err,
+		},
+	}
 }

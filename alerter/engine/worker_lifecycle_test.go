@@ -103,7 +103,7 @@ func newLifecycleRetry(t *testing.T, ctx context.Context) (*worker, *queryRetryS
 		Rule:                 &rules.Rule{Namespace: "lifecycle", Name: t.Name(), Interval: time.Hour},
 		Clock:                clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 		MaxConcurrentQueries: 1,
-		KustoClient:          &fakeKustoClient{},
+		KustoClient:          &fakeKustoClient{queryErr: remoteEntityResolutionError()},
 		AlertClient: &fakeAlerter{createFn: func(context.Context, string, alert.Alert) error {
 			t.Error("aborted evaluation must not create a failure alert")
 			return nil
@@ -112,7 +112,7 @@ func newLifecycleRetry(t *testing.T, ctx context.Context) (*worker, *queryRetryS
 	metrics.QueryHealth.WithLabelValues(w.rule.Namespace, w.rule.Name).Set(QueryHealthHealthy)
 	metrics.NotificationUnhealthy.WithLabelValues(w.rule.Namespace, w.rule.Name).Set(NotificationHealthHealthy)
 	result := w.executeQueryAttempt(ctx, nil)
-	require.NoError(t, result.err)
+	require.True(t, result.retryable)
 	require.NotNil(t, result.retry)
 	t.Cleanup(result.retry.evaluationCancel)
 	return w, result.retry
@@ -153,6 +153,122 @@ func receiveAttempt(t *testing.T, done <-chan queryAttemptResult) queryAttemptRe
 	}
 }
 
+func TestWorker_RetryCancellationRetainsEvaluation(t *testing.T) {
+	for _, phase := range []string{"before entry", "slot wait", "in flight"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			w, retry := newLifecycleRetry(t, ctx)
+			assertFinished := expectAbortedEvaluation(t, w, retry, evaluationOutcomeCancelled)
+			var result queryAttemptResult
+			if phase == "before entry" {
+				cancel()
+				result = w.executeQueryAttempt(ctx, retry)
+			} else {
+				started := make(chan struct{})
+				if phase == "slot wait" {
+					w.querySlots <- struct{}{}
+					retry.evaluationContext = &observedDoneContext{Context: retry.evaluationContext, observed: started}
+				} else {
+					w.kustoClient = &fakeKustoClient{queryFn: func(ctx context.Context, _ *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+						close(started)
+						<-ctx.Done()
+						// Even an SDK returning nil cannot turn shutdown into success.
+						return nil, 0
+					}}
+				}
+				done := make(chan queryAttemptResult, 1)
+				go func() { done <- w.executeQueryAttempt(ctx, retry) }()
+				select {
+				case <-started:
+				case <-time.After(time.Second):
+					t.Fatal("retry did not enter the expected phase")
+				}
+				cancel()
+				result = receiveAttempt(t, done)
+				if phase == "slot wait" {
+					require.Len(t, w.querySlots, 1, "retry must not take the held slot")
+					<-w.querySlots
+				}
+			}
+			require.True(t, result.aborted)
+			require.ErrorIs(t, result.err, context.Canceled)
+			require.Same(t, retry, result.retry)
+			w.finishAbortedQuery(result)
+			assertFinished()
+		})
+	}
+}
+
+func TestWorker_RetryDeadlineRetainsInitialError(t *testing.T) {
+	for _, phase := range []string{"before entry", "slot wait", "nil query return"} {
+		t.Run(phase, func(t *testing.T) {
+			w, retry := newLifecycleRetry(t, context.Background())
+			initialErr := retry.initialErr
+			retry.evaluationCancel()
+			if phase == "before entry" {
+				retry.evaluationContext, retry.evaluationCancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			} else {
+				retry.evaluationContext, retry.evaluationCancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+			}
+			t.Cleanup(retry.evaluationCancel)
+			queryCalls := 0
+			w.kustoClient = &fakeKustoClient{queryFn: func(ctx context.Context, _ *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+				queryCalls++
+				<-ctx.Done()
+				return nil, 0
+			}}
+			if phase == "slot wait" {
+				w.querySlots <- struct{}{}
+				defer func() { <-w.querySlots }()
+			}
+			result := w.executeQueryAttempt(context.Background(), retry)
+			require.False(t, result.aborted)
+			require.False(t, result.retryable)
+			require.Same(t, retry, result.retry)
+			require.ErrorIs(t, result.err, context.DeadlineExceeded)
+			var exhausted *retriableError
+			require.ErrorAs(t, result.err, &exhausted)
+			require.Same(t, initialErr, exhausted.initialErr)
+			if phase == "nil query return" {
+				require.Equal(t, 1, queryCalls)
+			} else {
+				require.Zero(t, queryCalls)
+			}
+
+			alertCalls := 0
+			w.alertCli = &fakeAlerter{createFn: func(ctx context.Context, _ string, a alert.Alert) error {
+				alertCalls++
+				require.NoError(t, ctx.Err(), "failure notification must not inherit the expired evaluation context")
+				require.Contains(t, a.Summary, initialErr.Error())
+				return nil
+			}}
+			w.handleQueryResult(context.Background(), result)
+			require.Equal(t, 1, alertCalls)
+			require.Equal(t, evaluationOutcomeServiceError, retry.evaluation.outcome)
+		})
+	}
+}
+
+func TestWorker_FirstTransientErrorReturnedAfterDeadline(t *testing.T) {
+	initialErr := remoteEntityResolutionError()
+	w := NewWorker(&WorkerConfig{
+		Rule: &rules.Rule{Namespace: "lifecycle", Name: t.Name()},
+		KustoClient: &fakeKustoClient{queryFn: func(ctx context.Context, _ *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			<-ctx.Done()
+			return initialErr, 0
+		}},
+	})
+	w.queryTime = 20 * time.Millisecond
+	result := w.executeQueryAttempt(context.Background(), nil)
+	defer result.retry.evaluationCancel()
+	require.False(t, result.aborted)
+	require.ErrorIs(t, result.err, context.DeadlineExceeded)
+	var exhausted *retriableError
+	require.ErrorAs(t, result.err, &exhausted)
+	require.Same(t, initialErr, exhausted.initialErr)
+}
+
 func TestWorker_LifecycleTerminationTakesPrecedence(t *testing.T) {
 	for _, parentDeadline := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cancelled", true: "parent deadline"}[parentDeadline], func(t *testing.T) {
@@ -174,6 +290,7 @@ func TestWorker_LifecycleTerminationTakesPrecedence(t *testing.T) {
 			result := w.executeQueryAttempt(ctx, retry)
 			require.True(t, result.aborted)
 			require.ErrorIs(t, result.err, wantErr)
+			require.False(t, isRetriableError(result.err), "lifecycle termination must bypass failure reporting")
 			w.finishAbortedQuery(result)
 			assertFinished()
 		})
@@ -197,7 +314,7 @@ func TestWorker_ParentDeadlineCancelsInFlightRetry(t *testing.T) {
 }
 
 func TestWorker_ReportingHandoffCancellation(t *testing.T) {
-	for _, completion := range []string{"success", "throttled", "setup error"} {
+	for _, completion := range []string{"success", "retry exhausted", "throttled", "setup error"} {
 		t.Run(completion, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -205,6 +322,8 @@ func TestWorker_ReportingHandoffCancellation(t *testing.T) {
 			assertFinished := expectAbortedEvaluation(t, w, retry, evaluationOutcomeCancelled)
 			result := queryAttemptResult{retry: retry}
 			switch completion {
+			case "retry exhausted":
+				result = retriableFailure(retry, retry.initialErr)
 			case "throttled":
 				result.err = alert.ErrTooManyRequests
 			case "setup error":
@@ -250,7 +369,7 @@ func TestWorker_ShutdownDuringFailureNotification(t *testing.T) {
 				require.ErrorIs(t, notificationCtx.Err(), context.Canceled)
 				return tc.err
 			}}
-			w.handleQueryResult(ctx, queryAttemptResult{retry: retry, err: &UnknownDBError{DB: "missing"}})
+			w.handleQueryResult(ctx, retriableFailure(retry, retry.initialErr))
 			require.Equal(t, 1, calls, "an already in-flight alert cannot be retracted")
 			assertFinished()
 		})
