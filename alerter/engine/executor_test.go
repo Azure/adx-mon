@@ -91,13 +91,10 @@ func TestExecutor_syncWorkers_SharesExecutorClock(t *testing.T) {
 		RuleStore:   &fakeRuleStore{rules: []*rules.Rule{{Namespace: "ns", Name: "one", Interval: time.Hour}, {Namespace: "ns", Name: "two", Interval: time.Hour}}},
 		KustoClient: &fakeKustoClient{},
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	e.syncWorkers(ctx)
+	e.syncWorkers(context.Background())
 	require.Len(t, e.workers, 2)
 	for _, w := range e.workers {
 		require.Same(t, clk, w.clock)
-		w.Close()
 	}
 }
 
