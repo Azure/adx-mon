@@ -19,6 +19,7 @@ import (
 	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
 	azvalue "github.com/Azure/azure-kusto-go/azkustodata/value"
 	"github.com/shopspring/decimal"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -37,6 +38,7 @@ type Executor struct {
 	ruleStore   ruleStore
 	region      string
 	ctrlCli     client.Client
+	clock       clock.Clock
 
 	// tags are access by the worker concurrently outside a mutex.  This is safe because
 	// the map is never modified after creation.
@@ -60,6 +62,7 @@ type ExecutorOpts struct {
 	Tags        map[string]string
 	Concurrency int
 	CtrlCli     client.Client
+	Clock       clock.Clock
 }
 
 // reservedNotificationColumns is the lowercase set of query result columns that
@@ -76,6 +79,10 @@ var reservedNotificationColumns = map[string]struct{}{
 
 // TODO make AlertAddr string part of alertcli
 func NewExecutor(opts ExecutorOpts) *Executor {
+	executorClock := opts.Clock
+	if executorClock == nil {
+		executorClock = clock.RealClock{}
+	}
 	return &Executor{
 		alertCli:    opts.AlertCli,
 		alertAddr:   opts.AlertAddr,
@@ -85,6 +92,7 @@ func NewExecutor(opts ExecutorOpts) *Executor {
 		tags:        opts.Tags,
 		querySlots:  queue.New(opts.Concurrency),
 		ctrlCli:     opts.CtrlCli,
+		clock:       executorClock,
 		workers:     make(map[string]*worker),
 	}
 }
@@ -113,6 +121,7 @@ func (e *Executor) newWorker(rule *rules.Rule) *worker {
 		HandlerFn:        e.HandlerFn,
 		CtrlClient:       e.ctrlCli,
 		sharedQuerySlots: e.querySlots,
+		Clock:            e.clock,
 	})
 }
 
