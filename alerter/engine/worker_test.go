@@ -20,6 +20,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/clock"
+	clocktesting "k8s.io/utils/clock/testing"
 )
 
 const (
@@ -441,6 +443,11 @@ func TestWorker_RequestInvalid(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 }
 
+func TestNewWorker_DefaultsToRealClock(t *testing.T) {
+	w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule"}})
+	require.IsType(t, clock.RealClock{}, w.clock)
+}
+
 func TestWorker_UnknownDB(t *testing.T) {
 	kcli := &fakeKustoClient{
 		queryErr: &UnknownDBError{DB: "fakedb", AvailableDatabases: []string{"db1", "db2"}},
@@ -803,19 +810,18 @@ func TestWorker_AlertsGeneratedMetricIncludesPartialSuccess(t *testing.T) {
 }
 
 func TestCalculateNextQueryTime(t *testing.T) {
-	now := time.Now()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	interval := 5 * time.Minute
 
 	t.Run("first execution returns immediate", func(t *testing.T) {
-		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule", Interval: interval, LastQueryTime: time.Time{}}, Region: "eastus"})
+		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule", Interval: interval, LastQueryTime: time.Time{}}, Region: "eastus", Clock: clocktesting.NewFakeClock(now)})
 		result := w.calculateNextQueryTime()
-		// Should be in the past (immediate execution)
-		require.True(t, result.Before(time.Now().Add(1*time.Second)), "expected immediate execution")
+		require.Equal(t, now.Add(-time.Second), result)
 	})
 
 	t.Run("scheduled execution returns lastQueryTime+interval", func(t *testing.T) {
 		last := now.Add(-10 * time.Minute)
-		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule", Interval: interval, LastQueryTime: last}, Region: "eastus"})
+		w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "rule", Interval: interval, LastQueryTime: last}, Region: "eastus", Clock: clocktesting.NewFakeClock(now)})
 		result := w.calculateNextQueryTime()
 		expected := last.Add(interval)
 		require.Equal(t, expected, result)

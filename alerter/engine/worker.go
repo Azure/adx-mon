@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/adx-mon/alerter/rules"
 	"github.com/Azure/adx-mon/pkg/logger"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -28,6 +29,7 @@ type worker struct {
 	handlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
 	querySlots chan struct{}
 	ctrlCli    client.Client
+	clock      clock.Clock
 
 	// criteria/expression evaluation cached at construction
 	matchAllowed bool
@@ -48,6 +50,7 @@ type WorkerConfig struct {
 	HandlerFn        func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
 	CtrlClient       client.Client
 	sharedQuerySlots chan struct{}
+	Clock            clock.Clock
 }
 
 // NewWorker creates a worker and performs one-time match evaluation.
@@ -60,6 +63,10 @@ func NewWorker(cfg *WorkerConfig) *worker {
 	if querySlots == nil {
 		querySlots = queue.New(cfg.MaxConcurrentQueries)
 	}
+	workerClock := cfg.Clock
+	if workerClock == nil {
+		workerClock = clock.RealClock{}
+	}
 	w := &worker{
 		rule:        cfg.Rule,
 		region:      cfg.Region,
@@ -69,6 +76,7 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		handlerFn:   cfg.HandlerFn,
 		querySlots:  querySlots,
 		ctrlCli:     cfg.CtrlClient,
+		clock:       workerClock,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
 	w.matchAllowed = allowed
@@ -133,7 +141,7 @@ func (e *worker) Run(ctx context.Context) {
 func (e *worker) calculateNextQueryTime() time.Time {
 	// If no last query time, this is the first execution
 	if e.rule.LastQueryTime.IsZero() {
-		return time.Now().Add(-time.Second) // Immediate execution
+		return e.clock.Now().Add(-time.Second) // Immediate execution
 	}
 
 	// Calculate next execution time based on last execution + interval

@@ -43,7 +43,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, maxQueryTime)
 	defer cancel()
 
-	evaluation := newAlertRuleEvaluation(e.rule)
+	evaluation := newAlertRuleEvaluation(e.rule, e.clock)
 	defer evaluation.finish()
 
 	queryContext, err := NewQueryContext(e.rule, evaluation.executionTime, e.region)
@@ -164,7 +164,7 @@ func (e *worker) ExecuteQuery(ctx context.Context) {
 
 	metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 	metrics.QueriesRunTotal.WithLabelValues().Inc()
-	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, time.Since(evaluation.executionTime))
+	logger.Infof("Completed %s/%s in %s", e.rule.Namespace, e.rule.Name, e.clock.Since(evaluation.executionTime))
 	logger.Infof("Query for %s/%s completed with %d entries found", e.rule.Namespace, e.rule.Name, evaluation.rows)
 
 	// Update AlertRule status with execution information

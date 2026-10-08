@@ -101,7 +101,7 @@ func (e *worker) updateAlertRuleCriteriaCondition(ctx context.Context) {
 		Reason:             reason,
 		Message:            message,
 		ObservedGeneration: alertRule.GetGeneration(),
-		LastTransitionTime: metav1.Now(),
+		LastTransitionTime: metav1.NewTime(e.clock.Now()),
 	}
 	if meta.SetStatusCondition(&alertRule.Status.Conditions, cond) {
 		if err := e.ctrlCli.Status().Update(updateCtx, alertRule); err != nil {
