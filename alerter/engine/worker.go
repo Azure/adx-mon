@@ -30,6 +30,7 @@ type worker struct {
 	querySlots chan struct{}
 	ctrlCli    client.Client
 	queryTime  time.Duration
+	retryDelay time.Duration
 	clock      clock.Clock
 
 	// criteria/expression evaluation cached at construction
@@ -78,6 +79,7 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		querySlots:  querySlots,
 		ctrlCli:     cfg.CtrlClient,
 		queryTime:   maxQueryTime,
+		retryDelay:  defaultRetryDelay,
 		clock:       workerClock,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
@@ -120,7 +122,7 @@ func (e *worker) Run(ctx context.Context) {
 				return
 			case <-timer.C():
 				scheduledQueryTime := nextQueryTime
-				result := e.executeQueryAttempt(ctx, nil)
+				result := e.executeScheduledQuery(ctx)
 				if result.aborted {
 					e.finishAbortedQuery(result)
 					return

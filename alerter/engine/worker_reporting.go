@@ -113,13 +113,18 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 			return
 		}
 
-		if !isUserError(err) {
+		retryExhausted := isRetriableError(err)
+		if !retryExhausted && !isUserError(err) {
 			evaluation.outcome = evaluationOutcomeServiceError
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query execution failed: %v", err))
 			return
 		}
-		evaluation.outcome = evaluationOutcomeUserError
+		if retryExhausted {
+			evaluation.outcome = evaluationOutcomeServiceError
+		} else {
+			evaluation.outcome = evaluationOutcomeUserError
+		}
 
 		// Store the original query error before it gets overwritten
 		originalQueryErr := err
@@ -132,6 +137,9 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 			return
 		}
 		if err != nil {
+			if retryExhausted {
+				metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+			}
 			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
 			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed and unable to create failure alert: %v", originalQueryErr))
@@ -155,6 +163,9 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		if ctx.Err() != nil {
 			return
 		}
+		if retryExhausted {
+			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
+		}
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s/%s: %s", endpointBaseName, e.rule.Namespace, e.rule.Name, err)
 			// Only set the notification as failed if we are not able to send a failure alert directly.
@@ -164,9 +175,13 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		} else {
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
 		}
-		// Query failed due to user error, so return the query to healthy.
-		metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
-		e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed with user error: %v", originalQueryErr))
+		if retryExhausted {
+			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed after retry: %v", originalQueryErr))
+		} else {
+			// Query failed due to user error, so return the query to healthy.
+			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
+			e.updateAlertRuleStatus(ctx, evaluation, "Error", fmt.Sprintf("Query failed with user error: %v", originalQueryErr))
+		}
 		return
 	}
 }

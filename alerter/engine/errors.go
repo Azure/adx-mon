@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	kerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
@@ -40,6 +41,79 @@ func (e *UnknownDBError) Error() string {
 	}
 
 	return sb.String()
+}
+
+func isTransientFailedRequest(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var kerr *kerrors.HttpError
+	if !errors.As(err, &kerr) {
+		return false
+	}
+
+	if kerr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	if isTransientRemoteSchemaCalloutBlockedError(kerr) {
+		return true
+	}
+	if isTransientRemoteEntityResolutionError(kerr) {
+		return true
+	}
+
+	return false
+}
+
+func isTransientRemoteEntityResolutionError(kerr *kerrors.HttpError) bool {
+	lowerErr := strings.ToLower(kerr.Error())
+	if strings.Contains(lowerErr, "sem0056") &&
+		strings.Contains(lowerErr, "resolving remote entities") &&
+		strings.Contains(lowerErr, "failed to resolve name or pattern") {
+		return !strings.Contains(lowerErr, "obo token is required for cross-cluster communication") &&
+			!strings.Contains(lowerErr, "is not authorized to") &&
+			!strings.Contains(lowerErr, "access denied") &&
+			!strings.Contains(lowerErr, "is not allowed by the callout policy")
+	}
+
+	return false
+}
+
+func isTransientRemoteSchemaCalloutBlockedError(kerr *kerrors.HttpError) bool {
+	const transientMessage = "host failed loopback link local check: 'uri.idnhost cannot be resolved into an ip address: no such host is known'"
+
+	restError := kerr.UnmarshalREST()
+	errorDetails, ok := restError["error"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	errorType, _ := errorDetails["@type"].(string)
+	if errorType != "Kusto.DataNode.Exceptions.RemoteSchemaCalloutBlockedException" {
+		return false
+	}
+
+	message, _ := errorDetails["@message"].(string)
+	return strings.Contains(strings.ToLower(message), transientMessage)
+}
+
+type retriableError struct {
+	initialErr error
+	retryErr   error
+}
+
+func (e *retriableError) Error() string {
+	return fmt.Sprintf("query retry failed: initial error: %v; retry error: %v", e.initialErr, e.retryErr)
+}
+
+func (e *retriableError) Unwrap() error {
+	return e.retryErr
+}
+
+func isRetriableError(err error) bool {
+	var retryErr *retriableError
+	return errors.As(err, &retryErr)
 }
 
 func isUserError(err error) bool {

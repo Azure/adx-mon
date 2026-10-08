@@ -443,6 +443,249 @@ func TestWorker_RequestInvalid(t *testing.T) {
 	require.Equal(t, QueryHealthHealthy, gaugeValue)
 }
 
+func TestWorker_ExecuteQuery_TransientFailedRequestIsOneShot(t *testing.T) {
+	queryCalls := 0
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			return remoteEntityResolutionError(), 0
+		},
+	}
+
+	rule := &rules.Rule{Namespace: "namespace", Name: "name"}
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}})
+
+	w.ExecuteQuery(context.Background())
+
+	require.Equal(t, 1, queryCalls)
+}
+
+func TestWorker_Run_SchedulesTransientFailedRequestRetry(t *testing.T) {
+	queryCalls := 0
+	var firstQueryContext *QueryContext
+	sameQueryContext := false
+	var queryDeadlines []time.Time
+	queryCalled := make(chan int, 2)
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			deadline, _ := ctx.Deadline()
+			queryDeadlines = append(queryDeadlines, deadline)
+			if queryCalls == 1 {
+				firstQueryContext = qc
+				queryCalled <- queryCalls
+				return remoteEntityResolutionError(), 0
+			}
+			sameQueryContext = firstQueryContext == qc
+			queryCalled <- queryCalls
+			return nil, 0
+		},
+	}
+
+	rule := &rules.Rule{
+		Namespace: "namespace",
+		Name:      "name",
+		Interval:  time.Hour,
+	}
+	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}, Clock: fakeClock})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("initial query was not executed")
+	}
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(defaultRetryDelay)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled retry was not executed")
+	}
+
+	cancel()
+	w.Close()
+
+	require.Equal(t, 2, queryCalls)
+	require.True(t, sameQueryContext, "retry should reuse the original query window")
+	require.Len(t, queryDeadlines, 2)
+	require.Equal(t, queryDeadlines[0], queryDeadlines[1], "retry should share the initial attempt's deadline")
+	require.Equal(t, fakeClock.Now().Add(-defaultRetryDelay), firstQueryContext.EndTime)
+	require.Equal(t, firstQueryContext.EndTime.Add(-rule.Interval), firstQueryContext.StartTime)
+}
+
+func TestWorker_Run_SchedulesTransientCalloutPolicyRetry(t *testing.T) {
+	queryCalled := make(chan struct{}, 2)
+	queryCalls := 0
+	calloutErr := remoteSchemaCalloutBlockedError(
+		"Kusto.DataNode.Exceptions.RemoteSchemaCalloutBlockedException",
+		"Error getting schema for the remote cluster: The remote cluster is not allowed by the callout policy because its target IP can not be evaluated: Hostname 'remote.example': Host failed loopback link local check: 'uri.IdnHost cannot be resolved into an IP address: No such host is known'",
+	)
+	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	w := NewWorker(&WorkerConfig{
+		Rule:  &rules.Rule{Namespace: "namespace", Name: "callout-policy-retry", Interval: time.Hour},
+		Clock: fakeClock,
+		KustoClient: &fakeKustoClient{queryFn: func(context.Context, *QueryContext, func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			queryCalled <- struct{}{}
+			if queryCalls == 1 {
+				return calloutErr, 0
+			}
+			return nil, 0
+		}},
+		AlertClient: &fakeAlerter{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("initial query was not executed")
+	}
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(defaultRetryDelay)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("callout policy retry was not executed")
+	}
+	cancel()
+	w.Close()
+
+	require.Equal(t, 2, queryCalls)
+}
+
+func TestWorker_Run_ReportsAfterRetryIsExhausted(t *testing.T) {
+	queryCalls := 0
+	queryCalled := make(chan int, 2)
+	alertCalled := make(chan alert.Alert, 1)
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			queryCalled <- queryCalls
+			return remoteEntityResolutionError(), 0
+		},
+	}
+
+	rule := &rules.Rule{Namespace: "namespace", Name: "name", Destination: "owning-team", Interval: time.Hour}
+	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	w := NewWorker(&WorkerConfig{
+		Rule:        rule,
+		Region:      "eastus",
+		KustoClient: kcli,
+		Clock:       fakeClock,
+		AlertClient: &fakeAlerter{createFn: func(_ context.Context, _ string, a alert.Alert) error {
+			alertCalled <- a
+			return nil
+		}},
+	})
+	outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(evaluationOutcomeServiceError)
+	counterBefore := getCounterValue(t, outcomeCounter)
+	histogramCountBefore := getHistogramCount(t, metrics.AlertRuleEvaluationDurationSeconds)
+	histogramSumBefore := getHistogramSum(t, metrics.AlertRuleEvaluationDurationSeconds)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	defer func() {
+		cancel()
+		w.Close()
+	}()
+
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("initial query was not executed")
+	}
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(defaultRetryDelay)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("retry was not executed")
+	}
+	var createdAlert alert.Alert
+	select {
+	case createdAlert = <-alertCalled:
+	case <-time.After(time.Second):
+		t.Fatal("failure alert was not sent after retry exhaustion")
+	}
+	waitForWorkerTimer(t, fakeClock)
+
+	require.Equal(t, 2, queryCalls)
+	require.Equal(t, rule.Destination, createdAlert.Destination)
+	require.Equal(t, 3, createdAlert.Severity)
+	require.Contains(t, createdAlert.CorrelationID, "alert-failure/")
+	require.Equal(t, QueryHealthUnhealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+	require.Equal(t, counterBefore+1, getCounterValue(t, outcomeCounter), "retry attempts should complete one evaluation")
+	require.Equal(t, histogramCountBefore+1, getHistogramCount(t, metrics.AlertRuleEvaluationDurationSeconds))
+	require.Equal(t, histogramSumBefore+defaultRetryDelay.Seconds(), getHistogramSum(t, metrics.AlertRuleEvaluationDurationSeconds))
+}
+
+func TestWorker_Run_RetryExhaustionKeepsQueryHealthUnhealthyWhenAlertFails(t *testing.T) {
+	queryCalled := make(chan int, 2)
+	alertCalled := make(chan struct{}, 1)
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalled <- len(queryCalled) + 1
+			return remoteEntityResolutionError(), 0
+		},
+	}
+
+	rule := &rules.Rule{Namespace: "namespace", Name: "retry-alert-failure", Interval: time.Hour}
+	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	w := NewWorker(&WorkerConfig{
+		Rule:        rule,
+		Region:      "eastus",
+		KustoClient: kcli,
+		Clock:       fakeClock,
+		AlertClient: &fakeAlerter{createFn: func(context.Context, string, alert.Alert) error {
+			alertCalled <- struct{}{}
+			return fmt.Errorf("alert service unavailable")
+		}},
+	})
+	metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name).Set(QueryHealthHealthy)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	defer func() {
+		cancel()
+		w.Close()
+	}()
+
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("initial query was not executed")
+	}
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(defaultRetryDelay)
+	select {
+	case <-queryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("retry was not executed")
+	}
+	select {
+	case <-alertCalled:
+	case <-time.After(time.Second):
+		t.Fatal("failure alert was not attempted after retry exhaustion")
+	}
+	waitForWorkerTimer(t, fakeClock)
+
+	require.Equal(t, QueryHealthUnhealthy, getGaugeValue(t, metrics.QueryHealth.WithLabelValues(rule.Namespace, rule.Name)))
+}
+
 func TestWorker_ExecuteQueryAttempt_UsesSlotAcquisitionWindowAndStartsDeadlineAfterSlot(t *testing.T) {
 	queryCalled := make(chan struct{}, 1)
 	var queryContext *QueryContext
@@ -496,6 +739,92 @@ func TestWorker_ExecuteQueryAttempt_UsesSlotAcquisitionWindowAndStartsDeadlineAf
 	require.Equal(t, deadline, queryDeadline)
 	require.False(t, deadline.Before(budgetStartedAfter.Add(w.queryTime)), "query budget should start after slot acquisition")
 	require.False(t, deadline.After(time.Now().Add(w.queryTime)), "query budget should already have started")
+}
+
+func TestWorker_ExecuteScheduledQuery_TimeoutDuringRetryReportsExhaustion(t *testing.T) {
+	queryCalls := 0
+	alertDeadline := make(chan time.Time, 1)
+	w := NewWorker(&WorkerConfig{
+		Rule: &rules.Rule{
+			Namespace:   "namespace",
+			Name:        "retry-timeout",
+			Destination: "owning-team",
+			Interval:    time.Hour,
+		},
+		Region: "eastus",
+		KustoClient: &fakeKustoClient{queryFn: func(context.Context, *QueryContext, func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			return remoteEntityResolutionError(), 0
+		}},
+		AlertClient: &fakeAlerter{createFn: func(ctx context.Context, _ string, _ alert.Alert) error {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			alertDeadline <- deadline
+			return nil
+		}},
+		Clock: clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+	})
+	w.queryTime = 20 * time.Millisecond
+	w.retryDelay = time.Hour
+
+	result := w.executeScheduledQuery(context.Background())
+	require.ErrorIs(t, result.err, context.DeadlineExceeded)
+	require.True(t, isRetriableError(result.err))
+	require.Equal(t, 1, queryCalls, "the retry should not start after the shared budget expires")
+
+	w.handleQueryResult(context.Background(), result)
+	deadline := <-alertDeadline
+	remaining := time.Until(deadline)
+	require.Greater(t, remaining, queryErrorNotificationTimeout-time.Second)
+	require.LessOrEqual(t, remaining, queryErrorNotificationTimeout)
+}
+
+func TestWorker_Run_CancelsScheduledRetry(t *testing.T) {
+	firstQueryCalled := make(chan struct{})
+	secondQueryCalled := make(chan struct{})
+	kcli := &fakeKustoClient{
+		queryFn: func(ctx context.Context, qc *QueryContext, fn func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			select {
+			case <-firstQueryCalled:
+				close(secondQueryCalled)
+			default:
+				close(firstQueryCalled)
+			}
+			return remoteEntityResolutionError(), 0
+		},
+	}
+
+	rule := &rules.Rule{Namespace: "namespace", Name: "name", Interval: time.Hour}
+	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	w := NewWorker(&WorkerConfig{Rule: rule, Region: "eastus", KustoClient: kcli, AlertClient: &fakeAlerter{}, Clock: fakeClock})
+	outcomeCounter := metrics.AlertRuleEvaluationsTotal.WithLabelValues(evaluationOutcomeCancelled)
+	counterBefore := getCounterValue(t, outcomeCounter)
+	w.alertCli = &fakeAlerter{createFn: func(context.Context, string, alert.Alert) error {
+		t.Error("shutdown during retry delay must not create a failure alert")
+		return nil
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+	select {
+	case <-firstQueryCalled:
+	case <-time.After(time.Second):
+		t.Fatal("initial query was not executed")
+	}
+	waitForWorkerTimer(t, fakeClock)
+
+	cancel()
+	w.Close()
+	fakeClock.Step(defaultRetryDelay)
+
+	select {
+	case <-secondQueryCalled:
+		t.Fatal("scheduled retry ran after cancellation")
+	default:
+	}
+	require.Equal(t, counterBefore+1, getCounterValue(t, outcomeCounter), "retry delay cancellation must finish one evaluation")
 }
 
 func TestWorker_Run_CancelsInFlightQuery(t *testing.T) {
@@ -577,6 +906,46 @@ func waitForQuery(t *testing.T, queries <-chan *QueryContext) *QueryContext {
 	case <-time.After(time.Second):
 		t.Fatal("query was not executed")
 		return nil
+	}
+}
+
+func TestWorker_Run_RetryDelayBoundary(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		advance time.Duration
+		want    int
+	}{
+		{"before delay", defaultRetryDelay - time.Nanosecond, 1},
+		{"at delay", defaultRetryDelay, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clk := clocktesting.NewFakeClock(base)
+			calls := make(chan struct{}, 2)
+			w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: tc.name, Interval: time.Hour}, Clock: clk,
+				KustoClient: &fakeKustoClient{queryFn: func(context.Context, *QueryContext, func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+					calls <- struct{}{}
+					return remoteEntityResolutionError(), 0
+				}}, AlertClient: &fakeAlerter{}})
+			ctx, cancel := context.WithCancel(context.Background())
+			w.Run(ctx)
+			waitForWorkerTimer(t, clk)
+			clk.Step(0)
+			<-calls
+			waitForWorkerTimer(t, clk)
+			clk.Step(tc.advance)
+			if tc.want == 2 {
+				select {
+				case <-calls:
+				case <-time.After(time.Second):
+					t.Fatal("retry did not run at the boundary")
+				}
+			} else {
+				require.Len(t, calls, 0)
+			}
+			cancel()
+			w.Close()
+		})
 	}
 }
 
@@ -685,6 +1054,56 @@ func TestWorker_Run_InitialAndRecurringScheduleUsesCurrentWindows(t *testing.T) 
 	w.Close()
 }
 
+func TestWorker_Run_InitialRetryDoesNotDelayFirstRecurringSchedule(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clk := clocktesting.NewFakeClock(base)
+	interval := time.Hour
+	queries := make(chan *QueryContext, 3)
+	queryCalls := 0
+	w := NewWorker(&WorkerConfig{
+		Rule: &rules.Rule{Namespace: "ns", Name: "initial-retry-schedule", Interval: interval}, Region: "eastus", Clock: clk,
+		KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			queries <- qc
+			if queryCalls == 1 {
+				return remoteEntityResolutionError(), 0
+			}
+			return nil, 0
+		}},
+		AlertClient: &fakeAlerter{},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	defer func() {
+		cancel()
+		w.Close()
+	}()
+
+	waitForWorkerTimer(t, clk)
+	clk.Step(0)
+	initial := waitForQuery(t, queries)
+	require.Equal(t, base, initial.EndTime)
+	require.Equal(t, base.Add(-interval), initial.StartTime)
+
+	waitForWorkerTimer(t, clk)
+	clk.Step(defaultRetryDelay)
+	retry := waitForQuery(t, queries)
+	require.Same(t, initial, retry, "initial retry should reuse the original query window")
+	require.Equal(t, base, retry.EndTime)
+	require.Equal(t, base.Add(-interval), retry.StartTime)
+
+	waitForWorkerTimer(t, clk)
+	clk.Step(interval - defaultRetryDelay - time.Nanosecond)
+	require.Empty(t, queries, "first recurring query ran before a full interval elapsed after the initial window")
+	clk.Step(time.Nanosecond)
+	recurring := waitForQuery(t, queries)
+	expectedEnd := base.Add(interval)
+	require.Equal(t, expectedEnd, recurring.EndTime)
+	require.Equal(t, expectedEnd.Add(-interval), recurring.StartTime)
+
+	require.Equal(t, 3, queryCalls)
+}
+
 func TestWorker_Run_RecurringScheduleResetBoundary(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	interval := time.Hour
@@ -739,6 +1158,40 @@ func TestWorker_Run_RecurringScheduleResetBoundary(t *testing.T) {
 		cancel()
 		w.Close()
 	})
+}
+
+func TestWorker_Run_RetryDoesNotMoveNormalSchedule(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clk := clocktesting.NewFakeClock(base)
+	queries := make(chan *QueryContext, 4)
+	queryCalls := 0
+	w := NewWorker(&WorkerConfig{Rule: &rules.Rule{Namespace: "ns", Name: "retry-schedule", Interval: time.Hour}, Clock: clk,
+		KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queryCalls++
+			queries <- qc
+			if queryCalls == 2 {
+				return remoteEntityResolutionError(), 0
+			}
+			return nil, 0
+		}}, AlertClient: &fakeAlerter{}})
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	waitForWorkerTimer(t, clk)
+	clk.Step(0)
+	require.Equal(t, base, waitForQuery(t, queries).EndTime)
+
+	waitForWorkerTimer(t, clk)
+	clk.Step(time.Hour)
+	require.Equal(t, base.Add(time.Hour), waitForQuery(t, queries).EndTime)
+	waitForWorkerTimer(t, clk)
+	clk.Step(defaultRetryDelay)
+	require.Equal(t, base.Add(time.Hour), waitForQuery(t, queries).EndTime, "retry should retain the recurring query window")
+
+	waitForWorkerTimer(t, clk)
+	clk.Step(time.Hour - defaultRetryDelay)
+	require.Equal(t, base.Add(2*time.Hour), waitForQuery(t, queries).EndTime, "retry should not move the next normal deadline")
+	cancel()
+	w.Close()
 }
 
 func TestWorker_UnknownDB(t *testing.T) {
@@ -1171,4 +1624,13 @@ func getHistogramCount(t *testing.T, metric prometheus.Metric) uint64 {
 	err := metric.Write(metricDTO)
 	require.NoError(t, err)
 	return metricDTO.Histogram.GetSampleCount()
+}
+
+func getHistogramSum(t *testing.T, metric prometheus.Metric) float64 {
+	t.Helper()
+
+	metricDTO := &dto.Metric{}
+	err := metric.Write(metricDTO)
+	require.NoError(t, err)
+	return metricDTO.Histogram.GetSampleSum()
 }
