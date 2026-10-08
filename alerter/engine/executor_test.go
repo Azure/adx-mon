@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/alerter/alert"
 	"github.com/Azure/adx-mon/alerter/queue"
 	"github.com/Azure/adx-mon/alerter/rules"
+	"github.com/Azure/adx-mon/metrics"
 	azerrors "github.com/Azure/azure-kusto-go/azkustodata/errors"
 	azquery "github.com/Azure/azure-kusto-go/azkustodata/query"
 	aztypes "github.com/Azure/azure-kusto-go/azkustodata/types"
@@ -451,6 +455,85 @@ func TestExecutor_Handler_DeliversEnrichedAlert(t *testing.T) {
 	}, client.alert)
 	require.Contains(t, client.alert.Summary, qc.Query)
 	require.Contains(t, client.alert.Summary, "https://cluster.kusto.windows.net/database?query=")
+}
+
+func TestExecutor_Handler_PropagatesContext(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"cancelled return", context.Canceled},
+		{"nil return", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+			qc := &QueryContext{Rule: &rules.Rule{Namespace: "lifecycle", Name: t.Name()}}
+			row := testRow(
+				azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long)},
+				azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1)},
+			)
+			gauge := metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name)
+			gauge.Set(NotificationHealthHealthy)
+			executor := &Executor{alertCli: &fakeAlerter{createFn: func(deliveryCtx context.Context, _ string, _ alert.Alert) error {
+				require.Same(t, ctx, deliveryCtx, "row delivery must inherit the query budget and lifecycle cancellation")
+				cancel()
+				require.ErrorIs(t, deliveryCtx.Err(), context.Canceled)
+				return tc.err
+			}}}
+			require.ErrorIs(t, executor.HandlerFn(ctx, "https://cluster.kusto.windows.net", qc, row), context.Canceled)
+			require.Equal(t, NotificationHealthHealthy, getGaugeValue(t, gauge))
+		})
+	}
+}
+
+func TestExecutor_Handler_CancelsHTTPDelivery(t *testing.T) {
+	started := make(chan struct{})
+	requestCancelled := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(requestCancelled)
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	alertCli, err := alert.NewClient(5 * time.Second)
+	require.NoError(t, err)
+	executor := &Executor{alertCli: alertCli, alertAddr: server.URL}
+	qc := &QueryContext{Rule: &rules.Rule{Namespace: "lifecycle", Name: t.Name()}}
+	row := testRow(
+		azquery.Columns{testColumn(0, "Title", aztypes.String), testColumn(1, "Severity", aztypes.Long)},
+		azvalue.Values{azvalue.NewString("Title"), azvalue.NewLong(1)},
+	)
+	gauge := metrics.NotificationUnhealthy.WithLabelValues(qc.Rule.Namespace, qc.Rule.Name)
+	gauge.Set(NotificationHealthHealthy)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- executor.HandlerFn(ctx, "https://cluster.kusto.windows.net", qc, row) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP delivery did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("HTTP delivery did not stop on cancellation")
+	}
+	select {
+	case <-requestCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP request did not observe cancellation")
+	}
+	require.Equal(t, NotificationHealthHealthy, getGaugeValue(t, gauge))
 }
 
 func TestClampInt64ToInt(t *testing.T) {

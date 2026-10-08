@@ -65,10 +65,11 @@ func (s *service) collect(ctx context.Context) {
 			}
 			delta := current.delta(s.previous)
 			logger.Infof("Status PeriodSeconds=%d Evaluations=%d Successes=%d SetupErrors=%d UserErrors=%d "+
-				"ServiceErrors=%d NotificationThrottled=%d AlertsGenerated=%d AverageDurationSeconds=%0.2f",
+				"ServiceErrors=%d Cancelled=%d NotificationThrottled=%d AlertsGenerated=%d AverageDurationSeconds=%0.2f",
 				int(statusLogInterval.Seconds()), uint64(delta.totalEvaluations()),
 				uint64(delta.evaluations["success"]), uint64(delta.evaluations["setup_error"]),
 				uint64(delta.evaluations["user_error"]), uint64(delta.evaluations["service_error"]),
+				uint64(delta.evaluations["cancelled"]),
 				uint64(delta.evaluations["notification_throttled"]), uint64(delta.alertsGenerated),
 				delta.averageDurationSeconds())
 			s.previous = current

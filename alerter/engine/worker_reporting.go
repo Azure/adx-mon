@@ -17,18 +17,40 @@ import (
 )
 
 const (
+	queryErrorNotificationTimeout = 30 * time.Second
+
 	evaluationOutcomeSuccess               = metrics.AlertRuleEvaluationOutcomeSuccess
 	evaluationOutcomeSetupError            = metrics.AlertRuleEvaluationOutcomeSetupError
 	evaluationOutcomeUserError             = metrics.AlertRuleEvaluationOutcomeUserError
 	evaluationOutcomeServiceError          = metrics.AlertRuleEvaluationOutcomeServiceError
+	evaluationOutcomeCancelled             = metrics.AlertRuleEvaluationOutcomeCancelled
 	evaluationOutcomeNotificationThrottled = metrics.AlertRuleEvaluationOutcomeNotificationThrottled
 )
 
 func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResult) {
+	if err := ctx.Err(); err != nil {
+		result.err = err
+		e.finishAbortedQuery(result)
+		return
+	}
 	if result.retry == nil {
 		return
 	}
 	evaluation := result.retry.evaluation
+	defer func() {
+		// Reporting uses the lifecycle context, not the expired query budget.
+		// Shutdown during delivery must not be recorded as notification failure.
+		if err := ctx.Err(); err != nil {
+			result.err = err
+			e.finishAbortedQuery(result)
+			return
+		}
+		if result.retry.evaluationCancel != nil {
+			result.retry.evaluationCancel()
+		}
+		evaluation.finish()
+	}()
+
 	err := result.err
 	if result.setupError {
 		evaluation.outcome = evaluationOutcomeSetupError
@@ -63,6 +85,9 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		} else {
 			summary = linkedSummary
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		err := e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
 			Destination:   e.rule.Destination,
 			Title:         fmt.Sprintf("Alert %s/%s has too many notifications in %s", e.rule.Namespace, e.rule.Name, e.region),
@@ -71,6 +96,9 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 			Source:        fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
 			CorrelationID: fmt.Sprintf("notification-failure/%s/%s", e.rule.Namespace, e.rule.Name),
 		})
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			logger.Errorf("Failed to send alert for throttled notification for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 		}
@@ -81,6 +109,10 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 	if err != nil {
 		// This failed because the query failed.
 		logger.Errorf("Failed to execute query=%s/%s on %s/%s: %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database, err)
+		if ctx.Err() != nil {
+			return
+		}
+
 		if !isUserError(err) {
 			evaluation.outcome = evaluationOutcomeServiceError
 			metrics.QueryHealth.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(0)
@@ -92,7 +124,13 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		// Store the original query error before it gets overwritten
 		originalQueryErr := err
 
+		notificationCtx, cancel := e.notificationContext(ctx)
+		defer cancel()
+
 		summary, err := KustoQueryLinks(fmt.Sprintf("This query is failing to execute:<br/><br/><pre>%s</pre><br/><br/>", originalQueryErr.Error()), result.retry.queryContext.Query, e.kustoClient.Endpoint(e.rule.Database), e.rule.Database)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s: %s", e.rule.Namespace, e.rule.Name, err)
 			metrics.NotificationUnhealthy.WithLabelValues(e.rule.Namespace, e.rule.Name).Set(1)
@@ -101,15 +139,22 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 		}
 
 		endpointBaseName, _ := strings.CutPrefix(e.kustoClient.Endpoint(e.rule.Database), "https://")
-		err = e.alertCli.Create(ctx, e.alertAddr, alert.Alert{
+		failureAlert := alert.Alert{
 			Destination:   e.rule.Destination,
 			Title:         fmt.Sprintf("Alert %s/%s has query errors on %s", e.rule.Namespace, e.rule.Name, e.kustoClient.Endpoint(e.rule.Database)),
 			Summary:       summary,
 			Severity:      3,
 			Source:        fmt.Sprintf("%s/%s", e.rule.Namespace, e.rule.Name),
 			CorrelationID: fmt.Sprintf("alert-failure/%s/%s/%s", endpointBaseName, e.rule.Namespace, e.rule.Name),
-		})
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		err = e.alertCli.Create(notificationCtx, e.alertAddr, failureAlert)
 
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			logger.Errorf("Failed to send failure alert for %s/%s/%s: %s", endpointBaseName, e.rule.Namespace, e.rule.Name, err)
 			// Only set the notification as failed if we are not able to send a failure alert directly.
@@ -126,10 +171,29 @@ func (e *worker) handleQueryResult(ctx context.Context, result queryAttemptResul
 	}
 }
 
+func (e *worker) finishAbortedQuery(result queryAttemptResult) {
+	retry := result.retry
+	if retry == nil {
+		return
+	}
+	retry.evaluation.outcome = evaluationOutcomeServiceError
+	if errors.Is(result.err, context.Canceled) {
+		retry.evaluation.outcome = evaluationOutcomeCancelled
+	}
+	if retry.evaluationCancel != nil {
+		retry.evaluationCancel()
+	}
+	retry.evaluation.finish()
+}
+
+func (e *worker) notificationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, queryErrorNotificationTimeout)
+}
+
 // updateAlertRuleStatus updates the AlertRule status with the execution information
 func (e *worker) updateAlertRuleStatus(ctx context.Context, evaluation *alertRuleEvaluation, status, message string) {
 	// Skip status update if we don't have a Kubernetes client
-	if e.ctrlCli == nil {
+	if e.ctrlCli == nil || ctx.Err() != nil {
 		return
 	}
 

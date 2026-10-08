@@ -29,6 +29,7 @@ type worker struct {
 	handlerFn  func(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error
 	querySlots chan struct{}
 	ctrlCli    client.Client
+	queryTime  time.Duration
 	clock      clock.Clock
 
 	// criteria/expression evaluation cached at construction
@@ -76,6 +77,7 @@ func NewWorker(cfg *WorkerConfig) *worker {
 		handlerFn:   cfg.HandlerFn,
 		querySlots:  querySlots,
 		ctrlCli:     cfg.CtrlClient,
+		queryTime:   maxQueryTime,
 		clock:       workerClock,
 	}
 	allowed, err := cfg.Rule.Matches(cfg.Tags)
