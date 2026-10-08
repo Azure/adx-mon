@@ -104,35 +104,42 @@ func (e *worker) Run(ctx context.Context) {
 	go func() {
 		defer e.wg.Done()
 
-		// Calculate the next execution time based on last execution
+		// Calculate the next execution time based on last execution.
 		nextQueryTime := e.calculateNextQueryTime()
 
 		logger.Infof("Creating query executor for %s/%s in %s executing every %s, next execution at %s",
 			e.rule.Namespace, e.rule.Name, e.rule.Database, e.rule.Interval.String(), nextQueryTime.Format(time.RFC3339))
 
-		// If we should execute immediately (e.g., first time or overdue), do so
-		if nextQueryTime.Before(time.Now()) {
-			e.ExecuteQuery(ctx)
-		} else {
-			// Wait until the calculated next execution time before starting the ticker
-			waitDuration := time.Until(nextQueryTime)
+		timer := e.clock.NewTimer(nextQueryTime.Sub(e.clock.Now()))
+		defer timer.Stop()
 
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(waitDuration):
-				e.ExecuteQuery(ctx)
-			}
-		}
-
-		ticker := time.NewTicker(e.rule.Interval)
-		defer ticker.Stop()
+		establishingSchedule := e.rule.LastQueryTime.IsZero()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				e.ExecuteQuery(ctx)
+			case <-timer.C():
+				scheduledQueryTime := nextQueryTime
+				result := e.executeQueryAttempt(ctx, nil)
+				if result.aborted {
+					e.finishAbortedQuery(result)
+					return
+				}
+				e.handleQueryResult(ctx, result)
+
+				if result.retry == nil {
+					// No query ran, so use the current time to keep a skipped rule
+					// from accumulating overdue timer events.
+					nextQueryTime = e.clock.Now().Add(e.rule.Interval)
+				} else if establishingSchedule {
+					// A rule without persisted scheduling state establishes its
+					// cadence from the first query window it actually evaluates.
+					nextQueryTime = result.retry.evaluation.executionTime.Add(e.rule.Interval)
+				} else {
+					nextQueryTime = e.advanceQuerySchedule(scheduledQueryTime, result.retry.evaluation.executionTime)
+				}
+				establishingSchedule = false
+				timer.Reset(nextQueryTime.Sub(e.clock.Now()))
 			}
 		}
 	}()
@@ -151,6 +158,16 @@ func (e *worker) calculateNextQueryTime() time.Time {
 	nextQueryTime := lastQueryTime.Add(e.rule.Interval)
 
 	return nextQueryTime
+}
+
+// advanceQuerySchedule preserves the established cadence for delays shorter
+// than one interval. Once a query starts at least one full interval late, it
+// resets the cadence from the query window it actually evaluates.
+func (e *worker) advanceQuerySchedule(scheduledTime time.Time, executionTime time.Time) time.Time {
+	if !executionTime.Before(scheduledTime.Add(e.rule.Interval)) {
+		return executionTime.Add(e.rule.Interval)
+	}
+	return scheduledTime.Add(e.rule.Interval)
 }
 
 func (e *worker) Close() {
