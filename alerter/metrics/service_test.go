@@ -30,19 +30,22 @@ func TestGatherSnapshotDelta(t *testing.T) {
 
 	evaluations.WithLabelValues(adxmetrics.AlertRuleEvaluationOutcomeSuccess).Inc()
 	evaluations.WithLabelValues(adxmetrics.AlertRuleEvaluationOutcomeServiceError).Inc()
+	evaluations.WithLabelValues(adxmetrics.AlertRuleEvaluationOutcomeCancelled).Inc()
 	alerts.Add(2)
 	durations.Observe(3)
 	durations.Observe(5)
+	durations.Observe(7)
 	current, err := gatherSnapshot(registry)
 	require.NoError(t, err)
 
 	delta := current.delta(previous)
 	require.Equal(t, float64(1), delta.evaluations[adxmetrics.AlertRuleEvaluationOutcomeSuccess])
 	require.Equal(t, float64(1), delta.evaluations[adxmetrics.AlertRuleEvaluationOutcomeServiceError])
-	require.Equal(t, float64(2), delta.totalEvaluations())
+	require.Equal(t, float64(1), delta.evaluations[adxmetrics.AlertRuleEvaluationOutcomeCancelled])
+	require.Equal(t, float64(3), delta.totalEvaluations())
 	require.Equal(t, float64(2), delta.alertsGenerated)
-	require.Equal(t, uint64(2), delta.durationCount)
-	require.Equal(t, float64(4), delta.averageDurationSeconds())
+	require.Equal(t, uint64(3), delta.durationCount)
+	require.Equal(t, float64(5), delta.averageDurationSeconds())
 }
 
 func TestSnapshotDeltaHandlesCounterReset(t *testing.T) {

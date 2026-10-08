@@ -133,6 +133,9 @@ func (e *Executor) Close() error {
 
 // HandlerFn converts rows of a query to Alerts.
 func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryContext, row azquery.Row) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	res, err := ParseAlertResult(qc, row)
 	if err != nil {
 		return err
@@ -158,7 +161,14 @@ func (e *Executor) HandlerFn(ctx context.Context, endpoint string, qc *QueryCont
 	addr := fmt.Sprintf("%s/alerts", e.alertAddr)
 	logger.Debugf("Sending alert %s %v", addr, a)
 
-	if err := e.alertCli.Create(context.Background(), addr, a); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err = e.alertCli.Create(ctx, addr, a)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	if err != nil {
 		if errors.Is(err, alert.ErrTooManyRequests) {
 			logger.Errorf("Failed to create Notification due to throttling: %s/%s", qc.Rule.Namespace, qc.Rule.Name)
 			return err
