@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -129,8 +130,12 @@ func TestWorker_StatusUpdateIncludesLatestEvaluationDetails(t *testing.T) {
 		CtrlClient: ctrlCli,
 	})
 
-	evaluation := newAlertRuleEvaluation(rule)
-	evaluation.startTime = time.Now().Add(-1500 * time.Millisecond)
+	fakeClock := clocktesting.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	evaluation := newAlertRuleEvaluation(rule, fakeClock)
+	fakeClock.Step(1500 * time.Millisecond)
+	require.Equal(t, 1500*time.Millisecond, evaluation.elapsed())
+	fakeClock.Step(time.Hour)
+	require.Equal(t, 1500*time.Millisecond, evaluation.elapsed(), "elapsed duration should be cached after completion")
 	evaluation.rows = 2
 	evaluation.alertsGenerated = 2
 	w.updateAlertRuleStatus(context.Background(), evaluation, "Success", "")
@@ -138,11 +143,73 @@ func TestWorker_StatusUpdateIncludesLatestEvaluationDetails(t *testing.T) {
 	updated := &alertrulev1.AlertRule{}
 	require.NoError(t, ctrlCli.Get(context.Background(), types.NamespacedName{Namespace: alertRule.Namespace, Name: alertRule.Name}, updated))
 	require.Equal(t, "Success", updated.Status.Status)
-	require.GreaterOrEqual(t, updated.Status.LastEvaluationDurationMilliseconds, int64(1500))
+	require.Equal(t, int64(1500), updated.Status.LastEvaluationDurationMilliseconds)
 	require.Equal(t, int64(2), updated.Status.LastRowsReturned)
 	require.Equal(t, int64(2), updated.Status.LastAlertsGenerated)
 	require.False(t, updated.Status.LastQueryTime.IsZero())
 	require.False(t, updated.Status.LastAlertTime.IsZero())
+}
+
+func TestWorker_OverdueExecutionPersistsCurrentWindow(t *testing.T) {
+	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	interval := 5 * time.Minute
+	lastQueryTime := metav1.NewTime(base.Add(-time.Hour))
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, alertrulev1.AddToScheme(scheme))
+	alertRule := &alertrulev1.AlertRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test-namespace", Name: "overdue-rule"},
+		Spec: alertrulev1.AlertRuleSpec{
+			Database:    "TestDB",
+			Interval:    metav1.Duration{Duration: interval},
+			Query:       "Table | take 1",
+			Destination: "destination",
+		},
+		Status: alertrulev1.AlertRuleStatus{
+			LastQueryTime: lastQueryTime,
+		},
+	}
+	ctrlCli := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&alertrulev1.AlertRule{}).
+		WithObjects(alertRule).
+		Build()
+
+	queries := make(chan *QueryContext, 1)
+	fakeClock := clocktesting.NewFakeClock(base)
+	w := NewWorker(&WorkerConfig{
+		Rule: &rules.Rule{
+			Namespace:     alertRule.Namespace,
+			Name:          alertRule.Name,
+			Database:      "TestDB",
+			Interval:      interval,
+			LastQueryTime: lastQueryTime.Time,
+		},
+		Clock:      fakeClock,
+		CtrlClient: ctrlCli,
+		KustoClient: &fakeKustoClient{queryFn: func(_ context.Context, qc *QueryContext, _ func(context.Context, string, *QueryContext, azquery.Row) error) (error, int) {
+			queries <- qc
+			return nil, 0
+		}},
+		AlertClient: &fakeAlerter{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.Run(ctx)
+	waitForWorkerTimer(t, fakeClock)
+	fakeClock.Step(0)
+	require.Equal(t, base, waitForQuery(t, queries).EndTime)
+
+	require.Eventually(t, func() bool {
+		updated := &alertrulev1.AlertRule{}
+		if err := ctrlCli.Get(context.Background(), types.NamespacedName{Namespace: alertRule.Namespace, Name: alertRule.Name}, updated); err != nil {
+			return false
+		}
+		return updated.Status.LastQueryTime.Time.Equal(base)
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	w.Close()
 }
 
 func TestWorker_ThrottledStatusIncludesPartialAlerts(t *testing.T) {

@@ -19,6 +19,7 @@ const (
 	AlertRuleEvaluationOutcomeSetupError            = "setup_error"
 	AlertRuleEvaluationOutcomeUserError             = "user_error"
 	AlertRuleEvaluationOutcomeServiceError          = "service_error"
+	AlertRuleEvaluationOutcomeCancelled             = "cancelled" // Explicit cancellation, not evaluation or parent timeout.
 	AlertRuleEvaluationOutcomeNotificationThrottled = "notification_throttled"
 )
 
