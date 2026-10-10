@@ -83,10 +83,12 @@ func (f *fakeUploader) upload(ctx context.Context) {
 
 type fakeKustoMgmt struct {
 	expectedQuery, actualQuery string
+	queries                    []string
 }
 
 func (f *fakeKustoMgmt) Mgmt(ctx context.Context, db string, query azkustodata.Statement, options ...azkustodata.QueryOption) (kustov1.Dataset, error) {
 	f.actualQuery = query.String()
+	f.queries = append(f.queries, f.actualQuery)
 	return kustov1.NewDataset(ctx, kustoerrors.OpMgmt, kustov1.V1{Tables: []kustov1.RawTable{
 		{
 			TableName: "Table_0",

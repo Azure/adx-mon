@@ -274,10 +274,16 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			name: "prom_rate",
 			body: `.create-or-alter function prom_rate (T:(Timestamp:datetime, SeriesId: long, Labels:dynamic, Value:real), interval:timespan=1m) {
 		T
-		| invoke prom_increase(interval=interval)
-		| extend Value=Value/((Timestamp-prev(Timestamp))/1s)
-		| where isnotnull(Value)
-		| where isnan(Value) == false}`},
+		| where isnan(Value) == false
+		| partition hint.strategy=shuffle by SeriesId (
+			order by Timestamp asc
+			| extend prevVal=prev(Value), prevTs=prev(Timestamp)
+			| extend sampleGap=(Timestamp-prevTs)/1s
+			| extend inc=case(isnull(prevVal), real(null), Value-prevVal < 0, next(Value)-Value, Value-prevVal)
+			| extend Value=iff(sampleGap > 0, inc/sampleGap, real(null))
+			| project Timestamp, SeriesId, Labels, Value
+		)
+		| where isfinite(Value)}`},
 
 		{
 
