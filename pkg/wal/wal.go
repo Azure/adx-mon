@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/pool"
 	"github.com/davidnarayan/go-flake"
@@ -50,9 +51,14 @@ type WAL struct {
 
 	sampleMetadataBuffer [12]byte
 
-	closeFn context.CancelFunc
+	// scheduler rotates the WAL's segments at their max age.  ownsScheduler is true when the WAL created it.
+	scheduler     *rotationScheduler
+	ownsScheduler bool
 
-	wg      sync.WaitGroup
+	// rotationIndex and rotationDeadline are guarded by scheduler.mu.  rotationIndex is -1 when not scheduled.
+	rotationIndex    int
+	rotationDeadline time.Time
+
 	mu      sync.RWMutex
 	closed  bool
 	segment Segment
@@ -65,8 +71,8 @@ type WAL struct {
 	// the latter requires taking an RLock on the segments which creates lock contention.
 	segmentSize int64
 
-	// segmentCreatedAt is the unixtime when the current segment was created.  This is tracked separately from Segment
-	// itself to avoid lock contention.
+	// segmentCreatedAt is the creation time of the current segment in Unix nanoseconds, or 0 when there is no
+	// current segment.  This is tracked separately from Segment itself to avoid lock contention.
 	segmentCreatedAt int64
 }
 
@@ -76,6 +82,9 @@ type SegmentInfo struct {
 	Path      string
 	Size      int64
 	CreatedAt time.Time
+
+	// Priority is the ingestion priority of the segment's table.
+	Priority ingestpolicy.Priority
 }
 
 type WALOpts struct {
@@ -104,6 +113,12 @@ type WALOpts struct {
 
 	// EnableWALFsync enables fsync of the segment after every flush.
 	EnableWALFsync bool
+
+	// Priority is the ingestion priority of the WAL's table.
+	Priority ingestpolicy.Priority
+
+	// scheduler is the shared rotation scheduler.  When nil, the WAL creates its own.
+	scheduler *rotationScheduler
 }
 
 type SampleType uint16
@@ -127,64 +142,89 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 	}
 
 	return &WAL{
-		index: opts.Index,
-		opts:  opts,
+		index:         opts.Index,
+		opts:          opts,
+		scheduler:     opts.scheduler,
+		rotationIndex: -1,
 	}, nil
 }
 
 func (w *WAL) Open(ctx context.Context) error {
-	ctx, w.closeFn = context.WithCancel(context.Background())
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.wg.Add(1)
-	go w.rotate(ctx)
+	if w.scheduler == nil {
+		w.scheduler = newRotationScheduler(defaultRotationSweepInterval, w.rotateSegmentIfNecessary)
+		w.ownsScheduler = true
+		w.scheduler.Open(context.Background())
+	}
 
 	return nil
 }
 
 func (w *WAL) Close() error {
-	w.closeFn()
-
-	w.wg.Wait()
+	// Stop background rotations before closing the segment.  This must not hold w.mu since a rotation in progress
+	// acquires it.
+	if w.ownsScheduler {
+		w.scheduler.Close()
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.closed = true
 
-	if w.segment != nil {
-		info := w.segment.Info()
-		if err := w.segment.Close(); err != nil {
+	seg := w.segment
+	w.setSegment(nil)
+
+	if seg != nil {
+		info := seg.Info()
+		info.Priority = w.opts.Priority
+		if err := seg.Close(); err != nil {
 			return err
 		}
 
 		w.index.Add(info)
-		w.segment = nil
 	}
 
 	return nil
 }
 
+// maxSegmentClosedRetries bounds how many times a write is retried when the segment it targeted was closed by a
+// concurrent rotation.  A closed segment rejects the write without writing any data so retrying is safe.
+const maxSegmentClosedRetries = 16
+
 func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error {
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	// Optimistically try to write, but the segment might rotate in the meantime.
-	// If it does, retry the write one more time.
-	n, err := w.tryWrite(ctx, buf, opts...)
-	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
-		w.rotateSegmentIfNecessary()
-		n, err = w.tryWrite(ctx, buf)
+	return w.writeWithRetry(ctx, func() (int, error) {
+		return w.tryWrite(ctx, buf, opts...)
+	})
+}
+
+// writeWithRetry calls write, retrying when the segment rotates concurrently.  A write that exceeds the max segment
+// size rotates the segment and is retried once.
+func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) error {
+	rotated := false
+	for closedRetries := 0; ; {
+		n, err := write()
 		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
-	} else if errors.Is(err, ErrSegmentClosed) {
-		n, err = w.tryWrite(ctx, buf, opts...)
-		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
+
+		switch {
+		case errors.Is(err, ErrMaxSegmentSizeExceeded) && !rotated:
+			rotated = true
+			w.rotateSegmentIfNecessary()
+		case errors.Is(err, ErrSegmentClosed) && closedRetries < maxSegmentClosedRetries:
+			closedRetries++
+		default:
+			return err
+		}
+
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
-	atomic.AddInt64(&w.segmentSize, int64(n))
-	return err
 }
 
 func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error) {
@@ -205,15 +245,12 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (i
 
 	w.mu.Lock()
 	if w.segment == nil {
-		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix,
-			WithFlushIntervale(w.opts.WALFlushInterval),
-			WithFsync(w.opts.EnableWALFsync))
+		seg, err := w.newSegment()
 		if err != nil {
 			w.mu.Unlock()
 			return 0, err
 		}
-		w.segment = seg
+		w.setSegment(seg)
 	}
 	seg = w.segment
 	w.mu.Unlock()
@@ -244,6 +281,11 @@ func (w *WAL) validateLimits() error {
 	return nil
 }
 
+// Priority returns the ingestion priority of the WAL's table.
+func (w *WAL) Priority() ingestpolicy.Priority {
+	return w.opts.Priority
+}
+
 func (w *WAL) Size() int {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -259,66 +301,139 @@ func (w *WAL) Segment() Segment {
 	return w.segment
 }
 
-func (w *WAL) rotate(ctx context.Context) {
-	defer w.wg.Done()
+func (w *WAL) requiresRotation() bool {
+	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+		return true
+	}
 
-	t := time.NewTicker(10 * time.Second)
-	defer t.Stop()
+	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
+	return w.opts.SegmentMaxAge > 0 && createdAt != 0 && time.Since(time.Unix(0, createdAt)) >= w.opts.SegmentMaxAge
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			w.rotateSegmentIfNecessary()
+// newSegment creates a new segment for the WAL.
+func (w *WAL) newSegment() (Segment, error) {
+	return NewSegment(w.opts.StorageDir, w.opts.Prefix,
+		WithFlushIntervale(w.opts.WALFlushInterval),
+		WithFsync(w.opts.EnableWALFsync))
+}
+
+// setSegment sets the current segment and its tracked size and creation time, and schedules its rotation.  seg may
+// be nil.  w.mu must be held for writing.
+func (w *WAL) setSegment(seg Segment) {
+	w.segment = seg
+	if seg == nil {
+		atomic.StoreInt64(&w.segmentSize, 0)
+		atomic.StoreInt64(&w.segmentCreatedAt, 0)
+		if w.scheduler != nil {
+			w.scheduler.unschedule(w)
+		}
+		return
+	}
+	atomic.StoreInt64(&w.segmentSize, seg.Size())
+	atomic.StoreInt64(&w.segmentCreatedAt, seg.CreatedAt().UnixNano())
+	w.scheduleRotationLocked()
+}
+
+// scheduleRotation schedules rotation of the current segment at its max age.
+func (w *WAL) scheduleRotation() {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	w.scheduleRotationLocked()
+}
+
+// scheduleRotationLocked is like scheduleRotation.  w.mu must be held.
+func (w *WAL) scheduleRotationLocked() {
+	if w.closed || w.scheduler == nil || w.opts.SegmentMaxAge <= 0 {
+		return
+	}
+	createdAt := atomic.LoadInt64(&w.segmentCreatedAt)
+	if createdAt == 0 {
+		return
+	}
+	w.scheduler.schedule(w, time.Unix(0, createdAt).Add(w.opts.SegmentMaxAge))
+}
+
+func (w *WAL) rotateSegmentIfNecessary() {
+	if !w.requiresRotation() {
+		return
+	}
+
+	w.mu.RLock()
+	cur, closed := w.segment, w.closed
+	w.mu.RUnlock()
+	if closed {
+		return
+	}
+
+	// Proactively create the next segment so writers do not create it while holding w.mu.  It is created before
+	// acquiring w.mu so writers are not blocked on file creation during rotation.  If the WAL is idle, the next
+	// segment is created lazily by the next write instead to avoid repeatedly creating and removing empty segments.
+	var next Segment
+	if !w.isIdle(cur) {
+		next = w.createNextSegment()
+	}
+
+	w.mu.Lock()
+	// Re-verify rotation is needed under write lock since the segment may have been rotated concurrently.
+	if w.closed || w.segment != cur || !w.requiresRotation() {
+		w.mu.Unlock()
+		discardSegment(next)
+		return
+	}
+
+	// A write may have arrived after the WAL was considered idle.  Keep the next segment proactive in that case.
+	if next == nil && !w.isIdle(cur) {
+		next = w.createNextSegment()
+	}
+
+	toClose := cur
+	w.setSegment(next)
+	w.mu.Unlock()
+
+	if toClose != nil {
+		// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
+		// delete it so that we don't end up uploading empty segments to Kusto.
+		if toClose.Size() > 8 {
+			info := toClose.Info()
+			info.Priority = w.opts.Priority
+			if err := toClose.Close(); err != nil {
+				logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
+				return
+			}
+			w.index.Add(info)
+		} else {
+			_ = toClose.Close()
+			_ = os.Remove(toClose.Path())
 		}
 	}
 }
 
-func (w *WAL) requiresRotation() bool {
-	return (w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize) ||
-		(w.opts.SegmentMaxAge.Seconds() > 0 && time.Since(time.Unix(w.segmentCreatedAt, 0)) >= w.opts.SegmentMaxAge)
+// isIdle returns true if seg is empty and no writes are in flight, meaning the WAL received no writes for a full
+// rotation period.
+func (w *WAL) isIdle(seg Segment) bool {
+	return seg != nil && seg.Size() <= 8 && atomic.LoadInt64(&w.inflightWriteBytes) == 0
 }
 
-func (w *WAL) rotateSegmentIfNecessary() {
-	if w.requiresRotation() {
-		w.mu.Lock()
-		// Re-verify rotation is needed under write lock since the fast path check is racy
-		if !w.requiresRotation() {
-			w.mu.Unlock()
-			return
-		}
+// createNextSegment creates the next segment, logging and returning nil on failure so the next write creates it.
+func (w *WAL) createNextSegment() Segment {
+	seg, err := w.newSegment()
+	if err != nil {
+		logger.Errorf("Failed to create new segment: %s", err.Error())
+		return nil
+	}
+	return seg
+}
 
-		toClose := w.segment
-		var err error
-		w.segment, err = NewSegment(w.opts.StorageDir, w.opts.Prefix,
-			WithFlushIntervale(w.opts.WALFlushInterval),
-			WithFsync(w.opts.EnableWALFsync))
-		if err != nil {
-			logger.Errorf("Failed to create new segment: %s", err.Error())
-			w.segment = nil
-			atomic.StoreInt64(&w.segmentSize, 0)
-			atomic.StoreInt64(&w.segmentCreatedAt, 0)
-		} else {
-			atomic.StoreInt64(&w.segmentSize, w.segment.Size())
-			atomic.StoreInt64(&w.segmentCreatedAt, w.segment.CreatedAt().Unix())
-		}
-		w.mu.Unlock()
-
-		if toClose != nil {
-			// 8 bytes is the size of the segment magic header bytes.  If that is all we've written, we can just
-			// delete it so that we don't end up uploading empty segments to Kusto.
-			if toClose.Size() > 8 {
-				info := toClose.Info()
-				w.index.Add(info)
-			} else {
-				_ = os.Remove(toClose.Path())
-			}
-
-			if err := toClose.Close(); err != nil {
-				logger.Errorf("Failed to close segment: %s %s", toClose.Path(), err.Error())
-			}
-		}
+// discardSegment closes and removes an unused segment.
+func discardSegment(seg Segment) {
+	if seg == nil {
+		return
+	}
+	if err := seg.Close(); err != nil {
+		logger.Errorf("Failed to close segment: %s %s", seg.Path(), err.Error())
+	}
+	if err := os.Remove(seg.Path()); err != nil && !os.IsNotExist(err) {
+		logger.Errorf("Failed to remove segment: %s %s", seg.Path(), err.Error())
 	}
 }
 
@@ -349,19 +464,9 @@ func (w *WAL) Append(ctx context.Context, buf []byte) error {
 	atomic.AddInt64(&w.inflightWriteBytes, int64(len(buf)))
 	defer atomic.AddInt64(&w.inflightWriteBytes, -int64(len(buf)))
 
-	n, err := w.tryAppend(ctx, buf)
-	if errors.Is(err, ErrMaxSegmentSizeExceeded) {
-		w.rotateSegmentIfNecessary()
-		n, err = w.tryAppend(ctx, buf)
-		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
-	} else if errors.Is(err, ErrSegmentClosed) {
-		n, err = w.tryAppend(ctx, buf)
-		atomic.AddInt64(&w.segmentSize, int64(n))
-		return err
-	}
-	atomic.AddInt64(&w.segmentSize, int64(n))
-	return err
+	return w.writeWithRetry(ctx, func() (int, error) {
+		return w.tryAppend(ctx, buf)
+	})
 }
 
 func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {
@@ -383,15 +488,12 @@ func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {
 
 	w.mu.Lock()
 	if w.segment == nil {
-		var err error
-		seg, err := NewSegment(w.opts.StorageDir, w.opts.Prefix,
-			WithFlushIntervale(w.opts.WALFlushInterval),
-			WithFsync(w.opts.EnableWALFsync))
+		seg, err := w.newSegment()
 		if err != nil {
 			w.mu.Unlock()
 			return 0, err
 		}
-		w.segment = seg
+		w.setSegment(seg)
 	}
 	seg = w.segment
 	w.mu.Unlock()

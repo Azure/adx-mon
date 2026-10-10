@@ -271,7 +271,7 @@ func realMain(ctx *cli.Context) error {
 
 		keepMetricLabelValues := make(map[*regexp.Regexp]*regexp.Regexp)
 		for _, v := range append(cfg.KeepMetricsWithLabelValue, cfg.PrometheusScrape.KeepMetricsWithLabelValue...) {
-			lableRe, err := regexp.Compile(v.LabelRegex)
+			labelRe, err := regexp.Compile(v.LabelRegex)
 			if err != nil {
 				logger.Fatalf("invalid metric regex: %s", err)
 			}
@@ -281,7 +281,7 @@ func realMain(ctx *cli.Context) error {
 				logger.Fatalf("invalid label regex: %s", err)
 			}
 
-			keepMetricLabelValues[lableRe] = valueRe
+			keepMetricLabelValues[labelRe] = valueRe
 		}
 
 		var defaultDropMetrics bool
@@ -347,6 +347,14 @@ func realMain(ctx *cli.Context) error {
 		liftAttributes = unionSlice(liftAttributes, cfg.OtelLog.LiftAttributes)
 	}
 
+	realtime, queuedReservedWorkersPercent, err := realtimeOpts(cfg.Realtime)
+	if err != nil {
+		return err
+	}
+	if realtime != nil {
+		logger.Infof("Realtime ingestion configured for tables: %v", realtime.Policy.RealtimeTables())
+	}
+
 	opts := &collector.ServiceOpts{
 		EnablePprof:            cfg.EnablePprof,
 		Scraper:                scraperOpts,
@@ -374,6 +382,9 @@ func realMain(ctx *cli.Context) error {
 		WALFlushInterval:       time.Duration(cfg.WALFlushIntervalMilliSeconds) * time.Millisecond,
 		Region:                 cfg.Region,
 		StorageDir:             cfg.StorageDir,
+
+		Realtime:                     realtime,
+		QueuedReservedWorkersPercent: queuedReservedWorkersPercent,
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {

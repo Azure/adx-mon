@@ -8,12 +8,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/ingestor/cluster"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/otlp"
 	"github.com/Azure/adx-mon/pkg/prompb"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/stretchr/testify/require"
+	fakek8s "k8s.io/client-go/kubernetes/fake"
 )
 
 type fakeHealthChecker struct {
@@ -275,12 +282,12 @@ func TestService_HandleTransfer_NoGzipHeader(t *testing.T) {
 }
 
 type fakeStore struct {
-	segements map[string]struct{}
-	importFn  func(filename string, body io.ReadCloser) (int, error)
+	segments map[string]struct{}
+	importFn func(filename string, body io.ReadCloser) (int, error)
 }
 
 func (f fakeStore) SegmentExists(filename string) bool {
-	_, ok := f.segements[filename]
+	_, ok := f.segments[filename]
 	return ok
 }
 
@@ -313,4 +320,88 @@ func (f fakeStore) Import(filename string, body io.ReadCloser) (int, error) {
 		return f.importFn(filename, body)
 	}
 	return 0, nil
+}
+
+type capturingUploader struct {
+	queue, realtime chan *cluster.Batch
+}
+
+func (u *capturingUploader) Open(context.Context) error               { return nil }
+func (u *capturingUploader) Close() error                             { return nil }
+func (u *capturingUploader) Database() string                         { return "" }
+func (u *capturingUploader) UploadQueue() chan *cluster.Batch         { return u.queue }
+func (u *capturingUploader) RealtimeUploadQueue() chan *cluster.Batch { return u.realtime }
+
+// newTransferBody returns the bytes of a segment containing data.
+func newTransferBody(t *testing.T, prefix string, data []byte) (string, []byte) {
+	t.Helper()
+	seg, err := wal.NewSegment(t.TempDir(), prefix)
+	require.NoError(t, err)
+	_, err = seg.Write(context.Background(), data)
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+	b, err := os.ReadFile(seg.Path())
+	require.NoError(t, err)
+	return filepath.Base(seg.Path()), b
+}
+
+func TestService_RealtimeTransferIsBatchedPromptly(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+
+	uploader := &capturingUploader{queue: make(chan *cluster.Batch, 10), realtime: make(chan *cluster.Batch, 10)}
+	var peers []cluster.PeerInfo
+	svc, err := NewService(ServiceOpts{
+		StorageDir:       t.TempDir(),
+		Uploader:         uploader,
+		MaxSegmentSize:   1024 * 1024,
+		MaxSegmentAge:    time.Hour,
+		MaxTransferAge:   time.Hour,
+		MaxTransferSize:  1024 * 1024,
+		MaxSegmentCount:  1000,
+		MaxDiskUsage:     1024 * 1024 * 1024,
+		K8sCli:           fakek8s.NewSimpleClientset(),
+		Hostname:         "ingestor-0",
+		MetricsDatabases: []string{"Metrics"},
+		AllowedDatabase:  []string{"Metrics"},
+		Realtime: &RealtimeOpts{
+			Policy:            policy,
+			MaxSegmentAge:     50 * time.Millisecond,
+			MaxBatchLatency:   50 * time.Millisecond,
+			MaxBatchBytes:     1024 * 1024,
+			ReservedDiskBytes: 1024 * 1024,
+		},
+		PeerListeners: []func(cluster.PeerInfo){func(p cluster.PeerInfo) { peers = append(peers, p) }},
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Open(context.Background()))
+	defer svc.Close()
+
+	// Peer listeners receive the initial peer info when the service opens.
+	require.Equal(t, []cluster.PeerInfo{{Count: 1, Rank: 0}}, peers)
+
+	transfer := func(prefix string) {
+		filename, body := newTransferBody(t, prefix, []byte("2024-01-01T00:00:00Z,1,{},1.5\n"))
+		req, err := http.NewRequest("POST", "http://localhost:9090/transfer?filename="+filename, bytes.NewReader(body))
+		require.NoError(t, err)
+		resp := httptest.NewRecorder()
+		svc.HandleTransfer(resp, req)
+		require.Equal(t, http.StatusAccepted, resp.Code, resp.Body.String())
+	}
+
+	start := time.Now()
+	transfer("Metrics_CpuUsage")
+	transfer("Metrics_MemoryUsage")
+
+	// The realtime segment rotates and is batched within its realtime latency, well before the queued segment's
+	// one hour max age or the periodic scan.
+	select {
+	case batch := <-uploader.realtime:
+		require.Equal(t, ingestpolicy.PriorityRealtime, batch.Priority)
+		require.Equal(t, "CpuUsage", batch.Table)
+		require.Less(t, time.Since(start), 2*time.Second)
+	case <-time.After(5 * time.Second):
+		t.Fatal("realtime batch was not uploaded")
+	}
+	require.Empty(t, uploader.queue)
 }

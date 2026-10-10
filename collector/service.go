@@ -19,11 +19,13 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/debug"
 	"github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/service"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
 	connect "github.com/bufbuild/connect-go"
@@ -147,6 +149,38 @@ type ServiceOpts struct {
 
 	// DisableGzip disables gzip compression for the transfer endpoint.
 	DisableGzip bool
+
+	// Realtime configures realtime ingestion.  When nil or without realtime tables, all tables are queued.
+	Realtime *RealtimeOpts
+
+	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.
+	QueuedReservedWorkersPercent int
+}
+
+// DefaultMaxDiskUsage is the max disk usage when ServiceOpts.MaxDiskUsage is not set.
+const DefaultMaxDiskUsage int64 = 10 * 1024 * 1024 * 1024
+
+// RealtimeOpts configures realtime ingestion in the collector.
+type RealtimeOpts struct {
+	// Policy assigns ingestion priorities to tables.
+	Policy *ingestpolicy.Policy
+
+	// MaxSegmentAge is the max age of realtime WAL segments before they are rotated.
+	MaxSegmentAge time.Duration
+
+	// MaxBatchLatency is the max time a closed realtime segment waits to be batched before it is transferred.
+	MaxBatchLatency time.Duration
+
+	// MaxBatchBytes is the max size of a realtime transfer batch in WAL bytes.
+	MaxBatchBytes int64
+
+	// ReservedDiskBytes is disk space reserved for realtime segments.
+	ReservedDiskBytes int64
+}
+
+// enabled returns true if realtime tables are configured.
+func (o *RealtimeOpts) enabled() bool {
+	return o != nil && o.Policy.HasRealtime()
 }
 
 type OtlpMetricsHandlerOpts struct {
@@ -265,7 +299,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		maxSegmentCount = opts.MaxSegmentCount
 	}
 
-	maxDiskUsage := int64(10 * 1024 * 1024 * 1024) // 10 GB
+	maxDiskUsage := DefaultMaxDiskUsage
 	if opts.MaxDiskUsage > 0 {
 		maxDiskUsage = opts.MaxDiskUsage
 	}
@@ -276,7 +310,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MaxDiskUsage:     maxDiskUsage,
 	})
 
-	store := storage.NewLocalStore(storage.StoreOpts{
+	storeOpts := storage.StoreOpts{
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
@@ -286,7 +320,18 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		LiftedAttributes: opts.LiftAttributes,
 		LiftedResources:  opts.LiftResources,
 		WALFlushInterval: opts.WALFlushInterval,
-	})
+	}
+	var realtimeBatch cluster.RealtimeBatchOpts
+	if opts.Realtime.enabled() {
+		storeOpts.Policy = opts.Realtime.Policy
+		storeOpts.Realtime = wal.RotationPolicy{SegmentMaxAge: opts.Realtime.MaxSegmentAge}
+		storeOpts.RealtimeReservedDiskBytes = opts.Realtime.ReservedDiskBytes
+		realtimeBatch = cluster.RealtimeBatchOpts{
+			MaxBatchLatency: opts.Realtime.MaxBatchLatency,
+			MaxBatchBytes:   opts.Realtime.MaxBatchBytes,
+		}
+	}
+	store := storage.NewLocalStore(storeOpts)
 
 	var httpHandlers []*http.HttpHandler
 	var grpcHandlers []*http.GRPCHandler
@@ -342,9 +387,10 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	}
 
 	var (
-		replicator    service.Component
-		transferQueue chan *cluster.Batch
-		partitioner   cluster.MetricPartitioner
+		replicator            service.Component
+		transferQueue         chan *cluster.Batch
+		realtimeTransferQueue chan *cluster.Batch
+		partitioner           cluster.MetricPartitioner
 	)
 	if opts.Endpoint != "" {
 		// This is a static partitioner that forces all entries to be assigned to the remote endpoint.
@@ -354,18 +400,20 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}
 
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-			Hostname:               opts.NodeName,
-			Partitioner:            partitioner,
-			Health:                 health,
-			SegmentRemover:         store,
-			InsecureSkipVerify:     opts.InsecureSkipVerify,
-			MaxTransferConcurrency: opts.MaxTransferConcurrency,
-			DisableGzip:            opts.DisableGzip,
+			Hostname:                     opts.NodeName,
+			Partitioner:                  partitioner,
+			Health:                       health,
+			SegmentRemover:               store,
+			InsecureSkipVerify:           opts.InsecureSkipVerify,
+			MaxTransferConcurrency:       opts.MaxTransferConcurrency,
+			DisableGzip:                  opts.DisableGzip,
+			QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create replicator: %w", err)
 		}
 		transferQueue = r.TransferQueue()
+		realtimeTransferQueue = r.RealtimeTransferQueue()
 		replicator = r
 	} else {
 		partitioner = remotePartitioner{
@@ -375,6 +423,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 		r := cluster.NewFakeReplicator()
 		transferQueue = r.TransferQueue()
+		realtimeTransferQueue = r.RealtimeTransferQueue()
 		replicator = r
 	}
 
@@ -390,10 +439,15 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MaxBatchSegments:        opts.MaxBatchSegments,
 		UploadQueue:             transferQueue,
 		TransferQueue:           transferQueue,
+		RealtimeUploadQueue:     realtimeTransferQueue,
+		RealtimeTransferQueue:   realtimeTransferQueue,
+		Realtime:                realtimeBatch,
 		PeerHealthReporter:      health,
 		SegmentsCountMetric:     collectorSegmentsTotal,
 		SegmentsSizeBytesMetric: collectorSegmentsSizeBytes,
 		SegmentsMaxAgeMetric:    collectorSegmentsMaxAge,
+
+		SegmentsSizeByPriorityMetric: metrics.NewCollectorSegmentSizeByPriorityMetric(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create batcher: %w", err)

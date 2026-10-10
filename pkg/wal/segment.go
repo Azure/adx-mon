@@ -360,7 +360,7 @@ func (s *segment) Write(ctx context.Context, buf []byte, opts ...WriteOptions) (
 	}
 	s.mu.RUnlock()
 
-	written, err := s.blockWrite(s.bw, buf, opts...)
+	written, err := s.blockWrite(buf, opts...)
 	if err != nil {
 		return 0, err
 	}
@@ -457,7 +457,7 @@ func (s *segment) Repair() error {
 		n, err = s.w.Read(buf[:blockLen])
 		idx += n
 		if err != nil {
-			logger.Warnf("Repairing segment %s, unexected error %s, truncating at %d", s.path, err, lastGoodIdx)
+			logger.Warnf("Repairing segment %s, unexpected error %s, truncating at %d", s.path, err, lastGoodIdx)
 			return s.truncate(int64(lastGoodIdx))
 		}
 
@@ -518,8 +518,9 @@ func (s *segment) appendBlocks(val []byte) (int, error) {
 	return n, nil
 }
 
-// blockWrite writes length and CRC32 prefixed block to w
-func (s *segment) blockWrite(w io.Writer, buf []byte, opts ...WriteOptions) (int, error) {
+// blockWrite writes a length and CRC32 prefixed block to the segment.  The segment writer is only accessed while
+// holding s.mu since Close releases it.
+func (s *segment) blockWrite(buf []byte, opts ...WriteOptions) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
@@ -587,7 +588,7 @@ func (s *segment) blockWrite(w io.Writer, buf []byte, opts ...WriteOptions) (int
 		return 0, ErrSegmentClosed
 	}
 
-	n, err := w.Write(b)
+	n, err := s.bw.Write(b)
 	if err != nil {
 		return 0, err
 	} else if n != len(b) {

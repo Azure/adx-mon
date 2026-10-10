@@ -1,0 +1,366 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
+	"github.com/Azure/adx-mon/pkg/partmap"
+	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/davidnarayan/go-flake"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNewBatcher_EventDriven(t *testing.T) {
+	newBatcher := func(segmenter Segmenter) *batcher {
+		countMetric, sizeMetric, ageMetric := newTestMetrics()
+		b, err := NewBatcher(BatcherOpts{
+			Segmenter:               segmenter,
+			SegmentsCountMetric:     countMetric,
+			SegmentsSizeBytesMetric: sizeMetric,
+			SegmentsMaxAgeMetric:    ageMetric,
+		})
+		require.NoError(t, err)
+		return b.(*batcher)
+	}
+
+	// Queued segments are batched as they close when the segmenter publishes segment events.
+	require.NotNil(t, newBatcher(wal.NewIndex()).queued)
+
+	// Otherwise the periodic scan batches them.
+	require.Nil(t, newBatcher(noEventsSegmenter{wal.NewIndex()}).queued)
+}
+
+// noEventsSegmenter hides the index's Subscribe method.
+type noEventsSegmenter struct{ *wal.Index }
+
+func (s noEventsSegmenter) Subscribe() {}
+
+func newEventModeEnv(t *testing.T, realtime RealtimeBatchOpts, linger time.Duration) *realtimeTestEnv {
+	t.Helper()
+	env := newRealtimeTestEnv(t, realtime, false)
+	env.b.queued = newQueuedBatcher(env.b, linger)
+	env.open(t)
+	return env
+}
+
+func TestQueuedBatcher_BatchesAfterLinger(t *testing.T) {
+	const linger = 50 * time.Millisecond
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, linger)
+	env.b.Partitioner = &prefixPartitioner{owners: map[string]string{"db_Peer": "peer"}, defaultOwner: env.b.hostname}
+
+	start := time.Now()
+	owned := env.add(t, "Owned", 100, ingestpolicy.PriorityQueued)
+	peer := env.add(t, "Peer", 100, ingestpolicy.PriorityQueued)
+
+	// Owned prefixes are uploaded and peer owned prefixes are transferred, after the linger.
+	require.Equal(t, []string{owned.Path}, receiveBatch(t, env.upload, time.Second).Paths())
+	require.Equal(t, []string{peer.Path}, receiveBatch(t, env.transfer, time.Second).Paths())
+	require.GreaterOrEqual(t, time.Since(start), linger)
+}
+
+func TestQueuedBatcher_LingerMergesSegments(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, 100*time.Millisecond)
+	env.b.Partitioner = &prefixPartitioner{defaultOwner: env.b.hostname}
+
+	a := env.add(t, "Cpu", 100, ingestpolicy.PriorityQueued)
+	b := env.add(t, "Cpu", 100, ingestpolicy.PriorityQueued)
+
+	// Segments that close within the linger are merged into one batch.
+	require.Equal(t, []string{a.Path, b.Path}, receiveBatch(t, env.upload, time.Second).Paths())
+}
+
+func TestQueuedBatcher_SizeTriggerSkipsLinger(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, time.Hour)
+	env.b.Partitioner = &prefixPartitioner{defaultOwner: env.b.hostname}
+	env.b.minUploadSize = 150
+
+	env.add(t, "Cpu", 100, ingestpolicy.PriorityQueued)
+	env.add(t, "Cpu", 100, ingestpolicy.PriorityQueued)
+
+	batch := receiveBatch(t, env.upload, time.Second)
+	require.Len(t, batch.Segments, 2)
+}
+
+func TestQueuedBatcher_RealtimeBatcherOwnsRealtimeSegments(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{MaxBatchLatency: time.Millisecond, MaxBatchBytes: 1 << 20}, time.Millisecond)
+	env.b.Partitioner = &prefixPartitioner{defaultOwner: env.b.hostname}
+
+	rt := env.add(t, "Realtime", 100, ingestpolicy.PriorityRealtime)
+	q := env.add(t, "Queued", 100, ingestpolicy.PriorityQueued)
+
+	require.Equal(t, []string{rt.Path}, receiveBatch(t, env.realtime, time.Second).Paths())
+	require.Equal(t, []string{q.Path}, receiveBatch(t, env.upload, time.Second).Paths())
+
+	time.Sleep(20 * time.Millisecond)
+	require.Empty(t, env.realtime)
+	require.Empty(t, env.upload)
+}
+
+func TestQueuedBatcher_HandlesRealtimeWithoutRealtimeBatcher(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, time.Millisecond)
+	env.b.Partitioner = &prefixPartitioner{defaultOwner: "peer"}
+
+	rt := env.add(t, "Realtime", 100, ingestpolicy.PriorityRealtime)
+
+	// Realtime batches are never transferred, even when a peer owns the prefix.
+	batch := receiveBatch(t, env.realtime, time.Second)
+	require.Equal(t, []string{rt.Path}, batch.Paths())
+	require.Equal(t, ingestpolicy.PriorityRealtime, batch.Priority)
+	require.Empty(t, env.transfer)
+}
+
+func TestQueuedBatcher_BatchSegmentsFlushes(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, time.Hour)
+	env.b.Partitioner = &prefixPartitioner{defaultOwner: env.b.hostname}
+	si := env.add(t, "Cpu", 100, ingestpolicy.PriorityQueued)
+
+	// Shutdown calls BatchSegments, which flushes segments waiting for their linger.
+	require.NoError(t, env.b.BatchSegments())
+	require.Equal(t, []string{si.Path}, receiveBatch(t, env.upload, time.Second).Paths())
+
+	// The segment is not batched again.
+	require.NoError(t, env.b.BatchSegments())
+	require.Empty(t, env.upload)
+}
+
+func TestQueuedBatcher_ReleasedBatchSchedulesRetry(t *testing.T) {
+	env := newEventModeEnv(t, RealtimeBatchOpts{}, time.Hour)
+	env.b.Partitioner = &prefixPartitioner{defaultOwner: "peer"}
+	si := env.add(t, "Queued", 100, ingestpolicy.PriorityQueued)
+
+	env.b.queued.Flush(context.Background())
+	batch := receiveBatch(t, env.transfer, time.Second)
+	require.Empty(t, env.b.queued.pending)
+
+	batch.Release()
+	_, pending := env.b.queued.pending[si.Prefix]
+	require.True(t, pending, "released queued batch must be scheduled for retry")
+}
+
+// batchKey describes a batch independent of the order batches were produced.
+func batchKey(kind string, b *Batch) string {
+	return fmt.Sprintf("%s %s %s %v", kind, b.Prefix, b.Priority, b.Paths())
+}
+
+func TestQueuedBatcher_MatchesScan(t *testing.T) {
+	idgen, err := flake.New()
+	require.NoError(t, err)
+	dir := t.TempDir()
+	idx := wal.NewIndex()
+
+	add := func(table string, size int64, age time.Duration, priority ingestpolicy.Priority) {
+		id := idgen.NextId()
+		created, err := flakeutil.ParseFlakeID(id.String())
+		require.NoError(t, err)
+		idx.Add(wal.SegmentInfo{
+			Prefix:    "db_" + table,
+			Ulid:      id.String(),
+			Path:      filepath.Join(dir, wal.Filename("db", table, "", id.String())),
+			Size:      size,
+			CreatedAt: created.Add(-age),
+			Priority:  priority,
+		})
+	}
+
+	// Exercise every splitting rule and both ownership outcomes.
+	for i := 0; i < 5; i++ {
+		add("Count", 10, 0, ingestpolicy.PriorityQueued) // split by max segment count
+	}
+	for i := 0; i < 4; i++ {
+		add("Upload", 120, 0, ingestpolicy.PriorityQueued) // split by min upload size
+	}
+	for i := 0; i < 3; i++ {
+		add("Transfer", 90, 0, ingestpolicy.PriorityQueued) // split by max transfer size
+	}
+	add("Old", 10, time.Hour, ingestpolicy.PriorityQueued) // split by max transfer age
+	add("Old", 10, 0, ingestpolicy.PriorityQueued)
+	add("Peer", 10, 0, ingestpolicy.PriorityQueued)       // transferred to the owning peer
+	add("Realtime", 10, 0, ingestpolicy.PriorityRealtime) // never transferred
+
+	newBatcher := func() *batcher {
+		b := newPriorityTestBatcher(t, idx, "peer")
+		b.Partitioner = &prefixPartitioner{
+			owners:       map[string]string{"db_Count": "node1", "db_Upload": "node1"},
+			defaultOwner: "peer",
+		}
+		b.maxBatchSegments = 3
+		b.minUploadSize = 200
+		b.maxTransferSize = 150
+		b.maxTransferAge = time.Minute
+		b.uploadQueue = make(chan *Batch, 100)
+		b.transferQueue = make(chan *Batch, 100)
+		return b
+	}
+
+	scan := newBatcher()
+	scanOwned, scanNotOwned, err := scan.processSegments()
+	require.NoError(t, err)
+	var want []string
+	for _, b := range scanOwned {
+		want = append(want, batchKey("upload", b))
+	}
+	for _, b := range scanNotOwned {
+		want = append(want, batchKey("transfer", b))
+	}
+
+	event := newBatcher()
+	newQueuedBatcher(event, time.Hour).Flush(context.Background())
+	var got []string
+	for len(event.uploadQueue) > 0 {
+		got = append(got, batchKey("upload", <-event.uploadQueue))
+	}
+	for len(event.transferQueue) > 0 {
+		got = append(got, batchKey("transfer", <-event.transferQueue))
+	}
+
+	sort.Strings(want)
+	sort.Strings(got)
+	require.Equal(t, want, got)
+	require.Greater(t, len(want), 8, strings.Join(want, "\n"))
+}
+
+// newBenchmarkBatcher returns a batcher with prefixes in-flight segments, one per prefix, and fresh unbatched segments
+// in the first fresh prefixes.
+func newBenchmarkBatcher(b *testing.B, prefixes, fresh int) (*batcher, []wal.SegmentInfo) {
+	b.Helper()
+	idx := wal.NewIndex()
+	idgen, err := flake.New()
+	require.NoError(b, err)
+	countMetric, sizeMetric, ageMetric := newTestMetrics()
+	bt := &batcher{
+		hostname:                "node1",
+		maxTransferAge:          time.Hour,
+		maxTransferSize:         100 * 1024 * 1024,
+		minUploadSize:           100 * 1024 * 1024,
+		maxBatchSegments:        25,
+		Partitioner:             &fakePartitioner{owner: "node1"},
+		Segmenter:               idx,
+		health:                  &fakeHealthChecker{healthy: true},
+		segments:                partmap.NewMap[int](64),
+		uploadQueue:             make(chan *Batch, fresh*2),
+		transferQueue:           make(chan *Batch, fresh*2),
+		segmentsCountMetric:     countMetric,
+		segmentsSizeBytesMetric: sizeMetric,
+		segmentsMaxAgeMetric:    ageMetric,
+	}
+
+	newSegment := func(table string) wal.SegmentInfo {
+		id := idgen.NextId()
+		created, err := flakeutil.ParseFlakeID(id.String())
+		require.NoError(b, err)
+		return wal.SegmentInfo{
+			Prefix:    "db_" + table,
+			Ulid:      id.String(),
+			Path:      filepath.Join("/wal", wal.Filename("db", table, "", id.String())),
+			Size:      1024,
+			CreatedAt: created,
+		}
+	}
+
+	for i := 0; i < prefixes; i++ {
+		si := newSegment(fmt.Sprintf("T%d", i))
+		idx.Add(si)
+		_ = bt.segments.Mutate(si.Path, func(n int) (int, error) { return n + 1, nil })
+	}
+
+	var freshSegments []wal.SegmentInfo
+	for i := 0; i < fresh; i++ {
+		si := newSegment(fmt.Sprintf("T%d", i))
+		idx.Add(si)
+		freshSegments = append(freshSegments, si)
+	}
+	return bt, freshSegments
+}
+
+// releaseBatches drains the batcher's queues and marks the fresh segments unbatched so the next iteration batches them
+// again.
+func releaseBatches(bt *batcher, fresh []wal.SegmentInfo) {
+	for len(bt.uploadQueue) > 0 {
+		<-bt.uploadQueue
+	}
+	for len(bt.transferQueue) > 0 {
+		<-bt.transferQueue
+	}
+	for _, si := range fresh {
+		_, _ = bt.segments.Delete(si.Path)
+	}
+}
+
+// BenchmarkBatcherPeriod measures the CPU used by scan and event driven batching in one 5 second period with many prefixes that
+// have in-flight segments and a few newly closed segments.
+func BenchmarkBatcherPeriod(b *testing.B) {
+	const fresh = 10
+	for _, prefixes := range []int{1000, 10000} {
+		b.Run(fmt.Sprintf("mode=scan/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, freshSegments := newBenchmarkBatcher(b, prefixes, fresh)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				owned, notOwned, err := bt.processSegments()
+				if err != nil || len(owned)+len(notOwned) != fresh {
+					b.Fatalf("unexpected batches %d %v", len(owned)+len(notOwned), err)
+				}
+				b.StopTimer()
+				releaseBatches(bt, freshSegments)
+				b.StartTimer()
+			}
+		})
+
+		b.Run(fmt.Sprintf("mode=event/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, freshSegments := newBenchmarkBatcher(b, prefixes, fresh)
+			e := newQueuedBatcher(bt, time.Hour)
+			ctx := context.Background()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bt.updateSegmentMetrics()
+				for _, si := range freshSegments {
+					e.onSegment(si)
+				}
+				e.process(ctx, time.Now(), true)
+				b.StopTimer()
+				if n := len(bt.uploadQueue) + len(bt.transferQueue); n != fresh {
+					b.Fatalf("unexpected batches %d", n)
+				}
+				releaseBatches(bt, freshSegments)
+				b.StartTimer()
+			}
+		})
+
+		// The event mode sweep, and processing the prefixes it marks pending, runs every queuedSweepInterval, which
+		// spans 12 periods.
+		b.Run(fmt.Sprintf("event-sweep/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, _ := newBenchmarkBatcher(b, prefixes, 0)
+			e := newQueuedBatcher(bt, time.Hour)
+			b.ReportAllocs()
+			b.ResetTimer()
+			ctx := context.Background()
+			for i := 0; i < b.N; i++ {
+				e.sweep()
+				e.process(ctx, time.Now(), true)
+				b.StopTimer()
+				e.pending = make(map[string]pendingPrefix)
+				b.StartTimer()
+			}
+		})
+
+		b.Run(fmt.Sprintf("metrics/prefixes=%d", prefixes), func(b *testing.B) {
+			bt, _ := newBenchmarkBatcher(b, prefixes, fresh)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bt.updateSegmentMetrics()
+			}
+		})
+	}
+}

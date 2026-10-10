@@ -36,6 +36,10 @@ type ReplicatorOpts struct {
 
 	// DisableGzip controls whether the client uses gzip compression for transfer requests.
 	DisableGzip bool
+
+	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.  Defaults to
+	// DefaultQueuedReservedWorkersPercent.
+	QueuedReservedWorkersPercent int
 }
 
 type SegmentRemover interface {
@@ -47,13 +51,17 @@ type Replicator interface {
 	service.Component
 	// TransferQueue returns a channel that can be used to transfer files to other nodes.
 	TransferQueue() chan *Batch
+
+	// RealtimeTransferQueue returns a channel for realtime batches.  They are transferred before queued batches.
+	RealtimeTransferQueue() chan *Batch
 }
 
 type replicator struct {
-	queue   chan *Batch
-	cli     *Client
-	wg      sync.WaitGroup
-	closeFn context.CancelFunc
+	queue         chan *Batch
+	realtimeQueue chan *Batch
+	cli           *Client
+	wg            sync.WaitGroup
+	closeFn       context.CancelFunc
 
 	hostname string
 
@@ -62,6 +70,7 @@ type replicator struct {
 	Health              PeerHealthReporter
 	SegmentRemover      SegmentRemover
 	transferConcurrency int
+	reservedPercent     int
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
@@ -88,21 +97,24 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 
 	return &replicator{
 		queue:               make(chan *Batch, 10000),
+		realtimeQueue:       make(chan *Batch, 10000),
 		cli:                 cli,
 		hostname:            opts.Hostname,
 		Partitioner:         opts.Partitioner,
 		Health:              opts.Health,
 		SegmentRemover:      opts.SegmentRemover,
 		transferConcurrency: transferConcurrency,
+		reservedPercent:     opts.QueuedReservedWorkersPercent,
 	}, nil
 }
 
 func (r *replicator) Open(ctx context.Context) error {
 	ctx, r.closeFn = context.WithCancel(ctx)
 	r.wg.Add(r.transferConcurrency)
-	for i := 0; i < r.transferConcurrency; i++ {
-		go r.transfer(ctx)
-	}
+	queues := PriorityQueues{Realtime: r.realtimeQueue, Queued: r.queue}
+	RunWorkers(ctx, queues, r.transferConcurrency, r.reservedPercent, func(batch *Batch) {
+		r.transfer(ctx, batch)
+	}, r.wg.Done)
 	return nil
 }
 
@@ -116,107 +128,102 @@ func (r *replicator) TransferQueue() chan *Batch {
 	return r.queue
 }
 
-func (r *replicator) transfer(ctx context.Context) {
-	defer r.wg.Done()
+func (r *replicator) RealtimeTransferQueue() chan *Batch {
+	return r.realtimeQueue
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case batch := <-r.queue:
-			segments := batch.Segments
+func (r *replicator) transfer(ctx context.Context, batch *Batch) {
+	segments := batch.Segments
 
-			if err := func() error {
-				paths := make([]string, len(segments))
-				for i, seg := range segments {
-					paths[i] = seg.Path
-				}
-				mr, err := wal.NewSegmentMerger(paths...)
-				if err != nil && os.IsNotExist(err) {
-					return nil
-				} else if err != nil {
-					return fmt.Errorf("open segments: %w", err)
-				}
-				defer mr.Close()
-
-				// Merge batch of files into the first file at the destination.  This ensures we transfer
-				// the full batch atomimcally.
-				filename := filepath.Base(paths[0])
-
-				db, table, schema, _, err := wal.ParseFilename(filename)
-				if err != nil {
-					return fmt.Errorf("parse segment filename: %w", err)
-				}
-
-				var key string
-				if schema != "" {
-					key = fmt.Sprintf("%s_%s_%s", db, table, schema)
-				} else {
-					key = fmt.Sprintf("%s_%s", db, table)
-				}
-
-				// Each metric is written to a distinct file.  The first part of the filename
-				// is the metric name.  We use the metric name to determine which node owns
-				// the metric.
-				owner, addr := r.Partitioner.Owner([]byte(key))
-
-				// We're the owner of the file... leave it for the ingestor to upload.
-				if owner == r.hostname {
-					return nil
-				}
-
-				// If the peer is not healthy, don't attempt transferring the segment.  This could happen if we marked
-				// the peer unhealthy after we received the batch to process.
-				if !r.Health.IsPeerHealthy(owner) {
-					return nil
-				}
-
-				start := time.Now()
-				if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
-					if errors.Is(err, &ErrBadRequest{}) {
-						// If ingestor returns a bad request, we should drop the segments as it means we're sending something
-						// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
-						// and log the error.
-						logger.Errorf("Failed to transfer segment %s to %s@%s: %s.  Dropping segments.", filename, owner, addr, err)
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove segment: %s", err)
-						}
-						return nil
-					} else if errors.Is(err, ErrSegmentExists) {
-						// Segment already exists, remove our side so we don't keep retrying.
-						if err := batch.Remove(); err != nil {
-							logger.Errorf("Failed to remove segment: %s", err)
-						}
-						return nil
-					} else if errors.Is(err, ErrSegmentLocked) {
-						// Segment is locked, retry later.
-						return nil
-					} else if errors.Is(err, ErrPeerOverloaded) {
-						// Ingestor is overloaded, mark the peer as unhealthy and retry later.
-						r.Health.SetPeerUnhealthy(owner)
-						return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
-					}
-					// Unknown error, assume it's transient and retry after some backoff.
-					r.Health.SetPeerUnhealthy(owner)
-					return err
-				}
-
-				if logger.IsDebug() {
-					for _, seg := range segments {
-						logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
-					}
-				}
-
-				if err := batch.Remove(); err != nil {
-					logger.Errorf("Failed to batch segment: %s", err)
-				}
-
-				return nil
-			}(); err != nil {
-				logger.Errorf("Failed to transfer batch to peer: %v", err)
-			}
-
-			batch.Release()
+	if err := func() error {
+		paths := make([]string, len(segments))
+		for i, seg := range segments {
+			paths[i] = seg.Path
 		}
+		mr, err := wal.NewSegmentMerger(paths...)
+		if err != nil && os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("open segments: %w", err)
+		}
+		defer mr.Close()
+
+		// Merge batch of files into the first file at the destination.  This ensures we transfer
+		// the full batch atomimcally.
+		filename := filepath.Base(paths[0])
+
+		db, table, schema, _, err := wal.ParseFilename(filename)
+		if err != nil {
+			return fmt.Errorf("parse segment filename: %w", err)
+		}
+
+		var key string
+		if schema != "" {
+			key = fmt.Sprintf("%s_%s_%s", db, table, schema)
+		} else {
+			key = fmt.Sprintf("%s_%s", db, table)
+		}
+
+		// Each metric is written to a distinct file.  The first part of the filename
+		// is the metric name.  We use the metric name to determine which node owns
+		// the metric.
+		owner, addr := r.Partitioner.Owner([]byte(key))
+
+		// We're the owner of the file... leave it for the ingestor to upload.
+		if owner == r.hostname {
+			return nil
+		}
+
+		// If the peer is not healthy, don't attempt transferring the segment.  This could happen if we marked
+		// the peer unhealthy after we received the batch to process.
+		if !r.Health.IsPeerHealthy(owner) {
+			return nil
+		}
+
+		start := time.Now()
+		if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
+			if errors.Is(err, &ErrBadRequest{}) {
+				// If ingestor returns a bad request, we should drop the segments as it means we're sending something
+				// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
+				// and log the error.
+				logger.Errorf("Failed to transfer segment %s to %s@%s: %s.  Dropping segments.", filename, owner, addr, err)
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove segment: %s", err)
+				}
+				return nil
+			} else if errors.Is(err, ErrSegmentExists) {
+				// Segment already exists, remove our side so we don't keep retrying.
+				if err := batch.Remove(); err != nil {
+					logger.Errorf("Failed to remove segment: %s", err)
+				}
+				return nil
+			} else if errors.Is(err, ErrSegmentLocked) {
+				// Segment is locked, retry later.
+				return nil
+			} else if errors.Is(err, ErrPeerOverloaded) {
+				// Ingestor is overloaded, mark the peer as unhealthy and retry later.
+				r.Health.SetPeerUnhealthy(owner)
+				return fmt.Errorf("transfer segment %s to %s: %w", filename, addr, err)
+			}
+			// Unknown error, assume it's transient and retry after some backoff.
+			r.Health.SetPeerUnhealthy(owner)
+			return err
+		}
+
+		if logger.IsDebug() {
+			for _, seg := range segments {
+				logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())
+			}
+		}
+
+		if err := batch.Remove(); err != nil {
+			logger.Errorf("Failed to batch segment: %s", err)
+		}
+
+		return nil
+	}(); err != nil {
+		logger.Errorf("Failed to transfer batch to peer: %v", err)
 	}
+
+	batch.Release()
 }

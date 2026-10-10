@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
 	"k8s.io/client-go/dynamic"
@@ -48,7 +49,7 @@ func main() {
 	app := &cli.App{
 		Name:  "ingestor",
 		Usage: "adx-mon metrics ingestor",
-		Flags: []cli.Flag{
+		Flags: append([]cli.Flag{
 			&cli.StringFlag{Name: "kubeconfig", Usage: "/etc/kubernetes/admin.conf"},
 			&cli.StringFlag{Name: "namespace", Usage: "Namespace for peer discovery"},
 			&cli.StringFlag{Name: "hostname", Usage: "Hostname of the current node"},
@@ -77,7 +78,7 @@ func main() {
 			&cli.StringFlag{Name: "ca-cert", Usage: "CA certificate file"},
 			&cli.StringFlag{Name: "key", Usage: "Server key file"},
 			&cli.BoolFlag{Name: "insecure-skip-verify", Usage: "Skip TLS verification"},
-		},
+		}, realtimeCLIFlags()...),
 
 		Action: func(ctx *cli.Context) error {
 			return realMain(ctx)
@@ -213,6 +214,14 @@ func realMain(ctx *cli.Context) error {
 	metricsEndpoints := ctx.StringSlice("metrics-kusto-endpoints")
 	logsEndpoints := ctx.StringSlice("logs-kusto-endpoints")
 
+	realtimeCfg, err := newRealtimeConfig(ctx, metricsEndpoints, logsEndpoints, maxDiskUsage, backend)
+	if err != nil {
+		logger.Fatalf("Invalid realtime configuration: %s", err)
+	}
+	if realtimeCfg.Policy.HasRealtime() {
+		logger.Infof("Realtime ingestion configured for tables: %v", realtimeCfg.Policy.RealtimeTables())
+	}
+
 	allowedDatabases := make([]string, 0, len(metricsEndpoints)+len(logsEndpoints))
 	var (
 		metricsDatabases []string
@@ -222,18 +231,23 @@ func realMain(ctx *cli.Context) error {
 		uploader         ingestor.Uploader
 	)
 
+	streamingSlots := realtimeCfg.newStreamingSlots()
+	if len(streamingSlots) > 0 {
+		prometheus.MustRegister(adx.NewStreamingSlotsCollector(streamingSlots))
+	}
+
 	switch backend {
 	case storage.BackendADX:
 		metricsUploaders, md, err := newUploaders(
 			metricsEndpoints, storageDir, concurrentUploads,
-			schema.DefaultMetricsMapping, adx.PromMetrics)
+			schema.DefaultMetricsMapping, adx.PromMetrics, realtimeCfg, streamingSlots)
 		if err != nil {
 			logger.Fatalf("Failed to create metrics uploader: %s", err)
 		}
 		metricsDatabases = md
 		logsUploaders, ld, err := newUploaders(
 			logsEndpoints, storageDir, concurrentUploads,
-			schema.DefaultLogsMapping, adx.OTLPLogs)
+			schema.DefaultLogsMapping, adx.OTLPLogs, realtimeCfg, streamingSlots)
 		if err != nil {
 			logger.Fatalf("Failed to create logs uploader: %s", err)
 		}
@@ -286,35 +300,38 @@ func realMain(ctx *cli.Context) error {
 	allowedDatabases = append(allowedDatabases, logsDatabases...)
 
 	svc, err := ingestor.NewService(ingestor.ServiceOpts{
-		K8sCli:                 k8scli,
-		K8sCtrlCli:             ctrlCli,
-		LogsKustoCli:           logsKustoCli,
-		MetricsKustoCli:        metricsKustoCli,
-		MetricsDatabases:       metricsDatabases,
-		AllowedDatabase:        allowedDatabases,
-		LogsDatabases:          logsDatabases,
-		Namespace:              namespace,
-		Hostname:               hostname,
-		Region:                 region,
-		StorageDir:             storageDir,
-		Uploader:               uploader,
-		DisablePeerTransfer:    disablePeerTransfer,
-		PartitionSize:          partitionSize,
-		MaxSegmentSize:         maxSegmentSize,
-		MaxSegmentAge:          maxSegmentAge,
-		MaxTransferSize:        maxTransferSize,
-		MaxTransferAge:         maxTransferAge,
-		MaxSegmentCount:        maxSegmentCount,
-		MaxDiskUsage:           maxDiskUsage,
-		MaxBatchSegments:       maxBatchSegments,
-		ConcurrentUploads:      concurrentUploads,
-		EnableWALFsync:         enableWALFsync,
-		MaxTransferConcurrency: maxTransferConcurrency,
-		InsecureSkipVerify:     insecureSkipVerify,
-		DropFilePrefixes:       dropPrefixes,
-		SlowRequestThreshold:   slowRequestThreshold.Seconds(),
-		ClusterLabels:          makeClusterLabels(ctx),
-		StorageBackend:         backend,
+		K8sCli:                       k8scli,
+		K8sCtrlCli:                   ctrlCli,
+		LogsKustoCli:                 logsKustoCli,
+		MetricsKustoCli:              metricsKustoCli,
+		MetricsDatabases:             metricsDatabases,
+		AllowedDatabase:              allowedDatabases,
+		LogsDatabases:                logsDatabases,
+		Namespace:                    namespace,
+		Hostname:                     hostname,
+		Region:                       region,
+		StorageDir:                   storageDir,
+		Uploader:                     uploader,
+		DisablePeerTransfer:          disablePeerTransfer,
+		PartitionSize:                partitionSize,
+		MaxSegmentSize:               maxSegmentSize,
+		MaxSegmentAge:                maxSegmentAge,
+		MaxTransferSize:              maxTransferSize,
+		MaxTransferAge:               maxTransferAge,
+		MaxSegmentCount:              maxSegmentCount,
+		MaxDiskUsage:                 maxDiskUsage,
+		MaxBatchSegments:             maxBatchSegments,
+		ConcurrentUploads:            concurrentUploads,
+		EnableWALFsync:               enableWALFsync,
+		MaxTransferConcurrency:       maxTransferConcurrency,
+		InsecureSkipVerify:           insecureSkipVerify,
+		DropFilePrefixes:             dropPrefixes,
+		SlowRequestThreshold:         slowRequestThreshold.Seconds(),
+		ClusterLabels:                makeClusterLabels(ctx),
+		StorageBackend:               backend,
+		Realtime:                     realtimeCfg.serviceOpts(),
+		QueuedReservedWorkersPercent: realtimeCfg.QueuedReservedWorkersPercent,
+		PeerListeners:                peerListeners(streamingSlots),
 	})
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
@@ -494,7 +511,8 @@ func parseStorageEndpoint(endpoint string) (string, string, error) {
 }
 
 func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
-	defaultMapping schema.SchemaMapping, sampleType adx.SampleType) ([]adx.Uploader, []string, error) {
+	defaultMapping schema.SchemaMapping, sampleType adx.SampleType,
+	realtimeCfg *realtimeConfig, streamingSlots map[string]*adx.StreamingSlots) ([]adx.Uploader, []string, error) {
 
 	var (
 		uploaders           []adx.Uploader
@@ -534,6 +552,9 @@ func newUploaders(endpoints []string, storageDir string, concurrentUploads int,
 			ConcurrentUploads: concurrentUploads,
 			DefaultMapping:    defaultMapping,
 			SampleType:        sampleType,
+
+			QueuedReservedWorkersPercent: realtimeCfg.QueuedReservedWorkersPercent,
+			Realtime:                     realtimeCfg.uploadOpts(database, addr, streamingSlots),
 		}))
 
 		uploadDatabaseNames = append(uploadDatabaseNames, database)

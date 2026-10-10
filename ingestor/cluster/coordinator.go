@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,23 @@ type Coordinator interface {
 
 	// IsLeader returns true if the current node is the leader.
 	IsLeader() bool
+
+	// Peers returns the number of ingestor peers and this node's rank among them.
+	Peers() PeerInfo
+
+	// SubscribePeers registers fn to be called when the peer count or this node's rank changes.  fn is called
+	// synchronously and must return quickly.  The returned func unsubscribes fn.
+	SubscribePeers(fn func(PeerInfo)) (unsubscribe func())
+}
+
+// PeerInfo describes this node's position among its ingestor peers.
+type PeerInfo struct {
+	// Count is the number of ready peers including this node.
+	Count int
+
+	// Rank is this node's zero based index among the peers sorted by name.  Every peer computes the same ordering so
+	// ranks are unique across peers that observe the same peer set.
+	Rank int
 }
 
 // Coordinator manages the cluster state and writes to the correct peer.
@@ -48,6 +66,14 @@ type coordinator struct {
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 	leader       bool
+
+	// peerInfo is the last computed peer info.  It is guarded by mu.
+	peerInfo PeerInfo
+
+	syncMu      sync.Mutex
+	subMu       sync.Mutex
+	subscribers map[int]func(PeerInfo)
+	nextSubID   int
 }
 
 type CoordinatorOpts struct {
@@ -87,11 +113,13 @@ func NewCoordinator(opts *CoordinatorOpts) (Coordinator, error) {
 	}
 
 	return &coordinator{
-		groupName: groupName,
-		hostname:  opts.Hostname,
-		namespace: ns,
-		opts:      opts,
-		kcli:      opts.K8sCli,
+		groupName:   groupName,
+		hostname:    opts.Hostname,
+		namespace:   ns,
+		opts:        opts,
+		kcli:        opts.K8sCli,
+		peerInfo:    PeerInfo{Count: 1},
+		subscribers: make(map[int]func(PeerInfo)),
 	}, nil
 }
 
@@ -161,7 +189,7 @@ func (c *coordinator) Open(ctx context.Context) error {
 
 	myIP, err := GetOutboundIP()
 	if err != nil {
-		return fmt.Errorf("failed to determin ip: %w", err)
+		return fmt.Errorf("failed to determine ip: %w", err)
 	}
 	if myIP == nil || myIP.To4().String() == "" {
 		return fmt.Errorf("failed to determine ip")
@@ -198,6 +226,58 @@ func (c *coordinator) IsLeader() bool {
 	return c.leader
 }
 
+func (c *coordinator) Peers() PeerInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.peerInfo
+}
+
+func (c *coordinator) SubscribePeers(fn func(PeerInfo)) func() {
+	c.subMu.Lock()
+	id := c.nextSubID
+	c.nextSubID++
+	c.subscribers[id] = fn
+	c.subMu.Unlock()
+
+	return func() {
+		c.subMu.Lock()
+		delete(c.subscribers, id)
+		c.subMu.Unlock()
+	}
+}
+
+// notifyPeers calls subscribers with info.  It must not be called while holding mu.
+func (c *coordinator) notifyPeers(info PeerInfo) {
+	c.subMu.Lock()
+	subs := make([]func(PeerInfo), 0, len(c.subscribers))
+	for _, fn := range c.subscribers {
+		subs = append(subs, fn)
+	}
+	c.subMu.Unlock()
+
+	for _, fn := range subs {
+		fn(info)
+	}
+}
+
+// computePeerInfo returns this node's peer count and rank.  This node is always counted since it is running even if
+// it is not reported ready yet.  mu must be held.
+func (c *coordinator) computePeerInfo() PeerInfo {
+	names := make([]string, 0, len(c.peers)+1)
+	self := false
+	for name := range c.peers {
+		names = append(names, name)
+		if name == c.hostname {
+			self = true
+		}
+	}
+	if !self {
+		names = append(names, c.hostname)
+	}
+	sort.Strings(names)
+	return PeerInfo{Count: len(names), Rank: sort.SearchStrings(names, c.hostname)}
+}
+
 func (c *coordinator) Owner(b []byte) (string, string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -211,11 +291,28 @@ func (c *coordinator) Close() error {
 	return nil
 }
 
-// syncPeers determines the active set of ingestors and reconfigures the partitioner.
+// syncPeers determines the active set of ingestors and reconfigures the partitioner.  Subscribers are notified if the
+// peer count or this node's rank changed.
 func (c *coordinator) syncPeers() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.syncMu.Lock()
+	defer c.syncMu.Unlock()
 
+	c.mu.Lock()
+	err := c.syncPeersLocked()
+	info := c.computePeerInfo()
+	changed := info != c.peerInfo
+	c.peerInfo = info
+	c.mu.Unlock()
+
+	if changed {
+		logger.Infof("Ingestor peers changed: count=%d rank=%d", info.Count, info.Rank)
+		c.notifyPeers(info)
+	}
+	return err
+}
+
+// syncPeersLocked is like syncPeers.  mu must be held.
+func (c *coordinator) syncPeersLocked() error {
 	pods, err := c.pl.Pods(c.namespace).List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("list pods: %w", err)
