@@ -484,6 +484,43 @@ The kubelet-discovery configuration enables pod discovery via the local kubelet 
   ca-path = '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
 
 ```
+## Realtime Ingestion
+
+Realtime ingestion lowers the latency of selected tables from minutes to seconds. Segments for realtime tables are rotated and batched as soon as they close and are transferred to the ingestor ahead of other tables. The ingestor ingests them with [streaming ingestion](https://learn.microsoft.com/en-us/azure/data-explorer/ingest-data-streaming), falling back to queued ingestion when streaming is unavailable.
+
+Realtime tables must also be configured on the ingestor with `--realtime-table` and a `--realtime-streaming-budget` for their Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion). Database and table names are normalized the same way as table names, so `Cpu_Usage` matches the `CpuUsage` table.
+
+When tables are configured, `reserved-disk-bytes` of disk is reserved for realtime tables: other tables are limited to `max-disk-usage` minus the reservation so a backlog of queued data cannot block realtime writes.
+
+```toml
+# Optional configuration for realtime ingestion of selected tables.
+# Realtime tables are rotated and transferred ahead of queued tables and the ingestor uploads them with streaming ingestion.
+[realtime]
+  # Maximum age in milliseconds of a realtime WAL segment before it is rotated. Defaults to 250.
+  max-segment-age-ms = 250
+  # Maximum time in milliseconds a closed realtime segment waits to be batched with others before it is transferred. Defaults to 500.
+  max-batch-latency-ms = 500
+  # Maximum size of a realtime transfer batch in compressed WAL bytes. Defaults to 2097152.
+  max-batch-bytes = 2097152
+  # Disk space in bytes reserved for realtime segments. Queued segments may use up to max-disk-usage minus this value. Only applies when tables are configured. Defaults to 1073741824.
+  reserved-disk-bytes = 1073741824
+  # Percentage of transfer workers reserved for queued segments so realtime traffic cannot starve them. At least one worker is always reserved. Defaults to 10.
+  queued-reserved-workers-percent = 10
+
+  # Tables that use realtime ingestion.
+  [[realtime.tables]]
+    # Database of the realtime table.
+    database = 'Metrics'
+    # Name of the realtime table.
+    table = 'CpuUsage'
+
+  [[realtime.tables]]
+    # Database of the realtime table.
+    database = 'Logs'
+    # Name of the realtime table.
+    table = 'ApplicationErrors'
+
+```
 
 ## Metadata Watching
 

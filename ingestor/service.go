@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/debug"
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/reader"
 	"github.com/Azure/adx-mon/pkg/scheduler"
@@ -149,6 +150,38 @@ type ServiceOpts struct {
 	ClusterLabels map[string]string
 
 	StorageBackend storage.Backend
+
+	// Realtime configures realtime ingestion.  When nil or without realtime tables, all tables are queued.
+	Realtime *RealtimeOpts
+
+	// QueuedReservedWorkersPercent is the percentage of transfer workers reserved for queued batches.
+	QueuedReservedWorkersPercent int
+
+	// PeerListeners are called with the ingestor's peer count and rank when the service opens and when they change.
+	PeerListeners []func(cluster.PeerInfo)
+}
+
+// RealtimeOpts configures realtime ingestion in the ingestor.
+type RealtimeOpts struct {
+	// Policy assigns ingestion priorities to tables.
+	Policy *ingestpolicy.Policy
+
+	// MaxSegmentAge is the max age of realtime WAL segments before they are rotated.
+	MaxSegmentAge time.Duration
+
+	// MaxBatchLatency is the max time a closed realtime segment waits to be batched.
+	MaxBatchLatency time.Duration
+
+	// MaxBatchBytes is the max size of a realtime batch in WAL bytes.
+	MaxBatchBytes int64
+
+	// ReservedDiskBytes is disk space reserved for realtime segments.
+	ReservedDiskBytes int64
+}
+
+// enabled returns true if realtime tables are configured.
+func (o *RealtimeOpts) enabled() bool {
+	return o != nil && o.Policy.HasRealtime()
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -156,14 +189,25 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		opts.StorageBackend = storage.BackendADX
 	}
 
-	store := storage.NewLocalStore(storage.StoreOpts{
+	storeOpts := storage.StoreOpts{
 		StorageDir:             opts.StorageDir,
 		SegmentMaxSize:         opts.MaxSegmentSize,
 		SegmentMaxAge:          opts.MaxSegmentAge,
 		EnableWALFsync:         opts.EnableWALFsync,
 		MaxDiskUsage:           opts.MaxDiskUsage,
 		StartupOpenConcurrency: opts.ConcurrentUploads,
-	})
+	}
+	var realtimeBatch cluster.RealtimeBatchOpts
+	if opts.Realtime.enabled() {
+		storeOpts.Policy = opts.Realtime.Policy
+		storeOpts.Realtime = wal.RotationPolicy{SegmentMaxAge: opts.Realtime.MaxSegmentAge}
+		storeOpts.RealtimeReservedDiskBytes = opts.Realtime.ReservedDiskBytes
+		realtimeBatch = cluster.RealtimeBatchOpts{
+			MaxBatchLatency: opts.Realtime.MaxBatchLatency,
+			MaxBatchBytes:   opts.Realtime.MaxBatchBytes,
+		}
+	}
+	store := storage.NewLocalStore(storeOpts)
 
 	coord, err := cluster.NewCoordinator(&cluster.CoordinatorOpts{
 		K8sCli:        opts.K8sCli,
@@ -182,13 +226,14 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	})
 
 	repl, err := cluster.NewReplicator(cluster.ReplicatorOpts{
-		Hostname:               opts.Hostname,
-		Partitioner:            coord,
-		InsecureSkipVerify:     opts.InsecureSkipVerify,
-		Health:                 health,
-		SegmentRemover:         store,
-		MaxTransferConcurrency: opts.MaxTransferConcurrency,
-		DisableGzip:            true,
+		Hostname:                     opts.Hostname,
+		Partitioner:                  coord,
+		InsecureSkipVerify:           opts.InsecureSkipVerify,
+		Health:                       health,
+		SegmentRemover:               store,
+		MaxTransferConcurrency:       opts.MaxTransferConcurrency,
+		DisableGzip:                  true,
+		QueuedReservedWorkersPercent: opts.QueuedReservedWorkersPercent,
 	})
 	if err != nil {
 		return nil, err
@@ -206,12 +251,17 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		Partitioner:             coord,
 		Segmenter:               store.Index(),
 		UploadQueue:             opts.Uploader.UploadQueue(),
+		RealtimeUploadQueue:     realtimeUploadQueue(opts.Uploader),
 		TransferQueue:           repl.TransferQueue(),
+		RealtimeTransferQueue:   repl.RealtimeTransferQueue(),
+		Realtime:                realtimeBatch,
 		PeerHealthReporter:      health,
 		TransfersDisabled:       opts.DisablePeerTransfer,
 		SegmentsCountMetric:     ingestorSegmentsTotal,
 		SegmentsSizeBytesMetric: ingestorSegmentsSizeBytes,
 		SegmentsMaxAgeMetric:    ingestorSegmentsMaxAge,
+
+		SegmentsSizeByPriorityMetric: metrics.NewIngestorSegmentSizeByPriorityMetric(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create batcher: %w", err)
@@ -274,6 +324,11 @@ func (s *Service) Open(ctx context.Context) error {
 
 	if err := s.coordinator.Open(svcCtx); err != nil {
 		return err
+	}
+
+	for _, listener := range s.opts.PeerListeners {
+		s.coordinator.SubscribePeers(listener)
+		listener(s.coordinator.Peers())
 	}
 
 	if err := s.batcher.Open(svcCtx); err != nil {
@@ -529,8 +584,8 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
 		return err
 	}
-	logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
-	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+	logger.Infof("Waiting for upload queue to drain, %d batches remaining", s.uploadQueueLen())
+	logger.Infof("Waiting for transfer queue to drain, %d batches remaining", s.transferQueueLen())
 
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -538,20 +593,43 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	for {
 		select {
 		case <-t.C:
-			if len(s.uploader.UploadQueue()) == 0 && len(s.replicator.TransferQueue()) == 0 {
+			if s.uploadQueueLen() == 0 && s.transferQueueLen() == 0 {
 				return nil
 			}
 
-			if len(s.uploader.UploadQueue()) != 0 {
-				logger.Infof("Waiting for upload queue to drain, %d batches remaining", len(s.uploader.UploadQueue()))
+			if n := s.uploadQueueLen(); n != 0 {
+				logger.Infof("Waiting for upload queue to drain, %d batches remaining", n)
 			}
-			if len(s.replicator.TransferQueue()) != 0 {
-				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", len(s.replicator.TransferQueue()))
+			if n := s.transferQueueLen(); n != 0 {
+				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", n)
 			}
 		case <-ctx.Done():
 			return fmt.Errorf("timed out to upload segments")
 		}
 	}
+}
+
+// realtimeUploader is implemented by uploaders that accept realtime batches on a separate queue.
+type realtimeUploader interface {
+	RealtimeUploadQueue() chan *cluster.Batch
+}
+
+// realtimeUploadQueue returns the realtime upload queue of u, or nil if u does not have one.
+func realtimeUploadQueue(u Uploader) chan *cluster.Batch {
+	if ru, ok := u.(realtimeUploader); ok {
+		return ru.RealtimeUploadQueue()
+	}
+	return nil
+}
+
+// uploadQueueLen returns the number of batches waiting to be uploaded.
+func (s *Service) uploadQueueLen() int {
+	return len(s.uploader.UploadQueue()) + len(realtimeUploadQueue(s.uploader))
+}
+
+// transferQueueLen returns the number of batches waiting to be transferred to peers.
+func (s *Service) transferQueueLen() int {
+	return len(s.replicator.TransferQueue()) + len(s.replicator.RealtimeTransferQueue())
 }
 
 func (s *Service) DisableWrites() error {
