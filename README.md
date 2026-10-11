@@ -28,6 +28,9 @@ collection and analysis of observability data.
 
 ## Development
 
+For repeatable tests of a local branch against real AKS and Azure Data Explorer,
+see [the Azure E2E environment harness](tools/dev/azure-test-env/README.md).
+
 ### Build, push, and deploy images from ACR
 
 Use these helper scripts to publish ADX-Mon images to your Azure Container Registry (ACR) and update the running Kubernetes workloads to use those images.

@@ -1,1 +1,5 @@
 tools/clickhouse/.stack/
+.adx-mon-test-env/
+.git/
+**/__pycache__/
+**/.DS_Store
