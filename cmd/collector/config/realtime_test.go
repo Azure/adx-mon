@@ -21,6 +21,7 @@ max-disk-usage = 21474836480
 [realtime]
 max-segment-age-ms = 100
 max-batch-latency-ms = 200
+log-batch-wait-ms = 120
 max-batch-bytes = 1048576
 reserved-disk-bytes = 536870912
 queued-reserved-workers-percent = 20
@@ -41,6 +42,7 @@ table = "ApplicationErrors"
 	require.NotNil(t, r)
 	require.Equal(t, 100*time.Millisecond, r.MaxSegmentAge())
 	require.Equal(t, 200*time.Millisecond, r.MaxBatchLatency())
+	require.Equal(t, 120*time.Millisecond, r.LogBatchWait())
 	require.Equal(t, int64(1048576), r.MaxBatchBytes)
 	require.Equal(t, int64(536870912), r.ReservedDiskBytes)
 	require.Equal(t, 20, r.QueuedReservedWorkersPercent)
@@ -59,6 +61,7 @@ func TestRealtime_Defaults(t *testing.T) {
 	r := c.Realtime
 	require.Equal(t, DefaultRealtimeMaxSegmentAge, r.MaxSegmentAge())
 	require.Equal(t, DefaultRealtimeMaxBatchLatency, r.MaxBatchLatency())
+	require.Equal(t, DefaultRealtimeLogBatchWait, r.LogBatchWait())
 	require.Equal(t, DefaultRealtimeMaxBatchBytes, r.MaxBatchBytes)
 	// No disk is reserved without realtime tables so queued capacity is unchanged.
 	require.Zero(t, r.ReservedDiskBytes)
@@ -103,6 +106,11 @@ func TestRealtime_Validate(t *testing.T) {
 			name:     "negative max segment age",
 			config:   Config{Realtime: &Realtime{MaxSegmentAgeMs: -1}},
 			contains: "realtime.max-segment-age-ms",
+		},
+		{
+			name:     "negative log batch wait",
+			config:   Config{Realtime: &Realtime{LogBatchWaitMs: -1}},
+			contains: "realtime.log-batch-wait-ms",
 		},
 		{
 			name:     "negative max batch latency",

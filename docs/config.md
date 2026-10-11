@@ -490,6 +490,8 @@ Realtime ingestion lowers the latency of selected tables from minutes to seconds
 
 Realtime tables must also be configured on the ingestor with `--realtime-table` and a `--realtime-streaming-budget` for their Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion). Database and table names are normalized the same way as table names, so `Cpu_Usage` matches the `CpuUsage` table.
 
+Pod-tailed logs routed directly to realtime tables use `log-batch-wait-ms` (100 ms by default) instead of the normal one-second batch wait. This does not change the wait for queued tables or other host-log sources.
+
 When tables are configured, `reserved-disk-bytes` of disk is reserved for realtime tables: other tables are limited to `max-disk-usage` minus the reservation so a backlog of queued data cannot block realtime writes.
 
 ```toml
@@ -500,6 +502,8 @@ When tables are configured, `reserved-disk-bytes` of disk is reserved for realti
   max-segment-age-ms = 250
   # Maximum time in milliseconds a closed realtime segment waits to be batched with others before it is transferred. Defaults to 500.
   max-batch-latency-ms = 500
+  # Maximum wait in milliseconds for pod-tailed logs routed to realtime tables before writing them to the WAL. Defaults to 100; queued tables retain their 1-second wait.
+  log-batch-wait-ms = 100
   # Maximum size of a realtime transfer batch in compressed WAL bytes. Defaults to 2097152.
   max-batch-bytes = 2097152
   # Disk space in bytes reserved for realtime segments. Queued segments may use up to max-disk-usage minus this value. Only applies when tables are configured. Defaults to 1073741824.

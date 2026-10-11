@@ -42,6 +42,7 @@ func TestRealtimeOpts_Tables(t *testing.T) {
 	require.Equal(t, ingestpolicy.PriorityRealtime, opts.Policy.Priority("Logs", "Realtime"))
 	require.Equal(t, config.DefaultRealtimeMaxSegmentAge, opts.MaxSegmentAge)
 	require.Equal(t, config.DefaultRealtimeMaxBatchLatency, opts.MaxBatchLatency)
+	require.Equal(t, config.DefaultRealtimeLogBatchWait, opts.LogBatchWait)
 	require.Equal(t, config.DefaultRealtimeMaxBatchBytes, opts.MaxBatchBytes)
 	require.Equal(t, config.DefaultRealtimeReservedDiskBytes, opts.ReservedDiskBytes)
 }

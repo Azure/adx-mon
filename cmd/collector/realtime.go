@@ -27,6 +27,7 @@ func realtimeOpts(cfg *config.Realtime) (*collector.RealtimeOpts, int, error) {
 		Policy:            policy,
 		MaxSegmentAge:     cfg.MaxSegmentAge(),
 		MaxBatchLatency:   cfg.MaxBatchLatency(),
+		LogBatchWait:      cfg.LogBatchWait(),
 		MaxBatchBytes:     cfg.MaxBatchBytes,
 		ReservedDiskBytes: cfg.ReservedDiskBytes,
 	}, cfg.QueuedReservedWorkersPercent, nil

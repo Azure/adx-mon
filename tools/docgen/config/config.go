@@ -394,6 +394,7 @@ func getContents() Contents {
 					Realtime: &config.Realtime{
 						MaxSegmentAgeMs:              250,
 						MaxBatchLatencyMs:            500,
+						LogBatchWaitMs:               100,
 						MaxBatchBytes:                2097152,
 						ReservedDiskBytes:            1073741824,
 						QueuedReservedWorkersPercent: 10,
@@ -625,6 +626,7 @@ var HostLogDescription = "The host log config configures file and journald log c
 
 var RealtimeDescription = "Realtime ingestion lowers the latency of selected tables from minutes to seconds. Segments for realtime tables are rotated and batched as soon as they close and are transferred to the ingestor ahead of other tables. The ingestor ingests them with [streaming ingestion](https://learn.microsoft.com/en-us/azure/data-explorer/ingest-data-streaming), falling back to queued ingestion when streaming is unavailable.\n\n" +
 	"Realtime tables must also be configured on the ingestor with `--realtime-table` and a `--realtime-streaming-budget` for their Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion). Database and table names are normalized the same way as table names, so `Cpu_Usage` matches the `CpuUsage` table.\n\n" +
+	"Pod-tailed logs routed directly to realtime tables use `log-batch-wait-ms` (100 ms by default) instead of the normal one-second batch wait. This does not change the wait for queued tables or other host-log sources.\n\n" +
 	"When tables are configured, `reserved-disk-bytes` of disk is reserved for realtime tables: other tables are limited to `max-disk-usage` minus the reservation so a backlog of queued data cannot block realtime writes."
 
 var KubeletDiscoveryDescription = "The kubelet-discovery configuration enables pod discovery via the local kubelet API instead of the Kubernetes API server. When configured, the collector polls the kubelet's `/pods` endpoint to discover running pods on the node." +

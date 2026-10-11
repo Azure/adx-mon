@@ -18,6 +18,7 @@ const (
 
 	DefaultRealtimeMaxSegmentAge                      = 250 * time.Millisecond
 	DefaultRealtimeMaxBatchLatency                    = 500 * time.Millisecond
+	DefaultRealtimeLogBatchWait                       = 100 * time.Millisecond
 	DefaultRealtimeMaxBatchBytes                int64 = 2 * 1024 * 1024
 	DefaultRealtimeReservedDiskBytes            int64 = 1024 * 1024 * 1024
 	DefaultRealtimeQueuedReservedWorkersPercent       = 10
@@ -27,6 +28,7 @@ const (
 type Realtime struct {
 	MaxSegmentAgeMs              int              `toml:"max-segment-age-ms,omitempty" comment:"Maximum age in milliseconds of a realtime WAL segment before it is rotated. Defaults to 250."`
 	MaxBatchLatencyMs            int              `toml:"max-batch-latency-ms,omitempty" comment:"Maximum time in milliseconds a closed realtime segment waits to be batched with others before it is transferred. Defaults to 500."`
+	LogBatchWaitMs               int              `toml:"log-batch-wait-ms,omitempty" comment:"Maximum wait in milliseconds for pod-tailed logs routed to realtime tables before writing them to the WAL. Defaults to 100; queued tables retain their 1-second wait."`
 	MaxBatchBytes                int64            `toml:"max-batch-bytes,omitempty" comment:"Maximum size of a realtime transfer batch in compressed WAL bytes. Defaults to 2097152."`
 	ReservedDiskBytes            int64            `toml:"reserved-disk-bytes,omitempty" comment:"Disk space in bytes reserved for realtime segments. Queued segments may use up to max-disk-usage minus this value. Only applies when tables are configured. Defaults to 1073741824."`
 	QueuedReservedWorkersPercent int              `toml:"queued-reserved-workers-percent,omitempty" comment:"Percentage of transfer workers reserved for queued segments so realtime traffic cannot starve them. At least one worker is always reserved. Defaults to 10."`
@@ -54,6 +56,12 @@ func (r *Realtime) Validate(maxDiskUsage int64) error {
 	}
 	if r.MaxBatchLatencyMs == 0 {
 		r.MaxBatchLatencyMs = int(DefaultRealtimeMaxBatchLatency / time.Millisecond)
+	}
+	if r.LogBatchWaitMs < 0 {
+		return errors.New("realtime.log-batch-wait-ms must be greater than 0")
+	}
+	if r.LogBatchWaitMs == 0 {
+		r.LogBatchWaitMs = int(DefaultRealtimeLogBatchWait / time.Millisecond)
 	}
 
 	if r.MaxBatchBytes < 0 {
@@ -127,4 +135,9 @@ func (r *Realtime) MaxSegmentAge() time.Duration {
 // MaxBatchLatency returns the realtime batch latency as a duration.  Validate must be called first.
 func (r *Realtime) MaxBatchLatency() time.Duration {
 	return time.Duration(r.MaxBatchLatencyMs) * time.Millisecond
+}
+
+// LogBatchWait returns the maximum pod-tail log batch wait. Validate must be called first.
+func (r *Realtime) LogBatchWait() time.Duration {
+	return time.Duration(r.LogBatchWaitMs) * time.Millisecond
 }

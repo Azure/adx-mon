@@ -170,6 +170,8 @@ type RealtimeOpts struct {
 
 	// MaxBatchLatency is the max time a closed realtime segment waits to be batched before it is transferred.
 	MaxBatchLatency time.Duration
+	// LogBatchWait is the pod-tail batch wait for realtime destinations.
+	LogBatchWait time.Duration
 
 	// MaxBatchBytes is the max size of a realtime transfer batch in WAL bytes.
 	MaxBatchBytes int64
