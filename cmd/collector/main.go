@@ -656,6 +656,10 @@ func realMain(ctx *cli.Context) error {
 
 	for _, v := range cfg.HostLog {
 		tailSourceConfig := tail.TailSourceConfig{}
+		if realtime != nil {
+			tailSourceConfig.RealtimePolicy = realtime.Policy
+			tailSourceConfig.RealtimeBatchWait = realtime.LogBatchWait
+		}
 		if !v.DisableKubeDiscovery {
 			informer, err = getInformer(ctx.Context, &cfg, hostname, informer)
 			if err != nil {
