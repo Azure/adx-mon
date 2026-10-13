@@ -125,6 +125,8 @@ type Resource_builder struct {
 	// Note: keys in the references MUST exist in attributes of this message.
 	//
 	// Status: [Development]
+	//
+	// [Since v1.6.0]
 	EntityRefs []*v1.EntityRef
 }
 

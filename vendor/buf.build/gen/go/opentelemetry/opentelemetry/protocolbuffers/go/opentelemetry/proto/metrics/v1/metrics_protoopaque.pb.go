@@ -880,7 +880,7 @@ type Metric_builder struct {
 	// described by https://ucum.org/ucum and https://units-of-measurement.org/
 	Unit string
 	// Data determines the aggregation type (if any) of the metric, what is the
-	// reported value type for the data points, as well as the relatationship to
+	// reported value type for the data points, as well as the relationship to
 	// the time interval over which they are reported.
 
 	// Fields of oneof xxx_hidden_Data:
@@ -898,6 +898,8 @@ type Metric_builder struct {
 	// Attribute keys MUST be unique (it is not allowed to have more than one
 	// attribute with the same key).
 	// The behavior of software that receives duplicated keys can be unpredictable.
+	//
+	// [Since v1.2.0]
 	Metadata []*v11.KeyValue
 }
 

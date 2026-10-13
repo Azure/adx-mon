@@ -369,6 +369,8 @@ type AnyValue_builder struct {
 	// empty, ignoring its semantic content for the non-Profiling signal.
 	//
 	// Status: [Alpha]
+	//
+	// [Since v1.10.0]
 	StringValueStrindex *int32
 	// -- end of xxx_hidden_Value
 }
@@ -457,6 +459,8 @@ type anyValue_StringValueStrindex struct {
 	// empty, ignoring its semantic content for the non-Profiling signal.
 	//
 	// Status: [Alpha]
+	//
+	// [Since v1.10.0]
 	StringValueStrindex int32 `protobuf:"varint,8,opt,name=string_value_strindex,json=stringValueStrindex,proto3,oneof"`
 }
 
@@ -707,6 +711,8 @@ type KeyValue_builder struct {
 	// empty, ignoring its semantic content for the non-Profiling signal.
 	//
 	// Status: [Alpha]
+	//
+	// [Since v1.10.0]
 	KeyStrindex int32
 }
 
@@ -838,6 +844,8 @@ func (b0 InstrumentationScope_builder) Build() *InstrumentationScope {
 // Entity represents an object of interest associated with produced telemetry: e.g spans, metrics, profiles, or logs.
 //
 // Status: [Development]
+//
+// [Since v1.6.0]
 type EntityRef struct {
 	state                      protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_SchemaUrl       string                 `protobuf:"bytes,1,opt,name=schema_url,json=schemaUrl,proto3"`
