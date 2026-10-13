@@ -223,6 +223,54 @@ func TestRealtimeBatcher_RetriesReleasedBatches(t *testing.T) {
 	}
 }
 
+func TestRealtimeBatcher_SizeTriggerHonorsRetryDelay(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{MaxBatchLatency: time.Hour, MaxBatchBytes: 1}, false)
+	r := env.b.realtime
+	ctx := context.Background()
+	prefix := "db_Realtime"
+	si := env.add(t, "Realtime", 100, ingestpolicy.PriorityRealtime)
+
+	r.markPending(prefix, time.Now())
+	r.processPrefix(ctx, prefix, time.Now(), false)
+	first := receiveBatch(t, env.realtime, time.Second)
+	require.Equal(t, []string{si.Path}, first.Paths())
+	first.Release()
+
+	pending := r.pending[prefix]
+	require.False(t, pending.retryAfter.IsZero())
+	retryAfter := pending.retryAfter
+	// A new segment notification or sweep may shorten the batching deadline, but not the retry backoff.
+	r.markPending(prefix, retryAfter.Add(-time.Hour))
+	r.sweep()
+	pending = r.pending[prefix]
+	require.Equal(t, retryAfter, pending.retryAfter)
+
+	// The segment exceeds the size trigger, but that cannot bypass retry backpressure.
+	r.processPrefix(ctx, prefix, pending.retryAfter.Add(-time.Nanosecond), false)
+	require.Empty(t, env.realtime)
+
+	r.processPrefix(ctx, prefix, pending.retryAfter.Add(time.Nanosecond), false)
+	retry := receiveBatch(t, env.realtime, time.Second)
+	require.Equal(t, []string{si.Path}, retry.Paths())
+}
+
+func TestRealtimeBatcher_FlushBypassesRetryDelay(t *testing.T) {
+	env := newRealtimeTestEnv(t, RealtimeBatchOpts{MaxBatchLatency: time.Hour, MaxBatchBytes: 1 << 20}, false)
+	r := env.b.realtime
+	prefix := "db_Realtime"
+	env.add(t, "Realtime", 100, ingestpolicy.PriorityRealtime)
+
+	r.markPending(prefix, time.Now())
+	r.processPrefix(context.Background(), prefix, time.Now(), false)
+	first := receiveBatch(t, env.realtime, time.Second)
+	first.Release()
+
+	// Flush is an explicit force-drain operation and intentionally bypasses retry backoff.
+	r.Flush(context.Background())
+	retry := receiveBatch(t, env.realtime, time.Second)
+	require.Equal(t, []string{first.Paths()[0]}, retry.Paths())
+}
+
 func TestRealtimeBatcher_DoesNotBatchSegmentsTwice(t *testing.T) {
 	env := newRealtimeTestEnv(t, RealtimeBatchOpts{MaxBatchLatency: time.Millisecond, MaxBatchBytes: 1 << 20}, false)
 	env.realtime = make(chan *Batch, 10000)
