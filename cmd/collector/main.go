@@ -351,7 +351,7 @@ func realMain(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	if realtime != nil {
+	if realtime.Policy.HasRealtime() {
 		logger.Infof("Realtime ingestion configured for tables: %v", realtime.Policy.RealtimeTables())
 	}
 
@@ -656,7 +656,7 @@ func realMain(ctx *cli.Context) error {
 
 	for _, v := range cfg.HostLog {
 		tailSourceConfig := tail.TailSourceConfig{}
-		if realtime != nil {
+		if realtime.Policy.HasRealtime() {
 			tailSourceConfig.RealtimePolicy = realtime.Policy
 			tailSourceConfig.RealtimeBatchWait = realtime.LogBatchWait
 		}
