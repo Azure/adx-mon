@@ -28,7 +28,7 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/klauspost/pgzip v1.2.7
 	github.com/libp2p/go-buffer-pool v0.1.0
-	github.com/lmittmann/tint v1.2.0
+	github.com/lmittmann/tint v1.2.1
 	github.com/mattn/go-isatty v0.0.24
 	github.com/moby/moby/api v1.56.0
 	github.com/pelletier/go-toml/v2 v2.4.3
