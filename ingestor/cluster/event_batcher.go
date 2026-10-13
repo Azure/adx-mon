@@ -109,13 +109,16 @@ func (r *eventBatcher) onSegment(si wal.SegmentInfo) {
 
 // released is called when a batch is released without being removed so its segments are retried.
 func (r *eventBatcher) released(prefix string) {
-	r.markPending(prefix, time.Now().Add(r.retryDelay))
+	retryAfter := time.Now().Add(r.retryDelay)
+	r.markPendingWithRetry(prefix, retryAfter, retryAfter)
 }
 
 // pendingPrefix is a prefix with unbatched segments.
 type pendingPrefix struct {
 	// deadline is when the prefix's segments must be batched.
 	deadline time.Time
+	// retryAfter prevents normal batching triggers from immediately re-emitting a released batch.
+	retryAfter time.Time
 	// seq changes each time the prefix is marked pending so segments that arrive while a batch is being built are not
 	// lost when the batch clears the prefix.
 	seq uint64
@@ -124,11 +127,19 @@ type pendingPrefix struct {
 // markPending records that prefix has unbatched segments that must be batched by deadline.  An earlier deadline is
 // kept.
 func (r *eventBatcher) markPending(prefix string, deadline time.Time) {
+	r.markPendingWithRetry(prefix, deadline, time.Time{})
+}
+
+// markPendingWithRetry records a pending prefix and, when retryAfter is set, delays normal batching until that time.
+func (r *eventBatcher) markPendingWithRetry(prefix string, deadline, retryAfter time.Time) {
 	r.mu.Lock()
 	r.seq++
 	p, ok := r.pending[prefix]
 	if !ok || deadline.Before(p.deadline) {
 		p.deadline = deadline
+	}
+	if !retryAfter.IsZero() {
+		p.retryAfter = retryAfter
 	}
 	p.seq = r.seq
 	r.pending[prefix] = p
@@ -251,6 +262,9 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 	p, ok := r.pending[prefix]
 	r.mu.Unlock()
 	if !ok && !force {
+		return
+	}
+	if !force && now.Before(p.retryAfter) {
 		return
 	}
 
