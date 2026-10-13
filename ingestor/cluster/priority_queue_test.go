@@ -87,6 +87,46 @@ func TestPriorityQueues_NextStopsOnContextDone(t *testing.T) {
 	}
 }
 
+func TestPriorityQueues_NextDoesNotConsumeWorkAfterContextDone(t *testing.T) {
+	tests := []struct {
+		name     string
+		reserved bool
+		realtime bool
+		queued   bool
+	}{
+		{name: "unreserved realtime", realtime: true},
+		{name: "reserved queued", reserved: true, queued: true},
+		{name: "both unreserved", realtime: true, queued: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := PriorityQueues{Realtime: make(chan *Batch, 1), Queued: make(chan *Batch, 1)}
+			if tt.realtime {
+				q.Realtime <- &Batch{Prefix: "realtime"}
+			}
+			if tt.queued {
+				q.Queued <- &Batch{Prefix: "queued"}
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			batch, ok := q.Next(ctx, tt.reserved)
+
+			require.False(t, ok)
+			require.Nil(t, batch)
+			wantRealtime, wantQueued := 0, 0
+			if tt.realtime {
+				wantRealtime = 1
+			}
+			if tt.queued {
+				wantQueued = 1
+			}
+			require.Len(t, q.Realtime, wantRealtime)
+			require.Len(t, q.Queued, wantQueued)
+		})
+	}
+}
+
 func TestRunWorkers_QueuedNotStarvedByRealtime(t *testing.T) {
 	q := PriorityQueues{Realtime: make(chan *Batch, 1000), Queued: make(chan *Batch, 1000)}
 	for i := 0; i < 1000; i++ {

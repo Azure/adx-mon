@@ -19,6 +19,12 @@ type PriorityQueues struct {
 // Next returns the next batch to process.  Reserved workers only process queued batches so realtime batches cannot
 // starve them.  Other workers process realtime batches before queued batches.  It returns false when ctx is done.
 func (q PriorityQueues) Next(ctx context.Context, reserved bool) (*Batch, bool) {
+	select {
+	case <-ctx.Done():
+		return nil, false
+	default:
+	}
+
 	if reserved {
 		select {
 		case <-ctx.Done():
