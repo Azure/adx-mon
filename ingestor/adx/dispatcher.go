@@ -2,6 +2,7 @@ package adx
 
 import (
 	"context"
+	"sync"
 
 	"github.com/Azure/adx-mon/ingestor/cluster"
 	"github.com/Azure/adx-mon/pkg/ingestpolicy"
@@ -74,30 +75,54 @@ func (d *dispatcher) Mgmt(ctx context.Context, query azkustodata.Statement, opti
 }
 
 func (d *dispatcher) upload(ctx context.Context) {
-	// Realtime batches are dispatched before queued batches.
-	queues := cluster.PriorityQueues{Realtime: d.realtimeQueue, Queued: d.queue}
+	// Dispatch the queues independently so a busy or congested realtime path cannot prevent queued batches from
+	// reaching uploaders with workers reserved for them.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		d.dispatch(ctx, d.realtimeQueue)
+	}()
+	go func() {
+		defer wg.Done()
+		d.dispatch(ctx, d.queue)
+	}()
+	wg.Wait()
+}
+
+func (d *dispatcher) dispatch(ctx context.Context, input <-chan *cluster.Batch) {
 	for {
-		batch, ok := queues.Next(ctx, false)
-		if !ok {
+		select {
+		case <-ctx.Done():
 			return
-		}
-
-		u, ok := d.uploaders[batch.Database]
-		if !ok {
-			logger.Errorf("No uploader for database %s", batch.Database)
-			continue
-		}
-
-		queue := u.UploadQueue()
-		if batch.Priority == ingestpolicy.PriorityRealtime {
-			queue = u.RealtimeUploadQueue()
+		default:
 		}
 
 		select {
-		case queue <- batch:
-		default:
-			batch.Release()
-			logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(queue), cap(queue))
+		case <-ctx.Done():
+			return
+		case batch := <-input:
+			d.dispatchBatch(batch)
 		}
+	}
+}
+
+func (d *dispatcher) dispatchBatch(batch *cluster.Batch) {
+	u, ok := d.uploaders[batch.Database]
+	if !ok {
+		logger.Errorf("No uploader for database %s", batch.Database)
+		return
+	}
+
+	queue := u.UploadQueue()
+	if batch.Priority == ingestpolicy.PriorityRealtime {
+		queue = u.RealtimeUploadQueue()
+	}
+
+	select {
+	case queue <- batch:
+	default:
+		batch.Release()
+		logger.Errorf("Failed to queue batch for %s. Queue is full: %d/%d", batch.Database, len(queue), cap(queue))
 	}
 }

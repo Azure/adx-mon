@@ -5,6 +5,7 @@ package adx
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,23 @@ func newTestDispatcher(t *testing.T, uploaders ...Uploader) *dispatcher {
 	go d.upload(ctx)
 	t.Cleanup(cancel)
 	return d
+}
+
+type blockedRealtimeQueueUploader struct {
+	Uploader
+	entered    chan struct{}
+	resume     chan struct{}
+	resumeOnce sync.Once
+}
+
+func (u *blockedRealtimeQueueUploader) RealtimeUploadQueue() chan *cluster.Batch {
+	close(u.entered)
+	<-u.resume
+	return u.Uploader.RealtimeUploadQueue()
+}
+
+func (u *blockedRealtimeQueueUploader) unblock() {
+	u.resumeOnce.Do(func() { close(u.resume) })
 }
 
 func TestDispatcher_RoutesByPriority(t *testing.T) {
@@ -69,31 +87,30 @@ func TestDispatcher_RoutesByDatabase(t *testing.T) {
 	require.Empty(t, b.RealtimeUploadQueue())
 }
 
-func TestDispatcher_DispatchesRealtimeFirst(t *testing.T) {
-	// Share one uploader queue so the dispatch order is observable.
-	u := NewFakeUploader("db").(*fakeUploader)
-	u.realtimeQueue = u.queue
-	d := NewDispatcher([]Uploader{u})
+func TestDispatcher_QueuedPathContinuesWhileRealtimePathIsBlocked(t *testing.T) {
+	base := NewFakeUploader("db")
+	u := &blockedRealtimeQueueUploader{
+		Uploader: base,
+		entered:  make(chan struct{}),
+		resume:   make(chan struct{}),
+	}
+	d := newTestDispatcher(t, u)
+	t.Cleanup(u.unblock)
 
-	// Fill both queues before the dispatcher starts so it must choose between them.
-	for i := 0; i < 5; i++ {
-		d.UploadQueue() <- &cluster.Batch{Database: "db"}
-		d.RealtimeUploadQueue() <- &cluster.Batch{Database: "db", Priority: ingestpolicy.PriorityRealtime}
+	realtime := &cluster.Batch{Database: "db", Priority: ingestpolicy.PriorityRealtime}
+	d.RealtimeUploadQueue() <- realtime
+	select {
+	case <-u.entered:
+	case <-time.After(time.Second):
+		t.Fatal("realtime dispatcher did not reach uploader")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.upload(ctx)
+	queued := &cluster.Batch{Database: "db", Priority: ingestpolicy.PriorityQueued}
+	d.UploadQueue() <- queued
+	require.Eventually(t, func() bool { return len(base.UploadQueue()) == 1 }, time.Second, time.Millisecond)
+	require.Same(t, queued, <-base.UploadQueue())
 
-	var got []ingestpolicy.Priority
-	for i := 0; i < 10; i++ {
-		select {
-		case b := <-u.queue:
-			got = append(got, b.Priority)
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for dispatched batches")
-		}
-	}
-	rt, q := ingestpolicy.PriorityRealtime, ingestpolicy.PriorityQueued
-	require.Equal(t, []ingestpolicy.Priority{rt, rt, rt, rt, rt, q, q, q, q, q}, got)
+	u.unblock()
+	require.Eventually(t, func() bool { return len(base.RealtimeUploadQueue()) == 1 }, time.Second, time.Millisecond)
+	require.Same(t, realtime, <-base.RealtimeUploadQueue())
 }
