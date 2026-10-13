@@ -15,8 +15,10 @@ import (
 func TestRealtimeOpts_Unset(t *testing.T) {
 	opts, percent, err := realtimeOpts(nil)
 	require.NoError(t, err)
-	require.Nil(t, opts)
-	require.Zero(t, percent)
+	require.NotNil(t, opts)
+	require.NotNil(t, opts.Policy)
+	require.False(t, opts.Policy.HasRealtime())
+	require.Equal(t, config.DefaultRealtimeQueuedReservedWorkersPercent, percent)
 }
 
 func TestRealtimeOpts_NoTables(t *testing.T) {
@@ -25,7 +27,9 @@ func TestRealtimeOpts_NoTables(t *testing.T) {
 
 	opts, percent, err := realtimeOpts(cfg.Realtime)
 	require.NoError(t, err)
-	require.Nil(t, opts)
+	require.NotNil(t, opts)
+	require.NotNil(t, opts.Policy)
+	require.False(t, opts.Policy.HasRealtime())
 	require.Equal(t, 20, percent)
 }
 
