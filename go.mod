@@ -3,11 +3,11 @@ module github.com/Azure/adx-mon
 go 1.26.0
 
 require (
-	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20260722205108-41ecbd638b41.2
-	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.12-20260722205108-41ecbd638b41.2
+	buf.build/gen/go/opentelemetry/opentelemetry/bufbuild/connect-go v1.10.0-20261002203906-f3a7b1f1162b.2
+	buf.build/gen/go/opentelemetry/opentelemetry/protocolbuffers/go v1.36.12-20261002203906-f3a7b1f1162b.2
 	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
 	github.com/Azure/azure-kusto-go/azkustoingest v1.2.0
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/kusto/armkusto v1.3.1
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources v1.2.0
@@ -28,12 +28,12 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/klauspost/pgzip v1.2.7
 	github.com/libp2p/go-buffer-pool v0.1.0
-	github.com/lmittmann/tint v1.2.0
+	github.com/lmittmann/tint v1.2.1
 	github.com/mattn/go-isatty v0.0.24
 	github.com/moby/moby/api v1.56.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7
-	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.72.0
 	github.com/shopspring/decimal v1.4.0
@@ -49,7 +49,7 @@ require (
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
 	go.uber.org/multierr v1.11.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
@@ -67,7 +67,7 @@ require (
 	cel.dev/expr v0.25.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/data/aztables v1.4.1 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.3 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue v1.0.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
@@ -139,7 +139,7 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
-	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/samber/lo v1.52.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
