@@ -347,6 +347,14 @@ func realMain(ctx *cli.Context) error {
 		liftAttributes = unionSlice(liftAttributes, cfg.OtelLog.LiftAttributes)
 	}
 
+	realtime, queuedReservedWorkersPercent, err := realtimeOpts(cfg.Realtime)
+	if err != nil {
+		return err
+	}
+	if realtime.Policy.HasRealtime() {
+		logger.Infof("Realtime ingestion configured for tables: %v", realtime.Policy.RealtimeTables())
+	}
+
 	opts := &collector.ServiceOpts{
 		EnablePprof:            cfg.EnablePprof,
 		Scraper:                scraperOpts,
@@ -374,6 +382,9 @@ func realMain(ctx *cli.Context) error {
 		WALFlushInterval:       time.Duration(cfg.WALFlushIntervalMilliSeconds) * time.Millisecond,
 		Region:                 cfg.Region,
 		StorageDir:             cfg.StorageDir,
+
+		Realtime:                     realtime,
+		QueuedReservedWorkersPercent: queuedReservedWorkersPercent,
 	}
 
 	for _, v := range cfg.PrometheusRemoteWrite {
@@ -645,6 +656,10 @@ func realMain(ctx *cli.Context) error {
 
 	for _, v := range cfg.HostLog {
 		tailSourceConfig := tail.TailSourceConfig{}
+		if realtime.Policy.HasRealtime() {
+			tailSourceConfig.RealtimePolicy = realtime.Policy
+			tailSourceConfig.RealtimeBatchWait = realtime.LogBatchWait
+		}
 		if !v.DisableKubeDiscovery {
 			informer, err = getInformer(ctx.Context, &cfg, hostname, informer)
 			if err != nil {

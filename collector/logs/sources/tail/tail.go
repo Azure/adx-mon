@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs/engine"
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/types"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 )
 
@@ -56,9 +58,11 @@ type FileTailTarget struct {
 
 // TailSourceConfig configures TailSource.
 type TailSourceConfig struct {
-	StaticTargets   []FileTailTarget
-	CursorDirectory string
-	WorkerCreator   engine.WorkerCreatorFunc
+	StaticTargets     []FileTailTarget
+	CursorDirectory   string
+	WorkerCreator     engine.WorkerCreatorFunc
+	RealtimePolicy    *ingestpolicy.Policy
+	RealtimeBatchWait time.Duration
 	// TODO mkeesey - TailSource should not need to manage poddiscovery service lifecycle.
 	// However, creation of TailSource happens with a create method to access store, making this
 	// wiring difficult.
@@ -67,9 +71,11 @@ type TailSourceConfig struct {
 
 // TailSource implements the types.Source interface for tailing files.
 type TailSource struct {
-	staticTargets   []FileTailTarget
-	cursorDirectory string
-	workerCreator   engine.WorkerCreatorFunc
+	staticTargets     []FileTailTarget
+	cursorDirectory   string
+	workerCreator     engine.WorkerCreatorFunc
+	realtimePolicy    *ingestpolicy.Policy
+	realtimeBatchWait time.Duration
 
 	ackGenerator func(*types.Log) func()
 	tailers      map[string]*Tailer
@@ -81,9 +87,11 @@ type TailSource struct {
 
 func NewTailSource(config TailSourceConfig) (*TailSource, error) {
 	ts := &TailSource{
-		staticTargets:   config.StaticTargets,
-		cursorDirectory: config.CursorDirectory,
-		workerCreator:   config.WorkerCreator,
+		staticTargets:     config.StaticTargets,
+		cursorDirectory:   config.CursorDirectory,
+		workerCreator:     config.WorkerCreator,
+		realtimePolicy:    config.RealtimePolicy,
+		realtimeBatchWait: config.RealtimeBatchWait,
 	}
 
 	if config.PodDiscoveryOpts != nil {
@@ -172,12 +180,14 @@ func (s *TailSource) AddTarget(target FileTailTarget, updateChan <-chan FileTail
 	}
 
 	tailerConfig := TailerConfig{
-		Target:          target,
-		UpdateChan:      updateChan,
-		AckGenerator:    s.ackGenerator,
-		WorkerCreator:   s.workerCreator,
-		CursorDirectory: s.cursorDirectory,
-		WorkerName:      s.Name(),
+		Target:            target,
+		UpdateChan:        updateChan,
+		AckGenerator:      s.ackGenerator,
+		WorkerCreator:     s.workerCreator,
+		RealtimePolicy:    s.realtimePolicy,
+		RealtimeBatchWait: s.realtimeBatchWait,
+		CursorDirectory:   s.cursorDirectory,
+		WorkerName:        s.Name(),
 	}
 
 	tailer, err := StartTailing(tailerConfig)

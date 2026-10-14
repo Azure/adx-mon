@@ -6,6 +6,8 @@
 *.dylib
 dist/
 bin/
+.adx-mon-test-env/
+__pycache__/
 
 # Test binary, built with `go test -c`
 *.test

@@ -124,6 +124,7 @@ type Config struct {
 	Exporters             *Exporters               `toml:"exporters,omitempty" comment:"Optional configuration for exporting telemetry outside of adx-mon in parallel with sending to ADX.\nExporters are declared here and referenced by name in each collection source."`
 	MetadataWatch         *MetadataWatch           `toml:"metadata-watch,omitempty" comment:"Optional configuration for watching dynamic metadata to add to logs and metrics."`
 	AddMetadataLabels     *AddMetadataLabels       `toml:"add-metadata-labels,omitempty" comment:"Optional global configuration for adding dynamic metadata as labels to all logs and metrics."`
+	Realtime              *Realtime                `toml:"realtime,omitempty" comment:"Optional configuration for realtime ingestion of selected tables.\nRealtime tables are rotated and transferred ahead of queued tables and the ingestor uploads them with streaming ingestion."`
 }
 
 type PrometheusScrape struct {
@@ -775,6 +776,20 @@ func (c *Config) Validate() error {
 		c.WALFlushIntervalMilliSeconds = DefaultConfig.WALFlushIntervalMilliSeconds
 	} else if c.WALFlushIntervalMilliSeconds < 0 {
 		return errors.New("wal-flush-interval must be greater than 0")
+	}
+
+	if c.Realtime != nil {
+		if c.StorageBackend != string(storage.BackendADX) {
+			return fmt.Errorf("realtime is only supported with storage-backend %q", storage.BackendADX)
+		}
+
+		maxDiskUsage := c.MaxDiskUsage
+		if maxDiskUsage <= 0 {
+			maxDiskUsage = DefaultMaxDiskUsage
+		}
+		if err := c.Realtime.Validate(maxDiskUsage); err != nil {
+			return err
+		}
 	}
 
 	return nil

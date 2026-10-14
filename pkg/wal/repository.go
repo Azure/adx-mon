@@ -13,6 +13,7 @@ import (
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/partmap"
 	"golang.org/x/sync/errgroup"
@@ -25,6 +26,9 @@ type Repository struct {
 	index *Index
 
 	wals *partmap.Map[*WAL]
+
+	// scheduler rotates segments of all WALs in the repository.
+	scheduler *rotationScheduler
 
 	// Total size of all wals in the repository.  This is updated
 	// lazily in the background.
@@ -41,14 +45,42 @@ type RepositoryOpts struct {
 	MaxSegmentCount  int
 	WALFlushInterval time.Duration
 	EnableWALFsync   bool
+
+	// Policy assigns an ingestion priority to each WAL prefix.  When nil, all WALs are queued.
+	Policy *ingestpolicy.Policy
+
+	// Realtime overrides the segment rotation settings for realtime WALs.
+	Realtime RotationPolicy
+
+	// RealtimeReservedDiskBytes is disk space reserved for realtime WALs.  Queued WALs reject writes once total disk
+	// usage reaches MaxDiskUsage minus this value.  It only applies when Policy has realtime tables and is less than
+	// MaxDiskUsage.
+	RealtimeReservedDiskBytes int64
+}
+
+// RotationPolicy overrides segment rotation settings.  Zero values inherit the repository settings.
+type RotationPolicy struct {
+	SegmentMaxAge    time.Duration
+	SegmentMaxSize   int64
+	WALFlushInterval time.Duration
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
-	return &Repository{
+	r := &Repository{
 		opts:  opts,
 		index: NewIndex(),
 		wals:  partmap.NewMap[*WAL](64),
 	}
+	r.scheduler = newRotationScheduler(defaultRotationSweepInterval, r.sweepRotations)
+	return r
+}
+
+// sweepRotations rotates any WAL segments that require it.
+func (s *Repository) sweepRotations() {
+	_ = s.wals.Each(func(key string, value *WAL) error {
+		value.rotateSegmentIfNecessary()
+		return nil
+	})
 }
 
 func (s *Repository) Open(ctx context.Context) error {
@@ -90,6 +122,8 @@ func (s *Repository) Open(ctx context.Context) error {
 			walPaths = append(walPaths, path)
 		}
 	}
+
+	s.scheduler.Open(context.Background())
 
 	if err := s.openStartupSegments(ctx, walPaths); err != nil {
 		return err
@@ -208,6 +242,7 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		Path:      path,
 		Size:      fi.Size(),
 		CreatedAt: createdAt,
+		Priority:  s.priority(prefix),
 	}
 	s.index.Add(info)
 
@@ -221,6 +256,9 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 }
 
 func (s *Repository) Close() error {
+	// Stop background rotations before closing WALs so segments are not rotated while shutting down.
+	s.scheduler.Close()
+
 	if err := s.wals.Each(func(key string, value *WAL) error {
 		wal := value
 		return wal.Close()
@@ -232,16 +270,7 @@ func (s *Repository) Close() error {
 }
 
 func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
-	walOpts := WALOpts{
-		Prefix:           prefix,
-		StorageDir:       s.opts.StorageDir,
-		SegmentMaxSize:   s.opts.SegmentMaxSize,
-		SegmentMaxAge:    s.opts.SegmentMaxAge,
-		MaxDiskUsage:     s.opts.MaxDiskUsage,
-		Index:            s.index,
-		WALFlushInterval: s.opts.WALFlushInterval,
-		EnableWALFsync:   s.opts.EnableWALFsync,
-	}
+	walOpts := s.walOpts(prefix)
 
 	wal, err := NewWAL(walOpts)
 	if err != nil {
@@ -253,6 +282,59 @@ func (s *Repository) newWAL(ctx context.Context, prefix string) (*WAL, error) {
 	}
 
 	return wal, nil
+}
+
+// walOpts returns the options for the WAL with the given prefix based on its ingestion priority.
+func (s *Repository) walOpts(prefix string) WALOpts {
+	opts := WALOpts{
+		Prefix:           prefix,
+		StorageDir:       s.opts.StorageDir,
+		SegmentMaxSize:   s.opts.SegmentMaxSize,
+		SegmentMaxAge:    s.opts.SegmentMaxAge,
+		Index:            s.index,
+		WALFlushInterval: s.opts.WALFlushInterval,
+		EnableWALFsync:   s.opts.EnableWALFsync,
+		scheduler:        s.scheduler,
+	}
+
+	opts.Priority = s.priority(prefix)
+	opts.MaxDiskUsage = s.MaxDiskUsage(opts.Priority)
+	if opts.Priority == ingestpolicy.PriorityRealtime {
+		rt := s.opts.Realtime
+		if rt.SegmentMaxAge > 0 {
+			opts.SegmentMaxAge = rt.SegmentMaxAge
+		}
+		if rt.SegmentMaxSize > 0 {
+			opts.SegmentMaxSize = rt.SegmentMaxSize
+		}
+		if rt.WALFlushInterval > 0 {
+			opts.WALFlushInterval = rt.WALFlushInterval
+		}
+	}
+	return opts
+}
+
+// MaxDiskUsage returns the total disk usage at which writes with the given priority are rejected.  Queued writes are
+// limited to MaxDiskUsage minus the realtime reservation so realtime writes can continue when queued data backs up.
+// A value of 0 means no limit.
+func (s *Repository) MaxDiskUsage(p ingestpolicy.Priority) int64 {
+	max, reserved := s.opts.MaxDiskUsage, s.opts.RealtimeReservedDiskBytes
+	if p == ingestpolicy.PriorityRealtime || max <= 0 || reserved <= 0 || reserved >= max || !s.opts.Policy.HasRealtime() {
+		return max
+	}
+	return max - reserved
+}
+
+// priority returns the ingestion priority of the WAL prefix.
+func (s *Repository) priority(prefix string) ingestpolicy.Priority {
+	if !s.opts.Policy.HasRealtime() {
+		return ingestpolicy.PriorityQueued
+	}
+	database, table, err := ParsePrefix(prefix)
+	if err != nil {
+		return ingestpolicy.PriorityQueued
+	}
+	return s.opts.Policy.Priority(database, table)
 }
 
 func (s *Repository) Get(ctx context.Context, key []byte) (*WAL, error) {

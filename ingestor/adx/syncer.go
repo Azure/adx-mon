@@ -43,6 +43,10 @@ type Syncer struct {
 
 	tables map[string]struct{}
 
+	// streamingMu serializes enabling streaming ingestion policies.  streamingPolicies records the result per table.
+	streamingMu       sync.Mutex
+	streamingPolicies map[string]streamingPolicyState
+
 	defaultMapping schema.SchemaMapping
 	cancelFn       context.CancelFunc
 	wg             sync.WaitGroup
@@ -65,11 +69,12 @@ func NewSyncer(kustoCli mgmt, database string, defaultMapping schema.SchemaMappi
 	return &Syncer{
 		KustoCli: kustoCli,
 
-		database:       database,
-		defaultMapping: defaultMapping,
-		mappings:       make(map[string]schema.SchemaMapping),
-		st:             st,
-		tables:         make(map[string]struct{}),
+		database:          database,
+		defaultMapping:    defaultMapping,
+		mappings:          make(map[string]schema.SchemaMapping),
+		st:                st,
+		tables:            make(map[string]struct{}),
+		streamingPolicies: make(map[string]streamingPolicyState),
 	}
 }
 
@@ -177,6 +182,44 @@ func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 	s.tables[table] = struct{}{}
 	s.mu.Unlock()
 
+	return nil
+}
+
+// streamingPolicyRetryInterval is how long a failure to enable a table's streaming ingestion policy is cached before
+// it is retried.
+const streamingPolicyRetryInterval = 10 * time.Minute
+
+type streamingPolicyState struct {
+	enabled bool
+	err     error
+	retryAt time.Time
+}
+
+// EnsureStreamingPolicy enables the streaming ingestion policy on table if it has not been enabled by this syncer.
+// Failures are cached for streamingPolicyRetryInterval so a missing permission does not issue a management command
+// for every batch.  A failure does not necessarily prevent streaming ingestion since the policy may be enabled at the
+// database level.
+func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error {
+	s.streamingMu.Lock()
+	defer s.streamingMu.Unlock()
+
+	state := s.streamingPolicies[table]
+	if state.enabled {
+		return nil
+	}
+	if state.err != nil && time.Now().Before(state.retryAt) {
+		return state.err
+	}
+
+	stmt := kql.New(".alter table ").AddTable(table).AddLiteral(" policy streamingingestion enable")
+	if _, err := s.KustoCli.Mgmt(ctx, s.database, stmt); err != nil {
+		err = fmt.Errorf("enable streaming ingestion policy for %s.%s: %w", s.database, table, err)
+		s.streamingPolicies[table] = streamingPolicyState{err: err, retryAt: time.Now().Add(streamingPolicyRetryInterval)}
+		return err
+	}
+
+	logger.Infof("Enabled streaming ingestion policy for %s.%s", s.database, table)
+	s.streamingPolicies[table] = streamingPolicyState{enabled: true}
 	return nil
 }
 
