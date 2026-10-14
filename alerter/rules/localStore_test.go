@@ -3,6 +3,7 @@ package rules
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -245,6 +246,42 @@ spec:
   autoMitigateAfter: 2h
   destination: "peoplewhocare"
 `
+
+func TestFromStream_IntervalValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		interval  string
+		expectErr bool
+	}{
+		{name: "omitted", expectErr: true},
+		{name: "empty", interval: `""`, expectErr: true},
+		{name: "zero", interval: "0s", expectErr: true},
+		{name: "negative", interval: "-5m", expectErr: true},
+		{name: "below minimum", interval: "29s", expectErr: true},
+		{name: "at minimum", interval: "30s"},
+		{name: "above minimum", interval: "5m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intervalLine := ""
+			if tc.interval != "" {
+				intervalLine = "  interval: " + tc.interval + "\n"
+			}
+			rule := "apiVersion: adx-mon.azure.com/v1\nkind: AlertRule\nmetadata:\n  name: interval-rule\n  namespace: foo\nspec:\n  database: SomeDB\n" +
+				intervalLine + "  query: BadThings\n  destination: peoplewhocare\n"
+
+			store := &fileStore{}
+			err := store.fromStream(strings.NewReader(rule), "eastus")
+			if tc.expectErr {
+				require.ErrorContains(t, err, "foo/interval-rule")
+				require.ErrorContains(t, err, "must be at least 30s")
+				require.Empty(t, store.rules)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, store.rules, 1)
+		})
+	}
+}
 
 func TestFromPath(t *testing.T) {
 	validFileDirectory := t.TempDir()

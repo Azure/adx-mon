@@ -79,8 +79,8 @@ spec:
               interval:
                 type: string
                 x-kubernetes-validations:
-                - message: interval must be a valid positive duration
-                  rule: self != '' && duration(self) > duration('0s')
+                - message: interval must be a duration of at least 30s
+                  rule: self != '' && duration(self) >= duration('30s')
               query:
                 type: string
             required:
