@@ -74,6 +74,10 @@ func (s *Store) Rules() []*Rule {
 }
 
 func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
+	if err := validateInterval(r.Spec.Interval.Duration); err != nil {
+		return nil, fmt.Errorf("alert rule %s/%s: %w", r.Namespace, r.Name, err)
+	}
+
 	rule := &Rule{
 		Version:            fmt.Sprintf("%d", r.Generation),
 		Database:           r.Spec.Database,
@@ -97,6 +101,13 @@ func toRule(r alertrulev1.AlertRule, region string) (*Rule, error) {
 	return rule, nil
 }
 
+func validateInterval(interval time.Duration) error {
+	if interval < alertrulev1.MinAlertRuleInterval {
+		return fmt.Errorf("interval %s must be at least %s", interval, alertrulev1.MinAlertRuleInterval)
+	}
+	return nil
+}
+
 func (s *Store) reloadRules() ([]*Rule, error) {
 	ctx, cancel := context.WithTimeout(s.ctx, 1*time.Minute)
 	defer cancel()
@@ -110,7 +121,8 @@ func (s *Store) reloadRules() ([]*Rule, error) {
 	for _, r := range ruleList.Items {
 		rule, err := toRule(r, s.opts.Region)
 		if err != nil {
-			return nil, err
+			logger.Errorf("Skipping invalid AlertRule: %v", err)
+			continue
 		}
 		rules = append(rules, rule)
 	}

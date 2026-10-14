@@ -26,6 +26,10 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// MinAlertRuleInterval is the shortest interval an AlertRule may run at. Keep it
+// in sync with the validation rule on AlertRuleSpec.Interval.
+const MinAlertRuleInterval = 30 * time.Second
+
 // AlertRuleSpec defines the desired state of AlertRule
 type AlertRuleSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -33,7 +37,7 @@ type AlertRuleSpec struct {
 
 	Database string `json:"database,omitempty"`
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self != '' && duration(self) > duration('0s')",message="interval must be a valid positive duration"
+	// +kubebuilder:validation:XValidation:rule="self != '' && duration(self) >= duration('30s')",message="interval must be a duration of at least 30s"
 	Interval metav1.Duration `json:"interval,omitempty"`
 	Query    string          `json:"query,omitempty"`
 	// +kubebuilder:validation:XValidation:rule="self == '' || duration(self) >= duration('0s')",message="autoMitigateAfter must be a valid duration"
