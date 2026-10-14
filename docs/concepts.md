@@ -674,7 +674,7 @@ spec:
 All must have the following fields:
 
 * `database` - The ADX database to execute the query.
-* `interval` - The interval at which the query should be executed.
+* `interval` - The interval at which the query should be executed. Must be a positive duration, such as `5m`.
 * `query` - The KQL query to execute.
 * `destination` - The destination to send the alert to.  This is provider specific.
 
