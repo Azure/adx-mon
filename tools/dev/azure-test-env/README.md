@@ -55,7 +55,27 @@ tools/dev/azure-test-env/test.sh run --resource-group adxmon-e2e-jw
 # Or run just one phase after a fix:
 tools/dev/azure-test-env/test.sh baseline --resource-group adxmon-e2e-jw
 tools/dev/azure-test-env/test.sh realtime --resource-group adxmon-e2e-jw
+tools/dev/azure-test-env/test.sh isolation --resource-group adxmon-e2e-jw
 ```
+
+### Table isolation phase
+
+`isolation` verifies that starving one table only affects that table. It
+deploys the ingestor with `--enforce-table-limits` and a deliberately tiny
+`--table-limit` for `Logs.E2eOtlpLogs`, then sends the usual numbered samples
+through every path and requires that:
+
+* the starved table reports `adxmon_table_backlog_throttled` or
+  `adxmon_table_quota_rejected_records_total`, proving the budget engaged;
+* every other path still reaches Kusto, and none of them is throttled;
+* the ingestor pod stays Ready while one table is over budget;
+* no unexpected component log errors appear. Shedding is logged at warning
+  level and is not counted as an error.
+
+The starved table is expected to be missing from Kusto, so `report` does not
+fail the run for it; a missing **healthy** path still fails. Results follow the
+same layout as the other phases and add a per-table budget table to
+`report.md`.
 
 To A/B test pod-tail latency using the **same newly built image tag**, first
 run `test.sh realtime --resource-group ... --realtime-log-batch-wait-ms 1000`

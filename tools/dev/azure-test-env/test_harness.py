@@ -272,5 +272,105 @@ class HarnessTest(unittest.TestCase):
                 self.assertFalse(harness.report(Path(tmp)))
 
 
+class IsolationTest(unittest.TestCase):
+    """Offline coverage for the table isolation phase."""
+
+    def rendered(self, limits):
+        commands = []
+        with patch.object(harness, "run", side_effect=lambda *a, **kw: commands.append((a, kw))), \
+             patch.object(harness, "output", return_value=json.dumps({"subsets": [{"addresses": [{"ip": "10.0.0.1"}]}]})):
+            harness.deploy(STATE, "sha-run", False, table_limits=limits)
+        return [kw["input"] for a, kw in commands if a[-2:] == ("-f", "-")][0]
+
+    def test_table_limit_flags_are_rendered_for_the_ingestor(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        ingestor = self.rendered(((db, table, 4096),))
+        self.assertIn("--enforce-table-limits", ingestor)
+        self.assertIn(f'--table-limit={{"database": "{db}", "table": "{table}", "max-bytes": 4096}}', ingestor)
+
+    def test_no_table_limits_are_rendered_by_default(self):
+        self.assertNotIn("--enforce-table-limits", self.rendered(()))
+
+    def test_budgets_parse_throttled_and_rejected_series(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        text = "\n".join([
+            "# HELP adxmon_table_backlog_throttled Currently over budget.",
+            f'adxmon_table_backlog_throttled{{component="ingestor",database="{db}",table="{table}"}} 1',
+            f'adxmon_table_backlog_throttled{{component="ingestor",database="Logs",table="E2ePodLogs"}} 0',
+            f'adxmon_table_quota_rejected_records_total{{component="ingestor",kind="logs",reason="bytes",database="{db}",table="{table}"}} 17',
+        ])
+        budgets = harness.table_budgets(text)
+        self.assertEqual(budgets[(db, table)], {"throttled": 1.0, "rejected": 17.0})
+        self.assertEqual(budgets[("Logs", "E2ePodLogs")]["throttled"], 0.0)
+
+    def observed(self, healthy_visible=True):
+        rows = {path: {"1": {"rows": 1, "first_visible_ms": 1000}} for path in harness.ISOLATION_HEALTHY}
+        if not healthy_visible:
+            rows[harness.ISOLATION_HEALTHY[0]] = {"1": {"rows": 0}}
+        rows[harness.ISOLATION_NOISY] = {"1": {"rows": 0}}
+        return rows
+
+    def test_starving_one_table_while_others_flow_passes(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        errors = harness.validate_isolation(self.observed(), {(db, table): {"throttled": 1.0, "rejected": 9.0}},
+                                            True, harness.ISOLATION_NOISY, harness.ISOLATION_HEALTHY)
+        self.assertEqual(errors, [])
+
+    def test_budget_that_never_engages_fails(self):
+        errors = harness.validate_isolation(self.observed(), {}, True,
+                                            harness.ISOLATION_NOISY, harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("never throttled" in e for e in errors), errors)
+
+    def test_collateral_damage_to_a_neighbour_fails(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        hdb, htable = harness.TABLES[harness.ISOLATION_HEALTHY[0]]
+        errors = harness.validate_isolation(self.observed(healthy_visible=False),
+                                            {(db, table): {"throttled": 1.0, "rejected": 1.0},
+                                             (hdb, htable): {"throttled": 1.0, "rejected": 0.0}},
+                                            True, harness.ISOLATION_NOISY, harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("throttled by its neighbour" in e for e in errors), errors)
+        self.assertTrue(any("delivered no rows" in e for e in errors), errors)
+
+    def test_unready_ingestor_fails(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        errors = harness.validate_isolation(self.observed(), {(db, table): {"throttled": 1.0, "rejected": 1.0}},
+                                            False, harness.ISOLATION_NOISY, harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("unready" in e for e in errors), errors)
+
+    def test_report_tolerates_the_intentionally_starved_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "result.json"
+            observed = {key: {"1": {"rows": 1, "first_visible_ms": 1000000001000}} for key in harness.TABLES}
+            observed[harness.ISOLATION_NOISY] = {"1": {"rows": 0}}
+            path.write_text(json.dumps({"mode": "isolation", "run_id": "test", "git_commit": "sha",
+                "signals": [{"seq": 1, "emitted_ms": 1000000000000}], "observed": observed,
+                "expected_missing": [harness.ISOLATION_NOISY], "log_errors": [],
+                "table_budgets": {"Logs.E2eOtlpLogs": {"throttled": 1.0, "rejected": 5.0}},
+                "ingestor_ready": True}))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertTrue(harness.report(path))
+            self.assertIn("Ingestor ready while throttled: True", out.getvalue())
+
+    def test_report_still_fails_when_a_healthy_table_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "result.json"
+            observed = {key: {"1": {"rows": 1, "first_visible_ms": 1000000001000}} for key in harness.TABLES}
+            observed[harness.ISOLATION_NOISY] = {"1": {"rows": 0}}
+            observed[harness.ISOLATION_HEALTHY[0]] = {"1": {"rows": 0}}
+            path.write_text(json.dumps({"mode": "isolation", "run_id": "test", "git_commit": "sha",
+                "signals": [{"seq": 1, "emitted_ms": 1000000000000}], "observed": observed,
+                "expected_missing": [harness.ISOLATION_NOISY], "log_errors": []}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(harness.report(path))
+
+    def test_poll_and_warmup_can_be_limited_to_healthy_paths(self):
+        seen = []
+        with patch.object(harness, "rows_for", side_effect=lambda _s, path, _r: seen.append(path) or {1: 1}):
+            harness.poll(STATE, "run", [{"seq": 1}], time.monotonic() + 5,
+                         {path: {} for path in harness.TABLES}, paths=harness.ISOLATION_HEALTHY)
+        self.assertNotIn(harness.ISOLATION_NOISY, seen)
+        self.assertEqual(set(seen), set(harness.ISOLATION_HEALTHY))
+
+
 if __name__ == "__main__":
     unittest.main()
