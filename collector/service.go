@@ -119,7 +119,12 @@ type ServiceOpts struct {
 	MaxDiskUsage int64
 
 	// MaxSegmentCount is the maximum number of segments files allowed on disk before signaling back-pressure.
-	MaxSegmentCount int64
+	MaxSegmentCount      int64
+	MaxTableDiskUsage    int64
+	MaxTableSegmentCount int64
+	DisableTableLimits   bool
+	EnforceTableLimits   bool
+	TableLimits          []wal.TableLimit
 
 	// StorageDir is the directory where the WAL will be stored
 	StorageDir string
@@ -312,11 +317,18 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		MaxDiskUsage:     maxDiskUsage,
 	})
 
+	budgetOpts, err := wal.ResolveAdmissionWithEnforcement(wal.Usage{Bytes: maxDiskUsage, Segments: maxSegmentCount}, opts.MaxTableDiskUsage, opts.MaxTableSegmentCount, opts.DisableTableLimits, opts.EnforceTableLimits, opts.TableLimits)
+	if err != nil {
+		return nil, err
+	}
+
 	storeOpts := storage.StoreOpts{
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
 		MaxDiskUsage:     maxDiskUsage,
+		Admission:        wal.NewAdmission(budgetOpts),
+		MetricComponent:  "collector",
 		Backend:          backend,
 		LiftedLabels:     opts.LiftLabels,
 		LiftedAttributes: opts.LiftAttributes,
@@ -439,6 +451,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		Segmenter:               store.Index(),
 		MinUploadSize:           4 * 1024 * 1024,
 		MaxBatchSegments:        opts.MaxBatchSegments,
+		MaxTableBatches:         max(10, opts.MaxTransferConcurrency*2),
 		UploadQueue:             transferQueue,
 		TransferQueue:           transferQueue,
 		RealtimeUploadQueue:     realtimeTransferQueue,
@@ -455,7 +468,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		return nil, fmt.Errorf("failed to create batcher: %w", err)
 	}
 
-	health.QueueSizer = batcher
+	health.QueueSizer = &storeQueueSizer{Batcher: batcher, store: store}
 
 	var scraper *Scraper
 	if opts.Scraper != nil {
@@ -506,6 +519,14 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 
 	return svc, nil
 }
+
+type storeQueueSizer struct {
+	cluster.Batcher
+	store *storage.LocalStore
+}
+
+func (s *storeQueueSizer) SegmentsSize() int64  { return s.store.Size() }
+func (s *storeQueueSizer) SegmentsTotal() int64 { return s.store.SegmentCount() }
 
 func (s *Service) Open(ctx context.Context) error {
 	ctx, s.cancel = context.WithCancel(ctx)
