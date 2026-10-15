@@ -14,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
 )
 
@@ -112,6 +113,8 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 	if !t.healthChecker.IsHealthy() {
 		return errors.New("Overloaded. Retry later")
 	}
+	tracker := &pointTracker{}
+	ctx = context.WithValue(ctx, pointTrackerKey{}, tracker)
 
 	// Causes allocation. Like in prom remote receiver, create rather than using a bunch of space in pool.
 	wr := prompb.WriteRequestPool.Get()
@@ -157,9 +160,10 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 		return fmt.Errorf("OTLP Write flush failure: %w", err)
 	}
 
+	rejectedRecordsExpHist += int64(len(tracker.rejected))
 	if rejectedRecordsExpHist > 0 {
 		return &ErrRejectedMetric{
-			Msg:   fmt.Sprintf("rejected %d records of unsupported type ExponentialHistogram", rejectedRecordsExpHist),
+			Msg:   fmt.Sprintf("rejected %d data points: unsupported type or table quota", rejectedRecordsExpHist),
 			Count: rejectedRecordsExpHist,
 		}
 	}
@@ -168,6 +172,11 @@ func (t *OltpMetricWriter) Write(ctx context.Context, msg *v1.ExportMetricsServi
 }
 
 func (t *OltpMetricWriter) addSeriesAndFlushIfNecessary(ctx context.Context, wr *prompb.WriteRequest, series *prompb.TimeSeries) error {
+	if tracker, ok := ctx.Value(pointTrackerKey{}).(*pointTracker); ok {
+		// A parallel slice keyed by position, so the common path costs an
+		// append rather than a map insert per data point.
+		tracker.points = append(tracker.points, tracker.current)
+	}
 	prompb.Sort(series.Labels)
 	wr.Timeseries = append(wr.Timeseries, series)
 	if len(wr.Timeseries) >= t.maxBatchSize {
@@ -186,7 +195,13 @@ func (t *OltpMetricWriter) flushBatch(ctx context.Context, wr *prompb.WriteReque
 
 	original := append([]*prompb.TimeSeries(nil), wr.Timeseries...)
 	filtered := t.requestTransformer.TransformWriteRequestWithCommonLabels(wr)
-	err := t.sendBatch(ctx, filtered)
+	outcome, err := t.sendBatch(ctx, filtered)
+
+	if tracker, ok := ctx.Value(pointTrackerKey{}).(*pointTracker); ok {
+		tracker.recordRejected(original, outcome.RejectedSeries)
+		tracker.points = tracker.points[:0]
+	}
+
 	for _, ts := range original {
 		prompb.TimeSeriesPool.Put(ts)
 	}
@@ -197,9 +212,9 @@ func (t *OltpMetricWriter) flushBatch(ctx context.Context, wr *prompb.WriteReque
 	return err
 }
 
-func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error {
+func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteRequest) (storage.WriteOutcome, error) {
 	if len(wr.Timeseries) == 0 {
-		return nil
+		return storage.WriteOutcome{}, nil
 	}
 
 	if len(t.remoteClients) == 0 || logger.IsDebug() {
@@ -224,7 +239,7 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 	}
 
 	if t.disableMetricsForwarding {
-		return nil
+		return storage.WriteOutcome{}, nil
 	}
 
 	start := time.Now()
@@ -232,15 +247,16 @@ func (t *OltpMetricWriter) sendBatch(ctx context.Context, wr *prompb.WriteReques
 		logger.Infof("OTLP Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(t.remoteClients), time.Since(start))
 	}()
 
-	err := remote.WriteRequest(ctx, t.remoteClients, wr)
+	outcome, err := storage.SplitOutcome(remote.WriteRequest(ctx, t.remoteClients, wr))
 	if err != nil {
-		return writeErr(err)
+		return outcome, writeErr(err)
 	}
-	return nil
+	return outcome, nil
 }
 
 func (t *OltpMetricWriter) addOltpNumberPoints(ctx context.Context, name string, points []*metricsv1.NumberDataPoint, wr *prompb.WriteRequest) error {
 	for _, point := range points {
+		beginPoint(ctx)
 		series := newSeries(name, point.Attributes)
 		series.Samples = []*prompb.Sample{
 			{
@@ -257,6 +273,7 @@ func (t *OltpMetricWriter) addOltpNumberPoints(ctx context.Context, name string,
 
 func (t *OltpMetricWriter) addOltpHistogramPoints(ctx context.Context, name string, points []*metricsv1.HistogramDataPoint, wr *prompb.WriteRequest) error {
 	for _, point := range points {
+		beginPoint(ctx)
 		timestamp := unixNanoToUnixMillis(point.TimeUnixNano)
 
 		// Add count series
@@ -397,6 +414,7 @@ func (t *OltpMetricWriter) addOltpExpHistogramPoints(ctx context.Context, name s
 
 func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string, points []*metricsv1.SummaryDataPoint, wr *prompb.WriteRequest) error {
 	for _, point := range points {
+		beginPoint(ctx)
 		timestamp := unixNanoToUnixMillis(point.TimeUnixNano)
 
 		// Add count series
@@ -433,6 +451,44 @@ func (t *OltpMetricWriter) addOltpSummaryPoints(ctx context.Context, name string
 		}
 	}
 	return nil
+}
+
+type pointTrackerKey struct{}
+
+// pointTracker maps emitted series back to the originating OTLP data point so
+// shedding is reported in the producer's units. Histogram and summary points
+// expand into several series, which must not be counted more than once.
+//
+// The common path only appends to points; the rejected set is allocated lazily
+// because most requests shed nothing.
+type pointTracker struct {
+	points   []int
+	rejected map[int]struct{}
+	current  int
+}
+
+func (t *pointTracker) recordRejected(sent []*prompb.TimeSeries, rejected []*prompb.TimeSeries) {
+	if len(rejected) == 0 {
+		return
+	}
+	for _, series := range rejected {
+		for i, candidate := range sent {
+			if candidate != series || i >= len(t.points) {
+				continue
+			}
+			if t.rejected == nil {
+				t.rejected = make(map[int]struct{})
+			}
+			t.rejected[t.points[i]] = struct{}{}
+			break
+		}
+	}
+}
+
+func beginPoint(ctx context.Context) {
+	if tracker, ok := ctx.Value(pointTrackerKey{}).(*pointTracker); ok {
+		tracker.current++
+	}
 }
 
 func newSeries(name string, attributes []*commonv1.KeyValue) *prompb.TimeSeries {
