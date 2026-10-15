@@ -41,13 +41,20 @@ import (
 	"github.com/Azure/adx-mon/pkg/service"
 	adxtls "github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/azure-kusto-go/azkustodata"
 )
 
 func main() {
-	app := &cli.App{
+	if err := newApp().Run(os.Args); err != nil {
+		logger.Fatal(err.Error())
+	}
+}
+
+func newApp() *cli.App {
+	return &cli.App{
 		Name:  "ingestor",
 		Usage: "adx-mon metrics ingestor",
 		Flags: append([]cli.Flag{
@@ -67,6 +74,12 @@ func main() {
 			&cli.Int64Flag{Name: "max-transfer-size", Usage: "Maximum segment size in bytes allowed for segment transfers", Value: 100 * 1024 * 1024},
 			&cli.Int64Flag{Name: "max-disk-usage", Usage: "Maximum disk space usage allowed before signaling back-pressure", Value: 10 * 1024 * 1024 * 1024},
 			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
+			&cli.Int64Flag{Name: "max-table-disk-usage", Usage: "Maximum WAL bytes per table; zero defaults to 10% of max-disk-usage"},
+			&cli.Int64Flag{Name: "max-table-segment-count", Usage: "Maximum active and closed files per table; zero defaults to 10% of max-segment-count"},
+			&cli.BoolFlag{Name: "disable-table-limits", Usage: "Disable default table quotas; explicit overrides still apply"},
+			&cli.Int64Flag{Name: "max-intake-memory", Usage: "Maximum bytes buffered across concurrent transfer requests. 0 disables the ceiling", Value: 1024 * 1024 * 1024},
+			&cli.BoolFlag{Name: "enforce-table-limits", Usage: "Reject writes that exceed a table budget. When unset, budgets are only measured and reported"},
+			&cli.GenericFlag{Name: "table-limit", Value: &tableLimitValues{}, Usage: "Repeatable normalized table override as JSON: {\"database\":\"Logs\",\"table\":\"App\",\"max-bytes\":1073741824,\"max-segments\":1000}"},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
 			&cli.StringSliceFlag{Name: "drop-prefix", Usage: "Drop transfers that match the file prefix. Transfer filenames are in the form of DestinationDB_Table_..."},
@@ -88,9 +101,6 @@ func main() {
 		Version: version.String(),
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		logger.Fatal(err.Error())
-	}
 }
 
 func realMain(ctx *cli.Context) error {
@@ -134,6 +144,10 @@ func realMain(ctx *cli.Context) error {
 	maxSegmentCount := ctx.Int64("max-segment-count")
 	dropPrefixes := ctx.StringSlice("drop-prefix")
 	maxDiskUsage := ctx.Int64("max-disk-usage")
+	tableLimits := ctx.Generic("table-limit").(*tableLimitValues).limits
+	if _, err := wal.ResolveAdmission(wal.Usage{Bytes: maxDiskUsage, Segments: maxSegmentCount}, ctx.Int64("max-table-disk-usage"), ctx.Int64("max-table-segment-count"), ctx.Bool("disable-table-limits"), tableLimits); err != nil {
+		return err
+	}
 	maxBatchSegments := ctx.Int("max-batch-segments")
 	partitionSize := ctx.Int("partition-size")
 	maxConns = int(ctx.Uint("max-connections"))
