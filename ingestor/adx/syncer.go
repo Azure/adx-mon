@@ -41,6 +41,11 @@ type Syncer struct {
 	mappings map[string]schema.SchemaMapping
 	st       SampleType
 
+	// inflight serializes concurrent schema work for the same entity without
+	// blocking other tables behind a database-wide lock.
+	inflightMu sync.Mutex
+	inflight   map[string]*sync.Mutex
+
 	tables map[string]struct{}
 
 	// streamingMu serializes enabling streaming ingestion policies.  streamingPolicies records the result per table.
@@ -145,11 +150,22 @@ func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.S
 		return err
 	}
 	s.mu.RLock()
-	if _, ok := s.tables[table]; ok {
-		s.mu.RUnlock()
+	_, exists := s.tables[table]
+	s.mu.RUnlock()
+	if exists {
 		return nil
 	}
+
+	entry := s.mappingLock("table:" + table)
+	entry.Lock()
+	defer entry.Unlock()
+
+	s.mu.RLock()
+	_, exists = s.tables[table]
 	s.mu.RUnlock()
+	if exists {
+		return nil
+	}
 
 	var columns []columnDef
 
@@ -257,10 +273,22 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 
 	name := fmt.Sprintf("%s_%d", string(kind), xxhash.Sum64(b.Bytes()))
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	_, exists := s.mappings[name]
+	s.mu.RUnlock()
+	if exists {
+		return name, nil
+	}
 
-	if _, ok := s.mappings[name]; ok {
+	// Serialize only callers racing on this same mapping.
+	entry := s.mappingLock(name)
+	entry.Lock()
+	defer entry.Unlock()
+
+	s.mu.RLock()
+	_, exists = s.mappings[name]
+	s.mu.RUnlock()
+	if exists {
 		return name, nil
 	}
 
@@ -282,12 +310,29 @@ func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema
 
 	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	_, err = s.KustoCli.Mgmt(ctx, s.database, showStmt)
-	if err != nil {
+	if _, err = s.KustoCli.Mgmt(ctx, s.database, showStmt); err != nil {
 		return "", err
 	}
+
+	s.mu.Lock()
 	s.mappings[name] = mapping
+	s.mu.Unlock()
 	return name, nil
+}
+
+// mappingLock returns the lock guarding a single mapping name.
+func (s *Syncer) mappingLock(name string) *sync.Mutex {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if s.inflight == nil {
+		s.inflight = make(map[string]*sync.Mutex)
+	}
+	entry, ok := s.inflight[name]
+	if !ok {
+		entry = &sync.Mutex{}
+		s.inflight[name] = entry
+	}
+	return entry
 }
 
 func (s *Syncer) ensureFunctions(ctx context.Context) error {
