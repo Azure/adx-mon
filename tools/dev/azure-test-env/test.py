@@ -25,6 +25,11 @@ TABLES = {"pod_logs": ("Logs", "E2ePodLogs"),
           "scraped_metrics": ("Metrics", "E2eScrapedSample"),
           "queued_control": ("Logs", "E2eQueuedControl")}
 REALTIME_PATHS = tuple(path for path in TABLES if path != "queued_control")
+# The isolation phase starves one table's budget on the ingestor and requires
+# every other path to keep flowing.
+ISOLATION_NOISY = "otlp_logs"
+ISOLATION_HEALTHY = tuple(path for path in TABLES if path != ISOLATION_NOISY)
+ISOLATION_TABLE_BYTES = 4096
 LOG_ERROR = re.compile(r'"(?:lvl|level)"\s*:\s*"(?:ERR|ERROR|FATAL)"|\b(?:ERROR|FATAL)\b', re.I)
 
 
@@ -116,7 +121,7 @@ def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100):
     return text
 
 
-def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100):
+def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=()):
     vars = {"ADX_URL": state["endpoint"], "CLIENT_ID": state["kubelet_client_id"],
             "CLUSTER": state["names"]["aks"], "REGION": state["region"]}
     def render(file):
@@ -132,6 +137,14 @@ def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100):
         flags += f'            - "--realtime-streaming-budget={state["endpoint"]}=3"\n'
         flags += '            - "--realtime-max-segment-age=100ms"\n'
         flags += '            - "--realtime-max-batch-latency=100ms"\n'
+        marker = f'            - "--logs-kusto-endpoints=Logs={state["endpoint"]}"\n'
+        assert marker in ingestor
+        ingestor = ingestor.replace(marker, marker + flags)
+    if table_limits:
+        flags = '            - "--enforce-table-limits"\n'
+        for db, table, max_bytes in table_limits:
+            limit = json.dumps({"database": db, "table": table, "max-bytes": max_bytes})
+            flags += f"            - '--table-limit={limit}'\n"
         marker = f'            - "--logs-kusto-endpoints=Logs={state["endpoint"]}"\n'
         assert marker in ingestor
         ingestor = ingestor.replace(marker, marker + flags)
@@ -251,6 +264,63 @@ def streaming_counts():
     return counts
 
 
+def ingestor_metrics():
+    with Forward("pod/ingestor-0", 9091) as forward:
+        with urllib.request.urlopen(forward.url + "/metrics", timeout=10) as response:
+            return response.read().decode()
+
+
+def samples(text, name):
+    """Parse one Prometheus metric family into {label tuple: value}."""
+    found = {}
+    for line in text.splitlines():
+        if not line.startswith(name + "{"):
+            continue
+        labels = dict(re.findall(r'(\w+)="([^"]*)"', line.split("}")[0]))
+        found[(labels.get("database"), labels.get("table"))] = float(line.rsplit(" ", 1)[-1])
+    return found
+
+
+def table_budgets(text):
+    """Per-destination budget state as {(db, table): {throttled, rejected}}."""
+    throttled = samples(text, "adxmon_table_backlog_throttled")
+    rejected = samples(text, "adxmon_table_quota_rejected_records_total")
+    state = {}
+    for key in set(throttled) | set(rejected):
+        state[key] = {"throttled": throttled.get(key, 0.0), "rejected": rejected.get(key, 0.0)}
+    return state
+
+
+def pod_ready(name):
+    pod = json.loads(output("kubectl", "-n", "adx-mon", "get", "pod", name, "-o", "json"))
+    return any(c["type"] == "Ready" and c["status"] == "True"
+               for c in pod.get("status", {}).get("conditions", []))
+
+
+def validate_isolation(records, budgets, ready, noisy, healthy):
+    """Pure validation so the contract is testable without a cluster.
+
+    The branch claims that starving one table only affects that table: every
+    other path keeps reaching Kusto and the instance stays ready.
+    """
+    errors = []
+    db, table = TABLES[noisy]
+    noisy_state = budgets.get((db, table), {})
+    if not (noisy_state.get("throttled") or noisy_state.get("rejected")):
+        errors.append(f"{db}.{table} was never throttled; the budget did not take effect")
+    if not ready:
+        errors.append("Ingestor became unready while one table was over budget")
+    for path in healthy:
+        hdb, htable = TABLES[path]
+        state = budgets.get((hdb, htable), {})
+        if state.get("throttled"):
+            errors.append(f"Healthy table {hdb}.{htable} was throttled by its neighbour")
+        visible = [seq for seq, row in records.get(path, {}).items() if row.get("first_visible_ms")]
+        if not visible:
+            errors.append(f"Healthy path {path} delivered no rows while {table} was over budget")
+    return errors
+
+
 def rows_for(state, path, run_id):
     db, table = TABLES[path]
     # The OTLP writer currently renders AnyValue labels as protobuf text
@@ -269,7 +339,7 @@ def rows_for(state, path, run_id):
             if row.get("Seq") is not None}
 
 
-def warm_tables(state, forward, deadline_seconds=600):
+def warm_tables(state, forward, deadline_seconds=600, pending=None):
     warm_id = f"warm-{uuid.uuid4().hex[:10]}"
     for attempt in range(15):
         try:
@@ -280,7 +350,7 @@ def warm_tables(state, forward, deadline_seconds=600):
                 raise
             print("Waiting for collector OTLP listener to accept connections", flush=True)
             time.sleep(2)
-    pending = set(TABLES)
+    pending = set(TABLES) if pending is None else set(pending)
     deadline = time.monotonic() + deadline_seconds
     last_error = {}
     last_notice = 0
@@ -305,7 +375,7 @@ def warm_tables(state, forward, deadline_seconds=600):
     return warm_id
 
 
-def poll(state, phase, signals, deadline, records):
+def poll(state, phase, signals, deadline, records, paths=None):
     # Each table polls independently.  A slow query on the queued control must
     # not delay the first-visibility timestamp of a realtime table.
     def poll_path(path):
@@ -338,8 +408,9 @@ def poll(state, phase, signals, deadline, records):
                 time.sleep(.25)
         return {(path, seq) for seq in remaining}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(TABLES)) as pool:
-        futures = [pool.submit(poll_path, path) for path in TABLES]
+    selected = tuple(paths or TABLES)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(selected)) as pool:
+        futures = [pool.submit(poll_path, path) for path in selected]
         return set().union(*(future.result() for future in futures))
 
 
@@ -453,6 +524,54 @@ def phase_run(state, mode, tag, report_dir, count, timeout, warmup_timeout=600,
     return result
 
 
+def phase_isolation(state, tag, report_dir, count, timeout, warmup_timeout=600):
+    """Starve one table's budget on the ingestor and require the rest to flow."""
+    for db in ("Metrics", "Logs"):
+        kusto(state["endpoint"], "", f'.alter database {db} policy ingestionbatching '
+              '```{"MaximumBatchingTimeSpan":"00:01:00","MaximumNumberOfItems":500,'
+              '"MaximumRawDataSizeMB":1024}```', True)
+    noisy_db, noisy_table = TABLES[ISOLATION_NOISY]
+    since = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    deploy(state, tag, False, table_limits=((noisy_db, noisy_table, ISOLATION_TABLE_BYTES),))
+    workload(state, tag)
+
+    # Warm-up uses the same starved budget, so the noisy table may never appear.
+    try:
+        with Forward() as forward:
+            warm_tables(state, forward, warmup_timeout, pending=set(ISOLATION_HEALTHY))
+    except Exception as e:
+        errors = log_errors(since, report_dir)
+        raise RuntimeError(f"{e}\nComponent logs saved in {report_dir}. "
+                           f"Unexpected log errors: {errors[:5]}") from e
+
+    run_id = f"e2e-{uuid.uuid4().hex[:12]}"
+    signals, records = [], {path: {} for path in TABLES}
+    with Forward() as forward:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            signals.append(emit(forward, run_id, 1))
+            expected = [{"seq": seq} for seq in range(1, count + 1)]
+            future = executor.submit(poll, state, run_id, expected,
+                                     time.monotonic() + timeout, records, paths=ISOLATION_HEALTHY)
+            for seq in range(2, count + 1):
+                time.sleep(3)
+                signals.append(emit(forward, run_id, seq))
+            missing = future.result()
+
+    budgets = table_budgets(ingestor_metrics())
+    ready = pod_ready("ingestor-0")
+    errors = log_errors(since, report_dir)
+    errors += validate_isolation(records, budgets, ready, ISOLATION_NOISY, ISOLATION_HEALTHY)
+    result = {"mode": "isolation", "run_id": run_id, "git_commit": output("git", "rev-parse", "HEAD"),
+              "images": {c: image(state, c, tag) for c in ("collector", "ingestor", "workload")},
+              "signals": signals, "observed": records, "missing": list(map(list, sorted(missing))),
+              "log_errors": errors, "streaming_counter_delta": {},
+              "expected_missing": [ISOLATION_NOISY],
+              "table_budgets": {f"{db}.{table}": v for (db, table), v in budgets.items()},
+              "ingestor_ready": ready}
+    save(report_dir / "result.json", result)
+    return result
+
+
 def report(directory):
     if directory.is_dir():
         direct = directory / "result.json"
@@ -488,8 +607,16 @@ def report(directory):
                 latency = visible - emitted if visible else None
                 fmt = lambda ms: dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).isoformat() if ms else "—"
                 lines.append(f"| {path} | {seq} | {fmt(emitted)} | {row.get('rows', 0)} | {fmt(visible)} | {latency if latency is not None else '—'} |")
+                expected_missing = data.get("expected_missing", [])
+                if path in expected_missing:
+                    continue
                 if not visible or (data["mode"] == "realtime" and path in REALTIME_PATHS and latency > 2000):
                     passed = False
+        if data.get("table_budgets"):
+            lines += ["", "| Table | Throttled | Rejected records |", "|---|---:|---:|"]
+            for name, budget in sorted(data["table_budgets"].items()):
+                lines.append(f"| {name} | {budget['throttled']:.0f} | {budget['rejected']:.0f} |")
+            lines += ["", f"Ingestor ready while throttled: {data.get('ingestor_ready')}", ""]
         lines += ["", "Streaming outcomes: `" + json.dumps(data.get("streaming_counter_delta", {})) + "`", "",
                   f"Unexpected component log errors: {len(data['log_errors'])}", ""]
         if data["log_errors"]:
@@ -505,7 +632,7 @@ def report(directory):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("run", "baseline", "realtime", "report"))
+    p.add_argument("command", choices=("run", "baseline", "realtime", "isolation", "report"))
     p.add_argument("--resource-group")
     p.add_argument("--results", type=Path, help="Existing results directory for report")
     p.add_argument("--count", type=int, default=5)
@@ -542,8 +669,11 @@ def main():
         for mode in (("baseline", "realtime") if a.command == "run" else (a.command,)):
             destination = directory / mode
             destination.mkdir()
-            phase_run(state, mode, tag, destination, a.count, a.timeout,
-                      a.warmup_timeout, a.realtime_log_batch_wait_ms)
+            if mode == "isolation":
+                phase_isolation(state, tag, destination, a.count, a.timeout, a.warmup_timeout)
+            else:
+                phase_run(state, mode, tag, destination, a.count, a.timeout,
+                          a.warmup_timeout, a.realtime_log_batch_wait_ms)
             if not report(destination):
                 raise RuntimeError(f"{mode} validation failed; see {destination / 'report.md'}")
     finally:

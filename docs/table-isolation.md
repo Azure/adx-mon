@@ -159,6 +159,25 @@ quota-shedding logs are limited to one message per table per minute.
 Per-table gauges disappear once a destination's backlog drains, bounding metric
 label lifetime. Cumulative counters persist.
 
+## End-to-end verification
+
+`tools/dev/azure-test-env` runs this branch against real AKS and ADX
+resources. After the one-time `cluster.sh create`, the isolation phase starves
+one table's budget on the ingestor and requires every other path to keep
+flowing:
+
+```bash
+tools/dev/azure-test-env/test.sh isolation --resource-group <group>
+```
+
+It fails if the starved table was never throttled, if a neighbouring table was
+throttled or stopped delivering, or if the ingestor became unready. The
+harness logic is covered offline by:
+
+```bash
+python3 -m unittest discover -s tools/dev/azure-test-env -p 'test_harness.py'
+```
+
 ## Known limitations
 
 * Quotas bound backlog, not rate. A destination that is already throttled is
