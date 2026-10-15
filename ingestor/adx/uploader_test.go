@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/Azure/adx-mon/pkg/testutils"
@@ -53,7 +54,9 @@ func TestUploader_newGzipReader_CompressesInput(t *testing.T) {
 	u := NewUploader(nil, UploaderOpts{ConcurrentUploads: 4})
 	input := bytes.Repeat([]byte("foo,bar,baz\n"), 1024)
 
-	gzipReader := u.newGzipReader(bytes.NewReader(input))
+	var wg sync.WaitGroup
+	gzipReader := u.newGzipReader(bytes.NewReader(input), &wg)
+	defer wg.Wait()
 	defer gzipReader.Close()
 
 	decoder, err := kgzip.NewReader(gzipReader)
@@ -69,7 +72,9 @@ func TestUploader_newGzipReader_PropagatesSourceError(t *testing.T) {
 	expectedErr := errors.New("source read failed")
 	u := NewUploader(nil, UploaderOpts{ConcurrentUploads: 2})
 
-	gzipReader := u.newGzipReader(&failingReader{err: expectedErr})
+	var wg sync.WaitGroup
+	gzipReader := u.newGzipReader(&failingReader{err: expectedErr}, &wg)
+	defer wg.Wait()
 	defer gzipReader.Close()
 
 	_, err := io.ReadAll(gzipReader)
@@ -98,7 +103,9 @@ func TestUploader_newGzipReader_VirtualRepairOnCorruptTailSegment(t *testing.T) 
 	require.NoError(t, err)
 	defer trailingGoodReader.Close()
 
-	gzipReader := u.newGzipReader(io.MultiReader(goodReader, corruptReader, trailingGoodReader))
+	var wg sync.WaitGroup
+	gzipReader := u.newGzipReader(io.MultiReader(goodReader, corruptReader, trailingGoodReader), &wg)
+	defer wg.Wait()
 	defer gzipReader.Close()
 
 	decoder, err := kgzip.NewReader(gzipReader)

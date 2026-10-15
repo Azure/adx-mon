@@ -110,7 +110,10 @@ func (c *streamingCooldowns) start(table string, until time.Time) {
 
 // streamBatch attempts to ingest a realtime batch with streaming ingestion.  data is the batch's uncompressed CSV
 // data.  When the outcome is streamFallback, the returned reader yields the batch's data for queued ingestion.
-func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxschema.SchemaMapping, data io.Reader) (streamOutcome, io.Reader) {
+func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table string, mapping adxschema.SchemaMapping, data io.Reader) (streamOutcome, io.Reader) {
+	if ctx.Err() != nil {
+		return n.retry(table, "shutdown")
+	}
 	rt := n.realtime
 	now := time.Now()
 	oldest := oldestSegment(batch)
@@ -139,18 +142,21 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 	}
 	buffered := buf.Bytes()
 
-	if err := n.syncer.EnsureTable(table, mapping); err != nil {
+	if err := n.syncer.EnsureTable(ctx, table, mapping); err != nil {
 		logger.Errorf("Failed to ensure table db=%s table=%s: %s", n.database, table, err)
 		return n.fallback(table, "schema", bytes.NewReader(buffered))
 	}
-	mappingName, err := n.syncer.EnsureMapping(table, mapping)
+	mappingName, err := n.syncer.EnsureMapping(ctx, table, mapping)
 	if err != nil {
 		logger.Errorf("Failed to ensure mapping db=%s table=%s: %s", n.database, table, err)
 		return n.fallback(table, "schema", bytes.NewReader(buffered))
 	}
-	if err := n.syncer.EnsureStreamingPolicy(n.ctx, table); err != nil {
+	if err := n.syncer.EnsureStreamingPolicy(ctx, table); err != nil {
 		// The policy may be enabled at the database level so streaming is still attempted.
 		logger.Warnf("%s", err)
+	}
+	if ctx.Err() != nil {
+		return n.retry(table, "shutdown")
 	}
 
 	// Wait briefly for a slot.  If the batch reaches its max lag first it uses queued ingestion, otherwise it is
@@ -160,11 +166,11 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 	if rt.MaxLag > 0 && lagDeadline.Before(slotDeadline) {
 		slotDeadline = lagDeadline
 	}
-	slotCtx, cancel := context.WithDeadline(n.ctx, slotDeadline)
+	slotCtx, cancel := context.WithDeadline(ctx, slotDeadline)
 	release, err := rt.Slots.Acquire(slotCtx)
 	cancel()
 	if err != nil {
-		if n.ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return n.retry(table, "shutdown")
 		}
 		if rt.MaxLag <= 0 || time.Now().Before(lagDeadline) {
@@ -172,10 +178,14 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 		}
 		return n.fallback(table, "lag", bytes.NewReader(buffered))
 	}
+	if ctx.Err() != nil {
+		release(false)
+		return n.retry(table, "shutdown")
+	}
 
-	ctx, cancel := context.WithTimeout(n.ctx, rt.RequestTimeout)
+	requestCtx, cancel := context.WithTimeout(ctx, rt.RequestTimeout)
 	start := time.Now()
-	_, err = n.streamer.FromReader(ctx, bytes.NewReader(buffered),
+	_, err = n.streamer.FromReader(requestCtx, bytes.NewReader(buffered),
 		azkustoingest.Database(n.database),
 		azkustoingest.Table(table),
 		azkustoingest.IngestionMappingRef(mappingName, azkustoingest.CSV),
@@ -196,6 +206,9 @@ func (n *uploader) streamBatch(batch *cluster.Batch, table string, mapping adxsc
 
 	failure := classifyStreamingError(err)
 	release(failure == streamingThrottled)
+	if ctx.Err() != nil {
+		return n.retry(table, "shutdown")
+	}
 	logger.Warnf("Streaming ingestion failed db=%s table=%s failure=%s: %s", n.database, table, failure, sanitizeErrorString(err))
 
 	switch failure {

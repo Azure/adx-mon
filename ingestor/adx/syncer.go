@@ -96,7 +96,10 @@ func (s *Syncer) Open(ctx context.Context) error {
 }
 
 func (s *Syncer) Close() error {
-	s.cancelFn()
+	// cancelFn is nil if Open failed or was never called.
+	if s.cancelFn != nil {
+		s.cancelFn()
+	}
 	s.wg.Wait()
 	return nil
 }
@@ -132,12 +135,15 @@ func (s *Syncer) loadIngestionMappings(ctx context.Context) error {
 }
 
 // EnsureDefaultTable creates a table with the default schema mapping if it does not exist.
-func (s *Syncer) EnsureDefaultTable(table string) error {
-	return s.EnsureTable(table, s.defaultMapping)
+func (s *Syncer) EnsureDefaultTable(ctx context.Context, table string) error {
+	return s.EnsureTable(ctx, table, s.defaultMapping)
 }
 
 // EnsureTable creates a table with the specified schema mapping if it does not exist.
-func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
+func (s *Syncer) EnsureTable(ctx context.Context, table string, mapping schema.SchemaMapping) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.RLock()
 	if _, ok := s.tables[table]; ok {
 		s.mu.RUnlock()
@@ -173,7 +179,7 @@ func (s *Syncer) EnsureTable(table string, mapping schema.SchemaMapping) error {
 
 	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	_, err := s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+	_, err := s.KustoCli.Mgmt(ctx, s.database, showStmt)
 	if err != nil {
 		return err
 	}
@@ -224,12 +230,15 @@ func (s *Syncer) EnsureStreamingPolicy(ctx context.Context, table string) error 
 }
 
 // EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
-func (s *Syncer) EnsureDefaultMapping(table string) (string, error) {
-	return s.EnsureMapping(table, s.defaultMapping)
+func (s *Syncer) EnsureDefaultMapping(ctx context.Context, table string) (string, error) {
+	return s.EnsureMapping(ctx, table, s.defaultMapping)
 }
 
 // EnsureMapping creates a schema mapping for the specified table if it does not exist.  It returns the name of the mapping.
-func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (string, error) {
+func (s *Syncer) EnsureMapping(ctx context.Context, table string, mapping schema.SchemaMapping) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	var columns []columnDef
 
 	for _, v := range mapping {
@@ -273,7 +282,7 @@ func (s *Syncer) EnsureMapping(table string, mapping schema.SchemaMapping) (stri
 
 	showStmt := kql.New("").AddUnsafe(sb.String())
 
-	_, err = s.KustoCli.Mgmt(context.Background(), s.database, showStmt)
+	_, err = s.KustoCli.Mgmt(ctx, s.database, showStmt)
 	if err != nil {
 		return "", err
 	}
