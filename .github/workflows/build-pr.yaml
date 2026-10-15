@@ -9,6 +9,7 @@ on:
   pull_request:
     branches: [ "main" ]
     types: [opened, review_requested, synchronize, reopened]
+  merge_group:
 
 permissions: {}
 
