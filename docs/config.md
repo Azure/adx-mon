@@ -38,6 +38,10 @@ max-segment-size = 52428800
 max-segment-count = 10000
 # Maximum allowed size in bytes of all segments on disk.
 max-disk-usage = 53687091200
+# Maximum WAL bytes per normalized database/table. Defaults to 10% of max-disk-usage.
+max-table-disk-usage = 5368709120
+# Maximum active and closed WAL files per table. Defaults to 10% of max-segment-count.
+max-table-segment-count = 1000
 # Interval to flush the WAL. (default 100)
 wal-flush-interval-ms = 100
 # Maximum number of concurrent transfers.

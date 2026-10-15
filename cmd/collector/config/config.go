@@ -12,6 +12,7 @@ import (
 	"github.com/Azure/adx-mon/collector/logs/sources/tail/sourceparse"
 	"github.com/Azure/adx-mon/collector/logs/transforms"
 	"github.com/Azure/adx-mon/collector/logs/transforms/parser"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/siderolabs/go-kmsg"
 )
@@ -87,14 +88,19 @@ type Config struct {
 	TLSCertFile        string            `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
 	StorageBackend     string            `toml:"storage-backend,omitempty" comment:"Storage backend used for WAL segments. Valid values: adx, clickhouse."`
 
-	MaxConnections               int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
-	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
-	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
-	MaxSegmentSize               int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
-	MaxSegmentCount              int64 `toml:"max-segment-count,omitempty" comment:"Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive."`
-	MaxDiskUsage                 int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
-	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
-	MaxTransferConcurrency       int   `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
+	MaxConnections               int              `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
+	MaxBatchSize                 int              `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
+	MaxSegmentAgeSeconds         int              `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
+	MaxSegmentSize               int64            `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
+	MaxSegmentCount              int64            `toml:"max-segment-count,omitempty" comment:"Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive."`
+	MaxDiskUsage                 int64            `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
+	MaxTableDiskUsage            int64            `toml:"max-table-disk-usage,omitempty" comment:"Maximum WAL bytes per normalized database/table. Defaults to 10% of max-disk-usage."`
+	MaxTableSegmentCount         int64            `toml:"max-table-segment-count,omitempty" comment:"Maximum active and closed WAL files per table. Defaults to 10% of max-segment-count."`
+	DisableTableLimits           bool             `toml:"disable-table-limits,omitempty" comment:"Disable default table quotas; explicit table-limits still apply."`
+	EnforceTableLimits           bool             `toml:"enforce-table-limits,omitempty" comment:"Reject writes that exceed a table budget. When false (default) budgets are only measured and reported so limits can be sized from real traffic."`
+	TableLimits                  []wal.TableLimit `toml:"table-limits,omitempty" comment:"Overrides for normalized database/table backlog budgets."`
+	WALFlushIntervalMilliSeconds int              `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
+	MaxTransferConcurrency       int              `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
 
 	StorageDir  string `toml:"storage-dir,omitempty" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof,omitempty" comment:"Enable pprof endpoints."`
@@ -597,6 +603,17 @@ type LogTransform struct {
 }
 
 func (c *Config) Validate() error {
+	disk := c.MaxDiskUsage
+	if disk <= 0 {
+		disk = 10 * 1024 * 1024 * 1024
+	}
+	segments := c.MaxSegmentCount
+	if segments <= 0 {
+		segments = 10000
+	}
+	if _, err := wal.ResolveAdmission(wal.Usage{Bytes: disk, Segments: segments}, c.MaxTableDiskUsage, c.MaxTableSegmentCount, c.DisableTableLimits, c.TableLimits); err != nil {
+		return err
+	}
 	backend := c.StorageBackend
 	if backend == "" {
 		backend = DefaultConfig.StorageBackend
