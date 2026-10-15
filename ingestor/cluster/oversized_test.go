@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/wal"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,9 +99,10 @@ func TestOversizedTransferIsSplitAndDelivered(t *testing.T) {
 	require.Positive(t, rejected, "the oversized merge was rejected first")
 }
 
-// A single segment that exceeds the budget cannot be split. It must be retained
-// and reported rather than retried forever.
-func TestUndeliverableSegmentIsRetainedAndBackedOff(t *testing.T) {
+// A single segment that exceeds the budget cannot be split or drained. It must
+// be dropped so it does not occupy the destination's budget forever, and the
+// loss must be reported.
+func TestUndeliverableSegmentIsDroppedAndReported(t *testing.T) {
 	server := &oversizedServer{limit: 1}
 	s := httptest.NewServer(http.HandlerFunc(server.handler))
 	defer s.Close()
@@ -118,21 +121,23 @@ func TestUndeliverableSegmentIsRetainedAndBackedOff(t *testing.T) {
 	require.NoError(t, rep.Open(ctx))
 	defer rep.Close()
 
+	before := undeliverableCount(t, "DB", "A")
+
 	batch := newOversizedBatch(t, t.TempDir(), 1, []byte("data"))
 	rep.TransferQueue() <- batch
 	require.Eventually(t, batch.IsReleased, 5*time.Second, time.Millisecond)
 
-	require.False(t, batch.IsRemoved(), "undeliverable data is retained locally")
+	require.True(t, batch.IsRemoved(), "undeliverable data is dropped rather than held forever")
+	require.Equal(t, before+1, undeliverableCount(t, "DB", "A"), "the loss is reported")
 	require.True(t, health.IsPeerHealthy("peer"), "an oversized payload is not a peer failure")
 
 	_, rejected := server.counts()
 	require.LessOrEqual(t, rejected, maxSplitDepth+1, "the payload is not retried indefinitely")
+}
 
-	// The destination is backed off, so a follow-up batch is not attempted.
-	before, _ := server.counts()
-	next := newOversizedBatch(t, t.TempDir(), 1, []byte("data"))
-	rep.TransferQueue() <- next
-	time.Sleep(250 * time.Millisecond)
-	after, _ := server.counts()
-	require.Equal(t, before, after, "backoff suppresses immediate retries")
+func undeliverableCount(t *testing.T, database, table string) float64 {
+	t.Helper()
+	var m dto.Metric
+	require.NoError(t, metrics.IngestorUndeliverableSegments.WithLabelValues(database, table).Write(&m))
+	return m.Counter.GetValue()
 }
