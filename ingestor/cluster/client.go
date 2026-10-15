@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	adxhttp "github.com/Azure/adx-mon/pkg/http"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/davidnarayan/go-flake"
 	"github.com/klauspost/compress/gzip"
 )
@@ -45,6 +47,24 @@ func (e *PeerOverloadedError) WithRequestId(id string) error {
 }
 
 var ErrPeerOverloaded error = &PeerOverloadedError{}
+
+const OverloadScopeHeader = "X-Adxmon-Overload-Scope"
+const OverloadReasonHeader = "X-Adxmon-Overload-Reason"
+
+// MaxTransferBytesHeader advertises how many bytes a destination can accept, so
+// a sender holding an oversized batch can split instead of retrying it.
+const MaxTransferBytesHeader = "X-Adxmon-Max-Transfer-Bytes"
+
+func retryDelay(value string) time.Duration {
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 5 * time.Second
+	}
+	if seconds > 300 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // SegmentExistsError represents a segment already exists error with optional requestId.
 type SegmentExistsError struct {
@@ -281,10 +301,26 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			if resp.Header.Get(OverloadScopeHeader) == "table" {
+				d, err := wal.DestinationFromFilename(filename)
+				if err != nil {
+					return fmt.Errorf("invalid throttled destination: %w", err)
+				}
+				return &wal.TableOverloadedError{Destination: d, Reason: resp.Header.Get(OverloadReasonHeader), RetryAfter: retryDelay(resp.Header.Get("Retry-After"))}
+			}
 			if perr, ok := ErrPeerOverloaded.(*PeerOverloadedError); ok {
 				return perr.WithRequestId(requestId)
 			}
 			return ErrPeerOverloaded
+		}
+
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			d, derr := wal.DestinationFromFilename(filename)
+			if derr != nil {
+				return fmt.Errorf("invalid oversized destination: %w", derr)
+			}
+			limit, _ := strconv.ParseInt(resp.Header.Get(MaxTransferBytesHeader), 10, 64)
+			return &wal.SegmentTooLargeError{Destination: d, Limit: limit}
 		}
 
 		if resp.StatusCode == http.StatusConflict {
