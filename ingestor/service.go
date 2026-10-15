@@ -111,7 +111,15 @@ type ServiceOpts struct {
 	MaxSegmentCount int64
 
 	// MaxDiskUsage is the maximum disk usage allowed before signaling back-pressure.
-	MaxDiskUsage int64
+	MaxDiskUsage      int64
+	MaxTableDiskUsage int64
+	// MaxIntakeMemory bounds the bytes buffered across concurrent transfer
+	// requests. Zero disables the ceiling.
+	MaxIntakeMemory      int64
+	MaxTableSegmentCount int64
+	DisableTableLimits   bool
+	EnforceTableLimits   bool
+	TableLimits          []wal.TableLimit
 
 	// AllowedDatabases is the distinct set of database names that are allowed to be written to.
 	AllowedDatabase []string
@@ -189,12 +197,20 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		opts.StorageBackend = storage.BackendADX
 	}
 
+	budgetOpts, err := wal.ResolveAdmissionWithEnforcement(wal.Usage{Bytes: opts.MaxDiskUsage, Segments: opts.MaxSegmentCount}, opts.MaxTableDiskUsage, opts.MaxTableSegmentCount, opts.DisableTableLimits, opts.EnforceTableLimits, opts.TableLimits)
+	if err != nil {
+		return nil, err
+	}
+
 	storeOpts := storage.StoreOpts{
 		StorageDir:             opts.StorageDir,
 		SegmentMaxSize:         opts.MaxSegmentSize,
 		SegmentMaxAge:          opts.MaxSegmentAge,
 		EnableWALFsync:         opts.EnableWALFsync,
 		MaxDiskUsage:           opts.MaxDiskUsage,
+		MaxIntakeMemory:        opts.MaxIntakeMemory,
+		Admission:              wal.NewAdmission(budgetOpts),
+		MetricComponent:        "ingestor",
 		StartupOpenConcurrency: opts.ConcurrentUploads,
 	}
 	var realtimeBatch cluster.RealtimeBatchOpts
@@ -248,6 +264,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		MaxTransferSize:         opts.MaxTransferSize,
 		MaxTransferAge:          opts.MaxTransferAge,
 		MaxBatchSegments:        opts.MaxBatchSegments,
+		MaxTableBatches:         max(10, opts.ConcurrentUploads*2, opts.MaxTransferConcurrency*2),
 		Partitioner:             coord,
 		Segmenter:               store.Index(),
 		UploadQueue:             opts.Uploader.UploadQueue(),
@@ -507,6 +524,8 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 		r.Close = true
 		w.Header().Set("Connection", "close")
 
+		w.Header().Set(cluster.OverloadScopeHeader, "instance")
+		w.Header().Set("Retry-After", "5")
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)
 		return
@@ -536,7 +555,27 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n, err := s.store.Import(f, body)
-	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
+	var oversized *wal.SegmentTooLargeError
+	if errors.As(err, &oversized) {
+		// Permanent for this payload: tell the sender how much this destination
+		// can accept so it can split rather than retry the same batch forever.
+		w.Header().Set(cluster.MaxTransferBytesHeader, strconv.FormatInt(oversized.Limit, 10))
+		m.WithLabelValues(strconv.Itoa(http.StatusRequestEntityTooLarge)).Inc()
+		http.Error(w, oversized.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
+	var quota *wal.TableOverloadedError
+	if errors.As(err, &quota) {
+		w.Header().Set(cluster.OverloadScopeHeader, "table")
+		w.Header().Set(cluster.OverloadReasonHeader, quota.Reason)
+		w.Header().Set("Retry-After", strconv.Itoa(int(quota.RetryAfter.Seconds())))
+		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
+		http.Error(w, quota.Error(), http.StatusTooManyRequests)
+		return
+	}
+	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) || errors.Is(err, storage.ErrIntakeMemoryExhausted) {
+		w.Header().Set(cluster.OverloadScopeHeader, "instance")
+		w.Header().Set("Retry-After", "5")
 		r.Close = true
 		w.Header().Set("Connection", "close")
 
@@ -569,7 +608,7 @@ func (s *Service) HandleTransfer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
-	if err := s.metrics.Close(); err != nil {
+	if err := s.DisableWrites(); err != nil {
 		return err
 	}
 
@@ -579,6 +618,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	return nil
 }
+
+// stallTimeout is how long the drain waits without any progress before giving
+// up. A destination that cannot drain must not hold shutdown open for the whole
+// context deadline.
+var stallTimeout = 30 * time.Second
 
 func (s *Service) UploadSegments(ctx context.Context) error {
 	if err := s.batcher.BatchSegments(); err != nil {
@@ -590,18 +634,37 @@ func (s *Service) UploadSegments(ctx context.Context) error {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
+	remaining := s.uploadQueueLen() + s.transferQueueLen()
+	lastProgress := time.Now()
 	for {
+		if remaining == 0 {
+			return nil
+		}
 		select {
 		case <-t.C:
-			if s.uploadQueueLen() == 0 && s.transferQueueLen() == 0 {
-				return nil
-			}
-
 			if n := s.uploadQueueLen(); n != 0 {
 				logger.Infof("Waiting for upload queue to drain, %d batches remaining", n)
 			}
 			if n := s.transferQueueLen(); n != 0 {
 				logger.Infof("Waiting for transfer queue to drain, %d batches remaining", n)
+			}
+
+			current := s.uploadQueueLen() + s.transferQueueLen()
+			if current == 0 {
+				return nil
+			}
+			if current < remaining {
+				remaining = current
+				lastProgress = time.Now()
+				continue
+			}
+			remaining = current
+			if time.Since(lastProgress) >= stallTimeout {
+				// A destination that cannot drain must not hold shutdown open
+				// for the whole deadline. Remaining work stays on disk and
+				// resumes after restart.
+				logger.Warnf("Backlog stopped draining with %d batches remaining; continuing shutdown", remaining)
+				return nil
 			}
 		case <-ctx.Done():
 			return fmt.Errorf("timed out to upload segments")
@@ -681,7 +744,7 @@ func (q *queueSizerAdapter) UploadQueueSize() int {
 }
 
 func (q *queueSizerAdapter) SegmentsTotal() int64 {
-	return int64(q.store.Index().TotalSegments())
+	return q.store.SegmentCount()
 }
 
 func (q *queueSizerAdapter) SegmentsSize() int64 {
