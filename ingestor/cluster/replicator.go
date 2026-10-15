@@ -16,10 +16,6 @@ import (
 	"go.uber.org/multierr"
 )
 
-// undeliverableBackoff is how long a destination waits after a payload it can
-// never accept, so an unresolvable batch cannot spin.
-const undeliverableBackoff = 5 * time.Minute
-
 // maxSchedulerRetry bounds how long the scheduler defers a destination on
 // behalf of one peer. The per-peer backoff remains authoritative.
 const maxSchedulerRetry = time.Second
@@ -272,15 +268,16 @@ func (r *replicator) send(ctx context.Context, batch *Batch, segments []wal.Segm
 
 // splitOversized halves a batch the destination cannot accept and retries each
 // half. A single segment that still does not fit cannot be resolved by
-// splitting, so it is retained and reported rather than retried forever.
+// splitting or by draining, so it is dropped: retaining it would occupy the
+// destination's budget indefinitely and block data that can be delivered.
 func (r *replicator) splitOversized(ctx context.Context, batch *Batch, segments []wal.SegmentInfo, depth int, oversized *wal.SegmentTooLargeError, owner, addr string) error {
 	if len(segments) <= 1 || depth >= maxSplitDepth {
 		metrics.IngestorUndeliverableSegments.WithLabelValues(oversized.Destination.Database, oversized.Destination.Table).Inc()
-		logger.Errorf("Segment %s cannot be delivered to %s@%s: %s. Raise the destination table budget or lower max-transfer-size; the data is retained locally.",
+		logger.Errorf("Dropping undeliverable segment %s for %s@%s: %s. The payload exceeds the destination table budget and cannot be split further; raise the table budget or lower max-transfer-size to avoid further loss.",
 			segments[0].Path, owner, addr, oversized)
-		// Long backoff so an unresolvable payload cannot spin.
-		r.backoff.deferUntil(owner, oversized.Destination, time.Now().Add(undeliverableBackoff))
-		batch.RetryAfter(undeliverableBackoff)
+		if err := r.remove(batch, segments); err != nil {
+			logger.Errorf("Failed to remove undeliverable segment: %s", err)
+		}
 		return nil
 	}
 

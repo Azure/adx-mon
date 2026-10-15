@@ -99,9 +99,12 @@ When a table exceeds a quota, unrelated destinations continue being processed:
   peer-scoped.
 * A transfer larger than the destination's entire budget returns `413` with
   `X-Adxmon-Max-Transfer-Bytes`. The sender splits the batch and retries the
-  halves. A single segment that still does not fit is retained, reported through
-  `adxmon_ingestor_undeliverable_segments_total`, and backed off instead of
-  retried forever; it needs a larger budget or a smaller `max-transfer-size`.
+  halves. A single segment that still does not fit cannot be split or drained,
+  so it is **dropped and logged**, and counted by
+  `adxmon_ingestor_undeliverable_segments_total`. Retaining it would occupy the
+  destination budget indefinitely and block data that can be delivered. Alert on
+  this counter: it means a table budget is too small or `max-transfer-size` is
+  too large.
 
 Table overload does not fail `/readyz` or mark a whole destination peer
 unhealthy. Reaching a quota closes the table's active segment so the uploader
