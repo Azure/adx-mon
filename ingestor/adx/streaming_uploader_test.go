@@ -53,7 +53,7 @@ type fakeQueued struct {
 	err   error
 }
 
-func (f *fakeQueued) upload(reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error {
+func (f *fakeQueued) upload(ctx context.Context, reader io.Reader, database, table string, mapping adxschema.SchemaMapping) error {
 	b, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -169,7 +169,7 @@ func TestStreamBatch_Success(t *testing.T) {
 	env := newStreamingTestEnv(t)
 	path := env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 	require.Equal(t, 1, env.stream.calls)
 	require.Equal(t, testCSV, env.stream.data)
@@ -186,7 +186,7 @@ func TestStreamBatch_QueuedBatchesUseQueuedIngestion(t *testing.T) {
 	env := newStreamingTestEnv(t)
 	path := env.addSegment(t, "Cpu", ingestpolicy.PriorityQueued, testCSV, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityQueued))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityQueued))
 
 	require.Zero(t, env.stream.calls)
 	require.Equal(t, 1, env.queue.calls)
@@ -199,7 +199,7 @@ func TestStreamBatch_NoStreamerUsesQueuedIngestion(t *testing.T) {
 	env.u.streamer = nil
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 	require.Equal(t, 1, env.queue.calls)
 	require.Equal(t, testCSV, env.queue.data)
@@ -220,7 +220,7 @@ func TestStreamBatch_RetryableFailures(t *testing.T) {
 			path := env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
 			batch := env.nextBatch(t, ingestpolicy.PriorityRealtime)
-			env.u.uploadBatch(batch)
+			env.u.uploadBatch(context.Background(), batch)
 
 			// The batch is released to be retried later and its segment is kept.
 			require.Equal(t, 1, env.stream.calls)
@@ -255,7 +255,7 @@ func TestStreamBatch_FallbackFailures(t *testing.T) {
 			env.stream.err = tt.err
 			path := env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
-			env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+			env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 			// The buffered data is ingested with queued ingestion.
 			require.Equal(t, 1, env.stream.calls)
@@ -267,7 +267,7 @@ func TestStreamBatch_FallbackFailures(t *testing.T) {
 			// During a cooldown the table skips streaming.
 			env.stream.err = nil
 			env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
-			env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+			env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 			if tt.cooldown {
 				require.Equal(t, 1, env.stream.calls)
 				require.Equal(t, 2, env.queue.calls)
@@ -284,7 +284,7 @@ func TestStreamBatch_CooldownExpires(t *testing.T) {
 	env.u.cooldowns.start("Cpu", time.Now().Add(-time.Second))
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 	require.Equal(t, 1, env.stream.calls)
 	require.Zero(t, env.queue.calls)
 }
@@ -293,7 +293,7 @@ func TestStreamBatch_LaggingBatchUsesQueuedIngestion(t *testing.T) {
 	env := newStreamingTestEnv(t)
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Now().Add(-2*time.Minute))
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 	require.Zero(t, env.stream.calls)
 	require.Equal(t, 1, env.queue.calls)
@@ -310,7 +310,7 @@ func TestStreamBatch_SlotWaitPastLagUsesQueuedIngestion(t *testing.T) {
 
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 	start := time.Now()
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 	require.Less(t, time.Since(start), time.Second)
 	require.Zero(t, env.stream.calls)
@@ -328,7 +328,7 @@ func TestStreamBatch_TooLargeRequestUsesQueuedIngestion(t *testing.T) {
 	}
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, data, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 	// The partially read data and the remainder are both ingested.
 	require.Zero(t, env.stream.calls)
@@ -341,7 +341,7 @@ func TestStreamBatch_DirectIngestUsesQueuedPath(t *testing.T) {
 	env.u.requireDirectIngest = true
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 	require.Zero(t, env.stream.calls)
 	require.Equal(t, 1, env.queue.calls)
 }
@@ -351,7 +351,7 @@ func TestStreamBatch_StreamingPolicyFailureStillStreams(t *testing.T) {
 	env.u.syncer.streamingPolicies["Cpu"] = streamingPolicyState{err: errors.New("forbidden"), retryAt: time.Now().Add(time.Hour)}
 	env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, testCSV, time.Time{})
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 	require.Equal(t, 1, env.stream.calls)
 	require.Zero(t, env.queue.calls)
 }
@@ -366,7 +366,7 @@ func TestStreamBatch_MultipleSegments(t *testing.T) {
 		paths = append(paths, env.addSegment(t, "Cpu", ingestpolicy.PriorityRealtime, line, time.Time{}))
 	}
 
-	env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+	env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 	require.Equal(t, want.Bytes(), env.stream.data)
 	for _, p := range paths {
 		require.NoFileExists(t, p)
@@ -398,7 +398,7 @@ func TestStreamBatch_NoSlotRetriesWithoutHoldingWorker(t *testing.T) {
 	batch := env.nextBatch(t, ingestpolicy.PriorityRealtime)
 
 	start := time.Now()
-	env.u.uploadBatch(batch)
+	env.u.uploadBatch(context.Background(), batch)
 
 	// The worker gives up after a short wait and the batch is retried later rather than using queued ingestion.
 	require.Less(t, time.Since(start), maxSlotWait+500*time.Millisecond)
@@ -466,7 +466,7 @@ func TestStreamBatch_Metrics(t *testing.T) {
 			before := realtimeBatchCount(t, table, tt.outcome)
 			requests := counterValue(t, metrics.IngestorRealtimeStreamingRequests.WithLabelValues("db"))
 			duration := counterValue(t, metrics.IngestorRealtimeStreamingDuration.WithLabelValues("db"))
-			env.u.uploadBatch(env.nextBatch(t, ingestpolicy.PriorityRealtime))
+			env.u.uploadBatch(context.Background(), env.nextBatch(t, ingestpolicy.PriorityRealtime))
 
 			require.Equal(t, before+1, realtimeBatchCount(t, table, tt.outcome))
 

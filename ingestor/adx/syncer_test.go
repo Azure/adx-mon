@@ -21,7 +21,7 @@ func TestSyncer_EnsureMapping(t *testing.T) {
 	kcli := &fakeKustoMgmt{}
 
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
-	name, err := s.EnsureDefaultMapping("Test")
+	name, err := s.EnsureDefaultMapping(context.Background(), "Test")
 	require.NoError(t, err)
 	require.Equal(t, "Test_15745692345339290292", name)
 }
@@ -32,7 +32,7 @@ func TestSyncer_EnsureTable(t *testing.T) {
 	}
 
 	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
-	require.NoError(t, s.EnsureDefaultTable("Test"))
+	require.NoError(t, s.EnsureDefaultTable(context.Background(), "Test"))
 	kcli.Verify(t)
 }
 
@@ -113,7 +113,7 @@ func TestSyncer_EnsureStreamingPolicyKustainer(t *testing.T) {
 	defer client.Close()
 
 	s := NewSyncer(client, "NetDefaultDB", schema.DefaultMetricsMapping, PromMetrics)
-	require.NoError(t, s.EnsureTable("CpuUsage", schema.DefaultMetricsMapping))
+	require.NoError(t, s.EnsureTable(ctx, "CpuUsage", schema.DefaultMetricsMapping))
 	require.NoError(t, s.EnsureStreamingPolicy(ctx, "CpuUsage"))
 
 	ds, err := client.Mgmt(ctx, "NetDefaultDB", kql.New(".show table CpuUsage policy streamingingestion"))

@@ -124,7 +124,7 @@ func TestClassifyStreamingError_Kustainer(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 	s := NewSyncer(client, "NetDefaultDB", schema.DefaultMetricsMapping, PromMetrics)
-	require.NoError(t, s.EnsureTable("CpuUsage", schema.DefaultMetricsMapping))
+	require.NoError(t, s.EnsureTable(ctx, "CpuUsage", schema.DefaultMetricsMapping))
 
 	streaming, err := azkustoingest.NewStreaming(azkustodata.NewConnectionStringBuilder(k.ConnectionUrl()),
 		azkustoingest.WithDefaultDatabase("NetDefaultDB"), azkustoingest.WithDefaultTable("CpuUsage"))
