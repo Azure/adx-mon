@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -41,6 +42,14 @@ var (
 	})
 )
 
+// defaultIntakeReservation is the memory charged for an import whose size
+// cannot be bounded by a destination budget.
+const defaultIntakeReservation = 64 * 1024 * 1024
+
+// ErrIntakeMemoryExhausted reports that too many concurrent requests are
+// already buffered. It is retryable: the sender keeps its data.
+var ErrIntakeMemoryExhausted = errors.New("intake memory exhausted")
+
 type Store interface {
 	service.Component
 
@@ -65,6 +74,8 @@ type LocalStore struct {
 	repository *wal.Repository
 
 	inflightWriteBytes int64
+	unregisterBudget   func()
+	intake             *MemoryLimiter
 }
 
 type StoreOpts struct {
@@ -90,6 +101,16 @@ type StoreOpts struct {
 	// RealtimeReservedDiskBytes is disk space reserved for realtime tables.  Queued writes are rejected once disk
 	// usage reaches MaxDiskUsage minus this value.
 	RealtimeReservedDiskBytes int64
+
+	// Admission owns per-destination capacity accounting.
+	Admission *wal.Admission
+
+	// MetricComponent labels exported table budget metrics.
+	MetricComponent string
+
+	// MaxIntakeMemory bounds the total bytes buffered across concurrent
+	// imports. Zero disables the ceiling.
+	MaxIntakeMemory int64
 }
 
 func NewLocalStore(opts StoreOpts) *LocalStore {
@@ -98,7 +119,8 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 	}
 
 	return &LocalStore{
-		opts: opts,
+		opts:   opts,
+		intake: NewMemoryLimiter(opts.MaxIntakeMemory),
 		repository: wal.NewRepository(wal.RepositoryOpts{
 			StorageDir:                opts.StorageDir,
 			SegmentMaxSize:            opts.SegmentMaxSize,
@@ -110,15 +132,25 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			Policy:                    opts.Policy,
 			Realtime:                  opts.Realtime,
 			RealtimeReservedDiskBytes: opts.RealtimeReservedDiskBytes,
+			Admission:                 opts.Admission,
 		}),
 	}
 }
 
 func (s *LocalStore) Open(ctx context.Context) error {
-	return s.repository.Open(ctx)
+	if err := s.repository.Open(ctx); err != nil {
+		return err
+	}
+	if s.opts.Admission != nil && s.opts.MetricComponent != "" {
+		s.unregisterBudget = metrics.RegisterTableBudget(s.opts.MetricComponent, s.opts.Admission)
+	}
+	return nil
 }
 
 func (s *LocalStore) Close() error {
+	if s.unregisterBudget != nil {
+		s.unregisterBudget()
+	}
 	return s.repository.Close()
 }
 
@@ -126,11 +158,30 @@ func (s *LocalStore) GetWAL(ctx context.Context, key []byte) (*wal.WAL, error) {
 	return s.repository.Get(ctx, key)
 }
 
+// preAdmit rejects work for a destination that is already over budget, before
+// the caller pays to encode it or to create a WAL for it. Returning early also
+// keeps a rejected destination from accumulating WAL objects and goroutines.
+func (s *LocalStore) preAdmit(prefix []byte) *wal.TableOverloadedError {
+	if s.opts.Admission == nil {
+		return nil
+	}
+	d, err := wal.DestinationFromPrefix(string(prefix))
+	if err != nil {
+		return nil
+	}
+	reason, throttled := s.opts.Admission.Throttled(d)
+	if !throttled {
+		return nil
+	}
+	return &wal.TableOverloadedError{Destination: d, Reason: reason, RetryAfter: 5 * time.Second}
+}
+
 func (s *LocalStore) WALCount() int {
 	return s.repository.Count()
 }
 
 func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteRequest) error {
+	var outcome WriteOutcome
 	enc := metricsCSVWriterPool.Get(8 * 1024).(*transform2.MetricsCSVWriter)
 	defer metricsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedLabels)
@@ -144,12 +195,17 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 			return err
 		}
 
+		if quota := s.preAdmit(key); quota != nil {
+			s.recordRejection(quota, int64(len(v.Samples)), 0, "metrics")
+			outcome.Rejected += int64(len(v.Samples))
+			outcome.RejectedSeries = append(outcome.RejectedSeries, v)
+			continue
+		}
+
 		w, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
 		}
-
-		metrics.SamplesStored.Add(float64(len(v.Samples)))
 
 		enc.Reset()
 		if err := enc.MarshalCSV(req, v); err != nil {
@@ -165,10 +221,22 @@ func (s *LocalStore) WriteTimeSeries(ctx context.Context, req *prompb.WriteReque
 
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			var quota *wal.TableOverloadedError
+			if errors.As(err, &quota) {
+				s.recordRejection(quota, int64(len(v.Samples)), int64(len(enc.Bytes())), "metrics")
+				outcome.Rejected += int64(len(v.Samples))
+				outcome.RejectedSeries = append(outcome.RejectedSeries, v)
+				continue
+			}
 			return err
 		}
+		outcome.Accepted += int64(len(v.Samples))
+		metrics.SamplesStored.Add(float64(len(v.Samples)))
 		// Decrement the inflight write bytes after writing to avoid double counting.
 		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+	}
+	if outcome.Rejected > 0 {
+		return &outcome
 	}
 	return nil
 }
@@ -194,6 +262,11 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	key = fmt.Appendf(key[:0], "%s_%s", sanitizedDB, sanitizedTable)
 
+	if quota := s.preAdmit(key); quota != nil {
+		s.recordRejection(quota, int64(len(logs.Logs)), 0, "logs")
+		return &WriteOutcome{Rejected: int64(len(logs.Logs))}
+	}
+
 	w, err := s.GetWAL(ctx, key)
 	if err != nil {
 		return err
@@ -213,6 +286,11 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 
 	wo := wal.WithSampleMetadata(wal.LogSampleType, uint32(len(logs.Logs)))
 	if err := w.Write(ctx, enc.Bytes(), wo); err != nil {
+		var quota *wal.TableOverloadedError
+		if errors.As(err, &quota) {
+			s.recordRejection(quota, int64(len(logs.Logs)), int64(len(enc.Bytes())), "logs")
+			return &WriteOutcome{Rejected: int64(len(logs.Logs))}
+		}
 		return err
 	}
 
@@ -220,6 +298,7 @@ func (s *LocalStore) WriteOTLPLogs(ctx context.Context, database, table string, 
 }
 
 func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) error {
+	var outcome WriteOutcome
 	enc := nativeLogsCSVWriterPool.Get(8 * 1024).(*transform2.NativeLogsCSVWriter)
 	defer nativeLogsCSVWriterPool.Put(enc)
 	enc.InitColumns(s.opts.LiftedResources)
@@ -264,6 +343,12 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		key = fmt.Appendf(key[:0], "%s_%s_", sanitizedDB, sanitizedTable)
 		key = strconv.AppendUint(key, enc.SchemaHash(), 36)
 
+		if quota := s.preAdmit(key); quota != nil {
+			s.recordRejection(quota, 1, 0, "logs")
+			outcome.Rejected++
+			continue
+		}
+
 		w, err := s.GetWAL(ctx, key)
 		if err != nil {
 			return err
@@ -282,8 +367,15 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 
 		if err := w.Write(ctx, enc.Bytes()); err != nil {
 			atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
+			var quota *wal.TableOverloadedError
+			if errors.As(err, &quota) {
+				s.recordRejection(quota, 1, int64(len(enc.Bytes())), "logs")
+				outcome.Rejected++
+				continue
+			}
 			return err
 		}
+		outcome.Accepted++
 
 		// Decrement the inflight write bytes after writing to avoid double counting.
 		atomic.AddInt64(&s.inflightWriteBytes, -int64(len(enc.Bytes())))
@@ -294,6 +386,9 @@ func (s *LocalStore) WriteNativeLogs(ctx context.Context, logs *types.LogBatch) 
 		metrics.InvalidLogsDropped.WithLabelValues().Add(float64(noDestinationCount))
 	}
 
+	if outcome.Rejected > 0 {
+		return &outcome
+	}
 	return nil
 }
 
@@ -327,9 +422,41 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 	defer pool.BytesBufferPool.Put(buf)
 	buf.Reset()
 
-	n, err := io.Copy(buf, body)
+	limit := s.opts.MaxDiskUsage
+	tableScoped := false
+	if s.opts.Admission != nil {
+		if tableLimit := s.opts.Admission.Limit(wal.Destination{Database: db, Table: table}).Bytes; tableLimit > 0 && (limit <= 0 || tableLimit <= limit) {
+			limit = tableLimit
+			tableScoped = true
+		}
+	}
+	var input io.Reader = body
+	if limit > 0 {
+		input = io.LimitReader(body, limit+1)
+	}
+
+	// Claim the worst case up front: the body is buffered in full before it can
+	// be admitted, so the ceiling has to be reserved before reading it.
+	reserved := limit
+	if reserved <= 0 {
+		reserved = defaultIntakeReservation
+	}
+	if !s.intake.Reserve(reserved) {
+		return 0, ErrIntakeMemoryExhausted
+	}
+	defer s.intake.Release(reserved)
+
+	n, err := io.Copy(buf, input)
 	if err != nil {
 		return 0, err
+	}
+	if limit > 0 && n > limit {
+		if tableScoped {
+			// Larger than the destination's entire budget: draining cannot make
+			// room, so report it as permanent for this payload shape.
+			return 0, &wal.SegmentTooLargeError{Destination: wal.Destination{Database: db, Table: table}, Size: n, Limit: limit}
+		}
+		return 0, wal.ErrMaxDiskUsageExceeded
 	}
 
 	atomic.AddInt64(&s.inflightWriteBytes, n)
@@ -370,16 +497,37 @@ func (s *LocalStore) Index() *wal.Index {
 // inflight write bytes, and index size (closed WAL segments).
 // diskUsageExceeded returns true if writes to w must be rejected because disk usage reached the limit for w's
 // ingestion priority.
+// diskUsageExceeded reports whether the aggregate disk limit is reached.
+// Admission owns capacity when enabled, including the global ceiling, so the
+// legacy check is skipped to avoid two systems rejecting on the same budget.
 func (s *LocalStore) diskUsageExceeded(w *wal.WAL) bool {
+	if s.opts.Admission != nil {
+		return false
+	}
 	return s.Size() > s.repository.MaxDiskUsage(w.Priority())
 }
 
 func (s *LocalStore) Size() int64 {
+	if s.opts.Admission != nil {
+		return s.opts.Admission.Usage().Bytes
+	}
 	return s.repository.Size() + atomic.LoadInt64(&s.inflightWriteBytes) + s.Index().TotalSize()
+}
+
+func (s *LocalStore) SegmentCount() int64 {
+	if s.opts.Admission != nil {
+		return s.opts.Admission.Usage().Segments
+	}
+	return int64(s.Index().TotalSegments())
 }
 
 // WriteDebug writes debug information to the given writer.
 func (s *LocalStore) WriteDebug(w io.Writer) error {
+	if s.opts.Admission != nil {
+		for d, status := range s.opts.Admission.Status() {
+			fmt.Fprintf(w, "Table %s: bytes=%d/%d segments=%d/%d throttled=%t rejected=%d\n", d, status.Bytes, status.Limit.Bytes, status.Segments, status.Limit.Segments, status.Throttled, status.RejectedRecords)
+		}
+	}
 	if err := s.repository.WriteDebug(w); err != nil {
 		return err
 	}
@@ -406,6 +554,14 @@ func (s *LocalStore) WriteDebug(w io.Writer) error {
 	tw.Flush()
 
 	return nil
+}
+
+func (s *LocalStore) recordRejection(quota *wal.TableOverloadedError, records, bytes int64, kind string) {
+	if s.opts.Admission.RecordRejection(quota.Destination, records, bytes) {
+		logger.Warnf("Shedding table quota data: table=%s reason=%s records=%d encoded_bytes=%d", quota.Destination, quota.Reason, records, bytes)
+	}
+	metrics.TableQuotaRejectedRecords.WithLabelValues(s.opts.MetricComponent, kind, quota.Reason).Add(float64(records))
+	metrics.TableQuotaRejectedBytes.WithLabelValues(s.opts.MetricComponent, kind, quota.Reason).Add(float64(bytes))
 }
 
 // SegmentKey returns the segment key for series using its effective labels
