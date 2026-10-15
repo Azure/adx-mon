@@ -119,6 +119,10 @@ type WALOpts struct {
 
 	// scheduler is the shared rotation scheduler.  When nil, the WAL creates its own.
 	scheduler *rotationScheduler
+
+	// Admission owns per-destination capacity accounting.  When nil, table
+	// budgets are not applied to this WAL.
+	Admission *Admission
 }
 
 type SampleType uint16
@@ -205,6 +209,11 @@ func (w *WAL) Write(ctx context.Context, buf []byte, opts ...WriteOptions) error
 
 // writeWithRetry calls write, retrying when the segment rotates concurrently.  A write that exceeds the max segment
 // size rotates the segment and is retried once.
+//
+// A write rejected by a table budget releases the active segment: the uploader
+// only drains closed segments, so otherwise a throttled table whose segment has
+// not reached its rotation size or age would never free capacity and could stay
+// throttled indefinitely.
 func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) error {
 	rotated := false
 	for closedRetries := 0; ; {
@@ -218,12 +227,43 @@ func (w *WAL) writeWithRetry(ctx context.Context, write func() (int, error)) err
 		case errors.Is(err, ErrSegmentClosed) && closedRetries < maxSegmentClosedRetries:
 			closedRetries++
 		default:
+			var quota *TableOverloadedError
+			if errors.As(err, &quota) {
+				w.closeActiveSegment()
+			}
 			return err
 		}
 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+	}
+}
+
+// closeActiveSegment closes and indexes the active segment, if any, so its
+// capacity can be reclaimed once it is uploaded.
+func (w *WAL) closeActiveSegment() {
+	w.mu.Lock()
+	toClose := w.segment
+	if toClose == nil {
+		w.mu.Unlock()
+		return
+	}
+	w.setSegment(nil)
+	w.mu.Unlock()
+
+	// Indexed before closing so a failed close still leaves the backlog
+	// discoverable by the uploader rather than stranding it until restart.
+	if toClose.Size() > 8 {
+		info := toClose.Info()
+		info.Priority = w.opts.Priority
+		w.index.Add(info)
+	} else {
+		_ = w.Remove(toClose.Path())
+	}
+
+	if err := toClose.Close(); err != nil {
+		logger.Errorf("Failed to close throttled segment: %s %s", toClose.Path(), err.Error())
 	}
 }
 
@@ -244,6 +284,10 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (i
 	w.mu.RUnlock()
 
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return 0, ErrSegmentClosed
+	}
 	if w.segment == nil {
 		seg, err := w.newSegment()
 		if err != nil {
@@ -259,6 +303,12 @@ func (w *WAL) tryWrite(ctx context.Context, buf []byte, opts ...WriteOptions) (i
 }
 
 func (w *WAL) validateLimits() error {
+	if w.opts.Admission != nil {
+		if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) > 8 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+			return ErrMaxSegmentSizeExceeded
+		}
+		return nil
+	}
 	totalSize := w.index.TotalSize() + atomic.LoadInt64(&w.inflightWriteBytes)
 	w.mu.RLock()
 	if w.segment != nil {
@@ -274,7 +324,7 @@ func (w *WAL) validateLimits() error {
 		return ErrMaxSegmentsExceeded
 	}
 
-	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
+	if w.opts.SegmentMaxSize > 0 && atomic.LoadInt64(&w.segmentSize) > 8 && atomic.LoadInt64(&w.segmentSize)+atomic.LoadInt64(&w.inflightWriteBytes) >= w.opts.SegmentMaxSize {
 		return ErrMaxSegmentSizeExceeded
 	}
 
@@ -314,7 +364,8 @@ func (w *WAL) requiresRotation() bool {
 func (w *WAL) newSegment() (Segment, error) {
 	return NewSegment(w.opts.StorageDir, w.opts.Prefix,
 		WithFlushIntervale(w.opts.WALFlushInterval),
-		WithFsync(w.opts.EnableWALFsync))
+		WithFsync(w.opts.EnableWALFsync),
+		WithAdmission(w.opts.Admission))
 }
 
 // setSegment sets the current segment and its tracked size and creation time, and schedules its rotation.  seg may
@@ -398,7 +449,8 @@ func (w *WAL) rotateSegmentIfNecessary() {
 			info.Priority = w.opts.Priority
 			w.index.Add(info)
 		} else {
-			_ = os.Remove(toClose.Path())
+			// Removed through the WAL so the table budget is released.
+			_ = w.Remove(toClose.Path())
 		}
 
 		if err := toClose.Close(); err != nil {
@@ -453,7 +505,10 @@ func (w *WAL) path() string {
 
 func (w *WAL) Remove(path string) error {
 	err := os.Remove(path)
-	if os.IsNotExist(err) {
+	if err == nil || os.IsNotExist(err) {
+		if d, derr := DestinationFromPrefix(w.opts.Prefix); derr == nil {
+			w.opts.Admission.Forget(d, path)
+		}
 		return nil
 	}
 	return err
@@ -486,6 +541,10 @@ func (w *WAL) tryAppend(ctx context.Context, buf []byte) (int, error) {
 	w.mu.RUnlock()
 
 	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return 0, ErrSegmentClosed
+	}
 	if w.segment == nil {
 		seg, err := w.newSegment()
 		if err != nil {

@@ -14,6 +14,10 @@ import (
 )
 
 // Index provides overview of all segments in a repository.
+//
+// The index owns closed-segment bookkeeping only. Live capacity accounting is
+// owned by Admission; the index notifies it when a segment is removed so the
+// two never maintain parallel counters that can diverge.
 type Index struct {
 	mu       sync.RWMutex
 	segments map[string][]SegmentInfo
@@ -31,6 +35,10 @@ type Index struct {
 	// subscribers is a copy-on-write list read without locking by Add.  subMu serializes updates.
 	subMu       sync.Mutex
 	subscribers atomic.Pointer[[]*indexSubscriber]
+
+	// Admission owns live capacity accounting and is notified when a segment is
+	// removed so its budget is released.
+	Admission *Admission
 }
 
 type indexSubscriber struct {
@@ -107,28 +115,46 @@ func (i *Index) Get(infos []SegmentInfo, prefix string) []SegmentInfo {
 	return infos
 }
 
-// Remove removes a segment from the index.
+// Remove removes a segment from the index and releases the capacity it held.
 func (i *Index) Remove(s SegmentInfo) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
+	var removed SegmentInfo
+	var found bool
 
+	i.mu.Lock()
 	segments := i.segments[s.Prefix]
 	for idx, seg := range segments {
 		if seg.Path == s.Path {
-			segments = append(segments[:idx], segments[idx+1:]...)
-			atomic.AddInt64(&i.totalSize, -s.Size)
+			// Copied, not referenced: the backing array is mutated below and by
+			// concurrent callers once the lock is released.
+			removed, found = seg, true
+			atomic.AddInt64(&i.totalSize, -seg.Size)
 			// Use the indexed priority since callers may not set it.
-			atomic.AddInt64(i.prioritySize(seg.Priority), -s.Size)
+			atomic.AddInt64(i.prioritySize(seg.Priority), -seg.Size)
 			i.removeAge(seg.Path, seg.CreatedAt)
-
+			segments = append(segments[:idx], segments[idx+1:]...)
 			if len(segments) == 0 {
 				delete(i.segments, s.Prefix)
-				break
+			} else {
+				i.segments[s.Prefix] = segments
 			}
-			i.segments[s.Prefix] = segments
 			break
 		}
 	}
+	i.mu.Unlock()
+
+	// Released outside the index lock so admission never has to be acquired
+	// beneath it.
+	if found {
+		if d, err := DestinationFromPrefix(removed.Prefix); err == nil {
+			i.Admission.Forget(d, removed.Path)
+		}
+	}
+}
+
+// Usage counts bytes and files, including reservations when used by admission.
+type Usage struct {
+	Bytes    int64
+	Segments int64
 }
 
 // Oldest returns the prefix of the oldest segment.
