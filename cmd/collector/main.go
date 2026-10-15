@@ -378,6 +378,11 @@ func realMain(ctx *cli.Context) error {
 		MaxSegmentSize:         cfg.MaxSegmentSize,
 		MaxSegmentCount:        cfg.MaxSegmentCount,
 		MaxDiskUsage:           cfg.MaxDiskUsage,
+		MaxTableDiskUsage:      cfg.MaxTableDiskUsage,
+		MaxTableSegmentCount:   cfg.MaxTableSegmentCount,
+		DisableTableLimits:     cfg.DisableTableLimits,
+		EnforceTableLimits:     cfg.EnforceTableLimits,
+		TableLimits:            cfg.TableLimits,
 		MaxTransferConcurrency: cfg.MaxTransferConcurrency,
 		WALFlushInterval:       time.Duration(cfg.WALFlushIntervalMilliSeconds) * time.Millisecond,
 		Region:                 cfg.Region,
@@ -634,6 +639,7 @@ func realMain(ctx *cli.Context) error {
 			logsSvc := otlp.NewLogsService(otlp.LogsServiceOpts{
 				WorkerCreator: engine.WorkerCreator(transformers, sinks),
 				HealthChecker: health,
+				ProcessBatch:  engine.WorkerCreator(transformers, sinks)("otlp-logs", nil).ProcessBatch,
 			})
 
 			workerSvc := &logs.Service{
