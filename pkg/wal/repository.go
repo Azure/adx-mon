@@ -56,6 +56,9 @@ type RepositoryOpts struct {
 	// usage reaches MaxDiskUsage minus this value.  It only applies when Policy has realtime tables and is less than
 	// MaxDiskUsage.
 	RealtimeReservedDiskBytes int64
+
+	// Admission owns per-destination capacity accounting for this repository.
+	Admission *Admission
 }
 
 // RotationPolicy overrides segment rotation settings.  Zero values inherit the repository settings.
@@ -66,9 +69,11 @@ type RotationPolicy struct {
 }
 
 func NewRepository(opts RepositoryOpts) *Repository {
+	index := NewIndex()
+	index.Admission = opts.Admission
 	r := &Repository{
 		opts:  opts,
-		index: NewIndex(),
+		index: index,
 		wals:  partmap.NewMap[*WAL](64),
 	}
 	r.scheduler = newRotationScheduler(defaultRotationSweepInterval, r.sweepRotations)
@@ -245,6 +250,9 @@ func (s *Repository) openStartupSegment(ctx context.Context, path string) error 
 		Priority:  s.priority(prefix),
 	}
 	s.index.Add(info)
+	if d, err := DestinationFromPrefix(prefix); err == nil {
+		s.opts.Admission.Restore(path, d, fi.Size())
+	}
 
 	if _, err := s.wals.GetOrCreate(prefix, func() (*WAL, error) {
 		return s.newWAL(ctx, prefix)
@@ -295,6 +303,7 @@ func (s *Repository) walOpts(prefix string) WALOpts {
 		WALFlushInterval: s.opts.WALFlushInterval,
 		EnableWALFsync:   s.opts.EnableWALFsync,
 		scheduler:        s.scheduler,
+		Admission:        s.opts.Admission,
 	}
 
 	opts.Priority = s.priority(prefix)
@@ -382,6 +391,8 @@ func (s *Repository) Keys() [][]byte {
 func (s *Repository) Index() *Index {
 	return s.index
 }
+
+func (s *Repository) Admission() *Admission { return s.opts.Admission }
 
 func (s *Repository) RemoveSegment(si SegmentInfo) {
 	s.index.Remove(si)

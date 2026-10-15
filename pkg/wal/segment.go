@@ -51,6 +51,10 @@ func WithFsync(b bool) SegmentOption {
 	}
 }
 
+func WithAdmission(a *Admission) SegmentOption {
+	return func(s *segment) { s.admission = a }
+}
+
 type Segment interface {
 	Append(ctx context.Context, buf []byte) (int, error)
 	Write(ctx context.Context, buf []byte, opts ...WriteOptions) (int, error)
@@ -112,6 +116,9 @@ type segment struct {
 	// this can increase disk IO and reduce performance.  If this is enabled, it may require more nodes
 	// to spread the IO load.
 	enableFsync bool
+	admission   *Admission
+	destination Destination
+	budget      *TableBudget
 }
 
 func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
@@ -133,28 +140,53 @@ func NewSegment(dir, prefix string, opts ...SegmentOption) (Segment, error) {
 	}
 
 	path := filepath.Join(dir, fileName)
+	config := &segment{}
+	for _, opt := range opts {
+		opt(config)
+	}
+	var destination Destination
+	var budget *TableBudget
+	if config.admission != nil {
+		destination, err = DestinationFromPrefix(prefix)
+		if err != nil {
+			return nil, err
+		}
+		budget = config.admission.Table(destination)
+	}
+	reservation, err := budget.Reserve(path, 8, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer reservation.Release()
 	fw, err := os.Create(path)
 	if err != nil {
 		return nil, err
 	}
 
 	if n, err := fw.Write(segmentMagic[:]); err != nil {
+		fw.Close()
+		os.Remove(path)
 		return nil, err
 	} else if n != 8 {
+		fw.Close()
+		os.Remove(path)
 		return nil, io.ErrShortWrite
 	}
+	reservation.Finish(8)
 
 	bf := bwPool.Get(DefaultIOBufSize).(*bufio.Writer)
 	bf.Reset(fw)
 
 	f := &segment{
-		id:        flakeId.String(),
-		prefix:    prefix,
-		createdAt: createdAt.UTC(),
-		path:      path,
-		w:         fw,
-		bw:        bf,
-		filePos:   8,
+		id:          flakeId.String(),
+		prefix:      prefix,
+		destination: destination,
+		budget:      budget,
+		createdAt:   createdAt.UTC(),
+		path:        path,
+		w:           fw,
+		bw:          bf,
+		filePos:     8,
 
 		closing:       make(chan struct{}),
 		flushCh:       make(chan chan error),
@@ -343,7 +375,13 @@ func (s *segment) Append(ctx context.Context, buf []byte) (int, error) {
 	}
 
 	// Strip off the header and append the block to the segment
+	r, err := s.reserve(int64(len(buf) - 8))
+	if err != nil {
+		return 0, err
+	}
+	defer r.Release()
 	n, err := s.appendBlocks(buf[8:])
+	r.Finish(int64(n))
 	if err != nil {
 		return 0, err
 	}
@@ -588,7 +626,13 @@ func (s *segment) blockWrite(buf []byte, opts ...WriteOptions) (int, error) {
 		return 0, ErrSegmentClosed
 	}
 
+	r, err := s.reserve(int64(len(b)))
+	if err != nil {
+		return 0, err
+	}
+	defer r.Release()
 	n, err := s.bw.Write(b)
+	r.Finish(int64(n))
 	if err != nil {
 		return 0, err
 	} else if n != len(b) {
@@ -596,6 +640,13 @@ func (s *segment) blockWrite(buf []byte, opts ...WriteOptions) (int, error) {
 	}
 
 	return n, nil
+}
+
+func (s *segment) reserve(bytes int64) (*Reservation, error) {
+	if s.budget == nil {
+		return nil, nil
+	}
+	return s.budget.Reserve(s.path, bytes, 0)
 }
 
 func (s *segment) truncate(ofs int64) error {
