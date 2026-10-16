@@ -224,7 +224,8 @@ func TestService_Open_Matching(t *testing.T) {
 		dir := t.TempDir()
 		pod := fakePod("default", "pod1", map[string]string{"app": "test"}, "ks8-master-123")
 		pod.Annotations = map[string]string{
-			"adx-mon/scrape": "true",
+			"adx-mon/scrape":          "true",
+			"adx-mon/scrape-interval": "45s",
 		}
 		pod.Status.PodIP = "172.31.1.18"
 		pod.Spec.Containers = []v1.Container{
@@ -272,6 +273,7 @@ func TestService_Open_Matching(t *testing.T) {
 		require.Equal(t, "http://172.31.1.18:9000/metrics", targets[0].Addr)
 		require.Equal(t, "container", targets[0].Container)
 		require.Equal(t, "default", targets[0].Namespace)
+		require.Equal(t, 45*time.Second, targets[0].ScrapeInterval)
 
 		require.Equal(t, "http://localhost:8080/metrics", targets[1].Addr)
 		require.Equal(t, "namespace", targets[1].Namespace)
