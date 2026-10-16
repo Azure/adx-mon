@@ -10,7 +10,66 @@ import (
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestScraper_OnUpdatePodReplacement(t *testing.T) {
+	tests := []struct {
+		name        string
+		scrape      string
+		terminating bool
+	}{
+		{name: "scrapeable replacement", scrape: "true"},
+		{name: "non-scrapeable replacement", scrape: "false"},
+		{name: "terminating replacement", scrape: "true", terminating: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewScraper(&ScraperOpts{})
+			oldPod := &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:   "default",
+					Name:        "pod",
+					UID:         "old-uid",
+					Annotations: map[string]string{"adx-mon/scrape": "true"},
+				},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{{
+						Name:  "container",
+						Ports: []v1.ContainerPort{{ContainerPort: 8080}},
+					}},
+				},
+				Status: v1.PodStatus{PodIP: "1.2.3.4"},
+			}
+			s.OnAdd(oldPod, false)
+			require.Len(t, s.Targets(), 1)
+
+			newPod := oldPod.DeepCopy()
+			newPod.UID = "new-uid"
+			newPod.Status.PodIP = "1.2.3.5"
+			newPod.Annotations["adx-mon/scrape"] = tt.scrape
+			if tt.terminating {
+				newPod.DeletionTimestamp = new(metav1.Now())
+			}
+
+			s.OnUpdate(oldPod, newPod)
+
+			if tt.scrape == "true" && !tt.terminating {
+				require.Equal(t, []ScrapeTarget{{
+					Addr:      "http://1.2.3.5:8080/metrics",
+					Namespace: "default",
+					Pod:       "pod",
+					Container: "container",
+				}}, s.Targets())
+			} else {
+				require.Empty(t, s.Targets())
+			}
+
+			s.OnDelete(newPod)
+			require.Empty(t, s.Targets())
+		})
+	}
+}
 
 func TestScraperOpts_RequestTransformer(t *testing.T) {
 	opts := &ScraperOpts{
