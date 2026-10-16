@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"sort"
 	"strconv"
@@ -90,6 +89,9 @@ type ScrapeTarget struct {
 	Namespace string
 	Pod       string
 	Container string
+
+	// ScrapeInterval overrides the global interval. Zero inherits the default.
+	ScrapeInterval time.Duration
 }
 
 func (t ScrapeTarget) path() string {
@@ -105,7 +107,7 @@ func (t ScrapeTarget) String() string {
 }
 
 func (t ScrapeTarget) Equals(other ScrapeTarget) bool {
-	return t.Addr == other.Addr && t.Namespace == other.Namespace && t.Pod == other.Pod && t.Container == other.Container && t.Static == other.Static
+	return t == other
 }
 
 // scrapeTargetKey separates pod incarnations and endpoints, including static
@@ -143,6 +145,8 @@ type Scraper struct {
 
 	mu      sync.RWMutex
 	targets map[scrapeTargetKey]ScrapeTarget
+
+	targetsChanged chan struct{}
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -154,10 +158,14 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		remoteClients:      opts.RemoteClients,
 		healthChecker:      opts.HealthChecker,
 		targets:            make(map[scrapeTargetKey]ScrapeTarget),
+		targetsChanged:     make(chan struct{}, 1),
 	}
 }
 
 func (s *Scraper) Open(ctx context.Context) error {
+	if s.opts.ScrapeInterval <= 0 {
+		return errors.New("scrape interval must be greater than zero")
+	}
 	logger.Infof("Starting prometheus scraper for node %s", s.opts.NodeName)
 	ctx, cancelFn := context.WithCancel(ctx)
 	s.cancel = cancelFn
@@ -206,44 +214,55 @@ func (s *Scraper) Close() error {
 func (s *Scraper) scrape(ctx context.Context) {
 	defer s.wg.Done()
 
-	// Sleep for a random amount of time to avoid thundering herd
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(time.Duration(rand.Intn(int(s.opts.ScrapeInterval.Seconds()))) * time.Second):
-		// continue
-	}
-
 	reconnectTimer := time.NewTicker(5 * time.Minute)
 	defer reconnectTimer.Stop()
-	t := time.NewTicker(s.opts.ScrapeInterval)
+	t := time.NewTimer(0)
 	defer t.Stop()
+	timerC := t.C
+	schedule := make(scrapeSchedule)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			if !s.healthChecker.IsHealthy() {
-				logger.Warnf("Collector is unhealthy, skipping scrape")
-				continue
-			}
-			s.scrapeTargets(ctx)
+		case <-timerC:
+		case <-s.targetsChanged:
 		case <-reconnectTimer.C:
 			for _, remoteClient := range s.remoteClients {
 				remoteClient.CloseIdleConnections()
 			}
 		}
+
+		now := time.Now()
+		s.mu.RLock()
+		schedule.reconcile(s.targets, s.opts.ScrapeInterval, now)
+		s.mu.RUnlock()
+		if targets := schedule.due(now); len(targets) > 0 {
+			if !s.healthChecker.IsHealthy() {
+				logger.Warnf("Collector is unhealthy, skipping scrape")
+			} else {
+				s.scrapeTargets(ctx, targets)
+			}
+			schedule.advance(now, time.Now())
+		}
+
+		timerC = nil
+		t.Stop()
+		if next, ok := schedule.next(); ok {
+			t.Reset(time.Until(next))
+			timerC = t.C
+		}
 	}
 }
 
-func (s *Scraper) scrapeTargets(ctx context.Context) {
-	targets := s.Targets()
-
+func (s *Scraper) scrapeTargets(ctx context.Context, targets []ScrapeTarget) {
 	scrapeTime := time.Now().UnixNano() / 1e6
 	wr := prompb.WriteRequestPool.Get()
 	defer prompb.WriteRequestPool.Put(wr)
 
 	for _, target := range targets {
+		if ctx.Err() != nil {
+			break
+		}
 		logger.Infof("Scraping %s", target.String())
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
@@ -376,6 +395,7 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 	defer s.mu.Unlock()
 
 	desired := make(map[scrapeTargetKey]ScrapeTarget, len(targets))
+	changed := false
 	for _, target := range targets {
 		key := target.key(p.UID, false)
 		desired[key] = target
@@ -389,12 +409,17 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 			logger.Infof("Adding target %s %s", target.path(), target)
 		}
 		s.targets[key] = target
+		changed = true
 	}
 	for key, target := range s.targets {
 		if _, ok := desired[key]; key.belongsTo(p) && !ok {
 			logger.Infof("Removing target %s %s", target.path(), target)
 			delete(s.targets, key)
+			changed = true
 		}
+	}
+	if changed {
+		s.notifyTargetsChanged()
 	}
 }
 
@@ -431,7 +456,16 @@ func (s *Scraper) OnDelete(obj interface{}) {
 		if key.belongsTo(p) {
 			logger.Infof("Removing target %s %s", target.path(), target)
 			delete(s.targets, key)
+			s.notifyTargetsChanged()
 		}
+	}
+}
+
+// Coalesce informer notifications; the scraper always reconciles the full set.
+func (s *Scraper) notifyTargetsChanged() {
+	select {
+	case s.targetsChanged <- struct{}{}:
+	default:
 	}
 }
 
