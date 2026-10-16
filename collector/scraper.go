@@ -374,10 +374,14 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 	}
 }
 
-func (s *Scraper) OnUpdate(oldObj, newObj interface{}) {
+func (s *Scraper) OnUpdate(oldObj, newObj any) {
 	p, ok := newObj.(*v1.Pod)
 	if !ok || p == nil {
 		return
+	}
+
+	if oldPod, ok := oldObj.(*v1.Pod); ok && oldPod != nil && oldPod.UID != p.UID {
+		s.OnDelete(oldPod)
 	}
 
 	if p.DeletionTimestamp != nil {
