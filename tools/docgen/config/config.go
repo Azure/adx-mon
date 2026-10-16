@@ -174,8 +174,12 @@ func getContents() Contents {
 				},
 			},
 			{
-				Title:       "Prometheus Scrape",
-				Description: "Prometheus scrape discovers pods with the `adx-mon/scrape` annotation as well as any defined static scrape targets. It ships any metrics to the defined ADX database.",
+				Title: "Prometheus Scrape",
+				Description: "Prometheus scrape discovers pods with the `adx-mon/scrape` annotation as well as any defined static scrape targets. It ships any metrics to the defined ADX database.\n\n" +
+					"The global `scrape-interval` is configured in seconds. To override it for all metrics endpoints on a pod, including those listed in `adx-mon/targets`, set `adx-mon/scrape-interval` to a positive Go duration:\n\n" +
+					"```yaml\nadx-mon/scrape: \"true\"\nadx-mon/port: \"metrics\"\nadx-mon/scrape-interval: \"30s\"\n```\n\n" +
+					"Values such as `500ms`, `15s`, and `2m` are supported. Missing or empty annotations inherit the global interval. Invalid, zero, or negative durations log a warning identifying the pod and fall back to the global interval. Changes are applied when pod discovery observes them; removing the annotation restores the default. Static targets inherit the global interval.\n\n" +
+					"New targets are staggered within their interval. Scrapes run serially, so scrape and forwarding durations can delay deadlines. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` continues to apply to every endpoint.",
 				Config: &config.Config{
 					PrometheusScrape: &config.PrometheusScrape{
 						Database:              "Metrics",

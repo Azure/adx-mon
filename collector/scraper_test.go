@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
 )
 
 func TestScraperOpts_RequestTransformer(t *testing.T) {
@@ -129,9 +131,9 @@ func TestScraper_isScrapeable_PodIpReused(t *testing.T) {
 
 	targets := s.isScrapeable(p)
 
-	s.targets = make(map[string]ScrapeTarget)
+	s.targets = make(map[scrapeTargetKey]ScrapeTarget)
 	for _, target := range targets {
-		s.targets[target.path()] = target
+		s.targets[target.key(p.UID, false)] = target
 	}
 
 	// Add a new pod with the same IP and port but different pod name
@@ -153,6 +155,113 @@ func TestScraper_isScrapeable_PodIpReused(t *testing.T) {
 	}
 
 	targets = s.isScrapeable(p)
+	require.Len(t, targets, 1)
+	require.Equal(t, "baz", targets[0].Pod)
+}
+
+func TestScraper_ReconcilePodEndpoints(t *testing.T) {
+	s := NewScraper(&ScraperOpts{})
+	p := fakePod("namespace", "pod", nil, "node")
+	p.UID = "pod-uid"
+	p.Annotations = map[string]string{"adx-mon/scrape": "true"}
+	p.Status.PodIP = "1.2.3.4"
+	p.Spec.Containers = []v1.Container{{Name: "app", Ports: []v1.ContainerPort{
+		{ContainerPort: 8080}, {ContainerPort: 9090},
+	}}}
+	static := ScrapeTarget{Addr: "http://localhost:8080/metrics", Namespace: p.Namespace, Pod: p.Name, Container: "app"}
+	s.targets[static.key("", true)] = static
+
+	s.OnAdd(p, true)
+	require.Len(t, s.Targets(), 3)
+	s.OnAdd(p, false)
+	require.Len(t, s.Targets(), 3)
+
+	updated := p.DeepCopy()
+	updated.Spec.Containers[0].Ports = updated.Spec.Containers[0].Ports[:1]
+	s.OnUpdate(p, updated)
+	require.Len(t, s.Targets(), 2)
+	require.Equal(t, "http://1.2.3.4:8080/metrics", s.Targets()[0].Addr)
+
+	updated.Annotations["adx-mon/scrape"] = "false"
+	s.OnUpdate(p, updated)
+	require.Equal(t, []ScrapeTarget{static}, s.Targets())
+
+	s.OnAdd(p, false)
+	require.Len(t, s.Targets(), 3)
+	s.OnDelete(cache.DeletedFinalStateUnknown{Obj: p})
+	require.Equal(t, []ScrapeTarget{static}, s.Targets())
+}
+
+func TestScraper_DeleteOldPodPreservesReplacement(t *testing.T) {
+	s := NewScraper(&ScraperOpts{})
+	p := fakePod("namespace", "pod", nil, "node")
+	p.UID = "old-uid"
+	p.Annotations = map[string]string{"adx-mon/scrape": "true"}
+	p.Status.PodIP = "1.2.3.4"
+	p.Spec.Containers = []v1.Container{{Name: "app", Ports: []v1.ContainerPort{{ContainerPort: 8080}}}}
+	s.OnAdd(p, true)
+	replacement := p.DeepCopy()
+	replacement.UID = "new-uid"
+	s.OnAdd(replacement, false)
+	s.OnDelete(p)
+	require.Len(t, s.Targets(), 1)
+	s.OnDelete(replacement)
+	require.Empty(t, s.Targets())
+}
+
+func TestMakeTargets_ScrapeInterval(t *testing.T) {
+	for _, mode := range []struct {
+		name        string
+		annotations map[string]string
+		count       int
+	}{
+		{name: "all ports", count: 2},
+		{name: "numeric port", annotations: map[string]string{"adx-mon/port": "8080"}, count: 1},
+		{name: "named port", annotations: map[string]string{"adx-mon/port": "metrics"}, count: 1},
+		{name: "target list", annotations: map[string]string{"adx-mon/targets": "/metrics:metrics,/other:9090"}, count: 2},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tt := range []struct {
+				value string
+				want  time.Duration
+			}{
+				{value: ""},
+				{value: "30s", want: 30 * time.Second},
+				{value: "2m", want: 2 * time.Minute},
+				{value: "500ms", want: 500 * time.Millisecond},
+				{value: "1.5s", want: 1500 * time.Millisecond},
+				{value: "1ns", want: time.Nanosecond},
+				{value: "invalid"},
+				{value: "30"},
+				{value: "0s"},
+				{value: "-1s"},
+				{value: "999999999999999999999h"},
+			} {
+				t.Run(tt.value, func(t *testing.T) {
+					p := fakePod("namespace", "pod", nil, "node")
+					p.Annotations = map[string]string{
+						"adx-mon/scrape": "true", "adx-mon/scrape-interval": tt.value,
+					}
+					for key, value := range mode.annotations {
+						p.Annotations[key] = value
+					}
+					p.Status.PodIP = "1.2.3.4"
+					p.Spec.Containers = []v1.Container{{Name: "app", Ports: []v1.ContainerPort{
+						{Name: "metrics", ContainerPort: 8080}, {ContainerPort: 9090},
+					}}}
+					targets := makeTargets(p)
+					require.Len(t, targets, mode.count)
+					for _, target := range targets {
+						require.Equal(t, tt.want, target.ScrapeInterval)
+					}
+					delete(p.Annotations, "adx-mon/scrape-interval")
+					for _, target := range makeTargets(p) {
+						require.Zero(t, target.ScrapeInterval)
+					}
+				})
+			}
+		})
+	}
 }
 
 type fakeClient struct {
