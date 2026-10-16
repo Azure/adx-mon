@@ -502,6 +502,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 	scheme := getAnnotationOrDefault(p, "adx-mon/scheme", "http")
 	path := getAnnotationOrDefault(p, "adx-mon/path", "/metrics")
+	interval := getScrapeInterval(p)
 
 	// Just scrape this one port
 	port := getAnnotationOrDefault(p, "adx-mon/port", "")
@@ -530,6 +531,7 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 				for _, checkPort := range checkPorts {
 					// if the current port, liveness port, readiness port, or named port exist in the targetMap, add that to scrape targets
 					if target, added := addTargetFromMap(podIP, scheme, checkPort, p.Namespace, p.Name, c.Name, targetMap, &cp); added {
+						target.ScrapeInterval = interval
 						targets = append(targets, target)
 						// if all targets are accounted for, return target list
 						if len(targetMap) == 0 {
@@ -563,25 +565,41 @@ func makeTargets(p *v1.Pod) []ScrapeTarget {
 
 				targets = append(targets,
 					ScrapeTarget{
-						Addr:      fmt.Sprintf("%s://%s:%s%s", scheme, podIP, actualPort, path),
-						Namespace: p.Namespace,
-						Pod:       p.Name,
-						Container: c.Name,
+						Addr:           fmt.Sprintf("%s://%s:%s%s", scheme, podIP, actualPort, path),
+						Namespace:      p.Namespace,
+						Pod:            p.Name,
+						Container:      c.Name,
+						ScrapeInterval: interval,
 					})
 				return targets
 			}
 
 			targets = append(targets,
 				ScrapeTarget{
-					Addr:      fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
-					Namespace: p.Namespace,
-					Pod:       p.Name,
-					Container: c.Name,
+					Addr:           fmt.Sprintf("%s://%s:%d%s", scheme, podIP, cp.ContainerPort, path),
+					Namespace:      p.Namespace,
+					Pod:            p.Name,
+					Container:      c.Name,
+					ScrapeInterval: interval,
 				})
 		}
 	}
 
 	return targets
+}
+
+func getScrapeInterval(p *v1.Pod) time.Duration {
+	raw := getAnnotationOrDefault(p, "adx-mon/scrape-interval", "")
+	if raw == "" {
+		return 0
+	}
+	interval, err := time.ParseDuration(raw)
+	if err != nil || interval <= 0 {
+		logger.Warnf("Invalid adx-mon/scrape-interval %q for pod %s/%s: must be a positive Go duration; using global scrape interval",
+			raw, p.Namespace, p.Name)
+		return 0
+	}
+	return interval
 }
 
 func parseTargetList(targetList string) (map[string]string, error) {

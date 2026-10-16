@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -13,6 +14,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/stretchr/testify/require"
+	v1 "k8s.io/api/core/v1"
 )
 
 func TestScrapeSchedule_Reconcile(t *testing.T) {
@@ -161,6 +163,103 @@ func TestScraper_MaintainsConnectionsWithoutTargets(t *testing.T) {
 		synctest.Wait()
 		require.Equal(t, 2, client.closed)
 		require.Zero(t, calls)
+	})
+}
+
+func TestScraper_PodIntervalUpdates(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		calls := make(map[string]int)
+		count := func(path string) int {
+			mu.Lock()
+			defer mu.Unlock()
+			return calls[path]
+		}
+		s := startTestScraper(t, &ScraperOpts{ScrapeInterval: time.Second}, func(req *http.Request) (*http.Response, error) {
+			mu.Lock()
+			calls[req.URL.Path]++
+			mu.Unlock()
+			return scrapeResponse(http.StatusOK), nil
+		})
+		p := fakePod("namespace", "pod", nil, "node")
+		p.UID = "pod-uid"
+		p.Annotations = map[string]string{
+			"adx-mon/scrape": "true", "adx-mon/scrape-interval": "100ms",
+			"adx-mon/targets": "/one:metrics,/two:9090",
+		}
+		p.Status.PodIP = "1.2.3.4"
+		p.Spec.Containers = []v1.Container{{Name: "app", Ports: []v1.ContainerPort{
+			{Name: "metrics", ContainerPort: 8080}, {ContainerPort: 9090},
+		}}}
+		s.OnAdd(p, true)
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		for _, path := range []string{"/one", "/two"} {
+			require.GreaterOrEqual(t, count(path), 10)
+			require.LessOrEqual(t, count(path), 11)
+		}
+
+		// Both endpoints must adopt an interval-only update immediately.
+		updated := p.DeepCopy()
+		updated.Annotations["adx-mon/scrape-interval"] = "200ms"
+		s.OnUpdate(p, updated)
+		synctest.Wait()
+		one, two := count("/one"), count("/two")
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.Equal(t, one+5, count("/one"))
+		require.Equal(t, two+5, count("/two"))
+
+		// Removing the annotation resets the next deadline to the default.
+		p = updated.DeepCopy()
+		delete(p.Annotations, "adx-mon/scrape-interval")
+		s.OnUpdate(updated, p)
+		synctest.Wait()
+		one, two = count("/one"), count("/two")
+		time.Sleep(time.Second - time.Nanosecond)
+		synctest.Wait()
+		require.Equal(t, one, count("/one"))
+		require.Equal(t, two, count("/two"))
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		require.Equal(t, one+1, count("/one"))
+		require.Equal(t, two+1, count("/two"))
+
+		// An endpoint removed from the list must stop while the other continues.
+		updated = p.DeepCopy()
+		updated.Annotations["adx-mon/targets"] = "/one:metrics"
+		s.OnUpdate(p, updated)
+		synctest.Wait()
+		one, two = count("/one"), count("/two")
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		require.Equal(t, one+2, count("/one"))
+		require.Equal(t, two, count("/two"))
+
+		p = updated.DeepCopy()
+		p.Annotations["adx-mon/scrape"] = "false"
+		s.OnUpdate(updated, p)
+		synctest.Wait()
+		one = count("/one")
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		require.Equal(t, one, count("/one"))
+
+		// Re-enabling discovery must wake the idle scheduler; deleting the pod
+		// must then discard its deadlines, including a long pending interval.
+		p.Annotations["adx-mon/scrape"] = "true"
+		s.OnAdd(p, false)
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		require.Greater(t, count("/one"), one)
+		s.OnDelete(p)
+		synctest.Wait()
+		one = count("/one")
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		require.Equal(t, one, count("/one"))
 	})
 }
 
