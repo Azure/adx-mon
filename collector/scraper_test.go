@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
@@ -265,6 +266,61 @@ func TestScraper_DeleteOldPodPreservesReplacement(t *testing.T) {
 	require.Len(t, s.Targets(), 1)
 	s.OnDelete(replacement)
 	require.Empty(t, s.Targets())
+}
+
+func TestMakeTargets_ScrapeInterval(t *testing.T) {
+	for _, mode := range []struct {
+		name        string
+		annotations map[string]string
+		count       int
+	}{
+		{name: "all ports", count: 2},
+		{name: "numeric port", annotations: map[string]string{"adx-mon/port": "8080"}, count: 1},
+		{name: "named port", annotations: map[string]string{"adx-mon/port": "metrics"}, count: 1},
+		{name: "target list", annotations: map[string]string{"adx-mon/targets": "/metrics:metrics,/other:9090"}, count: 2},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tt := range []struct {
+				value string
+				want  time.Duration
+			}{
+				{value: ""},
+				{value: "30s", want: 30 * time.Second},
+				{value: "2m", want: 2 * time.Minute},
+				{value: "500ms", want: 500 * time.Millisecond},
+				{value: "1.5s", want: 1500 * time.Millisecond},
+				{value: "1ns", want: time.Nanosecond},
+				{value: "invalid"},
+				{value: "30"},
+				{value: "0s"},
+				{value: "-1s"},
+				{value: "999999999999999999999h"},
+			} {
+				t.Run(tt.value, func(t *testing.T) {
+					p := fakePod("namespace", "pod", nil, "node")
+					p.Annotations = map[string]string{
+						"adx-mon/scrape": "true", "adx-mon/scrape-interval": tt.value,
+					}
+					for key, value := range mode.annotations {
+						p.Annotations[key] = value
+					}
+					p.Status.PodIP = "1.2.3.4"
+					p.Spec.Containers = []v1.Container{{Name: "app", Ports: []v1.ContainerPort{
+						{Name: "metrics", ContainerPort: 8080}, {ContainerPort: 9090},
+					}}}
+					targets := makeTargets(p)
+					require.Len(t, targets, mode.count)
+					for _, target := range targets {
+						require.Equal(t, tt.want, target.ScrapeInterval)
+					}
+					delete(p.Annotations, "adx-mon/scrape-interval")
+					for _, target := range makeTargets(p) {
+						require.Zero(t, target.ScrapeInterval)
+					}
+				})
+			}
+		})
+	}
 }
 
 type fakeClient struct {
