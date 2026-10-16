@@ -144,7 +144,7 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
 ## explicit; go 1.25.0
 github.com/ClickHouse/ch-go/compress
 github.com/ClickHouse/ch-go/proto
-# github.com/ClickHouse/clickhouse-go/v2 v2.48.0
+# github.com/ClickHouse/clickhouse-go/v2 v2.49.0
 ## explicit; go 1.25.0
 github.com/ClickHouse/clickhouse-go/v2
 github.com/ClickHouse/clickhouse-go/v2/ext
@@ -169,10 +169,9 @@ github.com/Microsoft/go-winio/pkg/guid
 # github.com/VictoriaMetrics/easyproto v1.2.0
 ## explicit; go 1.18
 github.com/VictoriaMetrics/easyproto
-# github.com/andybalholm/brotli v1.2.2
+# github.com/andybalholm/brotli v1.2.6
 ## explicit; go 1.22
 github.com/andybalholm/brotli
-github.com/andybalholm/brotli/flate
 github.com/andybalholm/brotli/matchfinder
 # github.com/antlr4-go/antlr/v4 v4.13.1
 ## explicit; go 1.22
@@ -440,7 +439,7 @@ github.com/moby/moby/api/types/storage
 github.com/moby/moby/api/types/swarm
 github.com/moby/moby/api/types/system
 github.com/moby/moby/api/types/volume
-# github.com/moby/moby/client v0.5.1
+# github.com/moby/moby/client v0.6.0
 ## explicit; go 1.24
 github.com/moby/moby/client
 github.com/moby/moby/client/internal
