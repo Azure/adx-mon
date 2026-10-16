@@ -45,6 +45,7 @@ The **Collector** is the entrypoint for telemetry collection in ADX-Mon. It is t
   - `adx-mon/scrape`: Enables scraping for a pod/service.
   - `adx-mon/port`, `adx-mon/path`: Configure scrape port/path. Port can be numeric (e.g., "8080") or named (e.g., "metrics").
   - `adx-mon/targets`: Comma-separated list of path:port combinations. Supports named ports.
+  - `adx-mon/scrape-interval`: Overrides the scrape interval for all metrics endpoints on a pod using a positive Go duration (e.g., `30s`, `2m`, or `500ms`). Missing, empty, or invalid values use the collector's global interval; invalid values log a warning.
   - `adx-mon/log-destination`: Sets log destination table.
   - `adx-mon/log-parsers`: Comma-separated list of log parsers (e.g., `json`).
 
