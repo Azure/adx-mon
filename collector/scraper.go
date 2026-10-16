@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/transform"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -107,6 +108,25 @@ func (t ScrapeTarget) Equals(other ScrapeTarget) bool {
 	return t.Addr == other.Addr && t.Namespace == other.Namespace && t.Pod == other.Pod && t.Container == other.Container && t.Static == other.Static
 }
 
+// scrapeTargetKey separates pod incarnations and endpoints, including static
+// endpoints with identical labels. Scheduling options are not part of identity.
+type scrapeTargetKey struct {
+	podUID    types.UID
+	static    bool
+	namespace string
+	pod       string
+	container string
+	addr      string
+}
+
+func (t ScrapeTarget) key(uid types.UID, static bool) scrapeTargetKey {
+	return scrapeTargetKey{uid, static, t.Namespace, t.Pod, t.Container, t.Addr}
+}
+
+func (k scrapeTargetKey) belongsTo(p *v1.Pod) bool {
+	return !k.static && k.podUID == p.UID && k.namespace == p.Namespace && k.pod == p.Name
+}
+
 type Scraper struct {
 	opts                 ScraperOpts
 	podInformer          k8s.PodInformerInterface
@@ -122,7 +142,7 @@ type Scraper struct {
 	cancel context.CancelFunc
 
 	mu      sync.RWMutex
-	targets map[string]ScrapeTarget
+	targets map[scrapeTargetKey]ScrapeTarget
 }
 
 func NewScraper(opts *ScraperOpts) *Scraper {
@@ -133,7 +153,7 @@ func NewScraper(opts *ScraperOpts) *Scraper {
 		requestTransformer: opts.RequestTransformer(),
 		remoteClients:      opts.RemoteClients,
 		healthChecker:      opts.HealthChecker,
-		targets:            make(map[string]ScrapeTarget),
+		targets:            make(map[scrapeTargetKey]ScrapeTarget),
 	}
 }
 
@@ -154,7 +174,7 @@ func (s *Scraper) Open(ctx context.Context) error {
 	// Add static targets
 	for _, target := range s.opts.Targets {
 		logger.Infof("Adding static target %s", target)
-		s.targets[target.path()] = target
+		s.targets[target.key("", true)] = target
 	}
 
 	if !s.opts.DisableDiscovery {
@@ -352,25 +372,29 @@ func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {
 
 	targets := s.isScrapeable(p)
 
-	// Not a scrape-able pod
-	if len(targets) == 0 {
-		return
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	desired := make(map[scrapeTargetKey]ScrapeTarget, len(targets))
 	for _, target := range targets {
-		existing, ok := s.targets[string(p.UID)]
+		key := target.key(p.UID, false)
+		desired[key] = target
+		existing, ok := s.targets[key]
 		if ok {
 			if target.Equals(existing) {
-				return
+				continue
 			}
 			logger.Infof("Updating target %s %s", target.path(), target)
 		} else {
 			logger.Infof("Adding target %s %s", target.path(), target)
 		}
-		s.targets[string(p.UID)] = target
+		s.targets[key] = target
+	}
+	for key, target := range s.targets {
+		if _, ok := desired[key]; key.belongsTo(p) && !ok {
+			logger.Infof("Removing target %s %s", target.path(), target)
+			delete(s.targets, key)
+		}
 	}
 }
 
@@ -388,6 +412,9 @@ func (s *Scraper) OnUpdate(oldObj, newObj interface{}) {
 }
 
 func (s *Scraper) OnDelete(obj interface{}) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
 	p, ok := obj.(*v1.Pod)
 	if !ok || p == nil {
 		return
@@ -396,12 +423,12 @@ func (s *Scraper) OnDelete(obj interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	target, ok := s.targets[string(p.UID)]
-	if !ok {
-		return
+	for key, target := range s.targets {
+		if key.belongsTo(p) {
+			logger.Infof("Removing target %s %s", target.path(), target)
+			delete(s.targets, key)
+		}
 	}
-	logger.Infof("Removing target %s %s", target.path(), target)
-	delete(s.targets, string(p.UID))
 }
 
 // isScrapeable returns the scrape target endpoints and true if the pod is currently a target, false otherwise
@@ -418,6 +445,9 @@ func (s *Scraper) Targets() []ScrapeTarget {
 		a = append(a, v)
 	}
 	sort.Slice(a, func(i, j int) bool {
+		if a[i].path() == a[j].path() {
+			return a[i].Addr < a[j].Addr
+		}
 		return a[i].path() < a[j].path()
 	})
 	return a

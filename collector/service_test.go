@@ -137,6 +137,7 @@ func TestService_Open_Static(t *testing.T) {
 				ScrapeInterval: 10 * time.Second,
 				Targets: []ScrapeTarget{
 					{Addr: "http://localhost:8080/metrics"},
+					{Addr: "http://localhost:9090/metrics"},
 				},
 			},
 			DisableGzip: true,
@@ -150,7 +151,7 @@ func TestService_Open_Static(t *testing.T) {
 		// wait for the scraper to pick up the new target
 		time.Sleep(100 * time.Millisecond)
 
-		require.Equal(t, 1, len(s.scraper.Targets()))
+		require.Equal(t, 2, len(s.scraper.Targets()))
 	})
 }
 
