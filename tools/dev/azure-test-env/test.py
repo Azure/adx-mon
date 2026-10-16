@@ -25,12 +25,13 @@ TABLES = {"pod_logs": ("Logs", "E2ePodLogs"),
           "scraped_metrics": ("Metrics", "E2eScrapedSample"),
           "queued_control": ("Logs", "E2eQueuedControl")}
 REALTIME_PATHS = tuple(path for path in TABLES if path != "queued_control")
-# The isolation phase starves one table's budget on the ingestor and requires
-# every other path to keep flowing.
+# The isolation phase deliberately sheds large logs at the collector while
+# healthy records in the same request and other paths continue to Kusto.
 ISOLATION_NOISY = "otlp_logs"
 ISOLATION_HEALTHY = tuple(path for path in TABLES if path != ISOLATION_NOISY)
-ISOLATION_TABLE_BYTES = 4096
+ISOLATION_TABLE_BYTES = 512
 LOG_ERROR = re.compile(r'"(?:lvl|level)"\s*:\s*"(?:ERR|ERROR|FATAL)"|\b(?:ERROR|FATAL)\b', re.I)
+IMDS_STARTUP_ERROR = re.compile(r'"msg":"HTTP status=400 method=GET url=http://169\.254\.169\.254/metadata/identity/oauth2/token')
 
 
 def image(state, component, tag):
@@ -101,7 +102,7 @@ def verify_images(state, tag):
             raise RuntimeError(f"Missing {image(state, component, tag)}; omit --reuse-tag to build")
 
 
-def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100):
+def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100, table_limits=()):
     text = text.replace("scrape-interval = 30", "scrape-interval = 1")
     text = text.replace("scrape-timeout = 25", "scrape-timeout = 1")
     # Keep-metrics only takes effect when default-drop-metrics is true.  Without
@@ -109,6 +110,14 @@ def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100):
     # series per cycle and dominates the latency experiment.
     text = text.replace("default-drop-metrics = false", "default-drop-metrics = true", 1)
     text = text.replace("keep-metrics = []", "keep-metrics = ['^e2e_scraped_sample$']", 1)
+    if daemonset and table_limits:
+        settings = "enforce-table-limits = true\n"
+        for db, table, max_bytes in table_limits:
+            settings += (f"\n[[table-limits]]\ndatabase = '{db}'\ntable = '{table}'\n"
+                         f"max-bytes = {max_bytes}\n")
+        marker = "[add-labels]"
+        assert marker in text
+        text = text.replace(marker, settings + "\n" + marker, 1)
     # Explicit OTLP metric receiver; the checked-in quick-start only defines OTLP logs.
     if daemonset:
         text += "\n[[otel-metric]]\ndatabase = 'Metrics'\npath = '/v1/otlpmetrics'\n"
@@ -121,7 +130,7 @@ def collector_config(text, realtime, daemonset, realtime_log_batch_wait_ms=100):
     return text
 
 
-def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=()):
+def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=(), collector_limits=()):
     vars = {"ADX_URL": state["endpoint"], "CLIENT_ID": state["kubelet_client_id"],
             "CLUSTER": state["names"]["aks"], "REGION": state["region"]}
     def render(file):
@@ -181,7 +190,7 @@ def deploy(state, tag, realtime, realtime_log_batch_wait_ms=100, table_limits=()
         config = "\n".join(line[4:] if line.startswith("    ") else line for line in raw.rstrip("\n").splitlines()) + "\n"
         replacement = "  config.toml: |\n" + "".join(
             "    " + line + "\n" for line in collector_config(
-                config, realtime, daemonset, realtime_log_batch_wait_ms).splitlines())
+                config, realtime, daemonset, realtime_log_batch_wait_ms, collector_limits).splitlines())
         collector = collector[:start] + replacement + collector[end:]
     run("kubectl", "apply", "-f", "-", input=collector)
     service = {"apiVersion": "v1", "kind": "Service", "metadata": {
@@ -264,10 +273,16 @@ def streaming_counts():
     return counts
 
 
-def ingestor_metrics():
-    with Forward("pod/ingestor-0", 9091) as forward:
+def collector_metrics():
+    with Forward("service/adx-mon-e2e-collector", 3100) as forward:
         with urllib.request.urlopen(forward.url + "/metrics", timeout=10) as response:
             return response.read().decode()
+
+
+def mixed_emit(forward, run_id, seq):
+    url = f"{forward.url}/mixed?" + urllib.parse.urlencode({"run": run_id, "seq": seq})
+    with urllib.request.urlopen(url, timeout=12) as response:
+        return json.load(response)
 
 
 def samples(text, name):
@@ -284,7 +299,9 @@ def samples(text, name):
 def table_budgets(text):
     """Per-destination budget state as {(db, table): {throttled, rejected}}."""
     throttled = samples(text, "adxmon_table_backlog_throttled")
-    rejected = samples(text, "adxmon_table_quota_rejected_records_total")
+    # The quota counter is aggregated by component/kind/reason, not table.
+    # The backlog gauge carries the destination labels needed here.
+    rejected = samples(text, "adxmon_table_backlog_rejected_records")
     state = {}
     for key in set(throttled) | set(rejected):
         state[key] = {"throttled": throttled.get(key, 0.0), "rejected": rejected.get(key, 0.0)}
@@ -297,28 +314,50 @@ def pod_ready(name):
                for c in pod.get("status", {}).get("conditions", []))
 
 
-def validate_isolation(records, budgets, ready, noisy, healthy):
-    """Pure validation so the contract is testable without a cluster.
-
-    The branch claims that starving one table only affects that table: every
-    other path keeps reaching Kusto and the instance stays ready.
-    """
+def validate_isolation(records, pulses, mixed_records, noisy_rows, ready_checks, healthy):
+    """Require selective shedding, accurate counts, and healthy delivery."""
     errors = []
-    db, table = TABLES[noisy]
-    noisy_state = budgets.get((db, table), {})
-    if not (noisy_state.get("throttled") or noisy_state.get("rejected")):
-        errors.append(f"{db}.{table} was never throttled; the budget did not take effect")
-    if not ready:
-        errors.append("Ingestor became unready while one table was over budget")
+    if not pulses:
+        errors.append("No mixed requests were sent")
+    if not ready_checks or not all(ready_checks):
+        errors.append("Ingestor became unready during table shedding")
+    for pulse in pulses:
+        total, rejected = pulse.get("noisy_records", 0), pulse.get("rejected_records", 0)
+        if not 0 < rejected <= total:
+            errors.append(f"Mixed request {pulse.get('seq')} did not selectively reject noisy records: {pulse}")
+        accepted = total - rejected
+        actual = noisy_rows.get(pulse.get("seq"), noisy_rows.get(str(pulse.get("seq")), 0))
+        if actual != accepted:
+            errors.append(f"Mixed request {pulse.get('seq')} reported {rejected}/{total} rejected, "
+                          f"but {actual} noisy rows reached Kusto (expected {accepted})")
+        rows = mixed_records.get("queued_control", {})
+        row = rows.get(pulse.get("seq"), rows.get(str(pulse.get("seq")), {}))
+        if not row.get("first_visible_ms"):
+            errors.append(f"Healthy control in mixed request {pulse.get('seq')} never reached Kusto")
     for path in healthy:
-        hdb, htable = TABLES[path]
-        state = budgets.get((hdb, htable), {})
-        if state.get("throttled"):
-            errors.append(f"Healthy table {hdb}.{htable} was throttled by its neighbour")
         visible = [seq for seq, row in records.get(path, {}).items() if row.get("first_visible_ms")]
         if not visible:
-            errors.append(f"Healthy path {path} delivered no rows while {table} was over budget")
+            errors.append(f"Healthy path {path} delivered no rows during table shedding")
     return errors
+
+
+def wait_noisy_rows(state, run_id, pulses, deadline):
+    """Wait for acknowledged noisy records, not intentionally rejected ones."""
+    expected = {p["seq"]: p["noisy_records"] - p["rejected_records"] for p in pulses}
+    if not any(expected.values()):
+        # A fresh cluster need not even have a table when every row is shed.
+        return {}
+    found = {}
+    while time.monotonic() < deadline:
+        try:
+            found = rows_for(state, ISOLATION_NOISY, run_id)
+        except Exception:
+            time.sleep(5)  # Schema creation may still be in progress.
+            continue
+        if all(found.get(seq, 0) >= count for seq, count in expected.items()):
+            break
+        time.sleep(5)
+    return found
 
 
 def rows_for(state, path, run_id):
@@ -525,14 +564,14 @@ def phase_run(state, mode, tag, report_dir, count, timeout, warmup_timeout=600,
 
 
 def phase_isolation(state, tag, report_dir, count, timeout, warmup_timeout=600):
-    """Starve one table's budget on the ingestor and require the rest to flow."""
+    """Shed noisy logs in mixed requests while every healthy path keeps flowing."""
     for db in ("Metrics", "Logs"):
         kusto(state["endpoint"], "", f'.alter database {db} policy ingestionbatching '
               '```{"MaximumBatchingTimeSpan":"00:01:00","MaximumNumberOfItems":500,'
               '"MaximumRawDataSizeMB":1024}```', True)
     noisy_db, noisy_table = TABLES[ISOLATION_NOISY]
     since = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
-    deploy(state, tag, False, table_limits=((noisy_db, noisy_table, ISOLATION_TABLE_BYTES),))
+    deploy(state, tag, False, collector_limits=((noisy_db, noisy_table, ISOLATION_TABLE_BYTES),))
     workload(state, tag)
 
     # Warm-up uses the same starved budget, so the noisy table may never appear.
@@ -545,29 +584,48 @@ def phase_isolation(state, tag, report_dir, count, timeout, warmup_timeout=600):
                            f"Unexpected log errors: {errors[:5]}") from e
 
     run_id = f"e2e-{uuid.uuid4().hex[:12]}"
+    mixed_id = f"mixed-{uuid.uuid4().hex[:12]}"
     signals, records = [], {path: {} for path in TABLES}
+    pulses, ready_checks = [], []
+    mixed_records = {"queued_control": {}}
     with Forward() as forward:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            pulses.append(mixed_emit(forward, mixed_id, 1))
+            ready_checks.append(pod_ready("ingestor-0"))
             signals.append(emit(forward, run_id, 1))
             expected = [{"seq": seq} for seq in range(1, count + 1)]
-            future = executor.submit(poll, state, run_id, expected,
-                                     time.monotonic() + timeout, records, paths=ISOLATION_HEALTHY)
+            deadline = time.monotonic() + timeout
+            future = executor.submit(poll, state, run_id, expected, deadline, records, paths=ISOLATION_HEALTHY)
+            mixed_future = executor.submit(poll, state, mixed_id, expected, deadline, mixed_records,
+                                           paths=("queued_control",))
             for seq in range(2, count + 1):
                 time.sleep(3)
+                pulses.append(mixed_emit(forward, mixed_id, seq))
+                ready_checks.append(pod_ready("ingestor-0"))
                 signals.append(emit(forward, run_id, seq))
             missing = future.result()
+            mixed_missing = mixed_future.result()
+            noisy_rows = wait_noisy_rows(state, mixed_id, pulses, deadline)
 
-    budgets = table_budgets(ingestor_metrics())
-    ready = pod_ready("ingestor-0")
+    budgets = table_budgets(collector_metrics())
+    ready_checks.append(pod_ready("ingestor-0"))
     errors = log_errors(since, report_dir)
-    errors += validate_isolation(records, budgets, ready, ISOLATION_NOISY, ISOLATION_HEALTHY)
+    # AKS IMDS can transiently return 400 during pod startup. Do not hide a
+    # lasting auth failure: readiness and Kusto delivery are checked below.
+    startup_errors = [line for line in errors if IMDS_STARTUP_ERROR.search(line)]
+    errors = [line for line in errors if not IMDS_STARTUP_ERROR.search(line)]
+    errors += validate_isolation(records, pulses, mixed_records, noisy_rows, ready_checks, ISOLATION_HEALTHY)
     result = {"mode": "isolation", "run_id": run_id, "git_commit": output("git", "rev-parse", "HEAD"),
               "images": {c: image(state, c, tag) for c in ("collector", "ingestor", "workload")},
               "signals": signals, "observed": records, "missing": list(map(list, sorted(missing))),
               "log_errors": errors, "streaming_counter_delta": {},
-              "expected_missing": [ISOLATION_NOISY],
+              "unmeasured_paths": [ISOLATION_NOISY], "mixed_run_id": mixed_id,
+              "mixed_pulses": pulses, "mixed_control": mixed_records["queued_control"],
+              "mixed_noisy_rows": noisy_rows,
+              "mixed_missing": list(map(list, sorted(mixed_missing))),
+              "ignored_startup_errors": startup_errors,
               "table_budgets": {f"{db}.{table}": v for (db, table), v in budgets.items()},
-              "ingestor_ready": ready}
+              "ingestor_ready": all(ready_checks)}
     save(report_dir / "result.json", result)
     return result
 
@@ -589,6 +647,9 @@ def report(directory):
                   "|---|---:|---:|---:|---|"]
         for path in TABLES:
             observed = data["observed"][path]
+            if path in data.get("unmeasured_paths", []):
+                lines.append(f"| {path} | — | not polled | — | — |")
+                continue
             latencies = [v["first_visible_ms"] - next(s["emitted_ms"] for s in data["signals"] if s["seq"] == int(seq))
                          for seq, v in observed.items() if v.get("first_visible_ms")]
             ordered = sorted(latencies)
@@ -599,6 +660,8 @@ def report(directory):
         lines += ["", "| Path | Sequence | Emitted (UTC) | Rows | First visible (UTC) | Latency (ms) |",
                   "|---|---:|---|---:|---|---:|"]
         for path in TABLES:
+            if path in data.get("unmeasured_paths", []):
+                continue
             for signal in data["signals"]:
                 seq = signal["seq"]
                 row = data["observed"][path].get(str(seq), {})
@@ -612,11 +675,32 @@ def report(directory):
                     continue
                 if not visible or (data["mode"] == "realtime" and path in REALTIME_PATHS and latency > 2000):
                     passed = False
+        if data.get("mixed_pulses"):
+            lines += ["", "| Mixed request | Noisy records | OTLP rejected | Noisy rows in Kusto | Healthy control in Kusto |",
+                      "|---:|---:|---:|---:|---:|"]
+            for pulse in data["mixed_pulses"]:
+                seq = pulse["seq"]
+                control = data.get("mixed_control", {}).get(str(seq), {})
+                noisy = data.get("mixed_noisy_rows", {}).get(str(seq), 0)
+                lines.append(f"| {seq} | {pulse['noisy_records']} | {pulse['rejected_records']} | {noisy} | "
+                             f"{control.get('rows', 0)} |")
+            lines += ["", f"Ingestor Ready during shedding: {data.get('ingestor_ready')}",
+                      f"Ignored transient IMDS startup errors: {len(data.get('ignored_startup_errors', []))}", ""]
+        if data["mode"] == "isolation":
+            validation = validate_isolation(data["observed"], data.get("mixed_pulses", []),
+                                            {"queued_control": data.get("mixed_control", {})},
+                                            data.get("mixed_noisy_rows", {}),
+                                            [data.get("ingestor_ready", False)], ISOLATION_HEALTHY)
+            if len(data.get("mixed_pulses", [])) != len(data["signals"]):
+                validation.append("Mixed request count did not match measured signal count")
+            if validation:
+                passed = False
+                lines += ["", "Isolation validation: " + "; ".join(validation), ""]
         if data.get("table_budgets"):
             lines += ["", "| Table | Throttled | Rejected records |", "|---|---:|---:|"]
             for name, budget in sorted(data["table_budgets"].items()):
                 lines.append(f"| {name} | {budget['throttled']:.0f} | {budget['rejected']:.0f} |")
-            lines += ["", f"Ingestor ready while throttled: {data.get('ingestor_ready')}", ""]
+            lines += ["", f"Ingestor ready: {data.get('ingestor_ready')}", ""]
         lines += ["", "Streaming outcomes: `" + json.dumps(data.get("streaming_counter_delta", {})) + "`", "",
                   f"Unexpected component log errors: {len(data['log_errors'])}", ""]
         if data["log_errors"]:

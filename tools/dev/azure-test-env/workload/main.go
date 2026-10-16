@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,20 +37,62 @@ func kv(k, v string) *commonpb.KeyValue {
 }
 
 func post(url string, msg proto.Message) error {
+	_, err := postResponse(url, msg)
+	return err
+}
+
+func postResponse(url string, msg proto.Message) ([]byte, error) {
 	b, err := proto.Marshal(msg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := client.Post(url, "application/x-protobuf", bytes.NewReader(b))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("%s: %s: %s", url, resp.Status, body)
+		return nil, fmt.Errorf("%s: %s: %s", url, resp.Status, body)
 	}
-	return nil
+	return io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+}
+
+// mixed sends one healthy control log after eight large noisy logs in the same
+// OTLP request. Partial success must count noisy rejections, but not the
+// healthy control, when the collector table limit is enforced.
+func mixed(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("run")
+	seq, err := strconv.Atoi(r.URL.Query().Get("seq"))
+	if id == "" || err != nil || seq < 1 {
+		http.Error(w, "run and positive seq required", http.StatusBadRequest)
+		return
+	}
+	const noisyCount = 8
+	now := uint64(time.Now().UnixNano())
+	records := make([]*logdata.LogRecord, 0, noisyCount+1)
+	for i := 0; i < noisyCount; i++ {
+		records = append(records, &logdata.LogRecord{TimeUnixNano: now, ObservedTimeUnixNano: now,
+			Body:       &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: strings.Repeat("x", 1024)}},
+			Attributes: []*commonpb.KeyValue{kv("kusto.database", "Logs"), kv("kusto.table", "E2eOtlpLogs"), kv("run_id", id), kv("seq", strconv.Itoa(seq))}})
+	}
+	records = append(records, &logdata.LogRecord{TimeUnixNano: now, ObservedTimeUnixNano: now,
+		Body:       &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "healthy control"}},
+		Attributes: []*commonpb.KeyValue{kv("kusto.database", "Logs"), kv("kusto.table", "E2eQueuedControl"), kv("run_id", id), kv("seq", strconv.Itoa(seq))}})
+	request := &logspb.ExportLogsServiceRequest{ResourceLogs: []*logdata.ResourceLogs{{ScopeLogs: []*logdata.ScopeLogs{{LogRecords: records}}}}}
+	response, err := postResponse("http://"+os.Getenv("HOST_IP")+":3100/v1/logs", request)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	var reply logspb.ExportLogsServiceResponse
+	if err := proto.Unmarshal(response, &reply); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"seq": seq, "noisy_records": noisyCount,
+		"rejected_records": reply.GetPartialSuccess().GetRejectedLogRecords()})
 }
 
 func emit(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +148,7 @@ func scrape(w http.ResponseWriter, _ *http.Request) {
 
 func main() {
 	http.HandleFunc("/emit", emit)
+	http.HandleFunc("/mixed", mixed)
 	http.HandleFunc("/metrics", scrape)
 	log.Fatal(http.ListenAndServe(":8088", nil))
 }
