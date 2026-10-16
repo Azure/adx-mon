@@ -138,6 +138,18 @@ lift-attributes = [
 
 Prometheus scrape discovers pods with the `adx-mon/scrape` annotation as well as any defined static scrape targets. It ships any metrics to the defined ADX database.
 
+The global `scrape-interval` is configured in seconds. To override it for all metrics endpoints on a pod, including those listed in `adx-mon/targets`, set `adx-mon/scrape-interval` to a positive Go duration:
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/port: "metrics"
+adx-mon/scrape-interval: "30s"
+```
+
+Values such as `500ms`, `15s`, and `2m` are supported. Missing or empty annotations inherit the global interval. Invalid, zero, or negative durations log a warning identifying the pod and fall back to the global interval. Changes are applied when pod discovery observes them; removing the annotation restores the default. Static targets inherit the global interval.
+
+New targets are staggered within their interval. Scrapes run serially, so scrape and forwarding durations can delay deadlines. Missed intervals are skipped rather than replayed, including after scrape failures or health-based skips. The global `scrape-timeout` continues to apply to every endpoint.
+
 ```toml
 # Defines a prometheus format endpoint scraper.
 [prometheus-scrape]

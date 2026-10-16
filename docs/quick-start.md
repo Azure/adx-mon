@@ -40,6 +40,20 @@ adx-mon/port: "8080"      # Can use numeric ports
 adx-mon/path: "/metrics"
 ```
 
+To override the collector's default scrape interval for a pod, add `adx-mon/scrape-interval`:
+
+```yaml
+adx-mon/scrape: "true"
+adx-mon/port: "metrics"
+adx-mon/scrape-interval: "30s"
+```
+
+The interval applies to every metrics endpoint discovered on that pod, including endpoints in `adx-mon/targets`.
+Use a positive Go duration such as `500ms`, `15s`, or `2m`. A missing or empty annotation uses the collector's
+global `prometheus-scrape.scrape-interval` (configured in seconds). Invalid, zero, or negative durations log a warning
+and use that global default. Updates to the annotation take effect when pod discovery observes them; removing it
+restores the default interval.
+
 You can also use **named ports** for better readability:
 
 ```yaml
