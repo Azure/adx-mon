@@ -136,6 +136,7 @@ spec:
         adx-mon/log-parsers: json
     spec:
       automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 600
       securityContext: {}
       serviceAccountName: ingestor
       containers:
