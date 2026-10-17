@@ -31,7 +31,8 @@ func NewClient(timeout time.Duration) (*Client, error) {
 	t.IdleConnTimeout = time.Minute
 
 	httpClient := &http.Client{
-		Timeout: timeout,
+		Transport: t,
+		Timeout:   timeout,
 	}
 
 	return &Client{
