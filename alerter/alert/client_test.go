@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +73,49 @@ func TestClient_Create_BadRequest(t *testing.T) {
 		Description: "description",
 	})
 	require.Errorf(t, err, "write failed: 400 Bad Request")
+}
+
+// BenchmarkClient_Create_Concurrent sends alerts from parallel goroutines through one
+// client against a local server that answers 201. It reports the number of new TCP
+// connections opened per operation so pooling changes are visible alongside allocations.
+func BenchmarkClient_Create_Concurrent(b *testing.B) {
+	var newConns atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		io.Copy(io.Discard, req.Body)
+		rw.WriteHeader(http.StatusCreated)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	c, err := alert.NewClient(time.Second)
+	require.NoError(b, err)
+
+	a := alert.Alert{
+		Summary:     "summary",
+		Title:       "title",
+		Severity:    1,
+		Destination: "MDM://Platform",
+		Description: "description",
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if err := c.Create(context.Background(), server.URL+"/alerts", a); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+	b.StopTimer()
+
+	b.ReportMetric(float64(newConns.Load())/float64(b.N), "conns/op")
 }
 
 func TestClient_Create_TooManyRequests(t *testing.T) {
