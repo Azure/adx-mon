@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/adx-mon/transform"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -341,7 +342,8 @@ func (s *Scraper) sendBatch(ctx context.Context, wr *prompb.WriteRequest) error 
 		logger.Infof("Sending %d timeseries to %d endpoints duration=%s", len(wr.Timeseries), len(s.remoteClients), time.Since(start))
 	}()
 
-	return remote.WriteRequest(ctx, s.remoteClients, wr)
+	_, err := storage.SplitOutcome(remote.WriteRequest(ctx, s.remoteClients, wr))
+	return err
 }
 
 func (s *Scraper) OnAdd(obj interface{}, isInitialList bool) {

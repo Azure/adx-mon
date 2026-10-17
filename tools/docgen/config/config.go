@@ -102,6 +102,8 @@ func getContents() Contents {
 					MaxSegmentSize:               52428800,
 					MaxSegmentCount:              10000,
 					MaxDiskUsage:                 53687091200,
+					MaxTableDiskUsage:            5368709120,
+					MaxTableSegmentCount:         1000,
 					MaxTransferConcurrency:       100,
 					WALFlushIntervalMilliSeconds: 100,
 

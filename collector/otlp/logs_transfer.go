@@ -26,6 +26,7 @@ import (
 type LogsServiceOpts struct {
 	WorkerCreator engine.WorkerCreatorFunc
 	HealthChecker interface{ IsHealthy() bool }
+	ProcessBatch  func(context.Context, *types.LogBatch) (int64, error)
 }
 
 type LogsService struct {
@@ -33,6 +34,14 @@ type LogsService struct {
 	outputQueue   chan *types.LogBatch
 	logger        *slog.Logger
 	healthChecker interface{ IsHealthy() bool }
+	processBatch  func(context.Context, *types.LogBatch) (int64, error)
+
+	// closing guards synchronous request processing so Close waits for in
+	// flight work instead of letting shutdown close transforms and sinks
+	// underneath it.
+	mu       sync.RWMutex
+	closed   bool
+	inflight sync.WaitGroup
 
 	wg sync.WaitGroup
 }
@@ -48,6 +57,7 @@ func NewLogsService(opts LogsServiceOpts) *LogsService {
 			),
 		),
 		healthChecker: opts.HealthChecker,
+		processBatch:  opts.ProcessBatch,
 	}
 }
 
@@ -62,9 +72,29 @@ func (s *LogsService) Open(ctx context.Context) error {
 }
 
 func (s *LogsService) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+
+	// Wait for synchronous requests before the owner closes transforms and
+	// sinks, otherwise in flight work would use closed components.
+	s.inflight.Wait()
+
 	close(s.outputQueue)
 	s.wg.Wait()
 	return nil
+}
+
+// beginRequest reserves the right to process a batch synchronously. It reports
+// false once the service is closing.
+func (s *LogsService) beginRequest() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return false
+	}
+	s.inflight.Add(1)
+	return true
 }
 
 func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +145,7 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		logBatch.Reset()
 
 		droppedLogMissingMetadata, convertedLogs := s.convertToLogBatch(msg, logBatch)
+		missingMetadata := droppedLogMissingMetadata
 
 		if convertedLogs == 0 {
 			var status *status.Status
@@ -129,14 +160,29 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		select {
-		case s.outputQueue <- logBatch:
-			// The worker owns the batch after it is enqueued.
-		case <-r.Context().Done():
-			// Context has timed out with the outputQueue not being able to consume. Dispose the logBatch.
-			types.DisposeLogBatch(logBatch)
-			// At this point, either the client has given up or the server timeout middleware will return an error back to the client.
-			return
+		if s.processBatch != nil {
+			if !s.beginRequest() {
+				types.DisposeLogBatch(logBatch)
+				writeErrorStatusResponse(w, http.StatusServiceUnavailable, newErrorStatus("Shutting down. Retry later"), m)
+				return
+			}
+			rejected, err := s.processBatch(r.Context(), logBatch)
+			s.inflight.Done()
+			if err != nil {
+				writeErrorStatusResponse(w, http.StatusServiceUnavailable, newErrorStatus("Failed to store logs. Retry later"), m)
+				return
+			}
+			droppedLogMissingMetadata += rejected
+		} else {
+			select {
+			case s.outputQueue <- logBatch:
+				// The worker owns the batch after it is enqueued.
+			case <-r.Context().Done():
+				// Context has timed out with the outputQueue not being able to consume. Dispose the logBatch.
+				types.DisposeLogBatch(logBatch)
+				// At this point, either the client has given up or the server timeout middleware will return an error back to the client.
+				return
+			}
 		}
 
 		// The logs have been committed by the OTLP endpoint
@@ -144,9 +190,9 @@ func (s *LogsService) Handler(w http.ResponseWriter, r *http.Request) {
 		if droppedLogMissingMetadata > 0 {
 			resp.SetPartialSuccess(&v1.ExportLogsPartialSuccess{
 				RejectedLogRecords: droppedLogMissingMetadata,
-				ErrorMessage:       "Logs lacking kube.database and kube.table attributes or body fields",
+				ErrorMessage:       "Logs rejected: missing routing metadata or table quota",
 			})
-			metrics.InvalidLogsDropped.WithLabelValues().Add(float64(droppedLogMissingMetadata))
+			metrics.InvalidLogsDropped.WithLabelValues().Add(float64(missingMetadata))
 		}
 
 		respBodyBytes, err := proto.Marshal(resp)

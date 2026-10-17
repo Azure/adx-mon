@@ -63,6 +63,10 @@ Component-specific push scripts are also available:
 ### Collector backend verification
 
 - `/readyz` returns `status=ok backend=<value>` when healthy and 503 with the same backend annotation if max disk usage or segment thresholds trigger backpressure.
+
+Collectors and ingestors isolate noisy destinations with [table-scoped backlog
+quotas and fair scheduling](docs/table-isolation.md). Mixed intake sheds only
+over-budget tables while internal transfers retain data for table-scoped retry.
 - `/debug/store` prefixes the active backend before the existing WAL diagnostics to help validate cluster configuration.
 
 ## Contributing

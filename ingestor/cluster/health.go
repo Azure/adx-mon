@@ -81,11 +81,11 @@ func (h *Health) UnhealthyReason() string {
 	segmentsTotal := h.QueueSizer.SegmentsTotal()
 	segmentsSize := h.QueueSizer.SegmentsSize()
 
-	if segmentsTotal >= h.opts.MaxSegmentCount {
+	if h.opts.MaxSegmentCount > 0 && segmentsTotal >= h.opts.MaxSegmentCount {
 		return ReasonMaxSegmentsExceeded
 	}
 
-	if segmentsSize >= h.opts.MaxDiskUsage {
+	if h.opts.MaxDiskUsage > 0 && segmentsSize >= h.opts.MaxDiskUsage {
 		return ReasonMaxDiskUsageExceeded
 	}
 

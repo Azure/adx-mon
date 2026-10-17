@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/prompb"
 	"github.com/Azure/adx-mon/pkg/remote"
 	"github.com/Azure/adx-mon/pkg/wal"
+	"github.com/Azure/adx-mon/storage"
 	"github.com/golang/snappy"
 	gbp "github.com/libp2p/go-buffer-pool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -145,6 +146,7 @@ func (s *Handler) HandleReceive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.Write(r.Context(), req)
+	_, err = storage.SplitOutcome(err)
 	if errors.Is(err, wal.ErrMaxSegmentsExceeded) || errors.Is(err, wal.ErrMaxDiskUsageExceeded) {
 		m.WithLabelValues(strconv.Itoa(http.StatusTooManyRequests)).Inc()
 		http.Error(w, "Overloaded. Retry later", http.StatusTooManyRequests)

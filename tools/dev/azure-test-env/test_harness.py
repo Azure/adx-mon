@@ -272,5 +272,140 @@ class HarnessTest(unittest.TestCase):
                 self.assertFalse(harness.report(Path(tmp)))
 
 
+class IsolationTest(unittest.TestCase):
+    """Offline coverage for the table isolation phase."""
+
+    def rendered(self, limits=(), collector_limits=(), kind="ingestor"):
+        commands = []
+        with patch.object(harness, "run", side_effect=lambda *a, **kw: commands.append((a, kw))), \
+             patch.object(harness, "output", return_value=json.dumps({"subsets": [{"addresses": [{"ip": "10.0.0.1"}]}]})):
+            harness.deploy(STATE, "sha-run", False, table_limits=limits, collector_limits=collector_limits)
+        return [kw["input"] for a, kw in commands if a[-2:] == ("-f", "-")][0 if kind == "ingestor" else 1]
+
+    def test_table_limit_flags_are_rendered_for_the_ingestor(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        ingestor = self.rendered(((db, table, 4096),))
+        self.assertIn("--enforce-table-limits", ingestor)
+        self.assertIn(f'--table-limit={{"database": "{db}", "table": "{table}", "max-bytes": 4096}}', ingestor)
+
+    def test_no_table_limits_are_rendered_by_default(self):
+        self.assertNotIn("--enforce-table-limits", self.rendered(()))
+        self.assertNotIn("enforce-table-limits = true", self.rendered(kind="collector"))
+
+    def test_collector_limit_only_applies_to_the_daemonset(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        collector = self.rendered(collector_limits=((db, table, 512),), kind="collector")
+        self.assertIn("enforce-table-limits = true", collector)
+        self.assertIn(f"[[table-limits]]\n    database = '{db}'\n    table = '{table}'\n    max-bytes = 512", collector)
+        self.assertNotIn("enforce-table-limits = true", collector.split("name: collector-singleton-config", 1)[1])
+
+    def test_budgets_parse_throttled_and_rejected_series(self):
+        db, table = harness.TABLES[harness.ISOLATION_NOISY]
+        text = "\n".join([
+            "# HELP adxmon_table_backlog_throttled Currently over budget.",
+            f'adxmon_table_backlog_throttled{{component="ingestor",database="{db}",table="{table}"}} 1',
+            f'adxmon_table_backlog_throttled{{component="ingestor",database="Logs",table="E2ePodLogs"}} 0',
+            'adxmon_table_quota_rejected_records_total{component="ingestor",kind="logs",reason="bytes"} 17',
+            f'adxmon_table_backlog_rejected_records{{component="ingestor",database="{db}",table="{table}"}} 17',
+        ])
+        budgets = harness.table_budgets(text)
+        self.assertEqual(budgets[(db, table)], {"throttled": 1.0, "rejected": 17.0})
+        self.assertEqual(budgets[("Logs", "E2ePodLogs")]["throttled"], 0.0)
+
+    def observed(self, healthy_visible=True):
+        rows = {path: {"1": {"rows": 1, "first_visible_ms": 1000}} for path in harness.ISOLATION_HEALTHY}
+        if not healthy_visible:
+            rows[harness.ISOLATION_HEALTHY[0]] = {"1": {"rows": 0}}
+        rows[harness.ISOLATION_NOISY] = {"1": {"rows": 0}}
+        return rows
+
+    def test_starving_one_table_while_others_flow_passes(self):
+        errors = harness.validate_isolation(self.observed(), [{"seq": 1, "noisy_records": 8, "rejected_records": 7}],
+                                            {"queued_control": {1: {"rows": 1, "first_visible_ms": 1000}}},
+                                            {1: 1},
+                                            [True, True], harness.ISOLATION_HEALTHY)
+        self.assertEqual(errors, [])
+
+    def test_budget_that_never_engages_fails(self):
+        errors = harness.validate_isolation(self.observed(), [{"seq": 1, "noisy_records": 8, "rejected_records": 0}],
+                                            {"queued_control": {1: {"first_visible_ms": 1000}}},
+                                            {1: 8},
+                                            [True], harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("did not selectively reject" in e for e in errors), errors)
+
+    def test_collateral_damage_to_a_neighbour_fails(self):
+        errors = harness.validate_isolation(self.observed(healthy_visible=False),
+                                            [{"seq": 1, "noisy_records": 8, "rejected_records": 9}],
+                                            {"queued_control": {}}, {}, [True], harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("did not selectively reject" in e for e in errors), errors)
+        self.assertTrue(any("Healthy control" in e for e in errors), errors)
+        self.assertTrue(any("delivered no rows" in e for e in errors), errors)
+
+    def test_unready_ingestor_fails(self):
+        errors = harness.validate_isolation(self.observed(), [], {}, {}, [True, False], harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("unready" in e for e in errors), errors)
+
+    def test_mismatched_noisy_kusto_count_fails(self):
+        errors = harness.validate_isolation(self.observed(), [{"seq": 1, "noisy_records": 8, "rejected_records": 7}],
+                                            {"queued_control": {1: {"first_visible_ms": 1000}}},
+                                            {1: 0}, [True], harness.ISOLATION_HEALTHY)
+        self.assertTrue(any("expected 1" in e for e in errors), errors)
+
+    def test_report_tolerates_the_intentionally_starved_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "result.json"
+            observed = {key: {"1": {"rows": 1, "first_visible_ms": 1000000001000}} for key in harness.TABLES}
+            observed[harness.ISOLATION_NOISY] = {"1": {"rows": 0}}
+            path.write_text(json.dumps({"mode": "isolation", "run_id": "test", "git_commit": "sha",
+                "signals": [{"seq": 1, "emitted_ms": 1000000000000}], "observed": observed,
+                "unmeasured_paths": [harness.ISOLATION_NOISY], "log_errors": [],
+                "mixed_pulses": [{"seq": 1, "noisy_records": 8, "rejected_records": 7}],
+                "mixed_control": {"1": {"rows": 1, "first_visible_ms": 1000000001000}},
+                "mixed_noisy_rows": {"1": 1},
+                "table_budgets": {"Logs.E2eOtlpLogs": {"throttled": 1.0, "rejected": 5.0}},
+                "ingestor_ready": True}))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertTrue(harness.report(path))
+            self.assertIn("Ingestor Ready during shedding: True", out.getvalue())
+            self.assertIn("| 1 | 8 | 7 | 1 | 1 |", out.getvalue())
+
+    def test_report_still_fails_when_a_healthy_table_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "result.json"
+            observed = {key: {"1": {"rows": 1, "first_visible_ms": 1000000001000}} for key in harness.TABLES}
+            observed[harness.ISOLATION_NOISY] = {"1": {"rows": 0}}
+            observed[harness.ISOLATION_HEALTHY[0]] = {"1": {"rows": 0}}
+            path.write_text(json.dumps({"mode": "isolation", "run_id": "test", "git_commit": "sha",
+                "signals": [{"seq": 1, "emitted_ms": 1000000000000}], "observed": observed,
+                "unmeasured_paths": [harness.ISOLATION_NOISY], "log_errors": [],
+                "mixed_pulses": [{"seq": 1, "noisy_records": 8, "rejected_records": 7}],
+                "mixed_control": {"1": {"rows": 1, "first_visible_ms": 1000000001000}},
+                "mixed_noisy_rows": {"1": 1}, "ingestor_ready": True}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(harness.report(path))
+
+    def test_report_fails_if_mixed_request_did_not_shed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "result.json"
+            observed = {key: {"1": {"rows": 1, "first_visible_ms": 1000000001000}} for key in harness.TABLES}
+            path.write_text(json.dumps({"mode": "isolation", "run_id": "test", "git_commit": "sha",
+                "signals": [{"seq": 1, "emitted_ms": 1000000000000}], "observed": observed,
+                "unmeasured_paths": [harness.ISOLATION_NOISY], "log_errors": [],
+                "mixed_pulses": [{"seq": 1, "noisy_records": 8, "rejected_records": 0}],
+                "mixed_control": {"1": {"rows": 1, "first_visible_ms": 1000000001000}},
+                "mixed_noisy_rows": {"1": 8},
+                "ingestor_ready": True}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(harness.report(path))
+
+    def test_poll_and_warmup_can_be_limited_to_healthy_paths(self):
+        seen = []
+        with patch.object(harness, "rows_for", side_effect=lambda _s, path, _r: seen.append(path) or {1: 1}):
+            harness.poll(STATE, "run", [{"seq": 1}], time.monotonic() + 5,
+                         {path: {} for path in harness.TABLES}, paths=harness.ISOLATION_HEALTHY)
+        self.assertNotIn(harness.ISOLATION_NOISY, seen)
+        self.assertEqual(set(seen), set(harness.ISOLATION_HEALTHY))
+
+
 if __name__ == "__main__":
     unittest.main()

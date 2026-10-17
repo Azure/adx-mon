@@ -55,7 +55,34 @@ tools/dev/azure-test-env/test.sh run --resource-group adxmon-e2e-jw
 # Or run just one phase after a fix:
 tools/dev/azure-test-env/test.sh baseline --resource-group adxmon-e2e-jw
 tools/dev/azure-test-env/test.sh realtime --resource-group adxmon-e2e-jw
+tools/dev/azure-test-env/test.sh isolation --resource-group adxmon-e2e-jw
 ```
+
+### Table isolation phase
+
+`isolation` tests selective shedding at the collector, rather than depending
+on a short-lived ingestor backlog to cross a quota at the instant metrics are
+scraped. It enforces a 512-byte budget for `Logs.E2eOtlpLogs` on the daemonset
+collector. Each measured signal is accompanied by a **mixed OTLP request**
+containing eight large noisy records followed by one healthy
+`Logs.E2eQueuedControl` record. The phase requires:
+
+* OTLP partial success reporting at least one, but no more than eight, rejected
+  noisy records per mixed request (the healthy record must not be counted);
+* the number of noisy rows arriving in Kusto to equal eight minus the reported
+  rejection count, so accepted and rejected records are both accounted for;
+* every same-request healthy control record and all four usual healthy paths
+  to reach Kusto, while the ingestor remains Ready during the requests;
+* no unexpected component errors. A transient AKS IMDS 400 at pod startup is
+  recorded separately, and is tolerated only alongside successful readiness
+  and Kusto delivery.
+
+The ordinary noisy path is not polled or reported as missing: small unrelated
+records may still arrive as a budget drains. The mixed requests' noisy records
+are queried and compared with their partial-success counts. `report.md` lists
+the counts, same-request Kusto rows, readiness, and any backlog gauges.
+This phase validates collector-side selective shedding; ingestor peer-scoped
+429 and upload fairness remain covered by Go tests, not by this live phase.
 
 To A/B test pod-tail latency using the **same newly built image tag**, first
 run `test.sh realtime --resource-group ... --realtime-log-batch-wait-ms 1000`

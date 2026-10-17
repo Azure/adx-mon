@@ -150,7 +150,13 @@ func (n *uploader) Open(ctx context.Context) error {
 func (n *uploader) startWorkers(ctx context.Context) {
 	workerCtx, closeFn := context.WithCancel(ctx)
 	n.closeFn = closeFn
-	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: n.queue}
+	// Schedule queued uploads fairly across destinations while preserving the
+	// realtime path and the shutdown behavior for active batches.
+	queued := cluster.FairQueue(workerCtx, n.queue, cluster.FairQueueOpts{
+		Workers:  n.opts.ConcurrentUploads,
+		Pipeline: "adx:" + n.database,
+	})
+	queues := cluster.PriorityQueues{Realtime: n.realtimeQueue, Queued: queued}
 	n.wg.Add(n.opts.ConcurrentUploads)
 	cluster.RunWorkers(workerCtx, queues, n.opts.ConcurrentUploads, n.opts.QueuedReservedWorkersPercent, func(batch *cluster.Batch) {
 		// Cancellation may race with dequeuing a batch. Do not start that batch after intake stops.

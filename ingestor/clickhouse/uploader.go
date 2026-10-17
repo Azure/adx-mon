@@ -38,6 +38,7 @@ type uploader struct {
 	cfg     Config
 	log     *slog.Logger
 	queue   chan *cluster.Batch
+	jobs    <-chan *cluster.Batch
 	schemas map[string]Schema
 	conn    connectionManager
 	syncer  *syncer
@@ -113,6 +114,7 @@ func (u *uploader) Open(ctx context.Context) error {
 		workers = 1
 	}
 	u.workers = workers
+	u.jobs = cluster.FairQueue(ctx, u.queue, cluster.FairQueueOpts{Workers: workers, Pipeline: "clickhouse:" + u.cfg.Database})
 
 	for i := 0; i < workers; i++ {
 		u.wg.Add(1)
@@ -178,7 +180,10 @@ func (u *uploader) worker(_ int) {
 		select {
 		case <-u.ctx.Done():
 			return
-		case batch := <-u.queue:
+		case batch, ok := <-u.jobs:
+			if !ok {
+				return
+			}
 			if batch == nil {
 				continue
 			}
@@ -210,6 +215,9 @@ func (u *uploader) processBatch(ctx context.Context, batch *cluster.Batch) error
 	}()
 
 	handleError := func(err error, retryable bool) error {
+		if retryable {
+			batch.RetryAfter(5 * time.Second)
+		}
 		if !retryable {
 			if remErr := batch.Remove(); remErr != nil {
 				if u.log != nil {

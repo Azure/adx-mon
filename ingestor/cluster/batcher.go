@@ -40,6 +40,7 @@ type BatcherOpts struct {
 	MaxTransferSize  int64
 	MaxTransferAge   time.Duration
 	MaxBatchSegments int
+	MaxTableBatches  int
 
 	Partitioner MetricPartitioner
 	Segmenter   Segmenter
@@ -89,19 +90,33 @@ type Batch struct {
 
 	batcher Batcher
 
-	released bool
-	removed  bool
-	mu       sync.Mutex
+	released   bool
+	removed    bool
+	mu         sync.Mutex
+	completion func(time.Duration)
+	retryDelay time.Duration
 }
 
 // Release releases the segments in the batch so they can be processed again.
 func (b *Batch) Release() {
-	b.batcher.Release(b)
-
 	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		return
+	}
 	b.released = true
+	completion, delay := b.completion, b.retryDelay
 	b.mu.Unlock()
+	if b.batcher != nil {
+		b.batcher.Release(b)
+	}
+	if completion != nil {
+		completion(delay)
+	}
 }
+
+// RetryAfter releases the worker promptly while deferring this table's next work.
+func (b *Batch) RetryAfter(delay time.Duration) { b.mu.Lock(); b.retryDelay = delay; b.mu.Unlock() }
 
 // Remove removes the segments in the batch from disk.
 func (b *Batch) Remove() error {
@@ -110,6 +125,15 @@ func (b *Batch) Remove() error {
 	b.mu.Unlock()
 
 	return b.batcher.Remove(b)
+}
+
+// RemoveSegments removes a subset of the batch from disk. It is used when an
+// oversized transfer is split and only part of the batch was delivered.
+func (b *Batch) RemoveSegments(segments []wal.SegmentInfo) error {
+	if len(segments) == 0 {
+		return nil
+	}
+	return b.batcher.Remove(&Batch{Segments: segments, Database: b.Database, Table: b.Table, Prefix: b.Prefix, batcher: b.batcher})
 }
 
 func (b *Batch) Paths() []string {
@@ -172,7 +196,9 @@ type batcher struct {
 	transferDisabled bool
 
 	wg         sync.WaitGroup
+	batchMu    sync.Mutex
 	closeFn    context.CancelFunc
+	ctx        context.Context
 	storageDir string
 
 	Partitioner      MetricPartitioner
@@ -184,6 +210,7 @@ type batcher struct {
 	minUploadSize    int64
 	maxSegmentAge    time.Duration
 	maxBatchSegments int
+	maxTableBatches  int
 
 	tempSet []wal.SegmentInfo
 
@@ -220,10 +247,12 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 
 	b := &batcher{
 		storageDir:              opts.StorageDir,
+		ctx:                     context.Background(),
 		maxTransferAge:          opts.MaxTransferAge,
 		maxTransferSize:         opts.MaxTransferSize,
 		minUploadSize:           minUploadSize,    // This is the minimal "optimal" size for kusto uploads.
 		maxBatchSegments:        maxBatchSegments, // The maximum number of segments to include in a merged batch
+		maxTableBatches:         max(2, opts.MaxTableBatches),
 		Partitioner:             opts.Partitioner,
 		Segmenter:               opts.Segmenter,
 		uploadQueue:             opts.UploadQueue,
@@ -258,6 +287,7 @@ func NewBatcher(opts BatcherOpts) (Batcher, error) {
 
 func (b *batcher) Open(ctx context.Context) error {
 	ctx, b.closeFn = context.WithCancel(ctx)
+	b.ctx = ctx
 	var err error
 	b.hostname, err = os.Hostname()
 	if err != nil {
@@ -357,6 +387,9 @@ func (b *batcher) watch(ctx context.Context) {
 }
 
 func (b *batcher) BatchSegments() error {
+	b.batchMu.Lock()
+	defer b.batchMu.Unlock()
+
 	if b.realtime != nil {
 		b.realtime.Flush(context.Background())
 	}
@@ -369,6 +402,8 @@ func (b *batcher) BatchSegments() error {
 	if err != nil {
 		return fmt.Errorf("process segments: %w", err)
 	}
+	owned = boundedBatches(owned, b.maxTableBatches)
+	notOwned = boundedBatches(notOwned, b.maxTableBatches)
 	atomic.StoreUint64(&b.pendingUploads, uint64(len(owned)))
 	atomic.StoreUint64(&b.pendingTransfer, uint64(len(notOwned)))
 
@@ -387,8 +422,33 @@ func (b *batcher) BatchSegments() error {
 			}
 		}
 	}
+	atomic.StoreUint64(&b.pendingUploads, 0)
+	atomic.StoreUint64(&b.pendingTransfer, 0)
 
 	return nil
+}
+
+// boundedBatches caps how many batches one destination contributes to a single
+// dispatch round. Excess batches stay on disk and are rediscovered by the next
+// scan, so a backlogged table cannot fill a shared queue ahead of every other
+// destination.
+func boundedBatches(batches []*Batch, limit int) []*Batch {
+	if limit <= 0 {
+		return batches
+	}
+	counts := make(map[wal.Destination]int)
+	result := batches[:0]
+	for _, batch := range batches {
+		d := wal.Destination{Database: batch.Database, Table: batch.Table}
+		if counts[d] >= limit {
+			metrics.IngestorDeferredBatches.WithLabelValues(d.Database, d.Table).Inc()
+			batch.Release()
+			continue
+		}
+		counts[d]++
+		result = append(result, batch)
+	}
+	return result
 }
 
 // updateQueueMetrics updates the queue size metrics with the batches waiting to be queued.
@@ -618,12 +678,12 @@ func (b *batcher) Release(batch *Batch) {
 
 func (b *batcher) Remove(batch *Batch) error {
 	for _, si := range batch.Segments {
-		b.Segmenter.Remove(si)
 		err := os.Remove(si.Path)
 		if err != nil && !os.IsNotExist(err) {
 			logger.Errorf("Failed to remove segment %s: %s", si.Path, err)
 			continue
 		}
+		b.Segmenter.Remove(si)
 	}
 	return nil
 }
