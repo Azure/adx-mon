@@ -166,10 +166,16 @@ func TestUploader_ShutdownAllowsInflightUploadToComplete(t *testing.T) {
 					require.True(t, batch.IsRemoved(), "the active upload must complete successfully")
 					require.NoFileExists(t, path)
 					require.Equal(t, 1, calls)
-					require.False(t, pendingQueued.IsReleased())
+					// FairQueue may have claimed pending queued work before shutdown;
+					// releasing that claim leaves its WAL data available for retry.
+					require.False(t, pendingQueued.IsRemoved())
 					require.False(t, pendingRealtime.IsReleased())
 					require.False(t, afterClose.IsReleased())
-					require.Len(t, u.UploadQueue(), 2)
+					if pendingQueued.IsReleased() {
+						require.Len(t, u.UploadQueue(), 1)
+					} else {
+						require.Len(t, u.UploadQueue(), 2)
+					}
 					require.Len(t, u.RealtimeUploadQueue(), 1)
 					require.Zero(t, u.realtime.Slots.Stats().InUse)
 				})
@@ -241,8 +247,12 @@ func TestUploader_CloseWaitsForAllInflightUploads(t *testing.T) {
 			require.Equal(t, i == len(tables)-1, closed, "Close must wait for every worker, not just the first")
 		}
 		require.NoError(t, executionCtx.Err())
-		require.False(t, pending.IsReleased())
-		require.Len(t, u.UploadQueue(), 1)
+		require.False(t, pending.IsRemoved(), "pending WAL data must remain available for retry")
+		if pending.IsReleased() {
+			require.Empty(t, u.UploadQueue())
+		} else {
+			require.Len(t, u.UploadQueue(), 1)
+		}
 	})
 }
 
