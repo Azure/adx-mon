@@ -69,117 +69,117 @@ func NewDataSet(opts SetOptions) *Set {
 		opts: opts,
 		metrics: []*Metric{
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("cpu")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("cpu")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("mem")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("mem")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("mem_total")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("mem_total")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("mem_free")},
-				{[]byte("region"), []byte("eastus")},
-			},
-				cardinality: opts.Cardinality,
-			},
-
-			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("mem_cached")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("mem_free")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("mem_buffers")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("mem_cached")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("disk")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("mem_buffers")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("disk_total")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("disk")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("disk_used")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("disk_total")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("disk_free")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("disk_used")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("net")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("disk_free")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("netio")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("net")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("diskio")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("netio")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("cpu_util")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("diskio")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("cpu_load1")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("cpu_util")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("cpu_load5")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("cpu_load1")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
 
 			{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte("cpu_load15")},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte("cpu_load5")},
+				{Name: []byte("region"), Value: []byte("eastus")},
+			},
+				cardinality: opts.Cardinality,
+			},
+
+			{Labels: []*prompb.Label{
+				{Name: []byte("__name__"), Value: []byte("cpu_load15")},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			},
@@ -189,8 +189,8 @@ func NewDataSet(opts SetOptions) *Set {
 	for i := 0; i < 1000; i++ {
 		s.metrics = append(s.metrics,
 			&Metric{Labels: []*prompb.Label{
-				{[]byte("__name__"), []byte(fmt.Sprintf("metric%d", i))},
-				{[]byte("region"), []byte("eastus")},
+				{Name: []byte("__name__"), Value: []byte(fmt.Sprintf("metric%d", i))},
+				{Name: []byte("region"), Value: []byte("eastus")},
 			},
 				cardinality: opts.Cardinality,
 			})
