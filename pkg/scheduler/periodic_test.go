@@ -32,11 +32,9 @@ func TestScheduleEveryRunsFunction(t *testing.T) {
 		return nil
 	})
 
-	time.Sleep(20 * time.Millisecond)
-
 	select {
 	case <-called:
-	default:
+	case <-time.After(time.Second):
 		require.Fail(t, "function was not called")
 	}
 }

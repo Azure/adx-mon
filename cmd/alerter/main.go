@@ -18,6 +18,7 @@ import (
 	alertrulev1 "github.com/Azure/adx-mon/api/v1"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
+	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/version"
 )
 
@@ -128,8 +129,8 @@ func realMain(ctx *cli.Context) error {
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
+	// Block until svc.Close() has drained, so the process does not exit mid-flush.
+	service.WaitForShutdown(sc, func(sig os.Signal) {
 		cancel()
 
 		logger.Infof("Received signal %s, exiting...", sig.String())
@@ -138,8 +139,7 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Error(err.Error())
 		}
-	}()
-	<-svcCtx.Done()
+	})
 	return nil
 }
 
