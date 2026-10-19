@@ -363,7 +363,7 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			| order by h, Timestamp asc
 			| extend prevVal=prev(Value)
 			| extend diff=Value-prevVal
-			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
+			| extend Value=case(h == prev(h), case(diff < 0, Value, diff), real(0))
 			| project-away prevVal, diff, h
 		)}`},
 
@@ -376,7 +376,7 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			order by Timestamp asc
 			| extend prevVal=prev(Value), prevTs=prev(Timestamp)
 			| extend sampleGap=(Timestamp-prevTs)/1s
-			| extend inc=case(isnull(prevVal), real(null), Value-prevVal < 0, next(Value)-Value, Value-prevVal)
+			| extend inc=case(isnull(prevVal), real(null), Value-prevVal < 0, Value, Value-prevVal)
 			| extend Value=iff(sampleGap > 0, inc/sampleGap, real(null))
 			| project Timestamp, SeriesId, Labels, Value
 		)
@@ -394,7 +394,7 @@ func (s *Syncer) ensurePromMetricsFunctions(ctx context.Context) error {
 			| order by h, Timestamp asc
 			| extend prevVal=prev(Value)
 			| extend diff=Value-prevVal
-			| extend Value=case(h == prev(h), case(diff < 0, next(Value)-Value, diff), real(0))
+			| extend Value=case(h == prev(h), case(diff < 0, Value, diff), real(0))
 			| project-away prevVal, diff, h
 		)}`},
 	}

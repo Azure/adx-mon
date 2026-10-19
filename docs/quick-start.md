@@ -104,6 +104,10 @@ AdxmonCollectorLogsSent
 | summarize TotalSent=sum(Value) by Host=tostring(Labels.host), Source=tostring(Labels.source)
 ```
 
+The `prom_delta()` and `prom_increase()` helpers return counter increases between consecutive samples within each series. A decrease is treated as a reset to zero, so the increase at that sample is its current value, without looking ahead to the next sample. For example, counter values `100, 3, 13` produce increases `0, 3, 10`, including when the reset is the final sample.
+
+The `prom_rate()` helper divides each reset-adjusted increase by the elapsed seconds since the previous sample in that series. It omits the first sample and rates with non-positive time gaps or non-finite results. These helpers operate on adjacent samples; the `interval` parameter is currently unused and does not provide PromQL-style range extrapolation.
+
 ### Log Examples
 
 ```kql
