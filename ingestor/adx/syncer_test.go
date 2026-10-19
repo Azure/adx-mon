@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,149 @@ func TestSyncer_EnsurePromMetricsFunctionsCreatesPromRate(t *testing.T) {
 	require.Contains(t, promRate, "| where isfinite(Value)")
 	require.NotContains(t, promRate, "| invoke prom_increase")
 	require.NotContains(t, promRate, "Value=inc/((Timestamp-prevTs)/1s)")
+}
+
+func TestSyncer_PromMetricsFunctionsUseCurrentValueOnReset(t *testing.T) {
+	kcli := &fakeKustoMgmt{}
+	s := NewSyncer(kcli, "db", schema.SchemaMapping{}, PromMetrics)
+	require.NoError(t, s.ensurePromMetricsFunctions(t.Context()))
+	require.Len(t, kcli.queries, 3)
+
+	for _, query := range kcli.queries {
+		require.NotContains(t, query, "next(")
+	}
+	require.Contains(t, kcli.queries[0], "case(diff < 0, Value, diff)")
+	require.Contains(t, kcli.queries[1], "Value-prevVal < 0, Value, Value-prevVal")
+	require.Contains(t, kcli.queries[2], "case(diff < 0, Value, diff)")
+}
+
+func TestSyncer_PromMetricsCounterResets(t *testing.T) {
+	testutils.IntegrationTest(t)
+
+	ctx := t.Context()
+	k, err := kustainer.Run(ctx, "mcr.microsoft.com/azuredataexplorer/kustainer-linux:latest", kustainer.WithStarted())
+	testcontainers.CleanupContainer(t, k)
+	require.NoError(t, err)
+
+	client, err := azkustodata.New(azkustodata.NewConnectionStringBuilder(k.ConnectionUrl()))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, client.Close()) }()
+
+	s := NewSyncer(client, "NetDefaultDB", schema.SchemaMapping{}, PromMetrics)
+	require.NoError(t, s.ensurePromMetricsFunctions(ctx))
+
+	type sample struct {
+		seriesID int64
+		offset   int64
+		increase float64
+		rate     float64
+	}
+	tests := []struct {
+		name    string
+		samples string
+		want    []sample
+	}{
+		{
+			name:    "monotonic with uneven spacing",
+			samples: "1,0,100, 1,10,110, 1,30,130",
+			want:    []sample{{1, 0, 0, 0}, {1, 10, 10, 1}, {1, 30, 20, 1}},
+		},
+		{
+			name:    "reset with uneven spacing",
+			samples: "1,0,100, 1,10,3, 1,30,13",
+			want:    []sample{{1, 0, 0, 0}, {1, 10, 3, 0.3}, {1, 30, 10, 0.5}},
+		},
+		{
+			name:    "reset at final sample",
+			samples: "1,0,100, 1,10,3",
+			want:    []sample{{1, 0, 0, 0}, {1, 10, 3, 0.3}},
+		},
+		{
+			name:    "reset to zero",
+			samples: "1,0,100, 1,10,0, 1,30,4",
+			want:    []sample{{1, 0, 0, 0}, {1, 10, 0, 0}, {1, 30, 4, 0.2}},
+		},
+		{
+			name:    "consecutive resets",
+			samples: "1,0,100, 1,10,10, 1,20,5, 1,30,20",
+			want:    []sample{{1, 0, 0, 0}, {1, 10, 10, 1}, {1, 20, 5, 0.5}, {1, 30, 15, 1.5}},
+		},
+		{
+			name:    "constant counter",
+			samples: "1,0,5, 1,10,5, 1,30,5",
+			want:    []sample{{1, 0, 0, 0}, {1, 10, 0, 0}, {1, 30, 0, 0}},
+		},
+		{
+			name:    "single sample",
+			samples: "1,0,100",
+			want:    []sample{{1, 0, 0, 0}},
+		},
+		{
+			name:    "independent series with unordered input",
+			samples: "2,30,8, 1,10,3, 2,0,50, 1,0,100, 2,10,4, 1,30,13",
+			want: []sample{
+				{1, 0, 0, 0}, {1, 10, 3, 0.3}, {1, 30, 10, 0.5},
+				{2, 0, 0, 0}, {2, 10, 4, 0.4}, {2, 30, 4, 0.2},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range []string{"prom_increase", "prom_delta", "prom_rate"} {
+				t.Run(name, func(t *testing.T) {
+					query := fmt.Sprintf(`datatable(SeriesId:long, Offset:long, Value:real) [%s]
+| extend Timestamp=datetime(2026-01-01) + Offset * 1s, Labels=dynamic({"test":"reset"})
+| project Timestamp, SeriesId, Labels, Value
+| invoke %s()
+| project SeriesId, Offset=tolong((Timestamp-datetime(2026-01-01))/1s), Value, NullValue=isnull(Value), Label=tostring(Labels.test)
+| order by SeriesId asc, Offset asc`, tt.samples, name)
+					ds, err := client.Query(t.Context(), "NetDefaultDB", kql.New("").AddUnsafe(query))
+					require.NoError(t, err)
+					require.NotEmpty(t, ds.Tables())
+
+					type result struct {
+						SeriesID  int64 `kusto:"SeriesId"`
+						Offset    int64
+						Value     float64
+						NullValue bool
+						Label     string
+					}
+					var got []result
+					for _, row := range ds.Tables()[0].Rows() {
+						var value result
+						require.NoError(t, row.ToStruct(&value))
+						require.False(t, value.NullValue)
+						got = append(got, value)
+					}
+
+					var want []result
+					for _, value := range tt.want {
+						if name == "prom_rate" && value.offset == 0 {
+							continue
+						}
+						expected := value.increase
+						if name == "prom_rate" {
+							expected = value.rate
+						}
+						want = append(want, result{
+							SeriesID: value.seriesID,
+							Offset:   value.offset,
+							Value:    expected,
+							Label:    "reset",
+						})
+					}
+					require.Len(t, got, len(want))
+					for i, expected := range want {
+						require.Equal(t, expected.SeriesID, got[i].SeriesID)
+						require.Equal(t, expected.Offset, got[i].Offset)
+						require.Equal(t, expected.Label, got[i].Label)
+						require.InDelta(t, expected.Value, got[i].Value, 1e-12)
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestSanitizerErrorString(t *testing.T) {
