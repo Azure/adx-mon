@@ -48,6 +48,7 @@ require (
 	github.com/valyala/fastjson v1.6.10
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/metric v1.47.0
+	go.uber.org/goleak v1.3.0
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.61.0
 	golang.org/x/sync v0.24.0
