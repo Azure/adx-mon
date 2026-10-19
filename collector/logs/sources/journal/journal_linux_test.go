@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
@@ -39,7 +40,7 @@ func TestJournalE2E(t *testing.T) {
 	t.Logf("Sending logs - view in journalctl with journalctl %s=%s", testtag, testValue)
 	matchTag := fmt.Sprintf("%s=%s", testtag, testValue)
 
-	numLogs := 1000
+	numLogs := 100
 	for i := 0; i < numLogs; i++ {
 		err := journal.Send(fmt.Sprintf("%d", i), journal.PriInfo, journalFields)
 		require.NoError(t, err)
@@ -66,7 +67,8 @@ func TestJournalE2E(t *testing.T) {
 	ctx := context.Background()
 	err := service.Open(ctx)
 	require.NoError(t, err)
-	<-sink.DoneChan()
+	_, err = waitForSink(sink, sinkWaitTimeout)
+	require.NoError(t, err)
 	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
@@ -106,7 +108,8 @@ func TestJournalE2E(t *testing.T) {
 	err = service.Open(ctx)
 	require.NoError(t, err)
 	defer service.Close()
-	<-newSink.DoneChan()
+	_, err = waitForSink(newSink, sinkWaitTimeout)
+	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), types.StringOrEmpty(newSink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Ensure the systemd unit identifier is set
@@ -138,7 +141,7 @@ func TestJournalMulipleSources(t *testing.T) {
 	matchTagOne := fmt.Sprintf("%s=%s", testtagOne, testValue)
 	matchTagTwo := fmt.Sprintf("%s=%s", testtagTwo, testValue)
 
-	numLogs := 5000
+	numLogs := 500
 	errgrp, _ := errgroup.WithContext(context.Background())
 	errgrp.Go(func() error {
 		for i := 0; i < numLogs; i++ {
@@ -189,7 +192,8 @@ func TestJournalMulipleSources(t *testing.T) {
 	err = errgrp.Wait()
 	require.NoError(t, err)
 
-	<-sink.DoneChan()
+	_, err = waitForSink(sink, sinkWaitTimeout)
+	require.NoError(t, err)
 	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 }
@@ -246,7 +250,8 @@ func TestJournalDisjunction(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
-	count := <-sink.DoneChan()
+	count, err := waitForSink(sink, sinkWaitTimeout)
+	require.NoError(t, err)
 	require.EqualValues(t, numLogs*2, count)
 }
 
@@ -307,7 +312,8 @@ func TestJournalInvalidCursor(t *testing.T) {
 	defer service.Close()
 
 	// Wait for all logs to be processed
-	count := <-sink.DoneChan()
+	count, err := waitForSink(sink, sinkWaitTimeout)
+	require.NoError(t, err)
 
 	// Since we had an invalid cursor, the journal should have fallen back to reading from head
 	// and should have read all logs we sent
@@ -315,4 +321,24 @@ func TestJournalInvalidCursor(t *testing.T) {
 
 	// Verify we got all the logs we expected
 	require.Equal(t, int64(numLogs), count)
+}
+
+// sinkWaitTimeout bounds how long a test waits for its sink to fill. journald
+// rate limits a unit's entries, so the entries a test wrote can be dropped and
+// the sink never fills; fail with a clear error instead of hanging the package.
+const sinkWaitTimeout = 30 * time.Second
+
+func waitForSink(sink *sinks.CountingSink, timeout time.Duration) (int64, error) {
+	select {
+	case count := <-sink.DoneChan():
+		return count, nil
+	case <-time.After(timeout):
+		return 0, fmt.Errorf("sink did not receive its logs within %s; journald may have rate limited the test's entries (see RateLimitBurst in journald.conf and `journalctl -u systemd-journald`)", timeout)
+	}
+}
+
+func TestWaitForSinkTimesOut(t *testing.T) {
+	sink := sinks.NewCountingSink(1)
+	_, err := waitForSink(sink, 50*time.Millisecond)
+	require.ErrorContains(t, err, "rate limit")
 }
