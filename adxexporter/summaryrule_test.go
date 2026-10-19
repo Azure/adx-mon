@@ -2,6 +2,7 @@ package adxexporter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,6 +22,50 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+type failExporterStatusUpdateClient struct {
+	client.Client
+}
+
+func (c failExporterStatusUpdateClient) Status() client.SubResourceWriter {
+	return failExporterStatusUpdateWriter{SubResourceWriter: c.Client.Status()}
+}
+
+type failExporterStatusUpdateWriter struct {
+	client.SubResourceWriter
+}
+
+func (w failExporterStatusUpdateWriter) Update(context.Context, client.Object, ...client.SubResourceUpdateOption) error {
+	return errors.New("status update denied")
+}
+
+func TestExportersReturnCriteriaStatusUpdateErrors(t *testing.T) {
+	now := time.Now()
+	rule := &adxmonv1.SummaryRule{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "sr"},
+		Spec:       adxmonv1.SummaryRuleSpec{Database: "testdb", CriteriaExpression: "false"},
+	}
+	base := newFakeClientWithRule(t, rule)
+	r := newBaseReconciler(t, failExporterStatusUpdateClient{Client: base}, NewMockKustoExecutor(t, "testdb", "https://test"), now)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rule)})
+	require.ErrorContains(t, err, "status update denied")
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+	metricsExporter := &adxmonv1.MetricsExporter{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "me"},
+		Spec:       adxmonv1.MetricsExporterSpec{CriteriaExpression: "false"},
+	}
+	metricsClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&adxmonv1.MetricsExporter{}).WithObjects(metricsExporter).Build()
+	metricsReconciler := &MetricsExporterReconciler{
+		Client:        failExporterStatusUpdateClient{Client: metricsClient},
+		ClusterLabels: map[string]string{},
+	}
+	_, err = metricsReconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(metricsExporter)})
+	require.ErrorContains(t, err, "status update denied")
+}
 
 func newFakeClientWithRule(t *testing.T, rule *adxmonv1.SummaryRule) client.Client {
 	t.Helper()

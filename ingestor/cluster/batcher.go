@@ -450,9 +450,11 @@ func (b *batcher) splitPrefix(prefix string, v []wal.SegmentInfo) (owned, notOwn
 		batchSize += si.Size
 
 		// Record that this segment is part of a batch.
-		_ = b.segments.Mutate(si.Path, func(n int) (int, error) {
+		if err := b.segments.Mutate(si.Path, func(n int) (int, error) {
 			return n + 1, nil
-		})
+		}); err != nil {
+			logger.Errorf("Failed to mark segment %s as batched: %v", si.Path, err)
+		}
 
 		// Prevent trying to combine an unbounded number of segments at once even if they are very small.  This
 		// can incur a lot of CPU time and slower transfers when there are hundreds of segments that can be combined.

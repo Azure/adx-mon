@@ -60,7 +60,9 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if err := r.reconcileIngestorSecurity(ctx, ingestor); err != nil {
-		_ = r.setSecurityCondition(ctx, ingestor, metav1.ConditionFalse, "SecurityMigrationFailed", err.Error())
+		if statusErr := r.setSecurityCondition(ctx, ingestor, metav1.ConditionFalse, "SecurityMigrationFailed", err.Error()); statusErr != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update Ingestor %s/%s security status after reconciliation failure (%v): %w", ingestor.Namespace, ingestor.Name, err, statusErr)
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile ingestor security controls: %w", err)
 	}
 	if err := r.setSecurityCondition(ctx, ingestor, metav1.ConditionTrue, "SecurityMigrationComplete", "Ingestor security controls are reconciled"); err != nil {
@@ -75,14 +77,18 @@ func (r *IngestorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			// Expression errors are terminal until the CRD changes; set status and exit without requeue.
 			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, ingestor)
+				if err := r.Status().Update(ctx, ingestor); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update Ingestor %s/%s criteria status: %w", ingestor.Namespace, ingestor.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
 		if !ok {
 			c := metav1.Condition{Type: adxmonv1.IngestorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: ingestor.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&ingestor.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, ingestor)
+				if err := r.Status().Update(ctx, ingestor); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update Ingestor %s/%s criteria status: %w", ingestor.Namespace, ingestor.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}

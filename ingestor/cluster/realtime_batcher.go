@@ -79,9 +79,11 @@ func (p realtimePolicy) batches(b *batcher, prefix string, segments []wal.Segmen
 		batch.Segments = append(batch.Segments, si)
 		size += si.Size
 
-		_ = b.segments.Mutate(si.Path, func(n int) (int, error) {
+		if err := b.segments.Mutate(si.Path, func(n int) (int, error) {
 			return n + 1, nil
-		})
+		}); err != nil {
+			logger.Errorf("Failed to mark realtime segment %s as batched: %v", si.Path, err)
+		}
 	}
 	return batches, nil
 }

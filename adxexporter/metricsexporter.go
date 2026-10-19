@@ -74,7 +74,9 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	condChanged := meta.SetStatusCondition(&metricsExporter.Status.Conditions, cond)
 	if !proceed {
 		if condChanged {
-			_ = r.Status().Update(ctx, &metricsExporter) // best-effort persist when skipping
+			if err := r.Status().Update(ctx, &metricsExporter); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update MetricsExporter %s/%s criteria status: %w", metricsExporter.Namespace, metricsExporter.Name, err)
+			}
 		}
 		return ctrl.Result{}, nil
 	}
@@ -89,7 +91,7 @@ func (r *MetricsExporterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if executed {
 		if statusErr := r.updateStatus(ctx, &metricsExporter, execErr); statusErr != nil {
 			logger.Errorf("Failed to update status for MetricsExporter %s/%s: %v", req.Namespace, req.Name, statusErr)
-			// Don't return error here - we want to continue processing
+			return ctrl.Result{}, fmt.Errorf("failed to update MetricsExporter %s/%s status: %w", metricsExporter.Namespace, metricsExporter.Name, statusErr)
 		}
 	}
 

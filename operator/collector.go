@@ -50,14 +50,18 @@ func (r *CollectorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			// Expression errors are terminal until the CRD changes; set status and exit without requeue.
 			c := metav1.Condition{Type: adxmonv1.CollectorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: collector.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&collector.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, collector)
+				if err := r.Status().Update(ctx, collector); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update Collector %s/%s criteria status: %w", collector.Namespace, collector.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
 		if !ok {
 			c := metav1.Condition{Type: adxmonv1.CollectorConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: collector.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&collector.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, collector)
+				if err := r.Status().Update(ctx, collector); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update Collector %s/%s criteria status: %w", collector.Namespace, collector.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}

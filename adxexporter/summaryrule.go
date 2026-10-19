@@ -74,7 +74,9 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	cond := metav1.Condition{Type: adxmonv1.ConditionCriteria, Status: condStatus, Reason: reason, Message: message, ObservedGeneration: rule.GetGeneration(), LastTransitionTime: metav1.Now()}
 	if meta.SetStatusCondition(&rule.Status.Conditions, cond) {
-		_ = r.Status().Update(ctx, &rule) // best-effort update
+		if err := r.Status().Update(ctx, &rule); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update SummaryRule %s/%s criteria status: %w", rule.Namespace, rule.Name, err)
+		}
 	}
 	if !proceed {
 		return ctrl.Result{}, nil
@@ -120,8 +122,8 @@ func (r *SummaryRuleReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Persist any changes made to async operation conditions or timestamps
 	if err := r.Status().Update(ctx, &rule); err != nil {
-		// Not fatal; next reconcile will retry
 		logger.Warnf("Failed to persist SummaryRule async status %s/%s: %v", rule.Namespace, rule.Name, err)
+		return ctrl.Result{}, fmt.Errorf("failed to persist SummaryRule async status %s/%s: %w", rule.Namespace, rule.Name, err)
 	}
 
 	// Emit health / status log (best-effort, after status update to reflect latest view)

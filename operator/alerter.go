@@ -56,14 +56,18 @@ func (r *AlerterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			// Expression errors are terminal until the CRD is updated, so we just set status and exit.
 			c := metav1.Condition{Type: adxmonv1.AlerterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionError", Message: err.Error(), ObservedGeneration: alerter.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&alerter.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, alerter)
+				if err := r.Status().Update(ctx, alerter); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update Alerter %s/%s criteria status: %w", alerter.Namespace, alerter.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
 		if !ok {
 			c := metav1.Condition{Type: adxmonv1.AlerterConditionOwner, Status: metav1.ConditionFalse, Reason: "CriteriaExpressionFalse", Message: "criteriaExpression evaluated to false; skipping", ObservedGeneration: alerter.GetGeneration(), LastTransitionTime: metav1.Now()}
 			if meta.SetStatusCondition(&alerter.Status.Conditions, c) {
-				_ = r.Status().Update(ctx, alerter)
+				if err := r.Status().Update(ctx, alerter); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update Alerter %s/%s criteria status: %w", alerter.Namespace, alerter.Name, err)
+				}
 			}
 			return ctrl.Result{}, nil
 		}
@@ -229,12 +233,16 @@ func (r *AlerterReconciler) CreateAlerter(ctx context.Context, alerter *adxmonv1
 
 	tmplBytes, err := alerterFS.ReadFile("manifests/alerter.yaml")
 	if err != nil {
-		_ = r.setCondition(ctx, alerter, "TemplateError", "Failed to read alerter template", metav1.ConditionFalse)
+		if statusErr := r.setCondition(ctx, alerter, "TemplateError", "Failed to read alerter template", metav1.ConditionFalse); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{}, nil
 	}
 	tmpl, err := texttemplate.New("alerter").Parse(string(tmplBytes))
 	if err != nil {
-		_ = r.setCondition(ctx, alerter, "TemplateError", "Failed to parse alerter template", metav1.ConditionFalse)
+		if statusErr := r.setCondition(ctx, alerter, "TemplateError", "Failed to parse alerter template", metav1.ConditionFalse); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -243,13 +251,17 @@ func (r *AlerterReconciler) CreateAlerter(ctx context.Context, alerter *adxmonv1
 		return ctrl.Result{}, fmt.Errorf("failed to get template data: %w", err)
 	}
 	if !ready {
-		_ = r.setCondition(ctx, alerter, "NotReady", "ADXCluster not ready", metav1.ConditionUnknown)
+		if err := r.setCondition(ctx, alerter, "NotReady", "ADXCluster not ready", metav1.ConditionUnknown); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	var rendered bytes.Buffer
 	if err := tmpl.Execute(&rendered, data); err != nil {
-		_ = r.setCondition(ctx, alerter, "TemplateError", "Failed to render alerter template", metav1.ConditionFalse)
+		if statusErr := r.setCondition(ctx, alerter, "TemplateError", "Failed to render alerter template", metav1.ConditionFalse); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{}, nil
 	}
 

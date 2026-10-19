@@ -2,6 +2,7 @@ package operator
 
 import (
 	context "context"
+	"errors"
 	"testing"
 
 	adxmonv1 "github.com/Azure/adx-mon/api/v1"
@@ -15,8 +16,79 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+type failStatusUpdateClient struct {
+	client.Client
+}
+
+func (c failStatusUpdateClient) Status() client.SubResourceWriter {
+	return failStatusUpdateWriter{SubResourceWriter: c.Client.Status()}
+}
+
+type failStatusUpdateWriter struct {
+	client.SubResourceWriter
+}
+
+func (w failStatusUpdateWriter) Update(context.Context, client.Object, ...client.SubResourceUpdateOption) error {
+	return errors.New("status update denied")
+}
+
+func TestReconcilersReturnCriteriaStatusUpdateErrors(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, adxmonv1.AddToScheme(scheme))
+
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test", Namespace: "default"}}
+	tests := []struct {
+		name      string
+		object    client.Object
+		reconcile func(client.Client) (ctrl.Result, error)
+	}{
+		{
+			name: "Alerter",
+			object: &adxmonv1.Alerter{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+				Spec: adxmonv1.AlerterSpec{CriteriaExpression: "false"}},
+			reconcile: func(c client.Client) (ctrl.Result, error) {
+				return (&AlerterReconciler{Client: c}).Reconcile(context.Background(), request)
+			},
+		},
+		{
+			name: "Collector",
+			object: &adxmonv1.Collector{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+				Spec: adxmonv1.CollectorSpec{CriteriaExpression: "false"}},
+			reconcile: func(c client.Client) (ctrl.Result, error) {
+				return (&CollectorReconciler{Client: c}).Reconcile(context.Background(), request)
+			},
+		},
+		{
+			name: "Ingestor",
+			object: &adxmonv1.Ingestor{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+				Spec:       adxmonv1.IngestorSpec{CriteriaExpression: "false"},
+				Status: adxmonv1.IngestorStatus{Conditions: []metav1.Condition{{
+					Type: adxmonv1.IngestorConditionSecurityReady, Status: metav1.ConditionTrue,
+					Reason: "SecurityMigrationComplete", Message: "Ingestor security controls are reconciled",
+				}}},
+			},
+			reconcile: func(c client.Client) (ctrl.Result, error) {
+				return (&IngestorReconciler{Client: c, Scheme: scheme}).Reconcile(context.Background(), request)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(tt.object).WithObjects(tt.object).Build()
+
+			result, err := tt.reconcile(failStatusUpdateClient{Client: base})
+			require.ErrorContains(t, err, "status update denied")
+			require.True(t, result.IsZero())
+		})
+	}
+}
 
 func TestAlerterReconciler_IsReady(t *testing.T) {
 	scheme := runtime.NewScheme()

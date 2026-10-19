@@ -346,6 +346,7 @@ func TestReconcile(t *testing.T) {
 			}
 			fakeClient := fake.NewClientBuilder().
 				WithScheme(s).
+				WithStatusSubresource(&adxmonv1.MetricsExporter{}).
 				WithObjects(objs...).
 				Build()
 

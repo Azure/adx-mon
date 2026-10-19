@@ -156,7 +156,8 @@ func TestMetricsExporter_CriteriaExpressionProcessing(t *testing.T) {
 			if tt.clusterLabels != nil {
 				labels = tt.clusterLabels
 			}
-			fakeClient := fake.NewClientBuilder().WithScheme(s).WithObjects(me).Build()
+			fakeClient := fake.NewClientBuilder().WithScheme(s).
+				WithStatusSubresource(&adxmonv1.MetricsExporter{}).WithObjects(me).Build()
 			mockKusto := NewMockKustoExecutor(t, "test-db", "https://test-cluster.kusto.windows.net")
 			if tt.expectExecuted {
 				mockKusto.SetNextResult(t, [][]interface{}{{"test_metric", 1.0, time.Now()}})

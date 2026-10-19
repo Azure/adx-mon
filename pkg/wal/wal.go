@@ -398,7 +398,9 @@ func (w *WAL) rotateSegmentIfNecessary() {
 			info.Priority = w.opts.Priority
 			w.index.Add(info)
 		} else {
-			_ = os.Remove(toClose.Path())
+			if err := os.Remove(toClose.Path()); err != nil && !os.IsNotExist(err) {
+				logger.Warnf("Failed to remove empty segment %s: %v", toClose.Path(), err)
+			}
 		}
 
 		if err := toClose.Close(); err != nil {
