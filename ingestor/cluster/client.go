@@ -227,6 +227,9 @@ func (c *Client) Write(ctx context.Context, endpoint string, filename string, bo
 	// Send the body with gzip compression unless the client has that option disabled.
 	if !c.opts.DisableGzip {
 		gzipReader, gzipWriter := io.Pipe()
+		// If the request fails before the transport drains the pipe, closing the
+		// reader unblocks the compressor goroutine instead of leaking it.
+		defer gzipReader.Close()
 		go func() {
 			defer gzipWriter.Close()
 			gzipCompressor := gzipWriterPool.Get().(*gzip.Writer)

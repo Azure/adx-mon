@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 func TestClient_Write_Success(t *testing.T) {
@@ -261,4 +262,22 @@ func TestClient_Write_DisableGzip_False(t *testing.T) {
 
 	err = client.Write(context.Background(), server.URL, "testfile", strings.NewReader("testdata"))
 	require.NoError(t, err)
+}
+
+func TestClient_Write_GzipGoroutineExitsWhenRequestFails(t *testing.T) {
+	// Reserve a port and close the listener so every dial is refused and
+	// httpClient.Do fails before the gzip pipe is drained.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	endpoint := server.URL
+	server.Close()
+
+	client, err := NewClient(ClientOpts{Timeout: time.Second})
+	require.NoError(t, err)
+
+	defer goleak.VerifyNone(t)
+
+	for i := 0; i < 5; i++ {
+		err = client.Write(context.Background(), endpoint, "testfile", strings.NewReader("testdata"))
+		require.Error(t, err)
+	}
 }
