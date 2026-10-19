@@ -1,0 +1,121 @@
+---
+aks_cluster_name: null
+region: null
+cloud: azure
+environment: null
+global_drop_metrics: []
+global_keep_metrics: []
+singleton_drop_metrics: []
+singleton_keep_metrics: []
+adx:
+  name: null
+  url: null
+  databases:
+    - name: Logs
+      telemetryType: Logs
+      retentionInDays: 30
+    - name: Metrics
+      telemetryType: Metrics
+      retentionInDays: 30
+adx_hub_url: null
+
+# Default container image registry/repository prefix. Each component's
+# `image.repository` defaults to `<image_registry>/<component>` and can be
+# overridden individually.
+image_registry: ghcr.io/azure/adx-mon
+
+collector:
+  enabled: true
+  # Defaults to https://ingestor.<release-namespace>.svc.cluster.local when unset.
+  ingestor_endpoint: null
+  insecure_skip_verify: true
+  log_destination: "Logs:Collector"
+  image:
+    repository: null  # defaults to <image_registry>/collector
+    tag: latest
+    pullPolicy: IfNotPresent
+  # Resources for the per-node DaemonSet collectors.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 500m
+      memory: 2000Mi
+  # Resources for the singleton Deployment collector (cluster-wide scrapes).
+  singleton_resources:
+    requests:
+      cpu: 50m
+      memory: 100Mi
+    limits:
+      cpu: 500m
+      memory: 2000Mi
+  # Collector config options surfaced to Helm. See pkg/collector for full reference.
+  config:
+    max_connections: 100
+    max_batch_size: 10000
+    wal_flush_interval_ms: 1000
+    metrics_database: Metrics
+    logs_database: Logs
+
+ingestor:
+  enabled: true
+  replicas: 1
+  affinity:
+    required: false
+    key: agentpool
+    value: system
+  client_id: null
+  insecure_skip_verify: true
+  log_destination: "Logs:Ingestor"
+  image:
+    repository: null  # defaults to <image_registry>/ingestor
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+alerter:
+  enabled: false
+  replicas: 1
+  affinity:
+    required: false
+    key: agentpool
+    value: system
+  auth_msi_id: null
+  log_destination: "Logs:Alerter"
+  # Address of the notifier service the alerter forwards alerts to. Required
+  # when alerter.enabled=true.
+  alerter_address: null
+  image:
+    repository: null  # defaults to <image_registry>/alerter
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+operator:
+  enabled: false
+  # Azure Workload Identity client ID for the operator. Required when
+  # operator.enabled=true.
+  client_id: null
+  affinity:
+    required: false
+    key: agentpool
+    value: system
+  log_destination: "Logs:Operator"
+  image:
+    repository: null  # defaults to <image_registry>/operator
+    tag: latest
+    pullPolicy: Always
+  resources: {}
