@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Azure/adx-mon/collector/logs"
 	"github.com/Azure/adx-mon/collector/logs/engine"
@@ -20,6 +21,25 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+// sinkTimeout bounds how long a test waits for the journal source to deliver
+// its entries. journald drops messages once a unit exceeds RateLimitBurst
+// (10000 per 30s by default), and a dropped entry would otherwise leave the
+// test blocked on the sink forever.
+const sinkTimeout = 60 * time.Second
+
+// waitForSink returns the count delivered to sink, or fails the test if the
+// expected entries do not arrive within sinkTimeout.
+func waitForSink(t *testing.T, sink *sinks.CountingSink) int64 {
+	t.Helper()
+	select {
+	case count := <-sink.DoneChan():
+		return count
+	case <-time.After(sinkTimeout):
+		t.Fatalf("journal entries did not arrive within %s; journald may be rate-limiting this unit (look for \"Suppressed N messages\" in journalctl -u systemd-journald)", sinkTimeout)
+		return 0
+	}
+}
 
 func TestJournalE2E(t *testing.T) {
 	if testing.Short() {
@@ -66,7 +86,7 @@ func TestJournalE2E(t *testing.T) {
 	ctx := context.Background()
 	err := service.Open(ctx)
 	require.NoError(t, err)
-	<-sink.DoneChan()
+	waitForSink(t, sink)
 	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
@@ -106,7 +126,7 @@ func TestJournalE2E(t *testing.T) {
 	err = service.Open(ctx)
 	require.NoError(t, err)
 	defer service.Close()
-	<-newSink.DoneChan()
+	waitForSink(t, newSink)
 	require.Equal(t, fmt.Sprintf("%d", numLogs*2-1), types.StringOrEmpty(newSink.Latest().GetBodyValue(types.BodyKeyMessage)))
 
 	// Ensure the systemd unit identifier is set
@@ -138,7 +158,9 @@ func TestJournalMulipleSources(t *testing.T) {
 	matchTagOne := fmt.Sprintf("%s=%s", testtagOne, testValue)
 	matchTagTwo := fmt.Sprintf("%s=%s", testtagTwo, testValue)
 
-	numLogs := 5000
+	// Keep the volume well under journald's default burst so the whole
+	// package stays below the rate limit.
+	numLogs := 1000
 	errgrp, _ := errgroup.WithContext(context.Background())
 	errgrp.Go(func() error {
 		for i := 0; i < numLogs; i++ {
@@ -189,7 +211,7 @@ func TestJournalMulipleSources(t *testing.T) {
 	err = errgrp.Wait()
 	require.NoError(t, err)
 
-	<-sink.DoneChan()
+	waitForSink(t, sink)
 	service.Close()
 	require.Equal(t, fmt.Sprintf("%d", numLogs-1), types.StringOrEmpty(sink.Latest().GetBodyValue(types.BodyKeyMessage)))
 }
@@ -246,7 +268,7 @@ func TestJournalDisjunction(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
-	count := <-sink.DoneChan()
+	count := waitForSink(t, sink)
 	require.EqualValues(t, numLogs*2, count)
 }
 
@@ -307,7 +329,7 @@ func TestJournalInvalidCursor(t *testing.T) {
 	defer service.Close()
 
 	// Wait for all logs to be processed
-	count := <-sink.DoneChan()
+	count := waitForSink(t, sink)
 
 	// Since we had an invalid cursor, the journal should have fallen back to reading from head
 	// and should have read all logs we sent
