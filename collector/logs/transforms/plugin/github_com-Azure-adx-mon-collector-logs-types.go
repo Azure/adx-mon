@@ -16,6 +16,7 @@ func init() {
 		"AttributeDatabaseName": reflect.ValueOf(constant.MakeFromLiteral("\"adxmon_destination_database\"", token.STRING, 0)),
 		"AttributeTableName":    reflect.ValueOf(constant.MakeFromLiteral("\"adxmon_destination_table\"", token.STRING, 0)),
 		"BodyKeyMessage":        reflect.ValueOf(constant.MakeFromLiteral("\"message\"", token.STRING, 0)),
+		"DisposeLogBatch":       reflect.ValueOf(types.DisposeLogBatch),
 		"LogBatchPool":          reflect.ValueOf(&types.LogBatchPool).Elem(),
 		"LogPool":               reflect.ValueOf(&types.LogPool).Elem(),
 		"NewLog":                reflect.ValueOf(types.NewLog),
