@@ -38,6 +38,7 @@ import (
 	"github.com/Azure/adx-mon/pkg/limiter"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/scheduler"
+	"github.com/Azure/adx-mon/pkg/service"
 	adxtls "github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
 	"github.com/Azure/adx-mon/schema"
@@ -401,11 +402,26 @@ func realMain(ctx *cli.Context) error {
 	// the segments will be delayed until the process is restarted.
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sc
+
+	// Only start the shutdown runner if running in a cluster
+	if _, err := rest.InClusterConfig(); err == nil {
+		go func() {
+			sd := runner.NewShutDownRunnerForNamespace(k8scli, srv, svc, namespace)
+			scheduler.RunForever(svcCtx, time.Minute, sd)
+		}()
+	}
+
+	// Block until svc.Close() has drained, so the process does not exit mid-upload.
+	service.WaitForShutdown(sc, func(sig os.Signal) {
+		// Bound each HTTP shutdown so a stuck connection cannot hang past the pod's grace period.
+		const shutdownTimeout = 30 * time.Second
 
 		// Stop receiving new samples
-		srv.Shutdown(context.Background())
+		srvCtx, srvCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer srvCancel()
+		if err := srv.Shutdown(srvCtx); err != nil {
+			logger.Errorf("Failed to shutdown server: %s", err)
+		}
 
 		// Disable writes for internal processes (metrics)
 		if err := svc.DisableWrites(); err != nil {
@@ -417,7 +433,9 @@ func realMain(ctx *cli.Context) error {
 		// Trigger shutdown of any pending background processes
 		cancel()
 
-		if err := metricsSrv.Shutdown(context.Background()); err != nil {
+		metricsCtx, metricsCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer metricsCancel()
+		if err := metricsSrv.Shutdown(metricsCtx); err != nil {
 			logger.Errorf("Failed to shutdown metrics server: %s", err)
 		}
 
@@ -426,17 +444,7 @@ func realMain(ctx *cli.Context) error {
 		if err != nil {
 			logger.Error(err.Error())
 		}
-	}()
-
-	// Only start the shutdown runner if running in a cluster
-	if _, err := rest.InClusterConfig(); err == nil {
-		go func() {
-			sd := runner.NewShutDownRunnerForNamespace(k8scli, srv, svc, namespace)
-			scheduler.RunForever(svcCtx, time.Minute, sd)
-		}()
-	}
-
-	<-svcCtx.Done()
+	})
 	return nil
 }
 
