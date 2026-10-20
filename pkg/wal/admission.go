@@ -7,6 +7,7 @@ import (
 	"time"
 
 	flakeutil "github.com/Azure/adx-mon/pkg/flake"
+	"github.com/Azure/adx-mon/pkg/ingestpolicy"
 )
 
 // TableLimit overrides the default local backlog budget for a normalized table.
@@ -26,6 +27,13 @@ type AdmissionOpts struct {
 	// is still measured and reported, which lets operators size limits from
 	// real traffic before any data is shed.
 	Enforce bool
+
+	// RealtimeReservedBytes is the part of Global.Bytes that only realtime
+	// tables may use, so queued backlog cannot consume the space realtime
+	// ingestion depends on. It applies in both enforced and observe-only
+	// modes, and only when Policy has realtime tables.
+	RealtimeReservedBytes int64
+	Policy                *ingestpolicy.Policy
 }
 
 type TableOverloadedError struct {
@@ -78,6 +86,9 @@ type TableBudget struct {
 	a     *Admission
 	d     Destination
 	limit Usage
+	// globalBytes is the instance byte ceiling for this destination: the
+	// global limit, less the realtime reservation for queued tables.
+	globalBytes int64
 
 	mu              sync.Mutex
 	usage           Usage
@@ -145,9 +156,20 @@ func (a *Admission) Table(d Destination) *TableBudget {
 	if t = a.tables[d]; t != nil {
 		return t
 	}
-	t = &TableBudget{a: a, d: d, limit: a.resolveLimit(d), files: make(map[string]fileUsage)}
+	t = &TableBudget{a: a, d: d, limit: a.resolveLimit(d), globalBytes: a.globalBytesLimit(d), files: make(map[string]fileUsage)}
 	a.tables[d] = t
 	return t
+}
+
+// globalBytesLimit mirrors Repository.MaxDiskUsage: queued tables stop at the
+// global limit minus the realtime reservation, realtime tables may use it all.
+func (a *Admission) globalBytesLimit(d Destination) int64 {
+	max, reserved := a.opts.Global.Bytes, a.opts.RealtimeReservedBytes
+	if max <= 0 || reserved <= 0 || reserved >= max || !a.opts.Policy.HasRealtime() ||
+		a.opts.Policy.Priority(d.Database, d.Table) == ingestpolicy.PriorityRealtime {
+		return max
+	}
+	return max - reserved
 }
 
 func (a *Admission) Limit(d Destination) Usage {
@@ -229,7 +251,7 @@ func (t *TableBudget) Reserve(path string, bytes, segments int64) (*Reservation,
 
 	// Claimed atomically: the check and the commit must not be separable or
 	// concurrent reservations on other tables could jointly pass the limit.
-	if !addWithin(&t.a.totalBytes, bytes, t.a.opts.Global.Bytes) {
+	if !addWithin(&t.a.totalBytes, bytes, t.globalBytes) {
 		t.releaseLocal(bytes, segments)
 		return nil, ErrMaxDiskUsageExceeded
 	}
