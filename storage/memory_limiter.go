@@ -25,8 +25,14 @@ func NewMemoryLimiter(limit int64) *MemoryLimiter {
 
 // Reserve claims n bytes of intake memory. It reports false when the claim
 // would exceed the ceiling, in which case the caller must shed or retry later.
+// Without a ceiling every claim succeeds but is still counted, so usage can be
+// measured before a ceiling is chosen.
 func (m *MemoryLimiter) Reserve(n int64) bool {
-	if m == nil || m.limit <= 0 {
+	if m == nil {
+		return true
+	}
+	if m.limit <= 0 {
+		m.used.Add(n)
 		return true
 	}
 	for {
@@ -42,10 +48,18 @@ func (m *MemoryLimiter) Reserve(n int64) bool {
 
 // Release returns previously reserved bytes.
 func (m *MemoryLimiter) Release(n int64) {
-	if m == nil || m.limit <= 0 {
+	if m == nil {
 		return
 	}
 	m.used.Add(-n)
+}
+
+// Limit reports the ceiling; zero means it is disabled.
+func (m *MemoryLimiter) Limit() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.limit
 }
 
 // InFlight reports the bytes currently reserved.
