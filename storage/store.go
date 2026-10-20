@@ -42,10 +42,6 @@ var (
 	})
 )
 
-// defaultIntakeReservation is the memory charged for an import whose size
-// cannot be bounded by a destination budget.
-const defaultIntakeReservation = 64 * 1024 * 1024
-
 // ErrIntakeMemoryExhausted reports that too many concurrent requests are
 // already buffered. It is retryable: the sender keeps its data.
 var ErrIntakeMemoryExhausted = errors.New("intake memory exhausted")
@@ -435,18 +431,13 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 		input = io.LimitReader(body, limit+1)
 	}
 
-	// Claim the worst case up front: the body is buffered in full before it can
-	// be admitted, so the ceiling has to be reserved before reading it.
-	reserved := limit
-	if reserved <= 0 {
-		reserved = defaultIntakeReservation
-	}
-	if !s.intake.Reserve(reserved) {
-		return 0, ErrIntakeMemoryExhausted
-	}
-	defer s.intake.Release(reserved)
+	// The body is buffered in full before it can be admitted, so memory is
+	// claimed as it is read rather than reserving the destination's whole
+	// budget, which could exceed the ceiling for a small payload.
+	intake := &intakeReader{r: input, m: s.intake}
+	defer intake.Release()
 
-	n, err := io.Copy(buf, input)
+	n, err := io.Copy(buf, intake)
 	if err != nil {
 		return 0, err
 	}

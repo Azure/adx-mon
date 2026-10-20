@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -102,4 +103,64 @@ func (r blockingReader) Read(p []byte) (int, error) {
 	}
 	<-r.release
 	return 0, io.EOF
+}
+
+// walPayload returns the bytes of a closed segment holding data, which is what
+// a peer transfers.
+func walPayload(t *testing.T, data []byte) []byte {
+	t.Helper()
+	seg, err := wal.NewSegment(t.TempDir(), "DB_A")
+	require.NoError(t, err)
+	_, err = seg.Write(context.Background(), data)
+	require.NoError(t, err)
+	path := seg.Path()
+	require.NoError(t, seg.Close())
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return b
+}
+
+// Memory is charged for the bytes a transfer buffers, not for its destination's
+// disk budget, so a small payload is admitted when that budget exceeds the
+// intake ceiling.
+func TestImportAdmitsPayloadSmallerThanCeilingWhenTableBudgetIsLarger(t *testing.T) {
+	payload := walPayload(t, []byte("foo\n"))
+	require.Less(t, len(payload), 1024)
+
+	budget := wal.NewAdmission(wal.AdmissionOpts{Enforce: true, Default: wal.Usage{Bytes: 4096, Segments: 10}})
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:      t.TempDir(),
+		Admission:       budget,
+		MaxIntakeMemory: 1024,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, s.Open(ctx))
+	defer s.Close()
+
+	n, err := s.Import("DB_A_s_1.wal", io.NopCloser(bytes.NewReader(payload)))
+	require.NoError(t, err)
+	require.Equal(t, len(payload), n)
+}
+
+// A payload exactly the size of the ceiling fits once the end of the body is
+// confirmed; one byte more cannot be buffered and is reported as retryable.
+func TestImportAtIntakeCeiling(t *testing.T) {
+	payload := walPayload(t, []byte("foo\n"))
+	s := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:      t.TempDir(),
+		Admission:       wal.NewAdmission(wal.AdmissionOpts{}),
+		MaxIntakeMemory: int64(len(payload)),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, s.Open(ctx))
+	defer s.Close()
+
+	n, err := s.Import("DB_A_s_1.wal", io.NopCloser(bytes.NewReader(payload)))
+	require.NoError(t, err)
+	require.Equal(t, len(payload), n)
+
+	_, err = s.Import("DB_A_s_2.wal", io.NopCloser(bytes.NewReader(append(payload, 'x'))))
+	require.ErrorIs(t, err, storage.ErrIntakeMemoryExhausted)
 }

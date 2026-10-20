@@ -86,3 +86,8 @@ func TestIngestorWiresTableBudgetDefaults(t *testing.T) {
 	svc.HandleReady(ready, httptest.NewRequest("GET", "/readyz", nil))
 	require.Equal(t, http.StatusOK, ready.Code)
 }
+
+func TestIngestorRejectsIntakeCeilingBelowTransferSize(t *testing.T) {
+	_, err := NewService(ServiceOpts{StorageDir: t.TempDir(), MaxTransferSize: 2048, MaxIntakeMemory: 1024, Uploader: tableTestUploader{queue: make(chan *cluster.Batch, 10)}, K8sCli: fake.NewSimpleClientset(), Hostname: "ingestor-0", Namespace: "adx-mon"})
+	require.ErrorContains(t, err, "max intake memory")
+}
