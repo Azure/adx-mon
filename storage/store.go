@@ -420,7 +420,10 @@ func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
 
 	limit := s.opts.MaxDiskUsage
 	tableScoped := false
-	if s.opts.Admission != nil {
+	// In observe-only mode the table budget is reported, not enforced, so it
+	// must not cap the body: rejecting as oversized would make the sender
+	// drop the segment.
+	if s.opts.Admission.Enforced() {
 		if tableLimit := s.opts.Admission.Limit(wal.Destination{Database: db, Table: table}).Bytes; tableLimit > 0 && (limit <= 0 || tableLimit <= limit) {
 			limit = tableLimit
 			tableScoped = true

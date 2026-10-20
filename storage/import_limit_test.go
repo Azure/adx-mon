@@ -3,6 +3,7 @@ package storage_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"io"
 	"testing"
 
@@ -30,4 +31,31 @@ func TestImportRejectsOversizedPayload(t *testing.T) {
 	require.EqualValues(t, 100, oversized.Limit, "the acceptable size is reported to the sender")
 	require.EqualValues(t, 101, body.Size()-int64(body.Len()), "the body is not buffered past the limit")
 	require.Equal(t, wal.Usage{}, budget.Usage())
+}
+
+// In observe-only mode a table budget is measured, not enforced. A transfer
+// larger than the budget must be imported rather than reported as oversized,
+// which would make the sender drop the segment.
+func TestImportDoesNotEnforceTableBudgetInObserveOnlyMode(t *testing.T) {
+	data := make([]byte, 1000)
+	_, _ = rand.Read(data) // incompressible, so the segment stays larger than the budget
+	payload := walPayload(t, data)
+	require.Greater(t, len(payload), 100)
+
+	budget := wal.NewAdmission(wal.AdmissionOpts{
+		Global:  wal.Usage{Bytes: 1 << 20},
+		Default: wal.Usage{Bytes: 100, Segments: 10},
+	})
+	s := storage.NewLocalStore(storage.StoreOpts{StorageDir: t.TempDir(), Admission: budget})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, s.Open(ctx))
+	defer s.Close()
+
+	n, err := s.Import("DB_A_s_123.wal", io.NopCloser(bytes.NewReader(payload)))
+	require.NoError(t, err)
+	require.Equal(t, len(payload), n)
+
+	status := budget.Status()[wal.Destination{Database: "DB", Table: "A"}]
+	require.Positive(t, status.WouldReject, "the exceeded budget is still reported")
 }
