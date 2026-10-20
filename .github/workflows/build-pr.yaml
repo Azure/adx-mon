@@ -33,7 +33,7 @@ jobs:
       run: sudo apt update
 
     - name: Install dependencies
-      run: sudo apt install -y libsystemd-dev # for collector journal input
+      run: sudo apt install -y libsystemd-dev systemd-journal-remote # for collector journal input and test fixtures
 
     - name: Check gofmt
       run: |
