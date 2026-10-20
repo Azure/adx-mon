@@ -71,6 +71,7 @@ type LocalStore struct {
 
 	inflightWriteBytes int64
 	unregisterBudget   func()
+	unregisterIntake   func()
 	intake             *MemoryLimiter
 }
 
@@ -140,12 +141,18 @@ func (s *LocalStore) Open(ctx context.Context) error {
 	if s.opts.Admission != nil && s.opts.MetricComponent != "" {
 		s.unregisterBudget = metrics.RegisterTableBudget(s.opts.MetricComponent, s.opts.Admission)
 	}
+	if s.opts.MetricComponent != "" {
+		s.unregisterIntake = metrics.RegisterIntakeMemory(s.opts.MetricComponent, s.intake)
+	}
 	return nil
 }
 
 func (s *LocalStore) Close() error {
 	if s.unregisterBudget != nil {
 		s.unregisterBudget()
+	}
+	if s.unregisterIntake != nil {
+		s.unregisterIntake()
 	}
 	return s.repository.Close()
 }

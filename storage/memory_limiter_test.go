@@ -164,3 +164,14 @@ func TestImportAtIntakeCeiling(t *testing.T) {
 	_, err = s.Import("DB_A_s_2.wal", io.NopCloser(bytes.NewReader(append(payload, 'x'))))
 	require.ErrorIs(t, err, storage.ErrIntakeMemoryExhausted)
 }
+
+// Usage is measured without a ceiling so operators can size one from real
+// traffic before enabling it.
+func TestMemoryLimiterCountsUsageWithoutCeiling(t *testing.T) {
+	m := storage.NewMemoryLimiter(0)
+	require.True(t, m.Reserve(100))
+	require.EqualValues(t, 100, m.InFlight())
+	require.Zero(t, m.Limit())
+	m.Release(100)
+	require.Zero(t, m.InFlight())
+}
