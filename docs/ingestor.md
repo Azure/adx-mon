@@ -9,6 +9,134 @@ their own metrics, logs and traces.  The ingestor aggregates these data sources 
 instead of each pod or node sending data individually.  This reduces the number of small files that ADX must later 
 merge into larger files which can impact query latency and increase resource requirements.
 
+## Pipeline timing metrics
+
+`adxmon_pipeline_step_duration_seconds` is a histogram with `component`, `step`, `database`, `table`, and `result` labels.
+`result` is `success` or `error`; each observation describes one operation attempt, not one telemetry record.
+`database` and `table` identify the destination of a WAL operation, transfer or upload. They are empty for scrapes,
+which can contain metrics destined for multiple tables. Series count grows with the number of destinations;
+no target, segment, or batch IDs are used as labels.
+
+| Component | Step | Measurement |
+| --- | --- | --- |
+| `collector` | `scrape` | Start of a target scrape until its response iterator is exhausted or fails. Includes parsing and any synchronous batch writes performed while reading. |
+| `collector` | `transfer` | One WAL batch transfer to an ingestor, including request compression and the receiver's response. |
+| `ingestor` | `transfer` | One WAL batch transfer to another ingestor. |
+| `ingestor` | `adx_queued_upload` | One queued upload operation, including schema preparation, compression, blob upload, and ingestion submission. Includes direct ingestion when using the Kusto emulator. |
+| `ingestor` | `adx_streaming_upload` | One streaming SDK request, after schema preparation and slot acquisition. |
+| Both | `wal_write` | One WAL write or append, including its internal concurrent-rotation retries. |
+| Both | `receive_transfer` | Reading an incoming transfer body and appending its blocks to the local WAL. |
+| Both | `wal_rotation` | A committed rotation, including preparing the next segment and closing/flushing the old one. Losing concurrent rotations are not observations. |
+| Both | `wal_rotation_lateness` | Age deadline to the actual segment swap, after acquiring the WAL write lock and preparing its replacement. Size rotations before the age deadline do not produce a sample. |
+
+`adxmon_pipeline_retries_scheduled_total{component,step,database,table}` counts failed transfer and queued-upload
+operations released for retry. Locked segments, overloaded peers, network errors, failed queued uploads,
+and streaming retry decisions (including unavailable slots)
+increment it. Rejected transfers (HTTP 400), already-present segments (HTTP 409), and context cancellation do not.
+Timeouts count because the segments are released for retry. The counter records retry decisions, not the
+number of retries actually executed; a restart, shutdown, or ownership change may prevent a retry.
+SDK-internal retries are not counted, but their duration is included in the upload operation.
+
+The histogram's `_count` gives completed attempts by result. For example, the mean duration by destination and step is:
+
+```promql
+sum by (component, step, database, table) (rate(adxmon_pipeline_step_duration_seconds_sum[5m]))
+/
+sum by (component, step, database, table) (rate(adxmon_pipeline_step_duration_seconds_count[5m]))
+```
+
+These are diagnostic timings, **not an additive end-to-end breakdown**. Scrapes, transfers, and uploads have
+different batch sizes and observation counts. Summing buckets across steps combines the observations; it does
+not measure the duration of their sequence. Neither summing percentiles nor dividing the total `_sum` by the
+total `_count` yields end-to-end latency.
+
+### Local segment lifetime: additive stages and a direct total
+
+`adxmon_pipeline_segment_duration_seconds{component,step,database,table,route}` observes each local WAL segment
+once, on successful handoff. `component` is `collector` or `ingestor`; `route` is `peer`, `adx_queued`, or
+`adx_streaming`, describing the final successful handoff. Direct upload, streaming-to-queued fallback, and
+ownership changes are supported; a segment does not have to be uploaded by its assigned owner.
+
+| Step | Boundary |
+| --- | --- |
+| `wal_buffer` | Segment creation to publication in the closed-segment index. |
+| `batch_wait` | Index publication to the first enqueue attempt. Includes intentional batching linger. |
+| `retry_wait` | Accumulated time from releasing an unsuccessful worker attempt to the next enqueue attempt. Includes backoff and rebatching. |
+| `worker_queue` | Accumulated time from enqueue attempts to worker entry. Includes blocked channel sends, dispatch and destination queues. |
+| `processing` | Accumulated time inside upload/transfer workers through successful handoff. Includes opening/decompressing files, schema work, streaming slots, failed attempts, fallback, SDK-internal retries and network work. |
+| `total` | Direct elapsed time from local segment creation through successful handoff, including retries. Also reported for recovered segments when their creation time is known. |
+| `complete_total` | The same direct total, only for segments with a complete stage history. Use this cohort when reconciling stages. |
+
+The first five stages partition `complete_total` on the **same completed-segment cohort**, so their duration
+sums add up. Each segment has one observation in every stage, including zero-duration stages.
+For a mean local lifetime by destination and route, sum the five stage `_sum` rates and divide by the
+`complete_total_count` rate, **not the sum of all stage counts**:
+
+```promql
+sum by (component, database, table, route) (
+  rate(adxmon_pipeline_segment_duration_seconds_sum{step=~"wal_buffer|batch_wait|retry_wait|worker_queue|processing"}[5m])
+)
+/
+sum by (component, database, table, route) (
+  rate(adxmon_pipeline_segment_duration_seconds_count{step="complete_total"}[5m])
+)
+```
+
+Use `step="total"` directly for local lifetime percentiles:
+
+```promql
+histogram_quantile(0.95,
+  sum by (le, component, database, table, route) (
+    rate(adxmon_pipeline_segment_duration_seconds_bucket{step="total"}[5m])
+  )
+)
+```
+
+`adxmon_pipeline_segment_retries_total{component,database,table,route}` counts additional **worker attempts per
+segment**, on successful completion with complete history. These are not individual HTTP retries: worker
+attempts can also be released after cancellation or an ownership/health check. A batch of ten segments retried
+once contributes ten, not one. Use `retries_scheduled_total` for immediate failure/retry-decision rates,
+including segments that have not completed.
+
+`adxmon_pipeline_incomplete_segments_total{component,database,table,route,reason}` makes missing history
+explicit. Recovered segments retain their filename creation time but lose stage/retry history; overlapping
+attempts, missing enqueue/start boundaries and invalid timestamp ordering also invalidate the breakdown.
+These segments produce a valid `total`, but no stage, `complete_total`, or executed-retry observations.
+Detailed state is process-local and shared by copies of segment metadata; there is no persistent timing format
+or global segment-ID lookup map. Completion is recorded before disk cleanup and deduplicated in memory.
+After a restart a previously handed-off but undeleted segment can be counted again; there is no cross-restart
+exactly-once guarantee.
+
+**Scope:** this is segment-level local residence, not per-record source-to-query latency. Rotation can pre-create
+an empty replacement segment, so creation is earlier than its first write. Index publication currently precedes
+the final close/flush on rotation; waiting for readable data after publication belongs to downstream stages.
+Transfer reception coalesces data into the receiver's WAL without preserving incoming segment identity or timing.
+The sender's `processing` already includes the receiver's `receive_transfer`, which itself includes `wal_write`:
+these attempt diagnostics overlap and must not be added to the segment partition. Do not sum local lifetimes
+across collectors/ingestors or add attempt histograms to stage histograms.
+
+Queued-upload success means submission, **not ADX query visibility**. Streaming success is the SDK request's
+success boundary, not an independent query-visibility check. Lifetimes are segment-weighted, not row-weighted;
+late records in an old segment do not have that segment's full age. Failed/dropped segments have no successful
+lifetime observation. Continue using backlog age/count gauges and retry rates to see work still waiting.
+True cross-hop per-record E2E and the ADX post-submission portion require separate team agreement on correlation
+and ADX-side visibility diagnostics; these metrics do not manufacture that missing interval.
+
+### Verify age scheduling
+
+The shared deadline scheduler remains unchanged. `wal_rotation_lateness` measures the actual age-deadline
+overrun at a committed swap, not just when its timer fired. It includes scheduling, concurrency saturation,
+WAL lock wait and replacement preparation. The 10-second fallback sweep is a separate safety mechanism;
+it is not the normal age deadline.
+
+`adxmon_pipeline_wal_rotation_overdue_seconds{component}` reports the maximum deadline overrun among nonempty
+**active** WALs, sampled with repository disk usage every 100 ms. It detects stuck rotation before a completion
+histogram can be emitted. `adxmon_pipeline_active_segments{component}` counts these nonempty active WALs,
+including those not yet represented in the closed-segment backlog. Empty/pre-created segments and age-disabled
+WALs do not create an overdue signal. A small positive delay is normal; alert on sustained overruns relative to
+the configured segment age, not on any nonzero value. The gauge is component-wide; rotation histograms retain
+database/table labels for investigation after progress resumes.
+
 # Design
 
 The ingestor is designed to be deployed as a Kubernetes StatefulSet with multiple replicas.  It exposes several

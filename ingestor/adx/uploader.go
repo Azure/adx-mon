@@ -347,6 +347,7 @@ func sanitizeErrorString(err error) error {
 
 // uploadBatch uploads a batch to kusto and removes its segments on success.
 func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
+	batch.StartProcessing()
 	if ctx.Err() != nil {
 		batch.Release()
 		return
@@ -363,13 +364,14 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 		defer batch.Release()
 
 		var (
-			readers        = make([]io.Reader, 0, len(segments))
-			segmentReaders = make([]*wal.SegmentReader, 0, len(segments))
-			database       string
-			table          string
-			schema         string
-			header         string
-			err            error
+			readers          = make([]io.Reader, 0, len(segments))
+			segmentReaders   = make([]*wal.SegmentReader, 0, len(segments))
+			uploadedSegments = make([]wal.SegmentInfo, 0, len(segments))
+			database         string
+			table            string
+			schema           string
+			header           string
+			err              error
 		)
 
 		for _, si := range segments {
@@ -397,6 +399,7 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			}
 
 			segmentReaders = append(segmentReaders, f)
+			uploadedSegments = append(uploadedSegments, si)
 			readers = append(readers, f)
 		}
 
@@ -457,6 +460,7 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 			outcome, data = n.streamBatch(ctx, batch, table, mapping, data)
 			switch outcome {
 			case streamed:
+				batch.RecordCompletion("ingestor", "adx_streaming", uploadedSegments)
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to remove batch: %s", err.Error())
 				}
@@ -472,11 +476,21 @@ func (n *uploader) uploadBatch(ctx context.Context, batch *cluster.Batch) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := n.queuedUpload(ctx, data, database, table, mapping); err != nil {
+		err = n.queuedUpload(ctx, data, database, table, mapping)
+		result := "success"
+		if err != nil {
+			result = "error"
+		}
+		metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_queued_upload", database, table, result).Observe(time.Since(now).Seconds())
+		if err != nil {
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_queued_upload", database, table).Inc()
+			}
 			logger.Errorf("Failed to upload batch db=%s table=%s segments=%d queue_len=%d err=%s", database, table, len(segments), len(n.queue), err.Error())
 			return
 		}
 
+		batch.RecordCompletion("ingestor", "adx_queued", uploadedSegments)
 		if logger.IsDebug() {
 			logger.Debugf("Uploaded %v duration=%s", segments, time.Since(now).String())
 		}

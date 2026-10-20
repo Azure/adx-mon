@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Azure/adx-mon/collector/metadata"
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/k8s"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/prompb"
@@ -225,16 +226,20 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 
 	for _, target := range targets {
 		logger.Infof("Scraping %s", target.String())
+		start := time.Now()
 		iter, err := s.scrapeClient.FetchMetricsIterator(target.Addr)
 		if err != nil {
+			metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", "", "", "error").Observe(time.Since(start).Seconds())
 			logger.Warnf("Failed to create scrape iterator %s/%s/%s at %s: %s",
 				target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 			continue
 		}
+		result := "success"
 		for iter.Next() {
 			pt := prompb.TimeSeriesPool.Get()
 			ts, err := iter.TimeSeriesInto(pt)
 			if err != nil {
+				result = "error"
 				logger.Warnf("Failed to parse series %s/%s/%s at %s: %s",
 					target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 				continue
@@ -265,8 +270,10 @@ func (s *Scraper) scrapeTargets(ctx context.Context) {
 			wr = s.flushBatchIfNecessary(ctx, wr)
 		}
 		if err := iter.Err(); err != nil {
+			result = "error"
 			logger.Warnf("Failed to scrape %s/%s/%s at %s: %s", target.Namespace, target.Pod, target.Container, target.Addr, err.Error())
 		}
+		metrics.PipelineStepDurationSeconds.WithLabelValues("collector", "scrape", "", "", result).Observe(time.Since(start).Seconds())
 
 		if err := iter.Close(); err != nil {
 			logger.Errorf("Failed to close iterator for %s/%s/%s: %s", target.Namespace, target.Pod, target.Container, err.Error())

@@ -293,6 +293,7 @@ func (r *eventBatcher) processPrefix(ctx context.Context, prefix string, now tim
 // are batched again.
 func (r *eventBatcher) send(ctx context.Context, batches []*Batch, queueFor func(ingestpolicy.Priority) chan *Batch) {
 	for i, batch := range batches {
+		batch.queuedAt = time.Now()
 		select {
 		case queueFor(batch.Priority) <- batch:
 		case <-ctx.Done():

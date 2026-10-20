@@ -30,6 +30,57 @@ var (
 
 	Namespace = "adxmon"
 
+	PipelineStepDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "step_duration_seconds",
+		Help:      "Duration of individual pipeline operation attempts in seconds, excluding time between retries. Not end-to-end latency.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600},
+	}, []string{"component", "step", "database", "table", "result"})
+
+	PipelineRetriesScheduledTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "retries_scheduled_total",
+		Help:      "Number of failed pipeline operations released for retry, excluding cancellation. Does not count executed retries or SDK-internal retries.",
+	}, []string{"component", "step", "database", "table"})
+
+	PipelineSegmentDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "segment_duration_seconds",
+		Help:      "Local WAL segment lifetime and accumulated stages, observed on successful handoff. Not cross-ingestor or ADX query-visibility latency.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
+	}, []string{"component", "step", "database", "table", "route"})
+
+	PipelineIncompleteSegmentsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "incomplete_segments_total",
+		Help:      "Successfully handed-off segments whose detailed timing history is incomplete, by reason. Their valid total lifetime is still reported.",
+	}, []string{"component", "database", "table", "route", "reason"})
+
+	PipelineSegmentRetriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "segment_retries_total",
+		Help:      "Additional worker attempts for successfully handed-off local segments with complete timing history. Not SDK HTTP retries.",
+	}, []string{"component", "database", "table", "route"})
+
+	PipelineRotationOverdueSeconds = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "wal_rotation_overdue_seconds",
+		Help:      "Maximum age-deadline overrun of nonempty active WAL segments. Detects stalled rotation before a rotation completes.",
+	}, []string{"component"})
+
+	PipelineActiveSegments = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: Namespace,
+		Subsystem: "pipeline",
+		Name:      "active_segments",
+		Help:      "Number of nonempty active WAL segments, including segments not yet visible in the closed-segment backlog.",
+	}, []string{"component"})
+
 	// Ingestor metrics
 	IngestorHealthCheck = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: Namespace,

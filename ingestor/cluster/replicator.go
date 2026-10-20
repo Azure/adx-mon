@@ -9,12 +9,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/adx-mon/metrics"
 	"github.com/Azure/adx-mon/pkg/logger"
 	"github.com/Azure/adx-mon/pkg/service"
 	"github.com/Azure/adx-mon/pkg/wal"
 )
 
 type ReplicatorOpts struct {
+	// Component identifies the sender in pipeline metrics: collector or ingestor. Defaults to ingestor.
+	Component string
+
 	// Partitioner is used to determine which node owns a given metric.
 	Partitioner MetricPartitioner
 
@@ -63,7 +67,8 @@ type replicator struct {
 	wg            sync.WaitGroup
 	closeFn       context.CancelFunc
 
-	hostname string
+	hostname  string
+	component string
 
 	// Partitioner is used to determine which node owns a given metric.
 	Partitioner         MetricPartitioner
@@ -74,6 +79,12 @@ type replicator struct {
 }
 
 func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
+	if opts.Component == "" {
+		opts.Component = "ingestor"
+	}
+	if opts.Component != "collector" && opts.Component != "ingestor" {
+		return nil, fmt.Errorf("invalid replicator component %q", opts.Component)
+	}
 	transferConcurrency := 5
 	if opts.MaxTransferConcurrency > 0 {
 		transferConcurrency = opts.MaxTransferConcurrency
@@ -100,6 +111,7 @@ func NewReplicator(opts ReplicatorOpts) (Replicator, error) {
 		realtimeQueue:       make(chan *Batch, 10000),
 		cli:                 cli,
 		hostname:            opts.Hostname,
+		component:           opts.Component,
 		Partitioner:         opts.Partitioner,
 		Health:              opts.Health,
 		SegmentRemover:      opts.SegmentRemover,
@@ -133,6 +145,7 @@ func (r *replicator) RealtimeTransferQueue() chan *Batch {
 }
 
 func (r *replicator) transfer(ctx context.Context, batch *Batch) {
+	batch.StartProcessing()
 	segments := batch.Segments
 
 	if err := func() error {
@@ -181,7 +194,16 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 		}
 
 		start := time.Now()
-		if err = r.cli.Write(ctx, addr, filename, mr); err != nil {
+		err = r.cli.Write(ctx, addr, filename, mr)
+		result := "success"
+		if err != nil {
+			result = "error"
+		}
+		metrics.PipelineStepDurationSeconds.WithLabelValues(r.component, "transfer", db, table, result).Observe(time.Since(start).Seconds())
+		if err != nil {
+			if !errors.Is(err, &ErrBadRequest{}) && !errors.Is(err, ErrSegmentExists) && !errors.Is(ctx.Err(), context.Canceled) {
+				metrics.PipelineRetriesScheduledTotal.WithLabelValues(r.component, "transfer", db, table).Inc()
+			}
 			if errors.Is(err, &ErrBadRequest{}) {
 				// If ingestor returns a bad request, we should drop the segments as it means we're sending something
 				// that won't be accepted.  Retrying will continue indefinitely.  In this case, just drop the file
@@ -193,6 +215,7 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 				return nil
 			} else if errors.Is(err, ErrSegmentExists) {
 				// Segment already exists, remove our side so we don't keep retrying.
+				batch.RecordCompletion(r.component, "peer", segments)
 				if err := batch.Remove(); err != nil {
 					logger.Errorf("Failed to remove segment: %s", err)
 				}
@@ -210,6 +233,7 @@ func (r *replicator) transfer(ctx context.Context, batch *Batch) {
 			return err
 		}
 
+		batch.RecordCompletion(r.component, "peer", segments)
 		if logger.IsDebug() {
 			for _, seg := range segments {
 				logger.Debugf("Transferred %s as %s to %s addr=%s duration=%s ", seg.Path, filename, owner, addr, time.Since(start).String())

@@ -313,6 +313,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	})
 
 	storeOpts := storage.StoreOpts{
+		Component:        "collector",
 		StorageDir:       opts.StorageDir,
 		SegmentMaxAge:    maxSegmentAge,
 		SegmentMaxSize:   maxSegmentSize,
@@ -402,6 +403,7 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 		}
 
 		r, err := cluster.NewReplicator(cluster.ReplicatorOpts{
+			Component:                    "collector",
 			Hostname:                     opts.NodeName,
 			Partitioner:                  partitioner,
 			Health:                       health,

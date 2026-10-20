@@ -68,6 +68,7 @@ type LocalStore struct {
 }
 
 type StoreOpts struct {
+	Component              string
 	StorageDir             string
 	SegmentMaxSize         int64
 	SegmentMaxAge          time.Duration
@@ -100,6 +101,7 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 	return &LocalStore{
 		opts: opts,
 		repository: wal.NewRepository(wal.RepositoryOpts{
+			Component:                 opts.Component,
 			StorageDir:                opts.StorageDir,
 			SegmentMaxSize:            opts.SegmentMaxSize,
 			SegmentMaxAge:             opts.SegmentMaxAge,
@@ -303,11 +305,21 @@ func (s *LocalStore) PrefixesByAge() []string {
 	return s.repository.PrefixesByAge()
 }
 
-func (s *LocalStore) Import(filename string, body io.ReadCloser) (int, error) {
+func (s *LocalStore) Import(filename string, body io.ReadCloser) (written int, err error) {
 	db, table, schema, _, err := wal.ParseFilename(filename)
 	if err != nil {
 		return 0, err
 	}
+	start := time.Now()
+	defer func() {
+		if s.opts.Component != "" {
+			result := "success"
+			if err != nil {
+				result = "error"
+			}
+			metrics.PipelineStepDurationSeconds.WithLabelValues(s.opts.Component, "receive_transfer", db, table, result).Observe(time.Since(start).Seconds())
+		}
+	}()
 
 	key := gbp.Get(256)
 	defer gbp.Put(key)

@@ -6,6 +6,7 @@ package adx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -112,7 +113,7 @@ func (c *streamingCooldowns) start(table string, until time.Time) {
 // data.  When the outcome is streamFallback, the returned reader yields the batch's data for queued ingestion.
 func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table string, mapping adxschema.SchemaMapping, data io.Reader) (streamOutcome, io.Reader) {
 	if ctx.Err() != nil {
-		return n.retry(table, "shutdown")
+		return n.retry(ctx, table, "shutdown")
 	}
 	rt := n.realtime
 	now := time.Now()
@@ -131,7 +132,7 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	buf := &bytes.Buffer{}
 	if _, err := io.Copy(buf, io.LimitReader(data, rt.MaxRequestBytes+1)); err != nil {
 		logger.Errorf("Failed to read realtime batch db=%s table=%s: %s", n.database, table, err)
-		return n.retry(table, "read_error")
+		return n.retry(ctx, table, "read_error")
 	}
 	if int64(buf.Len()) > rt.MaxRequestBytes {
 		return n.fallback(table, "too_large", io.MultiReader(buf, data))
@@ -156,7 +157,7 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 		logger.Warnf("%s", err)
 	}
 	if ctx.Err() != nil {
-		return n.retry(table, "shutdown")
+		return n.retry(ctx, table, "shutdown")
 	}
 
 	// Wait briefly for a slot.  If the batch reaches its max lag first it uses queued ingestion, otherwise it is
@@ -171,16 +172,16 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	cancel()
 	if err != nil {
 		if ctx.Err() != nil {
-			return n.retry(table, "shutdown")
+			return n.retry(ctx, table, "shutdown")
 		}
 		if rt.MaxLag <= 0 || time.Now().Before(lagDeadline) {
-			return n.retry(table, "no_slot")
+			return n.retry(ctx, table, "no_slot")
 		}
 		return n.fallback(table, "lag", bytes.NewReader(buffered))
 	}
 	if ctx.Err() != nil {
 		release(false)
-		return n.retry(table, "shutdown")
+		return n.retry(ctx, table, "shutdown")
 	}
 
 	requestCtx, cancel := context.WithTimeout(ctx, rt.RequestTimeout)
@@ -193,6 +194,11 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	cancel()
 	metrics.IngestorRealtimeStreamingRequests.WithLabelValues(n.database).Inc()
 	metrics.IngestorRealtimeStreamingDuration.WithLabelValues(n.database).Add(time.Since(start).Seconds())
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	metrics.PipelineStepDurationSeconds.WithLabelValues("ingestor", "adx_streaming_upload", n.database, table, result).Observe(time.Since(start).Seconds())
 
 	if err == nil {
 		release(false)
@@ -207,15 +213,15 @@ func (n *uploader) streamBatch(ctx context.Context, batch *cluster.Batch, table 
 	failure := classifyStreamingError(err)
 	release(failure == streamingThrottled)
 	if ctx.Err() != nil {
-		return n.retry(table, "shutdown")
+		return n.retry(ctx, table, "shutdown")
 	}
 	logger.Warnf("Streaming ingestion failed db=%s table=%s failure=%s: %s", n.database, table, failure, sanitizeErrorString(err))
 
 	switch failure {
 	case streamingThrottled:
-		return n.retry(table, "throttled")
+		return n.retry(ctx, table, "throttled")
 	case streamingRetry:
-		return n.retry(table, "transient")
+		return n.retry(ctx, table, "transient")
 	case streamingUnavailable:
 		n.cooldowns.start(table, time.Now().Add(rt.Cooldown))
 		return n.fallback(table, failure.String(), bytes.NewReader(buffered))
@@ -233,8 +239,11 @@ func (n *uploader) fallback(table, reason string, data io.Reader) (streamOutcome
 }
 
 // retry records that a realtime batch will be retried with streaming ingestion.
-func (n *uploader) retry(table, reason string) (streamOutcome, io.Reader) {
+func (n *uploader) retry(ctx context.Context, table, reason string) (streamOutcome, io.Reader) {
 	n.recordRealtime(table, "retry_"+reason)
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		metrics.PipelineRetriesScheduledTotal.WithLabelValues("ingestor", "adx_streaming_upload", n.database, table).Inc()
+	}
 	return streamRetry, nil
 }
 

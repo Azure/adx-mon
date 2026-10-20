@@ -190,6 +190,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	storeOpts := storage.StoreOpts{
+		Component:              "ingestor",
 		StorageDir:             opts.StorageDir,
 		SegmentMaxSize:         opts.MaxSegmentSize,
 		SegmentMaxAge:          opts.MaxSegmentAge,
