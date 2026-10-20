@@ -201,6 +201,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Transfers are buffered in full before admission, so a ceiling below the
+	// largest transfer would reject that transfer on every retry.
+	if opts.MaxIntakeMemory > 0 && opts.MaxTransferSize > opts.MaxIntakeMemory {
+		return nil, fmt.Errorf("max intake memory (%d) must be at least max transfer size (%d)", opts.MaxIntakeMemory, opts.MaxTransferSize)
+	}
 
 	storeOpts := storage.StoreOpts{
 		StorageDir:             opts.StorageDir,
