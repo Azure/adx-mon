@@ -157,6 +157,12 @@ func (a *Admission) Limit(d Destination) Usage {
 	return a.Table(d).limit
 }
 
+// Enforced reports whether table budgets reject writes. When false they are
+// only measured, so callers must not turn a table budget into a hard limit.
+func (a *Admission) Enforced() bool {
+	return a != nil && a.opts.Enforce
+}
+
 type Reservation struct {
 	t     *TableBudget
 	path  string
