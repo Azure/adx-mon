@@ -41,7 +41,6 @@ import (
 	"github.com/Azure/adx-mon/pkg/service"
 	adxtls "github.com/Azure/adx-mon/pkg/tls"
 	"github.com/Azure/adx-mon/pkg/version"
-	"github.com/Azure/adx-mon/pkg/wal"
 	"github.com/Azure/adx-mon/schema"
 	"github.com/Azure/adx-mon/storage"
 	"github.com/Azure/azure-kusto-go/azkustodata"
@@ -144,8 +143,8 @@ func realMain(ctx *cli.Context) error {
 	maxSegmentCount := ctx.Int64("max-segment-count")
 	dropPrefixes := ctx.StringSlice("drop-prefix")
 	maxDiskUsage := ctx.Int64("max-disk-usage")
-	tableLimits := ctx.Generic("table-limit").(*tableLimitValues).limits
-	if _, err := wal.ResolveAdmission(wal.Usage{Bytes: maxDiskUsage, Segments: maxSegmentCount}, ctx.Int64("max-table-disk-usage"), ctx.Int64("max-table-segment-count"), ctx.Bool("disable-table-limits"), tableLimits); err != nil {
+	tableIsolation, err := parseTableIsolationOpts(ctx)
+	if err != nil {
 		return err
 	}
 	maxBatchSegments := ctx.Int("max-batch-segments")
@@ -314,7 +313,7 @@ func realMain(ctx *cli.Context) error {
 	allowedDatabases = append(allowedDatabases, metricsDatabases...)
 	allowedDatabases = append(allowedDatabases, logsDatabases...)
 
-	svc, err := ingestor.NewService(ingestor.ServiceOpts{
+	svcOpts := ingestor.ServiceOpts{
 		K8sCli:                       k8scli,
 		K8sCtrlCli:                   ctrlCli,
 		LogsKustoCli:                 logsKustoCli,
@@ -347,7 +346,9 @@ func realMain(ctx *cli.Context) error {
 		Realtime:                     realtimeCfg.serviceOpts(),
 		QueuedReservedWorkersPercent: realtimeCfg.QueuedReservedWorkersPercent,
 		PeerListeners:                peerListeners(streamingSlots),
-	})
+	}
+	tableIsolation.apply(&svcOpts)
+	svc, err := ingestor.NewService(svcOpts)
 	if err != nil {
 		logger.Fatalf("Failed to create service: %s", err)
 	}
