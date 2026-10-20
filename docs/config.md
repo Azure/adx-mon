@@ -40,6 +40,10 @@ max-segment-count = 10000
 max-disk-usage = 53687091200
 # Interval to flush the WAL. (default 100)
 wal-flush-interval-ms = 100
+# Fallback WAL rotation sweep interval in milliseconds. Zero or omitted defaults to half the effective max-segment-age, with a 3s floor.
+# The 3s floor is an arbitrary safety choice that needs analysis and tuning; an explicit positive interval may be shorter.
+# Age-based rotations use exact deadlines and are not delayed by this interval.
+wal-rotation-sweep-interval-ms = 15000
 # Maximum number of concurrent transfers.
 max-transfer-concurrency = 100
 # Storage directory for the WAL and log cursors.

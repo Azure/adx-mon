@@ -19,6 +19,31 @@ func newSchedulerTestWAL() *WAL {
 	return &WAL{rotationIndex: -1}
 }
 
+func TestRotationSweepInterval(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxAge     time.Duration
+		configured time.Duration
+		want       time.Duration
+	}{
+		{name: "half age", maxAge: 30 * time.Second, want: 15 * time.Second},
+		{name: "ingestor default age", maxAge: 5 * time.Minute, want: 150 * time.Second},
+		{name: "five second age uses floor", maxAge: 5 * time.Second, want: 3 * time.Second},
+		{name: "subsecond age uses floor", maxAge: 250 * time.Millisecond, want: 3 * time.Second},
+		{name: "age disabled", want: 3 * time.Second},
+		{name: "negative age disabled", maxAge: -time.Second, want: 3 * time.Second},
+		{name: "fractional half age", maxAge: 7 * time.Second, want: 3500 * time.Millisecond},
+		{name: "explicit shorter than floor", maxAge: 30 * time.Second, configured: time.Millisecond, want: time.Millisecond},
+		{name: "explicit longer than age", maxAge: time.Second, configured: 10 * time.Second, want: 10 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, rotationSweepInterval(tt.maxAge, tt.configured))
+		})
+	}
+}
+
 func TestRotationScheduler_OrdersByDeadline(t *testing.T) {
 	s := newRotationScheduler(0, nil)
 	now := time.Now()

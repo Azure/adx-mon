@@ -99,6 +99,10 @@ type WALOpts struct {
 	// SegmentMaxAge is the max age of a segment before it will be rotated and compressed.
 	SegmentMaxAge time.Duration
 
+	// RotationSweepInterval controls fallback rotation checks, independently of exact age deadlines.
+	// Zero defaults to half SegmentMaxAge with a 3-second floor.
+	RotationSweepInterval time.Duration
+
 	// MaxDiskUsage is the max disk usage of WAL segments allowed before writes should be rejected.
 	MaxDiskUsage int64
 
@@ -136,6 +140,9 @@ func NewWAL(opts WALOpts) (*WAL, error) {
 	if opts.StorageDir == "" {
 		return nil, fmt.Errorf("wal storage dir not defined")
 	}
+	if opts.RotationSweepInterval < 0 {
+		return nil, fmt.Errorf("rotation sweep interval must not be negative")
+	}
 
 	if opts.Index == nil {
 		opts.Index = NewIndex()
@@ -154,7 +161,8 @@ func (w *WAL) Open(ctx context.Context) error {
 	defer w.mu.Unlock()
 
 	if w.scheduler == nil {
-		w.scheduler = newRotationScheduler(defaultRotationSweepInterval, w.rotateSegmentIfNecessary)
+		interval := rotationSweepInterval(w.opts.SegmentMaxAge, w.opts.RotationSweepInterval)
+		w.scheduler = newRotationScheduler(interval, w.rotateSegmentIfNecessary)
 		w.ownsScheduler = true
 		w.scheduler.Open(context.Background())
 	}

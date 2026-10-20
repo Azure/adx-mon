@@ -11,10 +11,16 @@ import (
 	"time"
 )
 
-// defaultRotationSweepInterval is how often every WAL is checked for rotation in addition to its scheduled deadline.
-// The sweep catches rotations that are not driven by age, such as a segment that exceeded its max size without a
-// subsequent write.
-const defaultRotationSweepInterval = 10 * time.Second
+// minDefaultRotationSweepInterval is an arbitrary safety floor to limit background sweep overhead.
+// This 3-second choice needs analysis and tuning; an explicit interval may be shorter.
+const minDefaultRotationSweepInterval = 3 * time.Second
+
+func rotationSweepInterval(maxAge, configured time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	return max(minDefaultRotationSweepInterval, maxAge/2)
+}
 
 // minRotationConcurrency is the minimum number of segments rotated concurrently.  Closing a segment flushes and
 // optionally fsyncs it so rotations are run in parallel to keep many WALs with the same deadline on schedule.

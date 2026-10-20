@@ -350,6 +350,42 @@ func TestRepository_RotatesWALsWithSharedScheduler(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestRepository_RotationSweepInterval(t *testing.T) {
+	for _, interval := range []time.Duration{0, 10 * time.Millisecond} {
+		t.Run(interval.String(), func(t *testing.T) {
+			r := NewRepository(RepositoryOpts{SegmentMaxAge: 30 * time.Second, RotationSweepInterval: interval})
+			require.Equal(t, rotationSweepInterval(30*time.Second, interval), r.scheduler.sweepInterval)
+		})
+	}
+}
+
+func TestRepository_RejectsNegativeRotationSweepInterval(t *testing.T) {
+	r := NewRepository(RepositoryOpts{StorageDir: t.TempDir(), RotationSweepInterval: -time.Second})
+	require.EqualError(t, r.Open(context.Background()), "rotation sweep interval must not be negative")
+}
+
+func TestRepository_RotationSweepDoesNotDelayRealtimeDeadline(t *testing.T) {
+	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Metrics", Table: "CpuUsage"}})
+	require.NoError(t, err)
+	r := NewRepository(RepositoryOpts{
+		StorageDir:            t.TempDir(),
+		SegmentMaxAge:         time.Minute,
+		RotationSweepInterval: time.Hour,
+		Policy:                policy,
+		Realtime:              RotationPolicy{SegmentMaxAge: 20 * time.Millisecond},
+	})
+	require.NoError(t, r.Open(context.Background()))
+	defer r.Close()
+
+	w, err := r.Get(context.Background(), []byte("Metrics_CpuUsage"))
+	require.NoError(t, err)
+	require.Same(t, r.scheduler, w.scheduler)
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	require.Eventually(t, func() bool {
+		return r.index.TotalSegments() == 1
+	}, time.Second, time.Millisecond)
+}
+
 func TestRepository_CloseStopsScheduler(t *testing.T) {
 	r := NewRepository(RepositoryOpts{StorageDir: t.TempDir(), SegmentMaxAge: time.Hour})
 	require.NoError(t, r.Open(context.Background()))

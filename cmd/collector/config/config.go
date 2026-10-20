@@ -87,14 +87,15 @@ type Config struct {
 	TLSCertFile        string            `toml:"tls-cert-file,omitempty" comment:"Optional path to the TLS cert bundle file."`
 	StorageBackend     string            `toml:"storage-backend,omitempty" comment:"Storage backend used for WAL segments. Valid values: adx, clickhouse."`
 
-	MaxConnections               int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
-	MaxBatchSize                 int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
-	MaxSegmentAgeSeconds         int   `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
-	MaxSegmentSize               int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
-	MaxSegmentCount              int64 `toml:"max-segment-count,omitempty" comment:"Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive."`
-	MaxDiskUsage                 int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
-	WALFlushIntervalMilliSeconds int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
-	MaxTransferConcurrency       int   `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
+	MaxConnections                       int   `toml:"max-connections,omitempty" comment:"Maximum number of connections to accept."`
+	MaxBatchSize                         int   `toml:"max-batch-size,omitempty" comment:"Maximum number of samples to send in a single batch."`
+	MaxSegmentAgeSeconds                 int   `toml:"max-segment-age-seconds,omitempty" comment:"Max segment agent in seconds."`
+	MaxSegmentSize                       int64 `toml:"max-segment-size,omitempty" comment:"Maximum segment size in bytes."`
+	MaxSegmentCount                      int64 `toml:"max-segment-count,omitempty" comment:"Maximum segment files allowed before signaling back-pressure. Defaults to 10000 when omitted or nonpositive."`
+	MaxDiskUsage                         int64 `toml:"max-disk-usage,omitempty" comment:"Maximum allowed size in bytes of all segments on disk."`
+	WALFlushIntervalMilliSeconds         int   `toml:"wal-flush-interval-ms,omitempty" comment:"Interval to flush the WAL. (default 100)"`
+	WALRotationSweepIntervalMilliSeconds int   `toml:"wal-rotation-sweep-interval-ms,omitempty" comment:"Fallback WAL rotation sweep interval in milliseconds. Zero or omitted defaults to half the effective max-segment-age, with a 3s floor.\nThe 3s floor is an arbitrary safety choice that needs analysis and tuning; an explicit positive interval may be shorter.\nAge-based rotations use exact deadlines and are not delayed by this interval."`
+	MaxTransferConcurrency               int   `toml:"max-transfer-concurrency,omitempty" comment:"Maximum number of concurrent transfers."`
 
 	StorageDir  string `toml:"storage-dir,omitempty" comment:"Storage directory for the WAL and log cursors."`
 	EnablePprof bool   `toml:"enable-pprof,omitempty" comment:"Enable pprof endpoints."`
@@ -776,6 +777,10 @@ func (c *Config) Validate() error {
 		c.WALFlushIntervalMilliSeconds = DefaultConfig.WALFlushIntervalMilliSeconds
 	} else if c.WALFlushIntervalMilliSeconds < 0 {
 		return errors.New("wal-flush-interval must be greater than 0")
+	}
+
+	if c.WALRotationSweepIntervalMilliSeconds < 0 {
+		return errors.New("wal-rotation-sweep-interval-ms must not be negative")
 	}
 
 	if c.Realtime != nil {

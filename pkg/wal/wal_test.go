@@ -363,6 +363,38 @@ func TestWAL_SubSecondMaxAge(t *testing.T) {
 	w.mu.RUnlock()
 }
 
+func TestWAL_RotationSweepInterval(t *testing.T) {
+	for _, interval := range []time.Duration{0, 10 * time.Millisecond} {
+		t.Run(interval.String(), func(t *testing.T) {
+			w := newTestWAL(t, WALOpts{SegmentMaxAge: 30 * time.Second, RotationSweepInterval: interval})
+			require.Equal(t, rotationSweepInterval(30*time.Second, interval), w.scheduler.sweepInterval)
+		})
+	}
+}
+
+func TestWAL_RejectsNegativeRotationSweepInterval(t *testing.T) {
+	_, err := NewWAL(WALOpts{StorageDir: t.TempDir(), RotationSweepInterval: -time.Second})
+	require.EqualError(t, err, "rotation sweep interval must not be negative")
+}
+
+func TestWAL_RotationSweepDoesNotDelayAgeDeadline(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxAge: 20 * time.Millisecond, RotationSweepInterval: time.Hour})
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	require.Eventually(t, func() bool {
+		return w.index.TotalSegments() == 1
+	}, time.Second, time.Millisecond)
+}
+
+func TestWAL_ConfiguredRotationSweepRunsWithoutAgeDeadline(t *testing.T) {
+	w := newTestWAL(t, WALOpts{SegmentMaxSize: 1024, RotationSweepInterval: 10 * time.Millisecond})
+	require.NoError(t, w.Write(context.Background(), []byte("foo")))
+	// Simulate reaching the size threshold without another write to trigger inline rotation.
+	atomic.StoreInt64(&w.segmentSize, 1024)
+	require.Eventually(t, func() bool {
+		return w.index.TotalSegments() == 1
+	}, time.Second, time.Millisecond)
+}
+
 func TestWAL_RotatesEachSegmentAtMaxAge(t *testing.T) {
 	const maxAge = 20 * time.Millisecond
 	w := newTestWAL(t, WALOpts{SegmentMaxAge: maxAge})

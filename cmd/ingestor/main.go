@@ -69,6 +69,7 @@ func main() {
 			&cli.Int64Flag{Name: "max-segment-count", Usage: "Maximum segment files allowed before signaling back-pressure", Value: 10000},
 			&cli.DurationFlag{Name: "max-transfer-age", Usage: "Maximum segment age of a segment before direct kusto upload", Value: 90 * time.Second},
 			&cli.DurationFlag{Name: "max-segment-age", Usage: "Maximum segment age", Value: 5 * time.Minute},
+			&cli.DurationFlag{Name: "wal-rotation-sweep-interval", Usage: "Fallback WAL rotation sweep interval; 0 defaults to half max-segment-age with a 3s floor (does not delay exact age deadlines)"},
 			&cli.StringSliceFlag{Name: "drop-prefix", Usage: "Drop transfers that match the file prefix. Transfer filenames are in the form of DestinationDB_Table_..."},
 			&cli.IntFlag{Name: "max-batch-segments", Usage: "Maximum number of segments per batch", Value: 25},
 			&cli.BoolFlag{Name: "enable-wal-fsync", Usage: "Enable WAL fsync", Value: false},
@@ -95,6 +96,11 @@ func main() {
 
 func realMain(ctx *cli.Context) error {
 	logger.Infof("%s version:%s", os.Args[0], version.String())
+
+	rotationSweepInterval := ctx.Duration("wal-rotation-sweep-interval")
+	if rotationSweepInterval < 0 {
+		return fmt.Errorf("wal-rotation-sweep-interval must not be negative")
+	}
 
 	svcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -317,6 +323,7 @@ func realMain(ctx *cli.Context) error {
 		PartitionSize:                partitionSize,
 		MaxSegmentSize:               maxSegmentSize,
 		MaxSegmentAge:                maxSegmentAge,
+		RotationSweepInterval:        rotationSweepInterval,
 		MaxTransferSize:              maxTransferSize,
 		MaxTransferAge:               maxTransferAge,
 		MaxSegmentCount:              maxSegmentCount,

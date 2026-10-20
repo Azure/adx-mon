@@ -71,6 +71,7 @@ type StoreOpts struct {
 	StorageDir             string
 	SegmentMaxSize         int64
 	SegmentMaxAge          time.Duration
+	RotationSweepInterval  time.Duration
 	MaxDiskUsage           int64
 	StartupOpenConcurrency int
 	Backend                Backend
@@ -103,6 +104,7 @@ func NewLocalStore(opts StoreOpts) *LocalStore {
 			StorageDir:                opts.StorageDir,
 			SegmentMaxSize:            opts.SegmentMaxSize,
 			SegmentMaxAge:             opts.SegmentMaxAge,
+			RotationSweepInterval:     opts.RotationSweepInterval,
 			MaxDiskUsage:              opts.MaxDiskUsage,
 			StartupOpenConcurrency:    opts.StartupOpenConcurrency,
 			WALFlushInterval:          opts.WALFlushInterval,

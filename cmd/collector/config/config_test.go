@@ -4,8 +4,37 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConfig_WALRotationSweepInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		toml    string
+		want    int
+		wantErr string
+	}{
+		{name: "omitted uses automatic default"},
+		{name: "zero uses automatic default", toml: "wal-rotation-sweep-interval-ms = 0"},
+		{name: "explicit below safety floor", toml: "wal-rotation-sweep-interval-ms = 250", want: 250},
+		{name: "explicit interval", toml: "wal-rotation-sweep-interval-ms = 10000", want: 10000},
+		{name: "negative rejected", toml: "wal-rotation-sweep-interval-ms = -1", want: -1, wantErr: "wal-rotation-sweep-interval-ms must not be negative"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			require.NoError(t, toml.Unmarshal([]byte(tt.toml), &cfg))
+			require.Equal(t, tt.want, cfg.WALRotationSweepIntervalMilliSeconds)
+			err := cfg.Validate()
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
 
 func TestConfig_ValidatePromRemoteWrite_PathRequired(t *testing.T) {
 	c := Config{

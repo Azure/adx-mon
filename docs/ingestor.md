@@ -27,6 +27,20 @@ the incoming data (Protobufs) and writing it to disk in an append only storage f
 
 # Data Flow
 
+## WAL rotation
+
+WAL segments are scheduled to rotate at their configured `--max-segment-age` deadline. A separate background sweep
+checks for other rotation conditions, such as a size limit reached without a subsequent write.
+
+Use `--wal-rotation-sweep-interval=3s` to override that sweep interval. Zero or omission defaults to half
+`--max-segment-age`, with a minimum of 3s. For example, a 30s max age gives a 15s sweep, while a 5s max age gives a 3s
+sweep. If age-based rotation is disabled, the default sweep interval is 3s. The 3s minimum is an arbitrary safety
+choice to limit sweep overhead and needs analysis and tuning; an explicit positive interval may be shorter.
+Negative intervals are rejected. The sweep interval never delays exact age-based rotation deadlines, including
+sub-second realtime deadlines.
+
+The collector exposes the same setting as `wal-rotation-sweep-interval-ms` in its [configuration](config.md).
+
 ## Metrics
 
 Each ingestor pod is fronted by a load balancer.  The ingestor receives data from the Kubernetes cluster via the 

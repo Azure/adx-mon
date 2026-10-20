@@ -55,6 +55,14 @@ func TestSeriesKey(t *testing.T) {
 	}
 }
 
+func TestStore_RejectsNegativeRotationSweepInterval(t *testing.T) {
+	store := storage.NewLocalStore(storage.StoreOpts{
+		StorageDir:            t.TempDir(),
+		RotationSweepInterval: -time.Second,
+	})
+	require.EqualError(t, store.Open(context.Background()), "rotation sweep interval must not be negative")
+}
+
 func TestSeriesKeyWithCommonLabels(t *testing.T) {
 	series := &prompb.TimeSeries{Labels: []*prompb.Label{{Name: []byte("__name__"), Value: []byte("cpu")}}}
 	request := &prompb.WriteRequest{

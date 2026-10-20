@@ -41,6 +41,10 @@ type RepositoryOpts struct {
 	SegmentMaxAge          time.Duration
 	StartupOpenConcurrency int
 
+	// RotationSweepInterval controls fallback rotation checks, independently of exact age deadlines.
+	// Zero defaults to half SegmentMaxAge with a 3-second floor.
+	RotationSweepInterval time.Duration
+
 	MaxDiskUsage     int64
 	MaxSegmentCount  int
 	WALFlushInterval time.Duration
@@ -71,7 +75,8 @@ func NewRepository(opts RepositoryOpts) *Repository {
 		index: NewIndex(),
 		wals:  partmap.NewMap[*WAL](64),
 	}
-	r.scheduler = newRotationScheduler(defaultRotationSweepInterval, r.sweepRotations)
+	interval := rotationSweepInterval(opts.SegmentMaxAge, opts.RotationSweepInterval)
+	r.scheduler = newRotationScheduler(interval, r.sweepRotations)
 	return r
 }
 
@@ -84,6 +89,9 @@ func (s *Repository) sweepRotations() {
 }
 
 func (s *Repository) Open(ctx context.Context) error {
+	if s.opts.RotationSweepInterval < 0 {
+		return fmt.Errorf("rotation sweep interval must not be negative")
+	}
 	if s.opts.StorageDir == "" {
 		return fmt.Errorf("storage dir is required")
 	}

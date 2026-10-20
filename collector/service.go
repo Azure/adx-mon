@@ -111,6 +111,9 @@ type ServiceOpts struct {
 	// MaxSegmentAge is the maximum time allowed before a segment is rolled over.
 	MaxSegmentAge time.Duration
 
+	// RotationSweepInterval overrides the WAL's fallback rotation sweep interval.
+	RotationSweepInterval time.Duration
+
 	// MaxSegmentSize is the maximum size allowed for a segment before it is rolled over.
 	MaxSegmentSize int64
 
@@ -313,15 +316,16 @@ func NewService(opts *ServiceOpts) (*Service, error) {
 	})
 
 	storeOpts := storage.StoreOpts{
-		StorageDir:       opts.StorageDir,
-		SegmentMaxAge:    maxSegmentAge,
-		SegmentMaxSize:   maxSegmentSize,
-		MaxDiskUsage:     maxDiskUsage,
-		Backend:          backend,
-		LiftedLabels:     opts.LiftLabels,
-		LiftedAttributes: opts.LiftAttributes,
-		LiftedResources:  opts.LiftResources,
-		WALFlushInterval: opts.WALFlushInterval,
+		StorageDir:            opts.StorageDir,
+		SegmentMaxAge:         maxSegmentAge,
+		RotationSweepInterval: opts.RotationSweepInterval,
+		SegmentMaxSize:        maxSegmentSize,
+		MaxDiskUsage:          maxDiskUsage,
+		Backend:               backend,
+		LiftedLabels:          opts.LiftLabels,
+		LiftedAttributes:      opts.LiftAttributes,
+		LiftedResources:       opts.LiftResources,
+		WALFlushInterval:      opts.WALFlushInterval,
 	}
 	var realtimeBatch cluster.RealtimeBatchOpts
 	if opts.Realtime.enabled() {

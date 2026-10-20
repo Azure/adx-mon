@@ -74,6 +74,9 @@ type ServiceOpts struct {
 	MaxSegmentSize int64
 	MaxSegmentAge  time.Duration
 
+	// RotationSweepInterval overrides the WAL's fallback rotation sweep interval.
+	RotationSweepInterval time.Duration
+
 	K8sCli     kubernetes.Interface
 	K8sCtrlCli client.Client
 
@@ -193,6 +196,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 		StorageDir:             opts.StorageDir,
 		SegmentMaxSize:         opts.MaxSegmentSize,
 		SegmentMaxAge:          opts.MaxSegmentAge,
+		RotationSweepInterval:  opts.RotationSweepInterval,
 		EnableWALFsync:         opts.EnableWALFsync,
 		MaxDiskUsage:           opts.MaxDiskUsage,
 		StartupOpenConcurrency: opts.ConcurrentUploads,
