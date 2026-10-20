@@ -26,6 +26,8 @@ type journalReader interface {
 	GetEntry() (*sdjournal.JournalEntry, error)
 	NextSkip(skip uint64) (uint64, error)
 	SeekHead() error
+	SeekTail() error
+	Previous() (uint64, error)
 	SeekCursor(cursor string) error
 	TestCursor(cursor string) error
 	Wait(timeout time.Duration) int
