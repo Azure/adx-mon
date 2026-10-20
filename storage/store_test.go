@@ -614,6 +614,27 @@ func (s shortReader) Read(p []byte) (n int, err error) {
 }
 
 func TestStore_RealtimeDiskReservation(t *testing.T) {
+	testRealtimeDiskReservation(t, nil)
+}
+
+// Admission replaces the repository's disk checks, so it must preserve the
+// realtime reservation whether or not table budgets are enforced.
+func TestStore_RealtimeDiskReservationWithAdmission(t *testing.T) {
+	for _, enforce := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enforce=%t", enforce), func(t *testing.T) {
+			testRealtimeDiskReservation(t, func(policy *ingestpolicy.Policy, maxDiskUsage, reserved int64) *wal.Admission {
+				return wal.NewAdmission(wal.AdmissionOpts{
+					Global:                wal.Usage{Bytes: maxDiskUsage},
+					Enforce:               enforce,
+					Policy:                policy,
+					RealtimeReservedBytes: reserved,
+				})
+			})
+		})
+	}
+}
+
+func testRealtimeDiskReservation(t *testing.T, newAdmission func(policy *ingestpolicy.Policy, maxDiskUsage, reserved int64) *wal.Admission) {
 	policy, err := ingestpolicy.New([]ingestpolicy.Table{{Database: "Logs", Table: "Realtime"}})
 	require.NoError(t, err)
 
@@ -621,6 +642,10 @@ func TestStore_RealtimeDiskReservation(t *testing.T) {
 		maxDiskUsage = 64 * 1024
 		reserved     = 32 * 1024
 	)
+	var admission *wal.Admission
+	if newAdmission != nil {
+		admission = newAdmission(policy, maxDiskUsage, reserved)
+	}
 	s := storage.NewLocalStore(storage.StoreOpts{
 		StorageDir:                t.TempDir(),
 		SegmentMaxSize:            1024,
@@ -628,6 +653,7 @@ func TestStore_RealtimeDiskReservation(t *testing.T) {
 		MaxDiskUsage:              maxDiskUsage,
 		Policy:                    policy,
 		RealtimeReservedDiskBytes: reserved,
+		Admission:                 admission,
 	})
 	require.NoError(t, s.Open(context.Background()))
 	defer s.Close()
