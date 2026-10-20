@@ -122,6 +122,8 @@ The **Ingestor** is the aggregation and buffering point for all telemetry collec
   - `--disable-peer-transfer`: Disable peer transfer (upload all segments directly).
   - `--partition-size`: Number of nodes in a partition for sharding.
   - `--max-disk-usage`, `--max-segment-count`: Backpressure controls.
+  - `--max-intake-memory`: Ceiling on memory buffered by in-flight transfers (1 GiB by default). See [table isolation](table-isolation.md#upgrading) before upgrading.
+  - `--max-table-disk-usage`, `--max-table-segment-count`, `--table-limit`, `--disable-table-limits`, `--enforce-table-limits`: Per-table backlog budgets. See [table isolation](table-isolation.md).
   - `--enable-wal-fsync`: Enable fsync for WAL durability.
   - `--realtime-table`, `--realtime-streaming-budget`: Tables that use realtime streaming ingestion and the streaming concurrency budget per Kusto endpoint. See [realtime ingestion](ingestor.md#realtime-ingestion) for all realtime options.
   - See `docs/config.md` for all options.
